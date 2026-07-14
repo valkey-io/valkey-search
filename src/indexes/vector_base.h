@@ -306,10 +306,6 @@ class PrefilterEvaluator : public query::Evaluator {
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
 
-  // Returns full EvaluationResult including score.
-  query::EvaluationResult EvaluateWithScore(const query::Predicate& predicate,
-                                            const InternedStringPtr& key);
-
   const InternedStringPtr& GetTargetKey() const override {
     CHECK(key_);
     return *key_;

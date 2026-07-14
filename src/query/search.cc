@@ -9,8 +9,8 @@
 
 #include <absl/strings/str_split.h>
 
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -420,7 +420,7 @@ void EvaluatePrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     absl::AnyInvocable<bool(const InternedStringPtr &,
-                            absl::flat_hash_set<const char *> &, float)>
+                            absl::flat_hash_set<const char *> &)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
@@ -452,11 +452,10 @@ void EvaluatePrefilteredKeys(
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);
       BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // Evaluate predicate and extract score
-      auto eval_result = key_evaluator.EvaluateWithScore(
-          *parameters.filter_parse_results.root_predicate, key);
-      if (eval_result.matches) {
-        bool result = appender(key, result_keys, eval_result.score);
+      // 3. Evaluate predicate
+      if (key_evaluator.Evaluate(
+              *parameters.filter_parse_results.root_predicate, key)) {
+        bool result = appender(key, result_keys);
         if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
@@ -489,8 +488,7 @@ CalcBestMatchingPrefilteredKeys(
   auto results_appender =
       [&results, &parameters, vector_index, query](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys,
-          float /*score*/) -> bool {
+          absl::flat_hash_set<const char *> &top_keys) -> bool {
     return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
                                            top_keys);
   };
@@ -625,42 +623,6 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
-// Computes the weighted score for a predicate tree where the document is known
-// to match. For AND predicates, all children match so we sum their weighted
-// contributions. For OR predicates, we use the predicate's own weight (since we
-// don't know which branch matched without re-evaluation). For leaf predicates,
-// the contribution is 1.0 * weight.
-float ComputeMatchedPredicateScore(const Predicate *predicate) {
-  if (!predicate) {
-    return 0.0f;
-  }
-  switch (predicate->GetType()) {
-    case PredicateType::kComposedAnd: {
-      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
-      float score = 0.0f;
-      for (const auto &child : composed->GetChildren()) {
-        score += ComputeMatchedPredicateScore(child.get());
-      }
-      // Apply the composed predicate's own weight as a multiplier
-      return score * predicate->GetWeight();
-    }
-    case PredicateType::kComposedOr: {
-      // Use the predicate's own weight as the contribution
-      return 1.0f * predicate->GetWeight();
-    }
-    case PredicateType::kNegate: {
-      // Negation is a filter, not a scoring clause.
-      return 0.0f;
-    }
-    case PredicateType::kTag:
-    case PredicateType::kNumeric:
-    case PredicateType::kText:
-      return 1.0f * predicate->GetWeight();
-    default:
-      return 0.0f;
-  }
-}
-
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     const SearchParameters &parameters) {
   const IndexSchema *index_schema = parameters.index_schema.get();
@@ -688,14 +650,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         entries_fetchers, false);
   }
 
-  // Compute the weighted score for matching documents
-  float weighted_score = 0.0f;
-  if (!parameters.filter_parse_results.is_match_all &&
-      parameters.filter_parse_results.root_predicate) {
-    weighted_score = ComputeMatchedPredicateScore(
-        parameters.filter_parse_results.root_predicate.get());
-  }
-
   // Get the config for maximum number of keys to accumulate before content
   // fetching
   const size_t max_keys = static_cast<size_t>(
@@ -703,15 +657,15 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   std::vector<indexes::BorrowedNeighbor> borrowed;
   borrowed.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
   bool fetch_limited = false;
-  auto results_appender = [&borrowed, max_keys, &fetch_limited, weighted_score](
-                              const InternedStringPtr &key,
-                              absl::flat_hash_set<const char *> &top_keys,
-                              float /*score*/) -> bool {
+  auto results_appender =
+      [&borrowed, max_keys, &fetch_limited](
+          const InternedStringPtr &key,
+          absl::flat_hash_set<const char *> &top_keys) -> bool {
     if (borrowed.size() >= max_keys) {
       fetch_limited = true;
       return false;
     }
-    borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, weighted_score});
+    borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -744,11 +698,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
           nonvector_results_fetched_limited_count.Increment();
           break;
         }
-        borrowed.push_back(
-            {BorrowedInternedStringPtr(key), 0.0f, weighted_score});
-        // Overwrite the flat weighted_score with the per-document relevance
-        // score when scoring is enabled. When disabled, keep weighted_score --
-        // the original, pre-scoring evaluation path.
+        borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
+        // Set the per-document relevance score when scoring is enabled.
         if (iterator_scoring_enabled) {
           if (auto *text_iter = iterator->GetTextIterator()) {
             float raw = text_iter->GetScore() * text_iter->GetWeight();
@@ -767,6 +718,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       }
     }
   } else {
+    // TODO: currently in-iterator scoring only works for pure text queries
+    // Await iterator refactor for text + numeric/tag/negate queries
     EvaluatePrefilteredKeys(parameters, entries_fetchers,
                             std::move(results_appender), qualified_entries,
                             /*stop_on_fetch_limit=*/true);

@@ -44,10 +44,7 @@ EvaluationResult BuildTextEvaluationResult(
   if (!iterator->IsIteratorValid()) {
     return EvaluationResult(false);
   }
-  float score = iterator->GetScore();
-  EvaluationResult result(true, std::move(iterator));
-  result.score = score;
-  return result;
+  return {true, std::move(iterator)};
 }
 
 TermPredicate::TermPredicate(
@@ -441,7 +438,6 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
   if (GetType() == PredicateType::kComposedAnd) {
     uint32_t childrenWithPositions = 0;
     uint64_t query_field_mask = ~0ULL;
-    float total_score = 0.0f;
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
@@ -467,7 +463,6 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
       if (!result.matches) {
         return EvaluationResult(false);
       }
-      total_score += result.score;
       if (result.filter_iterator) {
         childrenWithPositions++;
         query_field_mask &= result.filter_iterator->QueryFieldMask();
@@ -498,21 +493,16 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         return EvaluationResult(false);
       }
       // Return the proximity iterator for potential nested use.
-      EvaluationResult prox_result(true, std::move(proximity_iterator));
-      prox_result.score = prox_result.filter_iterator->GetScore();
-      return prox_result;
+      return {true, std::move(proximity_iterator)};
     }
     // Propagate the filter iterator from the one child exists
     else if (childrenWithPositions == 1) {
-      EvaluationResult single_result(true, std::move(iterators[0]));
-      single_result.score = total_score;
-      return single_result;
+      return {true, std::move(iterators[0])};
     }
     // All matched, but none have position. non-proximity case
-    return EvaluationResult(true, total_score);
+    return EvaluationResult(true);
   }
   // Handle OR logic
-  float best_score = 0.0f;
   auto filter_iterators =
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>();
@@ -521,11 +511,10 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         EvaluatePredicate(child.get(), evaluator, require_positions, true);
     // Short-circuit if any matches and positions not required.
     if (result.matches && !require_positions) {
-      return EvaluationResult(true, result.score);
+      return EvaluationResult(true);
     } else if (result.matches) {
-      if (result.score > best_score) best_score = result.score;
       if (result.filter_iterator == nullptr) {
-        return EvaluationResult(true, result.score);
+        return EvaluationResult(true);
       }
       filter_iterators.push_back(std::move(result.filter_iterator));
     }
@@ -548,9 +537,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
     return EvaluationResult(false);
   }
   // Return the OR proximity iterator for potential nested scenarios.
-  EvaluationResult or_result(true, std::move(or_proximity_iterator));
-  or_result.score = or_result.filter_iterator->GetScore();
-  return or_result;
+  return {true, std::move(or_proximity_iterator)};
 }
 
 }  // namespace valkey_search::query

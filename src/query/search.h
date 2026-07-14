@@ -379,9 +379,5 @@ bool ShouldReturnNoResults(const SearchParameters& parameters);
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
-// Computes the weighted score for a predicate tree where the document is known
-// to match. Exposed for testing.
-float ComputeMatchedPredicateScore(const Predicate* predicate);
-
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

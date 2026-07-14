@@ -86,14 +86,6 @@ bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
   return res.matches;
 }
 
-query::EvaluationResult PrefilterEvaluator::EvaluateWithScore(
-    const query::Predicate &predicate, const InternedStringPtr &key) {
-  key_ = &key;
-  auto res = predicate.Evaluate(*this);
-  key_ = nullptr;
-  return res;
-}
-
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   bool case_sensitive = true;

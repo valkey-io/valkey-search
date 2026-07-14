@@ -18,6 +18,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/functional/function_ref.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -129,7 +130,7 @@ class Stemmer : public TokenFilter {
 ///
 /// The parser uses this to extract tokens from raw text spans between
 /// query syntax characters. Two strategies exist:
-///   - Delimiter-based (European): walk codepoints, break on punctuation
+///   - Punctuation-based (European): walk codepoints, break on punctuation
 ///   - Segmenter-delegated (CJK): extract span, delegate to Segment()
 ///
 /// The parser handles query-syntax detection (|, @, (, ), ", *, %, etc.)
@@ -155,7 +156,7 @@ class QueryTokenizer {
   ///
   /// Returns:
   ///   - A Token with non-empty content if a token was extracted
-  ///   - A Token with empty content if only delimiters/skippable bytes were
+  ///   - A Token with empty content if only punctuation/skippable bytes were
   ///     consumed (bytes_consumed > 0 tells the caller to advance)
   ///   - nullopt if nothing could be consumed (pos is at `"` or end)
   ///   - Error status for malformed escape sequences
@@ -178,12 +179,12 @@ class QueryTokenizer {
   /// Returns:
   ///   - A Token with non-empty content if a token was extracted
   ///   - A Token with empty content + bytes_consumed > 0 if only
-  ///     delimiters/skippable bytes were consumed
+  ///     punctuation/skippable bytes were consumed
   ///   - nullopt if nothing could be consumed (pos at query syntax or end)
   ///   - Error status for malformed escape sequences
   virtual absl::StatusOr<std::optional<Token>> NextUnquotedToken(
       absl::string_view text, size_t pos, bool& hit_query_syntax,
-      bool (*is_query_syntax)(uint32_t cp)) const = 0;
+      absl::FunctionRef<bool(uint32_t cp)> is_query_syntax) const = 0;
 };
 
 // ============================================================================
@@ -196,7 +197,7 @@ class QueryTokenizer {
 /// boundaries are defined by punctuation and whitespace characters.
 ///
 /// Handles backslash escapes: `\<char>` means "include <char> literally,
-/// don't treat it as a delimiter."
+/// don't treat it as punctuation."
 class PunctuationSegmenter : public Segmenter {
  public:
   explicit PunctuationSegmenter(const std::string& punctuation);
@@ -206,9 +207,9 @@ class PunctuationSegmenter : public Segmenter {
       absl::string_view text) const override;
 
   /// Returns true if the given code point is treated as a word boundary
-  /// (delimiter) by this segmenter. Used by DelimiterQueryTokenizer and
+  /// (punctuation) by this segmenter. Used by PunctuationQueryTokenizer and
   /// internally by Segment().
-  bool IsDelimiter(uint32_t cp) const;
+  bool IsPunctuation(uint32_t cp) const;
 
  private:
   PunctuationSet punct_set_;
@@ -259,23 +260,23 @@ class StopWordFilter : public TokenFilter {
   absl::flat_hash_set<std::string> stop_words_set_;
 };
 
-/// Delimiter-based query tokenizer for European/Snowball languages.
+/// Punctuation-based query tokenizer for European/Snowball languages.
 ///
-/// Walks codepoints one at a time, breaking on punctuation delimiters.
+/// Walks codepoints one at a time, breaking on punctuation characters.
 /// This contains the exact escape-handling and word-boundary logic that was
 /// previously inline in the filter parser's token extraction methods.
 ///
 /// Escape contract (mirrors PunctuationSegmenter::Segment):
 ///   - `\\` -> include literal `\` in token, continue same token
-///   - `\<delimiter>` -> include the delimiter char literally, continue
-///   - `\<non-delimiter>` where `\` is a delimiter -> end current token
-///   - `\<non-delimiter>` where `\` is NOT a delimiter -> include char,
+///   - `\<punctuation>` -> include the punctuation char literally, continue
+///   - `\<non-punctuation>` where `\` is punctuation -> end current token
+///   - `\<non-punctuation>` where `\` is NOT punctuation -> include char,
 ///   continue
 ///   - `\` at end of input -> error
 ///   - `\` + invalid UTF-8 -> replace with U+FFFD, continue
-class DelimiterQueryTokenizer : public QueryTokenizer {
+class PunctuationQueryTokenizer : public QueryTokenizer {
  public:
-  explicit DelimiterQueryTokenizer(const PunctuationSegmenter& segmenter)
+  explicit PunctuationQueryTokenizer(const PunctuationSegmenter &segmenter)
       : segmenter_(segmenter) {}
 
   absl::StatusOr<std::optional<Token>> NextQuotedToken(
@@ -283,13 +284,14 @@ class DelimiterQueryTokenizer : public QueryTokenizer {
 
   absl::StatusOr<std::optional<Token>> NextUnquotedToken(
       absl::string_view text, size_t pos, bool& hit_query_syntax,
-      bool (*is_query_syntax)(uint32_t cp)) const override;
+      absl::FunctionRef<bool(uint32_t cp)> is_query_syntax) const override;
 
  private:
   /// Result of handling a backslash escape.
   enum class EscapeResult {
     kContinue,   // Escape handled, continue building token
-    kBreakToken  // Backslash was a delimiter before non-delimiter -> end token
+    kBreakToken  // Backslash was punctuation before non-punctuation -> end
+                 // token
   };
 
   /// Handles a backslash escape sequence at text[cursor].
@@ -349,6 +351,12 @@ class LanguageProcessor {
   /// Tokens that any filter eliminates are removed from the result.
   std::vector<std::string> ApplyFilters(std::vector<std::string> tokens) const;
 
+  /// Apply all filters to a single token (same chain as ingestion).
+  /// Returns true if the token should be kept, false if any filter drops it.
+  /// Use for query tokens that need the full filter pipeline without
+  /// re-segmentation (e.g., unquoted plain terms).
+  bool ProcessWord(std::string &token) const;
+
   /// Get the normalizer. Always non-null — every language has normalization.
   /// O(1) access.
   Normalizer* GetNormalizer() const { return normalizer_.get(); }
@@ -357,12 +365,6 @@ class LanguageProcessor {
   /// determining word boundaries in query text. O(1) access.
   const QueryTokenizer* GetQueryTokenizer() const {
     return query_tokenizer_.get();
-  }
-
-  /// Get the primary segmenter. If there are multiple segmenters in the
-  /// pipeline, this returns the first one. O(1) access.
-  const Segmenter* GetSegmenter() const {
-    return segmenters_.empty() ? nullptr : segmenters_[0].get();
   }
 
   /// Get the stop word filter, or nullptr if this processor has no stop words.

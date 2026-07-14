@@ -42,7 +42,7 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
   size_t pos = 0;
 
   while (pos < text.size()) {
-    // Skip leading delimiters (code-point aware)
+    // Skip leading punctuation (code-point aware)
     while (pos < text.size()) {
       if (text[pos] == '\\' && pos + 1 < text.size()) {
         break;
@@ -60,7 +60,7 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
         auto cp = s.NextUtf8();
         CHECK(cp != utils::Scanner::kInvalidCp)
             << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
-        if (!IsDelimiter(cp)) {
+        if (!IsPunctuation(cp)) {
           break;
         }
         pos += s.LastUtf8ByteLen();
@@ -69,7 +69,7 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
 
     word.clear();
 
-    // Build word until next delimiter boundary
+    // Build word until next punctuation boundary
     while (pos < text.size()) {
       // Handle backslash escape
       if (text[pos] == '\\' && pos + 1 < text.size()) {
@@ -90,7 +90,7 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
           CHECK(esc_cp != utils::Scanner::kInvalidCp)
               << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
           uint8_t esc_len = s.LastUtf8ByteLen();
-          if (esc_cp != '\\' && !IsDelimiter(esc_cp) && IsDelimiter('\\')) {
+          if (esc_cp != '\\' && !IsPunctuation(esc_cp) && IsPunctuation('\\')) {
             break;
           }
           word.append(text.data() + pos, esc_len);
@@ -113,7 +113,7 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
         auto cp = s.NextUtf8();
         CHECK(cp != utils::Scanner::kInvalidCp)
             << "Segment decoded invalid UTF-8 after IsValidUtf8 passed";
-        if (IsDelimiter(cp)) {
+        if (IsPunctuation(cp)) {
           break;
         }
         uint8_t len = s.LastUtf8ByteLen();
@@ -130,7 +130,7 @@ absl::StatusOr<std::vector<std::string>> PunctuationSegmenter::Segment(
   return tokens;
 }
 
-bool PunctuationSegmenter::IsDelimiter(uint32_t cp) const {
+bool PunctuationSegmenter::IsPunctuation(uint32_t cp) const {
   return punct_set_.Contains(cp);
 }
 
@@ -181,12 +181,12 @@ bool StopWordFilter::IsStopWord(absl::string_view word) const {
 }
 
 // ============================================================================
-// DelimiterQueryTokenizer implementation
+// PunctuationQueryTokenizer implementation
 // ============================================================================
 
 absl::StatusOr<std::optional<QueryTokenizer::Token>>
-DelimiterQueryTokenizer::NextQuotedToken(absl::string_view text,
-                                         size_t pos) const {
+PunctuationQueryTokenizer::NextQuotedToken(absl::string_view text,
+                                           size_t pos) const {
   if (pos >= text.size()) {
     return std::nullopt;
   }
@@ -202,34 +202,8 @@ DelimiterQueryTokenizer::NextQuotedToken(absl::string_view text,
 
   std::string content;
   size_t cursor = pos;
+  bool building_token = false;
 
-  // Skip leading delimiters (but stop on quote, escape, or end)
-  while (cursor < text.size()) {
-    if (text[cursor] == '"') {
-      break;
-    }
-    if (text[cursor] == '\\') {
-      break;  // escape starts token content
-    }
-    utils::Scanner s(text.substr(cursor));
-    auto cp = s.NextUtf8();
-    if (cp == utils::Scanner::kEOF) {
-      break;
-    }
-    if (cp == utils::Scanner::kInvalidCp) {
-      // Invalid UTF-8 -- replace with U+FFFD and treat as content
-      utils::Scanner::PushBackUtf8(content, 0xFFFD);
-      cursor += s.LastUtf8ByteLen();
-      goto build_quoted_token;  // NOLINT
-    }
-    if (!segmenter_.IsDelimiter(cp)) {
-      break;
-    }
-    cursor += s.LastUtf8ByteLen();
-  }
-
-  // Build token until next boundary
-build_quoted_token:  // NOLINT
   while (cursor < text.size()) {
     // Check for quote boundary
     if (text[cursor] == '"') {
@@ -238,6 +212,9 @@ build_quoted_token:  // NOLINT
 
     // Check for backslash escape
     if (text[cursor] == '\\') {
+      if (!building_token) {
+        building_token = true;
+      }
       VMSDK_ASSIGN_OR_RETURN(auto esc_result,
                              HandleEscape(text, cursor, content));
       if (esc_result == EscapeResult::kBreakToken) {
@@ -252,13 +229,22 @@ build_quoted_token:  // NOLINT
       break;
     }
     if (cp == utils::Scanner::kInvalidCp) {
+      // Invalid UTF-8 -- replace with U+FFFD and treat as content
       utils::Scanner::PushBackUtf8(content, 0xFFFD);
+      cursor += s.LastUtf8ByteLen();
+      building_token = true;
+      continue;
+    }
+    if (segmenter_.IsPunctuation(cp)) {
+      if (building_token) {
+        break;
+      }
+      // Still skipping leading punctuation
       cursor += s.LastUtf8ByteLen();
       continue;
     }
-    if (segmenter_.IsDelimiter(cp)) {
-      break;
-    }
+    // Non-punctuation character — append to token
+    building_token = true;
     uint8_t len = s.LastUtf8ByteLen();
     content.append(text.data() + cursor, len);
     cursor += len;
@@ -272,9 +258,9 @@ build_quoted_token:  // NOLINT
 }
 
 absl::StatusOr<std::optional<QueryTokenizer::Token>>
-DelimiterQueryTokenizer::NextUnquotedToken(
-    absl::string_view text, size_t pos, bool& hit_query_syntax,
-    bool (*is_query_syntax)(uint32_t cp)) const {
+PunctuationQueryTokenizer::NextUnquotedToken(
+    absl::string_view text, size_t pos, bool &hit_query_syntax,
+    absl::FunctionRef<bool(uint32_t cp)> is_query_syntax) const {
   hit_query_syntax = false;
   if (pos >= text.size()) {
     return std::nullopt;
@@ -293,58 +279,14 @@ DelimiterQueryTokenizer::NextUnquotedToken(
 
   std::string content;
   size_t cursor = pos;
+  bool building_token = false;
 
-  // Skip leading delimiters (but stop on query syntax, escape, or end)
   while (cursor < text.size()) {
-    if (text[cursor] == '\\') {
-      break;  // escape starts token content
-    }
-    utils::Scanner s(text.substr(cursor));
-    auto cp = s.NextUtf8();
-    if (cp == utils::Scanner::kEOF) {
-      break;
-    }
-    if (cp == utils::Scanner::kInvalidCp) {
-      utils::Scanner::PushBackUtf8(content, 0xFFFD);
-      cursor += s.LastUtf8ByteLen();
-      goto build_unquoted_token;  // NOLINT
-    }
-    if (is_query_syntax(cp)) {
-      hit_query_syntax = true;
-      break;
-    }
-    if (!segmenter_.IsDelimiter(cp)) {
-      break;
-    }
-    cursor += s.LastUtf8ByteLen();
-  }
-
-  if (hit_query_syntax) {
-    size_t bytes_consumed = cursor - pos;
-    if (bytes_consumed == 0) {
-      return std::nullopt;
-    }
-    return std::make_optional(Token{"", bytes_consumed});
-  }
-
-  // Build token until next boundary
-build_unquoted_token:  // NOLINT
-  while (cursor < text.size()) {
-    // Peek to check for query syntax
-    {
-      utils::Scanner s(text.substr(cursor));
-      auto cp = s.NextUtf8();
-      if (cp == utils::Scanner::kEOF) {
-        break;
-      }
-      if (cp != utils::Scanner::kInvalidCp && is_query_syntax(cp)) {
-        hit_query_syntax = true;
-        break;
-      }
-    }
-
     // Check for backslash escape
     if (text[cursor] == '\\') {
+      if (!building_token) {
+        building_token = true;
+      }
       VMSDK_ASSIGN_OR_RETURN(auto esc_result,
                              HandleEscape(text, cursor, content));
       if (esc_result == EscapeResult::kBreakToken) {
@@ -359,16 +301,37 @@ build_unquoted_token:  // NOLINT
       break;
     }
     if (cp == utils::Scanner::kInvalidCp) {
+      // Invalid UTF-8 -- replace with U+FFFD and treat as content
       utils::Scanner::PushBackUtf8(content, 0xFFFD);
+      cursor += s.LastUtf8ByteLen();
+      building_token = true;
+      continue;
+    }
+    if (is_query_syntax(cp)) {
+      hit_query_syntax = true;
+      break;
+    }
+    if (segmenter_.IsPunctuation(cp)) {
+      if (building_token) {
+        break;
+      }
+      // Still skipping leading punctuation
       cursor += s.LastUtf8ByteLen();
       continue;
     }
-    if (segmenter_.IsDelimiter(cp)) {
-      break;
-    }
+    // Non-punctuation character — append to token
+    building_token = true;
     uint8_t len = s.LastUtf8ByteLen();
     content.append(text.data() + cursor, len);
     cursor += len;
+  }
+
+  if (!building_token && hit_query_syntax) {
+    size_t bytes_consumed = cursor - pos;
+    if (bytes_consumed == 0) {
+      return std::nullopt;
+    }
+    return std::make_optional(Token{"", bytes_consumed});
   }
 
   size_t bytes_consumed = cursor - pos;
@@ -378,8 +341,8 @@ build_unquoted_token:  // NOLINT
   return std::make_optional(Token{std::move(content), bytes_consumed});
 }
 
-absl::StatusOr<DelimiterQueryTokenizer::EscapeResult>
-DelimiterQueryTokenizer::HandleEscape(absl::string_view text, size_t& cursor,
+absl::StatusOr<PunctuationQueryTokenizer::EscapeResult>
+PunctuationQueryTokenizer::HandleEscape(absl::string_view text, size_t &cursor,
                                       std::string& content) const {
   cursor++;  // consume backslash
   if (cursor >= text.size()) {
@@ -395,19 +358,19 @@ DelimiterQueryTokenizer::HandleEscape(absl::string_view text, size_t& cursor,
     cursor += esc_len;
     return EscapeResult::kContinue;
   }
-  if (esc_cp == '\\' || segmenter_.IsDelimiter(esc_cp)) {
-    // Double backslash or escaped delimiter -> keep literally, continue
+  if (esc_cp == '\\' || segmenter_.IsPunctuation(esc_cp)) {
+    // Double backslash or escaped punctuation -> keep literally, continue
     content.append(text.data() + cursor, esc_len);
     cursor += esc_len;
     return EscapeResult::kContinue;
   }
-  // Backslash before non-delimiter character
-  if (segmenter_.IsDelimiter('\\')) {
-    // Backslash is itself a delimiter -> token break.
+  // Backslash before non-punctuation character
+  if (segmenter_.IsPunctuation('\\')) {
+    // Backslash is itself punctuation -> token break.
     // Don't consume the escaped char -- it starts the next token.
     return EscapeResult::kBreakToken;
   }
-  // Backslash is NOT a delimiter -> keep the non-delimiter char, continue
+  // Backslash is NOT punctuation -> keep the non-punctuation char, continue
   content.append(text.data() + cursor, esc_len);
   cursor += esc_len;
   return EscapeResult::kContinue;
@@ -488,19 +451,21 @@ absl::StatusOr<std::vector<std::string>> LanguageProcessor::Segment(
   return current;
 }
 
+bool LanguageProcessor::ProcessWord(std::string &token) const {
+  for (const auto &filter : filters_) {
+    if (!filter->Apply(token)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::vector<std::string> LanguageProcessor::ApplyFilters(
     std::vector<std::string> tokens) const {
   std::vector<std::string> result;
   result.reserve(tokens.size());
-  for (auto& token : tokens) {
-    bool keep = true;
-    for (const auto& filter : filters_) {
-      if (!filter->Apply(token)) {
-        keep = false;
-        break;
-      }
-    }
-    if (keep) {
+  for (auto &token : tokens) {
+    if (ProcessWord(token)) {
       result.push_back(std::move(token));
     }
   }
@@ -528,9 +493,9 @@ std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
   // Segmenter: punctuation-based splitting for all Snowball languages
   auto punct_segmenter = std::make_shared<PunctuationSegmenter>(punctuation);
 
-  // Query tokenizer: delimiter-based (uses the same punctuation segmenter)
+  // Query tokenizer: punctuation-based (uses the same punctuation segmenter)
   auto query_tokenizer =
-      std::make_shared<DelimiterQueryTokenizer>(*punct_segmenter);
+      std::make_shared<PunctuationQueryTokenizer>(*punct_segmenter);
 
   // Filter 1: Unicode normalization + case folding
   // Turkish requires locale-aware case folding for correct İ/I handling:

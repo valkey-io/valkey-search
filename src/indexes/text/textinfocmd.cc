@@ -75,7 +75,7 @@ static absl::Status DumpWordIterator(ValkeyModuleCtx* ctx, auto& wi,
 FT._DEBUG TEXTINFO <index_name> PREFIX <word> [WITHKEYS [WITHPOSITIONS]]
 FT._DEBUG TEXTINFO <index_name> SUFFIX <word> [WITHKEYS [WITHPOSITIONS]]
 FT._DEBUG TEXTINFO <index_name> STEM <word>
-FT._DEBUG TEXTINFO <index_name> TOKENIZE <string>
+FT._DEBUG TEXTINFO <index_name> LEXER <string>
 
 */
 absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,

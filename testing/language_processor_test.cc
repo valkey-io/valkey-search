@@ -209,7 +209,13 @@ TEST_F(LanguageProcessorTest, AllStopWordsProducesEmptyResult) {
 // (the architectural equivalent of old Lexer::Tokenize with stemming_enabled =
 // false), the caller knows not to build a stem map.
 TEST_F(LanguageProcessorTest, NoStemmerMeansNoStemMap) {
-  auto result = processor_->Process("running jumps happily");
+  auto processor = LanguageProcessor::Builder()
+                       .AddSegmenter(std::make_shared<PunctuationSegmenter>(
+                           GetDefaultPunctuation(data_model::LANGUAGE_ENGLISH)))
+                       .Build();
+  EXPECT_EQ(processor->GetStemmer(), nullptr);
+
+  auto result = processor->Process("running jumps happily");
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result, std::vector<std::string>({"running", "jumps", "happily"}));
 

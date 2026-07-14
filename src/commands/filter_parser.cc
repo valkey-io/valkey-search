@@ -52,8 +52,8 @@ static auto query_terms_count =
             CHECK_RANGE(1, kMaxQueryTermsCount, kQueryStringTermsCountConfig))
         .Build();
 
-vmsdk::config::Number& GetQueryStringTermsCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*query_terms_count);
+vmsdk::config::Number &GetQueryStringTermsCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*query_terms_count);
 }
 
 /// Register the "fuzzy-max-distance" flag. Controls the maximum edit distance
@@ -70,8 +70,8 @@ static auto fuzzy_max_distance =
                                             kFuzzyMaxDistanceConfig))
         .Build();
 
-vmsdk::config::Number& GetFuzzyMaxDistance() {
-  return dynamic_cast<vmsdk::config::Number&>(*fuzzy_max_distance);
+vmsdk::config::Number &GetFuzzyMaxDistance() {
+  return dynamic_cast<vmsdk::config::Number &>(*fuzzy_max_distance);
 }
 }  // namespace options
 
@@ -86,18 +86,38 @@ constexpr double kPositiveInf = std::numeric_limits<double>::infinity();
 constexpr double kNegativeInf = -std::numeric_limits<double>::infinity();
 #endif
 
-// Returns true if the code point is a query-language reserved character.
-// These are characters that have syntactic meaning in the query grammar
-// and must not be consumed by the tokenizer as word content.
+// Query syntax character categories — single source of truth for each concept.
+// The tokenizer calls IsQuerySyntax() to decide where to stop consuming.
+// The parser calls IsReservedChar() to decide when to emit an error, and
+// IsClauseSeparator() to decide when a term boundary is structural.
+
+// Clause separators: characters that end a term and route parsing to another
+// clause or sub-expression. These are valid in context — not an error.
+bool IsClauseSeparator(uint32_t cp) {
+  return cp == ')' || cp == '|' || cp == '(' || cp == '@' || cp == '-';
+}
+
+// Reserved characters: always invalid as bare text content at the start of
+// a token or after tokenizer extraction. Their appearance is a syntax error.
+bool IsReservedChar(uint32_t cp) {
+  return cp == '{' || cp == '}' || cp == '[' || cp == ']' || cp == ':' ||
+         cp == ';' || cp == '$';
+}
+
+// Wildcard/fuzzy markers: context-dependent characters that the parser
+// consumes before/after word content (Phase 1 and Phase 3).
+bool IsWildcardMarker(uint32_t cp) { return cp == '*' || cp == '%'; }
+
+// Composite: all characters that have syntactic meaning in the query grammar.
+// The tokenizer must not consume these as word content.
 bool IsQuerySyntaxChar(uint32_t cp) {
-  return cp == ')' || cp == '|' || cp == '(' || cp == '@' || cp == '"' ||
-         cp == '%' || cp == '*' || cp == '-' || cp == '{' || cp == '}' ||
-         cp == '[' || cp == ']' || cp == ':' || cp == ';' || cp == '$';
+  return IsClauseSeparator(cp) || IsReservedChar(cp) || IsWildcardMarker(cp) ||
+         cp == '"';
 }
 }  // namespace
 
 // Helper function to print predicate tree structure using DFS
-std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
+std::string PrintPredicateTree(const query::Predicate *predicate, int indent) {
   std::string result;
   std::string indent_str(indent * 2, ' ');
 
@@ -107,8 +127,8 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
 
   switch (predicate->GetType()) {
     case query::PredicateType::kComposedAnd: {
-      const auto* composed =
-          static_cast<const query::ComposedPredicate*>(predicate);
+      const auto *composed =
+          static_cast<const query::ComposedPredicate *>(predicate);
       auto slop = composed->GetSlop();
       if (composed->GetInorder() == false && !slop.has_value()) {
         result += indent_str + "AND{\n";
@@ -118,68 +138,68 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
                   ", inorder=" + (composed->GetInorder() ? "true" : "false") +
                   "){\n";
       }
-      for (const auto& child : composed->GetChildren()) {
+      for (const auto &child : composed->GetChildren()) {
         result += PrintPredicateTree(child.get(), indent + 1);
       }
       result += indent_str + "}\n";
       break;
     }
     case query::PredicateType::kComposedOr: {
-      const auto* composed =
-          static_cast<const query::ComposedPredicate*>(predicate);
+      const auto *composed =
+          static_cast<const query::ComposedPredicate *>(predicate);
       result += indent_str + "OR{\n";
-      for (const auto& child : composed->GetChildren()) {
+      for (const auto &child : composed->GetChildren()) {
         result += PrintPredicateTree(child.get(), indent + 1);
       }
       result += indent_str + "}\n";
       break;
     }
     case query::PredicateType::kNegate: {
-      const auto* negate =
-          static_cast<const query::NegatePredicate*>(predicate);
+      const auto *negate =
+          static_cast<const query::NegatePredicate *>(predicate);
       result += indent_str + "NOT{\n";
       result += PrintPredicateTree(negate->GetPredicate(), indent + 1);
       result += indent_str + "}\n";
       break;
     }
     case query::PredicateType::kNumeric: {
-      const auto* numeric =
-          static_cast<const query::NumericPredicate*>(predicate);
+      const auto *numeric =
+          static_cast<const query::NumericPredicate *>(predicate);
       result +=
           indent_str + "NUMERIC(" + std::string(numeric->GetAlias()) + ")\n";
       break;
     }
     case query::PredicateType::kTag: {
-      const auto* tag = static_cast<const query::TagPredicate*>(predicate);
+      const auto *tag = static_cast<const query::TagPredicate *>(predicate);
       result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
       break;
     }
     case query::PredicateType::kText: {
-      const auto* text = static_cast<const query::TextPredicate*>(predicate);
+      const auto *text = static_cast<const query::TextPredicate *>(predicate);
       std::string field_mask_str = std::to_string(text->GetFieldMask());
 
       // Determine specific text predicate type
-      if (auto term = dynamic_cast<const query::TermPredicate*>(predicate)) {
+      if (auto term = dynamic_cast<const query::TermPredicate *>(predicate)) {
         result += indent_str + "TEXT-TERM(\"" +
                   std::string(term->GetTextString()) +
                   "\", field_mask=" + field_mask_str + ")\n";
       } else if (auto prefix =
-                     dynamic_cast<const query::PrefixPredicate*>(predicate)) {
+                     dynamic_cast<const query::PrefixPredicate *>(predicate)) {
         result += indent_str + "TEXT-PREFIX(\"" +
                   std::string(prefix->GetTextString()) +
                   "\", field_mask=" + field_mask_str + ")\n";
       } else if (auto suffix =
-                     dynamic_cast<const query::SuffixPredicate*>(predicate)) {
+                     dynamic_cast<const query::SuffixPredicate *>(predicate)) {
         result += indent_str + "TEXT-SUFFIX(\"" +
                   std::string(suffix->GetTextString()) +
                   "\", field_mask=" + field_mask_str + ")\n";
       } else if (auto infix =
-                     dynamic_cast<const query::InfixPredicate*>(predicate)) {
+                     dynamic_cast<const query::InfixPredicate *>(predicate)) {
         result += indent_str + "TEXT-INFIX(\"" +
                   std::string(infix->GetTextString()) +
                   "\", field_mask=" + field_mask_str + ")\n";
       } else if (auto fuzzy =
-                     dynamic_cast<const query::FuzzyPredicate*>(predicate)) {
+                     dynamic_cast<const query::FuzzyPredicate *>(predicate)) {
         result += indent_str + "TEXT-FUZZY(\"" +
                   std::string(fuzzy->GetTextString()) +
                   "\", distance=" + std::to_string(fuzzy->GetDistance()) +
@@ -196,9 +216,9 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
   return result;
 }
 
-FilterParser::FilterParser(const IndexSchema& index_schema,
+FilterParser::FilterParser(const IndexSchema &index_schema,
                            absl::string_view expression,
-                           const TextParsingOptions& options)
+                           const TextParsingOptions &options)
     : index_schema_(index_schema),
       expression_(absl::StripAsciiWhitespace(expression)),
       options_(options),
@@ -215,9 +235,9 @@ bool FilterParser::Match(char expected, bool skip_whitespace) {
   return false;
 }
 
-bool FilterParser::MatchInsensitive(const std::string& expected) {
+bool FilterParser::MatchInsensitive(const std::string &expected) {
   auto old_pos = pos_;
-  for (const auto& itr : expected) {
+  for (const auto &itr : expected) {
     if (!Match(itr, false) && !Match(absl::ascii_tolower(itr), false)) {
       pos_ = old_pos;
       return false;
@@ -290,7 +310,7 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
 }
 
 absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
-FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
+FilterParser::ParseNumericPredicate(const std::string &attribute_alias) {
   auto index = index_schema_.GetIndex(attribute_alias);
   if (!index.ok() ||
       index.value()->GetIndexerType() != indexes::IndexerType::kNumeric) {
@@ -328,7 +348,7 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
                      pos_));
   }
   auto numeric_index =
-      dynamic_cast<const indexes::Numeric*>(index.value().get());
+      dynamic_cast<const indexes::Numeric *>(index.value().get());
   query_operations_ |= QueryOperations::kContainsNumeric;
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
@@ -366,7 +386,7 @@ FilterParser::ParseQueryTags(absl::string_view tag_string) {
 }
 
 absl::StatusOr<std::unique_ptr<query::TagPredicate>>
-FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
+FilterParser::ParseTagPredicate(const std::string &attribute_alias) {
   auto index = index_schema_.GetIndex(attribute_alias);
   if (!index.ok() ||
       index.value()->GetIndexerType() != indexes::IndexerType::kTag) {
@@ -376,7 +396,7 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
   auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
   filter_identifiers_.insert(identifier);
 
-  auto tag_index = dynamic_cast<indexes::Tag*>(index.value().get());
+  auto tag_index = dynamic_cast<indexes::Tag *>(index.value().get());
   VMSDK_ASSIGN_OR_RETURN(auto tag_string, ParseTagString());
   VMSDK_ASSIGN_OR_RETURN(auto parsed_tags, ParseQueryTags(tag_string));
   query_operations_ |= QueryOperations::kContainsTag;
@@ -433,10 +453,10 @@ absl::StatusOr<bool> FilterParser::IsMatchAllExpression() {
 }
 
 void FilterParser::FlagNestedComposedPredicate(
-    std::unique_ptr<query::Predicate>& predicate) {
-  auto* composed = dynamic_cast<query::ComposedPredicate*>(predicate.get());
+    std::unique_ptr<query::Predicate> &predicate) {
+  auto *composed = dynamic_cast<query::ComposedPredicate *>(predicate.get());
   if (!composed) return;
-  for (const auto& child : composed->GetChildren()) {
+  for (const auto &child : composed->GetChildren()) {
     if (child->GetType() == query::PredicateType::kComposedAnd ||
         child->GetType() == query::PredicateType::kComposedOr) {
       query_operations_ |= QueryOperations::kContainsNestedComposed;
@@ -491,8 +511,8 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
 }
 
 inline std::unique_ptr<query::Predicate> MayNegatePredicate(
-    std::unique_ptr<query::Predicate> predicate, bool& negate,
-    QueryOperations& query_operations) {
+    std::unique_ptr<query::Predicate> predicate, bool &negate,
+    QueryOperations &query_operations) {
   if (negate) {
     negate = false;
     query_operations |= QueryOperations::kContainsNegate;
@@ -503,7 +523,7 @@ inline std::unique_ptr<query::Predicate> MayNegatePredicate(
 
 absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     std::unique_ptr<query::Predicate> prev_predicate,
-    std::unique_ptr<query::Predicate> predicate, bool& negate,
+    std::unique_ptr<query::Predicate> predicate, bool &negate,
     query::LogicalOperator logical_operator, bool no_prev_grp,
     bool not_rightmost_bracket) {
   auto new_predicate =
@@ -521,8 +541,8 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   // Only extend AND nodes when we're adding with AND operator
   if (prev_predicate->GetType() == query::PredicateType::kComposedAnd &&
       logical_operator == query::LogicalOperator::kAnd && !no_prev_grp) {
-    auto* composed =
-        dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
+    auto *composed =
+        dynamic_cast<query::ComposedPredicate *>(prev_predicate.get());
     composed->AddChild(std::move(new_predicate));
     query_operations_ |= QueryOperations::kContainsAnd;
     return prev_predicate;
@@ -534,14 +554,14 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       not_rightmost_bracket &&
       new_predicate->GetType() == query::PredicateType::kComposedOr) {
     std::vector<std::unique_ptr<query::Predicate>> new_children;
-    auto* new_composed =
-        dynamic_cast<query::ComposedPredicate*>(new_predicate.get());
+    auto *new_composed =
+        dynamic_cast<query::ComposedPredicate *>(new_predicate.get());
     auto children = new_composed->ReleaseChildren();
     new_children.reserve(1 + children.size());
     if (prev_predicate) {
       new_children.push_back(std::move(prev_predicate));
     }
-    for (auto& child : children) {
+    for (auto &child : children) {
       new_children.push_back(std::move(child));
     }
     query_operations_ |= QueryOperations::kContainsOr;
@@ -571,12 +591,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
 // Quoted Text Syntax:
 // word1 word2" word3 -> word1
 // word2" word3 -> word2
-// Token boundaries (separated by space): " <delimiter> \<non-delimiter>
+// Token boundaries (separated by space): " <punctuation> \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const std::optional<std::string>& field_or_default) {
-  const auto& processor = *text_index_schema->GetProcessor();
-  const auto* tokenizer = processor.GetQueryTokenizer();
+    const std::optional<std::string> &field_or_default) {
+  const auto &processor = *text_index_schema->GetProcessor();
+  const auto *tokenizer = processor.GetQueryTokenizer();
   std::string raw_text;
   if (tokenizer) {
     VMSDK_ASSIGN_OR_RETURN(auto result,
@@ -590,7 +610,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     return FilterParser::TokenResult{nullptr, false};
   }
   // Apply only normalization (no re-segmentation) to the collected token.
-  auto* normalizer = processor.GetNormalizer();
+  auto *normalizer = processor.GetNormalizer();
   if (normalizer) {
     normalizer->NormalizeInPlace(raw_text);
   }
@@ -618,14 +638,14 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
 //   Infix:   *word*
 //   Fuzzy:   %word% | %%word%% | %%%word%%%
 // Token boundaries:
-//   <delimiter> ( ) | @ " - { } [ ] : ; $
+//   <punctuation> ( ) | @ " - { } [ ] : ; $
 // Reserved chars:
 //   { } [ ] : ; $ -> error
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const std::optional<std::string>& field_or_default) {
-  const auto& processor = *text_index_schema->GetProcessor();
-  const auto* tokenizer = processor.GetQueryTokenizer();
+    const std::optional<std::string> &field_or_default) {
+  const auto &processor = *text_index_schema->GetProcessor();
+  const auto *tokenizer = processor.GetQueryTokenizer();
   std::string raw_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
@@ -638,19 +658,14 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   while (!IsEnd()) {
     Peeked pk = PeekCodepoint();
     if (!pk.IsValid()) break;
-    if (pk.cp == ')' || pk.cp == '|' || pk.cp == '(' || pk.cp == '@') {
+    if (IsClauseSeparator(pk.cp)) {
       break_on_query_syntax = true;
       break;
     }
-    if (pk.cp == '{' || pk.cp == '}' || pk.cp == '[' || pk.cp == ']' ||
-        pk.cp == ':' || pk.cp == ';' || pk.cp == '$') {
+    if (IsReservedChar(pk.cp)) {
       return absl::InvalidArgumentError(
           absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
                        expression_.substr(pos_, 1), "`"));
-    }
-    if (pk.cp == '-') {
-      break_on_query_syntax = true;
-      break;
     }
     if (pk.cp == '"') break;
     if (pk.cp == '%') {
@@ -686,9 +701,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       // reject it with an unexpected character error
       if (!IsEnd()) {
         Peeked pk = PeekCodepoint();
-        if (pk.IsValid() &&
-            (pk.cp == '{' || pk.cp == '}' || pk.cp == '[' || pk.cp == ']' ||
-             pk.cp == ':' || pk.cp == ';' || pk.cp == '$')) {
+        if (pk.IsValid() && IsReservedChar(pk.cp)) {
           return absl::InvalidArgumentError(
               absl::StrCat("Unexpected character at position ", pos_ + 1, ": `",
                            expression_.substr(pos_, 1), "`"));
@@ -713,13 +726,14 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     }
   }
 
-  // Normalize the collected token (case folding etc.) — applies to all paths.
-  auto* normalizer = processor.GetNormalizer();
-  if (normalizer) {
-    normalizer->NormalizeInPlace(raw_content);
-  }
+  // Normalize the collected token (case folding etc.) for wildcard/fuzzy paths.
+  // Regular terms use ProcessWord() which applies the full filter chain.
   FieldMaskPredicate field_mask;
   if (leading_percent_count > 0) {
+    auto *normalizer = processor.GetNormalizer();
+    if (normalizer) {
+      normalizer->NormalizeInPlace(raw_content);
+    }
     if (trailing_percent_count == leading_percent_count &&
         leading_percent_count <= options::GetFuzzyMaxDistance().GetValue()) {
       if (raw_content.empty())
@@ -737,6 +751,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       return absl::InvalidArgumentError("Invalid fuzzy '%' markers");
     }
   } else if (starts_with_star) {
+    auto *normalizer = processor.GetNormalizer();
+    if (normalizer) {
+      normalizer->NormalizeInPlace(raw_content);
+    }
     if (raw_content.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(
@@ -755,6 +773,10 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
           break_on_query_syntax};
     }
   } else if (ends_with_star) {
+    auto *normalizer = processor.GetNormalizer();
+    if (normalizer) {
+      normalizer->NormalizeInPlace(raw_content);
+    }
     if (raw_content.empty())
       return absl::InvalidArgumentError("Invalid wildcard '*' markers");
     VMSDK_RETURN_IF_ERROR(
@@ -765,12 +787,15 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
                                                  std::move(raw_content)),
         break_on_query_syntax};
   } else {
-    // Regular term: check stop-word directly (token is already normalized).
+    // Regular term: apply full filter chain (normalize + stop-word + any
+    // future filters) — matches ingestion's ApplyFilters pipeline.
     if (raw_content.empty()) {
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
-    auto* stop_filter = processor.GetStopWordFilter();
-    if (stop_filter && stop_filter->IsStopWord(raw_content)) {
+    if (!processor.ProcessWord(raw_content)) {
+      return FilterParser::TokenResult{nullptr, break_on_query_syntax};
+    }
+    if (raw_content.empty()) {
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
     bool exact = options_.verbatim;
@@ -787,15 +812,15 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
 }
 
 absl::Status FilterParser::SetupTextFieldConfiguration(
-    FieldMaskPredicate& field_mask,
-    const std::optional<std::string>& field_name, bool with_suffix) {
+    FieldMaskPredicate &field_mask,
+    const std::optional<std::string> &field_name, bool with_suffix) {
   if (field_name.has_value()) {
     auto index = index_schema_.GetIndex(*field_name);
     if (!index.ok() ||
         index.value()->GetIndexerType() != indexes::IndexerType::kText) {
       return absl::InvalidArgumentError("Index does not have any text field");
     }
-    auto* text_index = dynamic_cast<const indexes::Text*>(index.value().get());
+    auto *text_index = dynamic_cast<const indexes::Text *>(index.value().get());
     if (with_suffix && !text_index->WithSuffixTrie()) {
       return absl::InvalidArgumentError("Field does not support suffix search");
     }
@@ -831,7 +856,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // parsing stops after first token.
 absl::StatusOr<std::optional<std::unique_ptr<query::Predicate>>>
 FilterParser::ParseTextTokens(
-    const std::optional<std::string>& field_or_default) {
+    const std::optional<std::string> &field_or_default) {
   auto text_index_schema = index_schema_.GetTextIndexSchema();
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
@@ -889,7 +914,7 @@ FilterParser::ParseTextTokens(
     }
     std::vector<std::unique_ptr<query::Predicate>> children;
     children.reserve(terms.size());
-    for (auto& term : terms) {
+    for (auto &term : terms) {
       children.push_back(std::move(term));
     }
     query_operations_ |= QueryOperations::kContainsProximity;

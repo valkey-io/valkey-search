@@ -2,6 +2,19 @@ Valkey Search 1.0 release notes
 =================================
 
 ================================================================================
+Valkey Search 1.0.3 - Released <RELEASE DATE TBD>
+================================================================================
+
+Bug fixes
+=========
+* Hardened load and command paths against crashes found through fuzzing: added validation for HNSW index data loaded from an external file and for query vector size against index dimensions at parse time (#1191, #1192)
+* Fixed an out-of-bounds access in pagination with LIMIT offset (#748)
+* Fixed an unexpected vk-search flag left in the RDB after all indexes are dropped (#847)
+* Avoid a deadlock while processing MULTI/EXEC mutations (#1018)
+* Fixed tag query parsing, including tag OR syntax in hybrid queries (#452, #602)
+* Fixed a use-after-free race in DefaultReplyScoreAs() (#565)
+
+================================================================================
 Valkey Search 1.0.2 - Released Tue 25 November 2025
 ================================================================================
 
@@ -85,7 +98,8 @@ New configurations
 ===========================
 * Add support for the following configurations: reader-threads, writer-threads, use-coordinator, log-level
 
-We appreciate the efforts of all who contributed code to this release!
+================================================================================
+Contributors
+================================================================================
 
-Yair Gottdenker (yairgott), Jacob Murphy (murphyjacob4), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws),
-Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika), Shivshankar-Reddy, KarthikSubbarao, Hyeonho Kim (proost)
+@yairgott, @murphyjacob4, @allenss-amazon, @eifrah-aws, @jeon1226, @QuChen88, @dpbnasika, @Shivshankar-Reddy, @KarthikSubbarao, @proost, @baswanth09, @boda26, @VoletiRam, @zvi-code, @Aksha1812

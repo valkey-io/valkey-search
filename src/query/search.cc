@@ -728,7 +728,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         }
       }
 
-      // dt feeds IDF, whose scorer CHECKs dt <= total_docs. Summing key counts
+      // dt feeds IDF, whose scorer checks dt <= total_docs. Summing key counts
       // across variants can double-count a doc indexed under several variants,
       // so clamp to keep the invariant.
       leaf.num_doc_contain_term =

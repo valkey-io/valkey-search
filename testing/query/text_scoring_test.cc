@@ -100,11 +100,10 @@ class TextScoringTest : public ValkeySearchTest {
     query::ScoreTextQuery(*index_schema_, root, scorer, candidates);
     // ScoreTextQuery no longer sorts (that now happens in TrimResults); order
     // by score desc here to preserve this helper's ranked contract.
-    std::sort(candidates.begin(), candidates.end(),
-              [](const indexes::BorrowedNeighbor& a,
-                 const indexes::BorrowedNeighbor& b) {
-                return a.score > b.score;
-              });
+    std::sort(
+        candidates.begin(), candidates.end(),
+        [](const indexes::BorrowedNeighbor& a,
+           const indexes::BorrowedNeighbor& b) { return a.score > b.score; });
     return candidates;
   }
 

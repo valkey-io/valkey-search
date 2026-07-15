@@ -20,7 +20,7 @@ namespace {
 // singleton. ICU owns these instances; callers must not delete, copy, or cache
 // their own. A failure status / null result means the ICU normalization data is
 // not linked, which is a build problem (see Normalize()).
-const icu::Normalizer2* InstanceFor(NormalizationForm form, UErrorCode& ec) {
+const icu::Normalizer2 *InstanceFor(NormalizationForm form, UErrorCode &ec) {
   switch (form) {
     case NormalizationForm::NFC:
       return icu::Normalizer2::getNFCInstance(ec);
@@ -52,7 +52,7 @@ std::string UnicodeNormalizer::Normalize(absl::string_view text,
   }
 
   UErrorCode ec = U_ZERO_ERROR;
-  const icu::Normalizer2* normalizer = InstanceFor(form, ec);
+  const icu::Normalizer2 *normalizer = InstanceFor(form, ec);
   // A failure or null instance here means ICU normalization data is not linked.
   // With our static data packaging this can only happen in a broken build, not
   // from user input, so fail loudly rather than silently skip normalization.
@@ -81,7 +81,7 @@ std::string UnicodeNormalizer::Normalize(absl::string_view text,
   return out;
 }
 
-void UnicodeNormalizer::CaseFoldInPlace(std::string& str) {
+void UnicodeNormalizer::CaseFoldInPlace(std::string &str) {
   // UTF-8-native case folding via CaseMap::utf8Fold (no manual UTF-16
   // round-trip). Like normalizeUTF8, this does not substitute U+FFFD for
   // malformed input; callers needing that must sanitize first
@@ -93,6 +93,31 @@ void UnicodeNormalizer::CaseFoldInPlace(std::string& str) {
                          /*edits=*/nullptr, ec);
   CHECK(U_SUCCESS(ec)) << "ICU utf8Fold failed: " << u_errorName(ec);
   str = std::move(out);
+}
+
+std::string UnicodeNormalizer::LocaleAwareCaseFold(absl::string_view text,
+                                                   const std::string &locale) {
+  if (text.empty()) {
+    return std::string();
+  }
+
+  // Turkish (and Azerbaijani) require locale-aware case mapping because:
+  //   - U+0049 (I) must map to U+0131 (ı) — dotless lowercase i
+  //   - U+0130 (İ) must map to U+0069 (i) — regular lowercase i
+  // Generic Unicode case folding maps both I and İ to i, which breaks
+  // Turkish text retrieval (queries for "ılık" won't match "ILIK").
+  //
+  // We use ICU's utf8ToLower with the Turkish locale rather than utf8Fold,
+  // because utf8Fold is locale-independent by design (Unicode CaseFolding.txt
+  // does not have Turkish-specific mappings).
+  std::string out;
+  icu::StringByteSink<std::string> sink(&out);
+  UErrorCode ec = U_ZERO_ERROR;
+  icu::CaseMap::utf8ToLower(locale.c_str(), /*options=*/0, ToStringPiece(text),
+                            sink, /*edits=*/nullptr, ec);
+  CHECK(U_SUCCESS(ec)) << "ICU utf8ToLower failed for locale '" << locale
+                       << "': " << u_errorName(ec);
+  return out;
 }
 
 }  // namespace valkey_search::indexes::text

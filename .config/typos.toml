@@ -6,7 +6,9 @@ extend-exclude = [
     "third_party/snowball/**",
     "third_party/icu/**",
     "src/indexes/text/rax/**",
-    "src/indexes/text/stop_words.h"
+    "src/indexes/text/stop_words.h",
+    "testing/language_processor_test.cc",
+    "testing/snowball_stem_test.cc"
 ]
 
 [default]
@@ -19,6 +21,7 @@ extend-ignore-re = [
     ".*unning"
 ]
 [default.extend-words]
+continuent = "continuent"
 caf = "caf"
 Fo = "Fo"
 InFo = "InFo"

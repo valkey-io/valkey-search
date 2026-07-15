@@ -12,12 +12,15 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/invasive_ptr.h"
+#include "src/indexes/text/punctuation.h"
+#include "src/indexes/text/stop_words.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -268,7 +271,8 @@ INSTANTIATE_TEST_SUITE_P(
             "Case sensitivity in tokenization"},
         TextIndexTestCase{
             "Hello мир 世界 test",
-            {"hello", "test"},            // Unicode handling may vary by lexer
+            {"hello",
+             "test"},  // Unicode handling may vary by LanguageProcessor
             {{"hello", 1}, {"test", 1}},  // positional
             {{"hello", 1}, {"test", 1}},  // boolean
             1,
@@ -593,6 +597,99 @@ TEST_F(TextTest, FuzzyMultiByteDistance2) {
   auto d2_miss = text::FuzzySearch::Search(tree, "mcn", /*max_distance=*/2,
                                            /*max_words=*/100);
   EXPECT_EQ(d2_miss.size(), 0u);
+}
+
+// ==========================================================================
+// Multi-language schema integration: verifies that non-English processors are
+// wired correctly through TextIndexSchema (factory, stop words, punctuation,
+// stem tree).
+
+class TextMultiLanguageTest : public ::testing::Test {
+ protected:
+  std::shared_ptr<text::TextIndexSchema> CreateSchema(
+      data_model::Language language) {
+    return std::make_shared<text::TextIndexSchema>(
+        language, text::GetDefaultPunctuation(language), false,
+        text::GetDefaultStopWords(language), 4);
+  }
+
+  std::unique_ptr<Text> CreateTextIndex(
+      std::shared_ptr<text::TextIndexSchema> schema, bool stemming = true) {
+    data_model::TextIndex proto;
+    proto.set_no_stem(!stemming);
+    return std::make_unique<Text>(proto, schema);
+  }
+
+  void IndexDocument(Text* text_index,
+                     std::shared_ptr<text::TextIndexSchema> schema,
+                     const std::string& key_name, absl::string_view data) {
+    auto key = StringInternStore::Intern(key_name);
+    auto result = text_index->AddRecord(key, data);
+    ASSERT_TRUE(result.ok()) << result.status();
+    ASSERT_TRUE(result.value());
+    schema->CommitKeyData(key);
+  }
+
+  bool TokenExists(std::shared_ptr<text::TextIndexSchema> schema,
+                   const std::string& token) {
+    auto iter = schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
+    return !iter.Done();
+  }
+};
+
+TEST_F(TextMultiLanguageTest, NonEnglishStopWordsFiltered) {
+  auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);
+  auto text_index = CreateTextIndex(schema);
+
+  IndexDocument(text_index.get(), schema, "doc:1", "je suis dans la maison");
+
+  EXPECT_FALSE(TokenExists(schema, "je"));
+  EXPECT_FALSE(TokenExists(schema, "dans"));
+  EXPECT_FALSE(TokenExists(schema, "la"));
+  EXPECT_TRUE(TokenExists(schema, "maison"));
+}
+
+TEST_F(TextMultiLanguageTest, NonAsciiPunctuationSplitting) {
+  auto schema = CreateSchema(data_model::LANGUAGE_ARABIC);
+  auto text_index = CreateTextIndex(schema, false);
+
+  IndexDocument(text_index.get(), schema, "doc:1", "مرحبا\xD8\x8Cعالم");
+
+  EXPECT_TRUE(TokenExists(schema, "مرحبا"));
+  EXPECT_TRUE(TokenExists(schema, "عالم"));
+}
+
+TEST_F(TextMultiLanguageTest, StemExpansionNonEnglish) {
+  auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);
+  schema->SetStemTextFieldMask(1);
+  auto text_index = CreateTextIndex(schema);
+
+  IndexDocument(text_index.get(), schema, "doc:1", "continuellement");
+  IndexDocument(text_index.get(), schema, "doc:2", "continuelle");
+
+  absl::InlinedVector<absl::string_view, text::kStemVariantsInlineCapacity>
+      words;
+  schema->GetAllStemVariants("continuellement", words, 1, false);
+  EXPECT_GE(words.size(), 1u);
+}
+
+TEST_F(TextMultiLanguageTest, DeleteCleansNonEnglishStemTree) {
+  auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);
+  schema->SetStemTextFieldMask(1);
+  auto text_index = CreateTextIndex(schema);
+
+  auto key = StringInternStore::Intern("doc:1");
+  {
+    auto result = text_index->AddRecord(key, "continuellement");
+    ASSERT_TRUE(result.ok());
+    schema->CommitKeyData(key);
+  }
+
+  EXPECT_TRUE(TokenExists(schema, "continuellement"));
+
+  schema->DeleteKeyData(key);
+
+  EXPECT_FALSE(TokenExists(schema, "continuellement"));
 }
 
 }  // namespace valkey_search::indexes

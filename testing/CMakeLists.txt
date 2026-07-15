@@ -73,10 +73,10 @@ finalize_test_flags(commands_test)
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/snowball_processor_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/language_processor_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/snowball_stem_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/unicode_normalizer_test.cc

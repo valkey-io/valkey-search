@@ -16,7 +16,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language_processor.h"
 #include "src/query/predicate.h"
 #include "src/utils/scanner.h"
 #include "vmsdk/src/module_config.h"
@@ -87,8 +87,6 @@ class FilterParser {
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 
-  absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
-                                             std::string& processed_content);
   struct TokenResult {
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
@@ -100,6 +98,7 @@ class FilterParser {
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       const std::optional<std::string>& field_or_default);
+
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);

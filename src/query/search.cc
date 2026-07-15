@@ -829,7 +829,11 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   if constexpr (std::is_same_v<T, indexes::BorrowedNeighbor>) {
     auto cmp = [](const indexes::BorrowedNeighbor &a,
                   const indexes::BorrowedNeighbor &b) {
-      return a.score > b.score;
+      if (a.score != b.score) {
+        return a.score > b.score;
+      }
+      // Tie-break on key ascending for a deterministic result order.
+      return a.key->Str() < b.key->Str();
     };
     size_t sort_limit = std::min(max_needed, vec.size());
     if (sort_limit < vec.size()) {

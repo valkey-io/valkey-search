@@ -37,7 +37,7 @@ class Bm25StdScorer : public Scorer {
                       uint32_t num_doc_contain_term) const override;
 
   // Scores one leaf given a precomputed IDF. Returns 0 for a degenerate corpus
-  // (avg_doc_len <= 0). CHECKs that stats is a Bm25StdStats.
+  // (avg_doc_len <= 0). Check stats is a Bm25StdStats.
   float ScoreLeaf(float idf, const ScoringStats& stats,
                   float leaf_weight) const override;
 

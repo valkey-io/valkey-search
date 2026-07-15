@@ -445,12 +445,20 @@ void ProcessNeighborsForReply(
                      }),
       neighbors.end());
 
-  // Re-sort by score after main-thread re-evaluation and drops.
-  if (!neighbors.empty() && !parameters.sortby_parameter.has_value()) {
+  // Re-sort by relevance score after main-thread re-evaluation and drops.
+  // Only for non-vector queries: for KNN, Neighbor.score holds the distance
+  // (lower is better) and results already arrive ascending, so a descending
+  // re-sort here would reverse the correct order.
+  if (!neighbors.empty() && parameters.IsNonVectorQuery() &&
+      !parameters.sortby_parameter.has_value()) {
     std::stable_sort(
         neighbors.begin(), neighbors.end(),
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-          return a.score > b.score;
+          if (a.score != b.score) {
+            return a.score > b.score;
+          }
+          // Tie-break on key ascending for a deterministic result order
+          return a.external_id->Str() < b.external_id->Str();
         });
   }
 }

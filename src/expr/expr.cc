@@ -499,11 +499,17 @@ struct Compiler {
   //  MulOp: * / ^
   //  AddOp: + -
   //  CmpOp: < <= == != > >=
-  //  LogOp: || &&
+  //  LandOp: &&
+  //  LorOp: ||
   //
   absl::StatusOr<ExprPtr> LorOp(CompileContext& ctx) {
     static std::vector<DyadicOp> ops{
         {"||", &FuncLor},
+    };
+    return DoDyadic(ctx, &Compiler::LandOp, ops);
+  }
+  absl::StatusOr<ExprPtr> LandOp(CompileContext& ctx) {
+    static std::vector<DyadicOp> ops{
         {"&&", &FuncLand},
     };
     return DoDyadic(ctx, &Compiler::CmpOp, ops);

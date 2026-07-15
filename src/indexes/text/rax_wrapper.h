@@ -18,9 +18,11 @@ always done in lexical order.
 
 A PathIterator API is also provided to enable fuzzy searching.
 
-TODO: Another feature of a RadixTree is the ability to provide a count of the
-entries that have a common prefix in O(len(prefix)) time. This is useful in
-query planning.
+Rax has also been extended with the ability to provide a count of items in a
+subtree in O(len(prefix)) time. The count is controlled by the caller who can
+dictate if a mutation operation to a target should add or subtract from the item
+count at that node. This is useful in query planning where we track the number
+of keys in a text index's subtree.
 
 */
 
@@ -80,14 +82,8 @@ class Rax {
   // return value of the mutate function is the new value for this word. if the
   // return value is nullopt then this word is deleted from the RadixTree.
   //
-  // (TODO) This function is explicitly multi-thread safe and is
-  // designed to allow other mutations to be performed on other words and
-  // targets simultaneously, with minimal collisions.
-  //
-  // In all cases, the mutate function is invoked once under the locking
-  // provided by the RadixTree itself, so if the target objects are disjoint
-  // (which is normal) then no locking is required within the mutate function
-  // itself.
+  // This function provides no thread-safety guarantees. In all cases the
+  // mutate function is invoked under write-exclusivity provided by the caller.
   //
   void MutateTarget(absl::string_view word,
                     absl::FunctionRef<void *(void *)> mutate,

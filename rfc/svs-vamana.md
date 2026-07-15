@@ -54,54 +54,91 @@ The SVS nightly tarball ships a pre-compiled runtime with all algorithms (FP32, 
 - C++ vtable ABI is fragile across compiler versions
 - Memory accounting is opaque — `malloc` interposition cannot intercept SVS allocations because the runtime has its own PLT entries
 
-#### Target Model: C API `.so` Swap (Recommended)
+#### Target Model: C API + SharedAPI Hybrid (Recommended)
 
 ```
 valkey-server
   └── MODULE LOAD libsearch.so
-         └── DT_NEEDED: libsvs_c_api.so (one of two variants)
-
-Variant A (open-source, default):
-  libsvs_c_api.so — built without SVS_RUNTIME_ENABLE_LVQ_LEANVEC
-  Supports: FP32, FP16, SQ8
-  svs_storage_create_lvq() → SVS_ERROR_NOT_IMPLEMENTED
-
-Variant B (proprietary, opt-in):
-  libsvs_c_api.so — built with SVS_RUNTIME_ENABLE_LVQ_LEANVEC + private headers
-  Supports: FP32, FP16, SQ8, LVQ4/8, LeanVec
-  svs_storage_create_lvq() → success
+         ├── links: libsvs_c_api.so (open-source, built from Apache-2.0 source)
+         │     └── stable C ABI: graph ops, search, add, save/load
+         │     └── supports: FP32, FP16, SQ8
+         │
+         └── discovers at runtime via ValkeyModule_GetSharedAPI:
+               └── MODULE LOAD libsearch_svs_pro.so (optional, loaded at any time)
+                     └── exports: "SVS_CompressStorage", "SVS_GetSupportedTypes", ...
+                     └── enables: LVQ4/8, LeanVec
 ```
 
-The C API (`svs_c.h`, Apache-2.0) is under development on the [dev/c-api branch](https://github.com/intel/ScalableVectorSearch/tree/dev/c-api/bindings/c). It provides:
-- Stable C ABI across compiler versions and platforms
-- `extern "C"` symbols only (via `-fvisibility=hidden` + explicit `SVS_API` marking)
-- Proprietary algorithms controlled by compile-time defines (`SVS_RUNTIME_ENABLE_LVQ_LEANVEC`)
-- Both variants share identical SONAME (`libsvs_c_api.so.0`) and symbol table — they differ only in runtime behavior
+This model combines the C API's ABI stability for core operations with Valkey's existing SharedAPI mechanism for runtime-extensible compression backends. The precedent is the JSON module integration in `src/attribute_data_type.cc`, where `ValkeyModule_GetSharedAPI(ctx, "JSON_GetValue")` discovers the JSON module's function pointer at runtime without a restart.
+
+**How it works:**
+
+1. `libsearch.so` links against `libsvs_c_api.so` (open-source, Apache-2.0) for all core index operations: graph construction, search, add/remove, save/load, memory accounting. This provides FP32, FP16, and SQ8 out of the box.
+
+2. For proprietary compression (LVQ, LeanVec), `libsearch.so` discovers an optional `libsearch_svs_pro.so` module via SharedAPI at runtime — identical to how it discovers JSON support:
+
+```cpp
+static SvsCompressStorageFn svs_compress = nullptr;
+static SvsGetSupportedTypesFn svs_get_supported = nullptr;
+static std::optional<bool> is_svs_pro_loaded;
+
+bool IsSvsProSupported(ValkeyModuleCtx *ctx) {
+    if (is_svs_pro_loaded.has_value() && is_svs_pro_loaded.value()) {
+        return true;
+    }
+    is_svs_pro_loaded = vmsdk::IsModuleLoaded(ctx, "search_svs_pro");
+    if (!is_svs_pro_loaded.value()) return false;
+
+    svs_compress = (SvsCompressStorageFn)ValkeyModule_GetSharedAPI(
+        ctx, "SVS_CompressStorage");
+    svs_get_supported = (SvsGetSupportedTypesFn)ValkeyModule_GetSharedAPI(
+        ctx, "SVS_GetSupportedTypes");
+    return svs_compress != nullptr;
+}
+```
+
+3. Deferred compression integrates naturally: when the training threshold is crossed, valkey-search checks `IsSvsProSupported()`. If the pro module is present, it compresses to the target type (LVQ/LeanVec). If absent, the index either stays uncompressed or falls back to SQ8 via the base C API.
+
+**Runtime behavior:**
+
+| Scenario | Behavior |
+|----------|----------|
+| Only `libsearch.so` loaded | FP32/FP16/SQ8 via C API. LVQ/LeanVec requests → error at FT.CREATE |
+| `libsearch_svs_pro.so` loaded later | Hot-registers LVQ/LeanVec. New FT.CREATE calls can use them immediately |
+| Pro module unloaded | Existing compressed indexes continue serving (data is in-memory). New FT.CREATE with LVQ → error |
+| Deferred compression triggers | Pro present → compress to target. Pro absent → stay uncompressed or fall back to SQ8, log warning |
+
+**Module unload safety:** `MODULE UNLOAD libsearch_svs_pro` is refused if any active index uses a compression type that requires the pro module's SIMD distance kernels. This is enforced via a reference count incremented at index creation and decremented at index drop.
 
 **Migration path:**
-1. valkey-search switches from `svs::svs_runtime` to `libsvs_c_api.so`
-2. `vector_svs.cc` calls C functions (`svs_index_build_dynamic`, `svs_index_search`, etc.) instead of C++ vtable methods
-3. Memory accounting calls the C API: `svs_index_get_memory_usage()`
-4. Intel publishes two variants of the tarball: open-source (default) and proprietary
+1. valkey-search migrates from `svs::svs_runtime` C++ vtable to `libsvs_c_api.so` C functions for core operations
+2. `vector_svs.cc` calls `svs_index_build_dynamic`, `svs_index_search`, etc. via the C API
+3. Compression backends beyond SQ8 are registered by `libsearch_svs_pro.so` via `ValkeyModule_ExportSharedAPI`
+4. Memory accounting uses `svs_index_get_memory_usage()` from the C API for base operations; pro module reports additional compressed storage via its own SharedAPI function
+
+**Responsibilities:**
+- Intel SVS team: implements and maintains the C API (`libsvs_c_api.so`)
+- valkey-search (this team): implements the SharedAPI integration, pro module interface contract, and deferred compression orchestration
 
 #### Alternative Approaches Considered
 
-| Dimension | Current (Runtime .so) | SharedAPI (Module-to-Module) | dlopen Plugin | C API .so Swap |
-|-----------|----------------------|------------------------------|---------------|----------------|
-| Deployment files | 2 | 3+ | 2 + plugins | 2 |
-| Operator complexity | Low | Medium | Medium | Low |
-| Hot-pluggable | No | Yes | Partial (load only) | No (restart) |
-| ABI stability | C++ vtable (fragile) | void* (manual version) | C function ptrs (stable) | C (stable) |
-| Memory accounting | Needs external contract | Unified (same process) | Unified (same process) | Via C API |
-| Licensing boundary | Build artifact | Module boundary | .so file boundary | .so file boundary |
-| Existing precedent | Current model | JSON integration in valkey-search | Common pattern | dev/c-api branch |
-| Multi-vendor support | No | Yes (multiple modules) | Yes (multiple plugins) | No (single .so) |
+| Dimension | Current (Runtime .so) | C API .so Swap | dlopen Plugin | **C API + SharedAPI (recommended)** |
+|-----------|----------------------|----------------|---------------|--------------------------------------|
+| Deployment files | 2 | 2 | 2 + plugins | 2–3 |
+| Operator complexity | Low | Low | Medium | Low |
+| Hot-pluggable | No | No (restart) | Partial (load only) | Yes (MODULE LOAD/UNLOAD) |
+| ABI stability | C++ vtable (fragile) | C (stable) | C function ptrs (stable) | C (stable) |
+| Memory accounting | Needs external contract | Via C API | Unified (same process) | Via C API + SharedAPI |
+| Licensing boundary | Build artifact | .so file boundary | .so file boundary | Module boundary |
+| Existing precedent | Current model | dev/c-api branch | Common pattern | JSON integration in valkey-search |
+| Multi-vendor support | No | No (single .so) | Yes (multiple plugins) | Yes (multiple modules) |
+| Graceful degradation | No | No (binary choice) | Partial | Yes (features degrade per-type) |
 
-**Approach 2 (SharedAPI)** uses `ValkeyModule_GetSharedAPI` / `ValkeyModule_ExportSharedAPI` (precedent: JSON integration in `src/attribute_data_type.cc`) to let a separate `libsearch_svs_pro.so` module register proprietary algorithms at load time. This is viable if hot-pluggability or multi-tenant licensing is needed.
+**Alternative 1: Pure C API .so Swap** — `libsearch.so` links a single `libsvs_c_api.so` that is either the open-source build (FP32/FP16/SQ8) or the proprietary build (adds LVQ/LeanVec). Simple deployment, but requires a server restart to switch variants and cannot gracefully degrade per-compression-type.
 
-**Approach 3 (dlopen Plugin)** scans a `--svs-plugin-dir` at module load time, loading `.so` plugins that register algorithms via a versioned C function-pointer contract. This gives the module full control over plugin lifecycle without depending on Valkey's module management.
+**Alternative 2: dlopen Plugin** — `libsearch.so` scans a `--svs-plugin-dir` at module load time, loading `.so` plugins that register compression backends via a versioned C function-pointer contract. This avoids depending on Valkey's module management but loses hot-pluggability (plugins load only at module init).
 
-Both alternative approaches are deferred — the C API swap (Approach 4) has the lowest integration risk and the upstream infrastructure already exists.
+**Alternative 3: Current model (deferred)** — Continue using Intel's pre-built runtime `.so` with C++ vtable interface. Not viable long-term due to ABI fragility, all-or-nothing licensing, and opaque memory accounting.
 
 ### Deferred Compression
 
@@ -109,10 +146,26 @@ Traditional compressed vector indexes require a training phase. SVS implements d
 
 1. The index starts with FP32 or FP16 storage regardless of target compression type.
 2. Queries are served immediately using the uncompressed representation.
-3. When live vector count reaches `LEANVEC_TRAINING_THRESHOLD`, the SVS runtime trains the compression model and swaps the data backend.
+3. When live vector count reaches `LEANVEC_TRAINING_THRESHOLD`, valkey-search initiates the compression transition.
 4. The graph structure, ID translator, and entry point are preserved — only the data storage layer changes.
 
 This is exposed in `FT.INFO` as a `state` field: `"training"` while below threshold, `"ready"` after compression has been applied.
+
+#### Transition Mechanics
+
+The compression transition uses **copy semantics** to avoid blocking concurrent searches:
+
+1. Threshold crossed — valkey-search detects the live vector count exceeds `LEANVEC_TRAINING_THRESHOLD`.
+2. Capability check — valkey-search calls `IsSvsProSupported(ctx)` to verify the target compression is available:
+   - FP16/SQ8: always available via `libsvs_c_api.so`
+   - LVQ/LeanVec: requires `libsearch_svs_pro.so` to be loaded
+3. Clone with new storage — a new index is built with compressed storage, copying the graph structure from the existing index. Searches continue against the original uncompressed index during this phase.
+4. Atomic swap — once the compressed index is ready, valkey-search atomically swaps the index pointer. The old uncompressed storage is freed.
+5. Memory accounting update — the freed memory is reflected in `FT.INFO` and per-index byte counters.
+
+**Hard constraint:** Searches must never block for more than ~10ms during the transition. The copy-then-swap approach ensures this — 2× peak memory during the overlap window is acceptable.
+
+**Fallback behavior:** If the target compression is unavailable at transition time (pro module not loaded), the index remains uncompressed and logs a warning. If the target is unavailable at `FT.CREATE` time, the command returns an error immediately.
 
 ### Platform Requirements
 
@@ -259,39 +312,46 @@ valkey-search integrates with SVS via Intel's runtime library, which provides:
 - `reconstruct_at()` for exact vector retrieval
 - `get_distance()` for pairwise distance computation
 
-#### C API Migration (Target Architecture)
+#### C API (Core Operations)
 
-The stable C API (`svs_c.h`) will provide:
+The stable C API (`svs_c.h`, implemented by Intel SVS team) provides the foundation for all index operations:
 - Stable ABI (C linkage, opaque handles) replacing C++ vtable interface
 - Custom threadpool callback interface for integration with valkey-search's reader thread pools
-- Source-buildable library enabling the swappable deployment model
-- Runtime capability detection: `svs_storage_is_supported(kind)` for graceful handling of missing backends
+- Source-buildable from the Apache-2.0 repository (FP32, FP16, SQ8)
 - Memory accounting: `svs_index_get_memory_usage()` for per-index byte attribution
+- Clone with recompression: `svs_index_clone_dynamic()` for deferred compression transitions
 
-#### Proprietary Algorithm Separation
+valkey-search links `libsvs_c_api.so` at build time. All graph construction, search, add/remove, and persistence operations go through this interface regardless of whether proprietary backends are loaded.
 
-The C API build system controls algorithm availability:
+#### SharedAPI Extension (Proprietary Compression)
 
-```cmake
-if(SVS_RUNTIME_ENABLE_LVQ_LEANVEC)
-    target_compile_definitions(svs_c_api PRIVATE SVS_RUNTIME_ENABLE_LVQ_LEANVEC)
-    target_compile_definitions(svs_c_api PRIVATE SVS_LVQ_HEADER="${SVS_LVQ_HEADER}")
-    target_compile_definitions(svs_c_api PRIVATE SVS_LEANVEC_HEADER="${SVS_LEANVEC_HEADER}")
-else()
-    # Open-source only — LVQ/LeanVec calls return NOT_IMPLEMENTED
-endif()
+Proprietary compression backends (LVQ, LeanVec) are provided by a separate Valkey module (`libsearch_svs_pro.so`) that registers its capabilities via `ValkeyModule_ExportSharedAPI`. This follows the same pattern as JSON support in `src/attribute_data_type.cc`.
+
+The pro module exports:
+- `SVS_CompressStorage` — performs the actual vector recompression (FP32 → LVQ/LeanVec)
+- `SVS_GetSupportedTypes` — returns the list of compression types available
+- `SVS_GetStorageMemory` — reports memory usage of compressed storage for accounting
+
+valkey-search discovers these at runtime:
+```cpp
+svs_compress = (SvsCompressStorageFn)ValkeyModule_GetSharedAPI(
+    ctx, "SVS_CompressStorage");
 ```
 
-When `SVS_RUNTIME_ENABLE_LVQ_LEANVEC` is OFF, calling `svs_storage_create_lvq()` returns `SVS_ERROR_NOT_IMPLEMENTED`. valkey-search translates this to a user-facing error: `"LVQ compression requires the Intel SVS proprietary runtime"`.
+This separation means:
+- `libsearch.so` ships as fully open-source (BSD-3-Clause) with no proprietary dependencies
+- Operators opt in to LVQ/LeanVec by loading the pro module (`MODULE LOAD libsearch_svs_pro.so`) at any time — no restart required
+- The pro module can be upgraded independently of valkey-search
 
 ### Dependencies
 
-| Dependency | Version | License | Purpose |
-|------------|---------|---------|---------|
-| Intel SVS Runtime (`libsvs_runtime.so`) | 0.4.0 | Proprietary (binary-only, free license) | Current: DynamicVamana graph, all compression backends |
-| Intel SVS C API (`libsvs_c_api.so`) | TBD | Apache-2.0 (open-source variant) or Proprietary (full variant) | Target: stable C ABI, swappable algorithm set |
+| Dependency | Version | License | Purpose | Owner |
+|------------|---------|---------|---------|-------|
+| Intel SVS Runtime (`libsvs_runtime.so`) | 0.4.0 | Proprietary (binary-only, free license) | Current: DynamicVamana graph, all compression backends | Intel SVS team |
+| Intel SVS C API (`libsvs_c_api.so`) | TBD | Apache-2.0 | Target: stable C ABI for core operations (FP32/FP16/SQ8) | Intel SVS team |
+| `libsearch_svs_pro.so` | TBD | Proprietary | Optional: LVQ/LeanVec compression via SharedAPI | valkey-search team (wraps Intel kernels) |
 
-The runtime is fetched as a pre-built x86_64 Linux binary at build time. AVX-512 is recommended; AVX2 is the minimum.
+The C API library is built from the Apache-2.0 source. AVX-512 is recommended; AVX2 is the minimum. The pro module links Intel's proprietary compression kernels and is distributed as a pre-built binary.
 
 ### Testing
 
@@ -302,7 +362,8 @@ The runtime is fetched as a pre-built x86_64 Linux binary at build time. AVX-512
 - **Deferred compression tests**: Threshold triggers training/compression transition; search works throughout
 - **Parameter validation tests**: Invalid combinations produce appropriate errors
 - **Performance tests**: Search latency and recall benchmarks across compression types and dataset sizes
-- **C API variant tests**: Open-source variant returns NOT_IMPLEMENTED for LVQ/LeanVec; proprietary variant succeeds
+- **SharedAPI integration tests**: Pro module load/unload, capability discovery, refuse unload with active LVQ indexes
+- **Deferred compression non-blocking test**: Verify P99 search latency stays <10ms during compression transition under concurrent query load
 
 ### Observability
 
@@ -325,14 +386,15 @@ The runtime is fetched as a pre-built x86_64 Linux binary at build time. AVX-512
 
 ### Remaining (Feature Parity with HNSW)
 
-| Phase | Feature | Priority | Description |
-|-------|---------|----------|-------------|
-| 1 | ENABLE_SVS=ON default | High | CMake flag defaults to ON on x86_64 Linux |
-| 2 | RDB persistence | Critical | Save/load SVS indexes across server restarts |
-| 3 | Dispatch latency sampling | Medium | Per-query latency metrics at dispatch layer |
-| 4 | Partial results on timeout | Medium | Return best results found so far when search times out |
-| 5 | C API migration | Blocked | Migrate to stable C API; enables open-source variant and swappable library model |
-| 6 | Deferred compression | Medium | Transparent FP32 -> compressed transition |
+| Phase | Feature | Priority | Owner | Description |
+|-------|---------|----------|-------|-------------|
+| 1 | ENABLE_SVS=ON default | High | valkey-search | CMake flag defaults to ON on x86_64 Linux |
+| 2 | RDB persistence | Critical | valkey-search | Save/load SVS indexes across server restarts |
+| 3 | Dispatch latency sampling | Medium | valkey-search | Per-query latency metrics at dispatch layer |
+| 4 | Partial results on timeout | Medium | valkey-search | Return best results found so far when search times out |
+| 5 | C API migration | Blocked (on Intel) | valkey-search | Migrate core ops to `libsvs_c_api.so`; Intel delivers the C API |
+| 6 | SharedAPI pro module | Medium | valkey-search | Implement `libsearch_svs_pro.so` with LVQ/LeanVec via SharedAPI |
+| 7 | Deferred compression | Medium | valkey-search | Copy-semantic transition orchestration with non-blocking swap |
 
 ### Known Gaps
 

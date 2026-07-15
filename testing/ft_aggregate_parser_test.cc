@@ -407,5 +407,50 @@ TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
   EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
 }
 
+TEST_F(AggregateTest, AddRecordAttributeIsIdempotent) {
+  AggregateParameters params(0);
+
+  size_t first = params.AddRecordAttribute("n1", "n1",
+                                           indexes::IndexerType::kNumeric);
+  size_t second = params.AddRecordAttribute("n1", "n1",
+                                            indexes::IndexerType::kNumeric);
+  EXPECT_EQ(first, second);
+  EXPECT_EQ(params.record_info_by_index_.size(), 1);
+}
+
+TEST_F(AggregateTest, AddRecordAttributeOverridesExistingAlias) {
+  AggregateParameters params(0);
+
+  // n1 is registered under its own name, e.g. from `LOAD 1 n1`.
+  size_t n1_index = params.AddRecordAttribute("n1", "n1",
+                                              indexes::IndexerType::kNumeric);
+
+  // n2 is then loaded but aliased as "n1", e.g. `LOAD 2 n1 n2 AS n1`.
+  // RediSearch's documented APPLY/LOAD semantics say this replaces/shadows
+  // the earlier "n1" alias binding rather than erroring out.
+  size_t n2_index = params.AddRecordAttribute("n2", "n1",
+                                              indexes::IndexerType::kNumeric);
+  EXPECT_NE(n1_index, n2_index);
+  EXPECT_EQ(params.record_info_by_index_.size(), 2);
+
+  // The alias "n1" now resolves to n2's slot ...
+  ASSERT_TRUE(params.record_indexes_by_alias_.contains("n1"));
+  EXPECT_EQ(params.record_indexes_by_alias_.at("n1"), n2_index);
+  // ... while both identifiers still resolve to their own, distinct slots.
+  EXPECT_EQ(params.record_indexes_by_identifier_.at("n1"), n1_index);
+  EXPECT_EQ(params.record_indexes_by_identifier_.at("n2"), n2_index);
+
+  // The superseded slot's display alias is cleared, since "n1" no longer
+  // refers to it; the new slot shows the alias it was just bound to.
+  EXPECT_TRUE(params.record_info_by_index_[n1_index].alias_.empty());
+  EXPECT_EQ(params.record_info_by_index_[n2_index].alias_, "n1");
+
+  // Re-adding the same (identifier, alias) pair afterwards is a no-op.
+  size_t n2_index_again = params.AddRecordAttribute(
+      "n2", "n1", indexes::IndexerType::kNumeric);
+  EXPECT_EQ(n2_index_again, n2_index);
+  EXPECT_EQ(params.record_info_by_index_.size(), 2);
+}
+
 }  // namespace aggregate
 }  // namespace valkey_search

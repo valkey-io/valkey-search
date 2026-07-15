@@ -503,10 +503,17 @@ class IndexSchema : public KeyspaceEventSubscription,
                            MutatedAttributes &mutated_attributes,
                            const Key &key)
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
-  void ProcessAttributeMutation(ValkeyModuleCtx *ctx,
+  // Processes a single attribute mutation. Returns true if the attribute's
+  // value was invalid data (not conforming to the field's type), which the
+  // caller may use to drop the whole key (Redisearch-compatible behavior).
+  bool ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
                                 vmsdk::UniqueValkeyString data,
                                 indexes::DeletionType deletion_type);
+  // Removes the key from every attribute index (and the schema-level text
+  // index). Used to implement the Redisearch-compatible behavior of dropping
+  // the entire key when any field contains invalid data.
+  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key);
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);
@@ -570,6 +577,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
+  FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,
               InTrackedMutationRecordsAfterConsumeNoCrash);
   FRIEND_TEST(ValkeySearchTest, Info);

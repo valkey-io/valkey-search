@@ -13,8 +13,18 @@ CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
+    ValkeySearchClusterTestCaseDebugMode,
     ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
 )
+
+# The compatibility pickles capture Redisearch behavior, which is the
+# compatible target. Run Valkey Search with search.emulate-release pinned to the
+# release that fixes the invalid-data compatibility defect so the compatible
+# (whole-key-drop) behavior is exercised. This requires debug-mode (the value is
+# above kModuleVersion), which the *DebugMode base classes enable. Datasets
+# without invalid data are unaffected by this setting.
+COMPAT_EMULATE_RELEASE = "1.3.0"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -537,7 +547,7 @@ def _load_answers_with_hash_check(answer_file_name):
     return answers
 
 
-class TestAnswersCMD(ValkeySearchTestCaseBase):
+class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
@@ -554,6 +564,9 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
 
         data_set = None
         client = self.server.get_new_client()
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+        )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
@@ -596,7 +609,7 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
     '''
 
 # TODO: fix cluster mode test failures
-class TestAnswersCME(ValkeySearchClusterTestCase):
+class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
     @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
     def test_answers(self, answers):
         global correct_answers, wrong_answers, failed_tests, passed_tests
@@ -612,6 +625,13 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+
+        # Pin every primary to the compatible (whole-key-drop) behavior so the
+        # invalid-data datasets match the Redisearch reference answers.
+        for node_idx in range(self.CLUSTER_SIZE):
+            self.client_for_primary(node_idx).execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
         for expected in answers:
             data_set = do_answer_cluster(

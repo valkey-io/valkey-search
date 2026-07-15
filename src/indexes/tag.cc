@@ -104,14 +104,16 @@ void Tag::DeindexTagForKey(absl::string_view tag,
             &TagMutateTrampoline, &ctx, SUBTRACT);
 }
 
-absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
-                                    absl::string_view data) {
+absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr& key,
+                                            absl::string_view data) {
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
+    // An empty tag set is a missing value, not invalid data. (Content
+    // validation of TAG fields, e.g. non-UTF8 detection, is deferred.)
     untracked_keys_.insert(key);
-    return false;
+    return RecordResult::kMissing;
   }
   auto [_, succ] = tracked_tags_by_keys_.insert(
       {key, TagInfo{.raw_tag_string = std::move(interned_data)}});
@@ -123,7 +125,7 @@ absl::StatusOr<bool> Tag::AddRecord(const InternedStringPtr& key,
   for (const auto& tag : parsed_tags) {
     IndexTagForKey(tag, key);
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 std::string Tag::UnescapeTag(absl::string_view tag) {
@@ -203,14 +205,14 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
   return parsed_tags;
 }
 
-absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
-                                       absl::string_view data) {
+absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr& key,
+                                               absl::string_view data) {
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
-    return false;
+    return RecordResult::kMissing;
   }
   absl::MutexLock lock(&index_mutex_);
 
@@ -236,7 +238,7 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
   }
 
   tag_info.raw_tag_string = std::move(interned_data);
-  return true;
+  return RecordResult::kAdded;
 }
 
 absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr& key,

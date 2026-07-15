@@ -82,6 +82,31 @@ TEST_F(NumericIndexTest, SimpleAddModifyRemove) {
   EXPECT_FALSE(index.ModifyRecord("key5", "aaa").value());
 }
 
+// A NUMERIC field whose value does not parse as a number is invalid data (as
+// opposed to a missing field), in both the Add and Modify paths.
+TEST_F(NumericIndexTest, DetectsInvalidData) {
+  // Add path: a non-numeric value is invalid data, not indexed.
+  EXPECT_EQ(index.AddRecordResult("key1", "not_a_number").value(),
+            RecordResult::kInvalidData);
+  EXPECT_FALSE(index.IsTracked("key1"));
+  // "nan" is also rejected as invalid data.
+  EXPECT_EQ(index.AddRecordResult("key2", "nan").value(),
+            RecordResult::kInvalidData);
+  // An empty value cannot be parsed as a number: invalid data.
+  EXPECT_EQ(index.AddRecordResult("key3", "").value(),
+            RecordResult::kInvalidData);
+
+  // A valid value is added.
+  EXPECT_EQ(index.AddRecordResult("key4", "42").value(), RecordResult::kAdded);
+  EXPECT_TRUE(index.IsTracked("key4"));
+
+  // Modify path: a previously-valid field becoming non-numeric is invalid data
+  // and the field is dropped (treated as missing within this index).
+  EXPECT_EQ(index.ModifyRecordResult("key4", "still_not_a_number").value(),
+            RecordResult::kInvalidData);
+  EXPECT_FALSE(index.IsTracked("key4"));
+}
+
 TEST_F(NumericIndexTest, SimpleAddModifyRemove1) {
   VMSDK_EXPECT_OK(index.AddRecord("key1", "1.5"));
   VMSDK_EXPECT_OK(index.AddRecord("key2", "2.0"));

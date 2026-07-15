@@ -20,7 +20,7 @@ namespace {
 // singleton. ICU owns these instances; callers must not delete, copy, or cache
 // their own. A failure status / null result means the ICU normalization data is
 // not linked, which is a build problem (see Normalize()).
-const icu::Normalizer2* InstanceFor(NormalizationForm form, UErrorCode& ec) {
+const icu::Normalizer2 *InstanceFor(NormalizationForm form, UErrorCode &ec) {
   switch (form) {
     case NormalizationForm::NFC:
       return icu::Normalizer2::getNFCInstance(ec);
@@ -52,7 +52,7 @@ std::string UnicodeNormalizer::Normalize(absl::string_view text,
   }
 
   UErrorCode ec = U_ZERO_ERROR;
-  const icu::Normalizer2* normalizer = InstanceFor(form, ec);
+  const icu::Normalizer2 *normalizer = InstanceFor(form, ec);
   // A failure or null instance here means ICU normalization data is not linked.
   // With our static data packaging this can only happen in a broken build, not
   // from user input, so fail loudly rather than silently skip normalization.
@@ -81,7 +81,7 @@ std::string UnicodeNormalizer::Normalize(absl::string_view text,
   return out;
 }
 
-void UnicodeNormalizer::CaseFoldInPlace(std::string& str) {
+void UnicodeNormalizer::CaseFoldInPlace(std::string &str) {
   // UTF-8-native case folding via CaseMap::utf8Fold (no manual UTF-16
   // round-trip). Like normalizeUTF8, this does not substitute U+FFFD for
   // malformed input; callers needing that must sanitize first

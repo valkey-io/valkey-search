@@ -70,7 +70,7 @@ class TokenFilter {
   /// Apply this filter to a single token in place.
   /// Returns true if the token should be kept, false if it should be removed.
   /// The token string may be mutated regardless of the return value.
-  virtual bool Apply(std::string& token) const = 0;
+  virtual bool Apply(std::string &token) const = 0;
 };
 
 /// Abstract interface for text normalization, extending TokenFilter.
@@ -87,7 +87,7 @@ class Normalizer : public TokenFilter {
 
   /// Normalize a token in place. Equivalent to Apply() but expresses the
   /// intent that normalization never drops tokens.
-  virtual void NormalizeInPlace(std::string& token) const = 0;
+  virtual void NormalizeInPlace(std::string &token) const = 0;
 };
 
 // Inline capacity for per-document stem mapping
@@ -121,9 +121,9 @@ class Stemmer : public TokenFilter {
   /// Ingestion-specific: maps stem roots to their original surface forms.
   /// For each token, if its stem differs from the original, adds the mapping
   /// stem_root -> original_token.
-  virtual void BuildStemMap(const std::vector<std::string>& tokens,
+  virtual void BuildStemMap(const std::vector<std::string> &tokens,
                             uint32_t min_stem_size,
-                            InProgressStemMap& stem_mappings) const = 0;
+                            InProgressStemMap &stem_mappings) const = 0;
 };
 
 /// Abstract interface for query-path tokenization strategy.
@@ -183,7 +183,7 @@ class QueryTokenizer {
   ///   - nullopt if nothing could be consumed (pos at query syntax or end)
   ///   - Error status for malformed escape sequences
   virtual absl::StatusOr<std::optional<Token>> NextUnquotedToken(
-      absl::string_view text, size_t pos, bool& hit_query_syntax,
+      absl::string_view text, size_t pos, bool &hit_query_syntax,
       absl::FunctionRef<bool(uint32_t cp)> is_query_syntax) const = 0;
 };
 
@@ -200,7 +200,7 @@ class QueryTokenizer {
 /// don't treat it as punctuation."
 class PunctuationSegmenter : public Segmenter {
  public:
-  explicit PunctuationSegmenter(const std::string& punctuation);
+  explicit PunctuationSegmenter(const std::string &punctuation);
   explicit PunctuationSegmenter(PunctuationSet punct_set);
 
   absl::StatusOr<std::vector<std::string>> Segment(
@@ -248,10 +248,10 @@ class NormalizeCaseFoldFilter : public Normalizer {
 /// effectively removing them from the token stream.
 class StopWordFilter : public TokenFilter {
  public:
-  explicit StopWordFilter(const std::vector<std::string>& stop_words);
+  explicit StopWordFilter(const std::vector<std::string> &stop_words);
   explicit StopWordFilter(absl::flat_hash_set<std::string> stop_words_set);
 
-  bool Apply(std::string& token) const override;
+  bool Apply(std::string &token) const override;
 
   /// Returns true if the given word is a stop word.
   bool IsStopWord(absl::string_view word) const;
@@ -283,7 +283,7 @@ class PunctuationQueryTokenizer : public QueryTokenizer {
       absl::string_view text, size_t pos) const override;
 
   absl::StatusOr<std::optional<Token>> NextUnquotedToken(
-      absl::string_view text, size_t pos, bool& hit_query_syntax,
+      absl::string_view text, size_t pos, bool &hit_query_syntax,
       absl::FunctionRef<bool(uint32_t cp)> is_query_syntax) const override;
 
  private:
@@ -296,10 +296,10 @@ class PunctuationQueryTokenizer : public QueryTokenizer {
 
   /// Handles a backslash escape sequence at text[cursor].
   absl::StatusOr<EscapeResult> HandleEscape(absl::string_view text,
-                                            size_t& cursor,
-                                            std::string& content) const;
+                                            size_t &cursor,
+                                            std::string &content) const;
 
-  const PunctuationSegmenter& segmenter_;
+  const PunctuationSegmenter &segmenter_;
 };
 
 // ============================================================================
@@ -324,12 +324,12 @@ class LanguageProcessor {
   /// header needed.
   class Builder {
    public:
-    Builder& AddSegmenter(std::shared_ptr<Segmenter> segmenter);
-    Builder& AddFilter(std::shared_ptr<TokenFilter> filter);
-    Builder& SetQueryTokenizer(std::shared_ptr<QueryTokenizer> tokenizer);
-    Builder& SetNormalizer(std::shared_ptr<Normalizer> normalizer);
-    Builder& SetStopWordFilter(std::shared_ptr<StopWordFilter> filter);
-    Builder& SetStemmer(std::shared_ptr<Stemmer> stemmer);
+    Builder &AddSegmenter(std::shared_ptr<Segmenter> segmenter);
+    Builder &AddFilter(std::shared_ptr<TokenFilter> filter);
+    Builder &SetQueryTokenizer(std::shared_ptr<QueryTokenizer> tokenizer);
+    Builder &SetNormalizer(std::shared_ptr<Normalizer> normalizer);
+    Builder &SetStopWordFilter(std::shared_ptr<StopWordFilter> filter);
+    Builder &SetStemmer(std::shared_ptr<Stemmer> stemmer);
     std::shared_ptr<LanguageProcessor> Build();
 
    private:
@@ -359,28 +359,28 @@ class LanguageProcessor {
 
   /// Get the normalizer. Always non-null — every language has normalization.
   /// O(1) access.
-  Normalizer* GetNormalizer() const { return normalizer_.get(); }
+  Normalizer *GetNormalizer() const { return normalizer_.get(); }
 
   /// Get the query tokenizer strategy. Used by the filter parser for
   /// determining word boundaries in query text. O(1) access.
-  const QueryTokenizer* GetQueryTokenizer() const {
+  const QueryTokenizer *GetQueryTokenizer() const {
     return query_tokenizer_.get();
   }
 
   /// Get the stop word filter, or nullptr if this processor has no stop words.
   /// O(1) access. Use for direct stop-word checks on already-normalized
   /// tokens (avoids redundant normalization from ApplyFilters).
-  StopWordFilter* GetStopWordFilter() const { return stop_word_filter_.get(); }
+  StopWordFilter *GetStopWordFilter() const { return stop_word_filter_.get(); }
 
   /// Get the stemmer, or nullptr if this processor doesn't support stemming.
   /// O(1) access.
-  Stemmer* GetStemmer() const { return stemmer_.get(); }
+  Stemmer *GetStemmer() const { return stemmer_.get(); }
 
   /// Factory: create a LanguageProcessor for the given language with
   /// the appropriate segmenter and filter composition.
   static std::shared_ptr<LanguageProcessor> Create(
-      data_model::Language language, const std::string& punctuation,
-      const std::vector<std::string>& stop_words);
+      data_model::Language language, const std::string &punctuation,
+      const std::vector<std::string> &stop_words);
 
  private:
   std::vector<std::shared_ptr<Segmenter>> segmenters_;

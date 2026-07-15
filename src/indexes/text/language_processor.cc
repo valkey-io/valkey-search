@@ -24,7 +24,7 @@ namespace valkey_search::indexes::text {
 // PunctuationSegmenter implementation
 // ============================================================================
 
-PunctuationSegmenter::PunctuationSegmenter(const std::string& punctuation)
+PunctuationSegmenter::PunctuationSegmenter(const std::string &punctuation)
     : punct_set_(BuildPunctuationSet(punctuation)) {}
 
 PunctuationSegmenter::PunctuationSegmenter(PunctuationSet punct_set)
@@ -166,13 +166,13 @@ void NormalizeCaseFoldFilter::NormalizeInPlace(std::string &token) const {
 // StopWordFilter implementation
 // ============================================================================
 
-StopWordFilter::StopWordFilter(const std::vector<std::string>& stop_words)
+StopWordFilter::StopWordFilter(const std::vector<std::string> &stop_words)
     : stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
 StopWordFilter::StopWordFilter(absl::flat_hash_set<std::string> stop_words_set)
     : stop_words_set_(std::move(stop_words_set)) {}
 
-bool StopWordFilter::Apply(std::string& token) const {
+bool StopWordFilter::Apply(std::string &token) const {
   return !stop_words_set_.contains(token);
 }
 
@@ -343,7 +343,7 @@ PunctuationQueryTokenizer::NextUnquotedToken(
 
 absl::StatusOr<PunctuationQueryTokenizer::EscapeResult>
 PunctuationQueryTokenizer::HandleEscape(absl::string_view text, size_t &cursor,
-                                      std::string& content) const {
+                                        std::string &content) const {
   cursor++;  // consume backslash
   if (cursor >= text.size()) {
     return absl::InvalidArgumentError(
@@ -380,37 +380,37 @@ PunctuationQueryTokenizer::HandleEscape(absl::string_view text, size_t &cursor,
 // LanguageProcessor::Builder implementation
 // ============================================================================
 
-LanguageProcessor::Builder& LanguageProcessor::Builder::AddSegmenter(
+LanguageProcessor::Builder &LanguageProcessor::Builder::AddSegmenter(
     std::shared_ptr<Segmenter> segmenter) {
   processor_->segmenters_.push_back(std::move(segmenter));
   return *this;
 }
 
-LanguageProcessor::Builder& LanguageProcessor::Builder::AddFilter(
+LanguageProcessor::Builder &LanguageProcessor::Builder::AddFilter(
     std::shared_ptr<TokenFilter> filter) {
   processor_->filters_.push_back(std::move(filter));
   return *this;
 }
 
-LanguageProcessor::Builder& LanguageProcessor::Builder::SetQueryTokenizer(
+LanguageProcessor::Builder &LanguageProcessor::Builder::SetQueryTokenizer(
     std::shared_ptr<QueryTokenizer> tokenizer) {
   processor_->query_tokenizer_ = std::move(tokenizer);
   return *this;
 }
 
-LanguageProcessor::Builder& LanguageProcessor::Builder::SetNormalizer(
+LanguageProcessor::Builder &LanguageProcessor::Builder::SetNormalizer(
     std::shared_ptr<Normalizer> normalizer) {
   processor_->normalizer_ = std::move(normalizer);
   return *this;
 }
 
-LanguageProcessor::Builder& LanguageProcessor::Builder::SetStopWordFilter(
+LanguageProcessor::Builder &LanguageProcessor::Builder::SetStopWordFilter(
     std::shared_ptr<StopWordFilter> filter) {
   processor_->stop_word_filter_ = std::move(filter);
   return *this;
 }
 
-LanguageProcessor::Builder& LanguageProcessor::Builder::SetStemmer(
+LanguageProcessor::Builder &LanguageProcessor::Builder::SetStemmer(
     std::shared_ptr<Stemmer> stemmer) {
   processor_->stemmer_ = std::move(stemmer);
   return *this;
@@ -435,9 +435,9 @@ absl::StatusOr<std::vector<std::string>> LanguageProcessor::Segment(
   // Multi-segmenter chaining: feed each segmenter's output into the next.
   std::vector<std::string> current = {std::string(text)};
 
-  for (const auto& segmenter : segmenters_) {
+  for (const auto &segmenter : segmenters_) {
     std::vector<std::string> next;
-    for (const auto& input : current) {
+    for (const auto &input : current) {
       auto result = segmenter->Segment(input);
       if (!result.ok()) {
         return result.status();
@@ -488,8 +488,8 @@ absl::StatusOr<std::vector<std::string>> LanguageProcessor::Process(
 namespace {
 
 std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
-    data_model::Language language, const std::string& punctuation,
-    const std::vector<std::string>& stop_words) {
+    data_model::Language language, const std::string &punctuation,
+    const std::vector<std::string> &stop_words) {
   // Segmenter: punctuation-based splitting for all Snowball languages
   auto punct_segmenter = std::make_shared<PunctuationSegmenter>(punctuation);
 
@@ -532,8 +532,8 @@ std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
 }  // namespace
 
 std::shared_ptr<LanguageProcessor> LanguageProcessor::Create(
-    data_model::Language language, const std::string& punctuation,
-    const std::vector<std::string>& stop_words) {
+    data_model::Language language, const std::string &punctuation,
+    const std::vector<std::string> &stop_words) {
   switch (language) {
       // TODO: Add ICU processor cases here when implemented
       // case data_model::LANGUAGE_CHINESE:

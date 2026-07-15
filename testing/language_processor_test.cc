@@ -488,13 +488,15 @@ TEST_F(FilterOrderingTest, ReverseOrderLeaksMixedCase) {
   auto stop_filter =
       std::make_shared<StopWordFilter>(std::vector<std::string>{"the", "and"});
 
-  // WRONG order: stop word first, then normalize
+  // WRONG order: stop word first, then normalize.
+  // Use AddFilter directly to control ordering — demonstrates that
+  // reversed filter order leaks mixed-case stop words through.
+  // Note: we don't call SetNormalizer/SetStopWordFilter here because
+  // they auto-add to the filter chain (which would duplicate entries).
   auto processor = LanguageProcessor::Builder()
                        .AddSegmenter(std::move(segmenter))
-                       .AddFilter(stop_filter)  // stop word check first
-                       .AddFilter(normalizer)   // normalize second
-                       .SetNormalizer(normalizer)
-                       .SetStopWordFilter(stop_filter)
+                       .AddFilter(std::move(stop_filter))  // stop word first
+                       .AddFilter(std::move(normalizer))   // normalize second
                        .Build();
 
   auto result = processor->Process("The AND cat");

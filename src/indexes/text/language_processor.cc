@@ -400,13 +400,15 @@ LanguageProcessor::Builder &LanguageProcessor::Builder::SetQueryTokenizer(
 
 LanguageProcessor::Builder &LanguageProcessor::Builder::SetNormalizer(
     std::shared_ptr<Normalizer> normalizer) {
-  processor_->normalizer_ = std::move(normalizer);
+  processor_->normalizer_ = normalizer;
+  processor_->filters_.push_back(std::move(normalizer));
   return *this;
 }
 
 LanguageProcessor::Builder &LanguageProcessor::Builder::SetStopWordFilter(
     std::shared_ptr<StopWordFilter> filter) {
-  processor_->stop_word_filter_ = std::move(filter);
+  processor_->stop_word_filter_ = filter;
+  processor_->filters_.push_back(std::move(filter));
   return *this;
 }
 
@@ -521,10 +523,8 @@ std::shared_ptr<LanguageProcessor> CreateSnowballProcessor(
   return LanguageProcessor::Builder()
       .AddSegmenter(std::move(punct_segmenter))
       .SetQueryTokenizer(std::move(query_tokenizer))
-      .SetNormalizer(normalizer)
-      .AddFilter(std::move(normalizer))
-      .SetStopWordFilter(stop_filter)
-      .AddFilter(std::move(stop_filter))
+      .SetNormalizer(std::move(normalizer))
+      .SetStopWordFilter(std::move(stop_filter))
       .SetStemmer(std::move(stemmer))
       .Build();
 }
@@ -535,11 +535,11 @@ std::shared_ptr<LanguageProcessor> LanguageProcessor::Create(
     data_model::Language language, const std::string &punctuation,
     const std::vector<std::string> &stop_words) {
   switch (language) {
-      // TODO: Add ICU processor cases here when implemented
+      // TODO: Add non-Snowball processor cases here when implemented
       // case data_model::LANGUAGE_CHINESE:
       // case data_model::LANGUAGE_JAPANESE:
       // case data_model::LANGUAGE_KOREAN:
-      //   return CreateICUProcessor(language, stop_words);
+      //   return Create...Processor(language, stop_words);
 
     default:
       return CreateSnowballProcessor(language, punctuation, stop_words);

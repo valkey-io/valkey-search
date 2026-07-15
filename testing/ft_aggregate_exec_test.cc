@@ -656,7 +656,7 @@ static std::vector<expr::Value> GetSampleArray(const expr::Value& value) {
 static void ExpectAllElementsIn(const std::vector<expr::Value>& sample,
                                 const std::vector<std::string>& allowed) {
   for (const auto& elem : sample) {
-    std::string elem_str = elem.AsString();
+    std::string elem_str = elem.AsString().value();
     EXPECT_TRUE(std::find(allowed.begin(), allowed.end(), elem_str) !=
                 allowed.end())
         << "Sample element \"" << elem_str << "\" not in allowed set";
@@ -694,7 +694,7 @@ TEST_F(AggregateExecTest, RandomSampleBasicTest) {
     auto sample = GetSampleArray(record->fields_.at(2));
     std::vector<std::string> allowed;
     for (int i = 0; i < 5; ++i) {
-      allowed.push_back(expr::Value(double(i)).AsString());
+      allowed.push_back(expr::Value(double(i)).AsString().value());
     }
     ExpectAllElementsIn(sample, allowed);
   }
@@ -710,7 +710,7 @@ TEST_F(AggregateExecTest, RandomSampleBasicTest) {
     EXPECT_EQ(sample.size(), 4);
     std::vector<std::string> all_values;
     for (int i = 0; i < 4; ++i) {
-      all_values.push_back(expr::Value(double(i)).AsString());
+      all_values.push_back(expr::Value(double(i)).AsString().value());
     }
     ExpectAllElementsIn(sample, all_values);
   }
@@ -726,7 +726,7 @@ TEST_F(AggregateExecTest, RandomSampleBasicTest) {
     EXPECT_EQ(sample.size(), 4);
     std::vector<std::string> all_values;
     for (int i = 0; i < 4; ++i) {
-      all_values.push_back(expr::Value(double(i)).AsString());
+      all_values.push_back(expr::Value(double(i)).AsString().value());
     }
     ExpectAllElementsIn(sample, all_values);
   }
@@ -751,7 +751,7 @@ TEST_F(AggregateExecTest, RandomSampleNilHandlingTest) {
   EXPECT_EQ(sample.size(), 3);
   std::vector<std::string> allowed;
   for (int i : {0, 2, 4}) {
-    allowed.push_back(expr::Value(double(i)).AsString());
+    allowed.push_back(expr::Value(double(i)).AsString().value());
   }
   ExpectAllElementsIn(sample, allowed);
 }
@@ -787,7 +787,7 @@ TEST_F(AggregateExecTest, RandomSampleTypeHandlingTest) {
       auto rec = std::make_unique<Record>(2);
       if (i % 2 == 0) {
         rec->fields_[0] = expr::Value(double(i));
-        allowed.push_back(expr::Value(double(i)).AsString());
+        allowed.push_back(expr::Value(double(i)).AsString().value());
       } else {
         std::string val = std::string("str") + std::to_string(i);
         allowed.push_back(val);
@@ -821,7 +821,7 @@ TEST_F(AggregateExecTest, RandomSampleMultipleReducersTest) {
     EXPECT_EQ(sample2.size(), 2);
     std::vector<std::string> allowed;
     for (int i = 0; i < 5; ++i) {
-      allowed.push_back(expr::Value(double(i)).AsString());
+      allowed.push_back(expr::Value(double(i)).AsString().value());
     }
     ExpectAllElementsIn(sample1, allowed);
     ExpectAllElementsIn(sample2, allowed);

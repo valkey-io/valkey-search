@@ -31,6 +31,7 @@
 #include "src/indexes/text/stop_words.h"
 #include "src/indexes/vector_base.h"
 #include "src/multi_language.h"
+#include "src/valkey_search_options.h"
 #include "src/version.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/module_config.h"
@@ -304,10 +305,9 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
   }
 
   if (!IsLanguageSupported(language)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(data_model::Language_Name(language),
-                     " requires the multi-language-support config to be "
-                     "enabled"));
+    return absl::InvalidArgumentError(absl::StrCat(
+        data_model::Language_Name(language),
+        " is not supported in module version ", kModuleVersion.ToString()));
   }
 
   index_schema_proto.set_language(language);

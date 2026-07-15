@@ -8,7 +8,6 @@ FT.CREATE LANGUAGE -> HSET -> FT.SEARCH pipeline.
 
 import os
 import struct
-from typing import List
 
 import pytest
 from valkey import ResponseError
@@ -16,7 +15,6 @@ from valkey.client import Valkey
 from valkey_search_test_case import (
     ValkeySearchTestCaseBase,
     ValkeySearchTestCaseDebugMode,
-    ValkeySearchClusterTestCase,
     ValkeySearchClusterTestCaseDebugMode,
 )
 from valkeytestframework.conftest import resource_port_tracker
@@ -26,15 +24,8 @@ from utils import IndexingTestHelper
 
 
 class MultiLanguageTestCase(ValkeySearchTestCaseDebugMode):
-    """Base class that enables multi-language-support flag."""
-
-    def get_config_file_lines(self, testdir, port) -> List[str]:
-        lines = super().get_config_file_lines(testdir, port)
-        load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
-        return [
-            x + " --multi-language-support yes" if load_module in x else x
-            for x in lines
-        ]
+    """Base class for multi-language tests (version >= 1.4 enables support)."""
+    pass
 
 
 # =============================================================================
@@ -536,15 +527,8 @@ class TestQueryParserNonAscii(ValkeySearchTestCaseBase):
 # =============================================================================
 
 class MultiLanguageClusterTestCase(ValkeySearchClusterTestCaseDebugMode):
-    """Cluster test case with multi-language-support enabled."""
-
-    def get_config_file_lines(self, testdir, port) -> List[str]:
-        lines = super().get_config_file_lines(testdir, port)
-        load_module = f"loadmodule {os.getenv('MODULE_PATH')}"
-        return [
-            x + " --multi-language-support yes" if load_module in x else x
-            for x in lines
-        ]
+    """Cluster test case for multi-language tests (version >= 1.4)."""
+    pass
 
 
 class TestLanguageClusterMetadata(MultiLanguageClusterTestCase):

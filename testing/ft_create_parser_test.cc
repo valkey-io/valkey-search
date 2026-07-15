@@ -22,7 +22,6 @@
 #include "src/indexes/text/punctuation.h"
 #include "src/indexes/text/stop_words.h"
 #include "src/multi_language.h"
-#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -101,12 +100,6 @@ void VerifyVectorParams(const data_model::VectorIndex &vector_index_proto,
 
 TEST_P(FTCreateParserTest, ParseParams) {
   const FTCreateParserTestCase &test_case = GetParam();
-  if (IsNonEnglishLanguage(test_case.expected.per_index_text_params.language)) {
-    // Enable the feature flag so multi-language tests can run.
-    VMSDK_EXPECT_OK(
-        const_cast<vmsdk::config::Boolean &>(options::GetMultiLanguageSupport())
-            .SetValue(true));
-  }
   auto command_str = std::string(test_case.command_str);
   if (test_case.text_field_count > 0) {
     command_str = "idx1 on HASH SCHEMA";

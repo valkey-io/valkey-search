@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_MULTI_LANGUAGE_H_
 
 #include "src/index_schema.pb.h"
-#include "src/valkey_search_options.h"
 #include "src/version.h"
 
 namespace valkey_search {
@@ -20,18 +19,16 @@ inline bool IsNonEnglishLanguage(data_model::Language language) {
          language != data_model::LANGUAGE_ENGLISH;
 }
 
-/// Returns true if multi-language support is enabled: module version >= 1.4
-/// AND the multi-language-support feature flag is set.
-inline bool IsMultiLanguageSupported() {
-  return kModuleVersion >= kRelease14 &&
-         options::GetMultiLanguageSupport().GetValue();
-}
+/// Returns true if multi-language support is enabled (version >= 1.4).
+inline bool IsMultiLanguageSupported() { return kModuleVersion >= kRelease14; }
 
 /// Returns true if the given language can be used right now.
 /// English/unspecified are always allowed; non-English requires
-/// version >= 1.4 and the feature flag.
+/// version >= 1.4.
 inline bool IsLanguageSupported(data_model::Language language) {
-  if (!IsNonEnglishLanguage(language)) return true;
+  if (!IsNonEnglishLanguage(language)) {
+    return true;
+  }
   return IsMultiLanguageSupported();
 }
 

@@ -148,8 +148,6 @@ config::Number& GetMutationWeightTag();
 /// FT.AGGREGATE commands
 config::Number& GetQueryStringDepth();
 
-/// Return the configuration entry for multi-language support feature flag
-const config::Boolean& GetMultiLanguageSupport();
 /// Return the configuration entry that controls compatibility-bug emulation.
 /// See COMPATIBILITY.md for the semantics.
 config::Version& GetEmulateRelease();

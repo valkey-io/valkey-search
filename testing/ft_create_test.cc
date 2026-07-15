@@ -512,34 +512,11 @@ TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorDisabled) {
   ExecuteFTCreateCommand(&fake_ctx_, argv);
 }
 
-// With feature flag disabled, non-English languages are in
-// the map but gated by IsLanguageSupported().
-TEST_F(FTCreateTest, NonEnglishLanguageRejectedFlagDisabled) {
-  std::vector<std::string> non_english_languages = {
-      "FRENCH",  "GERMAN",  "SPANISH", "ITALIAN",    "PORTUGUESE", "RUSSIAN",
-      "SWEDISH", "TURKISH", "DUTCH",   "INDONESIAN", "ARABIC"};
-
-  for (const auto& lang : non_english_languages) {
-    std::vector<std::string> argv = {
-        "FT.CREATE", "test_idx_" + lang, "LANGUAGE", lang, "schema", "title",
-        "text"};
-    ExecuteFTCreateCommand(
-        &fake_ctx_, argv, VALKEYMODULE_OK,
-        "-LANGUAGE_" + lang +
-            " requires the multi-language-support config to be enabled\r\n");
-  }
-}
-
-// With feature flag enabled, non-English languages succeed.
-TEST_F(FTCreateTest, NonEnglishLanguageAllowedFlagEnabled) {
+// Non-English languages are supported for module version >= 1.4.
+TEST_F(FTCreateTest, NonEnglishLanguageAllowed) {
   int db_num = 0;
   ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
       .WillByDefault(testing::Return(db_num));
-
-  // Enable the multi-language-support feature flag
-  VMSDK_EXPECT_OK(
-      const_cast<vmsdk::config::Boolean&>(options::GetMultiLanguageSupport())
-          .SetValue(true));
 
   std::vector<std::string> non_english_languages = {
       "FRENCH",  "GERMAN",  "SPANISH", "ITALIAN",    "PORTUGUESE", "RUSSIAN",

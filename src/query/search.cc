@@ -645,11 +645,17 @@ float ComputeMatchedPredicateScore(const Predicate *predicate) {
   }
 }
 
-// A term leaf's posting list resolved once per query. The posting list and its
-// document frequency (dt) are identical for every candidate, so they are
-// resolved up front by ResolveLeaves rather than re-walked per document.
+// A term leaf's posting lists resolved once per query. A term matches via its
+// original word plus any stem variants that stem to the same root (mirroring
+// TermPredicate::Evaluate), so a leaf can resolve to several posting lists. The
+// lists and document frequency (dt) are identical for every candidate, so they
+// are resolved up front by ResolveLeaves rather than re-walked per document.
 struct ResolvedLeaf {
-  indexes::text::InvasivePtr<indexes::text::Postings> postings;
+  // Original term posting list first, followed by any stem-variant lists. Empty
+  // when the term (and all its variants) are absent from the index.
+  absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
+                      indexes::text::kStemVariantsInlineCapacity + 1>
+      postings;
   uint32_t num_doc_contain_term = 0;
   // Query-invariant per-term weight (BM25 IDF), computed once here instead of
   // per candidate document.
@@ -687,12 +693,49 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       CHECK(text_index_schema != nullptr);
       auto text_index = text_index_schema->GetTextIndex();
       CHECK(text_index != nullptr);
-      auto postings = text_index->GetPrefix().FindPostingsTarget(
-          term_pred->GetTextString());
-      const uint32_t dt = postings ? postings->GetKeyCount() : 0;
-      const float term_weight = scorer->PrecomputeIDF(total_docs, dt);
-      resolved.emplace(term_pred,
-                       ResolvedLeaf{std::move(postings), dt, term_weight});
+      const auto &prefix = text_index->GetPrefix();
+
+      ResolvedLeaf leaf;
+      // Collect the words the term matches on: the original word plus, for a
+      // non-exact term on a stemmed field, every variant sharing its stem root
+      // (matching TermPredicate::Evaluate). Ingestion stores original words in
+      // the posting tree, so each word is resolved via FindPostingsTarget.
+      auto add_word = [&](absl::string_view word) {
+        auto postings = prefix.FindPostingsTarget(word);
+        // TODO: scoring for stemming. Redis treat stem variant as a leaf
+        // num_doc_contain_term is counted twice and need fix in future
+        if (postings) {
+          leaf.num_doc_contain_term += postings->GetKeyCount();
+          leaf.postings.push_back(std::move(postings));
+        }
+      };
+      add_word(term_pred->GetTextString());
+
+      const uint64_t stem_field_mask =
+          term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
+      if (!term_pred->IsExact() && stem_field_mask != 0) {
+        absl::InlinedVector<absl::string_view,
+                            indexes::text::kStemVariantsInlineCapacity>
+            stem_variants;
+        std::string stemmed = text_index_schema->GetAllStemVariants(
+            term_pred->GetTextString(), stem_variants, stem_field_mask,
+            /*lock_needed=*/true);
+        if (stemmed != term_pred->GetTextString()) {
+          add_word(stemmed);
+        }
+        for (const auto &variant : stem_variants) {
+          add_word(variant);
+        }
+      }
+
+      // dt feeds IDF, whose scorer CHECKs dt <= total_docs. Summing key counts
+      // across variants can double-count a doc indexed under several variants,
+      // so clamp to keep the invariant.
+      leaf.num_doc_contain_term =
+          std::min(leaf.num_doc_contain_term, total_docs);
+      leaf.term_weight =
+          scorer->PrecomputeIDF(total_docs, leaf.num_doc_contain_term);
+      resolved.emplace(term_pred, std::move(leaf));
       break;
     }
     default:
@@ -758,12 +801,16 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       auto it = ctx.resolved.find(predicate);
       if (it == ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
-      if (!leaf.postings) return std::nullopt;
+      if (leaf.postings.empty()) return std::nullopt;
 
-      auto tf_opt = leaf.postings->GetTermFrequencyForKey(key);
-      if (!tf_opt) return std::nullopt;
-
-      uint32_t tf = *tf_opt;
+      // Sum the term frequency across the original word and its stem variants:
+      // a doc matches the leaf if any resolved posting list contains its key.
+      uint32_t tf = 0;
+      for (const auto &postings : leaf.postings) {
+        if (auto tf_opt = postings->GetTermFrequencyForKey(key)) {
+          tf += *tf_opt;
+        }
+      }
 
       if (tf == 0) return std::nullopt;
 
@@ -1036,7 +1083,11 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   if constexpr (std::is_same_v<T, indexes::BorrowedNeighbor>) {
     auto cmp = [](const indexes::BorrowedNeighbor &a,
                   const indexes::BorrowedNeighbor &b) {
-      return a.score > b.score;
+      if (a.score != b.score) {
+        return a.score > b.score;
+      }
+      // Tie-break on key ascending for a deterministic result order.
+      return a.key->Str() < b.key->Str();
     };
     size_t sort_limit = std::min(max_needed, vec.size());
     if (sort_limit < vec.size()) {

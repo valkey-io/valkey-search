@@ -322,7 +322,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 1 @t1 reduce random_sample 2 @n1 10000 as s",
         ]
         for cmd in error_cases:
-            self.execute_command(cmd.split())
+            self.check(dialect, cmd)
 
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)

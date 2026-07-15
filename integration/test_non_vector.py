@@ -343,7 +343,7 @@ def validate_random_sample_queries(client: Valkey):
     # Sample should be an array (list in Python)
     sample = row[b'sample']
     assert isinstance(sample, list)
-    assert len(sample) <= 5  # Should have at most 5 elements
+    assert len(sample) == 5  # Should have exactly 5 elements
     
     # 2. RANDOM_SAMPLE with various sample sizes
     # Sample size smaller than group size
@@ -460,24 +460,33 @@ def validate_random_sample_queries(client: Valkey):
         assert isinstance(val, bytes)
         assert val in [b'electronics', b'books']
     
-    # 7. RANDOM_SAMPLE with mixed-type fields (numeric and string in same property)
-    # This tests that RANDOM_SAMPLE handles different types correctly
+    # 7. RANDOM_SAMPLE with nil-skipping (sparsely populated field)
+    # Add documents without a rating field, then sample @rating — documents
+    # missing the field should be excluded from the sample.
+    client.execute_command(
+        "HSET", "product:no_rating_1", "price", "50", "category", "books"
+    )
+    client.execute_command(
+        "HSET", "product:no_rating_2", "price", "60", "category", "books"
+    )
+    time.sleep(0.5)  # Allow indexing
     result = client.execute_command(
-        "FT.AGGREGATE", "products", "@price:[1 100]",
-        "LOAD", "2", "price", "rating",
+        "FT.AGGREGATE", "products", "@price:[50 60]",
+        "LOAD", "1", "rating",
         "APPLY", "1", "AS", "all",
         "GROUPBY", "1", "@all",
-        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "3", "AS", "price_sample",
-        "REDUCE", "RANDOM_SAMPLE", "2", "@rating", "3", "AS", "rating_sample"
+        "REDUCE", "RANDOM_SAMPLE", "2", "@rating", "10", "AS", "sample"
     )
     assert result[0] == 1
     row = dict(zip(result[1][::2], result[1][1::2]))
-    price_sample = row[b'price_sample']
-    rating_sample = row[b'rating_sample']
-    assert isinstance(price_sample, list)
-    assert isinstance(rating_sample, list)
-    assert len(price_sample) == 3
-    assert len(rating_sample) == 3
+    assert b'sample' in row
+    sample = row[b'sample']
+    assert isinstance(sample, list)
+    # Only docs with rating values should appear; the no-rating docs are skipped.
+    # No assertion on exact count since some aggregate_complex docs may also
+    # fall in [50 60], but the query should complete without errors.
+    for val in sample:
+        assert val is not None
 
 def validate_aggregate_complex_queries(client: Valkey):
     """

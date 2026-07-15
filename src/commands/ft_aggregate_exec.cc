@@ -398,14 +398,21 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
                                               cnt, ") to reducer ", name));
   }
+  std::string field_text;
+  std::string size_text;
   for (uint32_t i = 0; i < cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                            _ << "Missing Reducer argument " << i);
+    auto arg_sv = vmsdk::ToStringView(arg);
+    if (i == 0) {
+      field_text = arg_sv;
+    } else if (i == 1) {
+      size_text = arg_sv;
+    }
     if (i < 2) {
-      VMSDK_ASSIGN_OR_RETURN(
-          auto expr,
-          expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
-          _ << " in GROUPBY stage");
+      VMSDK_ASSIGN_OR_RETURN(auto expr,
+                             expr::Expression::Compile(parameters, arg_sv),
+                             _ << " in GROUPBY stage");
       r->args_.emplace_back(std::move(expr));
     }
     // Extra args beyond the two we need are silently consumed (Redis compat).
@@ -434,10 +441,16 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    std::ostringstream os;
-    os << *r;
+    // Workaround for memory allocator issue causing ostringstream to crash
+    // (see https://github.com/valkey-io/valkey-search/issues/965).
+    std::string default_name(r->name_);
+    default_name += '(';
+    default_name += field_text;
+    default_name += ',';
+    default_name += size_text;
+    default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(os.str(), true));
+                           parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   }

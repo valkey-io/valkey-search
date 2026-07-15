@@ -1,39 +1,125 @@
-Valkey Search 1.0.0 release notes
-=================================
+Valkey Search 1.1 release notes
+===============================
 
 ================================================================================
-Valkey Search 1.0.0 RC1 - Released Fri 28 Mar 2025
+Valkey Search 1.1.1 - Released <RELEASE DATE TBD>
 ================================================================================
-This is the first release candidate of valkey-search 1.0 that is a high-performance Vector Similarity Search engine optimized for AI-driven workloads. It delivers single-digit millisecond latency and high QPS, capable of handling billions of vectors with over 99% recall.
 
-Valkey-Search allows users to create indexes and perform similarity searches, incorporating complex filters. It supports Approximate Nearest Neighbor (ANN) search with HNSW and exact matching using K-Nearest Neighbors (KNN). Users can index data using either Valkey Hash or Valkey-JSON data types.
+Bug fixes
+=========
+* Hardened load and command paths against crashes found through fuzzing: added validation for HNSW index data loaded from an external file and for query vector size against index dimensions at parse time (#1191, #1192)
+* Fixed a use-after-free race in DefaultReplyScoreAs() (#565)
+* Fixed a cross-module memory allocator crash by hiding wrapper symbols (#569)
+* Fixed tag OR syntax in hybrid queries and tag query parsing (#452, #602)
+* Fixed a RETURN clause bug and now return the alias field when an alias is specified (#568)
+* Avoid a deadlock while processing MULTI/EXEC mutations (#629)
+* Fixed an unexpected vk-search flag left in the RDB after all indexes are dropped (#848)
+* Allow a local node to have no primary endpoint
 
-Major API and Functionality
-=========================
-* Add the search module data type which can handle RDB load, RDB save, free, and memory usage
-* Add the following search module commands: 
-    ** FT.CREATE
-    ** FT.DROPINDEX
-    ** FT.INFO
-    ** FT._LIST
-    ** FT.SEARCH
-* Supported indexes
-    ** Vector: HNSW and Flat
-    ** Non-vector: Numeric and Tag
-* Index data types include Valkey Hash and Valkey JSON.
-* Cluster support
-* Linear scaling of keyspace and compute
-* ACL support
-* RDB serialization of metadata including the search index
-* Hybrid queries combining vector and non vector indexes
-* Handle key space events for data mutation
-* Expose statistics and reporting memory usage to the core valkey engine
+================================================================================
+Valkey Search 1.1.0 GA - Released Wed 24 December 2025
+================================================================================
 
-New configurations
-===========================
-* Add support for the following configurations: reader-threads, writer-threads, use-coordinator, log-level
+This release requires Valkey core 9.0.1 release or higher.
 
-We appreciate the efforts of all who contributed code to this release!
+Major New Features / Updates
+============================
+* FT.AGGREGATE command is implemented.
+* Indexes and query operations no longer require a vector component.
+* Consistency of operations across the cluster is substantially improved.
+* The RDB format now includes information to avoid generating a backfill on reload when it's not required. (Backward compatible with 1.0 release)
+* The build system has switched to cmake.
+* A pytest-based integration test environment was added
+* Full DBNum support for cluster mode is implemented.
 
-Yair Gottdenker (yairgott), Allen Samuels (allenss-amazon), Eran Ifrah (eifrah-aws), Jacob Murphy (murphyjacob4), Chanil Jeon (jeon1226), Qu Chen (QuChen88), DP (dpbnasika)
+What's Changed
+==============
+* Add integration test framework by @murphyjacob4 (#20)
+* CMake support by @eifrah-aws (#33)
+* Ensure that Index names and Prefixes do not have a slot tag, closes #31 by @allenss-amazon (#57)
+* Enforce vector indexed attribute by @yairgott (#63)
+* Add ACL support to Valkey Search by @jeon1226 (#49)
+* Automatically configure threadpool size based on physical cpu core count by @dpbnasika (#60)
+* Implement new RDB format by @murphyjacob4 (#68)
+* Add ASAN build option by @eifrah-aws (#100)
+* Adding support for blocking clients during keyspace notification by @yairgott (#95)
+* FT.SEARCH - Update neighbor sorting to always be asc by @KarthikSubbarao (#104)
+* Rename ValkeySearch to valkey-search by @yairgott (#119)
+* Dynamic thread pool by @eifrah-aws (#126)
+* Command registration permissions alignment with ACL prefix permissions by @yairgott (#125)
+* Introduce RFC for RDB format by @murphyjacob4 (#28)
+* Add OOM checking to index backfill by @murphyjacob4 (#135)
+* Renaming total_indexed_hash_keys to total_indexed_documents by @yairgott (#137)
+* Fixing empty vector query clause ft.search cmd parsing by @yairgott (#138)
+* Allow changing the reader/writer threads count at runtime by @eifrah-aws (#129)
+* Module-Config: fix a possibility of a double free by @eifrah-aws (#149)
+* Enable integration tests + ASan by @eifrah-aws (#162)
+* Search trigger for Valkey Extension Automation by @Nikhil-Manglore (#163)
+* Fix bug resulting in no ingestion to indexes with the same prefix as a dropped index by @eifrah-aws (#166)
+* Alpine Linux related fixes by @eifrah-aws (#168)
+* Fix GetRedisLocalPort function to support TLS by @yanamolo (#144)
+* Add coordinator port info metric by @yanamolo (#177)
+* The module can now be built on macOS by @eifrah-aws (#178)
+* We renamed Valkey-Extensions to Valkey-Bundle by @Nikhil-Manglore (#189)
+* Valkey Test Framework: load JSON module by @eifrah-aws (#198)
+* Revision of info framework by @allenss-amazon (#202)
+* Add FT._DEBUG command by @allenss-amazon (#207)
+* Limit FT.SEARCH query string parsing recursive depth by a module config by @KarthikSubbarao (#182)
+* Add network byte counting to coordinator client by @yulazariy (#212)
+* Add operational limits to create command by @aradz44 (#214)
+* Add CPU metrics for reader and writer threads by @yanamolo (#217)
+* Add query string bytes limit using a module config by @KarthikSubbarao (#222)
+* Add a limit on the number of terms in a search query by @aradz44 (#229)
+* Add limit to the K value in FT.SEARCH cmd by @aradz44 (#231)
+* Limit the result record in ft.search cmd by @aradz44 (#239)
+* Supporting tsan build and addressing the time slice mutex test issues by @yairgott (#236)
+* Add metric for reclaimable memory by @aradz44 (#240)
+* Adding support for non vector queries by @KarthikSubbarao (#218)
+* Fix ACL bug where commands were allowed when user has no permissions for one of the index prefixes by @yanamolo (#246)
+* Reimplement timeout handling by @allenss-amazon (#249)
+* Change visibility for some of info fields to developer only by @yulazariy (#281)
+* Handle OOM during search command fanout by @yanamolo (#268)
+* Reject queries when no valid pre-filter and no vector filter is provided by @KarthikSubbarao (#283)
+* Add coordinator metadata health monitoring info field by @yulazariy (#284)
+* Added support for cluster with replicas by @eifrah-aws (#313)
+* Properly wait for replication group to reach stabilization status by @eifrah-aws (#315)
+* Fanout operation base and cluster-wide primary and cluster fanout operation modes by @boda26 (#310)
+* Strip the complete build path from logs by @Shivshankar-Reddy (#308)
+* feat: memory scope & memory usage for string interning store by @proost (#153)
+* Expose global symbols so that crash dump backtraces are useful by @allenss-amazon (#329)
+* Add a configuration for resuming workers after fork by @eranfrie (#301)
+* Introduced new "debug-mode" configuration entry by @eifrah-aws (#339)
+* Add support to retrieving JSON values via the JSON shared API by @yairgott (#287)
+* Add configurable thread pool fairness mechanism with comprehensive testing by @yulazariy (#362)
+* Respect valkey and json module versions defined in build and integration tests by @ChristophKoerner (#363)
+* Remove command allowed acl checks if it is already done by Valkey by @yulazariy (#387)
+* Added and removed stats and attributes from ft.info by @Nivesh-01 (#370)
+* Tag casesensitive updated to be key-value pair by @Nivesh-01 (#395)
+* Add --format option to build script by @BCathcart (#384)
+* FT.CREATE consistency check by @boda26 (#386)
+* FT.DROPINDEX consistency check by @boda26 (#393)
+* Implement server version checking on load by @allenss-amazon (#408)
+* Implementation of FT.AGGREGATE Command by @allenss-amazon (#345)
+* Addressing non-vector search issues by @yairgott (#400)
+* Prevent Valkey crash when module is loaded twice by @dmitrypol (#415)
+* Prevent crash on Valkey 7.2 when loading valkey-search by @dmitrypol (#427)
+* Cluster Map Implementation by @boda26 (#435)
+* Replace multiple utility libraries with unified vmsdklib dependency by @eifrah-aws (#477)
+* Update ProcessKeyspaceNotification to not return before trying out all attributes by @KarthikSubbarao (#489)
+* Revise Save/Restore for true pit snapshot by @allenss-amazon (#401)
+* Add support for checking ACL key prefix permissions using the new Valkey module API by @eifrah-aws (#479)
+* Populate fingerprint and version to IndexSchema by @boda26 (#480)
+* feat: set command info for ft.create by @proost (#299)
+* FT.SEARCH partition and consistency controls by @boda26 (#464)
+* FT.INFO partition and consistency controls by @boda26 (#469)
+* Change default Valkey to 9.0.1 release by @allenss-amazon (#528)
+* Feature/ft create sortable by @AlexFilipImproving (#533)
+* Add general utility thread pool for "execute later at low priority" routines and schedule Search Result deletions on this by @KarthikSubbarao (#542)
+* Update arguments for ft.create and ft.search json (#369) by @eric-musliner (#504)
+
+================================================================================
+Contributors
+================================================================================
+
+@yairgott, @allenss-amazon, @eifrah-aws, @murphyjacob4, @jeon1226, @QuChen88, @dpbnasika, @zvi-code, @daddaman-amz, @boda26, @baswanth09, @KarthikSubbarao, @Aksha1812, @Nikhil-Manglore, @yanamolo, @yulazariy, @aradz44, @Shivshankar-Reddy, @proost, @eranfrie, @ChristophKoerner, @Nivesh-01, @BCathcart, @dmitrypol, @AlexFilipImproving, @eric-musliner, @FawenYo, @roshkhatri, @jsoref, @hwware, @talxsha, @uriyage, @adamk-janea, @eliastam
 

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/base/optimization.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -501,6 +502,12 @@ absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
   return absl::OkStatus();
 }
 
+// INFO counter for the invalid-data compatibility defect (see COMPATIBILITY.md
+// and the "Compatibility Defects" section).
+static vmsdk::info_field::Integer invalid_data_drops_key_compat_counter(
+    "compatibility", "compatibility-invalid_data_drops_key",
+    vmsdk::info_field::IntegerBuilder().App());
+
 void TrackResults(
     ValkeyModuleCtx *ctx, const absl::StatusOr<bool> &status,
     const char *operation_str,
@@ -520,6 +527,30 @@ void TrackResults(
         << operation_str
         << " succeeded with result: " << status.status().ToString();
   } else {
+    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 1)
+        << operation_str
+        << " failed with result: " << status.status().ToString();
+  }
+}
+
+// Overload for Add/Modify, which return a RecordResult. kAdded counts as a
+// success; kMissing and kInvalidData both count as skipped (the field produced
+// nothing to index). Note that the metric-counter names are intentionally
+// unchanged ("skipped") to preserve compatibility of the INFO surface.
+void TrackResults(
+    ValkeyModuleCtx *ctx, const absl::StatusOr<indexes::RecordResult> &status,
+    const char *operation_str,
+    IndexSchema::Stats::ResultCnt<std::atomic<uint64_t>> &counter) {
+  if (ABSL_PREDICT_FALSE(!status.ok())) {
+    ++counter.failure_cnt;
+    // Track global ingestion failures
+    Metrics::GetStats().ingest_total_failures++;
+  } else if (status.value() == indexes::RecordResult::kAdded) {
+    ++counter.success_cnt;
+  } else {
+    ++counter.skipped_cnt;
+  }
+  if (ABSL_PREDICT_FALSE(!status.ok())) {
     VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 1)
         << operation_str
         << " failed with result: " << status.status().ToString();
@@ -639,13 +670,15 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
 
 void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
                                       MutatedAttributes &mutated_attributes,
-                                      const Key &key) {
+                                      const Key &key)
+    ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
     // front
     text_index_schema_->DeleteKeyData(key);
   }
   bool all_deletes = true;
+  bool invalid_data = false;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {
@@ -655,10 +688,13 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
         indexes::DeletionType::kNone) {
       all_deletes = false;
     }
-    ProcessAttributeMutation(ctx, itr->second, key,
-                             std::move(attribute_data_itr.second.data),
-                             attribute_data_itr.second.deletion_type);
+    if (ProcessAttributeMutation(ctx, itr->second, key,
+                                 std::move(attribute_data_itr.second.data),
+                                 attribute_data_itr.second.deletion_type)) {
+      invalid_data = true;
+    }
   }
+  CHECK(!all_deletes || !invalid_data);
   if (all_deletes) {
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
@@ -670,9 +706,45 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // updates to all Text attributes in one operation for efficiency
     text_index_schema_->CommitKeyData(key);
   }
+
+  // Post-cleanup for invalid data. Redisearch drops the entire key from the
+  // index when any indexed field contains data that does not conform to the
+  // field's type. We let the per-field updates above run first (invalid data is
+  // expected to be rare) and only then, if any field reported invalid data,
+  // remove the whole key. This behavior is gated on search.emulate-release so
+  // the legacy behavior (treat the offending field as missing) is preserved by
+  // default. See COMPATIBILITY.md.
+  if (ABSL_PREDICT_FALSE(invalid_data)) {
+    // Equivalent to VALKEY_SEARCH_COMPATIBILITY_FIX, but that macro lazily
+    // constructs its INFO counter on first invocation, which here is a worker
+    // thread; we use a statically-constructed counter instead (see above).
+    if (options::EnabledInVersion(1, 3, 0)) {
+      RemoveKeyFromAllIndexes(ctx, key);
+    } else {
+      invalid_data_drops_key_compat_counter.Increment();
+    }
+  }
 }
 
-void IndexSchema::ProcessAttributeMutation(
+void IndexSchema::RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx,
+                                          const Key &key) {
+  for (const auto &attribute_itr : attributes_) {
+    auto index = attribute_itr.second.GetIndex();
+    auto res = index->RemoveRecord(key, indexes::DeletionType::kRecord);
+    TrackResults(ctx, res, "Remove", stats_.subscription_remove);
+  }
+  if (text_index_schema_) {
+    // The bad key's text tokens were just committed above; remove them. The
+    // per-attribute Text index tracking was already cleared by RemoveRecord.
+    text_index_schema_->DeleteKeyData(key);
+  }
+  {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    index_key_info_.erase(key);
+  }
+}
+
+bool IndexSchema::ProcessAttributeMutation(
     ValkeyModuleCtx *ctx, const Attribute &attribute, const Key &key,
     vmsdk::UniqueValkeyString data, indexes::DeletionType deletion_type) {
   auto index = attribute.GetIndex();
@@ -682,15 +754,15 @@ void IndexSchema::ProcessAttributeMutation(
     if (index->IsTracked(key)) {
       auto res = index->ModifyRecord(key, data_view);
       TrackResults(ctx, res, "Modify", stats_.subscription_modify);
-      if (res.ok() && res.value()) {
+      if (res.ok() && res.value() == indexes::RecordResult::kAdded) {
         ++Metrics::GetStats().time_slice_upserts;
       }
-      return;
+      return res.ok() && res.value() == indexes::RecordResult::kInvalidData;
     }
     auto res = index->AddRecord(key, data_view);
     TrackResults(ctx, res, "Add", stats_.subscription_add);
 
-    if (res.ok() && res.value()) {
+    if (res.ok() && res.value() == indexes::RecordResult::kAdded) {
       ++Metrics::GetStats().time_slice_upserts;
       // Track field type counters
       switch (index->GetIndexerType()) {
@@ -713,7 +785,7 @@ void IndexSchema::ProcessAttributeMutation(
           break;
       }
     }
-    return;
+    return res.ok() && res.value() == indexes::RecordResult::kInvalidData;
   }
 
   auto res = index->RemoveRecord(key, deletion_type);
@@ -721,6 +793,7 @@ void IndexSchema::ProcessAttributeMutation(
   if (res.ok() && res.value()) {
     ++Metrics::GetStats().time_slice_deletes;
   }
+  return false;
 }
 
 std::unique_ptr<vmsdk::StopWatch> CreateQueueDelayCapturer() {
@@ -966,6 +1039,7 @@ void IndexSchema::BackfillScanCallback(ValkeyModuleCtx *ctx,
 }
 
 CONTROLLED_BOOLEAN(StopBackfill, false);
+CONTROLLED_BOOLEAN(ForceRDBLoadFailure, false);
 
 uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
                                       uint32_t batch_size) {
@@ -1549,6 +1623,11 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     Metrics::GetStats().rdb_restore_current_index_keys_loaded = i + 1;
   }
 
+  if (ForceRDBLoadFailure.GetValue()) {
+    return absl::InternalError(
+        "Simulated IO error during RDB load (ForceRDBLoadFailure)");
+  }
+
   if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
     VMSDK_LOG(NOTICE, ctx)
         << "RDB restore completed with backpressure. Total wait cycles: "
@@ -1626,6 +1705,12 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       auto index_schema,
       IndexSchema::Create(ctx, *index_schema_proto, mutations_thread_pool,
                           !load_attributes_on_create, true));
+
+  // If we exit early after creating a new schema, workers may already hold
+  // strong references via ValkeyModule_Yield. Ensure MarkAsDestructing is
+  // called so the destructor won't attempt main-thread-only cleanup.
+  auto mark_destructing_on_error =
+      absl::MakeCleanup([&]() { index_schema->MarkAsDestructing(); });
 
   // Supplemental content will include indices and any content for them
   while (supplemental_iter.HasNext()) {
@@ -1706,6 +1791,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   }
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
+  std::move(mark_destructing_on_error)
+      .Cancel();  // Don't mark for destruction since no error has been returned
   return index_schema;
 }
 
@@ -1858,6 +1945,14 @@ bool IndexSchema::InTrackedMutationRecords(
   absl::MutexLock lock(&mutated_records_mutex_);
   auto itr = tracked_mutated_records_.find(key);
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
+    return false;
+  }
+  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
+  // attributes = std::nullopt, leaving the entry in the map. After that
+  // sequence, attributes is disengaged and `attributes->find(...)` would
+  // dereference an empty optional (UB; observed crashing under ASAN in the
+  // backfill scan path). No pending mutation == false.
+  if (!itr->second.attributes.has_value()) {
     return false;
   }
   if (itr->second.attributes->find(identifier) ==

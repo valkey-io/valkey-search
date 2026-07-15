@@ -9,7 +9,9 @@
 
 #include <absl/strings/str_split.h>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -56,6 +58,36 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
+
+namespace {
+// Process-global count of live SearchParameters objects. See
+// GetSearchParametersInFlight() in the header for the rationale.
+std::atomic<int64_t> &SearchParametersInFlightCounter() {
+  static std::atomic<int64_t> counter{0};
+  return counter;
+}
+}  // namespace
+
+int64_t GetSearchParametersInFlight() {
+  return SearchParametersInFlightCounter().load(std::memory_order_relaxed);
+}
+
+namespace detail {
+SearchParametersInFlightGuard::SearchParametersInFlightGuard() {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::SearchParametersInFlightGuard(
+    const SearchParametersInFlightGuard &) {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::SearchParametersInFlightGuard(
+    SearchParametersInFlightGuard &&) noexcept {
+  SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
+}
+SearchParametersInFlightGuard::~SearchParametersInFlightGuard() {
+  SearchParametersInFlightCounter().fetch_sub(1, std::memory_order_relaxed);
+}
+}  // namespace detail
 
 // Query operation counters
 DEV_INTEGER_COUNTER(query_stats, query_text_term_count);
@@ -427,12 +459,19 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  std::vector<char> normalized_vec;
+  absl::string_view query = parameters.query;
+  if (vector_index->GetNormalize()) {
+    normalized_vec = indexes::NormalizeEmbedding(
+        parameters.query, vector_index->GetDataTypeSize());
+    query = absl::string_view(normalized_vec.data(), normalized_vec.size());
+  }
   auto results_appender =
-      [&results, &parameters, vector_index](
+      [&results, &parameters, vector_index, query](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
-                                           results, top_keys);
+    return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
+                                           top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,
@@ -803,8 +842,7 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
@@ -1108,6 +1146,18 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
   VMSDK_ASSIGN_OR_RETURN(
       parameters.query,
       SubstituteParam(parameters, parameters.parse_vars.query_vector_string));
+
+  VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
+                                         parameters.attribute_alias));
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  CHECK(vector_index != nullptr);
+  if (parameters.query.size() !=
+      static_cast<size_t>(vector_index->GetVectorDataSize())) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("query vector blob size (", parameters.query.size(),
+                     ") does not match index's expected size (",
+                     vector_index->GetVectorDataSize(), ")."));
+  }
 
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(

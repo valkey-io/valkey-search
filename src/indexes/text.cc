@@ -33,23 +33,28 @@ Text::Text(const data_model::TextIndex &text_index_proto,
   }
 }
 
-absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
-                                     absl::string_view data) {
+absl::StatusOr<RecordResult> Text::AddRecord(const InternedStringPtr &key,
+                                             absl::string_view data) {
   auto result = text_index_schema_->StageAttributeData(
       key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+  if (!result.ok()) {
+    return result.status();
+  }
 
   absl::MutexLock lock(&index_mutex_);
-  if (result.ok() && *result) {
+  if (*result) {
     auto [_, succ] = tracked_keys_.insert(key);
     if (!succ) {
       return absl::AlreadyExistsError(
           absl::StrCat("Key `", key->Str(), "` already exists"));
     }
     untracked_keys_.erase(key);
-  } else {
-    untracked_keys_.insert(key);
+    return RecordResult::kAdded;
   }
-  return result;
+  // No indexable tokens (or, until TEXT content validation is implemented, a
+  // UTF-8 error) is treated as a missing field.
+  untracked_keys_.insert(key);
+  return RecordResult::kMissing;
 }
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
@@ -71,8 +76,8 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
   return true;
 }
 
-absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
-                                        absl::string_view data) {
+absl::StatusOr<RecordResult> Text::ModifyRecord(const InternedStringPtr &key,
+                                                absl::string_view data) {
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
@@ -81,16 +86,19 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
 
   absl::MutexLock lock(&index_mutex_);
   if (!result.ok() || !*result) {
+    // No indexable tokens (or, until TEXT content validation is implemented, a
+    // UTF-8 error) is treated as a missing field. (Behavior preserved from the
+    // pre-RecordResult implementation, which also folded staging errors here.)
     tracked_keys_.erase(key);
     untracked_keys_.insert(key);
-    return false;
+    return RecordResult::kMissing;
   }
   auto it = tracked_keys_.find(key);
   if (it == tracked_keys_.end()) {
     return absl::NotFoundError(
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {

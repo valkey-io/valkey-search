@@ -131,10 +131,14 @@ class TextIndexSchema {
     return {total_docs, avg_doc_len};
   }
 
-  uint32_t GetKeyDocLen(const InternedStringPtr &key) const {
-    auto itr = per_key_scoring_info_.find(key);
+  // Takes a borrowed key so neither scoring path (post-filter walk in
+  // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
+  // callers wrap their key in a BorrowedInternedStringPtr.
+  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key) const {
+    auto itr = per_key_scoring_info_.find(key.AsInternedRef());
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
   }
+
   uint32_t GetKeyNorm(const InternedStringPtr &key) const {
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.norm : 0;

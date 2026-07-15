@@ -12,7 +12,7 @@
 #include <cstring>
 
 #include "absl/log/check.h"
-#include "src/indexes/scoring/scoring_stats.h"
+#include "src/indexes/scoring/scorer.h"
 
 namespace valkey_search::indexes::scoring {
 
@@ -22,15 +22,6 @@ float Bm25StdScorer::PrecomputeIDF(uint32_t total_docs,
   const float n = static_cast<float>(total_docs);
   const float dt = static_cast<float>(num_doc_contain_term);
   return std::log1pf((n - dt + 0.5f) / (dt + 0.5f));
-}
-
-float Bm25StdScorer::ScoreLeaf(float idf, const ScoringStats& stats,
-                               float leaf_weight) const {
-  const auto* bm25_stats = dynamic_cast<const Bm25StdStats*>(&stats);
-  CHECK(bm25_stats != nullptr);
-
-  return ScoreLeaf(idf, bm25_stats->term_frequency, bm25_stats->doc_len,
-                   bm25_stats->avg_doc_len, leaf_weight);
 }
 
 float Bm25StdScorer::ComposeDocumentScore(float sum_of_terms,

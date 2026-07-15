@@ -9,83 +9,78 @@
 #define VALKEYSEARCH_TESTING_SCORING_SCORING_TEST_DATA_H_
 
 #include <cstdint>
+#include <string>
 
-#include "src/indexes/scoring/scoring_stats.h"
+#include "src/indexes/scoring/scorer.h"
+#include "src/utils/string_interning.h"
 
 // Shared test data for Bm25StdScorer unit tests.
 namespace valkey_search::indexes::scoring::test_data {
 
 inline constexpr uint32_t kTotalDocs = 8;
 // total_doc_len = 5+6+7+9+4+4+6+1 = 42; avg = 42 / 8 = 5.25.
-inline constexpr float kAvgDocLen = 5.25f;
+inline constexpr uint64_t kTotalDocLen = 42;
 inline constexpr uint32_t kDtHello = 6;
 inline constexpr uint32_t kDtWorld = 6;
 inline constexpr uint32_t kDtRare = 2;
 inline constexpr uint32_t kDtUnique = 1;
 
 struct DocInfo {
-  uint64_t doc_id;
+  std::string key_name;
   uint32_t doc_len;
   uint32_t f_hello;
   uint32_t f_world;
   uint32_t f_rare;
   uint32_t f_unique;
+
+  InternedStringPtr GetKey() const {
+    return StringInternStore::Intern(key_name);
+  }
 };
 
-// {doc_id, doc_len, f_hello, f_world, f_rare, f_unique}
+// {key_name, doc_len, f_hello, f_world, f_rare, f_unique}
 // doc:2 / doc:7 are byte-identical for the tie-break test.
-inline constexpr DocInfo kDocs[] = {
-    {1, 5, 1, 1, 0, 0}, {2, 6, 2, 1, 0, 0}, {3, 7, 3, 1, 0, 0},
-    {4, 9, 5, 1, 0, 0}, {5, 4, 4, 0, 0, 0}, {6, 4, 0, 1, 1, 1},
-    {7, 6, 2, 1, 0, 0}, {8, 1, 0, 0, 1, 0},
+inline const DocInfo kDocs[] = {
+    {"doc:1", 5, 1, 1, 0, 0}, {"doc:2", 6, 2, 1, 0, 0},
+    {"doc:3", 7, 3, 1, 0, 0}, {"doc:4", 9, 5, 1, 0, 0},
+    {"doc:5", 4, 4, 0, 0, 0}, {"doc:6", 4, 0, 1, 1, 1},
+    {"doc:7", 6, 2, 1, 0, 0}, {"doc:8", 1, 0, 0, 1, 0},
 };
 
-inline Bm25StdStats StatsForHello(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.doc_id = doc.doc_id;
-  s.term = "hello";
-  s.num_doc_contain_term = kDtHello;
-  s.term_frequency = doc.f_hello;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+// Per-leaf scoring inputs for the Bm25StdScorer unit tests. Mirrors the fields
+// the production search path feeds into ScoreLeaf.
+struct LeafData {
+  uint32_t total_docs = 0;
+  uint64_t total_doc_len = 0;
+  uint32_t num_doc_contain_term = 0;
+  uint32_t term_frequency = 0;
+  uint32_t doc_len = 0;
+};
+
+inline LeafData LeafFor(const DocInfo& doc, uint32_t dt, uint32_t f) {
+  LeafData in;
+  in.total_docs = kTotalDocs;
+  in.total_doc_len = kTotalDocLen;
+  in.num_doc_contain_term = dt;
+  in.term_frequency = f;
+  in.doc_len = doc.doc_len;
+  return in;
 }
 
-inline Bm25StdStats StatsForWorld(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.doc_id = doc.doc_id;
-  s.term = "world";
-  s.num_doc_contain_term = kDtWorld;
-  s.term_frequency = doc.f_world;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafData LeafForHello(const DocInfo& doc) {
+  return LeafFor(doc, kDtHello, doc.f_hello);
 }
 
-inline Bm25StdStats StatsForRare(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.doc_id = doc.doc_id;
-  s.term = "rare";
-  s.num_doc_contain_term = kDtRare;
-  s.term_frequency = doc.f_rare;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafData LeafForWorld(const DocInfo& doc) {
+  return LeafFor(doc, kDtWorld, doc.f_world);
 }
 
-inline Bm25StdStats StatsForUnique(const DocInfo& doc) {
-  Bm25StdStats s;
-  s.total_docs = kTotalDocs;
-  s.doc_id = doc.doc_id;
-  s.term = "unique";
-  s.num_doc_contain_term = kDtUnique;
-  s.term_frequency = doc.f_unique;
-  s.avg_doc_len = kAvgDocLen;
-  s.doc_len = doc.doc_len;
-  return s;
+inline LeafData LeafForRare(const DocInfo& doc) {
+  return LeafFor(doc, kDtRare, doc.f_rare);
+}
+
+inline LeafData LeafForUnique(const DocInfo& doc) {
+  return LeafFor(doc, kDtUnique, doc.f_unique);
 }
 
 }  // namespace valkey_search::indexes::scoring::test_data

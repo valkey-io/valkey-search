@@ -40,18 +40,16 @@ TermIterator::TermIterator(
       leaf_weight_(leaf_weight),
       num_doc_contain_term_(num_doc_contain_term),
       text_index_schema_(text_index_schema) {
-  // Derive the query-invariant corpus stats from the schema and fold every
-  // fixed BM25 input (IDF, leaf weight, avg_doc_len, k1, b) into per-leaf
-  // coefficients once, so GetScore() avoids a per-document log call and divide.
-  // A null schema or empty corpus disables scoring (constant-stub fallback).
+  // Derive the query-invariant corpus stats from the schema and precompute the
+  // per-term IDF once, so GetScore() avoids a per-document log call. A null
+  // schema or empty corpus disables scoring (constant-stub fallback).
   if (text_index_schema_ != nullptr) {
     const auto stats = text_index_schema_->GetIndexScoringStats();
     if (stats.total_docs > 0) {
       bm25_scorer_ = &StdScorer();
-      const float idf =
+      idf_ =
           bm25_scorer_->PrecomputeIDF(stats.total_docs, num_doc_contain_term_);
-      leaf_coeffs_ = bm25_scorer_->PrecomputeLeafCoeffs(idf, stats.avg_doc_len,
-                                                        leaf_weight_);
+      avg_doc_len_ = stats.avg_doc_len;
     }
   }
 
@@ -82,13 +80,13 @@ float TermIterator::GetScore() const {
   }
 
   // text_index_schema_ is non-null whenever bm25_scorer_ was resolved above.
-  const uint32_t doc_len = text_index_schema_->GetKeyDocLen(*current_key_);
+  const uint32_t doc_len = text_index_schema_->GetKeyDocLen(
+      BorrowedInternedStringPtr(*current_key_));
 
-  // Fast path: coefficients are precomputed at construction, so this is a
-  // single multiply-add plus divide -- no dynamic_cast, no polymorphic stats,
-  // and no per-document avg_doc_len divide.
-  return scoring::Bm25StdScorer::ScoreLeafFast(leaf_coeffs_, term_frequency,
-                                               doc_len);
+  // idf_ and avg_doc_len_ are precomputed at construction, so only the
+  // per-document term frequency and doc_len vary here.
+  return bm25_scorer_->ScoreLeaf(idf_, term_frequency, doc_len, avg_doc_len_,
+                                 leaf_weight_);
 }
 
 FieldMaskPredicate TermIterator::QueryFieldMask() const {

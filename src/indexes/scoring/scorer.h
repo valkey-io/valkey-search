@@ -11,8 +11,9 @@
 #include <cstdint>
 #include <string_view>
 
-#include "absl/types/span.h"
-#include "src/indexes/scoring/scoring_stats.h"
+#include "absl/base/no_destructor.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/strings/string_view.h"
 
 namespace valkey_search::indexes::scoring {
 
@@ -25,8 +26,23 @@ enum class ScorerType {
   kTfidf,
 };
 
-// Stateless, thread-safe scoring algorithm. Concrete scorers expect a
-// specific ScoringStats subtype and CHECK the contract.
+inline absl::string_view ScorerToString(ScorerType scorer) {
+  switch (scorer) {
+    case ScorerType::kBm25Std:
+      return "BM25STD";
+    case ScorerType::kTfidf:
+      return "TFIDF";
+  }
+  return "BM25STD";
+}
+
+const absl::NoDestructor<absl::flat_hash_map<absl::string_view, ScorerType>>
+    kScorerByStr({
+        {"BM25STD", ScorerType::kBm25Std},
+        {"TFIDF", ScorerType::kTfidf},
+    });
+
+// Stateless, thread-safe scoring algorithm.
 class Scorer {
  public:
   virtual ~Scorer() = default;
@@ -40,17 +56,16 @@ class Scorer {
   virtual float PrecomputeIDF(uint32_t total_docs,
                               uint32_t num_doc_contain_term) const = 0;
 
-  // Scores one matching (term, document) leaf given a precomputed IDF. Concrete
-  // scorers CHECK the stats subtype.
-  virtual float ScoreLeaf(float idf, const ScoringStats& stats,
-                          float leaf_weight) const = 0;
+  // Scores one matching (term, document) leaf given a precomputed IDF. Returns
+  // 0 for a degenerate corpus (avg_doc_len <= 0).
+  virtual float ScoreLeaf(float idf, uint32_t term_frequency, uint32_t doc_len,
+                          float avg_doc_len, float leaf_weight) const = 0;
 
   virtual float ComposeDocumentScore(float sum_of_terms,
                                      float document_score) const = 0;
-
-  float CombineGroup(absl::Span<const float> child_scores,
-                     float group_weight) const;
 };
+
+const Scorer* GetScorer(ScorerType type);
 
 }  // namespace valkey_search::indexes::scoring
 

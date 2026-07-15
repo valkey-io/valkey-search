@@ -103,13 +103,13 @@ class TermIterator : public TextIterator {
   const uint32_t num_doc_contain_term_;
   const TextIndexSchema* const text_index_schema_;
 
-  // Typed scorer and per-leaf BM25 coefficients cached at construction. The
-  // coefficients fold every query-invariant input (IDF, leaf weight,
-  // avg_doc_len, k1, b) into three weights so GetScore() reduces to a single
-  // multiply-add and divide per document -- see Bm25StdScorer::LeafCoeffs.
+  // Typed scorer and the query-invariant BM25 inputs cached at construction:
+  // idf_ (per-term) and avg_doc_len_ (corpus-wide). GetScore() combines them
+  // with the per-document term frequency and doc_len via ScoreLeaf().
   // Null bm25_scorer_ means scoring is disabled (constant-stub fallback).
   const scoring::Bm25StdScorer* bm25_scorer_{nullptr};
-  scoring::Bm25StdScorer::LeafCoeffs leaf_coeffs_{};
+  float idf_{0.0f};
+  float avg_doc_len_{0.0f};
 
   // Pending queue: heap of valid iterators not currently being processed.
   // Provides O(1) access to the minimum key and O(log K) extraction.

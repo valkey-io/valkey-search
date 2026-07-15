@@ -17,7 +17,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
@@ -27,6 +26,7 @@
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "src/utils/cancel.h"
@@ -78,27 +78,6 @@ constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
-
-enum class Scorer {
-  kBM25STD,
-  kTFIDF,
-};
-
-inline absl::string_view ScorerToString(Scorer scorer) {
-  switch (scorer) {
-    case Scorer::kBM25STD:
-      return "BM25STD";
-    case Scorer::kTFIDF:
-      return "TFIDF";
-  }
-  return "BM25STD";
-}
-
-const absl::NoDestructor<absl::flat_hash_map<absl::string_view, Scorer>>
-    kScorerByStr({
-        {"BM25STD", Scorer::kBM25STD},
-        {"TFIDF", Scorer::kTFIDF},
-    });
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -242,7 +221,7 @@ struct SearchParameters {
   bool verbatim{false};
   // TODO: Scorer is currently a placeholder. The selected scoring function is
   // not yet invoked; non-vector queries will report a score of 0.0.
-  Scorer scorer{Scorer::kBM25STD};
+  indexes::scoring::ScorerType scorer{indexes::scoring::ScorerType::kBm25Std};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
@@ -378,6 +357,19 @@ bool ShouldReturnNoResults(const SearchParameters& parameters);
 // optional whitespace). Returns the position of `=>` or npos if not found.
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
+
+// Computes the weighted score for a predicate tree where the document is known
+// to match. Exposed for testing.
+float ComputeMatchedPredicateScore(const Predicate* predicate);
+
+// Scores admitted candidate documents by walking the predicate tree.
+// For each TermPredicate leaf, looks up each candidate's term frequency
+// and feeds the scorer. Writes scores into candidates in-place. Sorting and
+// trimming to the requested limit happen later in SearchResult::TrimResults.
+void ScoreTextQuery(const IndexSchema& index_schema,
+                    const Predicate* root_predicate,
+                    const indexes::scoring::Scorer* scorer,
+                    std::vector<indexes::BorrowedNeighbor>& candidates);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

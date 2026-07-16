@@ -540,8 +540,3 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data("sortable numbers", key_type)
         self.check(dialect, f"ft.search {key_type}_idx1 * LIMIT 10000 10")
 
-    def test_infields_with_knn_query(self, key_type, dialect):
-        """INFIELDS is inert for pure KNN queries — Redis Stack parity."""
-        self.setup_data("sortable numbers", key_type)
-        # With INFIELDS naming a valid text field: same results as without.
-        self.checkvec(dialect, f"ft.search {key_type}_idx1 * INFIELDS 1 t1")

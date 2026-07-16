@@ -56,10 +56,16 @@ absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
     // GetIndex validates the field exists and is a TEXT index (type check).
     auto index = index_schema.GetIndex(field);
     if (!index.ok()) {
+      // Divergence from RediSearch: RediSearch silently ignores non-existent
+      // fields in INFIELDS. We error to catch user mistakes early.
       return absl::InvalidArgumentError(absl::StrCat(
           "INFIELDS field '", field, "' does not exist in the index"));
     }
     if (index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+      // Divergence from RediSearch: RediSearch silently ignores non-TEXT
+      // fields in INFIELDS (they simply have no effect). We error because
+      // INFIELDS only applies to full-text matching and a non-TEXT field
+      // indicates a user mistake.
       return absl::InvalidArgumentError(
           absl::StrCat("INFIELDS field '", field, "' is not a TEXT field"));
     }
@@ -844,6 +850,10 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     // INFIELDS restricts the allowed field set for every term, including
     // explicit @field: terms. If the explicit field is not in INFIELDS, the
     // query is invalid — the user asked to search a field they excluded.
+    // Divergence from RediSearch: RediSearch treats the intersection of the
+    // explicit field and INFIELDS as the effective scope — if the field is not
+    // in INFIELDS the term silently matches nothing. We error instead to
+    // surface the likely mistake.
     if (options_.infields && !options_.infields->empty() &&
         !options_.infields->contains(*field_name)) {
       return absl::InvalidArgumentError(

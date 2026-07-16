@@ -8,7 +8,8 @@ extend-exclude = [
     "src/indexes/text/rax/**",
     "src/indexes/text/stop_words.h",
     "testing/language_processor_test.cc",
-    "testing/snowball_stem_test.cc"
+    "testing/snowball_stem_test.cc",
+    "integration/compatibility/data_sets.py"
 ]
 
 [default]
@@ -32,6 +33,7 @@ DeBuG = "DeBuG"
 DrOpInDeX = "DrOpInDeX"
 updat = "updat" # Used for stem matching
 Clangd = "Clangd"
+mak = "mak" # Turkish suffix *mak in compatibility exclusion comments
 
 [type.cpp]
 extend-ignore-re = [

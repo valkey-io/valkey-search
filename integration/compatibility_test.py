@@ -10,6 +10,9 @@ from compatibility.data_sets import *
 
 ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
+MULTILANG_ANSWER_FILES = [g["answers"] for g in GENERATORS if "multilang" in g["answers"]]
+# Non-multilang pickles run separately for organizational clarity
+BASE_ANSWER_FILES = [g["answers"] for g in GENERATORS if "multilang" not in g["answers"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
@@ -538,7 +541,7 @@ def _load_answers_with_hash_check(answer_file_name):
 
 
 class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
+    @pytest.mark.parametrize("answers", BASE_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
@@ -594,6 +597,39 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         for k, v in passed_tests.items():
             print(f"Passed test {k:60}: {v} times")
     '''
+
+
+class TestAnswersMultiLang(ValkeySearchTestCaseBase):
+    """Compatibility tests for multi-language text search."""
+
+    @pytest.mark.parametrize("answers", MULTILANG_ANSWER_FILES)
+    def test_answers(self, answers):
+        global client, data_set
+        global correct_answers, failed_tests, passed_tests
+
+        # RESET GLOBAL COUNTERS AT START OF EACH TEST
+        correct_answers = 0
+        wrong_answers = 0
+        failed_tests = {}
+        passed_tests = {}
+
+        print("Running test_answers (multilang) with answers file:", answers)
+        answers = _load_answers_with_hash_check(answers)
+
+        data_set = None
+        client = self.server.get_new_client()
+        for i in range(len(answers)):
+            data_set = do_answer(client, answers[i], data_set)
+
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
+            print(f"Correct answers: {correct_answers} out of {len(answers)}")
+            if len(failed_tests) != 0:
+                print(">>>>>>>>> Failed Tests <<<<<<<<<")
+                for k, v in failed_tests.items():
+                    print(f"Failed test {k:60}: {v} times")
+            assert False
+
 
 # TODO: fix cluster mode test failures
 class TestAnswersCME(ValkeySearchClusterTestCase):

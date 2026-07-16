@@ -444,3 +444,246 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     def test_text_search_fuzzy(self, key_type, dialect, schema_type):
         """Test fuzzy search with Levenshtein distance 1."""
         self._run_test(gen_fuzzy_1, "pure text", key_type, dialect, schema_type)
+
+
+# ============================================================================
+# Multi-language compatibility tests
+# ============================================================================
+# All supported non-English languages from the Language enum in index_schema.proto
+MULTILANG_LANGUAGES = [
+    "french", "german", "spanish", "italian", "portuguese",
+    "russian", "swedish", "turkish", "dutch", "indonesian", "arabic",
+]
+
+# Map language name to its dataset name in TEXT_DATASETS
+LANG_TO_DATASET = {lang: f"{lang} text" for lang in MULTILANG_LANGUAGES}
+
+# Excluded queries for multi-language compatibility tests.
+# These are known intentional divergences explained below.
+#
+# Uses term-based exclusion: if a query contains ANY word/pattern that triggers
+# a known divergence for that language, it is excluded. This is comprehensive
+# across all randomly-generated query shapes (exact, prefix, suffix, grouped,
+# fuzzy) and prevents flaky failures from compound queries.
+
+# Dutch: Kraaij-Pohlmann (Snowball 3.0.1) stems ge-/be-/ver- prefixed words.
+# These words share stems with others in the dataset, causing cross-matches
+# that Dutch Porter (RediSearch, Snowball 2.1.0) doesn't produce.
+# Stem collisions: {schilder, geschilderd, schilderen}, {bouwen, gebouwd}
+_DUTCH_DIVERGENT_TERMS = {
+    "schilder", "geschilderd", "schilderen", "gebouwd", "bouwen",
+}
+
+# German: Valkey uses Unicode CaseFolding (ß→ss), Redis uses toLower (ß→ß).
+# All words containing ß are indexed/queried differently between the two systems.
+# Valkey: "Straße"→"strasse", Redis: "Straße"→"straße"
+# After Valkey casefold, these produce tokens with "ss" that don't exist in Redis.
+# Suffix *sse, *ssen matches Valkey's "strasse"/"schliessen" but not Redis's "straße"/"schließen"
+# Also: any suffix containing "ß" matches Redis but not Valkey (since ß→ss in Valkey)
+_GERMAN_DIVERGENT_AFTER_FOLD = {
+    "strasse", "strassenbahn", "grosse", "sussigkeit", "schliessen",
+    "straße", "straßenbahn", "größe", "süßigkeit", "schließen",
+}
+
+# Turkish: "yapmak" is in Lucene's Turkish stop word list (used by Valkey).
+# RediSearch has no Turkish stop words. Any query containing "yapmak" or
+# patterns matching it (prefix yap*, suffix *mak) will diverge.
+_TURKISH_STOP_WORDS_IN_DATASET = {"yapmak"}
+
+# Indonesian (NOSTEM schema only): RediSearch's RS_FIELDMASK_ALL bypass causes
+# query-time stemming on NOSTEM fields. stem("kekuatan")="kuat" and "kuat"
+# exists literally in the dataset, so Redis matches it while Valkey doesn't.
+_INDONESIAN_DIVERGENT_NOSTEM = {"kekuatan"}
+
+# Arabic (fuzzy only, stemming-enabled schema): RediSearch trie contains stemmed
+# forms alongside originals. Fuzzy search can match these stems at shorter edit
+# distances. All words in the Arabic dataset that stem to a different (shorter)
+# form could produce fuzzy divergences if the generated fuzzy term happens to
+# land within distance 1 of the stemmed form.
+# We conservatively exclude ALL Arabic fuzzy queries since the stemmer produces
+# 21 unique stems that are shorter than originals, making collision likely.
+
+
+def _is_query_excluded(query: str, language: str, schema_type: str) -> bool:
+    """Check if a query should be excluded due to known divergences.
+
+    This function must be COMPREHENSIVE — any query that COULD diverge due to
+    the documented root causes must be caught, regardless of the random query
+    shape that wraps it.
+    """
+    if language == "dutch":
+        # Any query containing a word involved in a stem collision
+        for term in _DUTCH_DIVERGENT_TERMS:
+            if term in query:
+                return True
+
+    elif language == "german":
+        # Any query involving ß-containing words or their casefold equivalents
+        # Suffix queries: *sse, *ssen could match ß-folded forms in Valkey
+        if query.startswith("*") or " *" in query:
+            # Check if the suffix pattern could match a ß-word after casefold
+            for suffix_part in query.split():
+                if suffix_part.startswith("*"):
+                    suffix = suffix_part[1:]
+                    # Does this suffix appear in any ß-word after folding?
+                    for folded in _GERMAN_DIVERGENT_AFTER_FOLD:
+                        if folded.endswith(suffix):
+                            return True
+        # Fuzzy queries near ß-words
+        if "%" in query:
+            return True  # Conservative: any German fuzzy could hit ß-word distance
+        # ß character itself in the query (suffix matching)
+        if "ß" in query:
+            return True
+
+    elif language == "turkish":
+        # Any query containing the stop word
+        for term in _TURKISH_STOP_WORDS_IN_DATASET:
+            if term in query:
+                return True
+        # Prefix/suffix patterns that match the stop word "yapmak"
+        if "yap*" in query:
+            return True
+        if "*mak" in query:
+            return True
+        # Fuzzy queries: any fuzzy could land within distance 1 of "yapmak"
+        # which is in Redis's trie but not Valkey's (stop word filtered).
+        # Conservative: exclude all Turkish fuzzy queries.
+        if "%" in query:
+            return True
+
+    elif language == "indonesian":
+        # Only NOSTEM schema diverges (RediSearch RS_FIELDMASK_ALL bypass)
+        if schema_type == "nostem":
+            for term in _INDONESIAN_DIVERGENT_NOSTEM:
+                if term in query:
+                    return True
+
+    elif language == "arabic":
+        # Only fuzzy queries diverge (RediSearch trie has stemmed forms)
+        if "%" in query:
+            return True  # Conservative: any Arabic fuzzy could hit a stem
+
+    return False
+
+
+@pytest.mark.parametrize("language", MULTILANG_LANGUAGES)
+@pytest.mark.parametrize("schema_type", ["default", "nostem"])
+@pytest.mark.parametrize("dialect", [2])
+@pytest.mark.parametrize("key_type", ["hash", "json"])
+class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
+    """Compatibility tests for non-English language text search.
+
+    Exercises the same query patterns as TestTextSearchCompatibility but
+    against language-specific datasets with LANGUAGE set in FT.CREATE.
+    """
+    TEXT_QUERY_TEST_SEED = 7721
+    MAX_QUERIES = 200  # Fewer per-language to keep total pickle size manageable
+    ANSWER_FILE_NAME = "text-search-multilang-answers.pickle.gz"
+
+    def setup_data(self, data_set_name, key_type, schema_type):
+        """Override to specify text data source with language."""
+        self.data_set_name = data_set_name
+        self.key_type = key_type
+        self.schema_type = schema_type
+        self.client.execute_command("FLUSHALL SYNC")
+        load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
+
+    def execute_command(self, cmd):
+        """Override to include schema_type and language in answer."""
+        answer = {"cmd": cmd,
+                "key_type": self.key_type,
+                "data_set_name": self.data_set_name,
+                "schema_type": self.schema_type,
+                "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                "traceback": "".join(traceback.format_stack())}
+        try:
+            print("Cmd:", *cmd)
+            answer["result"] = self.client.execute_command(*cmd)
+            answer["exception"] = False
+            if answer["result"] != [0]:
+                self.__class__.replied_count += 1
+            print(f"replied: {answer['result']} (count: {self.__class__.replied_count})")
+        except Exception as exc:
+            print(f"Got exception for Error: '{exc}', Cmd:{cmd}")
+            answer["result"] = {}
+            answer["exception"] = True
+        self.answers.append(answer)
+
+    def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type,
+                  language, inorder=False, slop=False, field=None):
+        """Run a test with given term builder function against a language dataset."""
+        self.setup_data(data_set_name, key_type, schema_type)
+        rng = random.Random(self.TEXT_QUERY_TEST_SEED)
+        renderer = TermRenderer()
+        vocab_by_field = data_sets.extract_vocab_by_field_from_text_data(data_set_name, key_type)
+
+        seen = set()
+        query_count = 0
+        attempts = 0
+        max_attempts = self.MAX_QUERIES * 20
+
+        while query_count < self.MAX_QUERIES and attempts < max_attempts:
+            attempts += 1
+            selected_field = field if field is not None else rng.choice(list(vocab_by_field.keys()))
+            vocab = vocab_by_field[selected_field]
+
+            try:
+                result = builder_fn(vocab, rng)
+                current_query = result if isinstance(result, str) else renderer.render(result)
+                if current_query in seen:
+                    continue
+                seen.add(current_query)
+
+                # Check if query is in the known-divergence exclusion set
+                if _is_query_excluded(current_query, language, schema_type):
+                    print(f"Query excluded (known divergence): {current_query}")
+                    excluded_args = ["FT.SEARCH", f"{key_type}_idx1", current_query, "DIALECT", str(dialect)]
+                    self.answers.append({
+                        "cmd": excluded_args,
+                        "key_type": self.key_type,
+                        "data_set_name": self.data_set_name,
+                        "schema_type": self.schema_type,
+                        "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
+                        "excluded": True,
+                    })
+                    continue
+
+                args = ["FT.SEARCH", f"{key_type}_idx1", current_query]
+                if inorder:
+                    args.append("INORDER")
+                if slop:
+                    args.extend(["SLOP", str(rng.randint(1, 2))])
+                args.extend(["DIALECT", str(dialect)])
+                self.check(*args)
+                query_count += 1
+
+            except Exception:
+                continue
+
+        print(f"Generated {query_count} unique queries from {attempts} attempts")
+
+    # ========================================================================
+    # Core query types — exercised per language
+    # ========================================================================
+
+    def test_multilang_exact_match(self, key_type, dialect, schema_type, language):
+        """Test exact word matching in the given language."""
+        self._run_test(gen_word, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_prefix(self, key_type, dialect, schema_type, language):
+        """Test prefix wildcard queries in the given language."""
+        self._run_test(gen_prefix, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_suffix(self, key_type, dialect, schema_type, language):
+        """Test suffix wildcard queries in the given language."""
+        self._run_test(gen_suffix, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_group_depth2(self, key_type, dialect, schema_type, language):
+        """Test grouped queries with depth 2 in the given language."""
+        self._run_test(gen_depth2, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+
+    def test_multilang_fuzzy(self, key_type, dialect, schema_type, language):
+        """Test fuzzy search with Levenshtein distance 1 in the given language."""
+        self._run_test(gen_fuzzy_1, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+

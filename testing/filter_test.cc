@@ -165,6 +165,40 @@ INSTANTIATE_TEST_SUITE_P(
             .evaluate_success = true,
         },
         {
+            .test_name = "numeric_happy_path_3",
+            .filter = "@num_field_2.0:[-1.5 2.5] @num_field_1.5:[-1.0 2.0]",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "numeric_happy_path_scientific_notation",
+            .filter = "@num_field_2.0:[1.0 1e2] @num_field_1.5:[1e0 1.5]",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "numeric_happy_path_scientific_notation_negative",
+            .filter = "@num_field_2.0:[1e-2 1e+2] "
+                      "@num_field_1.5:[-1e2 1.5] "
+                      "@num_field_1.5:[-1e-2 1.5]",
+            .create_success = true,
+            .evaluate_success = true,
+        },
+        {
+            .test_name = "numeric_invalid_embedded_minus",
+            .filter = "@num_field_1.5:[1-2 2.0]",
+            .create_success = false,
+            .create_expected_error_message =
+                "Expected space or `,` between start and end values of a "
+                "numeric field. Position: 17",
+        },
+        {
+            .test_name = "numeric_invalid_leading_plus",
+            .filter = "@num_field_1.5:[+1 2.0]",
+            .create_success = false,
+            .create_expected_error_message = "Invalid number: ",
+        },
+        {
             .test_name = "numeric_happy_path_inclusive_1",
             .filter = "@num_field_2.0:[2 2.5] @num_field_1.5:[1.0 1.5]",
             .create_success = true,

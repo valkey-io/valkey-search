@@ -19,6 +19,7 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseBase,
     ValkeySearchClusterTestCase,
 )
+from valkeytestframework.conftest import resource_port_tracker
 from indexes import Index, Text
 from utils import (
     IndexingTestHelper,
@@ -58,17 +59,22 @@ CURRENT_RDB_ON_OLD_MODULE_CASES = [
 # ---------------------------------------------------------------------------
 
 def _do_current_rdb_on_old_module(test_case, client, server, reader_version,
-                                  index_setup_fn, expected_outcome):
+                                  index_setup_fn, expected_outcome,
+                                  save_client=None):
     """
     Phase 1: On the current module, create an index via index_setup_fn and SAVE.
     Phase 2: Start a server with `reader_version` module, loading the RDB.
     Assert the expected outcome.
+
+    save_client: If provided, SAVE is issued through this client (useful in
+    cluster mode to ensure the RDB is written by the specific server whose
+    data directory we read back).
     """
     skip_if_san_build()
 
     # Phase 1: create index, ingest data, save RDB
     index_setup_fn(client)
-    client.execute_command("SAVE")
+    (save_client or client).execute_command("SAVE")
 
     testdir = server.cwd
     dbfilename = server.args["dbfilename"]
@@ -136,9 +142,14 @@ class TestCurrentRDBOnOldModule_CME(ValkeySearchClusterTestCase):
                                        expected_outcome):
         primary = self.replication_groups[0].primary
         cluster_client = self.new_cluster_client()
+        # Use primary.client for SAVE to ensure the RDB we read back is from
+        # the same node. The cluster client is used for index/data creation
+        # (which replicates schema to all nodes), but SAVE must target the
+        # specific primary whose RDB we will load in Phase 2.
         _do_current_rdb_on_old_module(
             self, cluster_client, primary.server,
             reader_version, index_setup_fn, expected_outcome,
+            save_client=primary.client,
         )
 
 

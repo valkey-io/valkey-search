@@ -105,6 +105,7 @@ def start_server_with_old_module(test_case, testdir, dbfilename, version,
     """Start a valkey server with an older search module, loading an existing RDB.
 
     Maps version → integration/module/{version}-libsearch.so.zip.
+    Extracts the binary into testdir to avoid polluting the source tree.
 
     Returns (server, client, logfile, module_path).
     """
@@ -117,9 +118,10 @@ def start_server_with_old_module(test_case, testdir, dbfilename, version,
         pytest.skip(f"{version} module binary not found at {zip_path}")
 
     import zipfile
+    module_filename = f"{version}-libsearch.so"
     with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(module_dir)
-    module_path = os.path.join(module_dir, f"{version}-libsearch.so")
+        zf.extract(module_filename, testdir)
+    module_path = os.path.join(testdir, module_filename)
     os.chmod(module_path, 0o755)
 
     server, client = test_case.create_server(

@@ -864,10 +864,11 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   if (parameters.cancellation_token->IsCancelled()) {
     return absl::OkStatus();
   }
-  // INKEYS 0 (has_inkeys=true, empty set) means no keys can match.
+  // INKEYS with an empty set means no keys can match.
   // Short-circuit before acquiring the lock to avoid unnecessary contention.
-  if (parameters.has_inkeys && parameters.inkeys.empty()) {
-    parameters.search_result = SearchResult(0, {}, parameters);
+  if (parameters.inkeys.has_value() && parameters.inkeys->empty()) {
+    parameters.search_result =
+        SearchResult(0, std::vector<indexes::Neighbor>{}, parameters);
     return absl::OkStatus();
   }
   vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());

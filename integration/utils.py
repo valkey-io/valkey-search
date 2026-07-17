@@ -3,6 +3,7 @@ Utility functions and helper classes for Valkey Search integration tests.
 """
 
 import functools
+import os
 import threading
 from typing import Dict, Any, Optional
 from valkey.client import Valkey
@@ -98,6 +99,59 @@ def pausepoint_hit(client, pausepoint_name):
         waiters.wait_for_true(lambda: pausepoint_hit(client, pausepoint_name))
     """
     return client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0
+
+def start_server_with_old_module(test_case, testdir, dbfilename, version,
+                                 wait_for_ping=False, connect_client=False):
+    """Start a valkey server with an older search module, loading an existing RDB.
+
+    Maps version → integration/module/{version}-libsearch.so.zip.
+    Extracts the binary into testdir to avoid polluting the source tree.
+
+    Returns (server, client, logfile, module_path).
+    """
+    server_path = os.getenv("VALKEY_SERVER_PATH")
+    module_dir = os.path.join(os.path.dirname(__file__), "module")
+    zip_path = os.path.join(module_dir, f"{version}-libsearch.so.zip")
+
+    if not os.path.exists(zip_path):
+        import pytest
+        pytest.skip(f"{version} module binary not found at {zip_path}")
+
+    import zipfile
+    module_filename = f"{version}-libsearch.so"
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extract(module_filename, testdir)
+    module_path = os.path.join(testdir, module_filename)
+    os.chmod(module_path, 0o755)
+
+    server, client = test_case.create_server(
+        testdir=testdir,
+        server_path=server_path,
+        args={
+            "appendonly": "no",
+            "dbfilename": dbfilename,
+            "loadmodule": module_path,
+        },
+        wait_for_ping=wait_for_ping,
+        connect_client=connect_client,
+    )
+
+    logfile = os.path.join(server.cwd, server.args["logfile"])
+    return server, client, logfile, module_path
+
+
+def cleanup_module_binary(module_path):
+    """Remove an extracted module binary."""
+    if module_path and os.path.exists(module_path):
+        os.remove(module_path)
+
+
+def skip_if_san_build():
+    """Skip the test if running under ASAN/TSAN (old binaries are incompatible)."""
+    import pytest
+    if os.environ.get("SAN_BUILD", "no") != "no":
+        pytest.skip("Old module binary is not ASAN/TSAN-compatible")
+
 
 class IndexingTestHelper:
     """Helper class containing common functions for testing indexing operations."""

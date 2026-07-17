@@ -22,8 +22,8 @@ class TestSearchCompatibility(BaseCompatibilityTest):
 
     def test_inkeys_with_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "LIMIT", "0", "3", "DIALECT", str(dialect))
-        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "LIMIT", "2", "2", "DIALECT", str(dialect))
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "SORTBY", "n1", "ASC", "LIMIT", "0", "3", "DIALECT", str(dialect))
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[-inf inf]", "INKEYS", "5", f"{key_type}:00", f"{key_type}:01", f"{key_type}:02", f"{key_type}:03", f"{key_type}:04", "SORTBY", "n1", "ASC", "LIMIT", "2", "2", "DIALECT", str(dialect))
 
     def test_inkeys_with_sortby(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)

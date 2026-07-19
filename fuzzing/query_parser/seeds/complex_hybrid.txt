@@ -1,0 +1,1 @@
+@tag:{a|b} @price:[(0 +inf]=>[KNN 5 @vec $blob EF_RUNTIME 100 AS dist]

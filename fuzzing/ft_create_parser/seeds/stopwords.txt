@@ -1,0 +1,1 @@
+myidx ON HASH STOPWORDS 2 hello world SCHEMA title TEXT

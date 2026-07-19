@@ -1,0 +1,1 @@
+myidx ON HASH PREFIX 2 doc: item: SCHEMA title TEXT price NUMERIC tag TAG

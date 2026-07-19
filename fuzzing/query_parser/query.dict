@@ -1,0 +1,269 @@
+# AFL dictionary for valkey-search query parser
+# Covers FT.SEARCH query string syntax parsed by PreParseQueryString()
+
+# =====================================================================
+# Operators and delimiters
+# =====================================================================
+
+# Field reference prefix
+at="@"
+
+# Field-value separator
+colon=":"
+
+# Logical OR
+pipe="|"
+
+# Negation (NOT)
+dash="-"
+
+# Wildcard
+star="*"
+
+# Vector filter delimiter
+arrow="=>"
+
+# =====================================================================
+# Grouping and range delimiters
+# =====================================================================
+
+# Parentheses (grouping / exclusive range bound)
+lparen="("
+rparen=")"
+
+# Square brackets (numeric range)
+lbracket="["
+rbracket="]"
+
+# Curly braces (tag set)
+lbrace="{"
+rbrace="}"
+
+# =====================================================================
+# Quote delimiters (phrase / fuzzy)
+# =====================================================================
+
+# Exact phrase matching
+dquote="\""
+
+# Fuzzy matching
+percent="%"
+
+# Escape character
+backslash="\\"
+
+# =====================================================================
+# Numeric range special values
+# =====================================================================
+
+plus_inf="+inf"
+minus_inf="-inf"
+inf="inf"
+
+# =====================================================================
+# Numeric literals
+# =====================================================================
+
+zero="0"
+one="1"
+neg_one="-1"
+ten="10"
+hundred="100"
+float_pi="3.14"
+neg_float="-0.5"
+sci_notation="1e2"
+sci_neg="3.14e-5"
+max_int="2147483647"
+neg_max="-2147483648"
+
+# =====================================================================
+# Vector query keywords (KNN syntax inside [...])
+# =====================================================================
+
+knn="KNN"
+ef_runtime="EF_RUNTIME"
+as_kw="AS"
+
+# =====================================================================
+# Parameter reference
+# =====================================================================
+
+dollar="$"
+dollar_blob="$blob"
+dollar_param="$param"
+dollar_vec="$vec"
+
+# =====================================================================
+# Common field name patterns
+# =====================================================================
+
+at_field="@field"
+at_tag="@tag"
+at_name="@name"
+at_vec="@vec"
+at_price="@price"
+at_score="@score"
+at_text="@text"
+at_num="@num"
+
+# =====================================================================
+# Field-value patterns
+# =====================================================================
+
+field_colon="@field:"
+field_tag="@tag:{"
+field_num="@field:["
+neg_field="-@field:"
+neg_tag="-@tag:{"
+
+# =====================================================================
+# Tag syntax patterns
+# =====================================================================
+
+tag_single="{value}"
+tag_multi="{a|b}"
+tag_triple="{a|b|c}"
+tag_prefix="{prefix*}"
+tag_suffix="{*suffix}"
+tag_infix="{*mid*}"
+tag_empty="{}"
+
+# =====================================================================
+# Numeric range patterns
+# =====================================================================
+
+range_inclusive="[1 10]"
+range_exc_lower="[(1 10]"
+range_exc_upper="[1 (10]"
+range_exc_both="[(1 (10]"
+range_gte="[1 +inf]"
+range_gt="[(1 +inf]"
+range_lte="[-inf 10]"
+range_lt="[-inf (10]"
+range_all="[-inf +inf]"
+range_eq="[5 5]"
+range_neg="[-10 -1]"
+range_float="[0.5 1.5]"
+range_comma="[1,10]"
+
+# =====================================================================
+# Text search patterns
+# =====================================================================
+
+# Prefix/suffix/infix wildcards
+prefix_wild="word*"
+suffix_wild="*word"
+infix_wild="*word*"
+
+# Fuzzy matching
+fuzzy_1="%word%"
+fuzzy_2="%%word%%"
+fuzzy_3="%%%word%%%"
+
+# Exact phrase
+phrase="\"hello world\""
+
+# =====================================================================
+# Logical composition patterns
+# =====================================================================
+
+or_expr="(a|b)"
+and_expr="a b"
+not_expr="-a"
+nested="((a|b) c)"
+complex="(a|b) -c"
+
+# =====================================================================
+# Vector query patterns
+# =====================================================================
+
+knn_basic="=>[KNN 10 @vec $blob]"
+knn_ef="=>[KNN 5 @vec $blob EF_RUNTIME 100]"
+knn_as="=>[KNN 10 @vec $blob AS score]"
+knn_full="=>[KNN 10 @vec $blob EF_RUNTIME 200 AS dist]"
+star_knn="*=>[KNN 10 @vec $blob]"
+
+# =====================================================================
+# Complete query patterns
+# =====================================================================
+
+all_match="*"
+field_text="@field:value"
+field_tag_query="@tag:{blue|red}"
+field_numeric="@price:[10 100]"
+combined="@tag:{a|b} @price:[1 10]"
+hybrid_vec="@tag:{a}=>[KNN 5 @vec $blob]"
+
+# =====================================================================
+# Proximity / phrase modifiers (parsed at command level, may appear)
+# =====================================================================
+
+slop="SLOP"
+inorder="INORDER"
+
+# =====================================================================
+# Punctuation characters (default punctuation set)
+# =====================================================================
+
+comma=","
+period="."
+lt="<"
+gt=">"
+semicolon=";"
+exclaim="!"
+hash="#"
+caret="^"
+ampersand="&"
+tilde="~"
+slash="/"
+question="?"
+equals="="
+plus="+"
+
+# =====================================================================
+# Reserved / error-inducing characters
+# =====================================================================
+
+null="\x00"
+newline="\x0a"
+tab="\x09"
+cr="\x0d"
+del="\x7f"
+high_byte="\xff"
+nbsp="\xc2\xa0"
+
+# =====================================================================
+# Edge case strings
+# =====================================================================
+
+empty=""
+space=" "
+double_space="  "
+at_only="@"
+colon_only=":"
+at_colon="@:"
+at_colon_star="@:*"
+bracket_empty="[]"
+paren_empty="()"
+brace_empty="{}"
+double_at="@@"
+double_pipe="||"
+double_dash="--"
+triple_percent="%%%"
+escaped_at="\\@"
+escaped_star="\\*"
+escaped_paren="\\("
+escaped_brace="\\{"
+
+# =====================================================================
+# Long / boundary strings
+# =====================================================================
+
+# Deeply nested parens
+deep_nest="((((a))))"
+# Long OR chain
+long_or="a|b|c|d|e|f|g|h"
+# Multiple fields
+multi_field="@a:x @b:y @c:z"
+# Mixed types
+mixed="@tag:{a} @num:[1 10] word"

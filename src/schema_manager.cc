@@ -64,7 +64,6 @@ static auto max_indexes =
                                  kMaxIndexesDefault,  // default size
                                  1,                   // min size
                                  kMaxIndexes)         // max size
-        .WithValidationCallback(CHECK_RANGE(1, kMaxIndexes, kMaxIndexesConfig))
         .Build();
 
 vmsdk::config::Number &GetMaxIndexes() {
@@ -77,9 +76,6 @@ static auto backfill_batch_size =
     vmsdk::config::NumberBuilder(kIndexSchemaBackfillBatchSizeConfig,
                                  kIndexSchemaBackfillBatchSize, 1,
                                  std::numeric_limits<int32_t>::max())
-        .WithValidationCallback(
-            CHECK_RANGE(1, std::numeric_limits<int32_t>::max(),
-                        kIndexSchemaBackfillBatchSizeConfig))
         .Build();
 
 vmsdk::config::Number &GetBackfillBatchSize() {

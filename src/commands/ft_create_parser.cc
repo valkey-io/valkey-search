@@ -112,8 +112,6 @@ static auto max_prefixes =
                                  kDefaultPrefixesCountLimit,  // default size
                                  1,                           // min size
                                  kMaxPrefixesCount)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxPrefixesCount, kMaxPrefixesConfig))
         .Build();
 
 /// Register the "--max-tag-field-length" flag. Controls the max length of a tag
@@ -123,8 +121,6 @@ static auto max_tag_field_len =
                                  kDefaultTagFieldLenLimit,  // default size
                                  1,                         // min size
                                  kMaxTagFieldLen)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxTagFieldLen, kMaxTagFieldLenConfig))
         .Build();
 
 /// Register the "--max-numeric-field-length" flag. Controls the max length of a
@@ -134,8 +130,6 @@ static auto max_numeric_field_len =
                                  kDefaultNumericFieldLenLimit,  // default size
                                  1,                             // min size
                                  kMaxNumericFieldLen)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxNumericFieldLen, kMaxNumericFieldLenConfig))
         .Build();
 
 /// Register the "--max-attributes" flag. Controls the max number of attributes
@@ -145,8 +139,6 @@ static auto max_attributes =
                                  kDefaultAttributesCountLimit,  // default size
                                  1,                             // min size
                                  kMaxAttributesCount)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxAttributesCount, kMaxAttributesConfig))
         .Build();
 
 /// Register the "--max-vector-attributes" flag. Controls the max number of
@@ -158,8 +150,6 @@ static auto max_vector_attributes =
                                  kDefaultAttributesCountLimit,  // default size
                                  1,                             // min size
                                  kMaxAttributesCount)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxAttributesCount, kMaxVectorAttributesConfig))
         .Build();
 
 /// Register the "--max-dimensions" flag. Controls the max dimensions for vector
@@ -169,19 +159,15 @@ static auto max_dimensions =
                                  kDefaultDimensionsCountLimit,  // default size
                                  1,                             // min size
                                  kMaxDimensionsCount)           // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxDimensionsCount, kMaxDimensionsConfig))
         .Build();
 
 /// Register the "--max-m" flag. Controls the max M parameter for HNSW
 /// algorithm.
-static auto max_m =
-    vmsdk::config::NumberBuilder(kMaxMConfig,  // name
-                                 kMaxM,        // default size
-                                 2,            // min size
-                                 kMaxM)        // max size
-        .WithValidationCallback(CHECK_RANGE(1, kMaxM, kMaxMConfig))
-        .Build();
+static auto max_m = vmsdk::config::NumberBuilder(kMaxMConfig,  // name
+                                                 kMaxM,        // default size
+                                                 2,            // min size
+                                                 kMaxM)        // max size
+                        .Build();
 
 /// Register the "--max-ef-construction" flag. Controls the max EF construction
 /// parameter for HNSW algorithm.
@@ -190,8 +176,6 @@ static auto max_ef_construction =
                                  kMaxEfConstruction,        // default size
                                  1,                         // min size
                                  kMaxEfConstruction)        // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxEfConstruction, kMaxEfConstructionConfig))
         .Build();
 
 /// Register the "--max-ef-runtime" flag. Controls the max EF runtime parameter
@@ -201,8 +185,6 @@ static auto max_ef_runtime =
                                  kMaxEfRuntime,        // default size
                                  1,                    // min size
                                  kMaxEfRuntime)        // max size
-        .WithValidationCallback(
-            CHECK_RANGE(1, kMaxEfRuntime, kMaxEfRuntimeConfig))
         .Build();
 
 /// Register the "--default-timeout-ms" flag. Controls the default timeout

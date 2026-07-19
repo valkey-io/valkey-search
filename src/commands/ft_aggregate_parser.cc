@@ -270,6 +270,30 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   if (it != record_indexes_by_alias_.end()) {
     return std::make_unique<Attribute>(name, it->second);
   }
+  if (!create && IsVectorQuery() &&
+      parse_vars_.score_record_index_.has_value() &&
+      !parse_vars.score_as_string.empty() &&
+      parse_vars.score_as_string[0] == '$') {
+    auto score_param_name = parse_vars.score_as_string.substr(1);
+    auto score_param_itr = parse_vars.params.find(score_param_name);
+    if (score_param_itr != parse_vars.params.end()) {
+      if (score_param_itr->second.second == name) {
+        AddRecordAlias(name, *parse_vars_.score_record_index_);
+        return std::make_unique<Attribute>(name,
+                                           *parse_vars_.score_record_index_);
+      }
+    } else {
+      if (parse_vars_.deferred_score_alias_.has_value() &&
+          *parse_vars_.deferred_score_alias_ != name) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Unknown field ", name, " in index."));
+      }
+      parse_vars_.deferred_score_alias_ = std::string(name);
+      AddRecordAlias(name, *parse_vars_.score_record_index_);
+      return std::make_unique<Attribute>(name,
+                                         *parse_vars_.score_record_index_);
+    }
+  }
   indexes::IndexerType fieldType = indexes::IndexerType::kNone;
   if (!create) {
     VMSDK_ASSIGN_OR_RETURN(fieldType,

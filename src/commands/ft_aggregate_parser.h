@@ -128,15 +128,25 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     return new_index;
   }
 
+  void AddRecordAlias(absl::string_view alias, size_t index) {
+    auto [itr, inserted] =
+        record_indexes_by_alias_.emplace(std::string(alias), index);
+    assert(inserted || itr->second == index);
+  }
+
   struct {
     // Variables here are only used during parsing and are cleared at the end.
 
     // For testing
     IndexInterface* index_interface_;
+    std::optional<size_t> score_record_index_;
+    std::optional<std::string> deferred_score_alias_;
 
   } parse_vars_;
   void ClearAtEndOfParse() {
     parse_vars_.index_interface_ = nullptr;
+    parse_vars_.score_record_index_.reset();
+    parse_vars_.deferred_score_alias_.reset();
     parse_vars.ClearAtEndOfParse();
   }
 

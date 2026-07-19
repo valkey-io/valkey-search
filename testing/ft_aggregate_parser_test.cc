@@ -8,9 +8,16 @@
 
 #include <map>
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/vector_flat.h"
+#include "src/schema_manager.h"
 #include "src/valkey_search_options.h"
+#include "testing/common.h"
+#include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
   return os << "S=" << *(std::string *)s;
@@ -52,17 +59,30 @@ struct FakeIndexInterface : public IndexInterface {
   }
 };
 
-struct AggregateTest : public vmsdk::ValkeyTest {
+struct AggregateTest : public ValkeySearchTest {
   void SetUp() override {
     fake_index.fields_ = {
         {"n1", indexes::IndexerType::kNumeric},
         {"n2", indexes::IndexerType::kNumeric},
     };
-    vmsdk::ValkeyTest::SetUp();
+    ValkeySearchTest::SetUp();
   }
-  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
+  void TearDown() override { ValkeySearchTest::TearDown(); }
   FakeIndexInterface fake_index;
 };
+
+std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
+    const std::vector<float> &floats) {
+  std::vector<ValkeyModuleString *> ret;
+  const absl::string_view blob_str = "BLOB";
+  ret.push_back(
+      ValkeyModule_CreateString(nullptr, blob_str.data(), blob_str.size()));
+  std::string vector_str(reinterpret_cast<const char *>(floats.data()),
+                         floats.size() * sizeof(float));
+  ret.push_back(ValkeyModule_CreateString(nullptr, vector_str.c_str(),
+                                          vector_str.size()));
+  return ret;
+}
 
 static struct TimeoutTestValue {
   std::string text_;
@@ -299,6 +319,116 @@ TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
     for (auto arg : argv) {
       ValkeyModule_FreeString(nullptr, arg);
     }
+  }
+}
+
+TEST_F(AggregateTest,
+       ParseCommandResolvesVectorScoreAliasParamForEarlySortByReference) {
+  std::vector<float> floats = {0.1f, 0.2f, 0.3f};
+  const std::string key_str = "my_schema_name";
+  auto index_schema = CreateIndexSchema(key_str, &fake_ctx_).value();
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber())
+      .WillRepeatedly([&index_schema](absl::string_view field) {
+        return index_schema->IndexSchema::GetIdentifier(field);
+      });
+
+  data_model::VectorIndex vector_index_proto;
+  vector_index_proto.set_dimension_count(3);
+  vector_index_proto.set_initial_cap(100);
+  vector_index_proto.set_vector_data_type(
+      data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+  auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
+  flat_algorithm_proto->set_block_size(100);
+  vector_index_proto.set_allocated_flat_algorithm(
+      flat_algorithm_proto.release());
+  auto index = indexes::VectorFlat<float>::Create(
+                   vector_index_proto, "attribute_identifier_1",
+                   data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                   .value();
+  VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "id1", index));
+
+  auto args = vmsdk::ToValkeyStringVector(
+      "SORTBY 2 @my_score DESC PARAMS 4 ALIAS my_score LIMIT 0 1");
+  auto vector_args = FloatToValkeyStringVector(floats);
+  args.insert(args.begin() + 6, vector_args.begin(), vector_args.end());
+
+  AggregateParameters params(0);
+  params.index_schema = index_schema;
+  params.index_schema_name = key_str;
+  params.parse_vars.query_string = "*=>[KNN 10 @vec $BLOB AS $ALIAS]";
+
+  vmsdk::ArgsIterator itr(args.data(), args.size());
+  auto status = params.ParseCommand(itr);
+
+  EXPECT_TRUE(status.ok()) << status;
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "my_score");
+  ASSERT_GE(params.record_info_by_index_.size(), 2);
+  EXPECT_EQ(params.record_info_by_index_[1].identifier_, "my_score");
+  EXPECT_EQ(params.record_info_by_index_[1].alias_, "my_score");
+  ASSERT_EQ(params.stages_.size(), 2);
+  std::ostringstream os;
+  params.stages_[0]->Dump(os);
+  EXPECT_EQ(os.str(), "SORTBY: DESC:@my_score MAX:10");
+
+  for (auto arg : args) {
+    ValkeyModule_FreeString(nullptr, arg);
+  }
+}
+
+TEST_F(AggregateTest,
+       ParseCommandRejectsMismatchedEarlyVectorScoreAliasReference) {
+  std::vector<float> floats = {0.1f, 0.2f, 0.3f};
+  const std::string key_str = "my_schema_name";
+  auto index_schema = CreateIndexSchema(key_str, &fake_ctx_).value();
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber())
+      .WillRepeatedly([&index_schema](absl::string_view field) {
+        return index_schema->IndexSchema::GetIdentifier(field);
+      });
+
+  data_model::VectorIndex vector_index_proto;
+  vector_index_proto.set_dimension_count(3);
+  vector_index_proto.set_initial_cap(100);
+  vector_index_proto.set_vector_data_type(
+      data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+  auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
+  flat_algorithm_proto->set_block_size(100);
+  vector_index_proto.set_allocated_flat_algorithm(
+      flat_algorithm_proto.release());
+  auto index = indexes::VectorFlat<float>::Create(
+                   vector_index_proto, "attribute_identifier_1",
+                   data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                   .value();
+  VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "id1", index));
+
+  auto args = vmsdk::ToValkeyStringVector(
+      "SORTBY 2 @wrong_score DESC PARAMS 4 ALIAS my_score LIMIT 0 1");
+  auto vector_args = FloatToValkeyStringVector(floats);
+  args.insert(args.begin() + 6, vector_args.begin(), vector_args.end());
+
+  AggregateParameters params(0);
+  params.index_schema = index_schema;
+  params.index_schema_name = key_str;
+  params.parse_vars.query_string = "*=>[KNN 10 @vec $BLOB AS $ALIAS]";
+
+  vmsdk::ArgsIterator itr(args.data(), args.size());
+  auto status = params.ParseCommand(itr);
+
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Unknown field @wrong_score"));
+
+  for (auto arg : args) {
+    ValkeyModule_FreeString(nullptr, arg);
   }
 }
 

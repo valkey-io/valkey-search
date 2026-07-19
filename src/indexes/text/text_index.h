@@ -48,10 +48,10 @@ struct TextIndexMetadata {
   std::atomic<uint64_t> num_unique_terms{0};
   std::atomic<uint64_t> total_term_frequency{0};
 
-  // Memory pools for text index components
-  MemoryPool posting_memory_pool_{0};
-  MemoryPool radix_memory_pool_{0};
-  MemoryPool text_index_memory_pool_{0};
+  // Postings objects, btree_map nodes, per-key rax nodes, container overhead.
+  MemoryPool postings_memory_pool_{0};
+  // FlatPositionMap allocations (one per document per unique term).
+  MemoryPool position_memory_pool_{0};
 };
 
 class TextIndex {
@@ -209,8 +209,7 @@ class TextIndexSchema {
   uint64_t GetTotalPositions() const;
   uint64_t GetNumUniqueTerms() const;
   uint64_t GetTotalTermFrequency() const;
-  // TODO: Implement the following APIs when we want granular memory metrics for
-  // text index components
+  // Per-component memory usage exposed via FT.INFO.
   uint64_t GetPostingsMemoryUsage() const;
   uint64_t GetRadixTreeMemoryUsage() const;
   uint64_t GetPositionMemoryUsage() const;

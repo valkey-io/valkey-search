@@ -302,6 +302,8 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate& predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
                                        bool require_positions) override;
+  query::EvaluationResult EvaluateGeoShape(
+      const query::GeoShapePredicate& predicate) override;
   const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
 };

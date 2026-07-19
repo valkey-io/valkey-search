@@ -36,6 +36,7 @@
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -155,6 +156,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     }
     case data_model::Index::IndexTypeCase::kNumericIndex: {
       return std::make_shared<indexes::Numeric>(index.numeric_index());
+    }
+    case data_model::Index::IndexTypeCase::kGeoshapeIndex: {
+      return std::make_shared<indexes::GeoShape>(index.geoshape_index());
     }
     case data_model::Index::IndexTypeCase::kTextIndex: {
       // Create the TextIndexSchema if this is the first Text index we're seeing

@@ -533,6 +533,28 @@ absl::Status ParseText(vmsdk::ArgsIterator &itr, data_model::Index &index_proto,
   return absl::OkStatus();
 }
 
+absl::Status ParseGeoShape(vmsdk::ArgsIterator &itr,
+                           data_model::Index &index_proto) {
+  auto geoshape_index_proto = std::make_unique<data_model::GeoShapeIndex>();
+  auto coord_system = data_model::GEO_SHAPE_COORD_SYSTEM_FLAT;
+  if (itr.DistanceEnd() > 0) {
+    auto next_arg = itr.Get();
+    if (next_arg.ok()) {
+      absl::string_view coord_str = vmsdk::ToStringView(next_arg.value());
+      if (absl::EqualsIgnoreCase(coord_str, "FLAT")) {
+        coord_system = data_model::GEO_SHAPE_COORD_SYSTEM_FLAT;
+        itr.Next();
+      } else if (absl::EqualsIgnoreCase(coord_str, "SPHERICAL")) {
+        return absl::InvalidArgumentError(
+            "SPHERICAL coordinate system is not supported. Use FLAT.");
+      }
+    }
+  }
+  geoshape_index_proto->set_coord_system(coord_system);
+  index_proto.set_allocated_geoshape_index(geoshape_index_proto.release());
+  return absl::OkStatus();
+}
+
 absl::StatusOr<indexes::IndexerType> ParseIndexerType(
     vmsdk::ArgsIterator &itr) {
   absl::string_view index_type_str;
@@ -582,6 +604,9 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
       break;
     case indexes::IndexerType::kText:
       VMSDK_RETURN_IF_ERROR(ParseText(itr, *index_proto, schema_text_defaults));
+      break;
+    case indexes::IndexerType::kGeoShape:
+      VMSDK_RETURN_IF_ERROR(ParseGeoShape(itr, *index_proto));
       break;
     default:
       CHECK(false);

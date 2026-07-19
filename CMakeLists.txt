@@ -53,6 +53,27 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CMAKE_BINARY_DIR}/.deps/install/include)
 
+# Boost.Geometry (header-only) for R-tree spatial indexing
+find_path(BOOST_INCLUDE_DIR boost/geometry.hpp
+  HINTS ENV BOOST_ROOT /usr/include /usr/local/include)
+if(BOOST_INCLUDE_DIR)
+  message(STATUS "Boost headers found at: ${BOOST_INCLUDE_DIR}")
+  include_directories(SYSTEM ${BOOST_INCLUDE_DIR})
+else()
+  message(STATUS "Boost headers not found locally, fetching via FetchContent...")
+  include(FetchContent)
+  FetchContent_Declare(Boost
+    URL https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0-cmake.tar.gz
+    URL_HASH SHA256=cc4b893acf645c9d4b698e9a0f08ca8846571571c2d2e0ef9c537b965e4571ae
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+  set(BOOST_INCLUDE_LIBRARIES geometry CACHE STRING "" FORCE)
+  FetchContent_MakeAvailable(Boost)
+  get_target_property(BOOST_INCLUDE_DIR Boost::geometry INTERFACE_INCLUDE_DIRECTORIES)
+  include_directories(SYSTEM ${BOOST_INCLUDE_DIR})
+  message(STATUS "Boost headers fetched to: ${BOOST_INCLUDE_DIR}")
+endif()
+
 include(valkey_search)
 
 add_subdirectory(vmsdk)

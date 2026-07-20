@@ -179,6 +179,43 @@ TEXT_DATASETS = {
 }
 
 # Multi-language text datasets for compatibility testing.
+#
+# These datasets are used by the compat suite to generate random queries that
+# should produce identical results between Valkey Search and RediSearch. To
+# achieve this, the vocabulary is curated to avoid known behavioral differences:
+#
+# Divergences handled at the vocab level:
+#
+# 1. Snowball 3.0.1 vs 2.1.0 (Dutch only)
+#    Valkey uses Kraaij-Pohlmann which strips ge-/be-/ver- prefixes. RediSearch
+#    is observed to use Porter-style stemming which does not strip these.
+#    Excluded specific Dutch terms whose K-P stems collide with other dataset
+#    terms (e.g. geschilderd, schilder, gebouwd).
+#
+# 2. CaseMap::utf8Fold decomposition (affects all languages)
+#    Valkey's ICU case folding converts ß→ss, ﬁ→fi, and similar. RediSearch is
+#    observed to use simple lowercasing which preserves these characters. Avoided
+#    characters like ß and ligatures in all language datasets.
+#
+# 3. Default stop words (affects all languages)
+#    Valkey applies per-language Lucene stop words by default. RediSearch is
+#    observed to only filter English stop words. Avoided any term that appears
+#    in the language's Lucene stop word list.
+#
+# 4. NOSTEM query-time stemming bypass (affects all languages)
+#    When running bare (non-field) queries against RediSearch on NOSTEM fields,
+#    stemmed matches are observed (suggesting query-time stemming bypasses
+#    NOSTEM). Valkey strictly enforces NOSTEM at both index and query time.
+#    Avoided vocab pairs where stem(term_A) == term_B within the same dataset
+#    (e.g. kekuatan stems to kuat in Indonesian).
+#
+# 5. Fuzzy search over stemmed forms (affects all languages, handled at generation time)
+#    When running fuzzy queries against RediSearch, matches are observed against
+#    stemmed forms of indexed terms in addition to originals. Valkey only matches
+#    against original forms. The fuzzy generator filters vocab at generation time
+#    to words whose 1-char mutations cannot land within edit-distance 1 of any
+#    stem (see _compute_safe_fuzzy_vocab in generate_text.py).
+#
 # Each dataset includes vocabulary that exercises language-specific features:
 # - Diacritics and special characters for normalization/case-folding
 # - Inflected forms to exercise Snowball stemming
@@ -222,31 +259,31 @@ TEXT_DATASETS_MULTILANG = {
         'schema': TEXT_SCHEMA,
         'field_values': {
             'title': [
-                # places/buildings — umlauts, ß, compounds
-                'Straße', 'Gebäude', 'Brücke', 'Universität', 'Küche', 'Bücherei',
+                # places/buildings — umlauts, compounds
+                'Gebäude', 'Brücke', 'Universität', 'Küche', 'Bücherei', 'Rathaus',
                 # transport — umlauts, compounds
-                'Straßenbahn', 'Flughafen', 'Führerschein', 'Fahrrad', 'Schiff', 'Eisenbahn',
+                'Flughafen', 'Führerschein', 'Fahrrad', 'Schiff', 'Eisenbahn', 'Autobahn',
                 # people — umlauts
                 'Mädchen', 'Ärzte', 'Schüler', 'Händler', 'Bäcker', 'Künstler',
                 # nature — umlauts
                 'Vögel', 'Bäume', 'Flüsse', 'Gärten', 'Wälder', 'Blüten',
-                # verbs (inflected — exercises stemmer)
-                'arbeiten', 'geöffnet', 'schließen', 'verstehen', 'gewünscht', 'übersetzen',
+                # verbs (inflected)
+                'arbeiten', 'geöffnet', 'verstehen', 'gewünscht', 'übersetzen', 'anfangen',
             ],
             'body': [
-                # objects — umlauts, ß
+                # objects — umlauts
                 'Schlüssel', 'Kühlschrank', 'Gemälde', 'Rätsel', 'Bücher', 'Möbel',
                 # food
-                'Käse', 'Brötchen', 'Würstchen', 'Knödel', 'Gemüse', 'Süßigkeit',
+                'Käse', 'Brötchen', 'Würstchen', 'Knödel', 'Gemüse', 'Lebkuchen',
                 # abstract — umlauts
-                'Größe', 'Stärke', 'Schönheit', 'Fähigkeit', 'Höflichkeit', 'Gemütlichkeit',
+                'Stärke', 'Schönheit', 'Fähigkeit', 'Höflichkeit', 'Gemütlichkeit', 'Freiheit',
                 # actions (inflected)
-                'laufen', 'schwimmen', 'gekämpft', 'geändert', 'zerstört', 'gebäude',
+                'laufen', 'schwimmen', 'gekämpft', 'geändert', 'zerstört', 'gefahren',
                 # descriptors — umlauts
                 'schnell', 'langsam', 'böse', 'schön', 'grün', 'müde',
             ],
             'color': ['rot', 'blau', 'grün', 'gelb', 'schwarz',
-                      'weiß', 'lila', 'orange', 'rosa', 'braun'],
+                      'lila', 'orange', 'rosa', 'braun', 'golden'],
             'price': (0, 50)
         }
     },
@@ -433,7 +470,7 @@ TEXT_DATASETS_MULTILANG = {
                 # abstract — ö, ü, ğ
                 'özgürlük', 'güzellik', 'doğruluk', 'büyüklük', 'güçlülük', 'mutluluk',
                 # actions (inflected) — dotless ı testing
-                'yüzmek', 'koşmak', 'uçmak', 'sürmek', 'yapmak', 'bulmak',
+                'yüzmek', 'koşmak', 'uçmak', 'sürmek', 'gitmek', 'bulmak',
                 # descriptors — ı, ş
                 'hızlı', 'yavaş', 'güçlü', 'sessiz', 'sıcak', 'soğuk',
             ],
@@ -449,13 +486,13 @@ TEXT_DATASETS_MULTILANG = {
                 # places — IJ digraph, compounds
                 'ziekenhuis', 'universiteit', 'bibliotheek', 'vliegveld', 'station', 'wijk',
                 # people
-                'leraar', 'ingenieur', 'schrijver', 'kunstenaar', 'bakker', 'schilder',
-                # food — diacritics
+                'leraar', 'ingenieur', 'schrijver', 'kunstenaar', 'bakker', 'timmerman',
+                # food
                 'kaas', 'brood', 'appel', 'sinaasappel', 'citroen', 'aardbei',
                 # nature — IJ, compounds
                 'ijsbeer', 'rivier', 'bos', 'woestijn', 'bloem', 'storm',
-                # verbs (inflected — exercises stemmer)
-                'werken', 'gebouwd', 'geopend', 'veranderd', 'geschilderd', 'geschreven',
+                # verbs (inflected)
+                'werken', 'lopen', 'spreken', 'zingen', 'dansen', 'lezen',
             ],
             'body': [
                 # objects — compounds
@@ -465,7 +502,7 @@ TEXT_DATASETS_MULTILANG = {
                 # abstract
                 'vrijheid', 'gelijkheid', 'schoonheid', 'mogelijkheid', 'veiligheid', 'waarheid',
                 # actions (inflected)
-                'zwemmen', 'rennen', 'vliegen', 'rijden', 'bouwen', 'schilderen',
+                'zwemmen', 'rennen', 'vliegen', 'rijden', 'tekenen', 'wandelen',
                 # descriptors
                 'snel', 'langzaam', 'sterk', 'zwak', 'warm', 'koud',
             ],
@@ -495,7 +532,7 @@ TEXT_DATASETS_MULTILANG = {
                 # animals
                 'kucing', 'burung', 'kuda', 'harimau', 'elang', 'lumba',
                 # abstract — agglutinative suffixes (-an, -kan)
-                'keindahan', 'kemerdekaan', 'kebahagiaan', 'kekuatan', 'kebenaran', 'kesehatan',
+                'keindahan', 'kemerdekaan', 'kebahagiaan', 'kebenaran', 'kesehatan', 'keadilan',
                 # actions (inflected)
                 'berenang', 'terbang', 'mengemudi', 'melompat', 'memanjat', 'menyelam',
                 # descriptors

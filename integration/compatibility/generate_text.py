@@ -3,6 +3,7 @@ import random
 import re
 import os
 import traceback
+import snowballstemmer
 from . import data_sets
 from .data_sets import load_data
 from .generate import BaseCompatibilityTest
@@ -361,6 +362,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                         "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                         "excluded": True,
                     })
+                    query_count += 1
                     continue
 
                 args = self._build_search_args(key_type, current_query, dialect, inorder, slop, rng)
@@ -458,113 +460,78 @@ MULTILANG_LANGUAGES = [
 # Map language name to its dataset name in TEXT_DATASETS
 LANG_TO_DATASET = {lang: f"{lang} text" for lang in MULTILANG_LANGUAGES}
 
-# Excluded queries for multi-language compatibility tests.
-# These are known intentional divergences explained below.
-#
-# Uses term-based exclusion: if a query contains ANY word/pattern that triggers
-# a known divergence for that language, it is excluded. This is comprehensive
-# across all randomly-generated query shapes (exact, prefix, suffix, grouped,
-# fuzzy) and prevents flaky failures from compound queries.
 
-# Dutch: Kraaij-Pohlmann (Snowball 3.0.1) stems ge-/be-/ver- prefixed words.
-# These words share stems with others in the dataset, causing cross-matches
-# that Dutch Porter (RediSearch, Snowball 2.1.0) doesn't produce.
-# Stem collisions: {schilder, geschilderd, schilderen}, {bouwen, gebouwd}
-_DUTCH_DIVERGENT_TERMS = {
-    "schilder", "geschilderd", "schilderen", "gebouwd", "bouwen",
-}
-
-# German: Valkey uses Unicode CaseFolding (ß→ss), Redis uses toLower (ß→ß).
-# All words containing ß are indexed/queried differently between the two systems.
-# Valkey: "Straße"→"strasse", Redis: "Straße"→"straße"
-# After Valkey casefold, these produce tokens with "ss" that don't exist in Redis.
-# Suffix *sse, *ssen matches Valkey's "strasse"/"schliessen" but not Redis's "straße"/"schließen"
-# Also: any suffix containing "ß" matches Redis but not Valkey (since ß→ss in Valkey)
-_GERMAN_DIVERGENT_AFTER_FOLD = {
-    "strasse", "strassenbahn", "grosse", "sussigkeit", "schliessen",
-    "straße", "straßenbahn", "größe", "süßigkeit", "schließen",
-}
-
-# Turkish: "yapmak" is in Lucene's Turkish stop word list (used by Valkey).
-# RediSearch has no Turkish stop words. Any query containing "yapmak" or
-# patterns matching it (prefix yap*, suffix *mak) will diverge.
-_TURKISH_STOP_WORDS_IN_DATASET = {"yapmak"}
-
-# Indonesian (NOSTEM schema only): RediSearch's RS_FIELDMASK_ALL bypass causes
-# query-time stemming on NOSTEM fields. stem("kekuatan")="kuat" and "kuat"
-# exists literally in the dataset, so Redis matches it while Valkey doesn't.
-_INDONESIAN_DIVERGENT_NOSTEM = {"kekuatan"}
-
-# Arabic (fuzzy only, stemming-enabled schema): RediSearch trie contains stemmed
-# forms alongside originals. Fuzzy search can match these stems at shorter edit
-# distances. All words in the Arabic dataset that stem to a different (shorter)
-# form could produce fuzzy divergences if the generated fuzzy term happens to
-# land within distance 1 of the stemmed form.
-# We conservatively exclude ALL Arabic fuzzy queries since the stemmer produces
-# 21 unique stems that are shorter than originals, making collision likely.
+def _edit_distance(s: str, t: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    m, n = len(s), len(t)
+    if m == 0:
+        return n
+    if n == 0:
+        return m
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev = dp[0]
+        dp[0] = i
+        for j in range(1, n + 1):
+            temp = dp[j]
+            if s[i - 1] == t[j - 1]:
+                dp[j] = prev
+            else:
+                dp[j] = 1 + min(prev, dp[j], dp[j - 1])
+            prev = temp
+    return dp[n]
 
 
-def _is_query_excluded(query: str, language: str, schema_type: str) -> bool:
-    """Check if a query should be excluded due to known divergences.
+def _compute_safe_fuzzy_vocab(vocab_by_field: dict, language: str) -> dict:
+    """Filter vocab to words safe for fuzzy compatibility testing.
 
-    This function must be COMPREHENSIVE — any query that COULD diverge due to
-    the documented root causes must be caught, regardless of the random query
-    shape that wraps it.
+    When running fuzzy queries against RediSearch, we observe that fuzzy matches
+    can occur against stemmed forms of indexed terms — i.e. RediSearch appears to
+    match fuzzy queries against stems in addition to original tokens. Valkey Search
+    does not do this; fuzzy matching operates only on the original indexed forms.
+
+    To avoid this known behavioral divergence in the compatibility suite, we
+    exclude any vocab word W where a 1-char mutation of W could land within
+    edit-distance 1 of a stem. Since gen_fuzzy_1 mutates W by exactly 1
+    character, the resulting query is distance 1 from W. For that query to also
+    be within distance 1 of a stem S, W must be within distance 2 of S (by
+    triangle inequality). Therefore we conservatively exclude any word W where
+    edit_distance(W, S) <= 2 for any stem S that differs from its original.
+
+    Returns a new vocab_by_field dict with only safe words per field.
+    If a field has no safe words, it is omitted from the result.
     """
-    if language == "dutch":
-        # Any query containing a word involved in a stem collision
-        for term in _DUTCH_DIVERGENT_TERMS:
-            if term in query:
-                return True
+    stemmer = snowballstemmer.stemmer(language)
 
-    elif language == "german":
-        # Any query involving ß-containing words or their casefold equivalents
-        # Suffix queries: *sse, *ssen could match ß-folded forms in Valkey
-        if query.startswith("*") or " *" in query:
-            # Check if the suffix pattern could match a ß-word after casefold
-            for suffix_part in query.split():
-                if suffix_part.startswith("*"):
-                    suffix = suffix_part[1:]
-                    # Does this suffix appear in any ß-word after folding?
-                    for folded in _GERMAN_DIVERGENT_AFTER_FOLD:
-                        if folded.endswith(suffix):
-                            return True
-        # Fuzzy queries near ß-words
-        if "%" in query:
-            return True  # Conservative: any German fuzzy could hit ß-word distance
-        # ß character itself in the query (suffix matching)
-        if "ß" in query:
-            return True
+    # Collect all unique stems across all fields that differ from the original
+    all_words = set()
+    for words in vocab_by_field.values():
+        all_words.update(w.lower() for w in words)
+    divergent_stems = set()
+    for word in all_words:
+        stem = stemmer.stemWord(word)
+        if stem != word:
+            divergent_stems.add(stem)
 
-    elif language == "turkish":
-        # Any query containing the stop word
-        for term in _TURKISH_STOP_WORDS_IN_DATASET:
-            if term in query:
-                return True
-        # Prefix/suffix patterns that match the stop word "yapmak"
-        if "yap*" in query:
-            return True
-        if "*mak" in query:
-            return True
-        # Fuzzy queries: any fuzzy could land within distance 1 of "yapmak"
-        # which is in Redis's trie but not Valkey's (stop word filtered).
-        # Conservative: exclude all Turkish fuzzy queries.
-        if "%" in query:
-            return True
+    if not divergent_stems:
+        return vocab_by_field  # No stems differ from originals — all words are safe
 
-    elif language == "indonesian":
-        # Only NOSTEM schema diverges (RediSearch RS_FIELDMASK_ALL bypass)
-        if schema_type == "nostem":
-            for term in _INDONESIAN_DIVERGENT_NOSTEM:
-                if term in query:
-                    return True
+    # Filter each field's vocab to only safe words
+    safe_vocab = {}
+    for field, words in vocab_by_field.items():
+        safe_words = []
+        for word in words:
+            w_lower = word.lower()
+            is_safe = all(
+                _edit_distance(w_lower, stem) > 2 for stem in divergent_stems
+            )
+            if is_safe:
+                safe_words.append(word)
+        if safe_words:
+            safe_vocab[field] = safe_words
 
-    elif language == "arabic":
-        # Only fuzzy queries diverge (RediSearch trie has stemmed forms)
-        if "%" in query:
-            return True  # Conservative: any Arabic fuzzy could hit a stem
+    return safe_vocab
 
-    return False
 
 
 @pytest.mark.parametrize("language", MULTILANG_LANGUAGES)
@@ -611,12 +578,13 @@ class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
         self.answers.append(answer)
 
     def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type,
-                  language, inorder=False, slop=False, field=None):
+                  language, inorder=False, slop=False, field=None, vocab_override=None):
         """Run a test with given term builder function against a language dataset."""
         self.setup_data(data_set_name, key_type, schema_type)
         rng = random.Random(self.TEXT_QUERY_TEST_SEED)
         renderer = TermRenderer()
-        vocab_by_field = data_sets.extract_vocab_by_field_from_text_data(data_set_name, key_type)
+        vocab_by_field = vocab_override if vocab_override is not None else \
+            data_sets.extract_vocab_by_field_from_text_data(data_set_name, key_type)
 
         seen = set()
         query_count = 0
@@ -634,20 +602,6 @@ class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
                 if current_query in seen:
                     continue
                 seen.add(current_query)
-
-                # Check if query is in the known-divergence exclusion set
-                if _is_query_excluded(current_query, language, schema_type):
-                    print(f"Query excluded (known divergence): {current_query}")
-                    excluded_args = ["FT.SEARCH", f"{key_type}_idx1", current_query, "DIALECT", str(dialect)]
-                    self.answers.append({
-                        "cmd": excluded_args,
-                        "key_type": self.key_type,
-                        "data_set_name": self.data_set_name,
-                        "schema_type": self.schema_type,
-                        "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
-                        "excluded": True,
-                    })
-                    continue
 
                 args = ["FT.SEARCH", f"{key_type}_idx1", current_query]
                 if inorder:
@@ -685,5 +639,16 @@ class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
 
     def test_multilang_fuzzy(self, key_type, dialect, schema_type, language):
         """Test fuzzy search with Levenshtein distance 1 in the given language."""
-        self._run_test(gen_fuzzy_1, LANG_TO_DATASET[language], key_type, dialect, schema_type, language)
+        dataset = LANG_TO_DATASET[language]
+        full_vocab = data_sets.extract_vocab_by_field_from_text_data(dataset, key_type)
+        safe_vocab = _compute_safe_fuzzy_vocab(full_vocab, language)
+        if not safe_vocab:
+            pytest.skip(
+                f"{language}: no vocab words safe for fuzzy compat testing "
+                f"(all within edit-distance 2 of a stem)"
+            )
+        self._run_test(
+            gen_fuzzy_1, dataset, key_type, dialect, schema_type,
+            language, vocab_override=safe_vocab
+        )
 

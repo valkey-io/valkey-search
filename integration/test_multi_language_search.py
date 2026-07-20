@@ -642,3 +642,197 @@ class TestLanguageRDBBackwardCompat(ValkeySearchTestCaseBase):
             assert "Invalid" in str(e) or "Syntax" in str(e), (
                 f"Unexpected error when searching stop word: {e}"
             )
+
+
+# =============================================================================
+# Deliberate divergences: Valkey-only correctness assertions
+# =============================================================================
+
+class TestDeliberateDivergences(MultiLanguageTestCase):
+    """
+    Valkey-only integration tests that positively assert intentional behavioral
+    differences from RediSearch. These prove that our design choices (newer
+    Snowball, Lucene stopwords, strict NOSTEM, utf8Fold) work correctly
+    end-to-end through the full FT.CREATE -> HSET -> FT.SEARCH pipeline.
+
+    No Redis comparison is needed — these tests document and lock in behaviors
+    where Valkey intentionally diverges.
+    """
+
+    # -----------------------------------------------------------------
+    # Divergence #1: German ß -> ss case folding (utf8Fold)
+    # Our CaseMap::utf8Fold converts ß to ss at both index and query time,
+    # aligning with Lucene behavior. This means "strasse" matches "Straße".
+    # -----------------------------------------------------------------
+
+    def test_german_eszett_case_folding(self):
+        """German ß folds to ss: 'strasse' matches 'Straße' and vice versa."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH",
+            "LANGUAGE", "GERMAN",
+            "SCHEMA", "content", "TEXT", "NOSTEM"
+        )
+        client.execute_command("HSET", "doc:1", "content", "Straße")
+        client.execute_command("HSET", "doc:2", "content", "strasse")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Query with ss form finds ß document
+        result = client.execute_command("FT.SEARCH", "idx", "@content:strasse")
+        assert result[0] == 2, (
+            "utf8Fold should map ß->ss: 'strasse' query should match both "
+            f"'Straße' and 'strasse' documents, got {result[0]} results"
+        )
+
+        # Query with ß form finds ss document
+        result = client.execute_command("FT.SEARCH", "idx", "@content:straße")
+        assert result[0] == 2, (
+            "utf8Fold should map ß->ss: 'straße' query should match both "
+            f"documents, got {result[0]} results"
+        )
+
+    # -----------------------------------------------------------------
+    # Divergence #2: Turkish dotted/dotless I (locale-aware lowercasing)
+    # Turkish has four I variants: İ/i (dotted) and I/ı (dotless).
+    # Our locale-aware utf8ToLower handles this correctly.
+    # -----------------------------------------------------------------
+
+    def test_turkish_dotted_i_case_folding(self):
+        """Turkish İ (dotted capital I) lowercases to i, matching 'istanbul'."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH",
+            "LANGUAGE", "TURKISH",
+            "SCHEMA", "content", "TEXT", "NOSTEM"
+        )
+        client.execute_command("HSET", "doc:1", "content", "İstanbul")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Lowercase query should match uppercase İ document
+        result = client.execute_command("FT.SEARCH", "idx", "@content:istanbul")
+        assert result[0] == 1, (
+            "Turkish locale-aware lowercasing should map İ->i: "
+            f"'istanbul' should match 'İstanbul', got {result[0]} results"
+        )
+
+    # -----------------------------------------------------------------
+    # Divergence #3: Ligature decomposition via case folding (utf8Fold)
+    # ICU's CaseMap::utf8Fold applies full Unicode case folding which
+    # decomposes ligatures like ﬁ -> fi (CaseFolding.txt status F).
+    # This means "financial" matches "ﬁnancial".
+    # -----------------------------------------------------------------
+
+    def test_ligature_case_fold_decomposition(self):
+        """utf8Fold decomposes ﬁ ligature to fi: 'financial' matches 'ﬁnancial'."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH",
+            "LANGUAGE", "ENGLISH",
+            "SCHEMA", "content", "TEXT", "NOSTEM"
+        )
+        # U+FB01 = ﬁ (Latin small ligature fi)
+        client.execute_command("HSET", "doc:1", "content", "\ufb01nancial report")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Query with regular "fi" should match ligature "ﬁ" after case folding
+        result = client.execute_command("FT.SEARCH", "idx", "@content:financial")
+        assert result[0] == 1, (
+            "utf8Fold should decompose ﬁ ligature to fi: 'financial' should "
+            f"match 'ﬁnancial', got {result[0]} results"
+        )
+
+    # -----------------------------------------------------------------
+    # Divergence #4: Strict NOSTEM enforcement
+    # Valkey enforces NOSTEM at both index and query time. Bare (non-field)
+    # queries do NOT bypass NOSTEM, unlike RediSearch which only enforces
+    # NOSTEM on field-targeted queries.
+    # -----------------------------------------------------------------
+
+    def test_nostem_strict_enforcement_bare_query(self):
+        """NOSTEM prevents stemming even for bare (non-field-targeted) queries."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH",
+            "LANGUAGE", "INDONESIAN",
+            "SCHEMA", "body", "TEXT", "NOSTEM"
+        )
+        # "kuat" = "strong"; "kekuatan" = "strength" (stems to "kuat")
+        client.execute_command("HSET", "doc:1", "body", "burung lambat kuat")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Field-targeted query: NOSTEM means no stemming, "kekuatan" != "kuat"
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@body:kekuatan", "DIALECT", "2"
+        )
+        assert result[0] == 0, (
+            "NOSTEM field query: 'kekuatan' should NOT match 'kuat' "
+            f"(no stemming), got {result[0]} results"
+        )
+
+        # Bare query: Valkey still enforces NOSTEM (unlike RediSearch)
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "kekuatan", "DIALECT", "2"
+        )
+        assert result[0] == 0, (
+            "NOSTEM bare query: Valkey strictly enforces NOSTEM even for "
+            f"non-field queries. 'kekuatan' should NOT match 'kuat', "
+            f"got {result[0]} results"
+        )
+
+    # -----------------------------------------------------------------
+    # Divergence #5: Arabic fuzzy search on original forms only
+    # Valkey does NOT index stemmed forms separately. Fuzzy search operates
+    # only on the original indexed tokens, not on stems.
+    # -----------------------------------------------------------------
+
+    def test_arabic_fuzzy_original_form_only(self):
+        """Arabic fuzzy search matches original form only, not stemmed form."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH",
+            "LANGUAGE", "ARABIC",
+            "SCHEMA", "body", "TEXT"
+        )
+        # حرية = "freedom" (4 code points: ح-ر-ي-ة)
+        # Arabic stemmer would stem to حر (2 code points)
+        client.execute_command("HSET", "doc:1", "body", "حرية")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Fuzzy search for حر (the stem) — should NOT match because Valkey
+        # doesn't index the stemmed form in the trie
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "%حر%", "DIALECT", "2"
+        )
+        assert result[0] == 0, (
+            "Arabic fuzzy: Valkey does not index stemmed forms. "
+            f"Fuzzy '%حر%' should NOT match 'حرية' (distance from stem "
+            f"is too large), got {result[0]} results"
+        )
+
+    # -----------------------------------------------------------------
+    # Divergence #6: Dutch Kraaij-Pohlmann stemmer (Snowball 3.0.1)
+    # Our newer Snowball uses K-P algorithm for Dutch which strips
+    # grammatical prefixes, unlike the older Porter algorithm in RediSearch.
+    # -----------------------------------------------------------------
+
+    def test_dutch_kp_stemmer_prefix_stripping(self):
+        """Dutch K-P stemmer strips prefixes: 'geschilderd' stems to 'schilder'."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH",
+            "LANGUAGE", "DUTCH",
+            "SCHEMA", "content", "TEXT"
+        )
+        # "geschilderd" = "painted", K-P stems to "schilder" (painter)
+        client.execute_command("HSET", "doc:1", "content", "geschilderd")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        # Searching for "schilder" should match because K-P reduces both
+        # "geschilderd" and "schilder" to the same stem
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@content:schilder"
+        )
+        assert result[0] == 1, (
+            "Dutch K-P stemmer should strip prefix: 'schilder' should match "
+            f"'geschilderd', got {result[0]} results"
+        )

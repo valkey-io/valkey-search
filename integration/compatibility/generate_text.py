@@ -369,7 +369,8 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                 self.check(*args)
                 query_count += 1
 
-            except Exception:
+            except Exception as e:
+                print(f"Error generating query: {e}")
                 continue
 
         print(f"Generated {query_count} unique queries from {attempts} attempts")
@@ -612,7 +613,8 @@ class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
                 self.check(*args)
                 query_count += 1
 
-            except Exception:
+            except Exception as e:
+                print(f"Error generating query: {e}")
                 continue
 
         print(f"Generated {query_count} unique queries from {attempts} attempts")

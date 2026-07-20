@@ -532,7 +532,7 @@ class MultiLanguageClusterTestCase(ValkeySearchClusterTestCaseDebugMode):
 
 
 class TestLanguageClusterMetadata(MultiLanguageClusterTestCase):
-    """Verify LANGUAGE field is consistent across cluster nodes via FT.INFO."""
+    """Verify LANGUAGE metadata and search behavior work correctly in cluster mode."""
 
     def test_language_consistent_across_cluster(self):
         """Create index with LANGUAGE on one node, verify all nodes report it."""
@@ -584,6 +584,53 @@ class TestLanguageClusterMetadata(MultiLanguageClusterTestCase):
             assert node_dict == first_dict, (
                 f"Node {i} FT.INFO differs from node 0 for LANGUAGE index"
             )
+
+    def test_stemming_works_across_cluster(self):
+        """Stemming produces correct results when docs land on different shards.
+
+        Creates a French index, inserts docs with keys chosen to hash to
+        different slots, then issues a stemmed search through the coordinator
+        and verifies results merge back correctly from all shards.
+        """
+        cluster_client = self.new_cluster_client()
+        node0: Valkey = self.new_client_for_primary(0)
+
+        node0.execute_command(
+            "FT.CREATE", "idx_fr_search", "ON", "HASH",
+            "LANGUAGE", "FRENCH",
+            "SCHEMA", "content", "TEXT"
+        )
+
+        nodes = [self.new_client_for_primary(i) for i in range(self.CLUSTER_SIZE)]
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(nodes, "idx_fr_search")
+
+        # Insert docs with keys that distribute across different hash slots.
+        # "mangeaient" (they were eating), "mangé" (eaten), "mangerons" (we will eat)
+        # all share the French stem "mang-" with query term "manger" (to eat).
+        docs = {
+            "doc:{fr_a}:1": "Ils mangeaient dans le restaurant",
+            "doc:{fr_b}:2": "Elle a mangé une pomme hier",
+            "doc:{fr_c}:3": "Nous mangerons ensemble demain",
+            "doc:{fr_d}:4": "Le château est magnifique",  # no mang- stem
+        }
+        for key, content in docs.items():
+            cluster_client.execute_command("HSET", key, "content", content)
+
+        # Wait for backfill on all nodes
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(nodes, "idx_fr_search")
+
+        # Search with a stem variant — "manger" (to eat) shares stem "mang-"
+        # This should match docs 1, 2, 3 but not doc 4
+        result = cluster_client.execute_command(
+            "FT.SEARCH", "idx_fr_search", "@content:manger"
+        )
+
+        # Verify the correct documents were returned (not doc:4)
+        returned_keys = {result[i] for i in range(1, len(result), 2)}
+        expected_keys = {b"doc:{fr_a}:1", b"doc:{fr_b}:2", b"doc:{fr_c}:3"}
+        assert returned_keys == expected_keys, (
+            f"Expected docs {expected_keys}, got {returned_keys}"
+        )
 
 
 # =============================================================================

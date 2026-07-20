@@ -757,8 +757,7 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                               .at(kSchemaManagerMetadataTypeName)
                               .entries();
     for (const auto &[name, entry] : entries) {
-      // In cluster mode, only support DB 0 for now
-      uint32_t db_num = 0;
+      uint32_t db_num = ValkeyModule_GetSelectedDb(ctx);
       uint64_t fingerprint = entry.fingerprint();
       uint32_t version = entry.version();
       SchemaManager::Instance().PopulateFingerprintVersionFromMetadata(

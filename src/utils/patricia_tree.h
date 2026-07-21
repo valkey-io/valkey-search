@@ -29,24 +29,26 @@
 namespace valkey_search {
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equaler = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equaler>>
 class PatriciaNode {
  public:
   PatriciaNode() = default;
-  absl::flat_hash_map<std::string,
-                      std::unique_ptr<PatriciaNode<T, Hasher, Equaler>>>
+  absl::flat_hash_map<
+      std::string, std::unique_ptr<PatriciaNode<T, Hasher, Equaler, SetType_>>>
       children;
   int64_t subtree_values_count = 0;
-  std::optional<absl::flat_hash_set<T, Hasher, Equaler>> value;
+  std::optional<SetType_> value;
   void PrintValue() {}
 };
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equaler = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equaler>>
 class PatriciaTree {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
-  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler>;
+  using SetType = SetType_;
+  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler, SetType_>;
   PatriciaTree(bool case_sensitive)
       : root_(std::make_unique<PatriciaNodeType>()),
         case_sensitive_(case_sensitive) {}
@@ -57,10 +59,9 @@ class PatriciaTree {
       node->subtree_values_count++;
       if (remaining_key.empty()) {
         if (!node->value.has_value()) {
-          node->value.emplace(std::move(SetType{value}));
-        } else {
-          node->value.value().insert(value);
+          node->value.emplace();
         }
+        node->value->insert(value);
         return;
       }
       bool found = false;
@@ -135,29 +136,45 @@ class PatriciaTree {
   // This iterator is used to iterate over all the values of a given prefix and
   // it's subtrees. In short, it will return all values that starts with a given
   // prefix.
+  // Iterates over all value-bearing nodes in the subtree rooted at the given
+  // node. Construction is O(1) — the DFS traversal is deferred until the
+  // first call to Done(), Next(), or Value().
   class PrefixSubTreeIterator {
    public:
-    PrefixSubTreeIterator(PatriciaNodeType *node) {
-      if (node == nullptr) {
-        return;
-      }
-      DfsHelper(node);
+    PrefixSubTreeIterator(PatriciaNodeType *node) : root_(node) {}
+
+    bool Done() const {
+      EnsureInitialized();
+      return values_.empty();
     }
 
-    bool Done() const { return values_.empty(); }
-
     void Next() {
+      EnsureInitialized();
       if (!values_.empty()) {
         values_.pop();
       }
     }
 
-    PatriciaNodeType *Value() const { return values_.top(); }
+    PatriciaNodeType *Value() const {
+      EnsureInitialized();
+      return values_.top();
+    }
 
    private:
-    std::stack<PatriciaNodeType *> values_;
+    PatriciaNodeType *root_;
+    mutable bool initialized_{false};
+    mutable std::stack<PatriciaNodeType *> values_;
 
-    void DfsHelper(PatriciaNodeType *node) {
+    void EnsureInitialized() const {
+      if (!initialized_) {
+        initialized_ = true;
+        if (root_ != nullptr) {
+          DfsHelper(root_);
+        }
+      }
+    }
+
+    void DfsHelper(PatriciaNodeType *node) const {
       if (node->value.has_value()) {
         values_.push(node);
       }

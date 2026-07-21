@@ -7,16 +7,54 @@
 #include "src/expr/value.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <random>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
+#include "vmsdk/src/testing_infra/module.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::expr {
 
-class ValueTest : public testing::Test {
+class ValueTest : public vmsdk::ValkeyTest {
  protected:
-  void SetUp() override {}
-  void TearDown() override {}
+  // Save+restore the default emulate-release so tests that flip it
+  // (to exercise both the legacy and fixed VALKEY_SEARCH_COMPATIBILITY_FIX
+  // branches) don't bleed state to subsequent tests. Note: debug-mode
+  // defaults to true in the unit-test environment (no ParseAndLoadArgv
+  // flips it to false), so SetValue past kModuleVersion is permitted.
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    auto ok = options::GetEmulateRelease().SetValue(saved_emulate_release_);
+    ASSERT_TRUE(ok.ok()) << ok.message();
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  // RAII wrapper: pins emulate-release for the duration of its scope and
+  // restores the value that was in effect when the scope started. Nestable.
+  class ScopedEmulateRelease {
+   public:
+    explicit ScopedEmulateRelease(vmsdk::ValkeyVersion v)
+        : prev_(options::GetEmulateRelease().GetValue()) {
+      auto ok = options::GetEmulateRelease().SetValue(v);
+      EXPECT_TRUE(ok.ok()) << ok.message();
+    }
+    ~ScopedEmulateRelease() {
+      auto ok = options::GetEmulateRelease().SetValue(prev_);
+      EXPECT_TRUE(ok.ok()) << ok.message();
+    }
+
+   private:
+    vmsdk::ValkeyVersion prev_;
+  };
+
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);
@@ -54,7 +92,7 @@ TEST_F(ValueTest, TypesTest) {
       {Value({Value(1.0), Value(2.0)}), false, false, false, false, true},
       {Value({}), false, false, false, false, true}};
 
-  for (auto& c : t) {
+  for (auto &c : t) {
     EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsBool(), c.is_bool) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsDouble(), c.is_double) << "Value is " << c.v;
@@ -105,7 +143,7 @@ TEST_F(ValueTest, Compare_test) {
       {Value(std::string("a")), Value(std::string("aa")), Ordering::kLESS},
       {Value(std::string("0.0")), Value(std::string("0.00")), Ordering::kLESS}};
 
-  for (auto& c : t) {
+  for (auto &c : t) {
     EXPECT_EQ(c.result, Compare(c.l, c.r)) << "l = " << c.l << " r = " << c.r;
     switch (c.result) {
       case Ordering::kUNORDERED:
@@ -135,7 +173,7 @@ TEST_F(ValueTest, Compare_floating_point) {
       {neg_inf, min_neg, max_neg, pos_zero, min_pos, max_pos, pos_inf},
   };
 
-  for (auto& number_line : number_lines) {
+  for (auto &number_line : number_lines) {
     for (auto i = 0; i < number_line.size(); ++i) {
       EXPECT_EQ(Compare(number_line[i], number_line[i]), Ordering::kEQUAL);
       EXPECT_EQ(number_line[i], number_line[i]);
@@ -204,7 +242,7 @@ TEST_F(ValueTest, add) {
 
   };
 
-  for (auto& tc : test_cases) {
+  for (auto &tc : test_cases) {
     EXPECT_EQ(FuncAdd(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
     EXPECT_EQ(FuncAdd(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
   }
@@ -247,14 +285,17 @@ TEST_F(ValueTest, case_test) {
       {"aBc", "abc", "ABC"},
       {"\xe2\x82\xac", "\xe2\x82\xac", "\xe2\x82\xac"},
   };
-  for (auto& [in, lower, upper] : testcases) {
+  for (auto &[in, lower, upper] : testcases) {
     EXPECT_EQ(Value(lower), FuncLower(Value(in)));
     EXPECT_EQ(Value(upper), FuncUpper(Value(in)));
   }
 }
 
 TEST_F(ValueTest, timetest) {
-  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT)
+  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT). This value
+  // is positive, finite, and post-epoch, so all VALKEY_SEARCH_COMPATIBILITY
+  // _FIX guards in the date functions evaluate to the same answer on both
+  // branches EXCEPT FuncMonth (which has a tm_mday=0-vs-1 off-by-one fix).
   Value ts(double(1739565015));
   EXPECT_EQ(FuncYear(ts), Value(2025));
   EXPECT_EQ(FuncDayofmonth(ts), Value(14));
@@ -263,13 +304,129 @@ TEST_F(ValueTest, timetest) {
   EXPECT_EQ(FuncMonthofyear(ts), Value(1));
 
   EXPECT_EQ(FuncTimefmt(ts, Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
-
   EXPECT_EQ(FuncParsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
 
   EXPECT_EQ(FuncMinute(ts), Value(1739565000));
   EXPECT_EQ(FuncHour(ts), Value(1739563200));
   EXPECT_EQ(FuncDay(ts), Value(1739491200));
-  EXPECT_EQ(FuncMonth(ts), Value(1738281600));
+
+  // FuncMonth differs across the compatibility branches:
+  //   legacy (pre-1.2.1): tm_mday=0 → mktime rolls back to last day of
+  //     previous month, returning Jan 31 2025 00:00:00 UTC = 1738281600.
+  //   fixed (>= 1.2.1):  tm_mday=1 → first day of the month, returning
+  //     Feb  1 2025 00:00:00 UTC = 1738368000.
+  // Default emulate-release in tests is 1.0.0 (legacy).
+  EXPECT_EQ(FuncMonth(ts), Value(1738281600))
+      << "default (pre-1.2.1) emulate-release should run legacy FuncMonth";
+  {
+    ScopedEmulateRelease s({1, 2, 1});
+    EXPECT_EQ(FuncMonth(ts), Value(1738368000))
+        << "emulate-release >= 1.2.1 should run the off-by-one fix";
+  }
+}
+
+// Walk every COMPATIBILITY_FIX site in value.cc through both branches and
+// verify the result actually differs as documented. Pin emulate-release
+// explicitly per phase rather than relying on the runtime default.
+TEST_F(ValueTest, CompatibilityFixGates) {
+  // Force the legacy branch first — explicit pin (don't rely on default).
+  ScopedEmulateRelease legacy_scope({1, 0, 0});
+
+  // --- asbool_string_truthy ---------------------------------------------
+  // FuncLand(string, true): the new branch promotes non-empty strings to
+  // true, so true && "a" == true (1); legacy: true && "a" == false (0).
+  Value s_a(std::string("a"));
+  EXPECT_EQ(FuncLand(Value(true), s_a), Value(false)) << "legacy AsBool";
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_EQ(FuncLand(Value(true), s_a), Value(true))
+        << "fix: non-empty truthy";
+  }
+
+  // --- numeric_unary_nan_on_unparsable ---------------------------------
+  // abs("a"): legacy → Nil; fix → NaN.
+  // std::isnan is unreliable under -ffast-math, so do a bit-pattern check
+  // (same approach as the IsNan helper in value.cc).
+  auto is_nan_bits = [](double d) {
+    uint64_t bits;
+    std::memcpy(&bits, &d, sizeof(bits));
+    constexpr uint64_t kExp = 0x7FF0000000000000ull;
+    constexpr uint64_t kMant = 0x000FFFFFFFFFFFFFull;
+    return (bits & kExp) == kExp && (bits & kMant) != 0;
+  };
+  {
+    auto legacy = FuncAbs(s_a);
+    EXPECT_TRUE(legacy.IsNil()) << "legacy abs(\"a\") should be Nil";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    auto fixed = FuncAbs(s_a);
+    ASSERT_TRUE(fixed.IsDouble());
+    EXPECT_TRUE(is_nan_bits(fixed.AsDouble().value()))
+        << "fix abs(\"a\") should be NaN";
+  }
+
+  // --- lower_non_string_to_nil / upper_non_string_to_nil ----------------
+  // lower(0) / upper(0): legacy passes through ("0"); fix → Nil.
+  Value zero(0.0);
+  {
+    auto l = FuncLower(zero);
+    ASSERT_TRUE(l.IsString());
+    EXPECT_EQ(l.AsStringView().value(), "0")
+        << "legacy lower(0) passes through";
+    auto u = FuncUpper(zero);
+    ASSERT_TRUE(u.IsString());
+    EXPECT_EQ(u.AsStringView().value(), "0");
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncLower(zero).IsNil()) << "fix lower(0) → Nil";
+    EXPECT_TRUE(FuncUpper(zero).IsNil()) << "fix upper(0) → Nil";
+  }
+
+  // --- timefmt_empty_format_to_nil --------------------------------------
+  // timefmt(0, ""): legacy → ""; fix → Nil.
+  {
+    auto t = FuncTimefmt(zero, Value(""));
+    ASSERT_TRUE(t.IsString());
+    EXPECT_EQ(t.AsStringView().value(), "") << "legacy timefmt(_, \"\") → \"\"";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncTimefmt(zero, Value("")).IsNil())
+        << "fix timefmt(_, \"\") → Nil";
+  }
+
+  // --- parsetime_format_mismatch_to_nil ---------------------------------
+  // parsetime("","a"): strptime returns NULL. Legacy uses the zero-tm and
+  // returns the constant -2209075200; fix → Nil.
+  {
+    auto p = FuncParsetime(Value(""), Value("a"));
+    ASSERT_TRUE(p.IsDouble());
+    EXPECT_EQ(p.AsDouble().value(), -2209075200.0)
+        << "legacy parsetime on format-mismatch falls back to zero-tm";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncParsetime(Value(""), Value("a")).IsNil())
+        << "fix parsetime on format-mismatch → Nil";
+  }
+
+  // --- date_fn_negative_ts_to_nil ---------------------------------------
+  // hour(-1): legacy computes -3600 (one second before epoch, rounded);
+  // fix → Nil. Spot-check one date function; the gate is shared by all
+  // nine via DateNegativeTsReturnsNil.
+  Value neg_one(-1.0);
+  {
+    auto h = FuncHour(neg_one);
+    ASSERT_TRUE(h.IsDouble());
+    EXPECT_EQ(h.AsDouble().value(), -3600.0)
+        << "legacy hour(-1) computes the pre-epoch rounded value";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncHour(neg_one).IsNil()) << "fix hour(-1) → Nil";
+  }
 }
 
 TEST_F(ValueTest, ArrayConstruction) {
@@ -376,9 +533,13 @@ TEST_F(ValueTest, ArrayAccessors) {
   EXPECT_EQ(vec.GetArrayElement(1).GetDouble(), 2.0);
   EXPECT_EQ(vec.GetArrayElement(2).GetDouble(), 3.0);
 
-  // Test GetArrayElement() with out of bounds index (should throw)
-  EXPECT_THROW(vec.GetArrayElement(3), std::out_of_range);
-  EXPECT_THROW(vec.GetArrayElement(100), std::out_of_range);
+  // Test GetArrayElement() with out of bounds index (should CHECK-fail)
+  VMSDK_EXPECT_DEATH(
+      vec.GetArrayElement(3),
+      "GetArrayElement called with index out of range: 3. Array size = 3");
+  VMSDK_EXPECT_DEATH(
+      vec.GetArrayElement(100),
+      "GetArrayElement called with index out of range: 100. Array size = 3");
 
   // Test AsArray() on vector values
   auto opt_vec = vec.AsArray();
@@ -722,8 +883,7 @@ TEST_F(ValueTest, FuncArrayLen_NotAArray) {
   Value scalar = Value(42.0);
   Value result = FuncArrayLen(scalar);
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "vectorlen: operand is not a vector");
+  EXPECT_EQ(result.GetNil().GetReason(), "vectorlen: operand is not a vector");
 }
 
 TEST_F(ValueTest, FuncArrayAt_ValidIndex) {
@@ -737,7 +897,7 @@ TEST_F(ValueTest, FuncArrayAt_FirstElement) {
   Value vec = Value({Value("first"), Value("second"), Value("third")});
   Value result = FuncArrayAt(vec, Value(0.0));
   EXPECT_TRUE(result.IsString());
-  EXPECT_EQ(result.AsString(), "first");
+  EXPECT_EQ(*result.AsString(), "first");
 }
 
 TEST_F(ValueTest, FuncArrayAt_LastElement) {
@@ -768,16 +928,15 @@ TEST_F(ValueTest, FuncArrayAt_NotAArray) {
   Value scalar = Value(42.0);
   Value result = FuncArrayAt(scalar, Value(0.0));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "vectorat: first operand is not a vector");
+  EXPECT_EQ(result.GetNil().GetReason(),
+            "vectorat: first operand is not a vector");
 }
 
 TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
   Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
   Value result = FuncArrayAt(vec, Value("not a number"));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "vectorat: index is not an integer");
+  EXPECT_EQ(result.GetNil().GetReason(), "vectorat: index is not an integer");
 }
 
 TEST_F(ValueTest, FuncIsArray_Array) {
@@ -857,15 +1016,15 @@ TEST_F(ValueTest, FuncFlatten_NotAArray) {
   Value scalar = Value(42.0);
   Value result = FuncFlatten(scalar, Value(1.0));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(),
-               "flatten: first operand is not a vector");
+  EXPECT_EQ(result.GetNil().GetReason(),
+            "flatten: first operand is not a vector");
 }
 
 TEST_F(ValueTest, FuncFlatten_InvalidDepth) {
   Value vec = Value({Value(1.0), Value(2.0)});
   Value result = FuncFlatten(vec, Value("not a number"));
   EXPECT_TRUE(result.IsNil());
-  EXPECT_STREQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
+  EXPECT_EQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
 }
 
 // Nested vector construction tests
@@ -1030,15 +1189,15 @@ TEST_F(ValueTest, NestedArray_ScalarFunctionRecursiveApplication) {
   Value inner1 = result.GetArrayElement(0);
   EXPECT_TRUE(inner1.IsArray());
   EXPECT_EQ(inner1.ArraySize(), 2);
-  EXPECT_EQ(inner1.GetArrayElement(0).AsString(), "hello");
-  EXPECT_EQ(inner1.GetArrayElement(1).AsString(), "world");
+  EXPECT_EQ(*inner1.GetArrayElement(0).AsString(), "hello");
+  EXPECT_EQ(*inner1.GetArrayElement(1).AsString(), "world");
 
   // Verify second inner vector
   Value inner2 = result.GetArrayElement(1);
   EXPECT_TRUE(inner2.IsArray());
   EXPECT_EQ(inner2.ArraySize(), 2);
-  EXPECT_EQ(inner2.GetArrayElement(0).AsString(), "foo");
-  EXPECT_EQ(inner2.GetArrayElement(1).AsString(), "bar");
+  EXPECT_EQ(*inner2.GetArrayElement(0).AsString(), "foo");
+  EXPECT_EQ(*inner2.GetArrayElement(1).AsString(), "bar");
 }
 
 TEST_F(ValueTest, NestedArray_MathFunctionRecursiveApplication) {

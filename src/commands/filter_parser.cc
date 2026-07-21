@@ -252,13 +252,29 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
   }
   std::string number_str;
   double value;
-  int multiplier = Match('-', false) ? -1 : 1;
-  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+  if (!IsEnd() && Peek() == '-') {
     number_str += expression_[pos_++];
   }
-  if (absl::AsciiStrToLower(number_str) != "nan" &&
-      absl::SimpleAtod(number_str, &value)) {
-    return value * multiplier;
+  bool exponent_seen = false;
+  bool exponent_sign_allowed = false;
+  while (!IsEnd()) {
+    const auto next = Peek();
+    if (std::isdigit(static_cast<unsigned char>(next)) || next == '.') {
+      number_str += expression_[pos_++];
+      exponent_sign_allowed = false;
+    } else if ((next == 'e' || next == 'E') && !exponent_seen) {
+      number_str += expression_[pos_++];
+      exponent_seen = true;
+      exponent_sign_allowed = true;
+    } else if ((next == '+' || next == '-') && exponent_sign_allowed) {
+      number_str += expression_[pos_++];
+      exponent_sign_allowed = false;
+    } else {
+      break;
+    }
+  }
+  if (!number_str.empty() && absl::SimpleAtod(number_str, &value)) {
+    return value;
   }
   return absl::InvalidArgumentError(
       absl::StrCat("Invalid number: ", number_str));
@@ -312,7 +328,17 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   SkipWhitespace();
-  auto stop_pos = expression_.substr(pos_).find('}');
+  // Scan for the closing '}' while respecting backslash escapes.
+  auto remaining = expression_.substr(pos_);
+  size_t stop_pos = std::string::npos;
+  for (size_t i = 0; i < remaining.size(); ++i) {
+    if (remaining[i] == '\\' && i + 1 < remaining.size()) {
+      ++i;  // skip escaped character
+    } else if (remaining[i] == '}') {
+      stop_pos = i;
+      break;
+    }
+  }
   if (stop_pos == std::string::npos) {
     return absl::InvalidArgumentError("Missing closing TAG bracket, '}'");
   }
@@ -414,6 +440,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   VMSDK_ASSIGN_OR_RETURN(auto is_match_all_expression, IsMatchAllExpression());
   FilterParseResults results;
   if (is_match_all_expression) {
+    results.is_match_all = true;
     return results;
   }
   filter_identifiers_.clear();
@@ -958,6 +985,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       }
       VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       predicate = std::move(sub_result.prev_predicate);
+      if (!predicate) {
+        return absl::InvalidArgumentError("Missing OR term");
+      }
       if (result.prev_predicate) {
         node_count_++;
       } else {

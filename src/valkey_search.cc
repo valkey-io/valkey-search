@@ -62,8 +62,8 @@ uint32_t ValkeySearch::GetHNSWBlockSize() const {
   return options::GetHNSWBlockSize().GetValue();
 }
 
-void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
+absl::Status ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
+  return options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
@@ -1167,7 +1167,7 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       options::GetThreadPoolWaitTimeSamples().GetValue());
   writer_thread_pool_->StartWorkers();
   utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
-      "utility-worker-", options::GetUtilityThreadCount().GetValue(),
+      "util-worker-", options::GetUtilityThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
   utility_thread_pool_->StartWorkers();
 

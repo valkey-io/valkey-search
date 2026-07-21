@@ -68,6 +68,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
       auto indexer_type = indexer->GetIndexerType();
+      if (indexer->IsVectorIndex()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Loading of vector fields is not supported (field `", load, "`)"));
+      }
       auto schema_identifier = params.index_schema->GetIdentifier(load);
       if (schema_identifier.ok()) {
         params.return_attributes.emplace_back(query::ReturnAttribute{
@@ -140,7 +144,8 @@ void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
   } else if (value.IsBool()) {
     ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
   } else if (value.IsDouble()) {
-    auto value_str = value.AsString();
+    // IsDouble() guarantees AsString() returns a value.
+    auto value_str = *value.AsString();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
   } else if (value.IsString()) {
     auto value_sv = value.GetStringView();
@@ -159,7 +164,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     return false;
   }
 
-  // Handle vector values with RESP array serialization
+  // Handle array values with RESP array serialization
   if (value.IsArray()) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     SerializeArrayToResp(ctx, value.GetArray());
@@ -168,18 +173,20 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 
   if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    auto value_sv = value.AsStringView();
+    // Guarded by IsNil() check above; AsStringView always succeeds here.
+    auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
     char double_storage[50];
     std::string_view value_view;
     if (name == "$") {
-      value_view = value.AsStringView();
+      value_view = *value.AsStringView();
     } else {
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
+        case indexes::IndexerType::kText:
         case indexes::IndexerType::kNone: {
-          value_view = value.AsStringView();
+          value_view = *value.AsStringView();
           break;
         }
         case indexes::IndexerType::kNumeric: {
@@ -252,17 +259,10 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
       }
     }
     default:
-      if (data_type ==
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-        return expr::Value(value);
-      } else {
-        auto v = vmsdk::JsonUnquote(value);
-        if (v) {
-          return expr::Value(std::move(*v));
-        } else {
-          return absl::InvalidArgumentError("Failed to unquote JSON value");
-        }
-      }
+      // JSON string values are already JSON-decoded when fetched/indexed
+      // (NormalizeJsonRecord), so they are treated the same as HASH values
+      // here. Decoding again would double-decode and corrupt escapes.
+      return expr::Value(value);
   }
 }
 

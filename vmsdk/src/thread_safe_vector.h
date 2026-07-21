@@ -25,6 +25,12 @@ class ThreadSafeVector {
   }
   bool IsEmpty() const { return Size() == 0; }
 
+  /// Count items matching `predicate`.
+  size_t CountIf(std::function<bool(T)> predicate) const {
+    absl::ReaderMutexLock lock{&mutex_};
+    return std::count_if(vec_.begin(), vec_.end(), predicate);
+  }
+
   /// Pop the first item that matches the predicate (starting from the top of
   /// the list)
   std::optional<T> PopIf(std::function<bool(T)> predicate) {

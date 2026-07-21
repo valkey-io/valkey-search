@@ -53,8 +53,20 @@ template <typename T, typename K>
 class IndexTeser : public T {
  public:
   explicit IndexTeser(K proto) : T(K(proto)) {}
+  // AddRecord/ModifyRecord return true iff the value was indexed (kAdded), so
+  // existing tests that check success/skip via a bool keep working. Use the
+  // *Result variants below to distinguish kMissing from kInvalidData.
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
+    auto interned_key = StringInternStore::Intern(key);
+    auto res = T::AddRecord(interned_key, data);
+    if (!res.ok()) {
+      return res.status();
+    }
+    return *res == indexes::RecordResult::kAdded;
+  }
+  absl::StatusOr<indexes::RecordResult> AddRecordResult(
+      absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
     return T::AddRecord(interned_key, data);
   }
@@ -66,6 +78,15 @@ class IndexTeser : public T {
   }
   absl::StatusOr<bool> ModifyRecord(absl::string_view key,
                                     absl::string_view data) {
+    auto interned_key = StringInternStore::Intern(key);
+    auto res = T::ModifyRecord(interned_key, data);
+    if (!res.ok()) {
+      return res.status();
+    }
+    return *res == indexes::RecordResult::kAdded;
+  }
+  absl::StatusOr<indexes::RecordResult> ModifyRecordResult(
+      absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
     return T::ModifyRecord(interned_key, data);
   }
@@ -79,14 +100,14 @@ class MockIndex : public indexes::IndexBase {
  public:
   MockIndex() : indexes::IndexBase(indexes::IndexerType::kNone) {}
   MockIndex(indexes::IndexerType type) : indexes::IndexBase(type) {}
-  MOCK_METHOD(absl::StatusOr<bool>, AddRecord,
+  MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, AddRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));
   MOCK_METHOD(absl::StatusOr<bool>, RemoveRecord,
               (const InternedStringPtr& key,
                indexes::DeletionType deletion_type),
               (override));
-  MOCK_METHOD(absl::StatusOr<bool>, ModifyRecord,
+  MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, ModifyRecord,
               (const InternedStringPtr& key, absl::string_view data),
               (override));
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
@@ -232,7 +253,8 @@ class MockIndexSchema : public IndexSchema {
       vmsdk::ThreadPool* mutations_thread_pool,
       data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
       std::string punctuation = ".", bool with_offsets = true,
-      const std::vector<std::string>& stop_words = {}) {
+      const std::vector<std::string>& stop_words = {}, float score = 1.0,
+      const std::string& score_field = "") {
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
@@ -242,6 +264,10 @@ class MockIndexSchema : public IndexSchema {
     index_schema_proto.set_with_offsets(with_offsets);
     index_schema_proto.mutable_stop_words()->Add(stop_words.begin(),
                                                  stop_words.end());
+    index_schema_proto.set_score(score);
+    if (!score_field.empty()) {
+      index_schema_proto.set_score_field(score_field);
+    }
     // NOLINTNEXTLINE
     auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
         ctx, index_schema_proto, std::move(attribute_data_type),

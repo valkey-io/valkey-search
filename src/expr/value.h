@@ -28,8 +28,8 @@ class Value {
   class Nil {
    public:
     Nil() : reason_("ctor") {}
-    explicit Nil(std::string reason) : reason_(reason) {}
-    const char* GetReason() const { return reason_.c_str(); }
+    explicit Nil(std::string reason) : reason_(std::move(reason)) {}
+    std::string GetReason() const { return reason_; }
 
    private:
     std::string reason_;
@@ -70,15 +70,15 @@ class Value {
   double GetDouble() const;
   absl::string_view GetStringView() const;
   Array GetArray() const;
-  const Value& GetArrayElement(size_t index) const;
+  Value GetArrayElement(size_t index) const;
 
   // convert to type
   std::optional<Nil> AsNil() const;
   std::optional<bool> AsBool() const;
   std::optional<double> AsDouble() const;
   std::optional<int64_t> AsInteger() const;
-  absl::string_view AsStringView() const;
-  std::string AsString() const;
+  std::optional<absl::string_view> AsStringView() const;
+  std::optional<std::string> AsString() const;
   std::optional<Array> AsArray() const;
 
   bool IsTrue() const {
@@ -95,12 +95,15 @@ class Value {
     } else if (v.IsDouble()) {
       return H::combine(std::move(h), *v.AsDouble());
     } else if (v.IsArray()) {
-      for (auto value : *v.AsArray().value().get()) {
-        h = H::combine(std::move(h), value);
+      auto arr = v.GetArray();
+      h = H::combine(std::move(h), arr->size());
+      for (const auto& elem : *arr) {
+        h = H::combine(std::move(h), elem);
       }
       return h;
     } else {
-      return H::combine(std::move(h), v.AsString());
+      // Bool or String — AsString cannot return nullopt for these.
+      return H::combine(std::move(h), *v.AsString());
     }
   }
 

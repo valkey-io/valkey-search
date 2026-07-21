@@ -4,7 +4,6 @@ Utility functions and helper classes for Valkey Search integration tests.
 
 import functools
 import threading
-import time
 from typing import Dict, Any, Optional
 from valkey.client import Valkey
 from valkey import ResponseError
@@ -12,17 +11,48 @@ from ft_info_parser import FTInfoParser
 from valkeytestframework.util import waiters
 
 
-def wait_for_background_tasks(seconds=10):
-    """Decorator that adds a sleep after the test body to let runByMain tasks
-    complete before the fixture teardown shuts down the server."""
+def wait_for_background_tasks(timeout=30):
+    """Decorator that, after the test body runs, waits until the server reports
+    zero in-flight asynchronous query operations before returning.
+
+    This ensures the system is idle before the fixture teardown shuts the server
+    down. Otherwise an async query that is still completing (e.g. a search whose
+    background worker has not yet finished) would leak its state - including the
+    shared_ptr to the index it references - and be reported as a leak at process
+    exit under ASAN.
+
+    The count is published by the server as the developer-visible INFO field
+    `search_async_queries_in_flight`. A busy wait (polling) is sufficient. In
+    cluster mode a query fans out across nodes, so every node is drained."""
     def decorator(func):
         @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            result = func(*args, **kwargs)
-            time.sleep(seconds)
+        def wrapper(self, *args, **kwargs):
+            result = func(self, *args, **kwargs)
+            wait_for_async_queries_drained(self, timeout=timeout)
             return result
         return wrapper
     return decorator
+
+
+def wait_for_async_queries_drained(test_case, timeout=30):
+    """Busy-wait until every server node reports zero in-flight asynchronous
+    query operations (the developer-visible INFO field
+    `search_async_queries_in_flight`), so the system is idle before the fixture
+    teardown shuts the servers down. Works for both single-node and cluster
+    test cases (a fanned-out query may be in flight on several nodes)."""
+    nodes = getattr(test_case, "nodes", None)
+    clients = [node.client for node in nodes] if nodes else [test_case.client]
+    # The in-flight counter is a developer-visible INFO field.
+    for client in clients:
+        client.execute_command("CONFIG SET search.info-developer-visible yes")
+    for client in clients:
+        waiters.wait_for_equal(
+            lambda c=client: int(
+                c.info("SEARCH")["search_async_queries_in_flight"]
+            ),
+            0,
+            timeout=timeout,
+        )
 
 def run_in_thread(func):
     """Run func in thread, return (thread, result, error) for later inspection."""
@@ -58,13 +88,16 @@ def find_local_key(client: Valkey, prefix: str = "key:") -> str:
                     return key
     raise RuntimeError(f"No key found for node on port {node_port}")
 
-def wait_for_pausepoint(client, pausepoint_name, timeout=10):
-    """Wait for a pausepoint to be hit by at least one thread."""
-    waiters.wait_for_true(
-        lambda: client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0,
-        timeout=timeout
-    )
-    return True
+def pausepoint_hit(client, pausepoint_name):
+    """Predicate: True once at least one thread is paused at the pausepoint.
+
+    PAUSEPOINT TEST returns the number of threads currently paused at the
+    pausepoint. Use with the standard waiter, which scales its timeout up
+    automatically under ASAN:
+
+        waiters.wait_for_true(lambda: pausepoint_hit(client, pausepoint_name))
+    """
+    return client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint_name) > 0
 
 class IndexingTestHelper:
     """Helper class containing common functions for testing indexing operations."""

@@ -347,19 +347,6 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
   std::string msg;
-  if (!vmsdk::config::IsDebugModeEnabled()) {
-    // Pretend like we don't exist
-    msg = "ERR unknown command '";
-    msg += vmsdk::ToStringView(argv[0]);
-    msg += "', with args beginning with:";
-    for (int i = 1; i < argc; ++i) {
-      msg += " '";
-      msg += vmsdk::ToStringView(argv[i]);
-      msg += "'";
-    }
-    ValkeyModule_ReplyWithError(ctx, msg.data());
-    return absl::OkStatus();
-  }
   for (int i = 1; i < argc; ++i) {
     msg += " ";
     msg += vmsdk::ToStringView(argv[i]);

@@ -41,6 +41,13 @@ namespace valkey_search::indexes {
 // and search is rejected.
 enum class SVSIndexState { kStaging, kReady };
 
+// Per-dimension epsilon factor for distance-based vector matching.
+// Empirically derived: worst-case compression (LVQ4x0 and LeanVec4x4) produces
+// self-distance of ~0.00202 * dim when computing get_distance(label,
+// same_vector). This constant covers that with margin. Multiply by the vector
+// dimension count to get the effective threshold.
+inline constexpr float kDefaultDistanceMatchEpsilonPerDim = 0.0021f;
+
 // SVS Vamana build parameters exposed to FT.CREATE
 struct SVSBuildConfig {
   size_t graph_max_degree = 64;
@@ -57,6 +64,11 @@ struct SVSBuildConfig {
   // When true, skip the intern store and use SVS native APIs for vector
   // retrieval and distance computation.
   bool drop_intern_store = false;
+  // Per-dimension epsilon for IsVectorMatch distance comparison. The effective
+  // threshold is this value * dimension_count. Covers quantization error from
+  // lossy compression (LVQ4, LVQ8, FP16, SQ8, etc.). Set to 0 to require
+  // exact match (only valid for FP32/SQI8 with L2 metric).
+  float distance_match_epsilon_per_dim = kDefaultDistanceMatchEpsilonPerDim;
 };
 
 // True when the compression type uses LeanVec, which requires a training

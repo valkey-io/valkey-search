@@ -143,6 +143,7 @@ struct SVSParameters : public FTCreateVectorParameters {
   int leanvec_training_threshold{kDefaultSVSLeanVecTrainingThreshold};
   data_model::RawVectorStorage raw_vector_storage{
       data_model::RAW_VECTOR_STORAGE_KEEP};
+  float distance_match_epsilon_per_dim{0.0f};  // 0 = use compiled default
   absl::Status Verify() const;
   std::unique_ptr<data_model::VectorIndex> ToProto() const;
 };

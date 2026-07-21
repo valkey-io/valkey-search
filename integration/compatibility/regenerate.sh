@@ -42,8 +42,8 @@ GENERATOR_FILES=()
 while IFS= read -r line; do
     GENERATOR_FILES+=("${line}")
 done < <(PYTHONPATH=integration "${PYTHON}" -c \
-    "from compatibility import GENERATORS
-for g in GENERATORS: print(g['generator'])")
+    "from compatibility import GENERATOR_FILES_UNIQUE
+for g in GENERATOR_FILES_UNIQUE: print(g)")
 
 ANSWER_FILES=()
 while IFS= read -r line; do

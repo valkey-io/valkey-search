@@ -70,10 +70,27 @@ class FakeCoordinatorAsync final
     ADD_FAILURE() << "Unexpected InfoIndexPartition reactor call";
   }
 
+  void MultiSearchIndexPartition(
+      ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest *,
+      MultiSearchIndexPartitionResponse *response,
+      std::function<void(::grpc::Status)> done) override {
+    *response = multi_search_response;
+    done(multi_search_status);
+  }
+
+  void MultiSearchIndexPartition(::grpc::ClientContext *,
+                                 const MultiSearchIndexPartitionRequest *,
+                                 MultiSearchIndexPartitionResponse *,
+                                 ::grpc::ClientUnaryReactor *) override {
+    ADD_FAILURE() << "Unexpected MultiSearchIndexPartition reactor call";
+  }
+
   SearchIndexPartitionResponse search_response;
   grpc::Status search_status = grpc::Status::OK;
   InfoIndexPartitionResponse info_response;
   grpc::Status info_status = grpc::Status::OK;
+  MultiSearchIndexPartitionResponse multi_search_response;
+  grpc::Status multi_search_status = grpc::Status::OK;
 };
 
 class FakeCoordinatorStub final : public Coordinator::StubInterface {
@@ -98,6 +115,13 @@ class FakeCoordinatorStub final : public Coordinator::StubInterface {
                                   const InfoIndexPartitionRequest &,
                                   InfoIndexPartitionResponse *) override {
     ADD_FAILURE() << "Unexpected InfoIndexPartition sync call";
+    return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
+  }
+
+  grpc::Status MultiSearchIndexPartition(
+      ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest &,
+      MultiSearchIndexPartitionResponse *) override {
+    ADD_FAILURE() << "Unexpected MultiSearchIndexPartition sync call";
     return grpc::Status(grpc::StatusCode::UNIMPLEMENTED, "");
   }
 
@@ -151,6 +175,22 @@ class FakeCoordinatorStub final : public Coordinator::StubInterface {
                                     const InfoIndexPartitionRequest &,
                                     ::grpc::CompletionQueue *) override {
     ADD_FAILURE() << "Unexpected PrepareAsyncInfoIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<MultiSearchIndexPartitionResponse> *
+  AsyncMultiSearchIndexPartitionRaw(::grpc::ClientContext *,
+                                    const MultiSearchIndexPartitionRequest &,
+                                    ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected AsyncMultiSearchIndexPartitionRaw call";
+    return nullptr;
+  }
+
+  ::grpc::ClientAsyncResponseReaderInterface<MultiSearchIndexPartitionResponse> *
+  PrepareAsyncMultiSearchIndexPartitionRaw(
+      ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest &,
+      ::grpc::CompletionQueue *) override {
+    ADD_FAILURE() << "Unexpected PrepareAsyncMultiSearchIndexPartitionRaw call";
     return nullptr;
   }
 

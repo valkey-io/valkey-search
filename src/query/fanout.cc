@@ -10,7 +10,9 @@
 #include <netinet/in.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -30,6 +32,7 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
@@ -92,6 +95,13 @@ struct SearchPartitionResultsTracker {
   std::atomic_bool has_node_error{false};       // Whether any node failed
   absl::Status first_node_error
       ABSL_GUARDED_BY(mutex);  // First error encountered
+
+  // Silent mode (FT.HYBRID multi-arm fanout): when meta_tracker_ is set, the
+  // destructor reports this arm's merged result to the meta-tracker instead of
+  // unblocking a client directly. arm_index_ identifies which arm this tracker
+  // serves.
+  std::shared_ptr<query::MultiSearchTracker> meta_tracker_;
+  size_t arm_index_{0};
 
   SearchPartitionResultsTracker(int outstanding_requests, int k,
                                 std::unique_ptr<SearchParameters> parameters)
@@ -175,7 +185,10 @@ struct SearchPartitionResultsTracker {
   }
 
   ~SearchPartitionResultsTracker() {
-    absl::MutexLock lock(&mutex);
+    // Use an optional lock so the silent-mode path can release it before
+    // invoking the meta-tracker (which may run a heavy Finalize synchronously).
+    std::optional<absl::MutexLock> lock_holder;
+    lock_holder.emplace(&mutex);
     absl::Status status;
     if (consistency_failed) {
       // Consistency failures always take precedence
@@ -209,6 +222,21 @@ struct SearchPartitionResultsTracker {
       status = absl::OkStatus();
     }
     parameters->search_result.status = status;
+    // Silent mode: hand this arm's merged result to the meta-tracker rather
+    // than unblocking a client. Move the result and the per-arm
+    // SearchParameters out so the meta-tracker can retain them (the neighbors
+    // may hold string_view keys into the local-responder chain).
+    if (meta_tracker_ != nullptr) {
+      auto meta = std::move(meta_tracker_);
+      size_t arm_index = arm_index_;
+      auto result = std::move(parameters->search_result);
+      auto self_params = std::move(parameters);
+      // Release the lock before invoking OnArmComplete: it may run Finalize ->
+      // FuseAndReply synchronously, which should not happen under our mutex.
+      lock_holder.reset();
+      meta->OnArmComplete(arm_index, std::move(result), std::move(self_params));
+      return;
+    }
     // The destructor runs on whichever thread drops the last shared_ptr
     // reference. If remote shards complete first and the local shard (which
     // completes on the main thread via content resolution) drops the last
@@ -410,6 +438,199 @@ absl::Status PerformSearchFanoutAsync(
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(std::move(local_parameters),
                                              thread_pool, SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";
+  }
+  return absl::OkStatus();
+}
+
+// ---------------------------------------------------------------------------
+// FT.HYBRID multi-arm fanout.
+// ---------------------------------------------------------------------------
+
+// Demuxes one shard's MultiSearchIndexPartitionResponse into the per-arm
+// trackers. sub_responses[i] feeds per_arm_trackers[i].
+void PerformRemoteMultiSearchRequest(
+    std::unique_ptr<coordinator::MultiSearchIndexPartitionRequest> request,
+    const std::string &address,
+    coordinator::ClientPool *coordinator_client_pool,
+    std::vector<std::shared_ptr<SearchPartitionResultsTracker>>
+        per_arm_trackers) {
+  auto client = coordinator_client_pool->GetClient(address);
+  client->MultiSearchIndexPartition(
+      std::move(request),
+      [per_arm_trackers = std::move(per_arm_trackers),
+       address = std::string(address)](
+          grpc::Status status,
+          coordinator::MultiSearchIndexPartitionResponse &response) mutable {
+        const int num_arms = static_cast<int>(per_arm_trackers.size());
+        if (!status.ok()) {
+          // RPC-level failure applies to every arm.
+          for (int i = 0; i < num_arms; ++i) {
+            coordinator::SearchIndexPartitionResponse empty;
+            per_arm_trackers[i]->HandleResponse(empty, address, status);
+          }
+          return;
+        }
+        for (int i = 0; i < num_arms; ++i) {
+          if (i < response.sub_responses_size()) {
+            auto *sub = response.mutable_sub_responses(i);
+            grpc::Status arm_status =
+                sub->grpc_code() == 0
+                    ? grpc::Status::OK
+                    : grpc::Status(
+                          static_cast<grpc::StatusCode>(sub->grpc_code()),
+                          sub->error_message());
+            per_arm_trackers[i]->HandleResponse(*sub->mutable_response(),
+                                                address, arm_status);
+          } else {
+            // Missing sub-response — treat as an internal error for that arm.
+            coordinator::SearchIndexPartitionResponse empty;
+            per_arm_trackers[i]->HandleResponse(
+                empty, address,
+                grpc::Status(grpc::StatusCode::INTERNAL,
+                             "Missing sub-response for arm"));
+          }
+        }
+      });
+}
+
+void PerformRemoteMultiSearchRequestAsync(
+    std::unique_ptr<coordinator::MultiSearchIndexPartitionRequest> request,
+    const std::string &address,
+    coordinator::ClientPool *coordinator_client_pool,
+    std::vector<std::shared_ptr<SearchPartitionResultsTracker>>
+        per_arm_trackers,
+    vmsdk::ThreadPool *thread_pool) {
+  thread_pool->Schedule(
+      [coordinator_client_pool, address = std::string(address),
+       request = std::move(request),
+       per_arm_trackers = std::move(per_arm_trackers)]() mutable {
+        PerformRemoteMultiSearchRequest(std::move(request), address,
+                                        coordinator_client_pool,
+                                        std::move(per_arm_trackers));
+      },
+      vmsdk::ThreadPool::Priority::kHigh);
+}
+
+absl::Status PerformMultiSearchFanoutAsync(
+    ValkeyModuleCtx *ctx,
+    std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
+    coordinator::ClientPool *coordinator_client_pool,
+    std::unique_ptr<query::MultiSearchParameters> parameters,
+    vmsdk::ThreadPool *thread_pool) {
+  const size_t num_arms = parameters->arms.size();
+  const size_t num_shards = search_targets.size();
+  CHECK(num_arms > 0);
+
+  // Build a per-arm gRPC request template and set its per-shard fetch limit.
+  // The fusion window bounds how many results per arm actually matter; fetch
+  // at least that many. Vector arms fetch their own k.
+  const uint32_t window = parameters->fusion.window;
+  std::vector<std::unique_ptr<coordinator::SearchIndexPartitionRequest>>
+      arm_requests;
+  arm_requests.reserve(num_arms);
+  for (size_t i = 0; i < num_arms; ++i) {
+    auto &arm = *parameters->arms[i];
+    // ExecuteCommand populates the envelope's index fingerprint / slot
+    // fingerprint just before fanout — AFTER the arms were built at parse
+    // time. Propagate them now so the per-arm consistency check on each shard
+    // matches. (Mirror of the cancellation_token propagation below.)
+    arm.index_fingerprint_version = parameters->index_fingerprint_version;
+    arm.slot_fingerprint = parameters->slot_fingerprint;
+    arm.enable_partial_results = parameters->enable_partial_results;
+    arm.enable_consistency = parameters->enable_consistency;
+    auto req = coordinator::ParametersToGRPCSearchRequest(arm);
+    uint64_t per_shard_limit;
+    if (arm.IsNonVectorQuery()) {
+      per_shard_limit = std::max<uint64_t>(window, 10);
+    } else {
+      // Vector arm: fetch top-k from each shard (worst case all k from one).
+      per_shard_limit = std::max<uint64_t>(arm.k, window);
+    }
+    req->mutable_limit()->set_first_index(0);
+    req->mutable_limit()->set_number(per_shard_limit);
+    // Widen the COORDINATOR-side arm limit to effectively unlimited. The
+    // per-arm SearchPartitionResultsTracker trims its merged-across-shards
+    // result to arm.limit (times a buffer multiplier); leaving it bounded
+    // would drop union members that came from later shards. The fusion
+    // window caps fusion-stage participants; the aggregate-pipeline LIMIT
+    // caps the final reply size. (See TestFtHybridClusterFunctionMerge —
+    // "all of each arm's results reach the coordinator and merge".)
+    arm.limit.first_index = 0;
+    arm.limit.number = std::numeric_limits<uint64_t>::max();
+    arm_requests.push_back(std::move(req));
+  }
+
+  // Propagate the envelope's cancellation token to each arm (set by
+  // ExecuteCommand after parsing).
+  cancel::Token shared_token = parameters->cancellation_token;
+
+  // Move arms out and build the meta-tracker (keeps per_arm_results sized to
+  // num_arms).
+  std::vector<std::unique_ptr<MultiArmShim>> arms = std::move(parameters->arms);
+  parameters->arms.clear();
+  parameters->arms.resize(num_arms);
+  auto meta_tracker =
+      std::make_shared<query::MultiSearchTracker>(std::move(parameters));
+
+  // One silent per-arm tracker; each reports to the meta-tracker on completion.
+  std::vector<std::shared_ptr<SearchPartitionResultsTracker>> per_arm_trackers;
+  per_arm_trackers.reserve(num_arms);
+  for (size_t i = 0; i < num_arms; ++i) {
+    arms[i]->cancellation_token = shared_token;
+    int k = arms[i]->k;
+    auto t = std::make_shared<SearchPartitionResultsTracker>(
+        static_cast<int>(num_shards), k, std::move(arms[i]));
+    t->meta_tracker_ = meta_tracker;
+    t->arm_index_ = i;
+    per_arm_trackers.push_back(std::move(t));
+  }
+
+  // Dispatch one MultiSearchIndexPartition RPC per remote shard.
+  bool has_local_target = false;
+  for (auto &node : search_targets) {
+    if (node.is_local) {
+      has_local_target = true;
+      continue;
+    }
+    auto multi_req =
+        std::make_unique<coordinator::MultiSearchIndexPartitionRequest>();
+    for (size_t i = 0; i < num_arms; ++i) {
+      auto *sub = multi_req->add_sub_requests();
+      sub->CopyFrom(*arm_requests[i]);
+      if (ForceInvalidSlotFingerprint.GetValue()) {
+        sub->set_slot_fingerprint(0);
+      } else if (node.shard != nullptr) {
+        sub->set_slot_fingerprint(node.shard->slots_fingerprint);
+      }
+    }
+    std::string target_address =
+        absl::StrCat(node.socket_address.primary_endpoint, ":",
+                     coordinator::GetCoordinatorPort(node.socket_address.port));
+    if (search_targets.size() >=
+            valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
+        thread_pool->Size() > 1) {
+      PerformRemoteMultiSearchRequestAsync(std::move(multi_req), target_address,
+                                           coordinator_client_pool,
+                                           per_arm_trackers, thread_pool);
+    } else {
+      PerformRemoteMultiSearchRequest(std::move(multi_req), target_address,
+                                      coordinator_client_pool,
+                                      per_arm_trackers);
+    }
+  }
+
+  // Local shard: run each arm locally, reporting into its per-arm tracker via
+  // a LocalResponderSearch (mirrors the single-arm path).
+  if (has_local_target) {
+    for (size_t i = 0; i < num_arms; ++i) {
+      auto local_parameters = std::make_unique<LocalResponderSearch>();
+      VMSDK_RETURN_IF_ERROR(coordinator::GRPCSearchRequestToParameters(
+          *arm_requests[i], nullptr, local_parameters.get()));
+      local_parameters->tracker = per_arm_trackers[i];
+      VMSDK_RETURN_IF_ERROR(query::SearchAsync(std::move(local_parameters),
+                                               thread_pool, SearchMode::kLocal))
+          << "Failed to handle FT.HYBRID arm locally during fan-out";
+    }
   }
   return absl::OkStatus();
 }

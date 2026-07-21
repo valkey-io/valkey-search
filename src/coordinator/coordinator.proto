@@ -25,6 +25,13 @@ service Coordinator {
   // Search the index partition for documents.
   rpc SearchIndexPartition(SearchIndexPartitionRequest)
       returns (SearchIndexPartitionResponse) {}
+  // Multi-arm search: dispatch N independent searches in one round-trip.
+  // Used by FT.HYBRID. The server-side handler validates that all sub_requests
+  // agree on db_num, index_schema_name, index_fingerprint_version,
+  // slot_fingerprint, and timeout_ms; treats sub_requests[0] as authoritative
+  // for the shared consistency check.
+  rpc MultiSearchIndexPartition(MultiSearchIndexPartitionRequest)
+      returns (MultiSearchIndexPartitionResponse) {}
   // Get index info across cluster
   rpc InfoIndexPartition(InfoIndexPartitionRequest)
       returns (InfoIndexPartitionResponse) {}
@@ -160,6 +167,29 @@ message SearchIndexPartitionResponse {
 message AttributeContentEntry {
   string identifier = 1;
   bytes content = 2;
+}
+
+// Per-arm wrapper for the multi-arm response. Carries the arm's
+// SearchIndexPartitionResponse plus a per-arm gRPC status so a single arm's
+// failure (e.g. per-arm execution error) does not kill the whole RPC.
+message MultiSearchSubResponse {
+  SearchIndexPartitionResponse response = 1;
+  uint32 grpc_code = 2;       // grpc::StatusCode encoded as int; 0 = OK
+  string error_message = 3;
+}
+
+message MultiSearchIndexPartitionRequest {
+  // Each sub_request is a complete, stand-alone single-arm request. Shared
+  // fields (db_num, index_schema_name, index_fingerprint_version,
+  // slot_fingerprint, timeout_ms) are duplicated across arms. The handler
+  // validates that sub_requests[1..N-1] match sub_requests[0] on these
+  // fields; sub_requests[0] is then treated as authoritative for the shared
+  // consistency check.
+  repeated SearchIndexPartitionRequest sub_requests = 1;
+}
+
+message MultiSearchIndexPartitionResponse {
+  repeated MultiSearchSubResponse sub_responses = 1;
 }
 
 message GlobalMetadataVersionHeader {

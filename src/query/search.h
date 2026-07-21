@@ -255,7 +255,9 @@ struct SearchParameters {
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
-  ContentProcessing GetContentProcessing() const;
+  // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result
+  // resolver) can force a particular content-processing mode.
+  virtual ContentProcessing GetContentProcessing() const;
 
   // The sortby parameter, populated by FT.SEARCH SORTBY clause or
   // deserialized from gRPC requests. Available to all query operations.

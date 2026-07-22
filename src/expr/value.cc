@@ -326,19 +326,12 @@ Ordering Compare(const Value& l, const Value& r) {
 
 // Vector error message generation functions
 
-static std::string MakeTypeMismatchError(const char* operation,
-                                         const char* expected,
-                                         const char* actual) {
-  return std::string("Type error in ") + operation + ": expected " + expected +
-         ", got " + actual;
-}
-
 static std::string MakeLengthMismatchError(size_t length1, size_t length2) {
   return "Length mismatch: vectors have lengths " + std::to_string(length1) +
          " and " + std::to_string(length2);
 }
 
-static std::string MakeIndexOutOfBoundsError(size_t index, size_t length) {
+static std::string MakeIndexOutOfBoundsError(int64_t index, size_t length) {
   return "Index out of bounds: index " + std::to_string(index) +
          ", vector length " + std::to_string(length);
 }
@@ -1078,9 +1071,7 @@ Value FuncArrayAt(const Value& vec, const Value& index) {
 
   size_t vec_size = vec.ArraySize();
   if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
-    std::string error = "Index out of bounds: index " + std::to_string(*idx) +
-                        ", vector length " + std::to_string(vec_size);
-    return Value(Value::Nil(error));
+    return Value(Value::Nil(MakeIndexOutOfBoundsError(*idx, vec_size)));
   }
 
   return vec.GetArrayElement(static_cast<size_t>(*idx));

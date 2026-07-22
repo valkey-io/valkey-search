@@ -250,8 +250,8 @@ def compare_row(l, r, key_type):
         # Check for list values first, before any field-name-based heuristics.
         #
         if isinstance(l[lks[i]], list) and isinstance(r[rks[i]], list):
-            if sorted(l[lks[i]]) != sorted(r[rks[i]]):
-                print("mismatch list field: ", lks[i], " ", sorted(l[lks[i]]), "!=", sorted(r[rks[i]]))
+            if l[lks[i]] != r[rks[i]]:
+                print("mismatch list field: ", lks[i], " ", l[lks[i]], "!=", r[rks[i]])
                 return False
         #
         # Hack, fields that start with an 'n' are assumed to be numeric

@@ -281,19 +281,56 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_TRUE(result.IsArray());
     EXPECT_EQ(result.ArraySize(), 4);
   }
-  // Deduplication: records with duplicate n2 values produce fewer elements
+  // Deduplication: multiple records in the same group with repeated reducer
+  // values — TOLIST must return each distinct value exactly once.
   {
     auto param = MakeStages("groupby 1 @n1 reduce tolist 1 @n2 as items");
-    auto records = MakeData(4);
-    // All 4 records have n2 = 4.0, so TOLIST should deduplicate to 1 element
-    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
-    // 4 groups (one per distinct n1), each with a single n2 value
-    EXPECT_EQ(records.size(), 4);
-    for (auto& r : records) {
-      auto& result = r->fields_.at(2);
-      EXPECT_TRUE(result.IsArray());
-      EXPECT_EQ(result.ArraySize(), 1);
+    // All 5 records share n1=0 (one group). n2 values: 1, 2, 1, 3, 2.
+    // Expected distinct set after dedup: {1, 2, 3} → ArraySize == 3.
+    RecordSet records(nullptr);
+    for (double n2 : {1.0, 2.0, 1.0, 3.0, 2.0}) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(0.0);  // n1 = 0 (group key)
+      rec->fields_[1] = expr::Value(n2);   // n2 = reducer field
+      records.emplace_back(std::move(rec));
     }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    // Only one group (all records share n1=0)
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto& result = record->fields_.at(2);
+    EXPECT_TRUE(result.IsArray());
+    // Duplicates (1 and 2) collapsed → 3 distinct values
+    EXPECT_EQ(result.ArraySize(), 3);
+  }
+  // Array flattening: if the reducer field value is itself an array, its
+  // elements are collected individually (one level of flattening).
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce tolist 1 @n1 as items");
+    // Two records share n2=0 (one group). n1 is an array [10.0, 20.0] for
+    // the first and [20.0, 30.0] for the second.
+    // After one-level flatten + dedup: {10, 20, 30} → ArraySize == 3.
+    RecordSet records(nullptr);
+    auto make_array_record = [](std::vector<double> elems, double group_key) {
+      auto rec = std::make_unique<Record>(2);
+      std::vector<expr::Value> arr;
+      arr.reserve(elems.size());
+      for (double e : elems) {
+        arr.emplace_back(e);
+      }
+      rec->fields_[0] = expr::Value(std::move(arr));  // n1 = array
+      rec->fields_[1] = expr::Value(group_key);        // n2 = group key
+      return rec;
+    };
+    records.emplace_back(make_array_record({10.0, 20.0}, 0.0));
+    records.emplace_back(make_array_record({20.0, 30.0}, 0.0));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto& result = record->fields_.at(2);
+    EXPECT_TRUE(result.IsArray());
+    // Elements: 10, 20 (from first record) + 30 (new from second; 20 deduped)
+    EXPECT_EQ(result.ArraySize(), 3);
   }
   // TOLIST alongside another reducer in the same GROUPBY
   {

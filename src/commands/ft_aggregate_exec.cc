@@ -348,6 +348,21 @@ class ToList : public GroupBy::ReducerInstance {
     if (values[0].IsNil()) {
       return;
     }
+    // Flatten one level: if the field value is itself an array, collect
+    // its individual elements rather than the array as a whole.
+    if (values[0].IsArray()) {
+      auto arr = values[0].GetArray();
+      for (const auto& elem : *arr) {
+        if (elem.IsNil()) {
+          continue;
+        }
+        if (!unique_values_.contains(elem)) {
+          unique_values_.insert(elem);
+          ordered_values_.push_back(elem);
+        }
+      }
+      return;
+    }
     if (!unique_values_.contains(values[0])) {
       unique_values_.insert(values[0]);
       ordered_values_.push_back(values[0]);

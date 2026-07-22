@@ -151,9 +151,8 @@ class TestToList(ValkeySearchTestCaseBase):
         rows = self._parse_agg_result(result)
         assert len(rows) == 1
         vals = [self._decode(v) for v in rows[0]["vals"]]
-        # All 5 unique values should be present
-        assert len(vals) == 5
-        assert set(vals) == {"50", "10", "40", "20", "30"}
+        # Values should appear in the order they were first seen
+        assert vals == ["50", "10", "40", "20", "30"]
 
     def test_tolist_order_with_duplicates(self):
         """When duplicates exist, only the first occurrence should be kept
@@ -185,8 +184,8 @@ class TestToList(ValkeySearchTestCaseBase):
         rows = self._parse_agg_result(result)
         assert len(rows) == 1
         vals = [self._decode(v) for v in rows[0]["vals"]]
-        assert len(vals) == 4
-        assert set(vals) == {"1", "2", "3", "4"}
+        # Only first occurrences, in first-seen order: 3, 1, 2, 4
+        assert vals == ["3", "1", "2", "4"]
 
     # ------------------------------------------------------------------ #
     # Edge cases
@@ -390,3 +389,39 @@ class TestToList(ValkeySearchTestCaseBase):
         list2 = sorted([self._decode(v) for v in rows[0]["list2"]])
         assert list1 == ["1", "2"]
         assert list2 == ["10", "20"]
+
+    def test_tolist_skips_nil_fields(self):
+        """TOLIST should skip documents where the reducer field is absent
+        (nil), only collecting values from documents that have the field."""
+        client: Valkey = self.server.get_new_client()
+        self._setup_index_and_wait(
+            client, "nil_idx", "ni:",
+            ["val", "NUMERIC", "grp", "TAG"]
+        )
+
+        # doc 1: has both group and val
+        client.execute_command("HSET", "ni:1", "val", "10", "grp", "g")
+        # doc 2: has group but NO val field — reducer field is nil
+        client.execute_command("HSET", "ni:2", "grp", "g")
+        # doc 3: has both group and val
+        client.execute_command("HSET", "ni:3", "val", "20", "grp", "g")
+
+        waiters.wait_for_true(
+            lambda: IndexingTestHelper.is_indexing_complete_on_node(
+                client, "nil_idx"
+            )
+        )
+
+        result = client.execute_command(
+            "FT.AGGREGATE", "nil_idx", "*",
+            "LOAD", "2", "@val", "@grp",
+            "GROUPBY", "1", "@grp",
+            "REDUCE", "TOLIST", "1", "@val", "AS", "vals"
+        )
+
+        rows = self._parse_agg_result(result)
+        assert len(rows) == 1
+        vals = [self._decode(v) for v in rows[0]["vals"]]
+        # Only the two non-nil values should appear; nil document skipped
+        assert len(vals) == 2
+        assert set(vals) == {"10", "20"}

@@ -34,6 +34,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "src/utils/cancel.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
@@ -47,6 +48,7 @@
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "third_party/hnswlib/stop_condition.h"
 // clang-format on
 
 namespace hnswlib_helpers {
@@ -346,6 +348,59 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
   }
   VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
   return CreateReply(search_result);
+}
+
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  const size_t max_candidates = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+  hnswlib::EpsilonSearchStopCondition<T> stop_condition(radius, 0,
+                                                        max_candidates);
+
+  auto perform_search = [this, &stop_condition, &filter,
+                         &cancellation_token](absl::string_view query_view)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS
+      -> absl::StatusOr<
+          std::vector<std::pair<T, hnswlib::labeltype>>> {
+    try {
+      absl::ReaderMutexLock lock(&resize_mutex_);
+      auto raw_results = algo_->searchStopConditionClosest(
+          (T *)query_view.data(), stop_condition, filter.get());
+      return raw_results;
+    } catch (const std::exception &e) {
+      Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
+          1, std::memory_order_relaxed);
+      return absl::InternalError(e.what());
+    }
+  };
+
+  std::vector<std::pair<T, hnswlib::labeltype>> raw_results;
+  if (normalize_) {
+    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+    VMSDK_ASSIGN_OR_RETURN(
+        raw_results,
+        perform_search(absl::string_view((const char *)norm_record.data(),
+                                         norm_record.size())));
+  } else {
+    VMSDK_ASSIGN_OR_RETURN(raw_results, perform_search(query));
+  }
+
+  // Convert the flat vector result to the Neighbor format via GetKeyDuringSearch
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(raw_results.size());
+  for (const auto &[dist, label] : raw_results) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    auto key = GetKeyDuringSearch(label);
+    if (!key.ok()) {
+      continue;
+    }
+    neighbors.emplace_back(*key, static_cast<float>(dist));
+  }
+  return neighbors;
 }
 
 template <typename T>

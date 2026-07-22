@@ -43,6 +43,7 @@ enum class QueryOperations : uint64_t {
   kContainsTextPrefix = 1 << 9,
   kContainsTextSuffix = 1 << 10,
   kContainsTextFuzzy = 1 << 11,
+  kContainsVectorRange = 1 << 12,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -120,6 +121,15 @@ class FilterParser {
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
+  struct VectorRangeQueryAttributes {
+    std::optional<std::string> yield_distance_as;
+    std::optional<double> epsilon;
+  };
+
+  absl::StatusOr<VectorRangeQueryAttributes> ParseVectorRangeQueryAttributes(
+      bool expect_arrow_after = true);
+  absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
+  ParseVectorRangePredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(
       const std::string& field_name);
   void SkipWhitespace();
@@ -134,6 +144,11 @@ class FilterParser {
   absl::StatusOr<double> ParseNumber();
 
   absl::StatusOr<absl::string_view> ParseTagString();
+
+  // Reads a non-whitespace token, stopping at whitespace or any character in
+  // stop_chars. Returns an error with error_msg if the token is empty.
+  absl::StatusOr<std::string> ParseToken(absl::string_view stop_chars,
+                                         absl::string_view error_msg);
 
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,

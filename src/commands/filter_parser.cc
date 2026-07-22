@@ -145,6 +145,13 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
       result += indent_str + "TAG(" + std::string(tag->GetAlias()) + ")\n";
       break;
     }
+    case query::PredicateType::kVectorRange: {
+      const auto* vr =
+          static_cast<const query::VectorRangePredicate*>(predicate);
+      result += indent_str + "VECTOR_RANGE(" + std::string(vr->GetAlias()) +
+                ", radius=" + std::to_string(vr->GetRadius()) + ")\n";
+      break;
+    }
     case query::PredicateType::kText: {
       const auto* text = static_cast<const query::TextPredicate*>(predicate);
       std::string field_mask_str = std::to_string(text->GetFieldMask());
@@ -280,6 +287,22 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
       absl::StrCat("Invalid number: ", number_str));
 }
 
+absl::StatusOr<std::string> FilterParser::ParseToken(
+    absl::string_view stop_chars, absl::string_view error_msg) {
+  SkipWhitespace();
+  std::string token;
+  while (!IsEnd() && !std::isspace(static_cast<unsigned char>(Peek()))) {
+    if (stop_chars.find(Peek()) != absl::string_view::npos) {
+      break;
+    }
+    token += expression_[pos_++];
+  }
+  if (token.empty()) {
+    return absl::InvalidArgumentError(error_msg);
+  }
+  return token;
+}
+
 absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
 FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   auto index = index_schema_.GetIndex(attribute_alias);
@@ -324,6 +347,189 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
   return std::make_unique<query::NumericPredicate>(
       numeric_index, attribute_alias, identifier, start, is_inclusive_start,
       end, is_inclusive_end);
+}
+
+absl::StatusOr<FilterParser::VectorRangeQueryAttributes>
+FilterParser::ParseVectorRangeQueryAttributes(bool expect_arrow_after) {
+  // Parse {$yield_distance_as: <name>; $epsilon: <value>} query attributes.
+  // The opening '{' has already been matched by the caller.
+  // When expect_arrow_after is true (prefix mode), expects '=>' after '}'.
+  // When false (suffix mode), '=>' was already consumed before '{'.
+  VectorRangeQueryAttributes attrs;
+  SkipWhitespace();
+  while (!IsEnd() && Peek() != '}') {
+    // Each attribute starts with '$'
+    if (!Match('$')) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Expected '$' in query attributes at position ", pos_ + 1));
+    }
+    // Read the attribute name (stops at ':', '}', or whitespace)
+    VMSDK_ASSIGN_OR_RETURN(
+        auto attr_name,
+        ParseToken(":}", "Expected attribute name after '$'"));
+    SkipWhitespace();
+    if (!Match(':')) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Expected ':' after attribute name at position ", pos_ + 1));
+    }
+    SkipWhitespace();
+    if (absl::AsciiStrToLower(attr_name) == "yield_distance_as") {
+      // Parse the value — stops at ';', '}', or whitespace
+      VMSDK_ASSIGN_OR_RETURN(
+          auto value,
+          ParseToken(";}", "$yield_distance_as value is missing"));
+      attrs.yield_distance_as = std::move(value);
+    } else if (absl::AsciiStrToLower(attr_name) == "epsilon") {
+      // Parse the numeric value — stops at ';', '}', or whitespace
+      VMSDK_ASSIGN_OR_RETURN(
+          auto value_str,
+          ParseToken(";}", "$epsilon must be a valid non-negative number"));
+      double epsilon_val;
+      if (!absl::SimpleAtod(value_str, &epsilon_val)) {
+        return absl::InvalidArgumentError(
+            "$epsilon must be a valid non-negative number");
+      }
+      if (epsilon_val < 0) {
+        return absl::InvalidArgumentError(
+            "$epsilon must be a valid non-negative number");
+      }
+      attrs.epsilon = epsilon_val;
+    } else {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unknown query attribute '$", attr_name, "'"));
+    }
+    SkipWhitespace();
+    // Consume optional ';' separator between attributes
+    Match(';');
+    SkipWhitespace();
+  }
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Expected '}' to close query attributes");
+  }
+  // In prefix mode, expect '=>' after the closing '}'
+  if (expect_arrow_after) {
+    if (!Match('=') || !Match('>', false)) {
+      return absl::InvalidArgumentError("Expected '=>' after query attributes");
+    }
+  }
+  return attrs;
+}
+
+absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
+FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
+  // At entry: "@<attribute_alias>:[VECTOR_RANGE" has already been consumed by
+  // ParseExpression. We now parse the remainder of the bracket contents:
+  //   <radius> $<blob_param> [EF_RUNTIME <n>] [AS <name>] ]
+  // followed by optional suffix query attributes: ]=>{$yield_distance_as: ...}
+  auto index = index_schema_.GetIndex(attribute_alias);
+  if (!index.ok()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "'", attribute_alias, "' is not indexed as a vector field"));
+  }
+  if (!index.value()->IsVectorIndex()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "'", attribute_alias, "' is not indexed as a vector field"));
+  }
+  auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
+  filter_identifiers_.insert(identifier);
+
+  // Parse radius: either a literal number or $param reference
+  SkipWhitespace();
+  if (IsEnd() || Peek() == ']') {
+    return absl::InvalidArgumentError("VECTOR_RANGE radius is missing");
+  }
+  double radius = 0;
+  std::string radius_param_name;
+  if (Peek() == '$') {
+    // Radius is a $param reference — resolved later in PostParseQueryString
+    ++pos_;
+    VMSDK_ASSIGN_OR_RETURN(radius_param_name,
+                           ParseToken("]", "VECTOR_RANGE radius is missing"));
+  } else {
+    VMSDK_ASSIGN_OR_RETURN(radius, ParseNumber());
+    if (radius < 0) {
+      return absl::InvalidArgumentError(
+          "VECTOR_RANGE radius must be non-negative");
+    }
+  }
+
+  // Parse vector blob parameter name ($blob_param)
+  SkipWhitespace();
+  if (IsEnd() || Peek() == ']') {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE vector blob parameter is missing");
+  }
+  if (!Match('$')) {
+    return absl::InvalidArgumentError(
+        "VECTOR_RANGE vector blob parameter is missing");
+  }
+  std::string vector_param_name;
+  VMSDK_ASSIGN_OR_RETURN(
+      vector_param_name,
+      ParseToken("]", "VECTOR_RANGE vector blob parameter is missing"));
+
+  // Parse optional parameters: EF_RUNTIME <value>, AS <name>
+  std::optional<std::string> score_as;
+  std::optional<double> epsilon;
+  SkipWhitespace();
+  while (!IsEnd() && Peek() != ']') {
+    // Try to match known optional parameter keywords
+    if (MatchInsensitive("EF_RUNTIME")) {
+      // EF_RUNTIME is not yet supported for VECTOR_RANGE queries.
+      // Consume the value token so we can emit a clean error.
+      (void)ParseToken("]", "EF_RUNTIME argument is missing");
+      return absl::UnimplementedError(
+          "EF_RUNTIME is not supported for VECTOR_RANGE queries");
+    } else if (MatchInsensitive("AS")) {
+      VMSDK_ASSIGN_OR_RETURN(auto as_name,
+                             ParseToken("]", "AS argument is missing"));
+      score_as = std::move(as_name);
+    } else {
+      // Unknown optional parameter — collect the token for the error message
+      VMSDK_ASSIGN_OR_RETURN(auto unknown_param, ParseToken("]", ""));
+      return absl::InvalidArgumentError(
+          absl::StrCat("Unexpected argument '", unknown_param, "'"));
+    }
+    SkipWhitespace();
+  }
+
+  if (!Match(']')) {
+    return absl::InvalidArgumentError(absl::StrCat("Expected ']' got '",
+                                                   expression_.substr(pos_, 1),
+                                                   "'. Position: ", pos_));
+  }
+
+  // Parse optional suffix query attributes: =>{$yield_distance_as: ...}
+  // This is the canonical Redis-compatible syntax for vector range queries.
+  SkipWhitespace();
+  if (!IsEnd() && pos_ + 1 < expression_.length() &&
+      expression_[pos_] == '=' && expression_[pos_ + 1] == '>') {
+    pos_ += 2;  // consume '=>'
+    SkipWhitespace();
+    if (!IsEnd() && Peek() == '{') {
+      ++pos_;  // consume '{'
+      VMSDK_ASSIGN_OR_RETURN(auto attrs,
+                             ParseVectorRangeQueryAttributes(false));
+      if (attrs.yield_distance_as.has_value()) {
+        score_as = std::move(attrs.yield_distance_as);
+      }
+      if (attrs.epsilon.has_value()) {
+        epsilon = attrs.epsilon;
+      }
+    } else {
+      return absl::InvalidArgumentError(
+          "Expected '{' after '=>' for query attributes");
+    }
+  }
+
+  query_operations_ |= QueryOperations::kContainsVectorRange;
+  auto predicate = std::make_unique<query::VectorRangePredicate>(
+      attribute_alias, identifier, radius, vector_param_name, score_as,
+      epsilon);
+  if (!radius_param_name.empty()) {
+    predicate->SetRadiusParamName(std::move(radius_param_name));
+  }
+  return predicate;
 }
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
@@ -1007,13 +1213,24 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     } else {
       std::optional<std::string> field_name;
       bool non_text = false;
-      if (Peek() == '@') {
+      if (!IsEnd() && Peek() == '@') {
         std::string parsed_field;
         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
         field_name = parsed_field;
         if (Match('[')) {
           node_count_++;
-          VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(*field_name));
+          // Peek for VECTOR_RANGE keyword before falling through to numeric
+          SkipWhitespace();
+          auto saved_pos = pos_;
+          if (MatchInsensitive("VECTOR_RANGE")) {
+            SkipWhitespace();
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseVectorRangePredicate(*field_name));
+          } else {
+            pos_ = saved_pos;
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseNumericPredicate(*field_name));
+          }
           non_text = true;
         } else if (Match('{')) {
           node_count_++;

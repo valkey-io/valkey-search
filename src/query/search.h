@@ -210,6 +210,12 @@ struct SearchParameters {
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
+  // Non-owning pointers to VectorRangePredicate nodes found during filter
+  // parsing. The pointed-to objects are owned by filter_parse_results (via the
+  // predicate tree rooted at root_predicate). These pointers are valid only
+  // during PostParseVectorRangeParameters; they are cleared at the end of that
+  // call to prevent dangling references. Do not access after parsing completes.
+  std::vector<query::VectorRangePredicate*> vector_range_predicates;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
@@ -334,6 +340,11 @@ size_t EvaluateFilterAsPrimary(
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase* vector_index, const SearchParameters& parameters);
 
+// Standalone Vector Range query: scans all keys, evaluates distance against
+// radius, collects matching keys with distances, sorts by ascending distance.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters& parameters);
+
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
@@ -341,6 +352,11 @@ CalcBestMatchingPrefilteredKeys(
     indexes::VectorBase* vector_index, size_t qualified_entries);
 
 bool QueryHasTextPredicate(const SearchParameters& parameters);
+
+// Walk the predicate tree and collect all VectorRangePredicate nodes.
+void CollectVectorRangePredicates(
+    Predicate* predicate,
+    std::vector<VectorRangePredicate*>& vector_range_predicates);
 
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters& parameters);

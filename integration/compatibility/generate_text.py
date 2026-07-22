@@ -3,7 +3,6 @@ import random
 import re
 import os
 import traceback
-import snowballstemmer
 from . import data_sets
 from .data_sets import load_data
 from .generate import BaseCompatibilityTest
@@ -502,6 +501,7 @@ def _compute_safe_fuzzy_vocab(vocab_by_field: dict, language: str) -> dict:
     Returns a new vocab_by_field dict with only safe words per field.
     If a field has no safe words, it is omitted from the result.
     """
+    import snowballstemmer  # dev-only dep; used at generation time (regenerate.sh), not CI runtime
     stemmer = snowballstemmer.stemmer(language)
 
     # Collect all unique stems across all fields that differ from the original

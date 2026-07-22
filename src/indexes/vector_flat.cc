@@ -270,6 +270,55 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       internal_id};
 }
 
+// Linear scan over all tracked keys. This is O(N) but correct for flat
+// indexes which have no graph structure to exploit.
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  std::vector<char> normalized_vec;
+  absl::string_view query_view = query;
+  if (normalize_) {
+    normalized_vec = NormalizeEmbedding(query, GetDataTypeSize());
+    query_view = absl::string_view((const char *)normalized_vec.data(),
+                                   normalized_vec.size());
+  }
+
+  std::vector<Neighbor> neighbors;
+  auto status = ForEachTrackedKey([&](const InternedStringPtr &key)
+                                      -> absl::Status {
+    if (cancellation_token->IsCancelled()) {
+      return absl::CancelledError("SearchRange cancelled");
+    }
+    // Apply optional inline filter by internal-id label.
+    if (filter) {
+      auto dist_result = ComputeDistanceFromRecord(key, query_view);
+      if (!dist_result.ok()) {
+        return absl::OkStatus();  // key deleted mid-scan; skip
+      }
+      if (!(*filter)(dist_result->second)) {
+        return absl::OkStatus();
+      }
+      if (dist_result->first <= radius) {
+        neighbors.emplace_back(key, dist_result->first);
+      }
+    } else {
+      auto dist_result = ComputeDistanceFromRecord(key, query_view);
+      if (!dist_result.ok()) {
+        return absl::OkStatus();
+      }
+      if (dist_result->first <= radius) {
+        neighbors.emplace_back(key, dist_result->first);
+      }
+    }
+    return absl::OkStatus();
+  });
+  if (!status.ok() && !absl::IsCancelled(status)) {
+    return status;
+  }
+  return neighbors;
+}
+
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {

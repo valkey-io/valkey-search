@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -35,6 +36,7 @@
 #include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -107,6 +109,35 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
     return query::EvaluationResult(false);
   }
   return predicate.Evaluate(*text_index_, *key_, require_positions);
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
+    const query::VectorRangePredicate &predicate) {
+  CHECK(key_);
+  auto query_vector = predicate.GetQueryVector();
+  if (query_vector.empty()) {
+    return query::EvaluationResult(false);
+  }
+  if (!index_schema_) {
+    return query::EvaluationResult(false);
+  }
+  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  if (!index.ok()) {
+    return query::EvaluationResult(false);
+  }
+  auto *vector_index = dynamic_cast<VectorBase *>(index->get());
+  if (!vector_index) {
+    return query::EvaluationResult(false);
+  }
+  auto distance_result =
+      vector_index->ComputeDistanceFromRecord(*key_, query_vector);
+  if (!distance_result.ok()) {
+    // Key not tracked in this vector index — treat as non-matching.
+    return query::EvaluationResult(false);
+  }
+  float distance = distance_result->first;
+  last_vector_range_distance_ = distance;
+  return query::EvaluationResult(distance <= predicate.GetRadius());
 }
 
 template <typename T>
@@ -503,6 +534,25 @@ absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
                                       absl::string_view query) const {
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalIdDuringSearch(key));
+  if (normalize_) {
+    auto norm_query = NormalizeEmbedding(query, GetDataTypeSize());
+    auto result = ComputeDistanceFromRecordImpl(
+        internal_id, absl::string_view(norm_query.data(), norm_query.size()));
+    if (result.ok()) {
+      // Cosine distance is defined in [0, 2], but float32 rounding can produce
+      // values slightly outside this range.  Clamp to maintain correct
+      // boundary semantics for VECTOR_RANGE radius comparisons.
+      if (result->first <= std::numeric_limits<float>::epsilon()) {
+        result->first = 0.0f;
+      } else if (result->first >=
+                 2.0f - std::numeric_limits<float>::epsilon()) {
+        // Ensure anti-parallel vectors produce distance slightly above 2.0 so
+        // that a radius of exactly 2.0 excludes them (matches Redis behavior).
+        result->first = std::nextafter(2.0f, 3.0f);
+      }
+    }
+    return result;
+  }
   return ComputeDistanceFromRecordImpl(internal_id, query);
 }
 

@@ -15,6 +15,8 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/vector_flat.h"
+#include "src/indexes/vector_hnsw.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 namespace valkey_search {
@@ -118,6 +120,14 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
 
   text_index_schema->CommitKeyData(key1);
+
+  // Add a flat vector field for VECTOR_RANGE parser tests (4-dimensional).
+  auto vec_index = indexes::VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 100, 1024),
+      "vec_id",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+  VMSDK_EXPECT_OK(vec_index);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "vec", *vec_index));
 }
 
 TEST_P(FilterTest, ParseParams) {
@@ -1746,6 +1756,114 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,  // "a|b" should match, numeric doesn't
             .key = "key_pipe",
+        },
+        // =================================================================
+        // VECTOR_RANGE syntax error tests (unit tests per Allen's review)
+        // =================================================================
+        {
+            .test_name = "vector_range_happy_path",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_with_yield_distance_as",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$yield_distance_as: dist}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_with_epsilon",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 0.1}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_with_both_query_attrs",
+            .filter =
+                "@vec:[VECTOR_RANGE 1.5 $blob]=>{$yield_distance_as: dist; "
+                "$epsilon: 0.01}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_non_vector_field",
+            .filter = "@num_field_1.5:[VECTOR_RANGE 1.0 $blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "'num_field_1.5' is not indexed as a vector field",
+        },
+        {
+            .test_name = "vector_range_missing_radius",
+            .filter = "@vec:[VECTOR_RANGE]",
+            .create_success = false,
+            .create_expected_error_message = "VECTOR_RANGE radius is missing",
+        },
+        {
+            .test_name = "vector_range_missing_blob_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE vector blob parameter is missing",
+        },
+        {
+            .test_name = "vector_range_missing_dollar_on_blob",
+            .filter = "@vec:[VECTOR_RANGE 1.5 blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE vector blob parameter is missing",
+        },
+        {
+            .test_name = "vector_range_negative_radius",
+            .filter = "@vec:[VECTOR_RANGE -1.5 $blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE radius must be non-negative",
+        },
+        {
+            .test_name = "vector_range_unknown_optional_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob UNKNOWN_PARAM]",
+            .create_success = false,
+            .create_expected_error_message = "Unexpected argument 'UNKNOWN_PARAM'",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_unsupported",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 100]",
+            .create_success = false,
+            .create_expected_error_message =
+                "EF_RUNTIME is not supported for VECTOR_RANGE queries",
+        },
+        {
+            .test_name = "vector_range_empty_yield_distance_as",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$yield_distance_as: }",
+            .create_success = false,
+            .create_expected_error_message =
+                "$yield_distance_as value is missing",
+        },
+        {
+            .test_name = "vector_range_invalid_epsilon",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: notanumber}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_negative_epsilon",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0.5}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_unknown_query_attr",
+            .filter =
+                "@vec:[VECTOR_RANGE 1.5 $blob]=>{$unknown_attr: value}",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unknown query attribute '$unknown_attr'",
+        },
+        {
+            .test_name = "vector_range_missing_closing_bracket",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob",
+            .create_success = false,
+            .create_expected_error_message =
+                "Expected ']' got ''. Position: 28",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

@@ -702,6 +702,10 @@ absl::Status SchemaManager::LoadIndex(
                            << vmsdk::config::RedactIfNeeded(name) << " (in db "
                            << db_num << ")";
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
+
+    // Increment completed index counter for restore progress tracking
+    Metrics::GetStats().rdb_restore_completed_indexes++;
+
     return absl::OkStatus();
   }
 

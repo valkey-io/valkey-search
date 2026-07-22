@@ -179,7 +179,7 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
-    char double_storage[50];
+    std::string double_storage;
     std::string_view value_view;
     if (name == "$") {
       value_view = *value.AsStringView();
@@ -196,9 +196,8 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
           if (!dble) {
             return false;
           }
-          auto double_size =
-              snprintf(double_storage, sizeof(double_storage), "%.11g", *dble);
-          value_view = std::string_view(double_storage, double_size);
+          double_storage = expr::FormatDouble(*dble);
+          value_view = double_storage;
           break;
         }
         default:

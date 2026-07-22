@@ -197,6 +197,7 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r);
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values);
 
 Value FuncTimefmt(const Value& t, const Value& fmt);
+std::string FormatDouble(double d);
 Value FuncParsetime(const Value& t, const Value& fmt);
 Value FuncDay(const Value& t);
 Value FuncHour(const Value& t);

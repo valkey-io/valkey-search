@@ -6,6 +6,7 @@
 
 #include "src/expr/value.h"
 
+#include <charconv>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
@@ -93,9 +94,9 @@ std::string FormatDouble(double d) {
       return "nan";
     }
   } else {
-    char storage[50];
-    size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
-    return {storage, output_chars};
+    char storage[32];
+    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d);
+    return {storage, ptr};
   }
 }
 

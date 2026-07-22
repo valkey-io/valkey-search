@@ -17,6 +17,7 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/info.h"
 
 namespace valkey_search {
@@ -163,7 +164,22 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    return false;
+    // A slot still carrying the missing-field sentinel was never populated by
+    // a stage (a LOAD attribute absent from the document): omit it, as
+    // Redisearch does. Any other nil is a computed (APPLY/reducer) result.
+    if (value.GetNil().GetReason() == kMissingFieldNil) {
+      return false;
+    }
+    // 1.2.1 fix: emit a computed nil as a RESP null (Redisearch replies
+    // `name: (nil)`); pre-1.2.1 omitted it entirely.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 2, 1, "apply_nil_emits_null",
+        [&] {
+          ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+          ValkeyModule_ReplyWithNull(ctx);
+          return true;
+        },
+        [] { return false; });
   }
 
   // Handle array values with RESP array serialization

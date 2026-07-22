@@ -174,8 +174,7 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(
     uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
     [[maybe_unused]] const std::vector<char> &norm_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  std::shared_ptr<VectorRecord> *stored_record =
-      algo_->getPoint(internal_id);
+  std::shared_ptr<VectorRecord> *stored_record = algo_->getPoint(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));

@@ -126,6 +126,16 @@ jobs:
               core.setOutput('label', label);
             }
 
+      - name: Debug resolved outputs
+        run: |
+          echo "merge_commit_sha: ${{ steps.pr.outputs.merge_commit_sha }}"
+          echo "head_sha: ${{ steps.pr.outputs.head_sha }}"
+          echo "base_ref: ${{ steps.pr.outputs.base_ref }}"
+          echo "pr_number: ${{ steps.pr.outputs.pr_number }}"
+          echo "cluster_filter: ${{ steps.pr.outputs.cluster_filter }}"
+          echo "skip_profiling: ${{ steps.pr.outputs.skip_profiling }}"
+          echo "label: ${{ steps.pr.outputs.label }}"
+
   benchmark:
     needs: resolve
     runs-on: [self-hosted, valkey-search-arm-pr]

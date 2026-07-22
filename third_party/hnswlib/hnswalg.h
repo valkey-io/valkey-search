@@ -938,8 +938,8 @@ class HierarchicalNSW
       labeltype id;
       memcpy((char *)&id, tmp_chunk.data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
-      new (GetDataPtrByInternalId(i)) SavedVectorT(generator(
-          absl::string_view(tmp_chunk.data() + size_links_level0_, vector_size_)));
+      new (GetDataPtrByInternalId(i)) SavedVectorT(generator(absl::string_view(
+          tmp_chunk.data() + size_links_level0_, vector_size_)));
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
       cur_element_count_++;

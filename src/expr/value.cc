@@ -9,9 +9,10 @@
 #include <cmath>
 #include <ctime>
 #include <iomanip>
-#include <sstream>
 
 #include "src/utils/scanner.h"
+#include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
+#include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -25,9 +26,14 @@ static const uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFull;
 
 // Built-in isnan doesn't work when compiling with fast-math, which is what we
 // want to do.
-static bool IsNan(const double& d) {
-  uint64_t v = *(uint64_t*)&d;
+static bool IsNan(const double &d) {
+  uint64_t v = *(uint64_t *)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
+}
+
+static bool IsInf(const double &d) {
+  uint64_t v = *(uint64_t *)&d;
+  return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
 }
 
 Value::Value(double d) { value_ = d; }
@@ -41,6 +47,20 @@ bool Value::IsDouble() const { return std::get_if<double>(&value_); }
 bool Value::IsString() const {
   return std::get_if<absl::string_view>(&value_) ||
          std::get_if<std::string>(&value_);
+}
+
+bool Value::IsArray() const { return std::holds_alternative<Array>(value_); }
+
+size_t Value::ArraySize() const {
+  CHECK(IsArray());
+  return std::get<Array>(value_)->size();
+}
+
+bool Value::IsEmptyArray() const {
+  if (auto vec_ptr = std::get_if<Array>(&value_)) {
+    return (*vec_ptr)->empty();
+  }
+  return false;
 }
 
 Value::Nil Value::GetNil() const { return std::get<Nil>(value_); }
@@ -81,22 +101,28 @@ std::string FormatDouble(double d) {
 std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;
-  } else if (auto result = std::get_if<double>(&value_)) {
+  }
+  if (auto result = std::get_if<double>(&value_)) {
     if (IsNan(*result)) {
       return true;
     }
     return !(*result == 0.0);
-  } else {
-    return false;
   }
-  /* if (std::get_if<absl::string_view>(&value_)) {
-    auto dble = AsDouble();
-    if (dble) {
-      return dble != 0.0;
-    }
-    return std::nullopt;
-  };
-  return std::nullopt; */
+  // 1.2.1 fix: non-empty strings are truthy (matches Redisearch). Pre-1.2.1
+  // every non-numeric value (Nil, both string variants) evaluated to false.
+  // Both string variants share the same counter via a common literal.
+  absl::string_view sv;
+  if (auto p = std::get_if<absl::string_view>(&value_)) {
+    sv = *p;
+  } else if (auto p = std::get_if<std::string>(&value_)) {
+    sv = *p;
+  } else {
+    return false;  // Nil
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "asbool_string_truthy",
+      [&] { return !sv.empty(); },  // new: JS-style truthiness
+      [&] { return false; });       // legacy: always false
 }
 
 std::optional<double> Value::AsDouble() const {
@@ -112,7 +138,7 @@ std::optional<double> Value::AsDouble() const {
   } else {
     return std::nullopt;
   }
-  char* end{nullptr};
+  char *end{nullptr};
   double val = std::strtod(sv.begin(), &end);
   if (end != sv.end() || IsNan(val)) {
     return std::nullopt;
@@ -129,38 +155,59 @@ std::optional<int64_t> Value::AsInteger() const {
   return std::nullopt;
 }
 
-absl::string_view Value::AsStringView() const {
+std::optional<absl::string_view> Value::AsStringView() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result ? "1" : "0";
   } else if (auto result = std::get_if<double>(&value_)) {
     if (!storage_) {
       storage_ = FormatDouble(*result);
     }
-    return *storage_;
+    return absl::string_view(*storage_);
   } else if (auto result = std::get_if<absl::string_view>(&value_)) {
     return *result;
   } else if (auto result = std::get_if<std::string>(&value_)) {
-    return *result;
+    return absl::string_view(*result);
   } else {
-    CHECK(false);
+    return std::nullopt;
   }
 }
 
-std::string Value::AsString() const {
+std::optional<std::string> Value::AsString() const {
   if (auto result = std::get_if<bool>(&value_)) {
-    return *result ? "1" : "0";
+    return std::string(*result ? "1" : "0");
   } else if (auto result = std::get_if<double>(&value_)) {
     return FormatDouble(*result);
   } else if (auto result = std::get_if<absl::string_view>(&value_)) {
     return std::string(*result);
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
+  } else if (auto result = std::get_if<Value::Array>(&value_)) {
+    return "";
   } else {
-    CHECK(false);
+    return std::nullopt;
   }
 }
 
-std::ostream& operator<<(std::ostream& os, const Value& v) {
+std::optional<Value::Array> Value::AsArray() const {
+  if (auto result = std::get_if<Array>(&value_)) {
+    return *result;
+  }
+  return std::nullopt;
+}
+
+Value::Array Value::GetArray() const { return std::get<Array>(value_); }
+
+Value Value::GetArrayElement(size_t index) const {
+  auto arr = GetArray();
+
+  CHECK(index < arr->size())
+      << "GetArrayElement called with index out of range: " << index
+      << ". Array size = " << arr->size();
+
+  return (*arr)[index];
+}
+
+std::ostream &operator<<(std::ostream &os, const Value &v) {
   if (v.IsNil()) {
     return os << "Nil(" << v.AsNil().value().GetReason() << ")";
   } else if (v.IsBool()) {
@@ -169,7 +216,8 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
     return os << "Dble(" << std::setprecision(10) << v.AsDouble().value()
               << ")";
   } else if (v.IsString()) {
-    return os << "'" << v.AsStringView() << "'";
+    // IsString() guarantees AsStringView() succeeds.
+    return os << "'" << *v.AsStringView() << "'";
   }
   CHECK(false);
 }
@@ -219,7 +267,7 @@ static Ordering CompareStrings(const absl::string_view l,
   }
 }
 
-Ordering Compare(const Value& l, const Value& r) {
+Ordering Compare(const Value &l, const Value &r) {
   // First equivalent types
 
   if (l.IsNil() || r.IsNil()) {
@@ -234,19 +282,42 @@ Ordering Compare(const Value& l, const Value& r) {
     return CompareStrings(l.GetStringView(), r.GetStringView());
   }
 
+  // Array comparisons
+  if (l.IsArray() && r.IsArray()) {
+    auto lvec = l.GetArray();
+    auto rvec = r.GetArray();
+
+    size_t min_size = std::min(lvec->size(), rvec->size());
+    if (min_size > 0) {
+      // Match RediSearch behavior by only comparing first elements
+      return Compare((*lvec)[0], (*rvec)[0]);
+    }
+
+    // All elements equal, compare by length
+    if (lvec->size() < rvec->size()) {
+      return Ordering::kLESS;
+    } else if (lvec->size() > rvec->size()) {
+      return Ordering::kGREATER;
+    }
+    return Ordering::kEQUAL;
+  } else if (l.IsArray() || r.IsArray()) {
+    // Array vs scalar
+    return Ordering::kUNORDERED;
+  }
+
   // Need to handle non-equivalent types.
   // Prefer to promote to double unless that fails.
-
   auto ld = l.AsDouble();
   auto rd = r.AsDouble();
   if (ld && rd) {
     return CompareDoubles(ld.value(), rd.value());
   }
 
-  return CompareStrings(l.AsStringView(), r.AsStringView());
+  // Nil cases were filtered above; both sides have a string representation.
+  return CompareStrings(*l.AsStringView(), *r.AsStringView());
 }
 
-Value FuncAdd(const Value& l, const Value& r) {
+Value FuncAdd(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -256,7 +327,7 @@ Value FuncAdd(const Value& l, const Value& r) {
   }
 }
 
-Value FuncSub(const Value& l, const Value& r) {
+Value FuncSub(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -266,7 +337,7 @@ Value FuncSub(const Value& l, const Value& r) {
   }
 }
 
-Value FuncMul(const Value& l, const Value& r) {
+Value FuncMul(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -276,16 +347,12 @@ Value FuncMul(const Value& l, const Value& r) {
   }
 }
 
-Value FuncDiv(const Value& l, const Value& r) {
+Value FuncDiv(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
     if (rv.value() == 0) {
-      // if (std::signbit(lv.value())) {
       return Value(std::nan(""));
-      //} else {
-      //  return Value(-std::abs(std::nan("nan")));
-      //}
     } else {
       return Value(lv.value() / rv.value());
     }
@@ -294,7 +361,7 @@ Value FuncDiv(const Value& l, const Value& r) {
   }
 }
 
-Value FuncPower(const Value& l, const Value& r) {
+Value FuncPower(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -304,19 +371,19 @@ Value FuncPower(const Value& l, const Value& r) {
   }
 }
 
-Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
+Value FuncLt(const Value &l, const Value &r) { return Value(l < r); }
 
-Value FuncLe(const Value& l, const Value& r) { return Value(l <= r); }
+Value FuncLe(const Value &l, const Value &r) { return Value(l <= r); }
 
-Value FuncEq(const Value& l, const Value& r) { return Value(l == r); }
+Value FuncEq(const Value &l, const Value &r) { return Value(l == r); }
 
-Value FuncNe(const Value& l, const Value& r) { return Value(l != r); }
+Value FuncNe(const Value &l, const Value &r) { return Value(l != r); }
 
-Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
+Value FuncGt(const Value &l, const Value &r) { return Value(l > r); }
 
-Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
+Value FuncGe(const Value &l, const Value &r) { return Value(l >= r); }
 
-Value FuncLor(const Value& l, const Value& r) {
+Value FuncLor(const Value &l, const Value &r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
   auto lv = l.AsBool();
   auto rv = r.AsBool();
@@ -327,7 +394,7 @@ Value FuncLor(const Value& l, const Value& r) {
   }
 }
 
-Value FuncLand(const Value& l, const Value& r) {
+Value FuncLand(const Value &l, const Value &r) {
   DBG << "FuncLand: " << l << " && " << r << "\n";
   auto lv = l.AsBool();
   auto rv = r.AsBool();
@@ -340,109 +407,154 @@ Value FuncLand(const Value& l, const Value& r) {
   }
 }
 
-Value FuncFloor(const Value& o) {
+// Shared "AsDouble failed" return path for unary numeric functions.
+// Pre-1.2.1 path: always returns Nil. 1.2.1 fix: returns NaN for inputs
+// that aren't Nil (typically a non-numeric string like "a"), matching
+// Redisearch's NaN-on-coercion-failure semantics. Nil-typed inputs still
+// propagate as Nil regardless of emulate-release, so layered expressions
+// like `abs(@missing_field)` keep clean Nil propagation.
+static Value NumericUnaryNil(const Value &o, const char *fname) {
+  if (o.IsNil()) {
+    return Value(Value::Nil(fname));
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "numeric_unary_nan_on_unparsable",
+      [&] { return Value(std::nan("")); },        // new: NaN propagation
+      [&] { return Value(Value::Nil(fname)); });  // legacy: Nil
+}
+
+Value FuncFloor(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("floor couldn't convert to a double"));
+    return NumericUnaryNil(o, "floor couldn't convert to a double");
   }
   return Value(std::floor(*d));
 }
 
-Value FuncCeil(const Value& o) {
+Value FuncCeil(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("ceil couldn't convert to a double"));
+    return NumericUnaryNil(o, "ceil couldn't convert to a double");
   }
   return Value(std::ceil(*d));
 }
 
-Value FuncAbs(const Value& o) {
+Value FuncAbs(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("abs couldn't convert to a double"));
+    return NumericUnaryNil(o, "abs couldn't convert to a double");
   }
   return Value(std::abs(*d));
 }
 
-Value FuncLog(const Value& o) {
+Value FuncLog(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("log couldn't convert to a double"));
+    return NumericUnaryNil(o, "log couldn't convert to a double");
   }
   return Value(std::log(*d));
 }
 
-Value FuncLog2(const Value& o) {
+Value FuncLog2(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("log2 couldn't convert to a double"));
+    return NumericUnaryNil(o, "log2 couldn't convert to a double");
   }
   return Value(std::log2(*d));
 }
 
-Value FuncExp(const Value& o) {
+Value FuncExp(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("exp couldn't convert to a double"));
+    return NumericUnaryNil(o, "exp couldn't convert to a double");
   }
   return Value(std::exp(*d));
 }
 
-Value FuncSqrt(const Value& o) {
+Value FuncSqrt(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("sqrt couldn't convert to a double"));
+    return NumericUnaryNil(o, "sqrt couldn't convert to a double");
   }
   return Value(std::sqrt(*d));
 }
 
-Value FuncStrlen(const Value& o) {
-  return Value(double(o.AsStringView().size()));
+Value FuncStrlen(const Value &o) {
+  if (o.IsArray()) {
+    return Value();
+  }
+  auto os = o.AsStringView();
+  if (!os) {
+    return Value(Value::Nil("strlen: operand has no string representation"));
+  }
+  return Value(double(os->size()));
 }
 
-Value FuncStartswith(const Value& l, const Value& r) {
+Value FuncStartswith(const Value &l, const Value &r) {
+  if (l.IsArray() || r.IsArray()) {
+    return Value();
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
-  if (rs.size() > ls.size()) {
+  if (!ls || !rs) {
+    return Value(
+        Value::Nil("startswith: operand has no string representation"));
+  }
+  if (rs->size() > ls->size()) {
     return Value(false);
   } else {
-    return Value(ls.substr(0, rs.size()) == rs);
+    return Value(ls->substr(0, rs->size()) == *rs);
   }
 }
 
-Value FuncContains(const Value& l, const Value& r) {
+Value FuncContains(const Value &l, const Value &r) {
+  if (l.IsArray() || r.IsArray()) {
+    return Value();
+  }
+
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
+  if (!ls || !rs) {
+    return Value(Value::Nil("contains: operand has no string representation"));
+  }
   size_t count = 0;
   size_t pos = 0;
-  if (rs.size() == 0) {
-    return Value(double(ls.size() + 1));
+  if (rs->size() == 0) {
+    return Value(double(ls->size() + 1));
   } else {
-    while ((pos = ls.find(rs, pos)) != std::string::npos) {
+    while ((pos = ls->find(*rs, pos)) != std::string::npos) {
       count++;
-      pos += rs.size();
+      pos += rs->size();
     }
     return Value(double(count));
   }
 }
 
-Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+Value FuncSubstr(const Value &l, const Value &m, const Value &r) {
+  if (l.IsArray() || m.IsArray() || r.IsArray()) {
+    return Value(Value::Nil("Invalid type for substr. Expected string"));
+  }
+
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
+  if (!ls) {
+    return Value(Value::Nil("substr: source has no string representation"));
+  }
   if (offset_p && length_p) {
-    int64_t offset = *offset_p >= 0 ? *offset_p : *offset_p + ls.size();
-    if (offset > ls.size() || offset < 0 || *length_p == 0) {
+    int64_t offset = *offset_p >= 0 ? *offset_p : *offset_p + ls->size();
+    if (offset > static_cast<int64_t>(ls->size()) || offset < 0 ||
+        *length_p == 0) {
       return Value("");
     } else {
       if (*length_p >= 0) {
-        return Value(std::string(ls.substr(offset, *length_p)));
+        return Value(std::string(ls->substr(offset, *length_p)));
       } else {
-        int64_t len = (ls.size() - offset) + *length_p;
+        int64_t len = (ls->size() - offset) + *length_p;
         if (len < 0) {
           return Value("");
         } else {
-          return Value(std::string(ls.substr(offset, len)));
+          return Value(std::string(ls->substr(offset, len)));
         }
       }
     }
@@ -451,11 +563,25 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   }
 }
 
-Value FuncLower(const Value& o) {
+Value FuncLower(const Value &o) {
+  if (o.IsArray()) {
+    return Value();
+  }
+  // 1.2.1 fix: refuse non-string inputs (matches Redisearch — lower(0) → Nil).
+  // Pre-1.2.1: passed numeric/bool through via AsStringView, returning
+  // their string form unchanged.
+  if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 2, 1, "lower_non_string_to_nil",
+                           [] { return true; }, [] { return false; })) {
+    return Value(Value::Nil("lower: operand is not a string"));
+  }
   auto os = o.AsStringView();
+  if (!os) {
+    return Value(Value::Nil("lower: operand has no string representation"));
+  }
   std::string result;
-  result.reserve(os.size());
-  utils::Scanner in(os);
+  result.reserve(os->size());
+  utils::Scanner in(*os);
   for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
        utf8 = in.NextUtf8()) {
     if (utf8 < 0x80) {
@@ -466,11 +592,23 @@ Value FuncLower(const Value& o) {
   return Value(std::move(result));
 }
 
-Value FuncUpper(const Value& o) {
+Value FuncUpper(const Value &o) {
+  if (o.IsArray()) {
+    return Value();
+  }
+  // See FuncLower above for rationale.
+  if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 2, 1, "upper_non_string_to_nil",
+                           [] { return true; }, [] { return false; })) {
+    return Value(Value::Nil("upper: operand is not a string"));
+  }
   auto os = o.AsStringView();
+  if (!os) {
+    return Value(Value::Nil("upper: operand has no string representation"));
+  }
   std::string result;
-  result.reserve(os.size());
-  utils::Scanner in(os);
+  result.reserve(os->size());
+  utils::Scanner in(*os);
   for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
        utf8 = in.NextUtf8()) {
     if (utf8 < 0x80) {
@@ -481,41 +619,104 @@ Value FuncUpper(const Value& o) {
   return Value(std::move(result));
 }
 
-Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
+// 1.2.1 fix shared by all date functions: pre-epoch (negative) timestamps
+// return Nil instead of computing a (negative) calendar value. Returns true
+// when the new (Nil) behavior should be taken; false to fall through to the
+// legacy path. Single counter for all date functions.
+static bool DateNegativeTsReturnsNil() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "date_fn_negative_ts_to_nil", [] { return true; },
+      [] { return false; });
+}
+
+Value FuncConcat(const absl::InlinedVector<Value, 4> &values) {
   std::string result;
-  for (auto& v : values) {
-    result.append(v.AsStringView());
+  for (auto &v : values) {
+    auto s = v.AsStringView();
+    if (!s) {
+      return Value(Value::Nil("concat: operand has no string representation"));
+    }
+    result.append(*s);
   }
   return Value(std::move(result));
 }
 
-#define TIME_FUNCTION(funcname, field, adjustment)        \
-  Value funcname(const Value& timestamp) {                \
-    auto ts = timestamp.AsDouble();                       \
-    if (!ts) {                                            \
-      return Value(Value::Nil("timestamp not a number")); \
-    }                                                     \
-    time_t time = (time_t) * ts;                          \
-    struct ::tm tm;                                       \
-    gmtime_r(&time, &tm);                                 \
-    return Value(double(tm.field + (adjustment)));        \
+// Macro for the date-component extractors that still depend on gmtime_r.
+// Guards: timestamp must be a finite number. The negative-timestamp guard
+// is the 1.2.1 fix (gated via DateNegativeTsReturnsNil); the finite guard
+// is always-on UB hardening — restoring it under emulate-release would
+// re-introduce UB at the (time_t) cast / gmtime_r partial-write on
+// overflow.
+#define TIME_FUNCTION(funcname, field, adjustment)               \
+  Value funcname(const Value &timestamp) {                       \
+    auto ts = timestamp.AsDouble();                              \
+    if (!ts) {                                                   \
+      return Value(Value::Nil("timestamp not a number"));        \
+    }                                                            \
+    if (IsNan(*ts) || IsInf(*ts)) {                              \
+      return Value(Value::Nil("timestamp is not finite"));       \
+    }                                                            \
+    if (*ts < 0 && DateNegativeTsReturnsNil()) {                 \
+      return Value(Value::Nil("timestamp is before the epoch")); \
+    }                                                            \
+    time_t time = (time_t)*ts;                                   \
+    struct ::tm tm;                                              \
+    gmtime_r(&time, &tm);                                        \
+    return Value(double(tm.field + (adjustment)));               \
   }
 
-TIME_FUNCTION(FuncDayofweek, tm_wday, 0)
 TIME_FUNCTION(FuncDayofmonth, tm_mday, 0)
 TIME_FUNCTION(FuncDayofyear, tm_yday, 0)
 TIME_FUNCTION(FuncMonthofyear, tm_mon, 0)
 TIME_FUNCTION(FuncYear, tm_year, 1900)
 
-Value FuncTimefmt(const Value& ts, const Value& fmt) {
+// Pure-arithmetic dayofweek: avoids gmtime_r entirely. Jan 1 1970 (ts=0)
+// was a Thursday — POSIX day index 4 (0=Sun..6=Sat).
+Value FuncDayofweek(const Value &o) {
+  auto tsd = o.AsDouble();
+  if (!tsd) {
+    return Value(Value::Nil("dayofweek: timestamp not a number"));
+  }
+  // Always-on UB hardening: pure-arithmetic implementation propagates
+  // NaN/inf into UB at the int64 cast below, so refuse them here.
+  if (IsNan(*tsd) || IsInf(*tsd)) {
+    return Value(Value::Nil("dayofweek: timestamp is not finite"));
+  }
+  // 1.2.1 fix: pre-epoch → Nil.
+  if (*tsd < 0 && DateNegativeTsReturnsNil()) {
+    return Value(Value::Nil("dayofweek: timestamp is before the epoch"));
+  }
+  int64_t days = static_cast<int64_t>(std::floor(*tsd / 86400.0));
+  // Floored modulo: works correctly even when the < 0 guard is relaxed.
+  int64_t r = ((days + 4) % 7 + 7) % 7;
+  return Value(double(r));
+}
+
+Value FuncTimefmt(const Value &ts, const Value &fmt) {
   auto timestampd = ts.AsDouble();
   if (!timestampd) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
   }
-  auto fmtstr = fmt.AsStringView();
-  if (fmtstr.empty()) {
-    return Value("");
+  if (IsInf(*timestampd)) {
+    return Value(Value::Nil("timefmt: timestamp is not finite"));
   }
+  // Note: unlike the component extractors (month/day/hour/…), timefmt
+  // happily formats pre-epoch (negative) timestamps to match Redisearch.
+  auto fmtstr = fmt.AsStringView();
+  if (!fmtstr) {
+    return Value(Value::Nil("timefmt: format has no string representation"));
+  }
+  if (fmtstr->empty()) {
+    // 1.2.1 fix: empty format → Nil (matches Redisearch).
+    // Pre-1.2.1: returned an empty string as a fast-path.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 2, 1, "timefmt_empty_format_to_nil",
+        [] { return Value(Value::Nil("timefmt: empty format string")); },
+        [] { return Value(""); });
+  }
+  // strftime needs a NUL-terminated format string. AsStringView() may return
+  // a view into storage that isn't NUL-terminated (e.g. a substring), so copy.
+  std::string fmt_z(*fmtstr);
   struct tm tm;
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
@@ -523,49 +724,110 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
-  while ((result_bytes = strftime(result.data(), result.size(),
-                                  fmt.AsStringView().data(), &tm)) == 0) {
+  while ((result_bytes = strftime(result.data(), result.size(), fmt_z.c_str(),
+                                  &tm)) == 0) {
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);
   return Value(std::move(result));
 }
 
-Value FuncParsetime(const Value& str, const Value& fmt) {
+Value FuncParsetime(const Value &str, const Value &fmt) {
   auto timestr = str.AsString();  // Ensure 0 terminated
   auto fmtstr = fmt.AsString();
-  struct tm tm;
-  ::strptime(timestr.data(), fmtstr.data(), &tm);
+  if (!timestr || !fmtstr) {
+    return Value(Value::Nil("parsetime: operand has no string representation"));
+  }
+  // Zero-init is always-on: reverting it would restore an uninitialized-tm
+  // read (UB). Without zero-init the result was nondeterministic, so no
+  // user could have depended on it.
+  struct tm tm = {};
+  char *res = ::strptime(timestr->data(), fmtstr->data(), &tm);
+  if (res == nullptr) {
+    // 1.2.1 fix: strptime returning NULL → Nil (matches Redisearch).
+    // Pre-1.2.1: ignored the NULL return and fed the zeroed tm to mktime,
+    // producing a constant -2209075200 (Dec 31 1899 UTC). That happened to
+    // line up with how Redisearch handles _successful_ no-op parses, but
+    // differs for failed parses.
+    if (VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 2, 1, "parsetime_format_mismatch_to_nil", [] { return true; },
+            [] { return false; })) {
+      return Value(Value::Nil("parsetime: format mismatch"));
+    }
+  }
   tm.tm_isdst = -1;  // Don't try to figure out DST, just use UTC
   return Value(double(::mktime(&tm)));
 }
 
-#define TIME_ROUND(func, zero_day, zero_hour, zero_minute)        \
-  Value func(const Value& o) {                                    \
-    auto tsd = o.AsDouble();                                      \
-    if (!tsd) {                                                   \
-      return Value(Value::Nil(#func ": timestamp not a number")); \
-    }                                                             \
-    time_t ts = (time_t)(*tsd);                                   \
-    struct tm tm;                                                 \
-    gmtime_r(&ts, &tm);                                           \
-    tm.tm_sec = 0;                                                \
-    if (zero_day) {                                               \
-      tm.tm_mday = 0;                                             \
-    }                                                             \
-    if (zero_hour) {                                              \
-      tm.tm_hour = 0;                                             \
-    }                                                             \
-    if (zero_minute) {                                            \
-      tm.tm_min = 0;                                              \
-    }                                                             \
-    return Value(double(::mktime(&tm)));                          \
+// Month-rounding: still needs gmtime_r/mktime because month boundaries
+// are not a fixed period (28/29/30/31 days). The finite guard is always-on
+// UB hardening; the negative-ts guard is the 1.2.1 fix.
+Value FuncMonth(const Value &o) {
+  auto tsd = o.AsDouble();
+  if (!tsd) {
+    return Value(Value::Nil("month: timestamp not a number"));
   }
+  if (IsNan(*tsd) || IsInf(*tsd)) {
+    return Value(Value::Nil("month: timestamp is not finite"));
+  }
+  if (*tsd < 0 && DateNegativeTsReturnsNil()) {
+    return Value(Value::Nil("month: timestamp is before the epoch"));
+  }
+  time_t ts = (time_t)(*tsd);
+  struct tm tm;
+  gmtime_r(&ts, &tm);
+  tm.tm_sec = 0;
+  tm.tm_min = 0;
+  tm.tm_hour = 0;
+  // 1.2.1 fix: tm_mday=1 (first day of the month, matches Redisearch).
+  // Pre-1.2.1: tm_mday=0 which mktime rolls back to the last day of the
+  // previous month — off by 86400 seconds.
+  tm.tm_mday = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "month_mday_off_by_one",
+      [] { return 1; },   // new: first of the month
+      [] { return 0; });  // legacy: rolled back one day
+  return Value(double(::mktime(&tm)));
+}
 
-TIME_ROUND(FuncMonth, true, true, true)
-TIME_ROUND(FuncDay, false, true, true)
-TIME_ROUND(FuncHour, false, false, true)
-TIME_ROUND(FuncMinute, false, false, false)
+// Fixed-period rounding: pure arithmetic, no gmtime_r/mktime, no UB on
+// non-finite inputs. Matches Redisearch's arithmetic-style implementation
+// (which is why minute(+inf) returns NaN there).
+//
+// `notnum`, `notfinite`, `negative` are static-storage string literals
+// supplied by each caller — Value::Nil holds a non-owning const char*.
+static Value RoundToPeriod(const Value &o, double period, const char *notnum,
+                           const char *notfinite, const char *negative) {
+  auto tsd = o.AsDouble();
+  if (!tsd) {
+    return Value(Value::Nil(notnum));
+  }
+  if (IsNan(*tsd) || IsInf(*tsd)) {
+    return Value(Value::Nil(notfinite));
+  }
+  // 1.2.1 fix: pre-epoch → Nil.
+  if (*tsd < 0 && DateNegativeTsReturnsNil()) {
+    return Value(Value::Nil(negative));
+  }
+  // floor (not trunc) so negative timestamps still round correctly when
+  // the < 0 guard is relaxed under emulate-release < 1.2.1.
+  return Value(std::floor(*tsd / period) * period);
+}
+
+Value FuncDay(const Value &o) {
+  return RoundToPeriod(o, 86400.0, "day: timestamp not a number",
+                       "day: timestamp is not finite",
+                       "day: timestamp is before the epoch");
+}
+Value FuncHour(const Value &o) {
+  return RoundToPeriod(o, 3600.0, "hour: timestamp not a number",
+                       "hour: timestamp is not finite",
+                       "hour: timestamp is before the epoch");
+}
+Value FuncMinute(const Value &o) {
+  return RoundToPeriod(o, 60.0, "minute: timestamp not a number",
+                       "minute: timestamp is not finite",
+                       "minute: timestamp is before the epoch");
+}
 
 }  // namespace expr
 }  // namespace valkey_search

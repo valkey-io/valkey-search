@@ -5,6 +5,20 @@ function(protogen_setup output_dir)
     list(TRANSFORM PROTOGEN_PROTO_SRC PREPEND "${CMAKE_SOURCE_DIR}/")
     list(TRANSFORM PROTOGEN_PROTO_SRC APPEND ".proto")
 
+    # protoc writes generated files into a subdirectory of ${output_dir}
+    # mirroring each .proto's own directory. Ninja auto-creates a build
+    # rule's output directory, but CMake's Makefile generator does not do
+    # this for custom commands, so protoc fails with "No such file or
+    # directory" under `make`. Create every needed subdirectory up front,
+    # at configure time, so this works under any generator.
+    file(MAKE_DIRECTORY "${output_dir}")
+    foreach(proto_input IN LISTS PROTOGEN_BASE_INPUTS)
+        get_filename_component(proto_subdir "${proto_input}" DIRECTORY)
+        if(proto_subdir)
+            file(MAKE_DIRECTORY "${output_dir}/${proto_subdir}")
+        endif()
+    endforeach()
+
     protobuf_generate(
         OUT_VAR PROTO_SRCS
         LANGUAGE cpp

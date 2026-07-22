@@ -21,8 +21,8 @@ on:
       num_runs:
         description: "Number of times to run each benchmark configuration"
         required: false
-        type: number
-        default: 3
+        type: string
+        default: "3"
       cluster_mode:
         description: "Cluster mode (empty=run config in file, true=cluster-mode only, false=non-cluster-mode only)"
         type: choice
@@ -128,7 +128,7 @@ jobs:
 
   benchmark:
     needs: resolve
-    runs-on: [self-hosted, ec2-module-pr-benchmarking-arm64]
+    runs-on: [self-hosted, valkey-search-arm-pr]
     timeout-minutes: 900
     env:
       # Module configuration
@@ -147,7 +147,7 @@ jobs:
       PERF_BENCHMARK_BRANCH: "module2-multi"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/fts-benchmarks-shortened-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-search/.github/benchmark_configs/fts-smoke-arm.json"
       # Run parameters
       RUNS: ${{ github.event.inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ github.event.inputs.core_commit || '' }}
@@ -160,6 +160,9 @@ jobs:
       pull-requests: write
       issues: write
     steps:
+      - name: Ensure git is installed
+        run: command -v git || sudo dnf install -y git
+
       - name: Set up Python
         uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
         with:
@@ -363,6 +366,7 @@ jobs:
             --commits "${{ steps.core_commit.outputs.sha }}" \
             --valkey-benchmark-path "${{ github.workspace }}/valkey_ram/src/valkey-benchmark" \
             --module-path "$MODULE_BASELINE_PATH/.build-release/libsearch.so" \
+            --module-commit "${{ steps.baseline_commit.outputs.sha }}" \
             --repository "${{ github.repository }}" \
             --target-ip ${{ secrets.EC2_SEARCH_IP }} \
             --mode both \
@@ -407,7 +411,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('comparison.md', 'utf8');
+            const body = fs.readFileSync('${{ github.workspace }}/comparison.md', 'utf8');
             const {owner, repo} = context.repo;
             const sha = '${{ needs.resolve.outputs.head_sha }}';
             const short = sha.slice(0, 7);

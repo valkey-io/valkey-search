@@ -120,13 +120,82 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-enum class ExpectedResults { kSuccess, kSkipped, kError };
+enum class ExpectedResults { kSuccess, kMissing, kInvalidData, kError };
 
 auto IndexToKey = [](int i) {
   return StringInternStore::Intern(std::to_string(i) + "_key");
 };
 
-absl::Status VerifyResult(const absl::StatusOr<bool> &res,
+// Single-query latency benchmark for the HNSW search inner loop. Disabled by
+// default; run explicitly with:
+//   .build-release/tests/indexes_test \
+//     --gtest_also_run_disabled_tests \
+//     --gtest_filter='*DISABLED_PrefetchBenchmark*'
+// Reports min/p50/p90/p99/mean per-query latency to stderr. Vectors are sized
+// to span many cache lines (dim 768 -> ~48 lines) so the prefetch pipeline is
+// exercised under realistic memory pressure.
+TEST_F(VectorIndexTest, DISABLED_PrefetchBenchmark)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto env_int = [](const char *name, int dflt) {
+    const char *v = std::getenv(name);
+    return v ? std::atoi(v) : dflt;
+  };
+  const int kDim = env_int("BENCH_DIM", 768);
+  const int kN = env_int("BENCH_N", 10000);
+  const int kMParam = env_int("BENCH_M", 16);
+  const int kEfC = env_int("BENCH_EFC", 200);
+  const int kEfR = env_int("BENCH_EFR", 128);
+  const int kK = env_int("BENCH_K", 10);
+  const int kWarmup = env_int("BENCH_WARMUP", 200);
+  const int kQueries = env_int("BENCH_QUERIES", 3000);
+
+  auto index =
+      VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
+                                     kN + 16, kMParam, kEfC, kEfR),
+          "attribute_identifier_1",
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+          .value();
+
+  auto vectors = DeterministicallyGenerateVectors(kN, kDim, 10.0);
+  for (int i = 0; i < kN; ++i) {
+    VMSDK_EXPECT_OK(index->AddRecord(IndexToKey(i), VectorToStr(vectors[i])));
+  }
+
+  // Warmup (also pages in the graph / vector storage).
+  for (int i = 0; i < kWarmup; ++i) {
+    auto r =
+        index->Search(VectorToStr(vectors[(i * 7919) % kN]), kK, CancelNever());
+    VMSDK_EXPECT_OK(r);
+  }
+
+  std::vector<double> lat_us;
+  lat_us.reserve(kQueries);
+  for (int i = 0; i < kQueries; ++i) {
+    absl::string_view q = VectorToStr(vectors[(i * 7919) % kN]);
+    auto t0 = std::chrono::steady_clock::now();
+    auto r = index->Search(q, kK, CancelNever());
+    auto t1 = std::chrono::steady_clock::now();
+    VMSDK_EXPECT_OK(r);
+    lat_us.push_back(
+        std::chrono::duration<double, std::micro>(t1 - t0).count());
+  }
+
+  std::sort(lat_us.begin(), lat_us.end());
+  auto pct = [&](double p) {
+    return lat_us[static_cast<size_t>(p / 100.0 * (lat_us.size() - 1))];
+  };
+  double mean =
+      std::accumulate(lat_us.begin(), lat_us.end(), 0.0) / lat_us.size();
+  std::fprintf(stderr,
+               "\n[PrefetchBenchmark] dim=%d N=%d M=%d efc=%d efr=%d k=%d "
+               "queries=%zu\n  min=%.1f  p50=%.1f  p90=%.1f  p99=%.1f  "
+               "max=%.1f  mean=%.1f  (us/query)\n",
+               kDim, kN, kMParam, kEfC, kEfR, kK, lat_us.size(), lat_us.front(),
+               pct(50), pct(90), pct(99), lat_us.back(), mean);
+}
+
+absl::Status VerifyResult(const absl::StatusOr<indexes::RecordResult> &res,
                           ExpectedResults expected_result,
                           std::string error_prefix) {
   if (expected_result == ExpectedResults::kSuccess) {
@@ -134,26 +203,38 @@ absl::Status VerifyResult(const absl::StatusOr<bool> &res,
       return absl::InternalError(
           absl::StrCat(error_prefix, "Expected success but res not ok"));
     }
-    if (!res.value()) {
+    if (res.value() != indexes::RecordResult::kAdded) {
       return absl::InternalError(absl::StrCat(
-          error_prefix, "Expected success but res value is false"));
+          error_prefix, "Expected added but res value is not kAdded"));
     }
     return absl::OkStatus();
   }
-  if (expected_result == ExpectedResults::kSkipped) {
+  if (expected_result == ExpectedResults::kMissing) {
     if (!res.ok()) {
       return absl::InternalError(
-          absl::StrCat(error_prefix, "Expected skipped but res not ok"));
+          absl::StrCat(error_prefix, "Expected missing but res not ok"));
     }
-    if (res.value()) {
+    if (res.value() != indexes::RecordResult::kMissing) {
+      return absl::InternalError(absl::StrCat(
+          error_prefix, "Expected missing but res value is not kMissing"));
+    }
+    return absl::OkStatus();
+  }
+  if (expected_result == ExpectedResults::kInvalidData) {
+    if (!res.ok()) {
       return absl::InternalError(
-          absl::StrCat(error_prefix, "Expected skipped but res value is true"));
+          absl::StrCat(error_prefix, "Expected invalid data but res not ok"));
+    }
+    if (res.value() != indexes::RecordResult::kInvalidData) {
+      return absl::InternalError(absl::StrCat(
+          error_prefix,
+          "Expected invalid data but res value is not kInvalidData"));
     }
     return absl::OkStatus();
   }
   if (res.status().ok()) {
     return absl::InternalError(
-        absl::StrCat(error_prefix, "Expected kError but res status not ok"));
+        absl::StrCat(error_prefix, "Expected kError but res status ok"));
   }
   return absl::OkStatus();
 }
@@ -226,8 +307,8 @@ void TestIndex(T *index, int dimensions, int vector_size,
   VERIFY_ADD(index, vectors, 0, ExpectedResults::kError);
   auto vectors_small_dim =
       DeterministicallyGenerateVectors(vectors.size(), dimensions - 1, 1.0);
-  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kSkipped);
-  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kSkipped,
+  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kInvalidData);
+  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kInvalidData,
                 false);
 
   VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kError, false);
@@ -436,7 +517,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
 }
 
 TEST_F(VectorIndexTest, VectorFlatCosineNormalizationDistance)
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
   const int dimensions = 4;
   auto index = VectorFlat<float>::Create(
       CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
@@ -647,7 +728,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     absl::string_view vec_str = VectorToStr(new_vectors[i]);
     auto res = (*index)->AddRecord(key, vec_str);
     VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
-    EXPECT_TRUE(res.value());
+    EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
   }
   EXPECT_EQ(base->GetTrackedKeyCount(), 13u);
   // Verifies we reused tombstoned hnsw nodes
@@ -773,7 +854,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
       // Re-insert the vectors
       for (size_t i = 0; i < vectors.size(); ++i) {
-        VERIFY_MODIFY(index.get(), vectors[i], i, ExpectedResults::kSkipped,
+        VERIFY_MODIFY(index.get(), vectors[i], i, ExpectedResults::kMissing,
                       true);
       }
     }
@@ -899,6 +980,10 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
 }
+
+// TODO: Port HNSW load-validation tests (corruption hardening) from main to
+// raw-vectors architecture. They currently rely on HierarchicalNSW and
+// VectorTracker which have been removed in raw-vectors.
 
 }  // namespace
 

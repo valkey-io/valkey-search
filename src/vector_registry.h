@@ -50,8 +50,8 @@ class VectorRegistry {
   // VectorRecord pointer (reusing existing instance if payload matches).
   std::shared_ptr<indexes::VectorRecord> Track(
       const InternedStringPtr &key,
-      const InternedStringPtr &attribute_identifier,
-      ValkeyModuleString *vector, Allocator *allocator,
+      const InternedStringPtr &attribute_identifier, ValkeyModuleString *vector,
+      Allocator *allocator,
       const data_model::AttributeDataType &attribute_data_type)
       ABSL_LOCKS_EXCLUDED(mutex_);
 

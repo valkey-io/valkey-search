@@ -169,10 +169,10 @@ std::shared_ptr<const VectorRecord> VectorBase::GetOrConstructVectorRecord(
   return VectorRecord::Construct(record, magnitude, vector_allocator_.get());
 }
 
-absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
-                                           absl::string_view record) {
+absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
+                                                   absl::string_view record) {
   if (!IsValidSizeVector(record)) {
-    return false;
+    return RecordResult::kInvalidData;
   }
 
   auto vector_record = GetOrConstructVectorRecord(key, record);
@@ -184,7 +184,7 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
     RemoveRecordDueToError(key, internal_id);
     return add_result;
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 absl::StatusOr<uint64_t> VectorBase::GetInternalId(
@@ -215,13 +215,13 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
   return it->second;
 }
 
-absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
-                                              absl::string_view record) {
+absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
+    const InternedStringPtr &key, absl::string_view record) {
   if (!IsValidSizeVector(record)) {
     auto id_res = GetInternalId(key);
     RemoveRecordDueToError(
         key, id_res.ok() ? std::make_optional(*id_res) : std::nullopt);
-    return false;
+    return RecordResult::kInvalidData;
   }
   auto vector_record = GetOrConstructVectorRecord(key, record);
   float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
@@ -229,7 +229,9 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
   VMSDK_ASSIGN_OR_RETURN(bool res,
                          UpdateMetadata(key, magnitude, vector_record.get()));
   if (!res) {
-    return false;
+    // The new vector is identical to the tracked one: nothing to re-index. This
+    // is a no-op, not invalid data.
+    return RecordResult::kMissing;
   }
 
   auto modify_result = ModifyRecordImpl(internal_id, std::move(vector_record));
@@ -237,7 +239,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     RemoveRecordDueToError(key, internal_id);
     return modify_result;
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 template <typename T>

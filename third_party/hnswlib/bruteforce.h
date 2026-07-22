@@ -32,6 +32,7 @@ class BruteforceSearch
   void *dist_func_param_;
   std::mutex index_lock;
   const size_t k_elements_per_chunk{10 * 1024};
+
   bool normalized_{false};
 
   std::unordered_map<labeltype, size_t> dict_external_to_internal;

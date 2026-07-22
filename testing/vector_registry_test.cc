@@ -488,12 +488,11 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashIdenticalVectorReTrack) {
                       testing::An<ValkeyModuleString **>(),
                       testing::TypedEq<void *>(nullptr)))
       .Times(2)
-      .WillRepeatedly(
-          [&vec_str](ValkeyModuleKey *, int, const char *,
-                     ValkeyModuleString **value_out, void *) {
-            *value_out = vmsdk::MakeUniqueValkeyString(vec_str).release();
-            return VALKEYMODULE_OK;
-          });
+      .WillRepeatedly([&vec_str](ValkeyModuleKey *, int, const char *,
+                                 ValkeyModuleString **value_out, void *) {
+        *value_out = vmsdk::MakeUniqueValkeyString(vec_str).release();
+        return VALKEYMODULE_OK;
+      });
   EXPECT_CALL(*kMockValkeyModule,
               HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
       .Times(2)
@@ -509,7 +508,8 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashIdenticalVectorReTrack) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits + 1);
 
   // Second Track call with exact same vector data reuses existing VectorRecord
-  // and STILL invokes ShareWithValkeyHash to ensure vector record is shared with engine.
+  // and STILL invokes ShareWithValkeyHash to ensure vector record is shared
+  // with engine.
   auto valkey_vec2 = vmsdk::MakeUniqueValkeyString(vec_str);
   auto rec2 =
       registry.Track(key, attr1, valkey_vec2.get(), nullptr,

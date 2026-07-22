@@ -76,8 +76,10 @@ struct IndexSchemaSubscriptionTestCase {
   absl::optional<std::pair<std::string, std::string>> valkey_hash_data;
   bool is_tracked;
   // Set to nullopt to not expect a call to the given index method.
-  absl::optional<absl::StatusOr<bool>> expect_index_add_w_result;
-  absl::optional<absl::StatusOr<bool>> expect_index_modify_w_result;
+  absl::optional<absl::StatusOr<indexes::RecordResult>>
+      expect_index_add_w_result;
+  absl::optional<absl::StatusOr<indexes::RecordResult>>
+      expect_index_modify_w_result;
   absl::optional<absl::StatusOr<bool>> expect_index_remove_w_result;
   // Validated against the input to add/modify if they are not nullopt.
   std::string expected_vector_buffer;
@@ -92,14 +94,25 @@ struct IndexSchemaSubscriptionTestCase {
 class IndexSchemaSubscriptionTest
     : public ValkeySearchTestWithParam<IndexSchemaSubscriptionTestCase> {
  protected:
-  // Helper functions to check operation success/failure patterns
+  // Helper functions to check operation success/failure patterns. Templated so
+  // they work for both the bool-returning Remove and the RecordResult-returning
+  // Add/Modify. A RecordResult operation is "successful" only when kAdded.
+  template <typename V>
   static bool IsOperationSuccessful(
-      const absl::optional<absl::StatusOr<bool>> &result) {
-    return result.has_value() && result.value().ok() && result.value().value();
+      const absl::optional<absl::StatusOr<V>> &result) {
+    if (!result.has_value() || !result.value().ok()) {
+      return false;
+    }
+    if constexpr (std::is_same_v<V, indexes::RecordResult>) {
+      return result.value().value() == indexes::RecordResult::kAdded;
+    } else {
+      return result.value().value();
+    }
   }
 
+  template <typename V>
   static bool IsOperationFailed(
-      const absl::optional<absl::StatusOr<bool>> &result) {
+      const absl::optional<absl::StatusOr<V>> &result) {
     return result.has_value() && !result.value().ok();
   }
 };
@@ -322,7 +335,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = true,
+            .expect_index_add_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "vector_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -367,7 +380,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = true,
+            .expect_index_modify_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "vector_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -439,7 +452,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = true,
+            .expect_index_add_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "numeric_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -455,7 +468,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = true,
+            .expect_index_modify_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "numeric_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -485,7 +498,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = true,
+            .expect_index_add_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "tag_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -501,7 +514,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = true,
+            .expect_index_modify_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "tag_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -545,7 +558,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = false,
+            .expect_index_add_w_result = indexes::RecordResult::kMissing,
             .expected_vector_buffer = "vector_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -566,7 +579,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = false,
+            .expect_index_modify_w_result = indexes::RecordResult::kMissing,
             .expected_vector_buffer = "vector_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -933,7 +946,7 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                       AddRecord(testing::Property(&InternedStringPtr::operator*,
                                                   testing::StrEq(key_str)),
                                 testing::_))
-              .WillOnce(testing::Return(true));
+              .WillOnce(testing::Return(indexes::RecordResult::kAdded));
           if (use_thread_pool) {
             EXPECT_CALL(thread_pool,
                         Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
@@ -1327,8 +1340,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
                       testing::An<ValkeyModuleString **>(),
                       testing::TypedEq<void *>(nullptr)))
       .WillRepeatedly([records](ValkeyModuleKey *key, int, const char *,
-                                ValkeyModuleString **value_out,
-                                void *) {
+                                ValkeyModuleString **value_out, void *) {
         absl::string_view key_str = key->key;
         CHECK(absl::ConsumePrefix(&key_str, "key"));
         int index;
@@ -1443,7 +1455,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       auto result =
           text_index->AddRecord(interned_key, vmsdk::ToStringView(data.get()));
       VMSDK_EXPECT_OK(result);
-      EXPECT_TRUE(result.value());
+      EXPECT_EQ(result.value(), indexes::RecordResult::kAdded);
     }
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
@@ -1471,8 +1483,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                         testing::An<ValkeyModuleString **>(),
                         testing::TypedEq<void *>(nullptr)))
         .WillRepeatedly([records](ValkeyModuleKey *key, int, const char *,
-                                  ValkeyModuleString **value_out,
-                                  void *) {
+                                  ValkeyModuleString **value_out, void *) {
           absl::string_view key_str = key->key;
           CHECK(absl::ConsumePrefix(&key_str, "key"));
           int index;
@@ -1965,6 +1976,77 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
   }
 }
 
+// Exercises the data-type-agnostic machinery that orchestrates dropping a key
+// when any indexed field contains invalid data, and verifies both the new
+// (Redisearch-compatible) and the legacy behavior based on
+// search.emulate-release. See COMPATIBILITY.md.
+TEST_F(IndexSchemaFriendTest, InvalidDataDropsKey) {
+  // The fixture already has an HNSW index "hnsw_id"; add a numeric and a tag
+  // index so a single key can carry an invalid numeric field alongside a valid
+  // tag field.
+  auto numeric_index =
+      std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+  VMSDK_EXPECT_OK(index_schema->AddIndex("numeric_id", "numeric_identifier",
+                                         numeric_index));
+  auto tag_index =
+      std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("tag_id", "tag_identifier", tag_index));
+
+  // Builds a fresh mutation carrying an invalid numeric value ("not_a_number")
+  // and a valid tag value ("electronics"), keyed by attribute alias.
+  auto make_mixed_mutation = []() {
+    IndexSchema::MutatedAttributes mutated_attributes;
+    mutated_attributes["numeric_id"].data =
+        vmsdk::MakeUniqueValkeyString("not_a_number");
+    mutated_attributes["tag_id"].data =
+        vmsdk::MakeUniqueValkeyString("electronics");
+    return mutated_attributes;
+  };
+
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+
+  // --- Legacy behavior: emulate-release below the fix (1.3.0). The invalid
+  // numeric field is treated as missing, but the rest of the key (the valid tag
+  // field) is retained. This confirms the current/incompatible path still
+  // works. ---
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 0, 0)));
+  auto legacy_key = StringInternStore::Intern("legacy_key");
+  {
+    auto mutated = make_mixed_mutation();
+    index_schema->SyncProcessMutation(&fake_ctx, mutated, legacy_key);
+  }
+  EXPECT_FALSE(numeric_index->IsTracked(legacy_key));  // invalid -> missing
+  EXPECT_TRUE(tag_index->IsTracked(legacy_key));       // key retained
+
+  // --- Compatible behavior: emulate-release at/above the fix (1.3.0). The
+  // entire key is dropped from every index, including the valid tag field. ---
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 3, 0)));
+  auto compat_key = StringInternStore::Intern("compat_key");
+  {
+    auto mutated = make_mixed_mutation();
+    index_schema->SyncProcessMutation(&fake_ctx, mutated, compat_key);
+  }
+  EXPECT_FALSE(numeric_index->IsTracked(compat_key));
+  EXPECT_FALSE(tag_index->IsTracked(compat_key));  // dropped despite valid tag
+
+  // --- Sanity: with the compatible behavior enabled, a key whose fields are
+  // all valid is indexed normally (no spurious drop). ---
+  auto good_key = StringInternStore::Intern("good_key");
+  {
+    IndexSchema::MutatedAttributes mutated;
+    mutated["numeric_id"].data = vmsdk::MakeUniqueValkeyString("123");
+    mutated["tag_id"].data = vmsdk::MakeUniqueValkeyString("electronics");
+    index_schema->SyncProcessMutation(&fake_ctx, mutated, good_key);
+  }
+  EXPECT_TRUE(numeric_index->IsTracked(good_key));
+  EXPECT_TRUE(tag_index->IsTracked(good_key));
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
+}
+
 TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
   auto vectors = DeterministicallyGenerateVectors(1000, dimensions, 2);
   auto itr = index_schema->attributes_.find(attribute_identifier);
@@ -2249,8 +2331,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
                         testing::An<ValkeyModuleString **>(),
                         testing::TypedEq<void *>(nullptr)))
         .WillRepeatedly([records](ValkeyModuleKey *key, int, const char *,
-                                  ValkeyModuleString **value_out,
-                                  void *) {
+                                  ValkeyModuleString **value_out, void *) {
           absl::string_view key_str = key->key;
           CHECK(absl::ConsumePrefix(&key_str, "key"));
           int index;
@@ -2463,16 +2544,15 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
       records_step5[i] = new ValkeyModuleString{
           std::string((char *)&vectors[i][0], dimensions * sizeof(float))};
     }
-    EXPECT_CALL(*kMockValkeyModule,
-                OpenKey(testing::_, testing::_, testing::_))
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
         .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
     EXPECT_CALL(*kMockValkeyModule,
                 HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
                         testing::An<ValkeyModuleString **>(),
                         testing::TypedEq<void *>(nullptr)))
         .WillRepeatedly([records_step5](ValkeyModuleKey *key, int, const char *,
-                                       ValkeyModuleString **value_out,
-                                       void *) {
+                                        ValkeyModuleString **value_out,
+                                        void *) {
           absl::string_view key_str = key->key;
           CHECK(absl::ConsumePrefix(&key_str, "key"));
           int index;
@@ -2739,7 +2819,7 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Widget")))
-      .WillOnce(Return(true));
+      .WillOnce(Return(indexes::RecordResult::kAdded));
 
   // Mock the key type
   EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
@@ -2807,7 +2887,7 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Gadget")))
-      .WillOnce(Return(true));
+      .WillOnce(Return(indexes::RecordResult::kAdded));
 
   EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
       .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
@@ -2847,6 +2927,54 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
   // Should fall back to default score (0.5)
   vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
   EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.5f);
+}
+
+TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  std::string index_schema_name_str("index_schema_name");
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, index_schema_name_str, key_prefixes,
+                          std::make_unique<HashAttributeDataType>(), nullptr)
+                          .value();
+
+  int dimensions = 8;
+  auto hnsw_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(
+              dimensions, data_model::DistanceMetric::DISTANCE_METRIC_L2, 100,
+              16, 200, 50),
+          "emb_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+          .value();
+  VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
+
+  auto key = StringInternStore::Intern("prefix:key");
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+
+  // 1. Manually add to registry to simulate an existing vector
+  std::string vec_data(dimensions * sizeof(float), 'a');
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_data);
+  VectorRegistry::Instance().Track(
+      key, hnsw_index->GetInternedAttributeIdentifier(), valkey_vec.get(),
+      nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+
+  auto [res_record, res_size] = VectorRegistry::Instance().LookupRecord(
+      key, hnsw_index->GetInternedAttributeIdentifier());
+  EXPECT_NE(res_record, nullptr);
+
+  // 2. Mock OpenKey to return nullptr (simulating deleted key)
+  EXPECT_CALL(*kMockValkeyModule,
+              OpenKey(&fake_ctx_, key_valkey_str.get(), testing::_))
+      .WillOnce(Return(nullptr));
+
+  // 3. Process the deletion notification
+  index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                       "del", key_valkey_str.get());
+
+  // 4. Verify that the registry entry is now erased
+  auto [res_record_after, res_size_after] =
+      VectorRegistry::Instance().LookupRecord(
+          key, hnsw_index->GetInternedAttributeIdentifier());
+  EXPECT_EQ(res_record_after, nullptr);
 }
 
 }  // namespace valkey_search

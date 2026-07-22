@@ -1486,8 +1486,7 @@ class HierarchicalNSW
     return result;
   }
 
-  tableint addPoint(InputVectorT &&data_point, labeltype label,
-                    int level) {
+  tableint addPoint(InputVectorT &&data_point, labeltype label, int level) {
     tableint cur_c = 0;
     {
       // Checking if the element with the same label already exists

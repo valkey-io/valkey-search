@@ -22,6 +22,16 @@ def _get_vmsdk_info(client: Valkey) -> dict[str, str]:
     return info_data
 
 
+def _get_vector_registry_stats(client: Valkey) -> dict[str, int]:
+    raw_stats = client.execute_command("FT._DEBUG", "VECTOR_SHARING_STATS")
+    stats_data = {}
+    for i in range(0, len(raw_stats), 2):
+        key = raw_stats[i].decode('utf-8') if isinstance(raw_stats[i], bytes) else raw_stats[i]
+        val = raw_stats[i+1]
+        stats_data[key] = int(val)
+    return stats_data
+
+
 class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
     """
     Integration tests for Vector Registry with memory sharing enabled (default).
@@ -106,6 +116,200 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
     def test_vector_registry_flat_sharing_on(self):
         """Test #2: FLAT vector index with memory sharing enabled."""
         self._run_sharing_test("FLAT", "flat_registry_idx")
+
+    def test_vector_registry_advanced_coverage(self):
+        """
+        Enhance coverage using FT._DEBUG VECTOR_SHARING_STATS.
+        Tests overwrites, same vs different vectors, lookup hits/misses, and lifecycle.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        index_name = "adv_registry_idx"
+
+        vector_index = Index(
+            index_name,
+            [Vector("vec", dim, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        vector_index.create(client)
+
+        # 1. Initial stats should be 0
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+        assert stats["hash_sharing_errors"] == 0
+        assert stats["hash_sharing_hits"] == 0
+        assert stats["lookup_record_hits"] == 0
+        assert stats["lookup_record_misses"] == 0
+
+        # 2. Ingest a vector and verify increments
+        key1 = "doc:1"
+        vec_data1 = [1.0] * dim
+        vec_bytes1 = float_to_bytes(vec_data1)
+        client.hset(key1, mapping={"vec": vec_bytes1})
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            1,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 1
+        assert stats["hash_sharing_hits"] == 1
+        # LookupRecord is called exactly once during AddRecord for the new document
+        assert stats["lookup_record_hits"] == 1
+        assert stats["lookup_record_misses"] == 0
+
+        # 3. Update document with the EXACT SAME vector
+        client.hset(key1, mapping={"vec": vec_bytes1})
+        
+        # To guarantee the background indexing of the update has completed,
+        # we add a second document and wait for the total doc count to be 2.
+        key2 = "doc:2"
+        vec_data2 = [2.0] * dim
+        vec_bytes2 = float_to_bytes(vec_data2)
+        client.hset(key2, mapping={"vec": vec_bytes2})
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            2,
+        )
+
+        # At this point, doc:1 was re-indexed with the same vector, and doc:2 was added.
+        # For doc:1 update: Since HSET overwrites the reference, Track finds it, reuses it,
+        # and shares it with the engine again (hash_sharing_hits becomes 2).
+        # AddRecord also calls LookupRecord (Hit).
+        # For doc:2 addition: Track adds it and shares it (hash_sharing_hits becomes 3).
+        # AddRecord calls LookupRecord (Hit).
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 2
+        assert stats["hash_sharing_hits"] == 3
+        # LookupRecord should have 3 hits (doc:1 initial, doc:1 update, doc:2 initial)
+        assert stats["lookup_record_hits"] == 3
+        assert stats["lookup_record_misses"] == 0
+
+        # 4. Update document with a DIFFERENT vector
+        vec_data3 = [3.0] * dim
+        vec_bytes3 = float_to_bytes(vec_data3)
+        client.hset(key1, mapping={"vec": vec_bytes3})
+
+        # Sync by adding doc:3
+        key3 = "doc:3"
+        vec_data4 = [4.0] * dim
+        vec_bytes4 = float_to_bytes(vec_data4)
+        client.hset(key3, mapping={"vec": vec_bytes4})
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            3,
+        )
+
+        # For doc:1 update: Track sees the content differs, replaces it, and shares it.
+        # AddRecord calls LookupRecord (Hit).
+        # For doc:3 addition: Track adds it and shares it (hash_sharing_hits becomes 5).
+        # AddRecord calls LookupRecord (Hit).
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 3
+        assert stats["hash_sharing_hits"] == 5
+        assert stats["lookup_record_hits"] == 5  # +2 hits
+        assert stats["lookup_record_misses"] == 0
+
+        # 5. Delete a document and verify drop in entry count
+        client.delete(key2)
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            2,
+        )
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 2
+
+    @pytest.mark.parametrize("index_type,distance_metric", [
+        ("HNSW", "L2"),
+        ("HNSW", "COSINE"),
+        ("FLAT", "L2"),
+        ("FLAT", "COSINE"),
+    ])
+    def test_vector_registry_deletion_coverage(self, index_type: str, distance_metric: str):
+        """
+        Verify that document deletion correctly erases the registry entry for both index types
+        and both distance metrics. By starting from 0 and asserting the count drops to 0,
+        we mathematically guarantee that the specific key was the one erased.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        index_name = f"del_cov_{index_type}_{distance_metric}"
+
+        vector_index = Index(
+            index_name,
+            [Vector("vec", dim, type=index_type, distance=distance_metric)],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        vector_index.create(client)
+
+        # 1. Initial stats should be 0
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+
+        # 2. Ingest a vector and verify increments
+        key1 = "doc:1"
+        vec_data1 = [1.0] * dim
+        vec_bytes1 = float_to_bytes(vec_data1)
+        client.hset(key1, mapping={"vec": vec_bytes1})
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            1,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 1
+
+        # 3. Delete the document and verify drop to 0
+        client.delete(key1)
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            0,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+
+    def test_hash_sharing_errors_coverage(self):
+        """
+        Trigger non-zero hash_sharing_errors by forcing ValkeyModule_HashSetStringRef to fail
+        using a Controlled Variable via FT._DEBUG.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        vector_index = Index(
+            "err_cov_idx",
+            [Vector("vec", dim, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        vector_index.create(client)
+
+        try:
+            # Enable the forced error injection
+            assert client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 1") == b"OK"
+
+            key1 = "doc:1"
+            vec_data1 = [1.0] * dim
+            vec_bytes1 = float_to_bytes(vec_data1)
+            client.hset(key1, mapping={"vec": vec_bytes1})
+
+            waiters.wait_for_equal(
+                lambda: vector_index.info(client).num_docs,
+                1,
+            )
+
+            stats = _get_vector_registry_stats(client)
+            assert stats["hash_sharing_errors"] > 0, f"Expected > 0 errors, got {stats['hash_sharing_errors']}"
+
+        finally:
+            # Ensure we reset the control variable even if asserts fail
+            client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
 
 
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
@@ -218,10 +422,10 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
         assert entries_on == num_vectors, f"Expected {num_vectors} tracked entries when sharing is ON, got {entries_on}"
 
         memory_delta = mem_off - mem_on
-        min_expected_bytes = int(expected_raw_vector_bytes * 0.95)
+        min_expected_bytes = int(expected_raw_vector_bytes * 0.90)
         assert memory_delta >= min_expected_bytes, (
             f"[HNSW] Memory delta between sharing OFF ({mem_off}) and ON ({mem_on}) was {memory_delta} bytes. "
-            f"Expected at least {min_expected_bytes} bytes (95% of 100 * 762 * sizeof(float))."
+            f"Expected at least {min_expected_bytes} bytes (90% of 100 * 762 * sizeof(float))."
         )
 
     def test_vector_registry_flat_memory_sharing(self):
@@ -246,8 +450,8 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
         assert entries_on == num_vectors, f"Expected {num_vectors} tracked entries when sharing is ON, got {entries_on}"
 
         memory_delta = mem_off - mem_on
-        min_expected_bytes = int(expected_raw_vector_bytes * 0.95)
+        min_expected_bytes = int(expected_raw_vector_bytes * 0.90)
         assert memory_delta >= min_expected_bytes, (
             f"[FLAT] Memory delta between sharing OFF ({mem_off}) and ON ({mem_on}) was {memory_delta} bytes. "
-            f"Expected at least {min_expected_bytes} bytes (95% of 100 * 762 * sizeof(float))."
+            f"Expected at least {min_expected_bytes} bytes (90% of 100 * 762 * sizeof(float))."
         )

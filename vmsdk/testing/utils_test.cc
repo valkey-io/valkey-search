@@ -30,9 +30,9 @@ TEST_F(UtilsTest, RunByMain) {
   ThreadPool thread_pool("test-pool", 1);
   thread_pool.StartWorkers();
   ValkeyModuleEventLoopOneShotFunc captured_callback;
-  void* captured_data;
+  void *captured_data;
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
-      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc callback, void* data) {
+      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc callback, void *data) {
         captured_callback = callback;
         captured_data = data;
         blocking_refcount.DecrementCount();
@@ -76,7 +76,7 @@ TEST_F(UtilsTest, DrainPendingMainCallbacksFreesUninvokedCallback) {
   ThreadPool thread_pool("test-pool", 1);
   thread_pool.StartWorkers();
   EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
-      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc, void*) {
+      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc, void *) {
         enqueued.DecrementCount();
         return 0;
       });
@@ -108,7 +108,7 @@ TEST_F(UtilsTest, ParseTag) {
       {"{}", std::nullopt}, {"abc{cde}xyz", "cde"}, {"ab{c}{d}{e}", "c"},
 
   };
-  for (auto& tc : test_cases) {
+  for (auto &tc : test_cases) {
     auto actual = ParseHashTag(tc.str);
     EXPECT_EQ(actual, tc.expected);
   }
@@ -165,7 +165,7 @@ TEST_F(UtilsTest, DisplayAsSIBytes) {
       {1ull << 30, "1.00GiB"},
       {1ull << 40, "1.00TiB"},
       {1ull << 50, "1.00PiB"}};
-  for (auto& [value, expected] : testcases) {
+  for (auto &[value, expected] : testcases) {
     char buffer[100];
     size_t bytes = DisplayAsSIBytes(value, buffer, sizeof(buffer));
     EXPECT_EQ(expected, std::string(buffer));
@@ -215,7 +215,7 @@ TEST_F(UtilsTest, JsonQuotedStringTest) {
       {std::string("\x20", 1), "\"\x20\""},
   };
 
-  for (auto& [str, expected] : testcases) {
+  for (auto &[str, expected] : testcases) {
     std::ostringstream os;
     os << JsonQuotedStringView(str);
     EXPECT_EQ(os.str(), expected) << " Original Input:" << str;

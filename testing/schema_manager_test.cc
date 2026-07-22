@@ -356,6 +356,65 @@ TEST_F(SchemaManagerTest, TestLoadIndexNoReplication) {
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
 }
 
+TEST_F(SchemaManagerTest,
+       TestCreateIndexSchemaSetsFingerprintVersionForNonZeroDb) {
+  constexpr uint32_t kDbNum = 5;
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
+      .WillByDefault(testing::Return(VALKEYMODULE_OK));
+
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  // Normal (non-RDB) path: creating in coordinator mode records the entry and
+  // stamps the schema fingerprint/version via OnMetadataCallback, which decodes
+  // the {db}name entry key so a non-zero DB is handled correctly.
+  auto proto = test_index_schema_proto_;
+  proto.set_db_num(kDbNum);
+  auto created = SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto);
+  VMSDK_EXPECT_OK(created);
+
+  auto schema =
+      SchemaManager::Instance().GetIndexSchema(kDbNum, index_name_).value();
+  EXPECT_EQ(schema->GetFingerprint(), created->fingerprint());
+  EXPECT_EQ(schema->GetVersion(), created->version());
+}
+
+TEST_F(SchemaManagerTest,
+       TestOnLoadingEndedRestoresFingerprintVersionForNonZeroDb) {
+  constexpr uint32_t kDbNum = 5;
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kDbNum))
+      .WillByDefault(testing::Return(VALKEYMODULE_OK));
+
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  // Creating in coordinator mode records the entry in the MetadataManager and
+  // stamps the schema fingerprint/version via the metadata callback.
+  auto proto = test_index_schema_proto_;
+  proto.set_db_num(kDbNum);
+  auto created = SchemaManager::Instance().CreateIndexSchema(&fake_ctx_, proto);
+  VMSDK_EXPECT_OK(created);
+  const uint64_t expected_fingerprint = created->fingerprint();
+  const uint32_t expected_version = created->version();
+
+  auto schema =
+      SchemaManager::Instance().GetIndexSchema(kDbNum, index_name_).value();
+
+  // An RDB-loaded schema comes up with default 0/0; OnLoadingEnded must
+  // reconcile it from metadata by decoding the {db}name entry key. The old
+  // code hardcoded db 0 and used the encoded key as the name, so a non-zero
+  // DB schema was never found and stayed at 0/0.
+  schema->SetFingerprint(0);
+  schema->SetVersion(0);
+
+  coordinator::MetadataManager::Instance().OnLoadingEnded(&fake_ctx_);
+
+  EXPECT_EQ(schema->GetFingerprint(), expected_fingerprint);
+  EXPECT_EQ(schema->GetVersion(), expected_version);
+}
+
 TEST_F(SchemaManagerTest, TestLoadIndexExistingData) {
   ValkeyModuleEvent eid;
   ON_CALL(*kMockValkeyModule, GetContextFromIO(testing::_))

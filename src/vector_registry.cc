@@ -14,8 +14,11 @@
 #include "absl/log/check.h"
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 
 namespace valkey_search {
+
+CONTROLLED_BOOLEAN(ForceHashSharingError, false);
 
 void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
   CHECK(ValkeyModule_GetApi("ValkeyModule_HashSetStringRef",
@@ -116,7 +119,8 @@ bool VectorRegistry::ShareWithValkeyHash(
       absl::string_view(vector_record->GetRawVector(), vector_size)) {
     return false;
   }
-  if (ValkeyModule_HashSetStringRef(
+  if (ForceHashSharingError.GetValue() ||
+      ValkeyModule_HashSetStringRef(
           key_obj.get(), attribute_identifier_str.get(),
           vector_record->GetRawVector(), vector_size) != VALKEYMODULE_OK) {
     ++stats_.hash_sharing_errors;

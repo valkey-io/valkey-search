@@ -461,9 +461,10 @@ CalcBestMatchingPrefilteredKeys(
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    query_magnitude = 1.0f / indexes::CalcMagnitude(
-        reinterpret_cast<const float *>(parameters.query.data()),
-        parameters.query.size() / sizeof(float));
+    query_magnitude =
+        1.0f / indexes::CalcMagnitude(
+                   reinterpret_cast<const float *>(parameters.query.data()),
+                   parameters.query.size() / sizeof(float));
   }
   auto results_appender =
       [&results, &parameters, vector_index, query_magnitude](
@@ -552,7 +553,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
           auto vector_index =
-              dynamic_cast<const indexes::VectorBase*>(attribute_info.index);
+              dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
           auto vector =
               vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {

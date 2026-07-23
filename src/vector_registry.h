@@ -99,7 +99,7 @@ class VectorRegistry {
       ABSL_GUARDED_BY(mutex_);
 
   friend class VectorRegistryTest;
-  bool hash_registration_supported_{false};
+  bool hash_vector_sharing_{false};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
   mutable absl::Mutex mutex_;

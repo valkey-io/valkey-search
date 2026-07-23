@@ -26,10 +26,10 @@ namespace valkey_search {
 class VectorRegistryTest : public ValkeySearchTest {
  protected:
   void SetHashRegistrationSupported(VectorRegistry &registry, bool supported) {
-    registry.hash_registration_supported_ = supported;
+    registry.hash_vector_sharing_ = supported;
   }
   bool GetHashRegistrationSupported(const VectorRegistry &registry) const {
-    return registry.hash_registration_supported_;
+    return registry.hash_vector_sharing_;
   }
   void InitRegistry(VectorRegistry &registry, ValkeyModuleCtx *ctx) {
     registry.Init(ctx);

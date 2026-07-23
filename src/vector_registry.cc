@@ -21,6 +21,11 @@ namespace valkey_search {
 CONTROLLED_BOOLEAN(ForceHashSharingError, false);
 
 void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
+  hash_vector_sharing_ = options::GetEnableVectorSharing().GetValue();
+  ctx_ = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
+  if (!hash_vector_sharing_) {
+    return;
+  }
   CHECK(ValkeyModule_GetApi("ValkeyModule_HashSetStringRef",
                             (void **)&ValkeyModule_HashSetStringRef) ==
             VALKEYMODULE_OK &&
@@ -28,8 +33,6 @@ void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
                             (void **)&ValkeyModule_HashHasStringRef) ==
             VALKEYMODULE_OK)
       << "Valkey version should be 9.0.1 and above";
-  hash_registration_supported_ = options::GetEnableVectorSharing().GetValue();
-  ctx_ = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
 }
 
 std::pair<std::shared_ptr<indexes::VectorRecord>, size_t>
@@ -89,7 +92,7 @@ bool VectorRegistry::ShareWithValkeyHash(
     const indexes::VectorRecord *vector_record, size_t vector_size,
     const data_model::AttributeDataType &attribute_data_type) {
   vmsdk::VerifyMainThread();
-  if (!hash_registration_supported_ ||
+  if (!hash_vector_sharing_ ||
       attribute_data_type !=
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     return false;
@@ -182,7 +185,7 @@ void VectorRegistry::LockFreeUntrackIfUnused(const RegistryKey &search_key) {
       // if hash registration is supported and there are no other references to
       // the vector (except for the one in the hash), we set a non-reference
       // record value to the hash before erasing the entry from the registry.
-      if (hash_registration_supported_) {
+      if (hash_vector_sharing_) {
         DetachFromValkeyHash(search_key);
       }
       tracked_vectors_.erase(it);

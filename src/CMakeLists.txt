@@ -75,6 +75,15 @@ target_sources(search PRIVATE $<TARGET_OBJECTS:vmsdk>)
 # path, e.g. ${BUILD_DIR}/libsearch.so, not nested under src/.
 set_target_properties(search PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
+if (UNIX AND NOT APPLE)
+    # Hide our malloc/free/new/delete override symbols (see
+    # vmsdk/src/memory_allocation_overrides.h) so they don't interpose on
+    # another module's (e.g. valkey-json's) allocator when both are loaded
+    # into the same process. See integration/test_cross_module_compat.py.
+    target_link_options(search PRIVATE
+        "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+endif ()
+
 if (NOT VALKEY_VENDORED_DEPS)
     add_library (search_dso SHARED $<TARGET_OBJECTS:search_base>)
     target_link_libraries(search_dso PRIVATE search_base)

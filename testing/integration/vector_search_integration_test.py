@@ -675,6 +675,67 @@ class VectorSearchIntegrationTest(VSSTestCase):
             )
             self.assertEqual(want, got)
             
+    def test_sortby_nocontent_ordering(self):
+        # Regression for #1215: SORTBY on a NUMERIC field must order results
+        # even with NOCONTENT, which previously bypassed sorting.
+        self.valkey_conn.execute_command(
+            "FT.CREATE", "sortidx", "SCHEMA",
+            "t", "TAG", "n", "NUMERIC", "SORTABLE",
+        )
+        time.sleep(1)
+        # n values chosen so numeric order differs from insertion order.
+        values = {f"k{i}": v for i, v in enumerate([50, 10, 40, 20, 30])}
+        for key, v in values.items():
+            self.valkey_conn.hset(key, mapping={"t": "a", "n": v})
+        time.sleep(1)
+
+        expected = [k.encode() for k, _ in sorted(values.items(), key=lambda kv: kv[1])]
+
+        for order, want in (("ASC", expected), ("DESC", list(reversed(expected)))):
+            got = self.valkey_conn.execute_command(
+                "FT.SEARCH", "sortidx", "@t:{a}",
+                "SORTBY", "n", order, "NOCONTENT", "LIMIT", "0", "10",
+                target_nodes=self.valkey_conn.RANDOM,
+            )
+            self.assertEqual(got[0], len(expected))
+            self.assertEqual(got[1:], want)
+
+    def test_sortby_vector_distance_nocontent(self):
+        # #1217: SORTBY on the KNN score alias must order by vector distance,
+        # including with NOCONTENT (which loads no attribute content -- the
+        # distance already lives on each result).
+        dims = 4
+        self.valkey_conn.execute_command(
+            "FT.CREATE", "vsort", "SCHEMA",
+            "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32",
+            "DIM", str(dims), "DISTANCE_METRIC", "L2",
+        )
+        time.sleep(1)
+        # Points on the x-axis at increasing distance from the origin query.
+        # Insertion order (k0,k1,k2) is deliberately not distance order.
+        dist_by_key = {"k0": 3.0, "k1": 1.0, "k2": 2.0}
+        for key, d in dist_by_key.items():
+            v = np.zeros(dims, dtype=np.float32)
+            v[0] = d
+            self.valkey_conn.hset(key, mapping={"vec": v.tobytes()})
+        time.sleep(1)
+
+        query_vec = np.zeros(dims, dtype=np.float32).tobytes()
+        knn = f"*=>[KNN 3 @vec $b AS vscore]"
+        near_to_far = [k.encode() for k, _ in sorted(dist_by_key.items(),
+                                                     key=lambda kv: kv[1])]
+
+        for order, want in (("ASC", near_to_far),
+                            ("DESC", list(reversed(near_to_far)))):
+            got = self.valkey_conn.execute_command(
+                "FT.SEARCH", "vsort", knn,
+                "SORTBY", "vscore", order, "NOCONTENT",
+                "PARAMS", "2", "b", query_vec, "DIALECT", "2",
+                target_nodes=self.valkey_conn.RANDOM,
+            )
+            self.assertEqual(got[0], len(near_to_far))
+            self.assertEqual(got[1:], want)
+
     def test_coordinator_server_port(self):
         for idx, port in enumerate(self.valkey_ports):
             # Connect to each node in the cluster

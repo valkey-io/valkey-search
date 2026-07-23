@@ -160,10 +160,10 @@ InternedStringPtr VectorBase::InternVector(absl::string_view record,
   return StringInternStore::Intern(record, vector_allocator_.get());
 }
 
-absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
-                                           absl::string_view record) {
+absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
+                                                   absl::string_view record) {
   if (!IsValidSizeVector(record)) {
-    return false;
+    return RecordResult::kInvalidData;
   }
   float magnitude = kDefaultMagnitude;
   std::vector<char> norm_record;
@@ -191,7 +191,7 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
     }
     return add_result;
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 absl::StatusOr<uint64_t> VectorBase::GetInternalId(
@@ -222,15 +222,14 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
   return it->second;
 }
 
-absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
-                                              absl::string_view record) {
+absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
+    const InternedStringPtr &key, absl::string_view record) {
   // VectorExternalizer tracks added entries. We need to untrack mutations which
   // are processed as modified records.
-
   if (!IsValidSizeVector(record)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
-    return false;
+    return RecordResult::kInvalidData;
   }
   float magnitude = kDefaultMagnitude;
   std::vector<char> norm_record;
@@ -243,7 +242,9 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(bool res, UpdateMetadata(key, magnitude, record));
   if (!res) {
-    return false;
+    // The new vector is identical to the tracked one: nothing to re-index. This
+    // is a no-op, not invalid data.
+    return RecordResult::kMissing;
   }
 
   auto modify_result = ModifyRecordImpl(internal_id, record);
@@ -257,7 +258,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     }
     return modify_result;
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 template <typename T>

@@ -8,6 +8,8 @@
 #ifndef VMSDK_SRC_LOG_H_
 #define VMSDK_SRC_LOG_H_
 
+#include <valkey/valkey_module.h>
+
 #include <optional>
 #include <string>
 
@@ -15,7 +17,6 @@
 #include "absl/log/log_entry.h"
 #include "absl/log/log_sink.h"
 #include "absl/status/status.h"
-#include <valkey/valkey_module.h>
 
 enum class LogLevel : int {
   kWarning = 0,

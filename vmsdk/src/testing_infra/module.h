@@ -8,6 +8,10 @@
 #ifndef VMSDK_SRC_TESTING_INFRA_MODULE
 #define VMSDK_SRC_TESTING_INFRA_MODULE
 
+#include <valkey/module_sdk/log.h>
+#include <valkey/module_sdk/utils.h>
+#include <valkey/valkey_module.h>
+
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
@@ -27,9 +31,6 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "type_conversions.h"
-#include <valkey/module_sdk/log.h>
-#include <valkey/module_sdk/utils.h>
-#include <valkey/valkey_module.h>
 
 class MockValkeyModule {
  public:

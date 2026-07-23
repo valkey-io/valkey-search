@@ -8,13 +8,14 @@
 #ifndef VMSDK_SRC_BLOCKED_CLIENT_H_
 #define VMSDK_SRC_BLOCKED_CLIENT_H_
 
+#include <valkey/valkey_module.h>
+
 #include <array>
 #include <utility>
 
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/synchronization/mutex.h"
-#include <valkey/valkey_module.h>
 
 namespace vmsdk {
 // External mutex for thread safety of BlockedClientTracker

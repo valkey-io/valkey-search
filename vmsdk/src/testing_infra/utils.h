@@ -9,6 +9,7 @@
 #define VMSDK_SRC_TESTING_INFRA_UTILS
 
 #include <sys/resource.h>
+#include <valkey/valkey_module.h>
 
 #include <string>
 #include <vector>
@@ -17,7 +18,6 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "testing_infra/module.h"
-#include <valkey/valkey_module.h>
 
 using ::testing::TestWithParam;
 

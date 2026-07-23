@@ -123,8 +123,7 @@ void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
   entries_.erase(config_item->GetName());
 }
 
-absl::flat_hash_map<std::string, Registerable *>
-ModuleConfigManager::Stash() {
+absl::flat_hash_map<std::string, Registerable *> ModuleConfigManager::Stash() {
   return std::exchange(entries_, {});
 }
 

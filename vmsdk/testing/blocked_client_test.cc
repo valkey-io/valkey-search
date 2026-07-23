@@ -8,8 +8,9 @@
 #include "blocked_client.h"
 
 #include <gtest/gtest.h>
-#include "testing_infra/utils.h"
 #include <valkey/valkey_module.h>
+
+#include "testing_infra/utils.h"
 
 namespace vmsdk {
 

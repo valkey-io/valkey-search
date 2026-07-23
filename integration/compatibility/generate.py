@@ -375,6 +375,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items"
         )
+        
     def test_aggregate_random_sample_errors(self, key_type, dialect):
         """Test error behavior for RANDOM_SAMPLE edge cases against Redis.
 

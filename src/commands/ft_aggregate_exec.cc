@@ -247,8 +247,10 @@ class RandomSample : public GroupBy::ReducerInstance {
  public:
   static constexpr size_t kMaxSampleSize = 1000;
 
-  explicit RandomSample(size_t sample_size) : sample_size_(sample_size) {
-    samples_.reserve(sample_size_);
+  explicit RandomSample(size_t sample_size)
+      : samples_(std::make_shared<std::vector<expr::Value>>()),
+        sample_size_(sample_size) {
+    samples_->reserve(sample_size_);
   }
 
   void ProcessRecord(const ArgVector& values) override {
@@ -256,19 +258,17 @@ class RandomSample : public GroupBy::ReducerInstance {
     // Reservoir sampling algorithm (Algorithm R)
     seen_count_++;
     if (seen_count_ <= sample_size_) {
-      samples_.push_back(values[0]);
+      samples_->push_back(values[0]);
     } else {
       std::uniform_int_distribution<size_t> dist(0, seen_count_ - 1);
       size_t j = dist(Rng());
       if (j < sample_size_) {
-        samples_[j] = values[0];
+        (*samples_)[j] = values[0];
       }
     }
   }
 
-  expr::Value GetResult() const override {
-    return expr::Value(std::make_shared<std::vector<expr::Value>>(samples_));
-  }
+  expr::Value GetResult() const override { return expr::Value(samples_); }
 
  private:
   // Thread-local RNG shared across all RandomSample instances in a query,
@@ -278,7 +278,7 @@ class RandomSample : public GroupBy::ReducerInstance {
     return rng;
   }
 
-  std::vector<expr::Value> samples_;
+  std::shared_ptr<std::vector<expr::Value>> samples_;
   size_t sample_size_;
   size_t seen_count_ = 0;
 };

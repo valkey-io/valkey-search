@@ -114,7 +114,7 @@ class VectorHNSW : public VectorBase {
                     float query_magnitude) const override;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return (*algo_->getPoint(internal_id));
+    return (*algo_->GetDataPtrByInternalId(internal_id));
   }
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override;

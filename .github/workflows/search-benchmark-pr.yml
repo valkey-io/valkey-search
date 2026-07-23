@@ -255,6 +255,35 @@ jobs:
 
           pip install --require-hashes -r requirements.txt
 
+      - name: Ensure GCC >= 13 (required for valkey-search build)
+        # NOTE: This uses AL2023-specific packages. Update if runner OS changes.
+        run: |
+          GCC_MIN_VERSION=13
+          CURRENT_VERSION=0
+
+          if /usr/local/bin/gcc --version 2>/dev/null; then
+            CURRENT_VERSION=$(/usr/local/bin/gcc -dumpversion | cut -d. -f1)
+          fi
+
+          if [[ "$CURRENT_VERSION" -ge "$GCC_MIN_VERSION" ]]; then
+            echo "✓ GCC $CURRENT_VERSION already available at /usr/local/bin/gcc (>= $GCC_MIN_VERSION)"
+            /usr/local/bin/gcc --version
+            /usr/local/bin/g++ --version
+          else
+            echo "GCC >= $GCC_MIN_VERSION not found (current: $CURRENT_VERSION) — installing GCC 14 from AL2023 repos..."
+            sudo dnf install -y gcc14 gcc14-c++
+
+            # Create symlinks in /usr/local/bin so builds pick up GCC 14 by default
+            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/gcc
+            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/g++
+            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/cc
+            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/c++
+
+            echo "✓ GCC 14 installed and symlinked"
+            /usr/local/bin/gcc --version
+            /usr/local/bin/g++ --version
+          fi
+
       - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
         working-directory: valkey_ram
         run: |

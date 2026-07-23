@@ -108,7 +108,7 @@ class TextTest : public ::testing::Test {
                              std::shared_ptr<text::TextIndexSchema> schema) {
     auto result = text_index->AddRecord(key, data);
     ASSERT_TRUE(result.ok()) << result.status();
-    ASSERT_TRUE(result.value());
+    ASSERT_EQ(result.value(), indexes::RecordResult::kAdded);
     schema->CommitKeyData(key);
   }
 

@@ -682,6 +682,7 @@ def compute_data_sets():
     data["sortable numbers"] = {}
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
+    data["bad vectors"] = {}
     data["hard strings"] = {}
     data["tag special chars"] = {}
     vec_algos = ["flat", "hnsw"]
@@ -846,6 +847,33 @@ def compute_data_sets():
                     "v1": array_encode(key_type, [5 for _ in range(VECTOR_DIM+1)]),
                 },
             ),
+        ]
+        #
+        # Bad vectors: every field is valid except the VECTOR field v1, which on
+        # some keys has the wrong number of elements (VECTOR_DIM+1 instead of
+        # VECTOR_DIM). Redisearch drops the whole key when a vector field is
+        # malformed, so those keys must not appear in any query result.
+        #
+        data["bad vectors"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["bad vectors"][SETS_KEY(key_type)] = [
+            (f"{key_type}:{i}",
+                {
+                    "n1": i,
+                    "n2": -i,
+                    "n3": i * 2,
+                    "t1": f"tag{i}",
+                    "t2": "common",
+                    "t3": "all_the_same_value",
+                    # Keys 1 and 3 carry a wrong-length (and therefore invalid)
+                    # vector; the rest are valid.
+                    "v1": array_encode(
+                        key_type,
+                        [i for _ in range(VECTOR_DIM + (1 if i in (1, 3) else 0))]),
+                    "e1": 1,
+                    "e2": "two",
+                },
+            )
+            for i in range(6)
         ]
         #
         # hard strings

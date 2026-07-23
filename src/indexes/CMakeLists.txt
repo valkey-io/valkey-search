@@ -53,7 +53,7 @@ target_include_directories(numeric PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(numeric PUBLIC index_base)
 target_link_libraries(numeric PUBLIC rdb_serialization)
 target_link_libraries(numeric PUBLIC predicate_header)
-target_link_libraries(numeric PUBLIC segment_tree)
+target_link_libraries(numeric PUBLIC numeric_btree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
 

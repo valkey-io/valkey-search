@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <iterator>
 #include <type_traits>
+#include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"

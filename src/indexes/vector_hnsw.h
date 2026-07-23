@@ -93,7 +93,7 @@ class VectorHNSW : public VectorBase {
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<size_t> ef_runtime = std::nullopt,
-      bool enable_partial_results = false) ABSL_LOCKS_EXCLUDED(resize_mutex_);
+      bool enable_partial_results = false);
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

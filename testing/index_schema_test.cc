@@ -2587,7 +2587,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
     for (size_t i = 0; i < vectors.size(); ++i) {
-      delete records[i];
+      delete records_step5[i];
     }
   }
 

@@ -1061,7 +1061,7 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
                   /*label=*/i, force_levels[i]);
   }
   ChunkStream golden;
-  auto serializer = [](const std::shared_ptr<const VectorRecord>& record,
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {
     size_t vector_size = kDimensions * sizeof(float);
     return std::vector<char>(record->GetRawVector(),
@@ -1173,7 +1173,7 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   EXPECT_EQ(algo.maxlevel_, 2);
   EXPECT_EQ(algo.element_levels_[algo.enterpoint_node_], 2);
   ChunkStream resaved;
-  auto serializer = [](const std::shared_ptr<const VectorRecord>& record,
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {
     size_t vector_size = kDimensions * sizeof(float);
     return std::vector<char>(record->GetRawVector(),

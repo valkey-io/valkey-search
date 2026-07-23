@@ -154,10 +154,10 @@ jobs:
       CORE_PATH: "${{ github.workspace }}/valkey"
       # Benchmark configuration
       PERF_BENCHMARK_REPO: "carol-ggg/valkey-perf-benchmark"
-      PERF_BENCHMARK_BRANCH: "module2-multi"
+      PERF_BENCHMARK_BRANCH: "module2-multi-restart"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-search/.github/benchmark_configs/fts-smoke-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-search/.github/benchmark_configs/fts-smoke-short-arm.json"
       # Run parameters
       RUNS: ${{ github.event.inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ github.event.inputs.core_commit || '' }}
@@ -394,7 +394,7 @@ jobs:
             --baseline ./results-baseline/search_tests/metrics.json \
             --new ./results-pr/search_tests/metrics.json \
             --output "${{ github.workspace }}/comparison.md" \
-            --metrics rps
+            --metrics all
 
       - name: Clean large profiling data
         if: always()

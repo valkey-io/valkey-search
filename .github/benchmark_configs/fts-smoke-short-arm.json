@@ -1,0 +1,60 @@
+[
+  {
+    "test_name": "FTS Smoke Test",
+    "seed": false,
+    "test_groups": [
+      {
+        "group": 1,
+        "description": "Basic text search",
+        "scenarios": [
+          {
+            "id": "a",
+            "type": "write",
+            "cluster_execution": "single",
+            "setup_commands": [
+              "FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA field1 TEXT"
+            ],
+            "flush_before": true,
+            "dataset": "datasets/search_terms.csv",
+            "maxdocs": 5000,
+            "clients": 50,
+            "sequential": true,
+            "command": "HSET doc:{tag}:__rand_int__ field1 \"__field:term__\""
+          },
+          {
+            "id": "b",
+            "type": "read",
+            "cluster_execution": "parallel",
+            "description": "Single term search",
+            "dataset": "datasets/search_terms.csv",
+            "clients": 50,
+            "duration": 30,
+            "warmup": 5,
+            "command": "FT.SEARCH idx \"__field:term__\""
+          }
+        ]
+      }
+    ],
+    "port": 6379,
+    "cluster_mode": [false],
+    "tls_mode": false,
+    "io-threads": 8,
+    "cpu_allocation": {
+      "cores_per_server": 8,
+      "cores_per_client": 8
+    },
+    "config_sets": [
+      {
+        "search.reader-threads": 8,
+        "search.writer-threads": 8,
+        "search.async-fanout-threshold": 4
+      }
+    ],
+    "modules": [
+      {
+        "path": "../valkey-search/.build-release/libsearch.so",
+        "startup_args": ["--use-coordinator"]
+      }
+    ]
+  }
+]

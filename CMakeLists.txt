@@ -17,6 +17,20 @@ option(UNIT_TESTS_SINGLE_EXE "Build all unit tests into a single executable inst
 
 set(SAN_BUILD "OFF" CACHE STRING "Build with sanitizers (OFF, address, thread, memory, undefined)")
 
+# Sanitizer builds pass -fno-lto, but CMake's native INTERPROCEDURAL_OPTIMIZATION
+# target property (used by third_party/snowball, and potentially other vendored
+# components that opt into LTO for performance) doesn't know that:
+# check_ipo_supported() only probes generic toolchain LTO support, so it stays
+# "enabled" even under -fno-lto. The result: CMake correctly notices -fno-lto
+# and skips auto-adding -flto to whatever links against an IPO-enabled target,
+# but that target still emits slim (LTO-bitcode-only, no real-code fallback)
+# objects -- which nothing without -flto can then link, failing with "plugin
+# needed to handle lto object". Disabling the default here means any component
+# that wants IPO must check this variable rather than deciding for itself.
+if (SAN_BUILD)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+endif ()
+
 # this is a built-in CMake variable.. but let's prefer SHARED_LIBS unless specifically disabled..
 set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries by default")
 

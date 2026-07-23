@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "hnswlib.h"
 #include "iostream.h"
 #include "src/metrics.h"
@@ -932,7 +934,8 @@ class HierarchicalNSW
 
     offsetLevel0_ = header->offset_level_0();
     max_elements_ = header->max_elements();
-    cur_element_count_ = header->curr_element_count();
+    size_t curr_element_count_val = header->curr_element_count();
+    cur_element_count_ = 0;
     serialize_size_data_per_element_ =
         header->serialize_size_data_per_element();
     label_offset_ = header->label_offset();
@@ -964,7 +967,7 @@ class HierarchicalNSW
 
     // Resolve capacity: at least the live element count, honoring the larger of
     // the caller-requested cap and the file's recorded capacity.
-    size_t cur_count = cur_element_count_;
+    size_t cur_count = curr_element_count_val;
     size_t max_elements =
         std::max(cur_count, std::max(max_elements_i, max_elements_));
     max_elements_ = max_elements;
@@ -989,16 +992,16 @@ class HierarchicalNSW
                       std::fabs(mult_ - expected_mult) <= 1e-6 * expected_mult,
                   "mult is inconsistent with M");
       }
-      LoadCheck(cur_element_count_ <= max_elements_,
+      LoadCheck(curr_element_count_val <= max_elements_,
                 "curr_element_count exceeds max_elements");
-      if (cur_element_count_ == 0) {
+      if (curr_element_count_val == 0) {
         LoadCheck(maxlevel_ == -1 || maxlevel_ == 0,
                   "empty index has a non-trivial max_level");
       } else {
         LoadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
-        LoadCheck(maxlevel_ <= static_cast<int>(cur_element_count_),
+        LoadCheck(maxlevel_ <= static_cast<int>(curr_element_count_val),
                   "max_level exceeds the element count");
-        LoadCheck(enterpoint_node_ < cur_element_count_,
+        LoadCheck(enterpoint_node_ < curr_element_count_val,
                   "enterpoint_node is out of range");
       }
       LoadCheck(size_data_per_element_ > 0, "size_data_per_element is 0");
@@ -1016,7 +1019,7 @@ class HierarchicalNSW
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
-    for (size_t i = 0; i < cur_element_count_; i++) {
+    for (size_t i = 0; i < curr_element_count_val; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       LoadCheck(chunk->size() ==
                     size_links_level0_ + vector_size_ + sizeof(labeltype),
@@ -1030,6 +1033,7 @@ class HierarchicalNSW
           isMarkedDeleted(i)));
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
+      cur_element_count_++;
 
       linklistsizeint *ll0 = get_linklist0(i);
       size_t l0_count = getListCount(ll0);
@@ -1037,7 +1041,7 @@ class HierarchicalNSW
       tableint *l0_neighbors = (tableint *)(ll0 + 1);
       size_t l0_scan = std::min(l0_count, maxM0_);
       for (size_t j = 0; j < l0_scan; j++) {
-        LoadCheck(l0_neighbors[j] < cur_element_count_,
+        LoadCheck(l0_neighbors[j] < curr_element_count_val,
                   "level-0 neighbor id out of range");
         LoadCheck(l0_neighbors[j] != i, "level-0 self-loop");
       }
@@ -1057,7 +1061,7 @@ class HierarchicalNSW
     element_levels_ = std::vector<int>(max_elements);
     revSize_ = 1.0 / mult_;
     ef_ = 10;
-    for (size_t i = 0; i < cur_element_count_; i++) {
+    for (size_t i = 0; i < curr_element_count_val; i++) {
       element_levels_[i] = 0;
       *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
 
@@ -1094,12 +1098,12 @@ class HierarchicalNSW
       }
     }
 
-    if (cur_element_count_ > 0) {
-      LoadCheck(enterpoint_node_ < cur_element_count_ &&
+    if (curr_element_count_val > 0) {
+      LoadCheck(enterpoint_node_ < curr_element_count_val &&
                     element_levels_[enterpoint_node_] == maxlevel_,
                 "enterpoint node is not at max_level");
     }
-    for (size_t i = 0; i < cur_element_count_; i++) {
+    for (size_t i = 0; i < curr_element_count_val; i++) {
       for (int level = 1; level <= element_levels_[i]; level++) {
         linklistsizeint *ll = get_linklist(i, level);
         size_t count = getListCount(ll);
@@ -1107,16 +1111,16 @@ class HierarchicalNSW
         tableint *neighbors = (tableint *)(ll + 1);
         for (size_t j = 0; j < scan; j++) {
           tableint e = neighbors[j];
-          LoadCheck(e < cur_element_count_,
+          LoadCheck(e < curr_element_count_val,
                     "upper-level neighbor id out of range");
           LoadCheck(e != i, "upper-level self-loop");
-          LoadCheck(e >= cur_element_count_ || element_levels_[e] >= level,
+          LoadCheck(e >= curr_element_count_val || element_levels_[e] >= level,
                     "upper-level neighbor is absent at that level");
         }
       }
     }
 
-    for (size_t i = 0; i < cur_element_count_; i++) {
+    for (size_t i = 0; i < curr_element_count_val; i++) {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
         valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;

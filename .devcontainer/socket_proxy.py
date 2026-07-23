@@ -3,6 +3,7 @@ import sys
 import threading
 import os
 import signal
+import ctypes
 
 def pipe(source, destination):
     try:
@@ -46,6 +47,14 @@ def main():
     listen_path = sys.argv[1]
     target_path = sys.argv[2]
 
+    # Instruct the Linux kernel to send SIGTERM if the parent bash script dies.
+    # 1 is PR_SET_PDEATHSIG
+    try:
+        libc = ctypes.CDLL('libc.so.6')
+        libc.prctl(1, signal.SIGTERM)
+    except Exception:
+        pass
+
     # Write PID to stdout so parent shell can capture it and kill it later
     print(os.getpid(), flush=True)
 
@@ -57,8 +66,8 @@ def main():
             pass
             
     server.bind(listen_path)
-    # Allow read/write access to the socket for the container user
-    os.chmod(listen_path, 0o666)
+    # Restrict read/write access strictly to the owner (prevents agent hijacking)
+    os.chmod(listen_path, 0o600)
     server.listen(5)
 
     def sig_handler(signum, frame):

@@ -26,7 +26,7 @@ fi
 
 # Set up SSH Agent socket proxy
 PROXY_PID=""
-PROXY_SOCKET="$WORKSPACE_DIR/.ssh-agent.sock"
+PROXY_SOCKET="$WORKSPACE_DIR/.ssh-agent-$$.sock"
 SSH_AUTH_SOCK_CONTAINER=""
 
 if [ -S "$SSH_AUTH_SOCK" ]; then
@@ -36,11 +36,11 @@ if [ -S "$SSH_AUTH_SOCK" ]; then
   # Wait briefly to ensure the socket file is created
   sleep 0.1
   # Set the SSH_AUTH_SOCK path to be used inside the container
-   SSH_AUTH_SOCK_CONTAINER="$CONTAINER_WORKSPACE/.ssh-agent.sock"
+   SSH_AUTH_SOCK_CONTAINER="$CONTAINER_WORKSPACE/.ssh-agent-$$.sock"
 fi
 
 cleanup() {
-  if [ -f "$WORKSPACE_DIR/.build-debug/compile_commands.json" ]; then
+  if [ -f "$WORKSPACE_DIR/.build-debug-container/compile_commands.json" ]; then
     python3 -c '
 import sys
 with open(sys.argv[1], "r") as f:
@@ -48,8 +48,8 @@ with open(sys.argv[1], "r") as f:
 content = content.replace(sys.argv[2], sys.argv[3])
 with open(sys.argv[1], "w") as f:
     f.write(content)
-' "$WORKSPACE_DIR/.build-debug/compile_commands.json" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" 2>/dev/null || true
-    ln -sfn .build-debug/compile_commands.json "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
+' "$WORKSPACE_DIR/.build-debug-container/compile_commands.json" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" 2>/dev/null || true
+    ln -sfn .build-debug-container/compile_commands.json "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
   fi
   if [ -n "$PROXY_PID" ]; then
     kill "$PROXY_PID" 2>/dev/null || true
@@ -82,7 +82,7 @@ if [ -n "$CONTAINER_ID" ]; then
   fi
   
   # Execute inside the container
-  ENV_FLAGS=("-e" "TERM=$TERM")
+  ENV_FLAGS=("-e" "TERM=$TERM" "-e" "BUILD_DIR_SUFFIX=-container")
   if [ -n "$SSH_AUTH_SOCK_CONTAINER" ]; then
     ENV_FLAGS+=("-e" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK_CONTAINER")
   fi
@@ -117,7 +117,14 @@ else
     SSH_MOUNT="-v $HOME/.ssh:/home/$USER_NAME/.ssh:ro"
   fi
 
-  ENV_FLAGS=("-e" "TERM=$TERM")
+  # Mount .ccache if it exists on the host, or create it
+  CCACHE_MOUNT=""
+  if [ ! -d "$HOME/.ccache-valkey-devcontainer" ]; then
+    mkdir -p "$HOME/.ccache-valkey-devcontainer"
+  fi
+  CCACHE_MOUNT="-v $HOME/.ccache-valkey-devcontainer:/home/$USER_NAME/.ccache"
+
+  ENV_FLAGS=("-e" "TERM=$TERM" "-e" "BUILD_DIR_SUFFIX=-container")
   if [ -n "$SSH_AUTH_SOCK_CONTAINER" ]; then
     ENV_FLAGS+=("-e" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK_CONTAINER")
   fi
@@ -129,6 +136,10 @@ else
       -u "$USER_UID:$USER_GID" \
       $GITCONFIG_MOUNT \
       $SSH_MOUNT \
+      $CCACHE_MOUNT \
+      --network host \
+      --security-opt seccomp=unconfined \
+      --cap-add SYS_PTRACE \
       "${ENV_FLAGS[@]}" \
       "$IMAGE_NAME" \
       bash
@@ -139,6 +150,10 @@ else
       -u "$USER_UID:$USER_GID" \
       $GITCONFIG_MOUNT \
       $SSH_MOUNT \
+      $CCACHE_MOUNT \
+      --network host \
+      --security-opt seccomp=unconfined \
+      --cap-add SYS_PTRACE \
       "${ENV_FLAGS[@]}" \
       "$IMAGE_NAME" \
       bash -c "$CMD"

@@ -17,6 +17,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include "src/valkey_search_options.h"
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"

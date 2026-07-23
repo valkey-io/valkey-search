@@ -393,7 +393,7 @@ function is_configure_required() {
 
     local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
     local IFS=$'\n'
-    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
+    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v "\.build-")
     for cmake_file in $cmake_files; do
         local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
         if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
@@ -424,7 +424,7 @@ if [[ "${FORMAT}" == "yes" ]]; then
     format
 fi
 
-BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
+BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}
 if [[ "${SAN_BUILD}" != "no" ]]; then
     printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
     if [[ "${SAN_BUILD}" == "address" ]]; then

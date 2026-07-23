@@ -184,6 +184,15 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
+// True when SORTBY targets the KNN score alias, which is the vector distance
+// already carried on each neighbor (no attribute content needed to sort).
+bool SortsByScore(const SearchCommand &command) {
+  return command.sortby_parameter.has_value() && command.IsVectorQuery() &&
+         command.score_as &&
+         vmsdk::ToStringView(command.score_as.get()) ==
+             command.sortby_parameter->field;
+}
+
 }  // namespace
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
@@ -193,6 +202,26 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   }
 
   auto sortby = parameters.sortby_parameter.value();
+
+  auto amount_to_keep = parameters.limit.first_index + parameters.limit.number;
+  auto sort_with = [&](auto compare) {
+    if (amount_to_keep >= neighbors.size()) {
+      std::stable_sort(neighbors.begin(), neighbors.end(), compare);
+    } else {
+      std::partial_sort(neighbors.begin(), neighbors.begin() + amount_to_keep,
+                        neighbors.end(), compare);
+    }
+  };
+
+  // Sort by the vector distance carried on each neighbor.
+  if (SortsByScore(parameters)) {
+    sort_with([&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+      return sortby.order == query::SortOrder::kAscending
+                 ? a.distance < b.distance
+                 : a.distance > b.distance;
+    });
+    return;
+  }
 
   // Check if field is a declared numeric attribute
   auto index_result = parameters.index_schema->GetIndex(sortby.field);
@@ -240,13 +269,7 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
     return false;
   };
 
-  auto amountToKeep = parameters.limit.first_index + parameters.limit.number;
-  if (amountToKeep >= neighbors.size()) {
-    std::stable_sort(neighbors.begin(), neighbors.end(), compare);
-  } else {
-    std::partial_sort(neighbors.begin(), neighbors.begin() + amountToKeep,
-                      neighbors.end(), compare);
-  }
+  sort_with(compare);
 }
 
 // Check for scenarios that require sending an early reply.
@@ -261,9 +284,12 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
     return true;  // Early reply sent, stop processing
   }
 
-  // SORTBY needs content loaded and sorted first, so only take the fast
-  // NOCONTENT path when there is no sort.
-  if (command.no_content && !command.sortby_parameter.has_value()) {
+  // NOCONTENT can reply ids-only without loading content, unless SORTBY targets
+  // a field whose value lives in the content. Sorting by the vector score uses
+  // the distance already on each neighbor, so it stays on this fast path.
+  if (command.no_content &&
+      (!command.sortby_parameter.has_value() || SortsByScore(command))) {
+    ApplySorting(search_result.neighbors, command);
     SendReplyNoContent(ctx, search_result, command);
     return true;  // Early reply sent, stop processing
   }

@@ -8,6 +8,7 @@
 #ifndef VMSDK_SRC_UTILS_H_
 #define VMSDK_SRC_UTILS_H_
 #include <absl/strings/str_format.h>
+#include <valkey/valkey_module.h>
 
 #include <optional>
 #include <string>
@@ -19,7 +20,6 @@
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
-#include <valkey/valkey_module.h>
 
 namespace vmsdk {
 

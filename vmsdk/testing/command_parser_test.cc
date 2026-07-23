@@ -7,6 +7,8 @@
 
 #include "command_parser.h"
 
+#include <valkey/valkey_module.h>
+
 #include <iostream>
 #include <optional>
 #include <string>
@@ -19,7 +21,6 @@
 #include "status/status_macros.h"
 #include "testing_infra/module.h"
 #include "testing_infra/utils.h"
-#include <valkey/valkey_module.h>
 
 namespace vmsdk {
 

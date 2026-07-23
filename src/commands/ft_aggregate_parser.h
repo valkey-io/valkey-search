@@ -123,10 +123,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
       std::string idstr(identifier);
       index = record_info_by_index_.size();
       record_indexes_by_identifier_.emplace(idstr, index);
-      record_info_by_index_.push_back(
-          AttributeRecordInfo{.identifier_ = idstr,
-                              .alias_ = alias_str,
-                              .data_type_ = data_type});
+      record_info_by_index_.push_back(AttributeRecordInfo{
+          .identifier_ = idstr, .alias_ = alias_str, .data_type_ = data_type});
     }
 
     // (Re)point the alias at this identifier's slot. If it previously

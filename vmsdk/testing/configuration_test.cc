@@ -29,11 +29,9 @@ inline void FreeValkeyArgs(std::vector<ValkeyModuleString *> &args) {
 class ScopedClearRegisteredConfigs {
  public:
   ScopedClearRegisteredConfigs()
-      : saved_(vmsdk::config::ModuleConfigManager::Instance()
-                    .Stash()) {}
+      : saved_(vmsdk::config::ModuleConfigManager::Instance().Stash()) {}
   ~ScopedClearRegisteredConfigs() {
-    vmsdk::config::ModuleConfigManager::Instance().Restore(
-        std::move(saved_));
+    vmsdk::config::ModuleConfigManager::Instance().Restore(std::move(saved_));
   }
 
  private:

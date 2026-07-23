@@ -2460,6 +2460,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(skip_schema->IsBackfillInProgress());
     LOG(INFO) << "✓ Skip load verified - index empty, backfill ready";
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
+    }
   }
 
   // STEP 3: Drop the schema (implicitly done when schema goes out of scope)
@@ -2637,6 +2640,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
 
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), num_vectors);
     LOG(INFO) << "✓ Mixed index normal load verified";
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
+    }
   }
 
   // Skip load for mixed index
@@ -2742,6 +2748,9 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     EXPECT_EQ(vec_index.value()->GetTrackedKeyCount(), 0);
     EXPECT_TRUE(mixed_skip_schema->IsBackfillInProgress());
     LOG(INFO) << "✓ Mixed index skip load verified";
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      delete records[i];
+    }
   }
 
   // STEPS 6-7: Create additional 2 indexes each with 100 vectors and save

@@ -303,7 +303,11 @@ absl::StatusOr<std::vector<char>> VectorBase::GetVectorDuringSearch(
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  const char *value = GetVectorLockFree(it->second.internal_id)->GetRawVector();
+  auto &vector_record = GetVectorLockFree(it->second.internal_id);
+  if (!vector_record) {
+    return absl::NotFoundError("Record was not found");
+  }
+  const char *value = vector_record->GetRawVector();
   result.assign(value, value + GetVectorDataSize());
   return result;
 }
@@ -375,7 +379,11 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
           absl::StrCat("Embedding id not found: ", key->Str()));
     }
     it->second.magnitude = magnitude;
-    stored_record = GetVectorLockFree(it->second.internal_id).get();
+    auto &stored_ptr = GetVectorLockFree(it->second.internal_id);
+    if (!stored_ptr) {
+      return true;  // No stored record, so vectors are definitely not matching
+    }
+    stored_record = stored_ptr.get();
   }
   // Returns true if the vectors are not matching
   return (std::memcmp(stored_record->GetRawVector(),

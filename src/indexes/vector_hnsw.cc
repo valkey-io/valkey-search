@@ -32,6 +32,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -119,9 +120,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       return VectorRecord::Construct(
           vector_data, magnitude, static_cast<FixedSizeAllocator *>(allocator));
     };
-    VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(input, index->space_.get(),
-                                vector_index_proto.initial_cap(), generator));
+    VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
+        input, index->space_.get(), vector_index_proto.initial_cap(),
+        vector_index_proto.hnsw_algorithm().m(),
+        options::GetHNSWValidationEnable().GetValue(), generator));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;

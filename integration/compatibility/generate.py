@@ -296,6 +296,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+
     def test_aggregate_limit(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")

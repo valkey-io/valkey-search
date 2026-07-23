@@ -256,7 +256,7 @@ absl::Status GRPCSearchRequestToParameters(
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
   if (request.has_inkeys()) {
-    auto &dest = parameters->inkeys.emplace();
+    auto& dest = parameters->inkeys.emplace();
     dest.reserve(request.inkeys().keys().size());
     for (const auto& key : request.inkeys().keys()) {
       dest.insert(key);

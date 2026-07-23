@@ -22,6 +22,22 @@ inline void FreeValkeyArgs(std::vector<ValkeyModuleString *> &args) {
   }
 }
 
+// RAII guard: clears every config self-registered with ModuleConfigManager
+// (see its doc comment) for the guard's lifetime, restoring them on scope
+// exit regardless of how the test returns, so other tests sharing this
+// process aren't affected.
+class ScopedClearRegisteredConfigs {
+ public:
+  ScopedClearRegisteredConfigs()
+      : saved_(vmsdk::config::ModuleConfigManager::Instance().Stash()) {}
+  ~ScopedClearRegisteredConfigs() {
+    vmsdk::config::ModuleConfigManager::Instance().Restore(std::move(saved_));
+  }
+
+ private:
+  absl::flat_hash_map<std::string, vmsdk::config::Registerable *> saved_;
+};
+
 using ::testing::_;
 using ::testing::Eq;
 using ::testing::StrEq;
@@ -35,15 +51,15 @@ class ConfigTest : public vmsdk::ValkeyTest {
 };
 
 TEST_F(ConfigTest, registration) {
+  // Every config declared anywhere in the codebase self-registers with this
+  // process-wide singleton at static-init time, regardless of whether this
+  // test binary actually exercises that config's owning component. Start
+  // from a clean slate so only the two configs declared below are present
+  // when Init() runs below.
+  ScopedClearRegisteredConfigs clear_registered_configs;
+
   vmsdk::config::Number number("number", 42, 0, 1024);
   vmsdk::config::Boolean boolean("boolean", true);
-
-  // Expect hide-user-data-from-log to be registered (it's auto-registered by
-  // the system)
-  EXPECT_CALL(*kMockValkeyModule,
-              RegisterBoolConfig(&fake_ctx, StrEq("hide-user-data-from-log"),
-                                 Eq(1), _, _, _, _, _))
-      .Times(testing::AtLeast(1));
 
   // 2 integer registration
   EXPECT_CALL(*kMockValkeyModule,

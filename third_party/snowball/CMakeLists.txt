@@ -29,10 +29,12 @@ target_include_directories(snowball PRIVATE
 )
 
 # Benchmarking confirmed a ~26% overall and ~42% peak speedup over
-# default builds.
+# default builds. CMAKE_INTERPROCEDURAL_OPTIMIZATION is forced OFF at the
+# top-level CMakeLists.txt for sanitizer builds (see the comment there for
+# why); respect that instead of deciding independently here.
 include(CheckIPOSupported)
 check_ipo_supported(RESULT lto_supported OUTPUT lto_error)
-if(lto_supported)
+if(lto_supported AND NOT CMAKE_INTERPROCEDURAL_OPTIMIZATION STREQUAL "OFF")
     set_property(TARGET snowball PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     target_compile_options(snowball PRIVATE -fno-fat-lto-objects)
 endif()

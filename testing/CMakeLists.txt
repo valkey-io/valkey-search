@@ -1,182 +1,130 @@
 # Base common test library - used by all test suites
-set(SRCS_COMMON ${CMAKE_CURRENT_LIST_DIR}/common.cc
-                ${CMAKE_CURRENT_LIST_DIR}/common.h)
+set(SRCS_COMMON common.cc common.h)
 
-add_library(testing_common_base STATIC ${SRCS_COMMON})
-valkey_search_target_update_san_flags(testing_common_base)
+if (VALKEY_VENDORED_DEPS)
+    # when using vendored (static deps) mode, tests are not linked against the intermediate search_dso object
+    # (which itself is also not built), because we end up with the same static deps being linked in twice.
+    # I asked Claude to manually enumerate the dependencies of the _dso variants instead.
+    include(object_library_helper)
+    add_library(testing_common_objs OBJECT ${SRCS_COMMON})
+    target_link_libraries(testing_common_objs PUBLIC search_base)
+    target_link_libraries(testing_common_objs PUBLIC vmsdk)
+    target_link_libraries(testing_common_objs PUBLIC vmsdk_testing)
+    target_link_libraries(testing_common_objs PUBLIC GTest::gtest_main GTest::gmock)
 
-target_include_directories(testing_common_base
-                           PUBLIC ${HIGHWAY_HASH_INCLUDE_PATH})
-target_include_directories(testing_common_base PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-# Core libraries used by most test suites
-target_link_libraries(testing_common_base PUBLIC attribute_data_type)
-target_link_libraries(testing_common_base PUBLIC index_schema)
-target_link_libraries(testing_common_base PUBLIC keyspace_event_manager)
-target_link_libraries(testing_common_base PUBLIC schema_manager)
-target_link_libraries(testing_common_base PUBLIC valkey_search)
-target_link_libraries(testing_common_base PUBLIC vector_externalizer)
-target_link_libraries(testing_common_base PUBLIC metadata_manager)
-target_link_libraries(testing_common_base PUBLIC vector_base)
-target_link_libraries(testing_common_base PUBLIC vector_hnsw)
-target_link_libraries(testing_common_base PUBLIC search)
-target_link_libraries(testing_common_base PUBLIC string_interning)
-target_link_libraries(testing_common_base PUBLIC index_schema_cc_proto)
-target_link_libraries(testing_common_base PUBLIC vmsdklib)
-target_link_libraries(testing_common_base PUBLIC numeric)
-target_link_libraries(testing_common_base PUBLIC tag)
-target_link_libraries(testing_common_base PUBLIC vector_flat)
-target_link_libraries(testing_common_base PUBLIC predicate)
-target_link_libraries(testing_common_base PUBLIC index_base)
-target_link_libraries(testing_common_base PUBLIC filter_parser)
-target_link_libraries(testing_common_base PUBLIC allocator)
-target_link_libraries(testing_common_base PUBLIC intrusive_ref_count)
-target_link_libraries(testing_common_base PUBLIC patricia_tree)
-target_link_libraries(testing_common_base PUBLIC server_events)
-target_link_libraries(testing_common_base PUBLIC rdb_serialization)
-target_link_libraries(testing_common_base PUBLIC iostream)
-target_link_libraries(testing_common_base PUBLIC valkey_module)
-target_link_libraries(testing_common_base PUBLIC vmsdk_testing_infra)
-target_link_libraries(testing_common_base PUBLIC expr)
+    create_object_interface(testing_common_base search_base vmsdk testing_common_objs)
+    target_link_libraries(testing_common_base INTERFACE gRPC::grpc++ protobuf::libprotobuf absl::base)
+    target_link_libraries(testing_common_base INTERFACE ICU::uc ICU::i18n ICU::data)
+    target_link_libraries(testing_common_base INTERFACE GTest::gtest_main GTest::gmock)
+    target_link_libraries(testing_common_base INTERFACE vmsdk_testing)
+else ()
+    add_library(testing_common_base SHARED ${SRCS_COMMON})
+    target_link_libraries(testing_common_base PUBLIC search_dso)
+    target_link_libraries(testing_common_base PUBLIC vmsdk_dso)
+    target_link_libraries(testing_common_base PUBLIC GTest::gtest_main GTest::gmock)
+    target_link_libraries(testing_common_base PUBLIC vmsdk_testing)
+endif ()
 
-# Coordinator common library - used by tests that need coordinator functionality
-add_library(testing_common_coordinator INTERFACE)
-target_link_libraries(testing_common_coordinator INTERFACE coordinator_common)
-target_link_libraries(testing_common_coordinator INTERFACE coordinator_cc_proto)
-target_link_libraries(testing_common_coordinator INTERFACE util)
-target_link_libraries(testing_common_coordinator INTERFACE client)
-target_link_libraries(testing_common_coordinator INTERFACE client_pool)
+# Registers a test suite. Normally this creates its own test executable, but
+# when UNIT_TESTS_SINGLE_EXE is set, all suites are instead accumulated and
+# built into a single "unit_tests" executable (see bottom of this file) to
+# cut down on redundant linking against the (potentially static) dependencies.
+macro(add_test_suite name sources)
+    if (UNIT_TESTS_SINGLE_EXE)
+        list(APPEND TEST_ALL_SOURCES ${sources})
+        if (ARGC GREATER 2)
+            list(APPEND TEST_ALL_INCLUDE_DIRS ${ARGV2})
+        endif ()
+    else ()
+        add_executable(${name} ${sources})
+        target_include_directories(${name} PUBLIC . ${ARGV2})
+        target_link_libraries(${name} PRIVATE testing_common_base)
+        gtest_discover_tests(${name})
+    endif ()
+endmacro()
 
 # 1. Commands Test Suite - consolidates FT command related tests
 set(COMMANDS_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+    ft_aggregate_exec_test.cc
+    ft_aggregate_parser_test.cc
+    ft_create_parser_test.cc
+    ft_search_parser_test.cc
+    ft_search_test.cc
+    ft_dropindex_test.cc
+    ft_list_test.cc
+    ft_info_test.cc
+    ft_create_test.cc
+    commands/ft_internal_update_test.cc
+    filter_test.cc)
 
-add_executable(commands_test ${COMMANDS_TEST_SOURCES})
-target_include_directories(commands_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(commands_test PRIVATE testing_common_base)
-target_link_libraries(commands_test PRIVATE testing_common_coordinator)
-target_link_libraries(commands_test PRIVATE ft_create_parser)
-target_link_libraries(commands_test PRIVATE ft_search_parser)
-target_link_libraries(commands_test PRIVATE commands)
-target_link_libraries(commands_test PRIVATE vmsdklib)
-finalize_test_flags(commands_test)
+add_test_suite(commands_test "${COMMANDS_TEST_SOURCES}")
 
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
+    index_schema_test.cc
+    lexer_test.cc
+    numeric_index_test.cc
+    posting_test.cc
+    tag_index_test.cc
+    text_test.cc
+    vector_test.cc)
 
-add_executable(indexes_test ${INDEXES_TEST_SOURCES})
-target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(indexes_test PRIVATE testing_common_base)
-target_link_libraries(indexes_test PRIVATE text)
-target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
-finalize_test_flags(indexes_test)
+add_test_suite(indexes_test "${INDEXES_TEST_SOURCES}")
 
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/valkey_search_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/schema_manager_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/server_events_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/multi_exec_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_externalizer_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/acl_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc)
+    valkey_search_test.cc
+    schema_manager_test.cc
+    keyspace_event_manager_test.cc
+    server_events_test.cc
+    attribute_data_type_test.cc
+    multi_exec_test.cc
+    vector_externalizer_test.cc
+    acl_test.cc
+    rdb_serialization_test.cc)
 
-add_executable(core_test ${CORE_TEST_SOURCES})
-target_include_directories(core_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(core_test PRIVATE testing_common_base)
-target_link_libraries(core_test PRIVATE testing_common_coordinator)
-target_link_libraries(core_test PRIVATE metrics)
-target_link_libraries(core_test PRIVATE commands)
-target_link_libraries(core_test PRIVATE acl)
-target_link_libraries(core_test PRIVATE vmsdklib)
-finalize_test_flags(core_test)
+add_test_suite(core_test "${CORE_TEST_SOURCES}")
 
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
+    search_test.cc
+    query/response_generator_test.cc)
 
-add_executable(query_test ${QUERY_TEST_SOURCES})
-target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
-target_link_libraries(query_test PRIVATE testing_common_base)
-target_link_libraries(query_test PRIVATE testing_common_coordinator)
-target_link_libraries(query_test PRIVATE fanout)
-target_link_libraries(query_test PRIVATE response_generator)
-target_link_libraries(query_test PRIVATE search_converter)
-finalize_test_flags(query_test)
+add_test_suite(query_test "${QUERY_TEST_SOURCES}")
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/coordinator/metadata_manager_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc)
+    coordinator/metadata_manager_test.cc
+    coordinator/client_test.cc)
 
-add_executable(coordinator_test ${COORDINATOR_TEST_SOURCES})
-target_include_directories(coordinator_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_include_directories(coordinator_test
-                           PUBLIC ${CMAKE_CURRENT_LIST_DIR}/coordinator)
-target_link_libraries(coordinator_test PRIVATE testing_common_base)
-target_link_libraries(coordinator_test PRIVATE testing_common_coordinator)
-finalize_test_flags(coordinator_test)
-
-# Create coordinator_common interface library (used by coordinator tests)
-set(SRCS_COORDINATOR_COMMON coordinator/common.h)
-
-add_library(coordinator_common INTERFACE)
-target_include_directories(coordinator_common
-                           INTERFACE ${CMAKE_CURRENT_LIST_DIR}/coordinator)
-target_link_libraries(coordinator_common INTERFACE client)
-target_link_libraries(coordinator_common INTERFACE client_pool)
-target_link_libraries(coordinator_common INTERFACE server)
+add_test_suite(coordinator_test "${COORDINATOR_TEST_SOURCES}" coordinator)
 
 # 1. Utils Test Suite - consolidates utility tests
 set(UTILS_TEST_SOURCES
-    ${CMAKE_CURRENT_LIST_DIR}/utils/allocator_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_list_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/numeric_btree_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)
+    utils/allocator_test.cc
+    utils/intrusive_list_test.cc
+    utils/intrusive_ref_count_test.cc
+    utils/lru_test.cc
+    utils/patricia_tree_test.cc
+    utils/numeric_btree_test.cc
+    utils/string_interning_test.cc)
 
-add_executable(valkey_utils_test ${UTILS_TEST_SOURCES})
-target_include_directories(valkey_utils_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_include_directories(valkey_utils_test
-                           PUBLIC ${CMAKE_CURRENT_LIST_DIR}/utils)
-target_link_libraries(valkey_utils_test PRIVATE testing_common_base)
-target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
-target_link_libraries(valkey_utils_test PRIVATE lru)
-target_link_libraries(valkey_utils_test PRIVATE numeric_btree)
-finalize_test_flags(valkey_utils_test)
+add_test_suite(valkey_utils_test "${UTILS_TEST_SOURCES}" utils)
 
 # 7. Text Index Test Suite
-add_executable(text_index_test 
-    ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/text_index_schema_test.cc)
-target_include_directories(text_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(text_index_test PRIVATE testing_common_base)
-target_link_libraries(text_index_test PRIVATE text)
-finalize_test_flags(text_index_test)
+set(TEXT_INDEX_TEST_SOURCES
+    flat_position_map_test.cc
+    radix_test.cc
+    rax_wrapper_test.cc
+    text_index_schema_test.cc)
 
-# 8. Expr Test Suite
-add_subdirectory(expr)
+add_test_suite(text_index_test "${TEXT_INDEX_TEST_SOURCES}")
+
+if (UNIT_TESTS_SINGLE_EXE)
+    list(REMOVE_DUPLICATES TEST_ALL_INCLUDE_DIRS)
+
+    add_executable(unit_tests ${TEST_ALL_SOURCES})
+    target_include_directories(unit_tests PUBLIC . ${TEST_ALL_INCLUDE_DIRS})
+    target_link_libraries(unit_tests PRIVATE testing_common_base)
+    gtest_discover_tests(unit_tests)
+endif ()

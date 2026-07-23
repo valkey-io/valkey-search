@@ -5,7 +5,7 @@
  *
  */
 
-#include "vmsdk/src/concurrency.h"
+#include "concurrency.h"
 
 #include <gtest/gtest.h>
 

@@ -8,6 +8,9 @@
 #ifndef VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
 #define VALKEYSEARCH_SRC_COORDINATOR_METADATA_MANAGER_H_
 
+#include <valkey/search/version.h>
+#include <valkey/valkey_module.h>
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -24,12 +27,10 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/rdb_serialization.h"
-#include "version.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::coordinator {
 

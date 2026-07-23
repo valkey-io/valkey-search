@@ -18,8 +18,8 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "gtest/gtest_prod.h"
 #include "managed_pointers.h"
+#include "valkey/module_sdk/vendored_gtest_prod.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -115,6 +115,19 @@ class ModuleConfigManager {
   /// Usually this is done by the destructor of the `Registerable` and is not
   /// needed manually
   void UnregisterConfig(Registerable *config_item);
+
+  /// Test-only: temporarily forget every config previously self-registered
+  /// with this manager, returning what was cleared so it can be restored via
+  /// RestoreForTesting(). Configs are process-wide singletons that
+  /// self-register at static-init time regardless of which test binary
+  /// happens to link them in, so a test asserting on exactly which configs
+  /// get registered via Init() should clear (and later restore, so other
+  /// tests sharing this process aren't affected) any pre-existing ones to
+  /// start from a clean slate.
+  absl::flat_hash_map<std::string, Registerable *> Stash();
+
+  /// Test-only: restores configs previously removed by ClearAllForTesting().
+  void Restore(absl::flat_hash_map<std::string, Registerable *> saved);
 
   /// List all registered configs to the provided context
   absl::Status ListAllConfigs(ValkeyModuleCtx *ctx, bool verbose,

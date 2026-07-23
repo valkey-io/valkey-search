@@ -60,7 +60,7 @@ jobs:
           -e CCACHE_MAXSIZE=1G \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo -E ci/build_ubuntu.sh --run-tests --asan --unittest-output=/workspace/test-results
+          sudo -E ci/build_ubuntu.sh --run-tests --asan --vendored --jobs=4 --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()
@@ -73,6 +73,13 @@ jobs:
       with:
         name: unittest-results
         path: test-results
+
+    # Render pass/fail counts and failed tests' captured output into the
+    # workflow run's summary page, so failures are visible without
+    # downloading artifacts or scrolling the raw docker/ctest log.
+    - name: Publish Test Summary
+      if: always()
+      run: python3 ci/summarize_test_results.py test-results/test-results.xml
 
     # Fail the job if tests failed
     - name: Check Test Results

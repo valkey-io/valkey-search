@@ -1,0 +1,1 @@
+#include "../../../src/valkey_search_options.h"

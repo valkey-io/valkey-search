@@ -8,6 +8,13 @@ project(
 
 option(BUILD_UNIT_TESTS "Build valkey-search unit tests" ON)
 option(VALKEY_VENDORED_DEPS "Use static vendored dependencies" OFF)
+
+# In vendored (static) dependency mode, every test executable statically
+# links the same copies of protobuf/gRPC/absl/ICU, which multiplies link
+# time and disk usage by the number of test executables. Default to a
+# single combined test executable there to avoid that cost.
+option(UNIT_TESTS_SINGLE_EXE "Build all unit tests into a single executable instead of one per suite" ${VALKEY_VENDORED_DEPS})
+
 set(SAN_BUILD "OFF" CACHE STRING "Build with sanitizers (OFF, address, thread, memory, undefined)")
 
 # this is a built-in CMake variable.. but let's prefer SHARED_LIBS unless specifically disabled..

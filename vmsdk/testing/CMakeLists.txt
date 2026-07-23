@@ -1,6 +1,13 @@
 add_library(testing_common INTERFACE)
 target_link_libraries(testing_common INTERFACE vmsdk_testing)
-target_link_libraries(testing_common INTERFACE vmsdk_dso)
+if (VALKEY_VENDORED_DEPS)
+    # vmsdk_dso isn't built in vendored mode (see vmsdk/src/CMakeLists.txt);
+    # link the vmsdk object library's objects directly instead.
+    target_link_libraries(testing_common INTERFACE vmsdk)
+    target_sources(testing_common INTERFACE $<TARGET_OBJECTS:vmsdk>)
+else ()
+    target_link_libraries(testing_common INTERFACE vmsdk_dso)
+endif ()
 target_link_libraries(testing_common INTERFACE GTest::gtest_main GTest::gmock)
 target_include_directories(testing_common INTERFACE .)
 target_include_directories(testing_common INTERFACE ${PROJECT_SOURCE_DIR})

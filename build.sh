@@ -41,6 +41,7 @@ Usage: build.sh [options...]
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout (ctest --output-on-failure).
     --run-integration-tests[=pattern] Run integration tests.
     --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --vendored                        Statically link gRPC, Protobuf & Abseil (VALKEY_VENDORED_DEPS=ON).
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
@@ -145,6 +146,11 @@ while [ $# -gt 0 ]; do
         ;;
     --use-system-modules)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
+    --vendored)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DVALKEY_VENDORED_DEPS=ON"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;

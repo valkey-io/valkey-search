@@ -60,7 +60,7 @@ jobs:
           -e CCACHE_MAXSIZE=1G \
           --user "ubuntu:ubuntu" \
           presubmit-image \
-          sudo -E ci/build_ubuntu.sh --run-tests --unittest-output=/workspace/test-results
+          sudo -E ci/build_ubuntu.sh --run-tests --vendored --jobs=4 --unittest-output=/workspace/test-results
 
     - name: Update Test Results Permissions
       if: always()

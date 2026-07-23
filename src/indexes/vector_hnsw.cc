@@ -148,8 +148,8 @@ InputVector::InputVector(
     : vector_record_(std::move(vector_record)) {
   if (normalize) {
     normalized_vector_ = NormalizeVector(
-        absl::string_view(vector_record->GetRawVector(), vector_record_size),
-        vector_record->GetReciprocalMagnitude());
+        absl::string_view(vector_record_->GetRawVector(), vector_record_size),
+        vector_record_->GetReciprocalMagnitude());
   }
 }
 template <typename T>

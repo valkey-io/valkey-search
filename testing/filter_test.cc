@@ -1792,6 +1792,23 @@ INSTANTIATE_TEST_SUITE_P(
                                        "}\n",
         },
         {
+            // A leading field-scoped group followed by an AND term must stay a
+            // nested subtree, not flatten into one AND (regression for the
+            // no_prev_grp handling in the @field:(...) branch).
+            .test_name = "text_field_group_then_and_term",
+            .filter = "@text_field1:(hello word) @text_field2:name",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure = "AND{\n"
+                                       "  AND{\n"
+                                       "    TEXT-TERM(\"hello\", field_mask=1)\n"
+                                       "    TEXT-TERM(\"word\", field_mask=1)\n"
+                                       "  }\n"
+                                       "  TEXT-TERM(\"name\", field_mask=2)\n"
+                                       "}\n",
+        },
+        {
             .test_name = "text_field_group_inner_override",
             // Explicit field inside the group overrides the scoped default.
             .filter = "@text_field1:(word | @text_field2:hello)",

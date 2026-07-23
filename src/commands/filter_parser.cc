@@ -1012,6 +1012,7 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     } else {
       std::optional<std::string> field_name = default_field;
       bool non_text = false;
+      bool field_scoped_group = false;
       if (Peek() == '@') {
         std::string parsed_field;
         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
@@ -1040,6 +1041,7 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
                 "Empty brackets detected at Position: ", pos_ - 1));
           }
           non_text = true;
+          field_scoped_group = true;
         }
       }
       if (!non_text) {
@@ -1050,7 +1052,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         }
         predicate = std::move(*predicate_opt);
       }
-      if (result.prev_predicate) {
+      const bool had_prev_predicate = result.prev_predicate != nullptr;
+      if (had_prev_predicate) {
         node_count_++;
       }
       VMSDK_ASSIGN_OR_RETURN(
@@ -1061,7 +1064,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // After the above wrap predicate there will always be a previous
       // predicate. Hence we set it to false.
       result.not_rightmost_bracket = false;
-      no_prev_grp = false;
+      // A leading field-scoped group is its own subtree: keep no_prev_grp set
+      // so a following AND term does not flatten into it (mirrors plain '(').
+      no_prev_grp = field_scoped_group && !had_prev_predicate;
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

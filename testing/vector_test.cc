@@ -117,7 +117,7 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
-enum class ExpectedResults { kSuccess, kSkipped, kError };
+enum class ExpectedResults { kSuccess, kMissing, kInvalidData, kError };
 
 auto IndexToKey = [](int i) {
   return StringInternStore::Intern(std::to_string(i) + "_key");
@@ -192,7 +192,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                pct(50), pct(90), pct(99), lat_us.back(), mean);
 }
 
-absl::Status VerifyResult(const absl::StatusOr<bool> &res,
+absl::Status VerifyResult(const absl::StatusOr<indexes::RecordResult> &res,
                           ExpectedResults expected_result,
                           std::string error_prefix) {
   if (expected_result == ExpectedResults::kSuccess) {
@@ -200,26 +200,38 @@ absl::Status VerifyResult(const absl::StatusOr<bool> &res,
       return absl::InternalError(
           absl::StrCat(error_prefix, "Expected success but res not ok"));
     }
-    if (!res.value()) {
+    if (res.value() != indexes::RecordResult::kAdded) {
       return absl::InternalError(absl::StrCat(
-          error_prefix, "Expected success but res value is false"));
+          error_prefix, "Expected added but res value is not kAdded"));
     }
     return absl::OkStatus();
   }
-  if (expected_result == ExpectedResults::kSkipped) {
+  if (expected_result == ExpectedResults::kMissing) {
     if (!res.ok()) {
       return absl::InternalError(
-          absl::StrCat(error_prefix, "Expected skipped but res not ok"));
+          absl::StrCat(error_prefix, "Expected missing but res not ok"));
     }
-    if (res.value()) {
+    if (res.value() != indexes::RecordResult::kMissing) {
+      return absl::InternalError(absl::StrCat(
+          error_prefix, "Expected missing but res value is not kMissing"));
+    }
+    return absl::OkStatus();
+  }
+  if (expected_result == ExpectedResults::kInvalidData) {
+    if (!res.ok()) {
       return absl::InternalError(
-          absl::StrCat(error_prefix, "Expected skipped but res value is true"));
+          absl::StrCat(error_prefix, "Expected invalid data but res not ok"));
+    }
+    if (res.value() != indexes::RecordResult::kInvalidData) {
+      return absl::InternalError(absl::StrCat(
+          error_prefix,
+          "Expected invalid data but res value is not kInvalidData"));
     }
     return absl::OkStatus();
   }
   if (res.status().ok()) {
     return absl::InternalError(
-        absl::StrCat(error_prefix, "Expected kError but res status not ok"));
+        absl::StrCat(error_prefix, "Expected kError but res status ok"));
   }
   return absl::OkStatus();
 }
@@ -292,8 +304,8 @@ void TestIndex(T *index, int dimensions, int vector_size,
   VERIFY_ADD(index, vectors, 0, ExpectedResults::kError);
   auto vectors_small_dim =
       DeterministicallyGenerateVectors(vectors.size(), dimensions - 1, 1.0);
-  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kSkipped);
-  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kSkipped,
+  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kInvalidData);
+  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kInvalidData,
                 false);
 
   VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kError, false);
@@ -667,7 +679,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     absl::string_view vec_str = VectorToStr(new_vectors[i]);
     auto res = (*index)->AddRecord(key, vec_str);
     VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
-    EXPECT_TRUE(res.value());
+    EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
   }
   EXPECT_EQ(base->GetTrackedKeyCount(), 13u);
   // Verifies we reused tombstoned hnsw nodes
@@ -747,7 +759,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
       // Re-insert the vectors
       for (size_t i = 0; i < vectors.size(); ++i) {
-        VERIFY_MODIFY(index.get(), vectors[i], i, ExpectedResults::kSkipped,
+        VERIFY_MODIFY(index.get(), vectors[i], i, ExpectedResults::kMissing,
                       true);
       }
     }

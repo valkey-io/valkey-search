@@ -1,11 +1,29 @@
 # Base common test library - used by all test suites
 set(SRCS_COMMON common.cc common.h)
 
-add_library(testing_common_base SHARED ${SRCS_COMMON})
-target_link_libraries(testing_common_base PUBLIC search_dso)
-target_link_libraries(testing_common_base PUBLIC GTest::gtest_main GTest::gmock)
-target_link_libraries(testing_common_base PUBLIC vmsdk_dso)
-target_link_libraries(testing_common_base PUBLIC vmsdk_testing)
+if (VALKEY_VENDORED_DEPS)
+    # when using vendored (static deps) mode, tests are not linked against the intermediate search_dso object
+    # (which itself is also not built), because we end up with the same static deps being linked in twice.
+    # I asked Claude to manually enumerate the dependencies of the _dso variants instead.
+    include(object_library_helper)
+    add_library(testing_common_objs OBJECT ${SRCS_COMMON})
+    target_link_libraries(testing_common_objs PUBLIC search_base)
+    target_link_libraries(testing_common_objs PUBLIC vmsdk)
+    target_link_libraries(testing_common_objs PUBLIC vmsdk_testing)
+    target_link_libraries(testing_common_objs PUBLIC GTest::gtest_main GTest::gmock)
+
+    create_object_interface(testing_common_base search_base vmsdk testing_common_objs)
+    target_link_libraries(testing_common_base INTERFACE gRPC::grpc++ protobuf::libprotobuf absl::base)
+    target_link_libraries(testing_common_base INTERFACE ICU::uc ICU::i18n ICU::data)
+    target_link_libraries(testing_common_base INTERFACE GTest::gtest_main GTest::gmock)
+    target_link_libraries(testing_common_base INTERFACE vmsdk_testing)
+else ()
+    add_library(testing_common_base SHARED ${SRCS_COMMON})
+    target_link_libraries(testing_common_base PUBLIC search_dso)
+    target_link_libraries(testing_common_base PUBLIC vmsdk_dso)
+    target_link_libraries(testing_common_base PUBLIC GTest::gtest_main GTest::gmock)
+    target_link_libraries(testing_common_base PUBLIC vmsdk_testing)
+endif ()
 
 # 1. Commands Test Suite - consolidates FT command related tests
 set(COMMANDS_TEST_SOURCES

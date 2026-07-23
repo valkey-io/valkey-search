@@ -30,7 +30,7 @@
 
 namespace valkey_search {
 // Vector externalizer is not used and planned to be implemented differently
-#ifndef SAN_BUILD
+#if defined(ENABLE_VECTOR_EXTERNALIZER_TEST)
 namespace {
 class VectorExternalizerTest : public ValkeySearchTestWithParam<bool> {
  public:
@@ -57,8 +57,7 @@ void ExternalizeVectors(const std::vector<std::vector<float>> &vectors,
     absl::string_view vector = VectorToStr(vectors[i]);
     if (normalize) {
       float magnitude;
-      auto norm_vector =
-          indexes::NormalizeEmbedding(vector, sizeof(float), &magnitude);
+      auto norm_vector = indexes::NormalizeVector(vector, &magnitude);
       vector = absl::string_view((const char *)norm_vector.data(),
                                  norm_vector.size());
       auto interned_vector = StringInternStore::Intern(vector, allocator);
@@ -131,12 +130,12 @@ TEST_P(VectorExternalizerTest, SimpleExternalize) {
     auto vector = fn(privdata, &len);
     if (normalize) {
       float magnitude_value;
-      auto norm_vector = indexes::NormalizeEmbedding(
-          VectorToStr(vectors[j]), sizeof(float), &magnitude_value);
-      auto denorm_vector =
-          DenormalizeVector(absl::string_view((const char *)norm_vector.data(),
-                                              norm_vector.size()),
-                            sizeof(float), magnitude_value);
+      auto norm_vector =
+          indexes::NormalizeVector(VectorToStr(vectors[j]), &magnitude_value);
+      auto denorm_vector = indexes::DenormalizeVector(
+          absl::string_view((const char *)norm_vector.data(),
+                            norm_vector.size()),
+          magnitude_value);
       EXPECT_EQ(absl::string_view(denorm_vector.data(), denorm_vector.size()),
                 absl::string_view(vector, len));
     } else {
@@ -213,12 +212,12 @@ void VerifyCB(const std::vector<std::vector<float>> &vectors, size_t offset,
     auto vector = fn(privdata, &len);
     if (normalized) {
       float magnitude_value;
-      auto norm_vector = indexes::NormalizeEmbedding(
-          VectorToStr(vectors[j]), sizeof(float), &magnitude_value);
-      auto denorm_vector =
-          DenormalizeVector(absl::string_view((const char *)norm_vector.data(),
-                                              norm_vector.size()),
-                            sizeof(float), magnitude_value);
+      auto norm_vector =
+          indexes::NormalizeVector(VectorToStr(vectors[j]), &magnitude_value);
+      auto denorm_vector = indexes::DenormalizeVector(
+          absl::string_view((const char *)norm_vector.data(),
+                            norm_vector.size()),
+          magnitude_value);
       EXPECT_EQ(absl::string_view(denorm_vector.data(), denorm_vector.size()),
                 absl::string_view(vector, len));
     } else {

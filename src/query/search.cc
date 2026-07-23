@@ -9,7 +9,6 @@
 
 #include <absl/strings/str_split.h>
 
-#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -460,18 +459,19 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  std::vector<char> normalized_vec;
-  absl::string_view query = parameters.query;
+  float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    normalized_vec = indexes::NormalizeEmbedding(
-        parameters.query, vector_index->GetDataTypeSize());
-    query = absl::string_view(normalized_vec.data(), normalized_vec.size());
+    query_magnitude =
+        1.0f / indexes::CalcMagnitude(
+                   reinterpret_cast<const float *>(parameters.query.data()),
+                   parameters.query.size() / sizeof(float));
   }
   auto results_appender =
-      [&results, &parameters, vector_index, query](
+      [&results, &parameters, vector_index, query_magnitude](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
+    return vector_index->AddPrefilteredKey(parameters.query, query_magnitude,
+                                           parameters.k, key, results,
                                            top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
@@ -553,8 +553,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
           auto vector_index =
-              dynamic_cast<indexes::VectorBase *>(attribute_info.index);
-          auto vector = vector_index->GetValue(neighbor.external_id);
+              dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
+          auto vector =
+              vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
@@ -845,7 +846,8 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
-  vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
   // coming from the coordinator

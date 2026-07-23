@@ -33,9 +33,13 @@ class BruteforceSearch
   std::mutex index_lock;
   const size_t k_elements_per_chunk{10 * 1024};
 
+  bool normalized_{false};
+
   std::unordered_map<labeltype, size_t> dict_external_to_internal;
 
-  BruteforceSearch(SpaceInterface<dist_t> *s, size_t maxElements = 0) {
+  BruteforceSearch(SpaceInterface<dist_t> *s, bool normalized,
+                   size_t maxElements = 0)
+      : normalized_(normalized) {
     cur_element_count_ = 0;
     vector_size_ = s->get_data_size();
     fstdistfunc_ = s->get_dist_func();
@@ -53,7 +57,11 @@ class BruteforceSearch
   }
   inline dist_t EvaluateDistance(const SavedVectorT &a,
                                  const SavedVectorT &b) const {
-    return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_);
+    float reciprocal_mag_product =
+        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+                    : 1.0f;
+    return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
+                        reciprocal_mag_product);
   }
 
   void clear() {

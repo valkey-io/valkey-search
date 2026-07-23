@@ -659,7 +659,7 @@ Value FuncConcat(const absl::InlinedVector<Value, 4> &values) {
     if (*ts < 0 && DateNegativeTsReturnsNil()) {                 \
       return Value(Value::Nil("timestamp is before the epoch")); \
     }                                                            \
-    time_t time = (time_t) * ts;                                 \
+    time_t time = (time_t)*ts;                                   \
     struct ::tm tm;                                              \
     gmtime_r(&time, &tm);                                        \
     return Value(double(tm.field + (adjustment)));               \

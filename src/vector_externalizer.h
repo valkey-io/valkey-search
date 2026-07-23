@@ -29,23 +29,21 @@
 namespace valkey_search {
 
 constexpr size_t kLRUCapacity = 100;
-char* ExternalizeCB(void* cb_data, size_t* len);
-std::vector<char> DenormalizeVector(absl::string_view record, size_t type_size,
-                                    float magnitude);
+char *ExternalizeCB(void *cb_data, size_t *len);
 
 class VectorExternalizer {
  public:
-  static VectorExternalizer& Instance() {
-    static VectorExternalizer* instance = new VectorExternalizer();
+  static VectorExternalizer &Instance() {
+    static VectorExternalizer *instance = new VectorExternalizer();
     return *instance;
   }
 
-  bool Externalize(const InternedStringPtr& key,
+  bool Externalize(const InternedStringPtr &key,
                    absl::string_view attribute_identifier,
                    data_model::AttributeDataType attribute_data_type,
-                   const InternedStringPtr& vector,
+                   const InternedStringPtr &vector,
                    std::optional<float> magnitude);
-  void Remove(const InternedStringPtr& key,
+  void Remove(const InternedStringPtr &key,
               absl::string_view attribute_identifier,
               data_model::AttributeDataType attribute_data_type);
   void ProcessEngineUpdateQueue();
@@ -63,14 +61,14 @@ class VectorExternalizer {
 
   struct VectorExternalizerEntry;
   struct LRUCacheEntry {
-    LRUCacheEntry(std::vector<char>&& normalized_vector,
-                  VectorExternalizerEntry* entry)
+    LRUCacheEntry(std::vector<char> &&normalized_vector,
+                  VectorExternalizerEntry *entry)
         : normalized_vector(std::move(normalized_vector)), entry(entry) {}
     ~LRUCacheEntry();
     std::vector<char> normalized_vector;
-    VectorExternalizerEntry* entry{nullptr};
-    LRUCacheEntry* next{nullptr};
-    LRUCacheEntry* prev{nullptr};
+    VectorExternalizerEntry *entry{nullptr};
+    LRUCacheEntry *next{nullptr};
+    LRUCacheEntry *prev{nullptr};
   };
   struct VectorExternalizerEntry {
     InternedStringPtr vector;
@@ -79,18 +77,18 @@ class VectorExternalizer {
     // vector string remains alive until the engine deep copy it.
     std::unique_ptr<LRUCacheEntry> cache_normalized_;
   };
-  void LRUPromote(LRUCacheEntry* entry);
-  LRUCacheEntry* LRUAdd(LRUCacheEntry* entry);
-  void LRURemove(LRUCacheEntry* entry);
-  void Init(ValkeyModuleCtx* ctx);
-  ValkeyModuleCtx* GetCtx() const {
+  void LRUPromote(LRUCacheEntry *entry);
+  LRUCacheEntry *LRUAdd(LRUCacheEntry *entry);
+  void LRURemove(LRUCacheEntry *entry);
+  void Init(ValkeyModuleCtx *ctx);
+  ValkeyModuleCtx *GetCtx() const {
     CHECK(ctx_.Get());
     return ctx_.Get().get();
   }
   vmsdk::UniqueValkeyString GetRecord(
-      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
-      ValkeyModuleKey* key_obj, absl::string_view key_cstr,
-      absl::string_view attribute_identifier, bool& is_module_owned);
+      ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+      ValkeyModuleKey *key_obj, absl::string_view key_cstr,
+      absl::string_view attribute_identifier, bool &is_module_owned);
 
   // Used for testing.
   void Reset();
@@ -112,13 +110,6 @@ class VectorExternalizer {
   size_t PendingEntriesCnt() const;
   bool hash_registration_supported_ = false;
 };
-
-template <typename T>
-void CopyAndDenormalizeEmbedding(T* dst, T* src, size_t size, float magnitude) {
-  for (size_t i = 0; i < size; i++) {
-    dst[i] = src[i] * magnitude;
-  }
-}
 
 };  // namespace valkey_search
 

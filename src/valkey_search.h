@@ -107,6 +107,7 @@ class ValkeySearch {
   void SendMetadataBroadcast(ValkeyModuleCtx *ctx, void *data);
   void AtForkPrepare();
   void AfterForkParent();
+  static bool HasInstance();
   static ValkeySearch &Instance();
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
 

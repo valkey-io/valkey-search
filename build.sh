@@ -240,7 +240,15 @@ function compute_build_flags() {
     # Passing -DCMAKE_{C,CXX}_FLAGS_RELEASE on the cmake command line replaces
     # CMake's own default for that cache variable (normally "-O3 -DNDEBUG")
     # rather than appending to it, so we have to reproduce it explicitly here.
-    VALKEY_SEARCH_C_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=${ROOT_DIR}= -ffat-lto-objects"
+    # -ffat-lto-objects only makes sense alongside -flto; sanitizer builds
+    # pass -fno-lto (see SAN_COMPILE_FLAGS above), and combining the two
+    # produces object files the final (non-LTO) link can't consume, failing
+    # with "plugin needed to handle lto object".
+    local lto_flags="-ffat-lto-objects"
+    if [[ "${SAN_BUILD}" != "no" ]]; then
+        lto_flags=""
+    fi
+    VALKEY_SEARCH_C_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=${ROOT_DIR}= ${lto_flags}"
     VALKEY_SEARCH_CXX_FLAGS_RELEASE="${VALKEY_SEARCH_C_FLAGS_RELEASE}"
 
     VALKEY_SEARCH_C_FLAGS_DEBUG="-O0 -fno-omit-frame-pointer -fno-lto"

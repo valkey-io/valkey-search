@@ -3,7 +3,6 @@ name: Integration tests
 on:
   pull_request:
     branches:
-      - multi-language-support
       - main
       - "[0-9].[0-9]"
     paths-ignore:
@@ -11,7 +10,6 @@ on:
       - '**/00-RELEASENOTES'
   push:
     branches:
-      - multi-language-support
       - main
       - "[0-9].[0-9]"
     paths-ignore:

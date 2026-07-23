@@ -11,10 +11,12 @@
 #include <string>
 
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
 #include "grpcpp/support/status.h"
 
 namespace valkey_search {
-inline grpc::Status ToGrpcStatus(const absl::Status& status) {
+inline grpc::Status ToGrpcStatus(const absl::Status &status) {
   if (status.ok()) {
     return grpc::Status::OK;
   }
@@ -22,7 +24,7 @@ inline grpc::Status ToGrpcStatus(const absl::Status& status) {
           std::string(status.message())};
 }
 
-inline absl::Status ToAbslStatus(const grpc::Status& status) {
+inline absl::Status ToAbslStatus(const grpc::Status &status) {
   if (status.ok()) {
     return absl::OkStatus();
   }
@@ -41,6 +43,13 @@ inline int GetCoordinatorPort(int valkey_port) {
     return valkey_port + kCoordinatorPortOffset + 1;
   }
   return valkey_port + kCoordinatorPortOffset;
+}
+
+inline std::string FormatAddressWithPort(absl::string_view ip, int port) {
+  if (ip.find(':') != absl::string_view::npos) {
+    return absl::StrCat("[", ip, "]:", port);
+  }
+  return absl::StrCat(ip, ":", port);
 }
 }  // namespace coordinator
 

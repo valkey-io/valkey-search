@@ -45,7 +45,7 @@ class FanoutOperationBase {
 
   virtual ~FanoutOperationBase() = default;
 
-  void StartOperation(ValkeyModuleCtx* ctx) {
+  void StartOperation(ValkeyModuleCtx *ctx) {
     blocked_client_ = std::make_unique<vmsdk::BlockedClient>(
         ctx, &Reply, &Timeout, &Free, kNoValkeyTimeout);
     blocked_client_->MeasureTimeStart();
@@ -65,8 +65,8 @@ class FanoutOperationBase {
   const std::string COMMUNICATION_ERROR_LOG_PREFIX =
       "FT.INFO FAILURE: Communication error on node with address ";
 
-  static int Reply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc) {
-    auto* op = static_cast<FanoutOperationBase*>(
+  static int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    auto *op = static_cast<FanoutOperationBase *>(
         ValkeyModule_GetBlockedClientPrivateData(ctx));
     if (!op) {
       return ValkeyModule_ReplyWithError(ctx, "No reply data");
@@ -77,19 +77,19 @@ class FanoutOperationBase {
     return op->GenerateReply(ctx, argv, argc);
   }
 
-  static int Timeout(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
+  static int Timeout(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                      int argc) {
     return ValkeyModule_ReplyWithError(ctx, "Request timed out");
   }
 
-  static void Free(ValkeyModuleCtx* ctx, void* privdata) {
-    delete static_cast<FanoutOperationBase*>(privdata);
+  static void Free(ValkeyModuleCtx *ctx, void *privdata) {
+    delete static_cast<FanoutOperationBase *>(privdata);
   }
 
   void StartFanoutRound() {
     outstanding_ = targets_.size();
     unsigned timeout_ms = GetTimeoutMs();
-    for (const auto& target : targets_) {
+    for (const auto &target : targets_) {
       auto req = GenerateRequest(target);
       IssueRpc(target, req, timeout_ms);
     }
@@ -97,9 +97,9 @@ class FanoutOperationBase {
 
   virtual std::vector<vmsdk::cluster_map::NodeInfo> GetTargets() const = 0;
 
-  void IssueRpc(const vmsdk::cluster_map::NodeInfo& target,
-                const Request& request, unsigned timeout_ms) {
-    coordinator::ClientPool* client_pool_ =
+  void IssueRpc(const vmsdk::cluster_map::NodeInfo &target,
+                const Request &request, unsigned timeout_ms) {
+    coordinator::ClientPool *client_pool_ =
         ValkeySearch::Instance().GetCoordinatorClientPool();
 
     if (target.is_local) {
@@ -116,8 +116,8 @@ class FanoutOperationBase {
         this->RpcDone();
       });
     } else {
-      std::string client_address = absl::StrCat(
-          target.socket_address.primary_endpoint, ":",
+      std::string client_address = coordinator::FormatAddressWithPort(
+          target.socket_address.primary_endpoint,
           coordinator::GetCoordinatorPort(target.socket_address.port));
       auto client = client_pool_->GetClient(client_address);
       if (!client) {
@@ -132,7 +132,7 @@ class FanoutOperationBase {
       }
       this->InvokeRemoteRpc(
           client.get(), request,
-          [this, target, client_address](grpc::Status status, Response& resp) {
+          [this, target, client_address](grpc::Status status, Response &resp) {
             if (status.ok()) {
               this->OnResponse(resp, target);
             } else {
@@ -166,24 +166,25 @@ class FanoutOperationBase {
   }
 
   virtual std::pair<grpc::Status, Response> GetLocalResponse(
-      const Request&, [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
+      const Request &,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo &) = 0;
 
-  virtual void InvokeRemoteRpc(coordinator::Client*, const Request&,
-                               std::function<void(grpc::Status, Response&)>,
+  virtual void InvokeRemoteRpc(coordinator::Client *, const Request &,
+                               std::function<void(grpc::Status, Response &)>,
                                unsigned timeout_ms) = 0;
 
   virtual unsigned GetTimeoutMs() const = 0;
 
   virtual Request GenerateRequest(
-      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo &) = 0;
 
   virtual void OnResponse(
-      const Response&,
-      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo&) = 0;
+      const Response &,
+      [[maybe_unused]] const vmsdk::cluster_map::NodeInfo &) = 0;
 
   virtual void OnError(grpc::Status status,
                        coordinator::FanoutErrorType error_type,
-                       const vmsdk::cluster_map::NodeInfo& target) {
+                       const vmsdk::cluster_map::NodeInfo &target) {
     absl::MutexLock lock(&mutex_);
     if (error_type == coordinator::FanoutErrorType::INDEX_NAME_ERROR) {
       index_name_error_nodes.push_back(target);
@@ -207,21 +208,21 @@ class FanoutOperationBase {
   // reset and clean the fields for new round of retry
   virtual void ResetForRetry() = 0;
 
-  virtual int GenerateReply(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
+  virtual int GenerateReply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) = 0;
 
-  virtual int GenerateTimeoutReply(ValkeyModuleCtx* ctx) {
+  virtual int GenerateTimeoutReply(ValkeyModuleCtx *ctx) {
     return ValkeyModule_ReplyWithError(ctx,
                                        "Unable to contact all cluster members");
   }
 
-  virtual int GenerateErrorReply(ValkeyModuleCtx* ctx) {
+  virtual int GenerateErrorReply(ValkeyModuleCtx *ctx) {
     absl::MutexLock lock(&mutex_);
     std::string error_message;
     // Log index name errors
     if (!index_name_error_nodes.empty()) {
       error_message = "Index name not found.";
-      for (const vmsdk::cluster_map::NodeInfo& target :
+      for (const vmsdk::cluster_map::NodeInfo &target :
            index_name_error_nodes) {
         if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
@@ -229,16 +230,17 @@ class FanoutOperationBase {
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX
-              << absl::StrCat(target.socket_address.primary_endpoint, ":",
-                              coordinator::GetCoordinatorPort(
-                                  target.socket_address.port));
+              << coordinator::FormatAddressWithPort(
+                     target.socket_address.primary_endpoint,
+                     coordinator::GetCoordinatorPort(
+                         target.socket_address.port));
         }
       }
     }
     // Log communication errors
     if (!communication_error_nodes.empty()) {
       error_message = "Communication error between nodes found.";
-      for (const vmsdk::cluster_map::NodeInfo& target :
+      for (const vmsdk::cluster_map::NodeInfo &target :
            communication_error_nodes) {
         if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
@@ -246,16 +248,17 @@ class FanoutOperationBase {
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX
-              << absl::StrCat(target.socket_address.primary_endpoint, ":",
-                              coordinator::GetCoordinatorPort(
-                                  target.socket_address.port));
+              << coordinator::FormatAddressWithPort(
+                     target.socket_address.primary_endpoint,
+                     coordinator::GetCoordinatorPort(
+                         target.socket_address.port));
         }
       }
     }
     // Log inconsistent state errors
     if (!inconsistent_state_error_nodes.empty()) {
       error_message = "Inconsistent index state error found.";
-      for (const vmsdk::cluster_map::NodeInfo& target :
+      for (const vmsdk::cluster_map::NodeInfo &target :
            inconsistent_state_error_nodes) {
         if (target.is_local) {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
@@ -263,9 +266,10 @@ class FanoutOperationBase {
         } else {
           VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX
-              << absl::StrCat(target.socket_address.primary_endpoint, ":",
-                              coordinator::GetCoordinatorPort(
-                                  target.socket_address.port));
+              << coordinator::FormatAddressWithPort(
+                     target.socket_address.primary_endpoint,
+                     coordinator::GetCoordinatorPort(
+                         target.socket_address.port));
         }
       }
     }

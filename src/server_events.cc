@@ -76,9 +76,17 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
 }
 
-void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }
+void AtForkPrepare() {
+  if (ValkeySearch::HasInstance()) {
+    ValkeySearch::Instance().AtForkPrepare();
+  }
+}
 
-void AfterForkParent() { ValkeySearch::Instance().AfterForkParent(); }
+void AfterForkParent() {
+  if (ValkeySearch::HasInstance()) {
+    ValkeySearch::Instance().AfterForkParent();
+  }
+}
 
 void SubscribeToServerEvents() {
   // Note: all the events are subscribed to here. The engine only supports

@@ -52,6 +52,8 @@ using vmsdk::config::ModuleConfigManager;
 
 static absl::NoDestructor<std::unique_ptr<ValkeySearch>> valkey_search_instance;
 
+bool ValkeySearch::HasInstance() { return *valkey_search_instance != nullptr; }
+
 ValkeySearch &ValkeySearch::Instance() { return **valkey_search_instance; };
 
 void ValkeySearch::InitInstance(std::unique_ptr<ValkeySearch> instance) {

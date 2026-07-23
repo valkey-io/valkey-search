@@ -13,6 +13,7 @@
 #include <optional>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -114,7 +115,10 @@ class VectorHNSW : public VectorBase {
                     float query_magnitude) const override;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return (*algo_->GetDataPtrByInternalId(internal_id));
+    auto *ptr = algo_->getPoint(internal_id);
+    CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
+                          << internal_id;
+    return *ptr;
   }
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override;

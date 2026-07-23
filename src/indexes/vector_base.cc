@@ -370,7 +370,7 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
     it->second.magnitude = magnitude;
     auto &stored_ptr = GetVectorLockFree(it->second.internal_id);
     if (!stored_ptr) {
-      return true; // No stored record, so vectors are definitely not matching
+      return true;  // No stored record, so vectors are definitely not matching
     }
     stored_record = stored_ptr.get();
   }

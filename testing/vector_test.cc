@@ -860,6 +860,9 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
         VERIFY_MODIFY(index.get(), vectors[i], i, ExpectedResults::kMissing,
                       true);
       }
+      for (size_t i = 0; i < vectors.size(); ++i) {
+        delete records[i];
+      }
     }
     for (size_t i = 0; i < vectors.size(); ++i) {
       delete records[i];

@@ -33,6 +33,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"

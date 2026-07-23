@@ -231,18 +231,23 @@ class HierarchicalNSW
         (*data_level0_memory_)[internal_id] + offsetData_);
   }
 
-  inline const SavedVectorT &GetDataByInternalId(tableint internal_id) const {
-    return *(GetDataPtrByInternalId(internal_id));
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  inline SavedVectorT GetDataByInternalId(tableint internal_id) const {
+    return std::atomic_load(GetDataPtrByInternalId(internal_id));
   }
 
   inline void SetDataByInternalId(tableint internal_id,
                                   InputVectorT &&datapoint) {
-    *(GetDataPtrByInternalId(internal_id)) = datapoint.GetVectorRecord();
+    std::atomic_store(GetDataPtrByInternalId(internal_id),
+                      datapoint.GetVectorRecord());
   }
   inline void SetDataByInternalId(tableint internal_id,
                                   SavedVectorT &&datapoint) {
-    *(GetDataPtrByInternalId(internal_id)) = std::move(datapoint);
+    std::atomic_store(GetDataPtrByInternalId(internal_id),
+                      std::move(datapoint));
   }
+#pragma GCC diagnostic pop
 
   inline void InitDataByInternalId(tableint internal_id,
                                    InputVectorT &&datapoint) {

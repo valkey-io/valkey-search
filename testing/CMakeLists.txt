@@ -25,6 +25,24 @@ else ()
     target_link_libraries(testing_common_base PUBLIC vmsdk_testing)
 endif ()
 
+# Registers a test suite. Normally this creates its own test executable, but
+# when UNIT_TESTS_SINGLE_EXE is set, all suites are instead accumulated and
+# built into a single "unit_tests" executable (see bottom of this file) to
+# cut down on redundant linking against the (potentially static) dependencies.
+macro(add_test_suite name sources)
+    if (UNIT_TESTS_SINGLE_EXE)
+        list(APPEND TEST_ALL_SOURCES ${sources})
+        if (ARGC GREATER 2)
+            list(APPEND TEST_ALL_INCLUDE_DIRS ${ARGV2})
+        endif ()
+    else ()
+        add_executable(${name} ${sources})
+        target_include_directories(${name} PUBLIC . ${ARGV2})
+        target_link_libraries(${name} PRIVATE testing_common_base)
+        gtest_discover_tests(${name})
+    endif ()
+endmacro()
+
 # 1. Commands Test Suite - consolidates FT command related tests
 set(COMMANDS_TEST_SOURCES
     ft_aggregate_exec_test.cc
@@ -39,10 +57,7 @@ set(COMMANDS_TEST_SOURCES
     commands/ft_internal_update_test.cc
     filter_test.cc)
 
-add_executable(commands_test ${COMMANDS_TEST_SOURCES})
-target_include_directories(commands_test PUBLIC .)
-target_link_libraries(commands_test PRIVATE testing_common_base)
-gtest_discover_tests(commands_test)
+add_test_suite(commands_test "${COMMANDS_TEST_SOURCES}")
 
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
@@ -54,10 +69,7 @@ set(INDEXES_TEST_SOURCES
     text_test.cc
     vector_test.cc)
 
-add_executable(indexes_test ${INDEXES_TEST_SOURCES})
-target_include_directories(indexes_test PUBLIC .)
-target_link_libraries(indexes_test PRIVATE testing_common_base)
-gtest_discover_tests(indexes_test)
+add_test_suite(indexes_test "${INDEXES_TEST_SOURCES}")
 
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
@@ -71,32 +83,21 @@ set(CORE_TEST_SOURCES
     acl_test.cc
     rdb_serialization_test.cc)
 
-add_executable(core_test ${CORE_TEST_SOURCES})
-target_include_directories(core_test PUBLIC .)
-target_link_libraries(core_test PRIVATE testing_common_base)
-gtest_discover_tests(core_test)
+add_test_suite(core_test "${CORE_TEST_SOURCES}")
 
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
     search_test.cc
     query/response_generator_test.cc)
 
-add_executable(query_test ${QUERY_TEST_SOURCES})
-target_include_directories(query_test PUBLIC .)
-target_link_libraries(query_test PRIVATE testing_common_base)
-gtest_discover_tests(query_test)
+add_test_suite(query_test "${QUERY_TEST_SOURCES}")
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES
     coordinator/metadata_manager_test.cc
     coordinator/client_test.cc)
 
-add_executable(coordinator_test ${COORDINATOR_TEST_SOURCES})
-target_include_directories(coordinator_test PUBLIC .)
-target_include_directories(coordinator_test
-                           PUBLIC coordinator)
-target_link_libraries(coordinator_test PRIVATE testing_common_base)
-gtest_discover_tests(coordinator_test)
+add_test_suite(coordinator_test "${COORDINATOR_TEST_SOURCES}" coordinator)
 
 # 1. Utils Test Suite - consolidates utility tests
 set(UTILS_TEST_SOURCES
@@ -108,19 +109,22 @@ set(UTILS_TEST_SOURCES
     utils/numeric_btree_test.cc
     utils/string_interning_test.cc)
 
-add_executable(valkey_utils_test ${UTILS_TEST_SOURCES})
-target_include_directories(valkey_utils_test PUBLIC .)
-target_include_directories(valkey_utils_test
-                           PUBLIC utils)
-target_link_libraries(valkey_utils_test PUBLIC testing_common_base)
-gtest_discover_tests(valkey_utils_test)
+add_test_suite(valkey_utils_test "${UTILS_TEST_SOURCES}" utils)
 
 # 7. Text Index Test Suite
-add_executable(text_index_test
+set(TEXT_INDEX_TEST_SOURCES
     flat_position_map_test.cc
     radix_test.cc
     rax_wrapper_test.cc
     text_index_schema_test.cc)
-target_include_directories(text_index_test PUBLIC .)
-target_link_libraries(text_index_test PRIVATE testing_common_base)
-gtest_discover_tests(text_index_test)
+
+add_test_suite(text_index_test "${TEXT_INDEX_TEST_SOURCES}")
+
+if (UNIT_TESTS_SINGLE_EXE)
+    list(REMOVE_DUPLICATES TEST_ALL_INCLUDE_DIRS)
+
+    add_executable(unit_tests ${TEST_ALL_SOURCES})
+    target_include_directories(unit_tests PUBLIC . ${TEST_ALL_INCLUDE_DIRS})
+    target_link_libraries(unit_tests PRIVATE testing_common_base)
+    gtest_discover_tests(unit_tests)
+endif ()

@@ -37,6 +37,20 @@ enum class DeletionType {
   kNone         // No deletion occurred.
 };
 
+// Result of an AddRecord/ModifyRecord operation on a field. This is the
+// "expected" outcome channel; genuinely unexpected failures are still reported
+// through the absl::Status error channel (see IndexBase::AddRecord).
+enum class RecordResult {
+  kAdded,        // The field value was successfully indexed.
+  kMissing,      // The field has no indexable value (the only allowed
+                 // non-valid field value, e.g. an empty tag/text or an
+                 // unchanged vector). Treated as if the field were absent.
+  kInvalidData,  // The field value does not conform to the field's type (e.g.
+                 // a NUMERIC field whose value is not a number, or a VECTOR
+                 // field with the wrong byte length). Redisearch drops the
+                 // entire key in this case; see COMPATIBILITY.md.
+};
+
 const absl::NoDestructor<absl::flat_hash_map<absl::string_view, IndexerType>>
     kIndexerTypeByStr({{"VECTOR", IndexerType::kVector},
                        {"TAG", IndexerType::kTag},
@@ -48,16 +62,17 @@ class IndexBase {
   explicit IndexBase(IndexerType indexer_type) : indexer_type_(indexer_type) {}
   virtual ~IndexBase() = default;
 
-  // Add/Remove/Modify will return true if the operation was successful, false
-  // if it was skipped.  Returns an error status if there is an unexpected
+  // Add/Modify return a RecordResult describing the outcome (indexed, missing,
+  // or invalid data). Remove returns true if a record was removed, false if it
+  // was skipped. All three return an error status if there is an unexpected
   // failure.
-  virtual absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                         absl::string_view data) = 0;
-  virtual absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
+  virtual absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
+                                                 absl::string_view data) = 0;
+  virtual absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
                                             DeletionType deletion_type) = 0;
-  virtual absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                            absl::string_view data) = 0;
-  virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const = 0;
+  virtual absl::StatusOr<RecordResult> ModifyRecord(
+      const InternedStringPtr &key, absl::string_view data) = 0;
+  virtual int RespondWithInfo(ValkeyModuleCtx *ctx) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
 
@@ -65,13 +80,13 @@ class IndexBase {
 
   virtual size_t GetTrackedKeyCount() const = 0;
   virtual size_t GetUnTrackedKeyCount() const = 0;
-  virtual bool IsTracked(const InternedStringPtr& key) const = 0;
-  virtual bool IsUnTracked(const InternedStringPtr& key) const = 0;
-  virtual void UnTrack(const InternedStringPtr& key) = 0;
+  virtual bool IsTracked(const InternedStringPtr &key) const = 0;
+  virtual bool IsUnTracked(const InternedStringPtr &key) const = 0;
+  virtual void UnTrack(const InternedStringPtr &key) = 0;
   virtual absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
   virtual absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
 
   virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString input) const {
@@ -85,16 +100,16 @@ class IndexBase {
   IndexerType indexer_type_{IndexerType::kNone};
 };
 
-inline bool IsVectorIndex(const IndexBase& index) {
+inline bool IsVectorIndex(const IndexBase &index) {
   return IsVectorIndex(index.GetIndexerType());
 }
 
-inline bool IsVectorIndex(const IndexBase* index) {
+inline bool IsVectorIndex(const IndexBase *index) {
   return index != nullptr && IsVectorIndex(index->GetIndexerType());
 }
 
 template <typename T>
-inline bool IsVectorIndex(const std::shared_ptr<T>& index) {
+inline bool IsVectorIndex(const std::shared_ptr<T> &index) {
   return index != nullptr && IsVectorIndex(index->GetIndexerType());
 }
 
@@ -102,7 +117,7 @@ class EntriesFetcherIteratorBase {
  public:
   virtual bool Done() const = 0;
   virtual void Next() = 0;
-  virtual const InternedStringPtr& operator*() const = 0;
+  virtual const InternedStringPtr &operator*() const = 0;
   virtual ~EntriesFetcherIteratorBase() = default;
 };
 

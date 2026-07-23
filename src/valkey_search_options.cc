@@ -9,6 +9,7 @@
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
 

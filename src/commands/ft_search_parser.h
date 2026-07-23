@@ -34,7 +34,7 @@ struct SearchCommand : public QueryCommand {
   // optimized with LIMIT based trimming. Implement the correct logic here to
   // return true when those clauses are present.
   bool RequiresCompleteResults() const override {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || inkeys.has_value();
   }
 
   query::SerializationRange GetSerializationRange() const;

@@ -9,11 +9,10 @@
 #include <cmath>
 #include <ctime>
 #include <iomanip>
-#include <sstream>
 
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
 #define DBG 0 && std::cerr
@@ -27,13 +26,13 @@ static const uint64_t kMantissaMask = 0x000FFFFFFFFFFFFFull;
 
 // Built-in isnan doesn't work when compiling with fast-math, which is what we
 // want to do.
-static bool IsNan(const double& d) {
-  uint64_t v = *(uint64_t*)&d;
+static bool IsNan(const double &d) {
+  uint64_t v = *(uint64_t *)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }
 
-static bool IsInf(const double& d) {
-  uint64_t v = *(uint64_t*)&d;
+static bool IsInf(const double &d) {
+  uint64_t v = *(uint64_t *)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
 }
 
@@ -139,7 +138,7 @@ std::optional<double> Value::AsDouble() const {
   } else {
     return std::nullopt;
   }
-  char* end{nullptr};
+  char *end{nullptr};
   double val = std::strtod(sv.begin(), &end);
   if (end != sv.end() || IsNan(val)) {
     return std::nullopt;
@@ -208,7 +207,7 @@ Value Value::GetArrayElement(size_t index) const {
   return (*arr)[index];
 }
 
-std::ostream& operator<<(std::ostream& os, const Value& v) {
+std::ostream &operator<<(std::ostream &os, const Value &v) {
   if (v.IsNil()) {
     return os << "Nil(" << v.AsNil().value().GetReason() << ")";
   } else if (v.IsBool()) {
@@ -268,7 +267,7 @@ static Ordering CompareStrings(const absl::string_view l,
   }
 }
 
-Ordering Compare(const Value& l, const Value& r) {
+Ordering Compare(const Value &l, const Value &r) {
   // First equivalent types
 
   if (l.IsNil() || r.IsNil()) {
@@ -318,7 +317,7 @@ Ordering Compare(const Value& l, const Value& r) {
   return CompareStrings(*l.AsStringView(), *r.AsStringView());
 }
 
-Value FuncAdd(const Value& l, const Value& r) {
+Value FuncAdd(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -328,7 +327,7 @@ Value FuncAdd(const Value& l, const Value& r) {
   }
 }
 
-Value FuncSub(const Value& l, const Value& r) {
+Value FuncSub(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -338,7 +337,7 @@ Value FuncSub(const Value& l, const Value& r) {
   }
 }
 
-Value FuncMul(const Value& l, const Value& r) {
+Value FuncMul(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -348,7 +347,7 @@ Value FuncMul(const Value& l, const Value& r) {
   }
 }
 
-Value FuncDiv(const Value& l, const Value& r) {
+Value FuncDiv(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -362,7 +361,7 @@ Value FuncDiv(const Value& l, const Value& r) {
   }
 }
 
-Value FuncPower(const Value& l, const Value& r) {
+Value FuncPower(const Value &l, const Value &r) {
   auto lv = l.AsDouble();
   auto rv = r.AsDouble();
   if (lv && rv) {
@@ -372,19 +371,19 @@ Value FuncPower(const Value& l, const Value& r) {
   }
 }
 
-Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
+Value FuncLt(const Value &l, const Value &r) { return Value(l < r); }
 
-Value FuncLe(const Value& l, const Value& r) { return Value(l <= r); }
+Value FuncLe(const Value &l, const Value &r) { return Value(l <= r); }
 
-Value FuncEq(const Value& l, const Value& r) { return Value(l == r); }
+Value FuncEq(const Value &l, const Value &r) { return Value(l == r); }
 
-Value FuncNe(const Value& l, const Value& r) { return Value(l != r); }
+Value FuncNe(const Value &l, const Value &r) { return Value(l != r); }
 
-Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
+Value FuncGt(const Value &l, const Value &r) { return Value(l > r); }
 
-Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
+Value FuncGe(const Value &l, const Value &r) { return Value(l >= r); }
 
-Value FuncLor(const Value& l, const Value& r) {
+Value FuncLor(const Value &l, const Value &r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
   auto lv = l.AsBool();
   auto rv = r.AsBool();
@@ -395,7 +394,7 @@ Value FuncLor(const Value& l, const Value& r) {
   }
 }
 
-Value FuncLand(const Value& l, const Value& r) {
+Value FuncLand(const Value &l, const Value &r) {
   DBG << "FuncLand: " << l << " && " << r << "\n";
   auto lv = l.AsBool();
   auto rv = r.AsBool();
@@ -414,7 +413,7 @@ Value FuncLand(const Value& l, const Value& r) {
 // Redisearch's NaN-on-coercion-failure semantics. Nil-typed inputs still
 // propagate as Nil regardless of emulate-release, so layered expressions
 // like `abs(@missing_field)` keep clean Nil propagation.
-static Value NumericUnaryNil(const Value& o, const char* fname) {
+static Value NumericUnaryNil(const Value &o, const char *fname) {
   if (o.IsNil()) {
     return Value(Value::Nil(fname));
   }
@@ -424,7 +423,7 @@ static Value NumericUnaryNil(const Value& o, const char* fname) {
       [&] { return Value(Value::Nil(fname)); });  // legacy: Nil
 }
 
-Value FuncFloor(const Value& o) {
+Value FuncFloor(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "floor couldn't convert to a double");
@@ -432,7 +431,7 @@ Value FuncFloor(const Value& o) {
   return Value(std::floor(*d));
 }
 
-Value FuncCeil(const Value& o) {
+Value FuncCeil(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "ceil couldn't convert to a double");
@@ -440,7 +439,7 @@ Value FuncCeil(const Value& o) {
   return Value(std::ceil(*d));
 }
 
-Value FuncAbs(const Value& o) {
+Value FuncAbs(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "abs couldn't convert to a double");
@@ -448,7 +447,7 @@ Value FuncAbs(const Value& o) {
   return Value(std::abs(*d));
 }
 
-Value FuncLog(const Value& o) {
+Value FuncLog(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "log couldn't convert to a double");
@@ -456,7 +455,7 @@ Value FuncLog(const Value& o) {
   return Value(std::log(*d));
 }
 
-Value FuncLog2(const Value& o) {
+Value FuncLog2(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "log2 couldn't convert to a double");
@@ -464,7 +463,7 @@ Value FuncLog2(const Value& o) {
   return Value(std::log2(*d));
 }
 
-Value FuncExp(const Value& o) {
+Value FuncExp(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "exp couldn't convert to a double");
@@ -472,7 +471,7 @@ Value FuncExp(const Value& o) {
   return Value(std::exp(*d));
 }
 
-Value FuncSqrt(const Value& o) {
+Value FuncSqrt(const Value &o) {
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "sqrt couldn't convert to a double");
@@ -480,7 +479,7 @@ Value FuncSqrt(const Value& o) {
   return Value(std::sqrt(*d));
 }
 
-Value FuncStrlen(const Value& o) {
+Value FuncStrlen(const Value &o) {
   if (o.IsArray()) {
     return Value();
   }
@@ -491,7 +490,7 @@ Value FuncStrlen(const Value& o) {
   return Value(double(os->size()));
 }
 
-Value FuncStartswith(const Value& l, const Value& r) {
+Value FuncStartswith(const Value &l, const Value &r) {
   if (l.IsArray() || r.IsArray()) {
     return Value();
   }
@@ -508,7 +507,7 @@ Value FuncStartswith(const Value& l, const Value& r) {
   }
 }
 
-Value FuncContains(const Value& l, const Value& r) {
+Value FuncContains(const Value &l, const Value &r) {
   if (l.IsArray() || r.IsArray()) {
     return Value();
   }
@@ -531,7 +530,7 @@ Value FuncContains(const Value& l, const Value& r) {
   }
 }
 
-Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+Value FuncSubstr(const Value &l, const Value &m, const Value &r) {
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
     return Value(Value::Nil("Invalid type for substr. Expected string"));
   }
@@ -564,7 +563,7 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   }
 }
 
-Value FuncLower(const Value& o) {
+Value FuncLower(const Value &o) {
   if (o.IsArray()) {
     return Value();
   }
@@ -593,7 +592,7 @@ Value FuncLower(const Value& o) {
   return Value(std::move(result));
 }
 
-Value FuncUpper(const Value& o) {
+Value FuncUpper(const Value &o) {
   if (o.IsArray()) {
     return Value();
   }
@@ -630,9 +629,9 @@ static bool DateNegativeTsReturnsNil() {
       [] { return false; });
 }
 
-Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
+Value FuncConcat(const absl::InlinedVector<Value, 4> &values) {
   std::string result;
-  for (auto& v : values) {
+  for (auto &v : values) {
     auto s = v.AsStringView();
     if (!s) {
       return Value(Value::Nil("concat: operand has no string representation"));
@@ -649,7 +648,7 @@ Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
 // re-introduce UB at the (time_t) cast / gmtime_r partial-write on
 // overflow.
 #define TIME_FUNCTION(funcname, field, adjustment)               \
-  Value funcname(const Value& timestamp) {                       \
+  Value funcname(const Value &timestamp) {                       \
     auto ts = timestamp.AsDouble();                              \
     if (!ts) {                                                   \
       return Value(Value::Nil("timestamp not a number"));        \
@@ -673,7 +672,7 @@ TIME_FUNCTION(FuncYear, tm_year, 1900)
 
 // Pure-arithmetic dayofweek: avoids gmtime_r entirely. Jan 1 1970 (ts=0)
 // was a Thursday — POSIX day index 4 (0=Sun..6=Sat).
-Value FuncDayofweek(const Value& o) {
+Value FuncDayofweek(const Value &o) {
   auto tsd = o.AsDouble();
   if (!tsd) {
     return Value(Value::Nil("dayofweek: timestamp not a number"));
@@ -693,7 +692,7 @@ Value FuncDayofweek(const Value& o) {
   return Value(double(r));
 }
 
-Value FuncTimefmt(const Value& ts, const Value& fmt) {
+Value FuncTimefmt(const Value &ts, const Value &fmt) {
   auto timestampd = ts.AsDouble();
   if (!timestampd) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
@@ -733,7 +732,7 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   return Value(std::move(result));
 }
 
-Value FuncParsetime(const Value& str, const Value& fmt) {
+Value FuncParsetime(const Value &str, const Value &fmt) {
   auto timestr = str.AsString();  // Ensure 0 terminated
   auto fmtstr = fmt.AsString();
   if (!timestr || !fmtstr) {
@@ -743,7 +742,7 @@ Value FuncParsetime(const Value& str, const Value& fmt) {
   // read (UB). Without zero-init the result was nondeterministic, so no
   // user could have depended on it.
   struct tm tm = {};
-  char* res = ::strptime(timestr->data(), fmtstr->data(), &tm);
+  char *res = ::strptime(timestr->data(), fmtstr->data(), &tm);
   if (res == nullptr) {
     // 1.2.1 fix: strptime returning NULL → Nil (matches Redisearch).
     // Pre-1.2.1: ignored the NULL return and fed the zeroed tm to mktime,
@@ -763,7 +762,7 @@ Value FuncParsetime(const Value& str, const Value& fmt) {
 // Month-rounding: still needs gmtime_r/mktime because month boundaries
 // are not a fixed period (28/29/30/31 days). The finite guard is always-on
 // UB hardening; the negative-ts guard is the 1.2.1 fix.
-Value FuncMonth(const Value& o) {
+Value FuncMonth(const Value &o) {
   auto tsd = o.AsDouble();
   if (!tsd) {
     return Value(Value::Nil("month: timestamp not a number"));
@@ -796,8 +795,8 @@ Value FuncMonth(const Value& o) {
 //
 // `notnum`, `notfinite`, `negative` are static-storage string literals
 // supplied by each caller — Value::Nil holds a non-owning const char*.
-static Value RoundToPeriod(const Value& o, double period, const char* notnum,
-                           const char* notfinite, const char* negative) {
+static Value RoundToPeriod(const Value &o, double period, const char *notnum,
+                           const char *notfinite, const char *negative) {
   auto tsd = o.AsDouble();
   if (!tsd) {
     return Value(Value::Nil(notnum));
@@ -814,17 +813,17 @@ static Value RoundToPeriod(const Value& o, double period, const char* notnum,
   return Value(std::floor(*tsd / period) * period);
 }
 
-Value FuncDay(const Value& o) {
+Value FuncDay(const Value &o) {
   return RoundToPeriod(o, 86400.0, "day: timestamp not a number",
                        "day: timestamp is not finite",
                        "day: timestamp is before the epoch");
 }
-Value FuncHour(const Value& o) {
+Value FuncHour(const Value &o) {
   return RoundToPeriod(o, 3600.0, "hour: timestamp not a number",
                        "hour: timestamp is not finite",
                        "hour: timestamp is before the epoch");
 }
-Value FuncMinute(const Value& o) {
+Value FuncMinute(const Value &o) {
   return RoundToPeriod(o, 60.0, "minute: timestamp not a number",
                        "minute: timestamp is not finite",
                        "minute: timestamp is before the epoch");

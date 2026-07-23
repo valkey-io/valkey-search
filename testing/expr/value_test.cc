@@ -92,7 +92,7 @@ TEST_F(ValueTest, TypesTest) {
       {Value({Value(1.0), Value(2.0)}), false, false, false, false, true},
       {Value({}), false, false, false, false, true}};
 
-  for (auto& c : t) {
+  for (auto &c : t) {
     EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsBool(), c.is_bool) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsDouble(), c.is_double) << "Value is " << c.v;
@@ -143,7 +143,7 @@ TEST_F(ValueTest, Compare_test) {
       {Value(std::string("a")), Value(std::string("aa")), Ordering::kLESS},
       {Value(std::string("0.0")), Value(std::string("0.00")), Ordering::kLESS}};
 
-  for (auto& c : t) {
+  for (auto &c : t) {
     EXPECT_EQ(c.result, Compare(c.l, c.r)) << "l = " << c.l << " r = " << c.r;
     switch (c.result) {
       case Ordering::kUNORDERED:
@@ -173,7 +173,7 @@ TEST_F(ValueTest, Compare_floating_point) {
       {neg_inf, min_neg, max_neg, pos_zero, min_pos, max_pos, pos_inf},
   };
 
-  for (auto& number_line : number_lines) {
+  for (auto &number_line : number_lines) {
     for (auto i = 0; i < number_line.size(); ++i) {
       EXPECT_EQ(Compare(number_line[i], number_line[i]), Ordering::kEQUAL);
       EXPECT_EQ(number_line[i], number_line[i]);
@@ -242,7 +242,7 @@ TEST_F(ValueTest, add) {
 
   };
 
-  for (auto& tc : test_cases) {
+  for (auto &tc : test_cases) {
     EXPECT_EQ(FuncAdd(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
     EXPECT_EQ(FuncAdd(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
   }
@@ -285,7 +285,7 @@ TEST_F(ValueTest, case_test) {
       {"aBc", "abc", "ABC"},
       {"\xe2\x82\xac", "\xe2\x82\xac", "\xe2\x82\xac"},
   };
-  for (auto& [in, lower, upper] : testcases) {
+  for (auto &[in, lower, upper] : testcases) {
     EXPECT_EQ(Value(lower), FuncLower(Value(in)));
     EXPECT_EQ(Value(upper), FuncUpper(Value(in)));
   }

@@ -10,7 +10,6 @@
 #include <sys/types.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -111,11 +110,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
 
 template <typename T>
 T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
-  T magnitude = 0.0f;
-  for (size_t i = 0; i < size; i++) {
-    magnitude += src[i] * src[i];
-  }
-  magnitude = std::sqrt(magnitude);
+  T magnitude = CalcMagnitude(src, size);
   T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
   for (size_t i = 0; i < size; i++) {
     dst[i] = norm * src[i];
@@ -167,17 +162,26 @@ InternedStringPtr VectorBase::InternVector(absl::string_view record,
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
                                                    absl::string_view record) {
-  std::optional<float> magnitude;
-  auto interned_vector = InternVector(record, magnitude);
-  if (!interned_vector) {
-    // A vector with the wrong byte length cannot be interned: invalid data.
+  if (!IsValidSizeVector(record)) {
     return RecordResult::kInvalidData;
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto internal_id,
-      TrackKey(key, magnitude.value_or(kDefaultMagnitude), interned_vector));
-  absl::Status add_result = AddRecordImpl(internal_id, interned_vector->Str());
+  float magnitude = kDefaultMagnitude;
+  std::vector<char> norm_record;
+  if (normalize_) {
+    norm_record = NormalizeEmbedding(record, GetDataTypeSize(), &magnitude);
+    record = absl::string_view((const char *)norm_record.data(),
+                               GetVectorDataSize());
+  }
+  VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
+  absl::Status add_result = AddRecordImpl(internal_id, record);
   if (!add_result.ok()) {
+    auto remove_result = RemoveRecordImpl(internal_id);
+    if (!remove_result.ok()) {
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+          << "While processing error for AddRecord, encountered error in "
+             "RemoveRecordImpl: "
+          << remove_result.message();
+    }
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
       VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
@@ -222,25 +226,28 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     const InternedStringPtr &key, absl::string_view record) {
   // VectorExternalizer tracks added entries. We need to untrack mutations which
   // are processed as modified records.
-  std::optional<float> magnitude;
-  auto interned_vector = InternVector(record, magnitude);
-  if (!interned_vector) {
-    // A vector with the wrong byte length cannot be interned: invalid data.
+  if (!IsValidSizeVector(record)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return RecordResult::kInvalidData;
   }
+  float magnitude = kDefaultMagnitude;
+  std::vector<char> norm_record;
+  if (normalize_) {
+    norm_record = NormalizeEmbedding(record, GetDataTypeSize(), &magnitude);
+    record = absl::string_view((const char *)norm_record.data(),
+                               GetVectorDataSize());
+  }
+
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(
-      bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
-                               interned_vector));
+  VMSDK_ASSIGN_OR_RETURN(bool res, UpdateMetadata(key, magnitude, record));
   if (!res) {
     // The new vector is identical to the tracked one: nothing to re-index. This
     // is a no-op, not invalid data.
     return RecordResult::kMissing;
   }
 
-  auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
+  auto modify_result = ModifyRecordImpl(internal_id, record);
   if (!modify_result.ok()) {
     auto untrack_result = UnTrackKey(key);
     if (!untrack_result.ok()) {
@@ -251,7 +258,6 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     }
     return modify_result;
   }
-  TrackVector(internal_id, interned_vector);
   return RecordResult::kAdded;
 }
 
@@ -278,12 +284,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
 
 absl::StatusOr<std::vector<char>> VectorBase::GetValue(
     const InternedStringPtr &key) const {
+  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
+  const char *value = GetValueImpl(it->second.internal_id);
   if (normalize_) {
     if (it->second.magnitude < 0) {
       return absl::InternalError("Magnitude is not initialized");
@@ -318,7 +325,6 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     return std::nullopt;
   }
   auto id = it->second.internal_id;
-  UnTrackVector(id);
   tracked_metadata_by_key_.erase(it);
   auto key_by_internal_id_it = key_by_internal_id_.find(id);
   if (key_by_internal_id_it == key_by_internal_id_.end()) {
@@ -330,16 +336,8 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
   return id;
 }
 
-char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
-  auto interned_vector = StringInternStore::Intern(
-      absl::string_view(vector, len), vector_allocator_.get());
-  TrackVector(internal_id, interned_vector);
-  return (char *)interned_vector->Str().data();
-}
-
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
-                                              float magnitude,
-                                              const InternedStringPtr &vector) {
+                                              float magnitude) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
@@ -352,16 +350,13 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
     return absl::InvalidArgumentError(
         absl::StrCat("Embedding id already exists: ", key->Str()));
   }
-  TrackVector(id, vector);
   key_by_internal_id_.insert({id, key});
   return id;
 }
-// Return an error if the key is empty or not being tracked.
-// Return false if the tracked vector matches the input vector.
-// Otherwise, track the new vector and return true.
-absl::StatusOr<bool> VectorBase::UpdateMetadata(
-    const InternedStringPtr &key, float magnitude,
-    const InternedStringPtr &vector) {
+
+absl::StatusOr<bool> VectorBase::UpdateMetadata(const InternedStringPtr &key,
+                                                float magnitude,
+                                                absl::string_view vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }

@@ -30,7 +30,7 @@ class NumericIndexTest : public vmsdk::ValkeyTest {
 };
 
 std::vector<std::string> Fetch(
-    valkey_search::indexes::EntriesFetcherBase& fetcher) {
+    valkey_search::indexes::EntriesFetcherBase &fetcher) {
   std::vector<std::string> keys;
   auto itr = fetcher.Begin();
   while (!itr->Done()) {

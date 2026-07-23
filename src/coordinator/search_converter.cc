@@ -297,7 +297,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->sortby_parameter = SortByFromGRPC(request);
   parameters->scorer = ScorerFromGRPC(request.scorer());
   if (request.has_inkeys()) {
-    auto &dest = parameters->inkeys.emplace();
+    auto& dest = parameters->inkeys.emplace();
     dest.reserve(request.inkeys().keys().size());
     for (const auto& key : request.inkeys().keys()) {
       dest.insert(key);

@@ -69,6 +69,8 @@ target_link_libraries(vmsdk PUBLIC absl::core_headers
 target_link_libraries(vmsdk PUBLIC ${GRPC_LIB})
 target_link_libraries(vmsdk PUBLIC highwayhash::highwayhash)
 
-add_library(vmsdk_dso SHARED)
-target_link_libraries(vmsdk_dso PUBLIC vmsdk)
-target_sources(vmsdk_dso PRIVATE $<TARGET_OBJECTS:vmsdk>)
+if (NOT VALKEY_VENDORED_DEPS)
+    add_library(vmsdk_dso SHARED)
+    target_link_libraries(vmsdk_dso PUBLIC vmsdk)
+    target_sources(vmsdk_dso PRIVATE $<TARGET_OBJECTS:vmsdk>)
+endif ()

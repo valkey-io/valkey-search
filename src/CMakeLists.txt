@@ -72,14 +72,16 @@ add_library (search MODULE $<TARGET_OBJECTS:search_base>)
 target_link_libraries(search PRIVATE search_base)
 target_sources(search PRIVATE $<TARGET_OBJECTS:vmsdk>)
 
-add_library (search_dso SHARED $<TARGET_OBJECTS:search_base>)
-target_link_libraries(search_dso PRIVATE search_base)
+if (NOT VALKEY_VENDORED_DEPS)
+    add_library (search_dso SHARED $<TARGET_OBJECTS:search_base>)
+    target_link_libraries(search_dso PRIVATE search_base)
 
-target_link_libraries(search_dso PUBLIC
-        vmsdk_dso
-        gRPC::grpc++
-        absl::base
-        protobuf::libprotobuf)
+    target_link_libraries(search_dso PUBLIC
+            vmsdk_dso
+            gRPC::grpc++
+            absl::base
+            protobuf::libprotobuf)
 
-target_link_libraries(search_dso INTERFACE mydeps)
-target_link_libraries(search_dso INTERFACE ICU::uc ICU::i18n ICU::data)
+    target_link_libraries(search_dso INTERFACE mydeps)
+    target_link_libraries(search_dso INTERFACE ICU::uc ICU::i18n ICU::data)
+endif ()

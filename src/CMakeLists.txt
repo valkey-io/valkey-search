@@ -71,6 +71,9 @@ endforeach()
 add_library (search MODULE $<TARGET_OBJECTS:search_base>)
 target_link_libraries(search PRIVATE search_base)
 target_sources(search PRIVATE $<TARGET_OBJECTS:vmsdk>)
+# testing/integration/run.sh and scripts/common.rc expect the module at a flat
+# path, e.g. ${BUILD_DIR}/libsearch.so, not nested under src/.
+set_target_properties(search PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 if (NOT VALKEY_VENDORED_DEPS)
     add_library (search_dso SHARED $<TARGET_OBJECTS:search_base>)

@@ -193,10 +193,12 @@ void VectorRegistry::LockFreeUntrackIfUnused(const RegistryKey &search_key) {
   }
 }
 
-VectorRegistry::Stats VectorRegistry::GetStats() const {
+const VectorRegistry::Stats &VectorRegistry::GetStats() const {
   vmsdk::VerifyMainThread();
-  absl::MutexLock lock(&mutex_);
-  stats_.entry_cnt = tracked_vectors_.size();
+  {
+    absl::MutexLock lock(&mutex_);
+    stats_.entry_cnt = tracked_vectors_.size();
+  }
   return stats_;
 }
 

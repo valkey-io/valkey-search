@@ -455,7 +455,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // For proper sequencing and thread-safety, we separate reads/writes into
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
-  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
 
   struct BackfillJob {
     BackfillJob() = delete;
@@ -502,11 +502,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
                                 vmsdk::UniqueValkeyString data,
-                                indexes::DeletionType deletion_type);
+                                indexes::DeletionType deletion_type)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   // Removes the key from every attribute index (and the schema-level text
   // index). Used to implement the Redisearch-compatible behavior of dropping
   // the entire key when any field contains invalid data.
-  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key);
+  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);

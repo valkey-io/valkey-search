@@ -986,7 +986,10 @@ void IndexSchema::ProcessMutation(ValkeyModuleCtx *ctx,
   if (ABSL_PREDICT_FALSE(!mutations_thread_pool_ ||
                          mutations_thread_pool_->Size() == 0)) {
     vmsdk::WriterMutexLock lock(&time_sliced_mutex_);
-    index_key_info_[interned_key].document_score = document_score;
+    {
+      absl::MutexLock records_lock(&mutated_records_mutex_);
+      index_key_info_[interned_key].document_score = document_score;
+    }
     SyncProcessMutation(ctx, mutated_attributes, interned_key);
     return;
   }

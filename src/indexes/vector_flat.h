@@ -49,15 +49,19 @@ class VectorFlat : public VectorBase {
     return space_.get();
   }
   int GetBlockSize() const { return block_size_; }
-  size_t GetCapacity() const override
-      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+  // Lock-free search optimization: Reading capacity is thread-safe because
+  // ChunkedArray::element_count_ is implemented as an atomic variable.
+  size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->data_->getCapacity();
   }
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
-      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -74,12 +78,19 @@ class VectorFlat : public VectorBase {
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   T ComputeDistance(absl::string_view query, const VectorRecord *vector_record,
-                    float query_magnitude) const override;
+                    float query_magnitude) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const override;
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
-      uint64_t internal_id) const override;
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,

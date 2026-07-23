@@ -71,13 +71,13 @@ class VectorRegistry {
       ABSL_LOCKS_EXCLUDED(mutex_);
 
   struct Stats {
-    size_t entry_cnt ABSL_GUARDED_BY(mutex_);
+    size_t entry_cnt;
     vmsdk::ShardedAtomic<uint64_t> hash_sharing_errors;
     vmsdk::ShardedAtomic<uint64_t> hash_sharing_hits;
     vmsdk::ShardedAtomic<uint64_t> lookup_record_hits;
     vmsdk::ShardedAtomic<uint64_t> lookup_record_misses;
   };
-  Stats GetStats() const ABSL_LOCKS_EXCLUDED(mutex_);
+  const Stats &GetStats() const;
 
   ValkeyModuleCtx *GetCtx() const { return ctx_.get(); }
 
@@ -117,8 +117,7 @@ class VectorRegistry {
   bool ShareWithValkeyHash(
       const InternedStringPtr &key, absl::string_view attribute_identifier,
       const indexes::VectorRecord *vector_record, size_t vector_size,
-      const data_model::AttributeDataType &attribute_data_type)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+      const data_model::AttributeDataType &attribute_data_type);
 
   // Reverts external shared vector references in the Valkey engine back to
   // standard string values prior to untracking.

@@ -207,6 +207,9 @@ class VectorBase : public IndexBase {
       absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   bool AddPrefilteredKey(
@@ -217,8 +220,11 @@ class VectorBase : public IndexBase {
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   absl::StatusOr<std::vector<char>> GetVectorDuringSearch(
-      const InternedStringPtr &key) const;
+      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
@@ -304,6 +310,9 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   absl::StatusOr<uint64_t> GetInternalIdDuringSearch(
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   absl::flat_hash_map<uint64_t, InternedStringPtr> key_by_internal_id_

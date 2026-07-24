@@ -10,6 +10,7 @@ VECTOR_DIM = 3
 
 SETS_KEY = lambda key_type: f"{key_type} sets"
 CREATES_KEY = lambda key_type: f"{key_type} creates"
+SETUP_KEY = lambda key_type: f"{key_type} setup"
 
 # Text data configuration
 TEXT_SCHEMA = {
@@ -211,6 +212,8 @@ def unbytes(b):
         return b.decode("utf-8")
     else:
         return b
+
+
 class ClientSystem:
     def __init__(self, address):
         self.address = address
@@ -654,18 +657,64 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     return data
 
 ### Helper Functions ###
+def compute_alias_data():
+    """Return alias compatibility dataset in the standard compute_data_sets() shape.
+    Supports both hash and json key types.
+    """
+    data = {"alias": {}}
+    for key_type in ["hash", "json"]:
+        if key_type == "hash":
+            data["alias"][CREATES_KEY(key_type)] = [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 adoc: SCHEMA price NUMERIC category TAG",
+                "FT.CREATE hash_idx2 ON HASH PREFIX 1 empty: SCHEMA price NUMERIC category TAG",
+            ]
+            data["alias"][SETS_KEY(key_type)] = [
+                (f"adoc:{i}", {"price": str(i * 10),
+                               "category": "electronics" if i % 2 == 0 else "books"})
+                for i in range(5)
+            ]
+            data["alias"][SETUP_KEY(key_type)] = [
+                ["FT.ALIASUPDATE", "alias_search", "hash_idx1"],
+                ["FT.ALIASUPDATE", "alias_agg",    "hash_idx1"],
+            ]
+        else:
+            data["alias"][CREATES_KEY(key_type)] = [
+                "FT.CREATE json_idx1 ON JSON PREFIX 1 jdoc: SCHEMA $.price AS price NUMERIC $.category AS category TAG",
+                "FT.CREATE json_idx2 ON JSON PREFIX 1 jempty: SCHEMA $.price AS price NUMERIC $.category AS category TAG",
+            ]
+            data["alias"][SETS_KEY(key_type)] = [
+                (f"jdoc:{i}", {"price": i * 10,
+                               "category": "electronics" if i % 2 == 0 else "books"})
+                for i in range(5)
+            ]
+            data["alias"][SETUP_KEY(key_type)] = [
+                ["FT.ALIASUPDATE", "alias_search", "json_idx1"],
+                ["FT.ALIASUPDATE", "alias_agg",    "json_idx1"],
+            ]
+    return data
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        match data_set:
+            case "alias":
+                data_source = "alias"
+            case _ if data_set in TEXT_DATASETS:
+                data_source = "text"
+            case _:
+                data_source = "vector"
 
     match data_source:
+        case "alias":
+            data = compute_alias_data()
         case "vector":
             data = compute_data_sets()
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
+
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
         client.execute_command(create_index_cmd)
@@ -681,7 +730,23 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
                 pipe.execute_command(*["JSON.SET", cmd[0], "$", json.dumps(cmd[1])])
         pipe.execute()
 
-    # client.wait_for_indexing_done(f"{key_type}_idx1")
+    # Run any post-load setup commands
+    for setup_cmd in data[data_set].get(SETUP_KEY(key_type), []):
+        client.execute_command(*setup_cmd)
+    # Verify that each alias expected to be live after setup actually resolves.
+    if data[data_set].get(SETUP_KEY(key_type)):
+        setup_cmds = data[data_set][SETUP_KEY(key_type)]
+        live_aliases: set[str] = set()
+        for cmd in setup_cmds:
+            verb = cmd[0].upper()
+            alias = cmd[1]
+            if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+                live_aliases.add(alias)
+            elif verb == "FT.ALIASDEL":
+                live_aliases.discard(alias)
+        for alias in live_aliases:
+            client.execute_command("FT.INFO", alias)
+
     print(f"setup_data completed {data_set} {key_type}")
 
     # Print loaded data for debugging
@@ -695,14 +760,20 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             print(f"{s}:{load_list[s][0]}:  ", k)
     return len(load_list)
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type):
-    data = compute_data_sets()
+def load_data_cluster(cluster_client, test_case, data_set_name, key_type):
+    match data_set_name:
+        case "alias":
+            data = compute_alias_data()
+        case _ if data_set_name in TEXT_DATASETS:
+            data = compute_text_data_sets(data_set_name)
+        case _:
+            data = compute_data_sets()
 
     primary0 = test_case.new_client_for_primary(0)
-    for create_cmd in data[data_set][CREATES_KEY(key_type)]:
+    for create_cmd in data[data_set_name][CREATES_KEY(key_type)]:
         primary0.execute_command(create_cmd)
 
-    for key, fields in data[data_set][SETS_KEY(key_type)]:
+    for key, fields in data[data_set_name][SETS_KEY(key_type)]:
         if key_type == "hash":
             cluster_client.hset(key, mapping=fields)
         else:
@@ -710,7 +781,26 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type):
                 "JSON.SET", key, "$", json.dumps(fields)
             )
 
-    print(f"cluster load completed {data_set} {key_type}")
+    # Run any post-load setup commands (e.g. alias creation) via primary 0
+    for setup_cmd in data[data_set_name].get(SETUP_KEY(key_type), []):
+        primary0.execute_command(*setup_cmd)
+
+    # Verify that each alias expected to be live after setup actually resolves,
+    # catching cluster-wide propagation failures early.
+    if data[data_set_name].get(SETUP_KEY(key_type)):
+        setup_cmds = data[data_set_name][SETUP_KEY(key_type)]
+        live_aliases: set[str] = set()
+        for cmd in setup_cmds:
+            verb = cmd[0].upper()
+            alias = cmd[1]
+            if verb in ("FT.ALIASADD", "FT.ALIASUPDATE"):
+                live_aliases.add(alias)
+            elif verb == "FT.ALIASDEL":
+                live_aliases.discard(alias)
+        for alias in live_aliases:
+            primary0.execute_command("FT.INFO", alias)
+
+    print(f"cluster load completed {data_set_name} {key_type}")
 
 def extract_vocab_from_text_data(dataset_name, key_type):
     """Extract unique words from TEXT fields in a text data set."""

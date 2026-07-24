@@ -65,6 +65,16 @@ absl::Status RegisterCommands(ValkeyModuleCtx *ctx,
           absl::StrCat("Failed to set ACL categories `", permissions,
                        "` for the command: ", command.cmd_name.data()));
     }
+    if (command.arity != 0) {
+      ValkeyModuleCommandInfo info = {
+          .version = VALKEYMODULE_COMMAND_INFO_VERSION,
+          .arity = command.arity,
+      };
+      if (ValkeyModule_SetCommandInfo(cmd, &info) == VALKEYMODULE_ERR) {
+        return absl::InternalError(absl::StrCat(
+            "Failed to set command info for: ", command.cmd_name.data()));
+      }
+    }
   }
   return absl::OkStatus();
 }

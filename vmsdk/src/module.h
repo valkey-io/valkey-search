@@ -69,6 +69,10 @@ struct CommandOptions {
   int first_key{0};
   int last_key{0};
   int key_step{0};
+  // If non-zero, enforces arity via ValkeyModule_SetCommandInfo.
+  // Positive N means exactly N args; negative -N means >= N args.
+  // Arity includes the command name itself.
+  int arity{0};
 };
 
 struct Options {

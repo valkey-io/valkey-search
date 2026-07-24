@@ -1043,6 +1043,38 @@ INSTANTIATE_TEST_SUITE_P(
             .sortby_enabled = true,
             .with_sort_keys = true,
         },
+        {
+            // SORTBY on the KNN score alias in ascending order is accepted even
+            // though the alias is not an index field (matches natural order).
+            .test_name = "sortby_vector_score_asc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test ASC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+        },
+        {
+            // Descending is not the natural order, so the alias still must
+            // resolve to an index field -- and does not, so it is rejected.
+            .test_name = "sortby_vector_score_desc_rejected",
+            .success = false,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .expected_error_message =
+                "SORTBY on `as_test` is only supported in ascending order",
+            .sortby_parameters_str = "SORTBY as_test DESC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
+        },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {
       return info.param.test_name;

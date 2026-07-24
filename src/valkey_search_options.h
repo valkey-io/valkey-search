@@ -45,6 +45,9 @@ config::Number &GetMaxWorkerSuspensionSecs();
 /// Return an immutable reference to the "use-coordinator" flag
 const config::Boolean &GetUseCoordinator();
 
+/// Return an immutable reference to the "enable-vector-sharing" flag
+const config::Boolean &GetEnableVectorSharing();
+
 /// Return the configuration entry for skipping vector index RDB loading
 const config::Boolean &GetSkipIndexLoad();
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -85,11 +85,12 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
   try {
-    auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
-        vector_index_proto.dimension_count(),
-        vector_index_proto.distance_metric(),
-        vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
-        attribute_data_type->ToProto()));
+    auto index = std::shared_ptr<VectorFlat<T>>(
+        new VectorFlat<T>(vector_index_proto.dimension_count(),
+                          vector_index_proto.distance_metric(),
+                          vector_index_proto.flat_algorithm().block_size(),
+                          attribute_identifier, attribute_data_type->ToProto()),
+        vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =
@@ -147,12 +148,11 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
 
 template <typename T>
 absl::Status VectorFlat<T>::AddRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-    [[maybe_unused]] const std::vector<char> &norm_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
-      algo_->addPoint(vector_record, internal_id);
+      algo_->addPoint(std::move(vector_record), internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       std::string error_msg = e.what();
@@ -171,16 +171,16 @@ absl::Status VectorFlat<T>::AddRecordImpl(
 
 template <typename T>
 absl::Status VectorFlat<T>::ModifyRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-    [[maybe_unused]] const std::vector<char> &norm_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  std::shared_ptr<VectorRecord> *stored_record = algo_->getPoint(internal_id);
+  std::shared_ptr<const VectorRecord> *stored_record =
+      algo_->getPoint(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
 
-  *stored_record = vector_record;
+  *stored_record = std::move(vector_record);
 
   return absl::OkStatus();
 }
@@ -247,7 +247,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 
 template <typename T>
 T VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                 VectorRecord *vector_record,
+                                 const VectorRecord *vector_record,
                                  float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
@@ -302,7 +302,7 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
-                        const std::shared_ptr<VectorRecord> &record) {
+                        const std::shared_ptr<const VectorRecord> &record) {
     if (normalize) {
       return NormalizeVector(
           absl::string_view(record->GetRawVector(), vector_size));
@@ -314,7 +314,7 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
 }
 
 template <typename T>
-std::shared_ptr<VectorRecord> &VectorFlat<T>::GetVectorLockFree(
+std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVectorLockFree(
     uint64_t internal_id) const {
   return *algo_->getPoint(internal_id);
 }

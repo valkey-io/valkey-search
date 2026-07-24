@@ -519,6 +519,35 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   }
 }
 
+TEST_F(VectorIndexTest, VectorFlatCosineNormalizationDistance)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int dimensions = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
+                                 10, 10),
+      attribute_identifier, attribute_data_type);
+  ASSERT_TRUE(index.ok());
+
+  // Non-unit vector [3.0, 0.0, 0.0, 0.0] with magnitude 3.0
+  std::vector<float> vec1 = {3.0f, 0.0f, 0.0f, 0.0f};
+  std::string vec1_bytes(reinterpret_cast<const char *>(vec1.data()),
+                         vec1.size() * sizeof(float));
+
+  auto key1 = IndexToKey(1);
+  VMSDK_EXPECT_OK(index.value()->AddRecord(key1, vec1_bytes));
+
+  // Search query [5.0, 0.0, 0.0, 0.0] pointing in exact same direction.
+  // Cosine distance should be 0.0 (1 - (3*5)/(3*5) = 0).
+  std::vector<float> query = {5.0f, 0.0f, 0.0f, 0.0f};
+  std::string query_bytes(reinterpret_cast<const char *>(query.data()),
+                          query.size() * sizeof(float));
+
+  auto search_res = index.value()->Search(query_bytes, 1, CancelNever());
+  ASSERT_TRUE(search_res.ok());
+  ASSERT_EQ(search_res.value().size(), 1);
+  EXPECT_NEAR(search_res.value()[0].distance, 0.0f, 1e-5f);
+}
+
 float CalcRecall(VectorFlat<float> *flat_index, VectorHNSW<float> *hnsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);
@@ -859,11 +888,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
 
   float magnitude = kDefaultMagnitude;
-  std::vector<char> norm_record;
   for (int t = 0; t < kThreads; ++t) {
     algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
                                                       vector_allocator.get()),
-                              norm_record),
+                              v_bytes.size(), false),
                   t);
   }
 
@@ -952,8 +980,9 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
                       vector_data.size() / sizeof(float));
     return VectorRecord::Construct(vector_data, magnitude);
   };
-  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, kM,
-                                 /*validate=*/true, generator));
+  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
+                                 /*expected_m=*/kM, /*validate=*/true,
+                                 generator));
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
 }
@@ -1016,7 +1045,6 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
                                     /*allow_replace_deleted=*/false,
                                     /*random_seed=*/100);
 
-  std::vector<char> norm_record;
   auto vector_allocator = CREATE_UNIQUE_PTR(
       FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
 
@@ -1029,11 +1057,11 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
 
     algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
                                                       vector_allocator.get()),
-                              norm_record),
+                              v_bytes.size(), false),
                   /*label=*/i, force_levels[i]);
   }
   ChunkStream golden;
-  auto serializer = [](const std::shared_ptr<VectorRecord> &record,
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {
     size_t vector_size = kDimensions * sizeof(float);
     return std::vector<char>(record->GetRawVector(),
@@ -1145,7 +1173,7 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   EXPECT_EQ(algo.maxlevel_, 2);
   EXPECT_EQ(algo.element_levels_[algo.enterpoint_node_], 2);
   ChunkStream resaved;
-  auto serializer = [](const std::shared_ptr<VectorRecord> &record,
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {
     size_t vector_size = kDimensions * sizeof(float);
     return std::vector<char>(record->GetRawVector(),

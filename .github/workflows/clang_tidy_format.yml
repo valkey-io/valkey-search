@@ -83,16 +83,35 @@ jobs:
           # no real checks selected (clang-diagnostic-* checks alone don't
           # count). ExtraArgs ensures -Wthread-safety is passed even when
           # compile_commands.json was produced by a non-Clang build.
-          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety']}"
+          TS_CONFIG="{Checks: '-*,readability-redundant-control-flow,clang-diagnostic-thread-safety*', WarningsAsErrors: 'clang-diagnostic-thread-safety*', ExtraArgs: ['-Wthread-safety'], HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'}"
 
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"
             docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
             bash -c "ci/check_clang_format.sh \"$FILE\""
 
-            echo "Running clang-tidy thread-safety check on $FILE"
+            TS_FILE="$FILE"
+            if [[ "$TS_FILE" == *.h ]]; then
+              CC_FILE="${TS_FILE%.h}.cc"
+              if [[ -f "$CC_FILE" ]]; then
+                TS_FILE="$CC_FILE"
+              else
+                HEADER_BASENAME=$(basename "$TS_FILE")
+                INCLUDED_BY=$(grep -rl "#include .*$HEADER_BASENAME" src/ vmsdk/src/ testing/ | grep '\.cc$' | head -n 1 || true)
+                if [[ -n "$INCLUDED_BY" ]]; then
+                  TS_FILE="$INCLUDED_BY"
+                else
+                  echo "Warning: Could not find any .cc file including $TS_FILE. Skipping clang-tidy."
+                  continue
+                fi
+              fi
+              echo "Header modified: running clang-tidy thread-safety check on translation unit $TS_FILE instead"
+            else
+              echo "Running clang-tidy thread-safety check on $TS_FILE"
+            fi
+
             docker run --rm -v "$(pwd):/workspace" --user "ubuntu:ubuntu" \
-              -e TS_FILE="$FILE" -e TS_CONFIG="$TS_CONFIG" presubmit-image \
+              -e TS_FILE="$TS_FILE" -e TS_CONFIG="$TS_CONFIG" presubmit-image \
               bash -c 'clang-tidy --quiet -p compile_commands.json --config="$TS_CONFIG" "$TS_FILE" 2>&1 | tail -n +3'
 
             # TODO: Enable full clang-tidy after the existing code is tidied

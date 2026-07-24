@@ -14,11 +14,16 @@ if [ -z "$files" ]; then
 fi
 
 has_inline=false
+clang_format_args=()
 for arg in "$@"; do
   if [ "$arg" = "-i" ]; then
     has_inline=true
+  else
+    clang_format_args+=("$arg")
   fi
 done
+
+modified_files=()
 
 for file in $files; do
   if [ ! -f "$file" ]; then
@@ -26,12 +31,24 @@ for file in $files; do
   fi
   
   if $has_inline; then
-    echo "Formatting $file"
-    clang-format "$@" "$file"
+    TEMP_FILE=$(mktemp)
+    if clang-format "${clang_format_args[@]}" "$file" > "$TEMP_FILE"; then
+      if ! diff -u "$file" "$TEMP_FILE" > /dev/null; then
+        modified_files+=("$file")
+        echo -e "Formatting $file ... \033[38;5;208mModified\033[0m"
+        cat "$TEMP_FILE" > "$file"
+      else
+        echo "Formatting $file"
+      fi
+    else
+      echo -e "\033[0;31mError\033[0m"
+      echo "Failed to run clang-format on $file"
+    fi
+    rm -f "$TEMP_FILE"
   else
     echo -n "Checking $file ... "
     TEMP_FILE=$(mktemp)
-    if clang-format "$@" "$file" > "$TEMP_FILE"; then
+    if clang-format "${clang_format_args[@]}" "$file" > "$TEMP_FILE"; then
       if diff -u "$file" "$TEMP_FILE" > /dev/null; then
         echo -e "\033[0;32mOK\033[0m"
       else
@@ -46,3 +63,12 @@ for file in $files; do
     rm -f "$TEMP_FILE"
   fi
 done
+
+if [ "$has_inline" = true ] && [ ${#modified_files[@]} -gt 0 ]; then
+  echo -e "\n\033[38;5;208mFiles modified by clang-format:\033[0m"
+  for file in "${modified_files[@]}"; do
+    echo -e "\033[38;5;208m  $file\033[0m"
+  done
+elif [ "$has_inline" = true ]; then
+  echo -e "\nNo files needed formatting changes."
+fi

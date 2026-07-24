@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -93,9 +93,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     absl::string_view attribute_identifier,
     SupplementalContentChunkIter &&iter) {
   try {
-    auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
-        vector_index_proto.dimension_count(), attribute_identifier,
-        attribute_data_type->ToProto()));
+    auto index = std::shared_ptr<VectorHNSW<T>>(
+        new VectorHNSW<T>(vector_index_proto.dimension_count(),
+                          attribute_identifier, attribute_data_type->ToProto()),
+        vmsdk::DestructByMainThread<VectorHNSW<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
 
@@ -141,16 +142,26 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
     : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
                  attribute_identifier) {}
 
+InputVector::InputVector(
+    const std::shared_ptr<const VectorRecord> &vector_record,
+    size_t vector_record_size, bool normalize)
+    : vector_record_(std::move(vector_record)) {
+  if (normalize) {
+    normalized_vector_ = NormalizeVector(
+        absl::string_view(vector_record_->GetRawVector(), vector_record_size),
+        vector_record_->GetReciprocalMagnitude());
+  }
+}
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-    const std::vector<char> &norm_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
-                      algo_->allow_replace_deleted_);
+      algo_->addPoint(InputVector(std::move(vector_record), GetVectorDataSize(),
+                                  normalize_),
+                      internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -202,7 +213,7 @@ absl::Status VectorHNSW<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
-                        const std::shared_ptr<VectorRecord> &record,
+                        const std::shared_ptr<const VectorRecord> &record,
                         bool is_marked_deleted) {
     if (normalize && !is_marked_deleted) {
       return NormalizeVector(
@@ -270,20 +281,20 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   auto vector_record =
       VectorRecord::Construct(norm_view, 1.0f, GetVectorAllocator());
-  algo_->SetDataByInternalId(*hnsw_internal_id, vector_record);
+  algo_->SetDataByInternalId(*hnsw_internal_id, std::move(vector_record));
   algo_->markDeletedInternal(*hnsw_internal_id);
   return absl::OkStatus();
 }
 
 template <typename T>
 absl::Status VectorHNSW<T>::ModifyRecordImpl(
-    uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-    const std::vector<char> &norm_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
-    algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
-                    algo_->allow_replace_deleted_);
+    algo_->addPoint(
+        InputVector(std::move(vector_record), GetVectorDataSize(), normalize_),
+        internal_id, algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -329,16 +340,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  std::vector<char> norm_record;
-  T magnitude = kDefaultMagnitude;
-  if (normalize_) {
-    norm_record = NormalizeVector(query, &magnitude);
-  }
+  T magnitude =
+      normalize_ ? CalcMagnitude(reinterpret_cast<const float *>(query.data()),
+                                 dimensions_)
+                 : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
     InputVector embedding(
         VectorRecord::Construct(query, magnitude, GetVectorAllocator()),
-        norm_record);
+        query.size(), normalize_);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -374,7 +384,7 @@ void VectorHNSW<T>::ToProtoImpl(
 
 template <typename T>
 T VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                 VectorRecord *vector_record,
+                                 const VectorRecord *vector_record,
                                  float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);

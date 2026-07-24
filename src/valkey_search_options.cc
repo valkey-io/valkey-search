@@ -146,6 +146,11 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Enable vector sharing
+constexpr absl::string_view kEnableVectorSharing{"enable-vector-sharing"};
+static auto enable_vector_sharing =
+    config::BooleanBuilder(kEnableVectorSharing, true).Hidden().Build();
+
 // Not allowing replace delete is aligned with RediSearch
 constexpr absl::string_view kHNSWAllowReplaceDeleted{
     "hnsw-allow-replace-deleted"};
@@ -154,9 +159,6 @@ static auto hnsw_allow_replace_deleted =
         .Dev()
         .Build();
 
-// Kill switch for HNSW index load-time validation (corruption hardening).
-// Default true; can be disabled in the field if a bug in the validation logic
-// were to reject otherwise-valid indexes.
 constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
 static auto hnsw_validation_enable =
     config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
@@ -231,7 +233,7 @@ static config::Boolean prefer_consistent_results(kEnableConsistentResults,
 constexpr absl::string_view kSearchResultBackgroundCleanup{
     "search-result-background-cleanup"};
 static config::Boolean search_result_background_cleanup(
-    kSearchResultBackgroundCleanup, true);
+    kSearchResultBackgroundCleanup, false);
 
 /// Configure the weight for high priority tasks in thread pools (0-100)
 /// Low priority weight = 100 - high_priority_weight
@@ -541,6 +543,10 @@ const vmsdk::config::Boolean &GetUseCoordinator() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*use_coordinator);
 }
 
+const vmsdk::config::Boolean &GetEnableVectorSharing() {
+  return dynamic_cast<const vmsdk::config::Boolean &>(*enable_vector_sharing);
+}
+
 const vmsdk::config::Boolean &GetSkipIndexLoad() {
   return dynamic_cast<const vmsdk::config::Boolean &>(*rdb_load_skip_index);
 }
@@ -577,6 +583,7 @@ config::Boolean &GetHNSWValidationEnableMutable() {
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
+  VMSDK_RETURN_IF_ERROR(enable_vector_sharing->SetValue(true));
   return absl::OkStatus();
 }
 

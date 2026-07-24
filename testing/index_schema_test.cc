@@ -77,8 +77,10 @@ struct IndexSchemaSubscriptionTestCase {
   absl::optional<std::pair<std::string, std::string>> valkey_hash_data;
   bool is_tracked;
   // Set to nullopt to not expect a call to the given index method.
-  absl::optional<absl::StatusOr<bool>> expect_index_add_w_result;
-  absl::optional<absl::StatusOr<bool>> expect_index_modify_w_result;
+  absl::optional<absl::StatusOr<indexes::RecordResult>>
+      expect_index_add_w_result;
+  absl::optional<absl::StatusOr<indexes::RecordResult>>
+      expect_index_modify_w_result;
   absl::optional<absl::StatusOr<bool>> expect_index_remove_w_result;
   // Validated against the input to add/modify if they are not nullopt.
   std::string expected_vector_buffer;
@@ -93,14 +95,25 @@ struct IndexSchemaSubscriptionTestCase {
 class IndexSchemaSubscriptionTest
     : public ValkeySearchTestWithParam<IndexSchemaSubscriptionTestCase> {
  protected:
-  // Helper functions to check operation success/failure patterns
+  // Helper functions to check operation success/failure patterns. Templated so
+  // they work for both the bool-returning Remove and the RecordResult-returning
+  // Add/Modify. A RecordResult operation is "successful" only when kAdded.
+  template <typename V>
   static bool IsOperationSuccessful(
-      const absl::optional<absl::StatusOr<bool>> &result) {
-    return result.has_value() && result.value().ok() && result.value().value();
+      const absl::optional<absl::StatusOr<V>> &result) {
+    if (!result.has_value() || !result.value().ok()) {
+      return false;
+    }
+    if constexpr (std::is_same_v<V, indexes::RecordResult>) {
+      return result.value().value() == indexes::RecordResult::kAdded;
+    } else {
+      return result.value().value();
+    }
   }
 
+  template <typename V>
   static bool IsOperationFailed(
-      const absl::optional<absl::StatusOr<bool>> &result) {
+      const absl::optional<absl::StatusOr<V>> &result) {
     return result.has_value() && !result.value().ok();
   }
 };
@@ -323,7 +336,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = true,
+            .expect_index_add_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "vector_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -368,7 +381,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = true,
+            .expect_index_modify_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "vector_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -440,7 +453,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = true,
+            .expect_index_add_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "numeric_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -456,7 +469,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("numeric", "numeric_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = true,
+            .expect_index_modify_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "numeric_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -486,7 +499,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = true,
+            .expect_index_add_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "tag_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -502,7 +515,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("tag", "tag_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = true,
+            .expect_index_modify_w_result = indexes::RecordResult::kAdded,
             .expected_vector_buffer = "tag_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -546,7 +559,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = false,
-            .expect_index_add_w_result = false,
+            .expect_index_add_w_result = indexes::RecordResult::kMissing,
             .expected_vector_buffer = "vector_buffer",
             .expected_add_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -567,7 +580,7 @@ INSTANTIATE_TEST_SUITE_P(
             .open_key_type = VALKEYMODULE_KEYTYPE_HASH,
             .valkey_hash_data = std::make_pair("vector", "vector_buffer"),
             .is_tracked = true,
-            .expect_index_modify_w_result = false,
+            .expect_index_modify_w_result = indexes::RecordResult::kMissing,
             .expected_vector_buffer = "vector_buffer",
             .expected_modify_cnt_delta =
                 IndexSchema::Stats::ResultCnt<uint64_t>{
@@ -934,7 +947,7 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                       AddRecord(testing::Property(&InternedStringPtr::operator*,
                                                   testing::StrEq(key_str)),
                                 testing::_))
-              .WillOnce(testing::Return(true));
+              .WillOnce(testing::Return(indexes::RecordResult::kAdded));
           if (use_thread_pool) {
             EXPECT_CALL(thread_pool,
                         Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
@@ -1417,7 +1430,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       auto result =
           text_index->AddRecord(interned_key, vmsdk::ToStringView(data.get()));
       VMSDK_EXPECT_OK(result);
-      EXPECT_TRUE(result.value());
+      EXPECT_EQ(result.value(), indexes::RecordResult::kAdded);
     }
 
     VMSDK_EXPECT_OK(index_schema->RDBSave(&rdb_stream));
@@ -1911,6 +1924,77 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
       }
     }
   }
+}
+
+// Exercises the data-type-agnostic machinery that orchestrates dropping a key
+// when any indexed field contains invalid data, and verifies both the new
+// (Redisearch-compatible) and the legacy behavior based on
+// search.emulate-release. See COMPATIBILITY.md.
+TEST_F(IndexSchemaFriendTest, InvalidDataDropsKey) {
+  // The fixture already has an HNSW index "hnsw_id"; add a numeric and a tag
+  // index so a single key can carry an invalid numeric field alongside a valid
+  // tag field.
+  auto numeric_index =
+      std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+  VMSDK_EXPECT_OK(index_schema->AddIndex("numeric_id", "numeric_identifier",
+                                         numeric_index));
+  auto tag_index =
+      std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("tag_id", "tag_identifier", tag_index));
+
+  // Builds a fresh mutation carrying an invalid numeric value ("not_a_number")
+  // and a valid tag value ("electronics"), keyed by attribute alias.
+  auto make_mixed_mutation = []() {
+    IndexSchema::MutatedAttributes mutated_attributes;
+    mutated_attributes["numeric_id"].data =
+        vmsdk::MakeUniqueValkeyString("not_a_number");
+    mutated_attributes["tag_id"].data =
+        vmsdk::MakeUniqueValkeyString("electronics");
+    return mutated_attributes;
+  };
+
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+
+  // --- Legacy behavior: emulate-release below the fix (1.3.0). The invalid
+  // numeric field is treated as missing, but the rest of the key (the valid tag
+  // field) is retained. This confirms the current/incompatible path still
+  // works. ---
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 0, 0)));
+  auto legacy_key = StringInternStore::Intern("legacy_key");
+  {
+    auto mutated = make_mixed_mutation();
+    index_schema->SyncProcessMutation(&fake_ctx, mutated, legacy_key);
+  }
+  EXPECT_FALSE(numeric_index->IsTracked(legacy_key));  // invalid -> missing
+  EXPECT_TRUE(tag_index->IsTracked(legacy_key));       // key retained
+
+  // --- Compatible behavior: emulate-release at/above the fix (1.3.0). The
+  // entire key is dropped from every index, including the valid tag field. ---
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 3, 0)));
+  auto compat_key = StringInternStore::Intern("compat_key");
+  {
+    auto mutated = make_mixed_mutation();
+    index_schema->SyncProcessMutation(&fake_ctx, mutated, compat_key);
+  }
+  EXPECT_FALSE(numeric_index->IsTracked(compat_key));
+  EXPECT_FALSE(tag_index->IsTracked(compat_key));  // dropped despite valid tag
+
+  // --- Sanity: with the compatible behavior enabled, a key whose fields are
+  // all valid is indexed normally (no spurious drop). ---
+  auto good_key = StringInternStore::Intern("good_key");
+  {
+    IndexSchema::MutatedAttributes mutated;
+    mutated["numeric_id"].data = vmsdk::MakeUniqueValkeyString("123");
+    mutated["tag_id"].data = vmsdk::MakeUniqueValkeyString("electronics");
+    index_schema->SyncProcessMutation(&fake_ctx, mutated, good_key);
+  }
+  EXPECT_TRUE(numeric_index->IsTracked(good_key));
+  EXPECT_TRUE(tag_index->IsTracked(good_key));
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
 }
 
 TEST_F(IndexSchemaFriendTest, ConsistencyTest) {
@@ -2614,7 +2698,7 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Widget")))
-      .WillOnce(Return(true));
+      .WillOnce(Return(indexes::RecordResult::kAdded));
 
   // Mock the key type
   EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
@@ -2682,7 +2766,7 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Gadget")))
-      .WillOnce(Return(true));
+      .WillOnce(Return(indexes::RecordResult::kAdded));
 
   EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
       .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);

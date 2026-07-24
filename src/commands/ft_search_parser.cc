@@ -254,9 +254,9 @@ absl::Status SearchCommand::PostParseQueryString() {
       // Ascending score matches the natural KNN order; descending is not yet
       // supported.
       if (sortby_parameter->order != query::SortOrder::kAscending) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "SORTBY on `", sortby_parameter->field,
-            "` is only supported in ascending order"));
+        return absl::InvalidArgumentError(
+            absl::StrCat("SORTBY on `", sortby_parameter->field,
+                         "` is only supported in ascending order"));
       }
     } else {
       // Validate sortby field exists in the index schema.

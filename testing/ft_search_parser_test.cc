@@ -1068,7 +1068,8 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 10,
             .ef = 190,
             .score_as = "as_test",
-            .expected_error_message = "Index field `as_test` does not exist",
+            .expected_error_message =
+                "SORTBY on `as_test` is only supported in ascending order",
             .sortby_parameters_str = "SORTBY as_test DESC",
             .sortby_field = "as_test",
             .sortby_order = query::SortOrder::kDescending,

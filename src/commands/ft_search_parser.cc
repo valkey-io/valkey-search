@@ -247,13 +247,18 @@ absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
   if (sortby_parameter.has_value()) {
-    // Sorting by the vector score in ascending order matches the natural KNN
-    // order, so allow it without requiring the alias to be an index field.
-    const bool sort_by_score_asc =
+    const bool sort_by_score =
         IsVectorQuery() && score_as &&
-        vmsdk::ToStringView(score_as.get()) == sortby_parameter->field &&
-        sortby_parameter->order == query::SortOrder::kAscending;
-    if (!sort_by_score_asc) {
+        vmsdk::ToStringView(score_as.get()) == sortby_parameter->field;
+    if (sort_by_score) {
+      // Ascending score matches the natural KNN order; descending is not yet
+      // supported.
+      if (sortby_parameter->order != query::SortOrder::kAscending) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "SORTBY on `", sortby_parameter->field,
+            "` is only supported in ascending order"));
+      }
+    } else {
       // Validate sortby field exists in the index schema.
       VMSDK_RETURN_IF_ERROR(
           index_schema->GetIdentifier(sortby_parameter->field).status());

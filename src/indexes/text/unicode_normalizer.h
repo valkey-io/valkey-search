@@ -17,9 +17,6 @@ enum class NormalizationForm {
 
 class UnicodeNormalizer {
  public:
-  /// Initialize ICU for module-wide usage (call once at module startup)
-  static void Initialize();
-
   /// Performs Unicode case folding in-place on an existing string.
   /// Minimizes heap allocations by reusing the provided string's buffer.
   /// This is preferred for high-throughput tokenization loops.
@@ -27,16 +24,20 @@ class UnicodeNormalizer {
   /// content is replaced with the folded version.
   static void CaseFoldInPlace(std::string& str);
 
-  // Planned multi-language support APIs (ICU-backed, not implemented yet)
-  // These show reviewers exactly which ICU functionality we will use
-
-  /// Unicode normalization for consistent text comparison across languages
-  /// Uses ICU Normalizer2 for diacritic handling and text standardization
-  /// @param text Input text to normalize
+  /// Unicode normalization for consistent text comparison across languages.
+  /// Uses ICU Normalizer2 (UTF-8-native normalizeUTF8) for diacritic handling
+  /// and text standardization, e.g. so canonically-equivalent forms compare
+  /// equal.
+  /// @param text Input text. Precondition: well-formed UTF-8. The ICU UTF-8
+  ///   APIs do not substitute U+FFFD for malformed input, so callers must
+  ///   validate/sanitize upstream (the tokenization and query paths do).
   /// @param form Normalization form (NFC, NFKC, NFD, NFKD)
   /// @return Normalized text string
-  /// @example Normalize("résumé", NormalizationForm::NFD) removes diacritics
+  /// @example Normalize("résumé", NormalizationForm::NFD) decomposes diacritics
   static std::string Normalize(absl::string_view text, NormalizationForm form);
+
+  // Planned multi-language support APIs (declared but not yet implemented).
+  // These show reviewers exactly which ICU functionality later tasks will use.
 
   /// Word boundary detection for CJK and complex script languages
   /// Uses ICU BreakIterator with built-in dictionaries (cjdict.dict ~2MB for

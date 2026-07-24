@@ -45,6 +45,7 @@
 #include "src/indexes/vector_hnsw.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
+#include "src/multi_language.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
@@ -1285,6 +1286,39 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     case data_model::LANGUAGE_ENGLISH:
       ValkeyModule_ReplyWithSimpleString(ctx, "english");
       break;
+    case data_model::LANGUAGE_FRENCH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "french");
+      break;
+    case data_model::LANGUAGE_GERMAN:
+      ValkeyModule_ReplyWithSimpleString(ctx, "german");
+      break;
+    case data_model::LANGUAGE_SPANISH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "spanish");
+      break;
+    case data_model::LANGUAGE_ITALIAN:
+      ValkeyModule_ReplyWithSimpleString(ctx, "italian");
+      break;
+    case data_model::LANGUAGE_PORTUGUESE:
+      ValkeyModule_ReplyWithSimpleString(ctx, "portuguese");
+      break;
+    case data_model::LANGUAGE_RUSSIAN:
+      ValkeyModule_ReplyWithSimpleString(ctx, "russian");
+      break;
+    case data_model::LANGUAGE_SWEDISH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "swedish");
+      break;
+    case data_model::LANGUAGE_TURKISH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "turkish");
+      break;
+    case data_model::LANGUAGE_DUTCH:
+      ValkeyModule_ReplyWithSimpleString(ctx, "dutch");
+      break;
+    case data_model::LANGUAGE_INDONESIAN:
+      ValkeyModule_ReplyWithSimpleString(ctx, "indonesian");
+      break;
+    case data_model::LANGUAGE_ARABIC:
+      ValkeyModule_ReplyWithSimpleString(ctx, "arabic");
+      break;
     default:
       ValkeyModule_ReplyWithSimpleString(ctx, "english");
       break;
@@ -2207,6 +2241,9 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     }
   }
   if (has_text_index) {
+    if (IsNonEnglishLanguage(unpacked->language())) {
+      return kRelease14;
+    }
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

@@ -12,11 +12,13 @@
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language_processor.h"
 #include "src/query/predicate.h"
+#include "src/utils/scanner.h"
 #include "vmsdk/src/module_config.h"
 
 namespace valkey_search {
@@ -85,8 +87,6 @@ class FilterParser {
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 
-  absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
-                                             std::string& processed_content);
   struct TokenResult {
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
@@ -98,6 +98,7 @@ class FilterParser {
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       const std::optional<std::string>& field_or_default);
+
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
@@ -125,6 +126,45 @@ class FilterParser {
   void SkipWhitespace();
 
   char Peek() const { return expression_[pos_]; }
+
+  // A decoded-but-not-yet-consumed code point at the current position.
+  // `byte_len` is always >= 1. Check `cp == utils::Scanner::kInvalidCp` to
+  // detect malformed UTF-8.
+  struct Peeked {
+    uint32_t cp;
+    uint8_t byte_len;
+
+    bool IsValid() const { return cp != utils::Scanner::kInvalidCp; }
+  };
+
+  // Decode the code point at pos_ without advancing. Caller must ensure
+  // !IsEnd(). The query string is the user-input boundary, so malformed UTF-8
+  // is possible; the caller decides how to tolerate it (see the token loops).
+  Peeked PeekCodepoint() const {
+    CHECK(!IsEnd());
+    utils::Scanner s(expression_.substr(pos_));
+    utils::Scanner::Char cp = s.NextUtf8();
+    // !IsEnd() guarantees at least one byte, so cp is never kEOF here.
+    return {static_cast<uint32_t>(cp), s.LastUtf8ByteLen()};
+  }
+
+  // Append the peeked code point's bytes to `dest` and advance past it.
+  // Keeps cp and byte_len together — callers never touch byte_len directly.
+  void ConsumePeeked(const Peeked& p, std::string& dest) {
+    dest.append(expression_.data() + pos_, p.byte_len);
+    pos_ += p.byte_len;
+  }
+
+  // Advance past the peeked code point without copying it.
+  void SkipPeeked(const Peeked& p) { pos_ += p.byte_len; }
+
+  // Replace a malformed code point with U+FFFD and skip it. Legacy (< 1.4.0)
+  // text-token path only; >= 1.4.0 rejects upfront in Parse(). Mirrors
+  // Scanner::ReplaceInvalidUtf8, applied per token here.
+  void ReplaceInvalidUtf8(const Peeked& p, std::string& dest) {
+    utils::Scanner::PushBackUtf8(dest, 0xFFFD);
+    SkipPeeked(p);
+  }
 
   bool IsEnd() const { return pos_ >= expression_.length(); }
   bool Match(char expected, bool skip_whitespace = true);

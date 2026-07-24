@@ -112,8 +112,10 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/lexer.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_processor.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/language_processor.h
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.cc
+              ${CMAKE_CURRENT_LIST_DIR}/text/snowball_stem.h
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/unicode_normalizer.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h

@@ -2375,8 +2375,10 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # 3. Suffix
         assert client.execute_command("FT.SEARCH", "idx", "@content:*ana")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "@content:*界")[0] == 2
-        # 4. Fuzzy (operates today at character level and not byte level)
-        assert client.execute_command("FT.SEARCH", "idx", "%Hola%")[0] == 0
+        # 4. Fuzzy (operates at code-point level, not byte level).
+        # doc:1 indexes "¡hola" as one token (¡ U+00A1 is not ASCII punctuation),
+        # so fuzzy "hola" with distance 1 matches via a single insertion.
+        assert client.execute_command("FT.SEARCH", "idx", "%Hola%")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "%%très%%")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "%你好%")[0] == 0
         # 5. Exact phrase

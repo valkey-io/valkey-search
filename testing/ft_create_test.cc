@@ -512,6 +512,26 @@ TEST_F(FTCreateTest, ReplicationBehaviorCoordinatorDisabled) {
   ExecuteFTCreateCommand(&fake_ctx_, argv);
 }
 
+// Non-English languages are supported for module version >= 1.4.
+TEST_F(FTCreateTest, NonEnglishLanguageAllowed) {
+  int db_num = 0;
+  ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillByDefault(testing::Return(db_num));
+
+  std::vector<std::string> non_english_languages = {
+      "FRENCH",  "GERMAN",  "SPANISH", "ITALIAN",    "PORTUGUESE", "RUSSIAN",
+      "SWEDISH", "TURKISH", "DUTCH",   "INDONESIAN", "ARABIC"};
+
+  for (const auto& lang : non_english_languages) {
+    std::vector<std::string> argv = {
+        "FT.CREATE", "test_idx_" + lang, "LANGUAGE", lang, "schema", "title",
+        "text"};
+    ExecuteFTCreateCommand(&fake_ctx_, argv, VALKEYMODULE_OK, "+OK\r\n");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
+        db_num, "test_idx_" + lang));
+  }
+}
+
 }  // namespace
 
 }  // namespace valkey_search

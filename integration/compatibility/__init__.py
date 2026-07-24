@@ -11,7 +11,11 @@ _COMPAT_DIR = os.path.dirname(os.path.abspath(__file__))
 GENERATORS = [
     {"generator": "generate.py",      "answers": "aggregate-answers.pickle.gz",   "cluster": True},
     {"generator": "generate_text.py", "answers": "text-search-answers.pickle.gz", "cluster": False},
+    {"generator": "generate_text.py", "answers": "text-search-multilang-answers.pickle.gz", "cluster": False},
 ]
+
+# De-duplicated generator files for regenerate.sh (each file is run once)
+GENERATOR_FILES_UNIQUE = sorted(set(g["generator"] for g in GENERATORS))
 
 
 def compute_sources_hash():

@@ -13,11 +13,10 @@ The ICU source is committed to the repository for reliable, reproducible builds.
 We integrate ICU with static data packaging (~45MB) containing embedded Unicode data. The `valkey_search::indexes::text::UnicodeNormalizer` class provides a C++ wrapper around ICU APIs for text processing in search indexes.
 
 **Currently Implemented:**
-- Basic case folding for case-insensitive search
-- ICU initialization and data integrity verification
+- `CaseFoldInPlace` — in-place Unicode case folding for case-insensitive search (UTF-8-native, via `CaseMap::utf8Fold`)
+- `Normalize` — Unicode normalization (NFC, NFKC, NFD, NFKD) via `Normalizer2::normalizeUTF8`
 
 **Foundation Ready For:**
-- Unicode normalization (NFC, NFKC, NFD, NFKD)
 - Word boundary detection for CJK languages
 - Locale-aware case folding
 - Script detection for mixed-script text
@@ -33,10 +32,16 @@ We integrate ICU with static data packaging (~45MB) containing embedded Unicode 
 ```cpp
 #include "src/indexes/text/unicode_normalizer.h"
 
-// Case folding for case-insensitive search
-std::string folded = UnicodeNormalizer::CaseFold("Hello World");
-std::string german = UnicodeNormalizer::CaseFold("Straße");  // Handles ß
-std::string turkish = UnicodeNormalizer::CaseFoldLocale("İstanbul");  // Handles İ/ı
+using valkey_search::indexes::text::NormalizationForm;
+using valkey_search::indexes::text::UnicodeNormalizer;
+
+// In-place case folding for case-insensitive search.
+std::string s = "Straße";
+UnicodeNormalizer::CaseFoldInPlace(s);  // -> "strasse"
+
+// Unicode normalization (e.g. NFC) so canonically-equivalent forms compare equal.
+std::string decomposed = "cafe\xCC\x81";  // "café" with combining acute U+0301
+std::string nfc = UnicodeNormalizer::Normalize(decomposed, NormalizationForm::NFC);
 ```
 
 ## Version Upgrade

@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -30,16 +31,21 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
+#include "src/coordinator/coordinator.pb.h"
+#include "src/coordinator/search_converter.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
 #include "src/query/predicate.h"
 #include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -1378,5 +1384,178 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+// Inter-node requests build predicates straight from the protobuf, bypassing
+// FilterParser::Parse's UTF-8 gate. GRPCPredicateToPredicate must handle
+// malformed UTF-8 before it reaches decoders (e.g. FuzzySearch::Search) that
+// CHECK-fail on it, otherwise a malformed wire message crashes the node. The
+// handling is compat-gated (see COMPATIBILITY.md): >= 1.4.0 rejects with
+// InvalidArgumentError; < 1.4.0 substitutes U+FFFD (1.2 behavior). These tests
+// pin emulate-release to the current release and assert the reject path, which
+// short-circuits at the converter entry before any index-schema lookup — so it
+// covers every text-bearing predicate type. (The legacy substitute path is
+// covered by GRPCPredicateUtf8LegacyTest below.)
+struct GRPCPredicateUtf8Case {
+  std::string test_name;
+  // Populates `predicate` with the type-specific oneof for this case. Different
+  // predicate types fill different protobuf fields, so the per-case setup is a
+  // builder lambda rather than a plain data row.
+  std::function<void(coordinator::Predicate &)> build;
+  bool expect_ok;  // Under emulate-release >= 1.4.0.
+};
+
+class GRPCPredicateUtf8Test
+    : public ValkeySearchTestWithParam<GRPCPredicateUtf8Case> {
+ protected:
+  void SetUp() override {
+    ValkeySearchTestWithParam<GRPCPredicateUtf8Case>::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+    // The gate rejects only at >= 1.4.0; pin it so the assertions are stable.
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease14));
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    ValkeySearchTestWithParam<GRPCPredicateUtf8Case>::TearDown();
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+TEST_P(GRPCPredicateUtf8Test, ValidatesUtf8AtConverterEntry) {
+  const auto &test_case = GetParam();
+  auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+  InitIndexSchema(index_schema.get());
+  absl::flat_hash_set<std::string> identifiers;
+
+  coordinator::Predicate predicate;
+  test_case.build(predicate);
+  auto result = coordinator::GRPCPredicateToPredicate(predicate, index_schema,
+                                                      identifiers);
+  EXPECT_EQ(result.ok(), test_case.expect_ok)
+      << "case: " << test_case.test_name << ": " << result.status().message();
+  if (!test_case.expect_ok) {
+    EXPECT_EQ(result.status().code(), absl::StatusCode::kInvalidArgument);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    GRPCPredicateUtf8Tests, GRPCPredicateUtf8Test,
+    ValuesIn<GRPCPredicateUtf8Case>({
+        // Fuzzy predicate carrying a truncated 2-byte lead (0xC3) is rejected.
+        {
+            .test_name = "fuzzy_truncated_lead_rejected",
+            .build =
+                [](coordinator::Predicate &p) {
+                  auto *fuzzy = p.mutable_fuzzy();
+                  fuzzy->set_field_mask(1);
+                  fuzzy->set_content("bad\xC3");
+                  fuzzy->set_distance(1);
+                },
+            .expect_ok = false,
+        },
+        // Tag predicate with a stray continuation byte (0x80) is also rejected,
+        // confirming the gate is not fuzzy-specific.
+        {
+            .test_name = "tag_stray_continuation_rejected",
+            .build =
+                [](coordinator::Predicate &p) {
+                  auto *tag = p.mutable_tag();
+                  tag->set_attribute_alias("tag_index_100_15");
+                  tag->set_raw_tag_string("bad\x80");
+                },
+            .expect_ok = false,
+        },
+        // Numeric carries no text, so it always passes the UTF-8 gate.
+        {
+            .test_name = "numeric_well_formed_accepted",
+            .build =
+                [](coordinator::Predicate &p) {
+                  auto *numeric = p.mutable_numeric();
+                  numeric->set_attribute_alias("numeric_index_100_10");
+                  numeric->set_start(0);
+                  numeric->set_is_inclusive_start(true);
+                  numeric->set_end(100);
+                  numeric->set_is_inclusive_end(true);
+                },
+            .expect_ok = true,
+        },
+    }),
+    [](const TestParamInfo<GRPCPredicateUtf8Case> &info) {
+      return info.param.test_name;
+    });
+
+// Legacy (< 1.4.0) counterpart of the gate above: instead of rejecting, the
+// converter substitutes U+FFFD for malformed bytes and re-dispatches, so the
+// predicate is built successfully (matching nothing) — the 1.2 behavior. This
+// exercises the converter's own legacy branch (ReplaceInvalidUtf8 +
+// re-dispatch), which the >= 1.4.0 reject test and the FilterParser tests do
+// not cover.
+class GRPCPredicateUtf8LegacyTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease12));
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    ValkeySearchTest::TearDown();
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+TEST_F(GRPCPredicateUtf8LegacyTest, MalformedFuzzyToleratedViaSubstitution) {
+  auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+  InitIndexSchema(index_schema.get());
+  // Fuzzy is the predicate whose decoder (FuzzySearch::Search) CHECK-fails on
+  // malformed UTF-8, so it's the case this gate primarily protects. The
+  // converter's kFuzzy case only needs GetTextIndexSchema() to be non-null to
+  // build the predicate, so CreateTextIndexSchema() is sufficient here.
+  index_schema->CreateTextIndexSchema();
+  absl::flat_hash_set<std::string> identifiers;
+
+  coordinator::Predicate predicate;
+  auto *fuzzy = predicate.mutable_fuzzy();
+  fuzzy->set_field_mask(1);
+  fuzzy->set_content("bad\xC3");  // truncated 2-byte lead
+  fuzzy->set_distance(1);
+
+  // Under legacy emulation the converter substitutes U+FFFD and builds the
+  // predicate rather than rejecting — so the call succeeds (1.2 behavior: the
+  // malformed term simply matches nothing).
+  auto result = coordinator::GRPCPredicateToPredicate(predicate, index_schema,
+                                                      identifiers);
+  ASSERT_TRUE(result.ok()) << result.status().message();
+  EXPECT_NE(result.value(), nullptr);
+}
+
+// Legacy (< 1.4.0): a malformed TAG keeps its raw bytes (no U+FFFD
+// substitution) so it exact-matches a raw-stored tag, as in 1.2. Asserts the
+// raw byte survived — ok()+non-null alone would not distinguish raw from
+// substituted. This inter-node branch is not exercised by the client-path
+// integration tests.
+TEST_F(GRPCPredicateUtf8LegacyTest, MalformedTagToleratedRaw) {
+  auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+  InitIndexSchema(index_schema.get());
+  absl::flat_hash_set<std::string> identifiers;
+
+  coordinator::Predicate predicate;
+  auto *tag = predicate.mutable_tag();
+  tag->set_attribute_alias("tag_index_100_15");
+  tag->set_raw_tag_string("bad\x80");  // stray continuation byte
+
+  auto result = coordinator::GRPCPredicateToPredicate(predicate, index_schema,
+                                                      identifiers);
+  ASSERT_TRUE(result.ok()) << result.status().message();
+  auto *tag_predicate =
+      dynamic_cast<query::TagPredicate *>(result.value().get());
+  ASSERT_NE(tag_predicate, nullptr);
+  EXPECT_EQ(tag_predicate->GetTagString(), "bad\x80");  // raw, not U+FFFD
+}
+
 }  // namespace
 }  // namespace valkey_search

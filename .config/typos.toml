@@ -5,7 +5,11 @@ ignore-hidden = true
 extend-exclude = [
     "third_party/snowball/**",
     "third_party/icu/**",
-    "src/indexes/text/rax/**"
+    "src/indexes/text/rax/**",
+    "src/indexes/text/stop_words.h",
+    "testing/language_processor_test.cc",
+    "testing/snowball_stem_test.cc",
+    "integration/compatibility/data_sets.py"
 ]
 
 [default]
@@ -18,6 +22,8 @@ extend-ignore-re = [
     ".*unning"
 ]
 [default.extend-words]
+continuent = "continuent"
+caf = "caf"
 Fo = "Fo"
 InFo = "InFo"
 SeArCh = "SeArCh" 
@@ -27,6 +33,7 @@ DeBuG = "DeBuG"
 DrOpInDeX = "DrOpInDeX"
 updat = "updat" # Used for stem matching
 Clangd = "Clangd"
+mak = "mak" # Turkish suffix *mak in compatibility exclusion comments
 
 [type.cpp]
 extend-ignore-re = [
@@ -38,5 +45,6 @@ extend-ignore-re = [
     "bubu",
     "Teser",
     "hel",
+    'caf\\xC3\\xA9',
     "eit_.*"
 ]

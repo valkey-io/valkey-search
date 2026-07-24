@@ -13,7 +13,6 @@
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
 #include "absl/synchronization/mutex.h"
-#include "libstemmer.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
 namespace valkey_search::indexes::text {
@@ -142,7 +141,7 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  const std::vector<std::string> &stop_words,
                                  uint32_t min_stem_size)
     : with_offsets_(with_offsets),
-      lexer_(language, punctuation, stop_words),
+      processor_(LanguageProcessor::Create(language, punctuation, stop_words)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -150,21 +149,23 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  // Get or create stem mappings for this key if stemming is enabled
-  InProgressStemMap *stem_mappings_ptr = nullptr;
-  if (stem) {
-    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-    stem_mappings_ptr = &in_progress_stem_mappings_[key];
-  }
-
-  // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  // Tokenize via the processor pipeline (segment + filter)
+  auto tokens = processor_->Process(data);
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
       return false;  // UTF-8 errors → hash_indexing_failures
     }
     return tokens.status();
+  }
+
+  // Build stem mappings if stemming is enabled (ingestion-specific)
+  if (stem) {
+    if (auto *stem_filter = processor_->GetStemmer()) {
+      std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+      stem_filter->BuildStemMap(*tokens, min_stem_size_,
+                                in_progress_stem_mappings_[key]);
+    }
   }
 
   // Map tokens -> positions -> field-masks
@@ -336,28 +337,30 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   }
 
   if (!empty_words.empty() && stem_text_field_mask_) {
-    absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
-    for (const auto &word : empty_words) {
-      std::string stem(word);
-      lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
-      if (stem != word) {
-        auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
-            [&word](InvasivePtr<StemParents> existing) {
-              // The term may not exist in the stem tree if it was only present
-              // in NOSTEM fields.
-              if (existing) {
-                CHECK(!existing->empty())
-                    << "Stem tree entry should not be empty";
-                auto it = std::find(existing->begin(), existing->end(), word);
-                if (it != existing->end()) {
-                  *it = std::move(existing->back());
-                  existing->pop_back();
+    auto *stem_filter = processor_->GetStemmer();
+    if (stem_filter) {
+      absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
+      for (const auto &word : empty_words) {
+        std::string stem = stem_filter->GetStemRoot(word, min_stem_size_);
+        if (stem != word) {
+          auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
+              [&word](InvasivePtr<StemParents> existing) {
+                // The term may not exist in the stem tree if it was only
+                // present in NOSTEM fields.
+                if (existing) {
+                  CHECK(!existing->empty())
+                      << "Stem tree entry should not be empty";
+                  auto it = std::find(existing->begin(), existing->end(), word);
+                  if (it != existing->end()) {
+                    *it = std::move(existing->back());
+                    existing->pop_back();
+                  }
+                  if (existing->empty()) existing.Clear();
                 }
-                if (existing->empty()) existing.Clear();
-              }
-              return existing;
-            });
-        stem_tree_.MutateTarget(stem, stem_remove_fn);
+                return existing;
+              });
+          stem_tree_.MutateTarget(stem, stem_remove_fn);
+        }
       }
     }
   }
@@ -382,7 +385,9 @@ std::string TextIndexSchema::GetAllStemVariants(
     uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term
   std::string stemmed(search_term);
-  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
+  if (auto *stem_filter = processor_->GetStemmer()) {
+    stemmed = stem_filter->GetStemRoot(search_term);
+  }
 
   std::optional<absl::ReaderMutexLock> stem_guard;
   if (lock_needed) stem_guard.emplace(&stem_tree_mutex_);

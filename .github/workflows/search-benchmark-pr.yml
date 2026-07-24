@@ -23,6 +23,13 @@ on:
         required: false
         type: string
         default: "3"
+      config_file:
+        description: "Benchmark config file (from valkey-perf-benchmark/configs/)"
+        type: choice
+        default: "fts-benchmarks-shortened-arm.json"
+        options:
+          - "fts-benchmarks-arm.json"
+          - "fts-benchmarks-shortened-arm.json"
       cluster_mode:
         description: "Cluster mode (empty=run config in file, true=cluster-mode only, false=non-cluster-mode only)"
         type: choice
@@ -63,7 +70,7 @@ jobs:
   # does not care how it was started.
   resolve:
     if: |
-      github.repository == 'carol-ggg/valkey-search' && (
+      github.repository == 'valkey-io/valkey-search' && (
         github.event_name == 'workflow_dispatch' ||
         (github.event.action == 'labeled' &&
          (github.event.label.name == 'run-search-benchmark' || github.event.label.name == 'run-search-benchmark-skip-profiling'))
@@ -153,11 +160,11 @@ jobs:
       CORE_DIR: "valkey"
       CORE_PATH: "${{ github.workspace }}/valkey"
       # Benchmark configuration
-      PERF_BENCHMARK_REPO: "carol-ggg/valkey-perf-benchmark"
-      PERF_BENCHMARK_BRANCH: "module2-multi-restart"
+      PERF_BENCHMARK_REPO: "valkey-io/valkey-perf-benchmark"
+      PERF_BENCHMARK_BRANCH: "main"
       PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
       PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
-      CONFIG_FILE: "${{ github.workspace }}/valkey-search/.github/benchmark_configs/fts-smoke-short-arm.json"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ github.event.inputs.config_file || 'fts-benchmarks-shortened-arm.json' }}"
       # Run parameters
       RUNS: ${{ github.event.inputs.num_runs || '3' }}
       CORE_COMMIT_INPUT: ${{ github.event.inputs.core_commit || '' }}
@@ -255,10 +262,10 @@ jobs:
 
           pip install --require-hashes -r requirements.txt
 
-      - name: Ensure GCC >= 13 (required for valkey-search build)
+      - name: Ensure GCC >= 12 (required for valkey-search build)
         # NOTE: This uses AL2023-specific packages. Update if runner OS changes.
         run: |
-          GCC_MIN_VERSION=13
+          GCC_MIN_VERSION=12
           CURRENT_VERSION=0
 
           if /usr/local/bin/gcc --version 2>/dev/null; then
@@ -436,7 +443,7 @@ jobs:
       - name: Upload artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: search-benchmark-pr-${{ needs.resolve.outputs.pr_number }}
           path: |

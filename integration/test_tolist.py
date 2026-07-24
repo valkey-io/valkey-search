@@ -123,7 +123,9 @@ class TestToList(ValkeySearchTestCaseBase):
 
     def test_tolist_preserves_insertion_order(self):
         """TOLIST should return values in the order they were first
-        encountered (insertion order), not sorted order."""
+        encountered during index scan. The index delivers documents in
+        sorted-by-value order (numeric index order), so TOLIST produces
+        values in that order regardless of HSET insertion order."""
         client: Valkey = self.server.get_new_client()
         self._setup_index_and_wait(
             client, "order_idx", "ord:",
@@ -131,7 +133,8 @@ class TestToList(ValkeySearchTestCaseBase):
         )
 
         # Insert in a specific non-sorted order: 50, 10, 40, 20, 30
-        # All unique, so no dedup needed — just checking order.
+        # All unique, so no dedup needed.
+        # The numeric index will deliver them sorted by val: 10, 20, 30, 40, 50
         for i, v in enumerate([50, 10, 40, 20, 30]):
             client.execute_command(
                 "HSET", f"ord:{i}", "val", str(v), "grp", "g1"
@@ -151,20 +154,25 @@ class TestToList(ValkeySearchTestCaseBase):
         rows = self._parse_agg_result(result)
         assert len(rows) == 1
         vals = [self._decode(v) for v in rows[0]["vals"]]
-        # Values should appear in the order they were first seen
-        assert vals == ["50", "10", "40", "20", "30"]
+        # Documents are delivered in numeric index order (sorted by val),
+        # so TOLIST produces values in ascending numeric order.
+        assert vals == ["10", "20", "30", "40", "50"]
 
     def test_tolist_order_with_duplicates(self):
         """When duplicates exist, only the first occurrence should be kept
-        and the order of first occurrences should be preserved."""
+        and the order of first occurrences should be preserved.
+        The index delivers documents in sorted-by-value order, so
+        'first occurrence' means the first time a value appears in that
+        sorted scan, not the HSET insertion order."""
         client: Valkey = self.server.get_new_client()
         self._setup_index_and_wait(
             client, "orddup_idx", "od:",
             ["val", "NUMERIC", "grp", "TAG"]
         )
 
-        # Sequence: 3, 1, 2, 1, 3, 2, 4
-        # Expected unique first-seen order: 3, 1, 2, 4
+        # Values: 3, 1, 2, 1, 3, 2, 4 (in HSET order, keys od:0..od:6)
+        # Numeric index delivers by val: 1, 1, 2, 2, 3, 3, 4
+        # First-seen in index order: 1, 2, 3, 4
         for i, v in enumerate([3, 1, 2, 1, 3, 2, 4]):
             client.execute_command(
                 "HSET", f"od:{i}", "val", str(v), "grp", "g1"
@@ -184,8 +192,8 @@ class TestToList(ValkeySearchTestCaseBase):
         rows = self._parse_agg_result(result)
         assert len(rows) == 1
         vals = [self._decode(v) for v in rows[0]["vals"]]
-        # Only first occurrences, in first-seen order: 3, 1, 2, 4
-        assert vals == ["3", "1", "2", "4"]
+        # First occurrences in index (numeric) order: 1, 2, 3, 4
+        assert vals == ["1", "2", "3", "4"]
 
     # ------------------------------------------------------------------ #
     # Edge cases

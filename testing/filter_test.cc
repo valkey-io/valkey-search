@@ -1800,13 +1800,14 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
             .key = "key1",
-            .expected_tree_structure = "AND{\n"
-                                       "  AND{\n"
-                                       "    TEXT-TERM(\"hello\", field_mask=1)\n"
-                                       "    TEXT-TERM(\"word\", field_mask=1)\n"
-                                       "  }\n"
-                                       "  TEXT-TERM(\"name\", field_mask=2)\n"
-                                       "}\n",
+            .expected_tree_structure =
+                "AND{\n"
+                "  AND{\n"
+                "    TEXT-TERM(\"hello\", field_mask=1)\n"
+                "    TEXT-TERM(\"word\", field_mask=1)\n"
+                "  }\n"
+                "  TEXT-TERM(\"name\", field_mask=2)\n"
+                "}\n",
         },
         {
             .test_name = "text_field_group_inner_override",

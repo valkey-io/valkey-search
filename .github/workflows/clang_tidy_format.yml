@@ -96,11 +96,13 @@ jobs:
               if [[ -f "$CC_FILE" ]]; then
                 TS_FILE="$CC_FILE"
               else
-                CC_FILES=( $(dirname "$TS_FILE")/*.cc )
-                if [[ -e "${CC_FILES[0]}" ]]; then
-                  TS_FILE="${CC_FILES[0]}"
+                HEADER_BASENAME=$(basename "$TS_FILE")
+                INCLUDED_BY=$(grep -rl "#include .*$HEADER_BASENAME" src/ vmsdk/src/ testing/ | grep '\.cc$' | head -n 1 || true)
+                if [[ -n "$INCLUDED_BY" ]]; then
+                  TS_FILE="$INCLUDED_BY"
                 else
-                  TS_FILE="src/valkey_search.cc"
+                  echo "Warning: Could not find any .cc file including $TS_FILE. Skipping clang-tidy."
+                  continue
                 fi
               fi
               echo "Header modified: running clang-tidy thread-safety check on translation unit $TS_FILE instead"

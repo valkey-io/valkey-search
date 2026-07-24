@@ -41,11 +41,16 @@ on:
       skip_profiling:
         description: "Skip profiling (faster run, no flamegraphs)"
         type: boolean
-        default: false
+        default: true
       skip_config_set:
         description: "Skip config_sets (use default config set)"
         type: boolean
         default: false
+      timeout_minutes:
+        description: "Job timeout in minutes (default 300)"
+        required: false
+        default: "300"
+        type: string
   pull_request_target:
     types: [labeled]
 
@@ -146,7 +151,7 @@ jobs:
   benchmark:
     needs: resolve
     runs-on: [self-hosted, valkey-search-arm-pr]
-    timeout-minutes: 900
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '300') }}
     env:
       # Module configuration
       MODULE_NAME: "search"

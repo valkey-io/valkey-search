@@ -1358,9 +1358,21 @@ def _run_alias_pausepoint_reset(order, node0, node1):
             node0.execute_command(
                 "FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
         elif order == 1:
-            # Release consistency check first, then metadata propagation.
+            # Release consistency check first.  Wait until the retry count
+            # exceeds RETRY_MIN_THRESHOLD before releasing metadata
+            # propagation, guaranteeing the consistency loop actually retries
+            # enough times (the 10ms retry sleep makes back-to-back releases
+            # racy on fast machines).
+            retry_before = int(
+                node0.info("SEARCH")["search_info_fanout_retry_count"])
             node0.execute_command(
                 "FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
+            waiters.wait_for_true(
+                lambda: int(
+                    node0.info("SEARCH")["search_info_fanout_retry_count"])
+                - retry_before > RETRY_MIN_THRESHOLD,
+                timeout=10,
+            )
             node1.execute_command(
                 "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
         else:

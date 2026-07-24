@@ -7,6 +7,7 @@
 #ifndef VALKEYSEARCH_EXPR_VALUE_H
 #define VALKEYSEARCH_EXPR_VALUE_H
 
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -49,6 +50,8 @@ class Value {
   explicit Value(Array&& vec) : value_(std::move(vec)) {}
   explicit Value(std::initializer_list<Value> elements)
       : value_(std::make_shared<std::vector<Value>>(elements)) {}
+  explicit Value(const std::vector<Value>& vec)
+      : value_(std::make_shared<std::vector<Value>>(vec)) {}
   explicit Value(std::vector<Value>&& vec)
       : value_(std::make_shared<std::vector<Value>>(std::move(vec))) {}
 
@@ -129,6 +132,15 @@ static inline std::ostream& operator<<(std::ostream& os, Ordering o) {
 
 Ordering Compare(const Value& l, const Value& r);
 
+// Array operation helper functions
+Value ApplyToElements(const Value::Array vec,
+                      std::function<Value(const Value&)> func);
+Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
+                      std::function<Value(const Value&, const Value&)> func,
+                      bool scalar_on_left);
+Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
+                       std::function<Value(const Value&, const Value&)> func);
+
 //
 // These orderings aren't IEEE compatible, but they match the legacy
 //
@@ -207,6 +219,17 @@ Value FuncDayofmonth(const Value& t);
 Value FuncDayofyear(const Value& t);
 Value FuncYear(const Value& t);
 Value FuncMonthofyear(const Value& t);
+
+// Array-specific functions
+Value FuncArrayLen(const Value& vec);
+Value FuncArrayAt(const Value& vec, const Value& index);
+Value FuncIsArray(const Value& val);
+Value FuncFlatten(const Value& vec, const Value& depth);
+
+// Array serialization/deserialization helpers
+// Deserialize a ValkeyModuleCallReply (RESP data) into a Value
+// Handles arrays recursively to support nested vectors
+expr::Value DeserializeValueFromResp(ValkeyModuleCallReply* reply);
 
 }  // namespace expr
 }  // namespace valkey_search

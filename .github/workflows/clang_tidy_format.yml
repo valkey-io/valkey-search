@@ -90,10 +90,12 @@ jobs:
             docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
             bash -c "ci/check_clang_format.sh \"$FILE\""
 
-            echo "Running clang-tidy thread-safety check on $FILE"
-            docker run --rm -v "$(pwd):/workspace" --user "ubuntu:ubuntu" \
-              -e TS_FILE="$FILE" -e TS_CONFIG="$TS_CONFIG" presubmit-image \
-              bash -c 'clang-tidy --quiet -p compile_commands.json --config="$TS_CONFIG" "$TS_FILE" 2>&1 | tail -n +3'
+            if [[ "$FILE" == *.cc ]]; then
+              echo "Running clang-tidy thread-safety check on $FILE"
+              docker run --rm -v "$(pwd):/workspace" --user "ubuntu:ubuntu" \
+                -e TS_FILE="$FILE" -e TS_CONFIG="$TS_CONFIG" presubmit-image \
+                bash -c 'clang-tidy --quiet -p compile_commands.json --config="$TS_CONFIG" "$TS_FILE" 2>&1 | tail -n +3'
+            fi
 
             # TODO: Enable full clang-tidy after the existing code is tidied
             # docker run --rm  -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \

@@ -79,9 +79,9 @@ class VectorHNSW : public VectorBase {
     return algo_->max_elements_;
   }
   // Reading immutable index parameters does not require a mutex. Bypassing
-  // thread-safety analysis because while the pointer algo_ is guarded to protect
-  // mutative operations, these specific fields are strictly constant after
-  // construction.
+  // thread-safety analysis because while the pointer algo_ is guarded to
+  // protect mutative operations, these specific fields are strictly constant
+  // after construction.
   int GetM() const ABSL_NO_THREAD_SAFETY_ANALYSIS { return algo_->M_; }
   int GetEfConstruction() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->ef_construction_;

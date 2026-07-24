@@ -319,7 +319,7 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
         arr.emplace_back(e);
       }
       rec->fields_[0] = expr::Value(std::move(arr));  // n1 = array
-      rec->fields_[1] = expr::Value(group_key);        // n2 = group key
+      rec->fields_[1] = expr::Value(group_key);       // n2 = group key
       return rec;
     };
     records.emplace_back(make_array_record({10.0, 20.0}, 0.0));

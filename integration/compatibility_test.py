@@ -248,10 +248,13 @@ def compare_row(l, r, key_type):
         #
         # TOLIST reducer returns lists where order is non-deterministic.
         # Check for list values first, before any field-name-based heuristics.
+        # Sort both lists before comparing since insertion order differs between
+        # Redis (random hash table traversal) and valkey-search (index order).
         #
         if isinstance(l[lks[i]], list) and isinstance(r[rks[i]], list):
-            if l[lks[i]] != r[rks[i]]:
-                print("mismatch list field: ", lks[i], " ", l[lks[i]], "!=", r[rks[i]])
+            if sorted(l[lks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)) != \
+               sorted(r[rks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)):
+                print("mismatch list field: ", lks[i], " ", sorted(l[lks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)), "!=", sorted(r[rks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)))
                 return False
         #
         # Hack, fields that start with an 'n' are assumed to be numeric

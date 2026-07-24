@@ -975,10 +975,10 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   VectorHNSW<float>::HNSWIndex algo;
   SingleChunkInputStream input(serialized);
   auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
-    float magnitude =
-        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
-                      vector_data.size() / sizeof(float));
-    return VectorRecord::Construct(vector_data, magnitude);
+    float reciprocal_magnitude = CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(vector_data.data()),
+        vector_data.size() / sizeof(float));
+    return VectorRecord::Construct(vector_data, reciprocal_magnitude);
   };
   VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
                                  /*expected_m=*/kM, /*validate=*/true,
@@ -1053,12 +1053,13 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
     v[i % kDimensions] = static_cast<float>(i + 1);
     absl::string_view v_bytes(reinterpret_cast<const char *>(v.data()),
                               v.size() * sizeof(float));
-    float magnitude = CalcMagnitude(v.data(), v.size());
+    float reciprocal_magnitude = CalcReciprocalMagnitude(v.data(), v.size());
 
-    algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
-                                                      vector_allocator.get()),
-                              v_bytes.size(), false),
-                  /*label=*/i, force_levels[i]);
+    algo.addPoint(
+        InputVector(VectorRecord::Construct(v_bytes, reciprocal_magnitude,
+                                            vector_allocator.get()),
+                    v_bytes.size(), false),
+        /*label=*/i, force_levels[i]);
   }
   ChunkStream golden;
   auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
@@ -1077,10 +1078,10 @@ absl::Status LoadGolden(ChunkStream &golden, size_t max_elements,
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo;
   auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
-    float magnitude =
-        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
-                      vector_data.size() / sizeof(float));
-    return VectorRecord::Construct(vector_data, magnitude);
+    float reciprocal_magnitude = CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(vector_data.data()),
+        vector_data.size() / sizeof(float));
+    return VectorRecord::Construct(vector_data, reciprocal_magnitude);
   };
   try {
     return algo.LoadIndex(golden, &space, max_elements, kM, validate,
@@ -1161,10 +1162,10 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo;
   auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
-    float magnitude =
-        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
-                      vector_data.size() / sizeof(float));
-    return VectorRecord::Construct(vector_data, magnitude);
+    float reciprocal_magnitude = CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(vector_data.data()),
+        vector_data.size() / sizeof(float));
+    return VectorRecord::Construct(vector_data, reciprocal_magnitude);
   };
   golden.Rewind();
   VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, kM,

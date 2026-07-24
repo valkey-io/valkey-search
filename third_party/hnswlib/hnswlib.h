@@ -146,7 +146,7 @@ typedef size_t labeltype;
 class BaseFilterFunctor {
  public:
   virtual bool operator()(hnswlib::labeltype id) { return true; }
-  virtual ~BaseFilterFunctor() {};
+  virtual ~BaseFilterFunctor(){};
 };
 
 // VALKEYSEARCH BEGIN
@@ -156,7 +156,7 @@ class BaseFilterFunctor {
 class BaseCancellationFunctor {
  public:
   virtual bool isCancelled() { return false; }
-  virtual ~BaseCancellationFunctor() {};
+  virtual ~BaseCancellationFunctor(){};
 };
 // VALKEYSEARCH END
 
@@ -217,21 +217,21 @@ class SpaceInterface {
   virtual ~SpaceInterface() {}
 };
 
-template <typename dist_t, typename InputVectorT, typename SavedVectorT>
+template <typename dist_t, typename QueryVectorT, typename StoredVectorT>
 class AlgorithmInterface {
  public:
-  virtual void addPoint(InputVectorT &&datapoint, labeltype label,
+  virtual void addPoint(QueryVectorT &&datapoint, labeltype label,
                         bool replace_deleted = false) = 0;
 
   virtual std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
+      const QueryVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const = 0;
 
   // Return k nearest neighbor in the order of closer fist
   virtual std::vector<std::pair<dist_t, labeltype>> searchKnnCloserFirst(
-      const InputVectorT &query_data, size_t k,
+      const QueryVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const;
@@ -239,10 +239,10 @@ class AlgorithmInterface {
   virtual ~AlgorithmInterface() = default;
 };
 
-template <typename dist_t, typename InputVectorT, typename SavedVectorT>
+template <typename dist_t, typename QueryVectorT, typename StoredVectorT>
 std::vector<std::pair<dist_t, labeltype>>
-AlgorithmInterface<dist_t, InputVectorT, SavedVectorT>::searchKnnCloserFirst(
-    const InputVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
+AlgorithmInterface<dist_t, QueryVectorT, StoredVectorT>::searchKnnCloserFirst(
+    const QueryVectorT &query_data, size_t k, BaseFilterFunctor *isIdAllowed,
     BaseCancellationFunctor *isCancelled  // VALKEYSEARCH
 ) const {
   std::vector<std::pair<dist_t, labeltype>> result;

@@ -58,7 +58,7 @@ class VectorRecord {
   // Static factory method to construct a VectorRecord managed by
   // std::shared_ptr.
   static std::shared_ptr<VectorRecord> Construct(
-      absl::string_view vector, float magnitude,
+      absl::string_view vector, float reciprocal_magnitude,
       Allocator *allocator = nullptr);
 
   inline const char *GetRawVector() const { return data_; }
@@ -72,7 +72,7 @@ class VectorRecord {
   char data_[0];  // flexible array member
 };
 
-float CalcMagnitude(const float *src, size_t size);
+float CalcReciprocalMagnitude(const float *src, size_t size);
 
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float reciprocal_magnitude);

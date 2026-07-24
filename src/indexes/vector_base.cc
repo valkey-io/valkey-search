@@ -77,12 +77,12 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
 
 namespace indexes {
 
-float CalcMagnitude(const float *src, size_t size) {
-  float magnitude = 0.0f;
+float CalcReciprocalMagnitude(const float *src, size_t size) {
+  float sum_sq = 0.0f;
   for (size_t i = 0; i < size; i++) {
-    magnitude += src[i] * src[i];
+    sum_sq += src[i] * src[i];
   }
-  return (magnitude == 0.0f) ? 1.0f : std::sqrt(magnitude);
+  return (sum_sq == 0.0f) ? 1.0f : (1.0f / std::sqrt(sum_sq));
 }
 
 std::vector<char> NormalizeVector(absl::string_view record,
@@ -101,12 +101,12 @@ std::vector<char> NormalizeVector(absl::string_view record,
 }
 
 std::vector<char> NormalizeVector(absl::string_view record, float *magnitude) {
-  float calc_magnitude =
-      CalcMagnitude((float *)record.data(), record.size() / sizeof(float));
-  std::vector<char> ret = NormalizeVector(record, 1.0f / calc_magnitude);
+  float reciprocal_magnitude = CalcReciprocalMagnitude(
+      (float *)record.data(), record.size() / sizeof(float));
+  std::vector<char> ret = NormalizeVector(record, reciprocal_magnitude);
 
   if (magnitude) {
-    *magnitude = calc_magnitude;
+    *magnitude = 1.0f / reciprocal_magnitude;
   }
   return ret;
 }
@@ -164,9 +164,10 @@ std::shared_ptr<const VectorRecord> VectorBase::GetOrConstructVectorRecord(
                   record.size()) == 0) {
     return vector_record;
   }
-  float magnitude = CalcMagnitude(
+  float reciprocal_magnitude = CalcReciprocalMagnitude(
       reinterpret_cast<const float *>(record.data()), dimensions_);
-  return VectorRecord::Construct(record, magnitude, vector_allocator_.get());
+  return VectorRecord::Construct(record, reciprocal_magnitude,
+                                 vector_allocator_.get());
 }
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
@@ -590,13 +591,13 @@ template void VectorBase::Init<float>(
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 
-std::shared_ptr<VectorRecord> VectorRecord::Construct(absl::string_view vector,
-                                                      float magnitude,
-                                                      Allocator *allocator) {
+std::shared_ptr<VectorRecord> VectorRecord::Construct(
+    absl::string_view vector, float reciprocal_magnitude,
+    Allocator *allocator) {
   size_t total_size = sizeof(VectorRecord) + vector.size();
   void *mem =
       allocator ? allocator->Allocate(total_size) : ::operator new(total_size);
-  VectorRecord *ptr = new (mem) VectorRecord(vector, magnitude);
+  VectorRecord *ptr = new (mem) VectorRecord(vector, reciprocal_magnitude);
   return {ptr, [allocator_used = (allocator != nullptr)](VectorRecord *p) {
             p->~VectorRecord();
             if (allocator_used) {
@@ -607,8 +608,9 @@ std::shared_ptr<VectorRecord> VectorRecord::Construct(absl::string_view vector,
           }};
 }
 
-VectorRecord::VectorRecord(absl::string_view vector, float magnitude)
-    : reciprocal_magnitude_(magnitude == 0.0f ? 1.0f : 1.0f / magnitude) {
+VectorRecord::VectorRecord(absl::string_view vector, float reciprocal_magnitude)
+    : reciprocal_magnitude_(
+          reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude) {
   std::memcpy(data_, vector.data(), vector.size());
 }
 }  // namespace indexes

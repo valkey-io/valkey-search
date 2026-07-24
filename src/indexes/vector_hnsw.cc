@@ -115,11 +115,12 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       if (!is_marked_deleted) {
         return std::shared_ptr<VectorRecord>(nullptr);
       }
-      T magnitude =
-          CalcMagnitude(reinterpret_cast<const T *>(vector_data.data()),
-                        vector_data.size() / sizeof(T));
+      T reciprocal_magnitude = CalcReciprocalMagnitude(
+          reinterpret_cast<const T *>(vector_data.data()),
+          vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
-          vector_data, magnitude, static_cast<FixedSizeAllocator *>(allocator));
+          vector_data, reciprocal_magnitude,
+          static_cast<FixedSizeAllocator *>(allocator));
     };
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
@@ -340,15 +341,16 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  T magnitude =
-      normalize_ ? CalcMagnitude(reinterpret_cast<const float *>(query.data()),
-                                 dimensions_)
-                 : kDefaultMagnitude;
+  T reciprocal_magnitude =
+      normalize_
+          ? CalcReciprocalMagnitude(
+                reinterpret_cast<const float *>(query.data()), dimensions_)
+          : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    InputVector embedding(
-        VectorRecord::Construct(query, magnitude, GetVectorAllocator()),
-        query.size(), normalize_);
+    InputVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
+                                                  GetVectorAllocator()),
+                          query.size(), normalize_);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {

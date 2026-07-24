@@ -99,11 +99,12 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
 
     auto generator = [allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data) {
-      T magnitude =
-          CalcMagnitude(reinterpret_cast<const T *>(vector_data.data()),
-                        vector_data.size() / sizeof(T));
+      T reciprocal_magnitude = CalcReciprocalMagnitude(
+          reinterpret_cast<const T *>(vector_data.data()),
+          vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
-          vector_data, magnitude, static_cast<FixedSizeAllocator *>(allocator));
+          vector_data, reciprocal_magnitude,
+          static_cast<FixedSizeAllocator *>(allocator));
     };
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
@@ -221,14 +222,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  float magnitude =
-      normalize_ ? CalcMagnitude(reinterpret_cast<const float *>(query.data()),
-                                 dimensions_)
-                 : 1.0f;
+  float reciprocal_magnitude =
+      normalize_
+          ? CalcReciprocalMagnitude(
+                reinterpret_cast<const float *>(query.data()), dimensions_)
+          : 1.0f;
 
   try {
     CancelCondition canceler(cancellation_token);
-    auto embedding = VectorRecord::Construct(query, magnitude);
+    auto embedding = VectorRecord::Construct(query, reciprocal_magnitude);
     auto res = algo_->searchKnn(
         embedding,
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),

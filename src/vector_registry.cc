@@ -73,11 +73,11 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
       vector_record = it->second.vector_record;
       vector_size = it->second.vector_record_size;
     } else {
-      float magnitude = indexes::CalcMagnitude(
+      float reciprocal_magnitude = indexes::CalcReciprocalMagnitude(
           reinterpret_cast<const float *>(vector_str.data()),
           vector_str.size() / sizeof(float));
-      vector_record =
-          indexes::VectorRecord::Construct(vector_str, magnitude, allocator);
+      vector_record = indexes::VectorRecord::Construct(
+          vector_str, reciprocal_magnitude, allocator);
       vector_size = vector_str.size();
       tracked_vectors_[search_key] = {vector_record, vector_size};
     }

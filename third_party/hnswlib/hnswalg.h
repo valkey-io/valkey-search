@@ -33,9 +33,9 @@ namespace hnswlib {
 typedef unsigned int tableint;
 typedef unsigned int linklistsizeint;
 
-template <typename dist_t, typename InputVectorT, typename SavedVectorT>
+template <typename dist_t, typename QueryVectorT, typename StoredVectorT>
 class HierarchicalNSW
-    : public AlgorithmInterface<dist_t, InputVectorT, SavedVectorT> {
+    : public AlgorithmInterface<dist_t, QueryVectorT, StoredVectorT> {
  public:
   static const tableint MAX_LABEL_OPERATION_LOCKS = 65536;
   static const unsigned char DELETE_MARK = 0x01;
@@ -138,13 +138,13 @@ class HierarchicalNSW
     update_probability_generator_.seed(random_seed + 1);
 
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-    offsetData_ = (size_links_level0_ + alignof(SavedVectorT) - 1) &
-                  ~(alignof(SavedVectorT) - 1);
+    offsetData_ = (size_links_level0_ + alignof(StoredVectorT) - 1) &
+                  ~(alignof(StoredVectorT) - 1);
     size_data_per_element_ =
-        offsetData_ + sizeof(SavedVectorT) + sizeof(labeltype);
+        offsetData_ + sizeof(StoredVectorT) + sizeof(labeltype);
     serialize_size_data_per_element_ =
         size_links_level0_ + vector_size_ + sizeof(labeltype);
-    label_offset_ = offsetData_ + sizeof(SavedVectorT);
+    label_offset_ = offsetData_ + sizeof(StoredVectorT);
     offsetLevel0_ = 0;
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
@@ -226,37 +226,37 @@ class HierarchicalNSW
     return (labeltype *)((*data_level0_memory_)[internal_id] + label_offset_);
   }
 
-  inline SavedVectorT *GetDataPtrByInternalId(tableint internal_id) const {
-    return reinterpret_cast<SavedVectorT *>(
+  inline StoredVectorT *GetDataPtrByInternalId(tableint internal_id) const {
+    return reinterpret_cast<StoredVectorT *>(
         (*data_level0_memory_)[internal_id] + offsetData_);
   }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  inline SavedVectorT GetDataByInternalId(tableint internal_id) const {
+  inline StoredVectorT GetDataByInternalId(tableint internal_id) const {
     return std::atomic_load(GetDataPtrByInternalId(internal_id));
   }
 
   inline void SetDataByInternalId(tableint internal_id,
-                                  InputVectorT &&datapoint) {
+                                  QueryVectorT &&datapoint) {
     std::atomic_store(GetDataPtrByInternalId(internal_id),
                       datapoint.GetVectorRecord());
   }
   inline void SetDataByInternalId(tableint internal_id,
-                                  SavedVectorT &&datapoint) {
+                                  StoredVectorT &&datapoint) {
     std::atomic_store(GetDataPtrByInternalId(internal_id),
                       std::move(datapoint));
   }
 #pragma GCC diagnostic pop
 
   inline void InitDataByInternalId(tableint internal_id,
-                                   InputVectorT &&datapoint) {
+                                   QueryVectorT &&datapoint) {
     new (GetDataPtrByInternalId(internal_id))
-        SavedVectorT(datapoint.GetVectorRecord());
+        StoredVectorT(datapoint.GetVectorRecord());
   }
 
-  inline dist_t EvaluateDistance(const SavedVectorT &a,
-                                 const SavedVectorT &b) const {
+  inline dist_t EvaluateDistance(const StoredVectorT &a,
+                                 const StoredVectorT &b) const {
     float reciprocal_mag_product =
         normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
                     : 1.0f;
@@ -264,7 +264,7 @@ class HierarchicalNSW
                         reciprocal_mag_product);
   }
 
-  inline dist_t EvaluateDistance(const InputVectorT &a, const SavedVectorT &b,
+  inline dist_t EvaluateDistance(const QueryVectorT &a, const StoredVectorT &b,
                                  bool is_rhs_marked_deleted) const {
     if (is_rhs_marked_deleted) {
       const char *query_vec =
@@ -292,7 +292,7 @@ class HierarchicalNSW
 
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
-  searchBaseLayer(tableint ep_id, const InputVectorT &data_point, int layer) {
+  searchBaseLayer(tableint ep_id, const QueryVectorT &data_point, int layer) {
     VisitedList *vl = visited_list_pool_->getFreeVisitedList();
     vl_type *visited_array = vl->mass;
     vl_type visited_array_tag = vl->curV;
@@ -366,7 +366,7 @@ class HierarchicalNSW
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
         visited_array[candidate_id] = visited_array_tag;
-        const SavedVectorT &currObj1 = (GetDataByInternalId(candidate_id));
+        const StoredVectorT &currObj1 = (GetDataByInternalId(candidate_id));
 
         dist_t dist1 = EvaluateDistance(data_point, currObj1,
                                         isMarkedDeleted(candidate_id));
@@ -398,7 +398,7 @@ class HierarchicalNSW
   std::priority_queue<std::pair<dist_t, tableint>,
                       std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
   searchBaseLayerST(
-      tableint ep_id, const InputVectorT &data_point, size_t ef,
+      tableint ep_id, const QueryVectorT &data_point, size_t ef,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr,  // VALKEYSEARCH
       BaseSearchStopCondition<dist_t> *stop_condition = nullptr) const {
@@ -419,7 +419,7 @@ class HierarchicalNSW
     if (bare_bone_search ||
         (!isMarkedDeleted(ep_id) &&
          ((!isIdAllowed) || (*isIdAllowed)(GetExternalLabel(ep_id))))) {
-      const SavedVectorT &ep_data = GetDataByInternalId(ep_id);
+      const StoredVectorT &ep_data = GetDataByInternalId(ep_id);
       dist_t dist =
           EvaluateDistance(data_point, ep_data, isMarkedDeleted(ep_id));
       lowerBound = dist;
@@ -492,7 +492,7 @@ class HierarchicalNSW
       constexpr int kVectorLookahead = 1;   // P3
 #endif
       thread_local std::vector<tableint> unvisited;
-      thread_local std::vector<const SavedVectorT *> vptrs;
+      thread_local std::vector<const StoredVectorT *> vptrs;
       unvisited.clear();
 
       // Phase 1: filter visited. Preserve neighbor-list order so the heap/
@@ -539,7 +539,7 @@ class HierarchicalNSW
         }
 #endif
         tableint candidate_id = unvisited[k];
-        const SavedVectorT *currObj1 = vptrs[k];
+        const StoredVectorT *currObj1 = vptrs[k];
         dist_t dist = EvaluateDistance(data_point, *currObj1,
                                        isMarkedDeleted(candidate_id));
 
@@ -662,7 +662,7 @@ class HierarchicalNSW
   }
 
   tableint mutuallyConnectNewElement(
-      const InputVectorT &data_point, tableint cur_c,
+      const QueryVectorT &data_point, tableint cur_c,
       std::priority_queue<std::pair<dist_t, tableint>,
                           std::vector<std::pair<dist_t, tableint>>,
                           CompareByFirst> &top_candidates,
@@ -890,7 +890,7 @@ class HierarchicalNSW
     std::vector<char> buf(serialize_size_data_per_element_);
     for (int i = 0; i < cur_element_count_; i++) {
       memcpy(buf.data(), (*data_level0_memory_)[i], size_links_level0_);
-      const SavedVectorT &record = GetDataByInternalId(i);
+      const StoredVectorT &record = GetDataByInternalId(i);
       std::vector<char> serialized_vector =
           serializer(record, isMarkedDeleted(i));
       memcpy(buf.data() + size_links_level0_, serialized_vector.data(),
@@ -962,11 +962,11 @@ class HierarchicalNSW
     // enabled these are cross-checked against the header below; the header's
     // own copies are only ever used as values to validate against.
     size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
-    offsetData_ = (size_links_level0_ + alignof(SavedVectorT) - 1) &
-                  ~(alignof(SavedVectorT) - 1);
+    offsetData_ = (size_links_level0_ + alignof(StoredVectorT) - 1) &
+                  ~(alignof(StoredVectorT) - 1);
     size_data_per_element_ =
-        offsetData_ + sizeof(SavedVectorT) + sizeof(labeltype);
-    label_offset_ = offsetData_ + sizeof(SavedVectorT);
+        offsetData_ + sizeof(StoredVectorT) + sizeof(labeltype);
+    label_offset_ = offsetData_ + sizeof(StoredVectorT);
     size_links_per_element_ =
         maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
 
@@ -1033,7 +1033,7 @@ class HierarchicalNSW
       labeltype id;
       memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
-      new (GetDataPtrByInternalId(i)) SavedVectorT(generator(
+      new (GetDataPtrByInternalId(i)) StoredVectorT(generator(
           absl::string_view(chunk->data() + size_links_level0_, vector_size_),
           isMarkedDeleted(i)));
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
@@ -1137,7 +1137,7 @@ class HierarchicalNSW
     return absl::OkStatus();
   }
 
-  SavedVectorT *getPoint(labeltype label) const {
+  StoredVectorT *getPoint(labeltype label) const {
     auto search = label_lookup_.find(label);
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
@@ -1158,7 +1158,7 @@ class HierarchicalNSW
     tableint internalId = search->second;
     lock_table.unlock();
 
-    const SavedVectorT &data_ptrv = GetDataByInternalId(internalId);
+    const StoredVectorT &data_ptrv = GetDataByInternalId(internalId);
     size_t dim = *((size_t *)dist_func_param_);
     std::vector<data_t> data(dim);
     memcpy(data.data(), data_ptrv.GetRawVector(), dim * sizeof(data_t));
@@ -1273,7 +1273,7 @@ class HierarchicalNSW
    * If replacement of deleted elements is enabled: replaces previously deleted
    * point if any, updating it with new point
    */
-  void addPoint(InputVectorT &&data_point, labeltype label,
+  void addPoint(QueryVectorT &&data_point, labeltype label,
                 bool replace_deleted = false) override {
     if ((allow_replace_deleted_ == false) && (replace_deleted == true)) {
       throw std::runtime_error(
@@ -1315,7 +1315,7 @@ class HierarchicalNSW
     }
   }
 
-  void updatePoint(InputVectorT &&dataPoint, tableint internalId,
+  void updatePoint(QueryVectorT &&dataPoint, tableint internalId,
                    float updateNeighborProbability) {
     // update the feature vector associated with existing point with new vector
     SetDataByInternalId(internalId, std::move(dataPoint));
@@ -1403,7 +1403,7 @@ class HierarchicalNSW
                                maxLevelCopy);
   }
 
-  void repairConnectionsForUpdate(const InputVectorT &dataPoint,
+  void repairConnectionsForUpdate(const QueryVectorT &dataPoint,
                                   tableint entryPointInternalId,
                                   tableint dataPointInternalId,
                                   int dataPointLevel, int maxLevel) {
@@ -1495,7 +1495,7 @@ class HierarchicalNSW
     return result;
   }
 
-  tableint addPoint(InputVectorT &&data_point, labeltype label, int level) {
+  tableint addPoint(QueryVectorT &&data_point, labeltype label, int level) {
     tableint cur_c = 0;
     {
       // Checking if the element with the same label already exists
@@ -1623,7 +1623,7 @@ class HierarchicalNSW
     return cur_c;
   }
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
+      const QueryVectorT &query_data, size_t k,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
   ) const override {
@@ -1631,7 +1631,7 @@ class HierarchicalNSW
   }
 
   std::priority_queue<std::pair<dist_t, labeltype>> searchKnn(
-      const InputVectorT &query_data, size_t k,
+      const QueryVectorT &query_data, size_t k,
       std::optional<size_t> ef_runtime,
       BaseFilterFunctor *isIdAllowed = nullptr,
       BaseCancellationFunctor *isCancelled = nullptr  // VALKEYSEARCH
@@ -1700,7 +1700,7 @@ class HierarchicalNSW
   }
 
   std::vector<std::pair<dist_t, labeltype>> searchStopConditionClosest(
-      const InputVectorT &query_data,
+      const QueryVectorT &query_data,
       BaseSearchStopCondition<dist_t> &stop_condition,
       BaseFilterFunctor *isIdAllowed = nullptr) const {
     std::vector<std::pair<dist_t, labeltype>> result;

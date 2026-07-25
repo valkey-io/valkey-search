@@ -47,9 +47,9 @@ on:
         type: boolean
         default: false
       timeout_minutes:
-        description: "Job timeout in minutes (default 300)"
+        description: "Job timeout in minutes (default 900)"
         required: false
-        default: "300"
+        default: "900"
         type: string
   pull_request_target:
     types: [labeled]
@@ -151,7 +151,7 @@ jobs:
   benchmark:
     needs: resolve
     runs-on: [self-hosted, valkey-search-arm-pr]
-    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '300') }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '900') }}
     env:
       # Module configuration
       MODULE_NAME: "search"

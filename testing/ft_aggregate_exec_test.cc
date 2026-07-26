@@ -269,6 +269,39 @@ TEST_F(AggregateExecTest, ReducerTest) {
     }
   }
 }
+// Regression test for issue #1251: re-using an alias for a different field must
+// shadow the previous binding (RediSearch LOAD/APPLY semantics) rather than
+// abort or silently corrupt the alias/slot bookkeeping.
+TEST_F(AggregateExecTest, AliasRebindShadowsPreviousBinding) {
+  auto params = std::make_unique<AggregateParameters>(0);
+  params->parse_vars_.index_interface_ = &fakeIndex;
+
+  EXPECT_EQ(
+      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
+      0);
+  EXPECT_EQ(
+      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
+      1);
+
+  // record_info_by_index_.size() is the slot count records are sized by.
+  EXPECT_EQ(params->record_info_by_index_.size(), 2);
+
+  // Shadowed: alias n1 resolves to the new slot, but the old slot survives and
+  // stays reachable by its identifier.
+  ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
+  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 1);
+  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n1"));
+  EXPECT_EQ(params->record_indexes_by_identifier_.at("n1"), 0);
+  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n2"));
+  EXPECT_EQ(params->record_indexes_by_identifier_.at("n2"), 1);
+
+  // Re-adding the pair currently in effect is idempotent — no new slot.
+  EXPECT_EQ(
+      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
+      1);
+  EXPECT_EQ(params->record_info_by_index_.size(), 2);
+}
+
 /*
 TEST_F(AggregateExecTest, testHash) {
   GroupKey key1({expr::Value(1.0), expr::Value(2.0)});

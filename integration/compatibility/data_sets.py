@@ -284,6 +284,8 @@ def compute_data_sets():
     data["hard strings"] = {}
     data["tag special chars"] = {}
     data["array inputs"] = {}
+    data["array inputs empty"] = {}
+    data["array compare"] = {}
     vec_algos = ["flat", "hnsw"]
     metrics = ["cosine", "ip", "l2"]
     for algo in vec_algos:
@@ -541,6 +543,63 @@ def compute_data_sets():
                 },
             )
             for i, row in enumerate(array_input_rows)
+        ]
+        #
+        # Array inputs, empty case: every key has n1, so the base query matches
+        # both groups, but no key in group "ge" has n2 or t2 at all. A TOLIST
+        # over those fields therefore collects nothing and yields an empty
+        # array, next to a non-empty one from group "ga" in the same reply.
+        #
+        array_empty_rows = [
+            # t1,  n1,   n2,       t2
+            ("ga",  1,   10,   "apple"),
+            ("ga",  2,   20,  "Banana"),
+            ("ge",  3, None,      None),
+            ("ge",  4, None,      None),
+        ]
+        data["array inputs empty"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array inputs empty"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {k: v for k, v in {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "t2": row[3],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                }.items() if v is not None},
+            )
+            for i, row in enumerate(array_empty_rows)
+        ]
+        #
+        # Array compare: group shapes that tell apart the possible rules for
+        # comparing two arrays. Per group, TOLIST(n1) and TOLIST(n2) collect:
+        #   g1  {1,2} vs {1,2}    identical
+        #   g2  {1,9} vs {1,2}    same first element, differing second
+        #   g3  {1,2} vs {1,2,3}  one is a prefix of the other
+        #   g4  {2}   vs {1,9}    differing first element
+        # Comparing by first element only, lexicographically, or by length all
+        # give different answers across these four.
+        #
+        array_compare_rows = [
+            # t1,  n1, n2
+            ("g1",  1,  1), ("g1", 2, 2),
+            ("g2",  1,  1), ("g2", 9, 2),
+            ("g3",  1,  1), ("g3", 2, 2), ("g3", 1, 3),
+            ("g4",  2,  1), ("g4", 2, 9),
+        ]
+        data["array compare"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array compare"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i, row in enumerate(array_compare_rows)
         ]
         for algo in vec_algos:
             for metric in metrics:

@@ -14,6 +14,11 @@ from .generate import BaseCompatibilityTest
 # carrying the arrays named below; the tail is the SORTBY / GROUPBY / APPLY
 # that consumes them.
 DATASET = "array inputs"
+# Same shape, but group "ge" has no n2/t2 at all, so TOLIST over those fields
+# collects nothing.
+DATASET_EMPTY = "array inputs empty"
+# Group shapes that tell apart the rules for comparing two arrays.
+DATASET_COMPARE = "array compare"
 
 # The base query only selects rows; it plays no part in what is being tested.
 FILTER_QUERY = "@n1:[-inf inf]"
@@ -78,6 +83,14 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
     def _apply(self, key_type, expr):
         self._pipeline(key_type, f"apply {expr} as result")
 
+    def _empty_pipeline(self, key_type, tail):
+        """Same, over the dataset where one group collects an empty array."""
+        cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
+        cmd += ("load 5 @__key @n1 @n2 @t1 @t2 groupby 1 @t1 "
+                "reduce tolist 1 @n2 as items "
+                f"reduce tolist 1 @t2 as sitems {tail}").split()
+        self.execute_command(cmd + ["DIALECT", "2"])
+
     ### APPLY ###
 
     def test_apply_dyadic_ops(self, key_type):
@@ -140,6 +153,45 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
         self._pipeline(key_type, "apply (@items)+(1) as a apply (@a)*(2) as result")
         self._pipeline(key_type, "apply abs(@items) as a apply strlen(@a) as result")
         self._pipeline(key_type, "apply (@items)+(@items) as a apply (@a)-(@items) as result")
+
+    def test_empty_array(self, key_type):
+        """A group whose TOLIST field is absent from every record."""
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "",  # is an empty array present in the reply at all?
+            "apply !(@items) as result",
+            "apply (@items)&&(1) as result",
+            "apply (@items)||(0) as result",
+            "apply !(@sitems) as result",
+            "apply exists(@items) as result",
+            'apply (@items)<("a") as result',
+            'apply (@items)==("") as result',
+            "apply (@items)+(1) as result",
+            "apply abs(@items) as result",
+            "apply strlen(@items) as result",
+            "sortby 2 @items asc",
+            "sortby 4 @items asc @t1 asc",
+            "groupby 1 @items reduce count 0 as cnt",
+            "groupby 1 @t1 reduce tolist 1 @items as flat",
+            "groupby 1 @t1 reduce count_distinct 1 @items as ncd",
+            "groupby 1 @t1 reduce sum 1 @items as nsum",
+        ]:
+            self._empty_pipeline(key_type, tail)
+
+    def test_array_vs_array_compare(self, key_type):
+        """Comparing two arrays -- a query Redisearch accepts.
+
+        Both engines compare lexicographically, but each over its own element
+        order, so the answers only agree when those orders happen to agree.
+        """
+        self.setup_data(DATASET_COMPARE, key_type)
+        for op in ["<", "<=", "==", "!=", ">=", ">"]:
+            cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
+            cmd += ("load 3 @n1 @n2 @t1 groupby 1 @t1 "
+                    "reduce tolist 1 @n1 as items "
+                    "reduce tolist 1 @n2 as items2 "
+                    f"apply (@items){op}(@items2) as result").split()
+            self.execute_command(cmd + ["DIALECT", "2"])
 
     ### SORTBY ###
 

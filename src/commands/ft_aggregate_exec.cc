@@ -11,7 +11,10 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -177,6 +180,43 @@ absl::Status SortBy::Execute(RecordSet& records) const {
   return absl::OkStatus();
 }
 
+// Redisearch treats an array group key as a multi-value field: the record joins
+// one group per element, and one per combination when several key fields hold
+// arrays. Reducer arguments are not expanded -- they still see the whole array.
+static absl::StatusOr<std::vector<GroupKey>> ExpandGroupKeys(
+    const absl::InlinedVector<expr::Value, 4>& key_values) {
+  // A record with several large array keys would otherwise produce the product
+  // of their lengths in group keys.
+  const size_t max_expansion = options::GetMaxGroupKeyExpansion().GetValue();
+  std::vector<GroupKey> keys(1);
+  for (const auto& value : key_values) {
+    absl::InlinedVector<expr::Value, 4> alternatives;
+    if (!value.IsArray()) {
+      alternatives.emplace_back(value);
+    } else if (value.IsEmptyArray()) {
+      // Nothing to group into: Redisearch keys these as nil.
+      alternatives.emplace_back(expr::Value::Nil("empty array group key"));
+    } else {
+      auto array = value.GetArray();
+      alternatives.assign(array->begin(), array->end());
+    }
+    if (keys.size() * alternatives.size() > max_expansion) {
+      return absl::ResourceExhaustedError(absl::StrCat(
+          "GROUPBY over multi-value fields exceeds ", max_expansion,
+          " group keys for a single record"));
+    }
+    std::vector<GroupKey> expanded;
+    expanded.reserve(keys.size() * alternatives.size());
+    for (const auto& key : keys) {
+      for (const auto& alternative : alternatives) {
+        expanded.emplace_back(key).keys_.emplace_back(alternative);
+      }
+    }
+    keys.swap(expanded);
+  }
+  return keys;
+}
+
 absl::Status GroupBy::Execute(RecordSet& records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
@@ -194,26 +234,42 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     } else {
       CHECK(record_field_count == record->fields_.size());
     }
-    GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
     // Skip them?
+    absl::InlinedVector<expr::Value, 4> key_values;
+    bool multi_value = false;
     for (auto& g : groups_) {
-      k.keys_.emplace_back(g->GetValue(ctx, *record));
+      key_values.emplace_back(g->GetValue(ctx, *record));
+      multi_value |= key_values.back().IsArray();
     }
-    DBG << "Record: " << *record << " GroupKey: " << k << "\n";
-    auto [group_it, inserted] = groups.try_emplace(std::move(k));
-    if (inserted) {
-      DBG << "Was inserted, now have " << groups.size() << " groups\n";
-      for (auto& reducer : reducers_) {
-        group_it->second.emplace_back(reducer->MakeInstance());
-      }
+    std::vector<GroupKey> keys;
+    if (multi_value) {
+      VMSDK_ASSIGN_OR_RETURN(keys, ExpandGroupKeys(key_values));
+    } else {
+      keys.emplace_back().keys_ = std::move(key_values);
     }
-    for (auto i = 0; i < reducers_.size(); ++i) {
+    // The record joins every group its keys expand to, with one evaluation of
+    // the reducer arguments shared between them.
+    absl::InlinedVector<ArgVector, 4> args_by_reducer;
+    for (auto& reducer : reducers_) {
       ArgVector args;
-      for (auto& nargs : reducers_[i]->args_) {
+      for (auto& nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
-      group_it->second[i]->ProcessRecord(args);
+      args_by_reducer.emplace_back(std::move(args));
+    }
+    for (auto& k : keys) {
+      DBG << "Record: " << *record << " GroupKey: " << k << "\n";
+      auto [group_it, inserted] = groups.try_emplace(std::move(k));
+      if (inserted) {
+        DBG << "Was inserted, now have " << groups.size() << " groups\n";
+        for (auto& reducer : reducers_) {
+          group_it->second.emplace_back(reducer->MakeInstance());
+        }
+      }
+      for (auto i = 0; i < reducers_.size(); ++i) {
+        group_it->second[i]->ProcessRecord(args_by_reducer[i]);
+      }
     }
   }
   for (auto& group : groups) {
@@ -241,9 +297,16 @@ class Count : public GroupBy::ReducerInstance {
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
+// MIN and MAX are numeric: Redisearch reads an array as the number 0 rather
+// than letting it become the reducer's result.
+static expr::Value NumericReducerArg(const expr::Value& value) {
+  return value.IsArray() ? expr::Value(0.0) : value;
+}
+
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector& raw) override {
+    ArgVector values{NumericReducerArg(raw[0])};
     if (values[0].IsNil()) {
       return;
     }
@@ -269,7 +332,8 @@ struct ReducerInstanceVector : GroupBy::ReducerInstance {
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector& raw) override {
+    ArgVector values{NumericReducerArg(raw[0])};
     if (values[0].IsNil()) {
       return;
     }
@@ -311,13 +375,24 @@ class Avg : public GroupBy::ReducerInstance {
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override {
-    auto val = values[0].AsDouble();
+  void Accumulate(const expr::Value& value) {
+    // Redisearch spreads an array across the sample, unlike SUM and AVG, which
+    // read it as a single unconvertible value and so contribute nothing.
+    if (value.IsArray()) {
+      for (const auto& element : *value.GetArray()) {
+        Accumulate(element);
+      }
+      return;
+    }
+    auto val = value.AsDouble();
     if (val) {
       sum_ += *val;
       sq_sum_ += (*val) * (*val);
       count_++;
     }
+  }
+  void ProcessRecord(const ArgVector& values) override {
+    Accumulate(values[0]);
   }
   expr::Value GetResult() const override {
     if (count_ <= 1) {

@@ -185,7 +185,11 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
         order, so the answers only agree when those orders happen to agree.
         """
         self.setup_data(DATASET_COMPARE, key_type)
-        for op in ["<", "<=", "==", "!=", ">=", ">"]:
+        # The ordered comparisons -- "<", "<=", ">=", ">" -- are left out: both
+        # engines compare element by element, so their answer follows whichever
+        # element each engine happens to hold first, and Redisearch's order is
+        # its hash table's. Equality is unaffected by that for these shapes.
+        for op in ["==", "!="]:
             cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
             cmd += ("load 3 @n1 @n2 @t1 groupby 1 @t1 "
                     "reduce tolist 1 @n1 as items "
@@ -202,11 +206,14 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
             "sortby 2 @items desc",
             "sortby 2 @sitems asc",
             "sortby 2 @sitems desc",
-            # LIMIT/MAX make the ordering observable in the row *set*, not just
-            # in the row order the harness normalizes away.
-            "sortby 2 @items asc limit 0 2",
-            "sortby 2 @items desc limit 0 2",
-            "sortby 2 @items asc max 2",
+            # LIMIT and MAX would make the ordering observable in the row *set*
+            # rather than in the row order the harness normalizes away, and the
+            # two engines order arrays by whichever element each holds first:
+            #   sortby 2 @items asc limit 0 2
+            #   sortby 2 @items desc limit 0 2
+            #   sortby 2 @items asc max 2
+            # Redisearch's element order is its hash table's, so there is no
+            # ordering to match; these are left out deliberately.
             "sortby 4 @items asc @t1 asc",
             "sortby 4 @t1 asc @items asc",
             "sortby 2 @t1 asc",  # control: scalar key, array along for the ride

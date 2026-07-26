@@ -283,6 +283,7 @@ def compute_data_sets():
     data["bad vectors"] = {}
     data["hard strings"] = {}
     data["tag special chars"] = {}
+    data["array inputs"] = {}
     vec_algos = ["flat", "hnsw"]
     metrics = ["cosine", "ip", "l2"]
     for algo in vec_algos:
@@ -499,6 +500,47 @@ def compute_data_sets():
                 },
             )
             for i in range(20)
+        ]
+        #
+        # Array inputs: feeds the ARRAY-valued (TOLIST) downstream tests.
+        # Three t1 groups of three keys each, so a TOLIST over a group yields a
+        # multi-element array. Properties the tests rely on:
+        #   - groups ga and gc collect the same n1 values, so two different
+        #     groups produce *equal* arrays (array as a group key);
+        #   - n2 repeats within gb and gc, so tolist(@n2) is shorter than
+        #     tolist(@n1) there and array/array operations see both a matching
+        #     and a mismatched length in one reply;
+        #   - n1 mixes negative, fractional and positive values (log/sqrt);
+        #   - t2 mixes case and repeats across groups (lower/upper/startswith);
+        #   - n3 is a unix timestamp and t3 a parseable date, one per group.
+        #
+        array_input_rows = [
+            # t1,   n1,   n2,          n3, t2,          t3
+            ("ga",    1,   10, 1700000000, "apple",     "2024-01-01"),
+            ("ga",    2,   20, 1700086400, "Banana",    "2024-01-01"),
+            ("ga",    3,   30, 1700172800, "cherry",    "2024-01-01"),
+            ("gb",   -1,    5, 1700259200, "delta",     "2024-01-02"),
+            ("gb",  0.5,    5, 1700345600, "Echo",      "2024-01-02"),
+            ("gb",    4,   25, 1700432000, "foxtrot",   "2024-01-02"),
+            ("gc",    1,  100, 1700518400, "apple",     "2024-01-03"),
+            ("gc",    2,  200, 1700604800, "Banana",    "2024-01-03"),
+            ("gc",    3,  200, 1700691200, "cherry",    "2024-01-03"),
+        ]
+        data["array inputs"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array inputs"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "n3": row[3],
+                    "t2": row[4],
+                    "t3": row[5],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i, row in enumerate(array_input_rows)
         ]
         for algo in vec_algos:
             for metric in metrics:

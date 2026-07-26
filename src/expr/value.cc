@@ -46,6 +46,11 @@ Value::Value(double d) { value_ = d; }
 
 bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
 
+bool Value::IsMissing() const {
+  auto nil = std::get_if<Nil>(&value_);
+  return nil && nil->IsMissing();
+}
+
 bool Value::IsBool() const { return std::get_if<bool>(&value_); }
 
 bool Value::IsDouble() const { return std::get_if<double>(&value_); }

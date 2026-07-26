@@ -1187,7 +1187,8 @@ TEST_F(ValueTest, Array_CaseFunctionsCollapse) {
   EXPECT_TRUE(FuncLower(nested).IsNil());
   EXPECT_TRUE(FuncUpper(nested).IsNil());
 
-  Value flat = Value({Value(std::string("HELLO")), Value(std::string("WORLD"))});
+  Value flat =
+      Value({Value(std::string("HELLO")), Value(std::string("WORLD"))});
   EXPECT_TRUE(FuncLower(flat).IsNil());
   EXPECT_TRUE(FuncUpper(flat).IsNil());
 }
@@ -1198,7 +1199,7 @@ TEST_F(ValueTest, Array_MathFunctionsCollapseToNan) {
       Value({Value({Value(1.5), Value(2.7)}), Value({Value(3.2), Value(4.9)})});
   Value flat = Value({Value(1.5), Value(2.7)});
 
-  for (const Value& v : {nested, flat}) {
+  for (const Value &v : {nested, flat}) {
     for (auto fn : {&FuncFloor, &FuncCeil, &FuncAbs, &FuncLog, &FuncLog2,
                     &FuncExp, &FuncSqrt}) {
       Value result = fn(v);

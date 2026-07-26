@@ -201,9 +201,9 @@ static absl::StatusOr<std::vector<GroupKey>> ExpandGroupKeys(
       alternatives.assign(array->begin(), array->end());
     }
     if (keys.size() * alternatives.size() > max_expansion) {
-      return absl::ResourceExhaustedError(absl::StrCat(
-          "GROUPBY over multi-value fields exceeds ", max_expansion,
-          " group keys for a single record"));
+      return absl::ResourceExhaustedError(
+          absl::StrCat("GROUPBY over multi-value fields exceeds ",
+                       max_expansion, " group keys for a single record"));
     }
     std::vector<GroupKey> expanded;
     expanded.reserve(keys.size() * alternatives.size());

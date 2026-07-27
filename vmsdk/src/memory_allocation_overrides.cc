@@ -99,8 +99,13 @@ class SystemAllocTracker {
  private:
  
   mutable absl::Mutex mutex_;
+  // Reporting must stay disabled here: without it, the hash set's own
+  // internal growth allocations get counted via ReportAllocMemorySize,
+  // inflating GetUsedMemoryCnt() by however much bookkeeping overhead this
+  // set happened to incur -- unrelated to, and non-deterministic relative
+  // to, the caller's actual allocations.
   absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
-                      RawSystemAllocator<void*>>
+                      RawSystemAllocator<void*, DisableRawSystemAllocatorReporting>>
       tracked_ptrs_ ABSL_GUARDED_BY(mutex_);
   // `tracked_ptrs_snapshot_` provides a lock-free fast path to check if an address is tracked.
   // It is initialized as a read-only snapshot of `tracked_ptrs_` when switching to the 
@@ -111,7 +116,7 @@ class SystemAllocTracker {
   //    `tracked_ptrs_` address tracker.
   // 2. Tests indicate this snapshot typically tracks ~1K addresses.
   absl::flat_hash_set<void*, absl::Hash<void*>, std::equal_to<void*>,
-                      RawSystemAllocator<void*>>
+                      RawSystemAllocator<void*, DisableRawSystemAllocatorReporting>>
       tracked_ptrs_snapshot_;
 };
 

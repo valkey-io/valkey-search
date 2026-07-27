@@ -129,7 +129,7 @@ struct RawSystemAllocator {
 
   RawSystemAllocator() = default;
   template <typename U>
-  constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
+  constexpr RawSystemAllocator(const RawSystemAllocator<U, Tag>&) noexcept {}
   // NOLINTNEXTLINE
   T* allocate(std::size_t n) {
     if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {

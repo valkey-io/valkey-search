@@ -274,7 +274,8 @@ absl::Status CreateRecordsFromNeighbors(
 
   for (auto &n : neighbors) {
     // Not record_indexes_by_alias_.size(): that undercounts once an alias has
-    // been re-bound (shadowed) to a new slot, leaving later slots out of bounds.
+    // been re-bound (shadowed) to a new slot, leaving later slots out of
+    // bounds.
     auto rec =
         std::make_unique<Record>(parameters.record_info_by_index_.size());
 

@@ -112,8 +112,7 @@ class ShardedAtomic {
    private:
     mutable absl::Mutex mutex_;
     std::vector<ThreadLocalNode*,
-                RawSystemAllocator<ThreadLocalNode*,
-                                   DisableRawSystemAllocatorReporting>>
+                RawSystemAllocator<ThreadLocalNode*>>
         nodes_ ABSL_GUARDED_BY(mutex_);
     // Carries over the value of threads that have exited. A ThreadLocalNode can
     // hold a non-zero value at exit when an increment and its matching

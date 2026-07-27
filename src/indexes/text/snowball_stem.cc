@@ -87,8 +87,8 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
     return word;
   }
   CHECK(stemmer) << "Stemmer is not initialized";
-  const sb_symbol *stemmed = sb_stemmer_stem(
-      stemmer, reinterpret_cast<const sb_symbol *>(word.data()), word.length());
+  const sb_symbol* stemmed = sb_stemmer_stem(
+      stemmer, reinterpret_cast<const sb_symbol*>(word.data()), word.length());
   CHECK(stemmed) << "Stemming failed";
   int stemmed_length = sb_stemmer_length(stemmer);
   // The Turkish Snowball stemmer can legitimately reduce a word to zero length
@@ -98,7 +98,7 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
   if (stemmed_length <= 0) {
     return word;
   }
-  return {reinterpret_cast<const char *>(stemmed),
+  return {reinterpret_cast<const char*>(stemmed),
           static_cast<std::string_view::size_type>(stemmed_length)};
 }
 

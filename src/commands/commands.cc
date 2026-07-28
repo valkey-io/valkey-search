@@ -19,6 +19,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
@@ -136,6 +137,7 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
 }
 
 CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
+CONTROLLED_BOOLEAN(ForceQueueDepthExceeded, false);
 
 //
 // Common Class for FT.SEARCH and FT.AGGREGATE command
@@ -213,6 +215,26 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       search_targets = ComputeSearchTargets(ctx, *parameters);
       if (search_targets.empty()) {
         return absl::InternalError("No available nodes to execute the query");
+      }
+    }
+
+    // Reject queries before creating a blocked client if the reader thread
+    // pool queue is too deep. Covers both fanout and single-node paths.
+    auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
+    if (configured_limit > 0) {
+      auto *thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
+      size_t effective_limit = configured_limit;
+      auto scaling_factor = options::GetQueueDepthScalingFactor();
+      if (scaling_factor > 0.0 && search_targets.size() > 1) {
+        double divisor = 1.0 + scaling_factor * (search_targets.size() - 1);
+        effective_limit =
+            std::max(static_cast<size_t>(1),
+                     static_cast<size_t>(configured_limit / divisor));
+      }
+      if (ForceQueueDepthExceeded.GetValue() ||
+          thread_pool->QueueSize() > effective_limit) {
+        return absl::ResourceExhaustedError(
+            "Search query queue depth exceeded");
       }
     }
 

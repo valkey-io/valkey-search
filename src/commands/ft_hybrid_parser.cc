@@ -331,6 +331,10 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
     VMSDK_ASSIGN_OR_RETURN(auto kw, inner_itr.GetStringView());
     inner_itr.Next();
     if (absl::EqualsIgnoreCase(kw, kConstantKw)) {
+      if (env.fusion.method != FusionConfig::Method::kRRF) {
+        return absl::InvalidArgumentError(
+            "COMBINE CONSTANT is only valid with RRF");
+      }
       uint32_t v = 0;
       VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
       env.fusion.rrf_constant = v;
@@ -340,11 +344,19 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       env.fusion.window = v;
       saw_window = true;
     } else if (absl::EqualsIgnoreCase(kw, kAlphaKw)) {
+      if (env.fusion.method != FusionConfig::Method::kLinear) {
+        return absl::InvalidArgumentError(
+            "COMBINE ALPHA is only valid with LINEAR");
+      }
       double v = 0;
       VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
       env.fusion.alpha = v;
       saw_alpha = true;
     } else if (absl::EqualsIgnoreCase(kw, kBetaKw)) {
+      if (env.fusion.method != FusionConfig::Method::kLinear) {
+        return absl::InvalidArgumentError(
+            "COMBINE BETA is only valid with LINEAR");
+      }
       double v = 0;
       VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
       env.fusion.beta = v;
@@ -354,6 +366,10 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       inner_itr.Next();
       env.score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
     } else if (absl::EqualsIgnoreCase(kw, kExprKw)) {
+      if (env.fusion.method != FusionConfig::Method::kFunction) {
+        return absl::InvalidArgumentError(
+            "COMBINE EXPR is only valid with FUNCTION");
+      }
       // COMBINE FUNCTION EXPR "<expression>". Compile the expression against
       // a context that maps every arm's score to a reference. Each arm is
       // reachable via its YIELD_SCORE_AS alias (if any), the positional
@@ -538,12 +554,19 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     }
   }
 
+  // TIMEOUT is consumed by the aggregate-suffix parser into env.agg->timeout_ms.
+  // Propagate it back onto the envelope so that ExecuteCommand — which builds
+  // the cancellation token from env.timeout_ms AFTER ParseAfterIndex returns —
+  // honors the caller's requested timeout instead of the pre-parse default.
+  env.timeout_ms = env.agg->timeout_ms;
+
   // Now that PARAMS (if any) are populated on env.agg->parse_vars.params,
   // share the params map with each arm so $name resolves identically. Also
   // run the per-arm pre/post-parse so vector arms (or vector-in-SEARCH per
   // the Valkey super-set) get their k/ef/query-blob populated.
   for (auto &arm : env.arms) {
     arm->parse_vars.params = env.agg->parse_vars.params;
+    arm->timeout_ms = env.timeout_ms;
     arm->cancellation_token = env.cancellation_token;
     // Two paths:
     //  - SEARCH arm (or any arm that came from a non-empty query string,

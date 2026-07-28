@@ -38,6 +38,12 @@ struct ArmInput {
   // top `window` neighbors (by the arm's pre-fusion order — vector arms are
   // sorted ascending by distance) participate in fusion. 0 = unlimited.
   uint32_t window = 0;
+  // Ranking direction of this arm's raw scores stored in Neighbor::distance.
+  // Vector arms are distance-based (lower = better), which is the default and
+  // the only case today. Score-based arms — e.g. future BM25 text scoring,
+  // where higher = better — set this true so LINEAR min-max normalization does
+  // NOT invert their ranking. See FuseLinear. (RRF is rank-based and unaffected.)
+  bool higher_is_better = false;
 };
 
 // Reciprocal Rank Fusion: per arm, walk top `window` neighbors and add

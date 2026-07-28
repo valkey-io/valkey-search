@@ -623,6 +623,24 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
   }
 
+  // Evaluate the FILTER expression here, on the main thread, while the key is
+  // still open. This lets references to fields not declared in the schema
+  // (HASH only) read their values directly off the key. It is evaluated for
+  // every existing key (key_obj != null) regardless of whether any declared
+  // field is present, so a predicate over a missing/undeclared field (e.g. a
+  // negation) can still admit the key. A deleted key (key_obj == null) is
+  // simply removed and is not filter-evaluated. When a key is rejected, all of
+  // its attributes are converted to deletes so any previously indexed entry is
+  // removed, and the rejection is counted for FT.INFO.
+  if (compiled_filter_ && key_obj &&
+      !EvaluateFilter(mutated_attributes, ctx, key_obj.get(), key_cstr)) {
+    for (auto &attr : mutated_attributes) {
+      attr.second.data = nullptr;
+      attr.second.deletion_type = indexes::DeletionType::kRecord;
+    }
+    ++stats_.filter_rejected_keys;
+  }
+
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
@@ -656,24 +674,10 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // front
     text_index_schema_->DeleteKeyData(key);
   }
-  // Apply filter if present: check if the key has actual data (not all
-  // deletes). If the filter evaluates to false, convert all entries to
-  // deletes so the key is removed from the index.
-  if (compiled_filter_) {
-    bool has_any_data = false;
-    for (const auto &attr : mutated_attributes) {
-      if (attr.second.deletion_type == indexes::DeletionType::kNone) {
-        has_any_data = true;
-        break;
-      }
-    }
-    if (has_any_data && !EvaluateFilter(mutated_attributes)) {
-      for (auto &attr : mutated_attributes) {
-        attr.second.data = nullptr;
-        attr.second.deletion_type = indexes::DeletionType::kRecord;
-      }
-    }
-  }
+  // Note: the FILTER expression is evaluated earlier, on the main thread in
+  // ProcessKeyspaceNotification (where the key is still open). A rejected key
+  // arrives here already converted to deletes, so this path just applies the
+  // resulting mutations.
   bool all_deletes = true;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
@@ -1144,7 +1148,7 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
-  int arrSize = 30;  // includes filter_numeric_conversion_failures
+  int arrSize = 32;  // includes the two filter_* counters
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1207,10 +1211,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   ValkeyModule_ReplyWithSimpleString(ctx, "filter_numeric_conversion_failures");
   ValkeyModule_ReplyWithCString(
-      ctx,
-      absl::StrFormat("%lu", stats_.filter_numeric_conversion_failures.load(
-                                 std::memory_order_relaxed))
-          .c_str());
+      ctx, absl::StrFormat("%lu", stats_.filter_numeric_conversion_failures)
+               .c_str());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "filter_rejected_keys");
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%lu", stats_.filter_rejected_keys).c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(
@@ -2209,6 +2215,13 @@ IndexSchema::MakeReference(absl::string_view name, bool create) {
                                                       data_type);
   }
   if (!create) {
+    // The field is not declared in the schema. For a HASH index it can still
+    // be read directly off the key at evaluation time, so emit a reference
+    // that does so. For JSON there is no path to resolve an undeclared field,
+    // so reject the expression at FT.CREATE time.
+    if (data_type == data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+      return std::make_unique<UnindexedHashFieldReference>(std::string(name));
+    }
     return absl::NotFoundError(
         absl::StrCat("Field `", name, "` not found in index schema"));
   }

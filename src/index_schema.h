@@ -123,9 +123,14 @@ class IndexSchema : public KeyspaceEventSubscription,
     ResultCnt<std::atomic<uint64_t>> subscription_add;
     std::atomic<uint32_t> document_cnt{0};
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
+    // FILTER counters. Both are written only during index-time FILTER
+    // evaluation, which runs on the main thread, so they are plain integers.
     // Number of times a FILTER expression referenced a NUMERIC field whose
-    // raw value could not be parsed as a double during index-time evaluation.
-    std::atomic<uint64_t> filter_numeric_conversion_failures{0};
+    // raw value could not be parsed as a double.
+    uint64_t filter_numeric_conversion_failures{0};
+    // Number of documents excluded from the index because they did not satisfy
+    // the FILTER expression.
+    uint64_t filter_rejected_keys{0};
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
     mutable absl::Mutex mutex_;
@@ -583,7 +588,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
-  bool EvaluateFilter(const MutatedAttributes &mutated_attributes) const;
+  // Evaluates the compiled FILTER expression for a document. `open_key` is the
+  // still-open key of the document (may be null for a deleted key) and `key` is
+  // its name; both let references to fields not declared in the schema read
+  // their values directly off the key (HASH only). Runs on the main thread.
+  bool EvaluateFilter(const MutatedAttributes &mutated_attributes,
+                      ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
+                      absl::string_view key) const;
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);

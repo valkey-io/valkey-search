@@ -1,8 +1,10 @@
 from valkey.client import Valkey
+from valkey import ResponseError
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from ft_info_parser import FTInfoParser
+import pytest
 import time
 
 
@@ -195,4 +197,120 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
         assert int(info.filter_numeric_conversion_failures) >= 2, (
             f"expected >=2 conversion failures, got "
             f"{info.filter_numeric_conversion_failures}"
+        )
+
+    def test_filter_undeclared_hash_field(self):
+        """For a HASH index, a FILTER may reference a field that is not declared
+        in the schema; its value is read directly off the key."""
+        client: Valkey = self.server.get_new_client()
+
+        # Schema declares only `price`; the FILTER references undeclared `secret`.
+        assert client.execute_command(
+            "FT.CREATE", "u_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "u:",
+            "FILTER", "@secret == 'yes'",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        client.execute_command("HSET", "u:1", "price", "100", "secret", "yes")
+        client.execute_command("HSET", "u:2", "price", "200", "secret", "no")
+        client.execute_command("HSET", "u:3", "price", "300")  # missing -> Nil -> kept
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "u_idx")
+
+        result = client.execute_command("FT.SEARCH", "u_idx", "@price:[0 +inf]", "NOCONTENT")
+        keys = {result[i] for i in range(1, len(result))}
+        assert keys == {b"u:1", b"u:3"}, f"got {keys}"
+
+    def test_filter_undeclared_hash_field_numeric_promotion(self):
+        """An undeclared HASH field compared against a numeric literal is
+        promoted to a number (not compared lexically)."""
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "p_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "p:",
+            "FILTER", "@rank > 50",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        # 100 and 9 discriminate numeric ({100,60}) from string ({9,60}).
+        client.execute_command("HSET", "p:100", "price", "1", "rank", "100")
+        client.execute_command("HSET", "p:9", "price", "2", "rank", "9")
+        client.execute_command("HSET", "p:60", "price", "3", "rank", "60")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "p_idx")
+
+        result = client.execute_command("FT.SEARCH", "p_idx", "@price:[0 +inf]", "NOCONTENT")
+        keys = {result[i] for i in range(1, len(result))}
+        assert keys == {b"p:100", b"p:60"}, f"numeric promotion expected, got {keys}"
+
+    def test_filter_negation_admits_key_without_the_field(self):
+        """A negation/inequality over a missing field must ADMIT the key
+        (three-valued NULL logic), including a key that has none of the
+        declared fields."""
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "neg_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "neg:",
+            "FILTER", "@status != 'active'",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        client.execute_command("HSET", "neg:1", "price", "10", "status", "active")  # excluded
+        client.execute_command("HSET", "neg:2", "price", "20", "status", "idle")    # admitted
+        client.execute_command("HSET", "neg:3", "price", "30")                       # no status -> kept
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "neg_idx")
+
+        result = client.execute_command("FT.SEARCH", "neg_idx", "@price:[0 +inf]", "NOCONTENT")
+        keys = {result[i] for i in range(1, len(result))}
+        assert keys == {b"neg:2", b"neg:3"}, f"got {keys}"
+
+    def test_filter_json_undeclared_field_is_rejected(self):
+        """For a JSON index, a FILTER referencing an undeclared field is
+        rejected at FT.CREATE time (no path to resolve it)."""
+        client: Valkey = self.server.get_new_client()
+
+        with pytest.raises(ResponseError, match="not found in index schema"):
+            client.execute_command(
+                "FT.CREATE", "j_idx",
+                "ON", "JSON",
+                "PREFIX", "1", "j:",
+                "FILTER", "@secret == 'yes'",
+                "SCHEMA", "$.price", "AS", "price", "NUMERIC"
+            )
+
+    def test_filter_rejected_keys_counter(self):
+        """FT.INFO filter_rejected_keys counts keys excluded by the FILTER and
+        is the primary signal for a misspelled HASH field name."""
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "rej_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "rej:",
+            "FILTER", "@price > 100",
+            "SCHEMA", "price", "NUMERIC"
+        ) == b"OK"
+
+        info = FTInfoParser(client.execute_command("FT.INFO", "rej_idx"))
+        assert int(info.filter_rejected_keys) == 0
+
+        client.execute_command("HSET", "rej:pass", "price", "500")   # passes
+        client.execute_command("HSET", "rej:fail1", "price", "10")   # rejected
+        client.execute_command("HSET", "rej:fail2", "price", "20")   # rejected
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rej_idx")
+
+        # Only the passing key is indexed.
+        result = client.execute_command("FT.SEARCH", "rej_idx", "@price:[0 +inf]", "NOCONTENT")
+        keys = {result[i] for i in range(1, len(result))}
+        assert keys == {b"rej:pass"}, f"got {keys}"
+
+        # The two rejected keys are counted (>= 2; the counter tracks evaluation
+        # events, which may exceed the distinct-key count).
+        info = FTInfoParser(client.execute_command("FT.INFO", "rej_idx"))
+        assert int(info.filter_rejected_keys) >= 2, (
+            f"expected >=2 rejected keys, got {info.filter_rejected_keys}"
         )

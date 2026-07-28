@@ -43,6 +43,8 @@ An array of key value pairs.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.
 - `num_terms` (integer) Total number of unique terms in all text fields in this index.
 - `hash_indexing_failures` (integer) Count of unsuccessful indexing attempts
+- `filter_rejected_keys` (integer) Number of keys that were excluded from the index because they did not satisfy the index `FILTER` expression. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, in which case the field is read directly off the key; a misspelled field name therefore does not fail the command but instead behaves as a missing field. A `filter_rejected_keys` value that unexpectedly matches (or nearly matches) the number of ingested keys is the primary signal that a field name in the `FILTER` expression is misspelled.
+- `filter_numeric_conversion_failures` (integer) Number of times the `FILTER` expression referenced a declared `NUMERIC` field whose stored value could not be parsed as a number; the raw value is then treated as a string.
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
 - `mutation_queue_size` (string) Number of keys contained in the mutation queue.
@@ -95,6 +97,8 @@ An array of key value pairs
 - `num_docs` (string) INTEGER. Total keys in the index
 - `num_records` (string) INTEGER. Total records in the index
 - `hash_indexing_failures` (string) INTEGER. Count of unsuccessful indexing attempts
+- `filter_rejected_keys` (string) INTEGER. Number of keys excluded from the index because they did not satisfy the index `FILTER` expression (see the LOCAL response above for how this helps detect a misspelled `FILTER` field name).
+- `filter_numeric_conversion_failures` (string) INTEGER. Number of times the `FILTER` expression referenced a declared `NUMERIC` field whose stored value could not be parsed as a number.
 
 ### Response when the CLUSTER option is specified
 

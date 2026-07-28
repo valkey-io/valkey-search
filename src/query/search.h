@@ -52,6 +52,8 @@ constexpr absl::string_view kOOMMsg{
     "OOM command not allowed when used memory > 'maxmemory'"};
 constexpr absl::string_view kFailedPreconditionMsg{
     "Index or slot consistency check failed"};
+constexpr absl::string_view kTimeoutMsg{
+    "Search operation cancelled due to timeout"};
 constexpr uint32_t kDialect{2};
 
 // Parser keywords

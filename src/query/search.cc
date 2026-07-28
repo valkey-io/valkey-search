@@ -847,7 +847,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   // slot and waste mutex time before discovering they're cancelled deep in the
   // iteration loop.
   if (parameters.cancellation_token->IsCancelled()) {
-    return absl::CancelledError("Search operation cancelled due to timeout");
+    return absl::CancelledError(kTimeoutMsg);
   }
   vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;

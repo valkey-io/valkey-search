@@ -42,13 +42,10 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
         self._config_all("search.max-query-queue-depth", 2)
         self._config_all("search.queue-depth-scaling-factor", "0.0")
         self._config_all("search.default-timeout-ms", 10000)
-
         node0 = self.new_client_for_primary(0)
         node0.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
-
         errors = []
-
         def query():
             try:
                 c = self.new_client_for_primary(0)
@@ -58,16 +55,13 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
                 errors.append(str(e))
             except (ValkeyConnectionError, OSError):
                 pass
-
         threads = [threading.Thread(target=query) for _ in range(8)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=15)
-
         node0.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
-
         rejected = [e for e in errors if "queue depth exceeded" in e.lower()]
         assert len(rejected) > 0, f"Expected queue depth rejections. Errors: {errors[:5]}"
 
@@ -79,13 +73,10 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
         self._config_all("search.max-query-queue-depth", 6)
         self._config_all("search.queue-depth-scaling-factor", "1.0")
         self._config_all("search.default-timeout-ms", 10000)
-
         node0 = self.new_client_for_primary(0)
         node0.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
-
         errors = []
-
         def query():
             try:
                 c = self.new_client_for_primary(0)
@@ -95,16 +86,13 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
                 errors.append(str(e))
             except (ValkeyConnectionError, OSError):
                 pass
-
         threads = [threading.Thread(target=query) for _ in range(5)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=15)
-
         node0.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
-
         rejected = [e for e in errors if "queue depth exceeded" in e.lower()]
         assert len(rejected) > 0, f"Expected rejections with scaled limit. Errors: {errors[:5]}"
 
@@ -114,15 +102,12 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
         self._config_all("search.reader-threads", 2)
         self._config_all("search.default-timeout-ms", 2000)
         self._config_all("search.max-query-queue-depth", 0)
-
         # Pause remote primaries.
         self.new_client_for_primary(1).execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
         self.new_client_for_primary(2).execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
-
         node0 = self.new_client_for_primary(0)
-
         # Without fix: queries timeout waiting for remote shards.
         self._config_all("search.local-search-max-priority", "no")
         timeouts_off = 0
@@ -132,7 +117,6 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
                     "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
             except ResponseError:
                 timeouts_off += 1
-
         # With fix: local shard completes, partial results returned.
         self._config_all("search.local-search-max-priority", "yes")
         successes_on = 0
@@ -143,13 +127,11 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
                 successes_on += 1
             except ResponseError:
                 pass
-
         # Cleanup.
         self.new_client_for_primary(1).execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
         self.new_client_for_primary(2).execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
-
         assert successes_on > 0, (
             f"Expected successes with local-search-max-priority=yes. "
             f"timeouts_off={timeouts_off}, successes_on={successes_on}")

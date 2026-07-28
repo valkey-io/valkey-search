@@ -24,7 +24,7 @@
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/fanout.h"
-#include "src/query/fusion.h"
+#include "src/query/rank_fusion.h"
 #include "src/query/multi_search.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
@@ -44,10 +44,10 @@ namespace query {
 // score aliases are injected into attribute_contents (see fusion.cc).
 std::vector<indexes::Neighbor> BuildFusedNeighbors(
     MultiSearchParameters &params) {
-  std::vector<fusion::ArmInput> arm_inputs;
+  std::vector<rank_fusion::ArmInput> arm_inputs;
   arm_inputs.reserve(params.arms.size());
   for (size_t i = 0; i < params.arms.size(); ++i) {
-    fusion::ArmInput in;
+    rank_fusion::ArmInput in;
     in.neighbors = &params.per_arm_results[i].neighbors;
     if (i < params.per_arm_score_alias.size()) {
       in.score_alias = params.per_arm_score_alias[i];
@@ -64,15 +64,15 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
   }
   std::vector<indexes::Neighbor> fused;
   if (params.fusion.method == FusionConfig::Method::kRRF) {
-    fused = fusion::FuseRRF(std::move(arm_inputs));
+    fused = rank_fusion::RRF(std::move(arm_inputs));
   } else if (params.fusion.method == FusionConfig::Method::kLinear) {
-    fused = fusion::FuseLinear(std::move(arm_inputs));
+    fused = rank_fusion::Linear(std::move(arm_inputs));
   } else {
     // COMBINE FUNCTION: evaluate the user expression per document, binding each
     // arm's raw score to its reference. Absent-from-arm scores bind to Nil.
     expr::Expression *fn = params.combine_function.get();
     CHECK(fn != nullptr) << "kFunction fusion without a compiled expression";
-    fused = fusion::FuseFunction(
+    fused = rank_fusion::Function(
         std::move(arm_inputs),
         [fn](const std::vector<std::optional<double>> &per_arm) -> double {
           ArmScoreRecord rec;

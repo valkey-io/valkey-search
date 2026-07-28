@@ -113,7 +113,7 @@ finalize_test_flags(core_test)
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/multi_search_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/query/fusion_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/query/rank_fusion_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
@@ -123,7 +123,7 @@ target_link_libraries(query_test PRIVATE testing_common_base)
 target_link_libraries(query_test PRIVATE testing_common_coordinator)
 target_link_libraries(query_test PRIVATE fanout)
 target_link_libraries(query_test PRIVATE multi_search)
-target_link_libraries(query_test PRIVATE fusion)
+target_link_libraries(query_test PRIVATE rank_fusion)
 # multi_search transitively depends on AggregateParameters' vtable, defined in
 # the commands library (ft_aggregate.cc).
 target_link_libraries(query_test PRIVATE commands)

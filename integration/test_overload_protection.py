@@ -8,10 +8,10 @@ Configs tested:
 """
 
 import threading
-import pytest
 from valkey_search_test_case import ValkeySearchClusterTestCaseDebugMode
 from valkey.client import Valkey
 from valkey.exceptions import ResponseError, ConnectionError as ValkeyConnectionError
+from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 
 

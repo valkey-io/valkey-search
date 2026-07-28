@@ -10,12 +10,10 @@
 #include <absl/strings/str_split.h>
 
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
-#include <thread>
 #include <optional>
 #include <queue>
 #include <string>
@@ -100,9 +98,6 @@ DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
-
-// TEST ONLY: Simulate slow query execution for overload reproduction
-CONTROLLED_SIZE_T(ForceQueryDelayMs, 0);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -856,13 +851,6 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   }
   vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;
-
-  // TEST ONLY: Simulate slow query execution (e.g., pre-PR#994 tag regression)
-  // Set via: FT._DEBUG CONTROLLED_VARIABLE SET ForceQueryDelayMs <ms>
-  if (ForceQueryDelayMs.GetValue() > 0) {
-    std::this_thread::sleep_for(
-        std::chrono::milliseconds(ForceQueryDelayMs.GetValue()));
-  }
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
   if (search_mode == SearchMode::kRemote) {

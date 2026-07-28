@@ -250,7 +250,7 @@ static auto max_query_queue_depth =
 constexpr absl::string_view kQueueDepthScalingFactor{
     "queue-depth-scaling-factor"};
 static auto queue_depth_scaling_factor =
-    config::NumberBuilder(kQueueDepthScalingFactor, 0, 0, 100)
+    config::NumberBuilder(kQueueDepthScalingFactor, 100, 0, 100)
         .Build();
 
 /// Enable search result background cleanup

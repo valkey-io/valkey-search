@@ -231,8 +231,7 @@ static config::Boolean prefer_consistent_results(kEnableConsistentResults,
 constexpr absl::string_view kLocalSearchMaxPriority{
     "local-search-max-priority"};
 static auto local_search_max_priority =
-    config::BooleanBuilder(kLocalSearchMaxPriority, false)
-        .Build();
+    config::BooleanBuilder(kLocalSearchMaxPriority, false).Build();
 
 /// Maximum reader thread pool queue depth before rejecting new queries.
 /// When the queue exceeds this threshold, FT.SEARCH is rejected before fan-out
@@ -250,8 +249,7 @@ static auto max_query_queue_depth =
 constexpr absl::string_view kQueueDepthScalingFactor{
     "queue-depth-scaling-factor"};
 static auto queue_depth_scaling_factor =
-    config::DoubleBuilder(kQueueDepthScalingFactor, 1.0, 0.0, 1.0)
-        .Build();
+    config::DoubleBuilder(kQueueDepthScalingFactor, 1.0, 0.0, 1.0).Build();
 
 /// Enable search result background cleanup
 /// If set to true, search result cleanup will be scheduled on background thread

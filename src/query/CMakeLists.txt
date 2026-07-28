@@ -58,15 +58,15 @@ target_link_libraries(content_resolution PUBLIC response_generator)
 target_link_libraries(content_resolution PUBLIC metrics)
 target_link_libraries(content_resolution PUBLIC vmsdklib)
 
-set(SRCS_FUSION ${CMAKE_CURRENT_LIST_DIR}/fusion.cc
-                ${CMAKE_CURRENT_LIST_DIR}/fusion.h)
+set(SRCS_RANK_FUSION ${CMAKE_CURRENT_LIST_DIR}/rank_fusion.cc
+                ${CMAKE_CURRENT_LIST_DIR}/rank_fusion.h)
 
-valkey_search_add_static_library(fusion "${SRCS_FUSION}")
-target_include_directories(fusion PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(fusion PUBLIC vector_base)
-target_link_libraries(fusion PUBLIC string_interning)
-target_link_libraries(fusion PUBLIC attribute_data_type)
-target_link_libraries(fusion PUBLIC vmsdklib)
+valkey_search_add_static_library(rank_fusion "${SRCS_RANK_FUSION}")
+target_include_directories(rank_fusion PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(rank_fusion PUBLIC vector_base)
+target_link_libraries(rank_fusion PUBLIC string_interning)
+target_link_libraries(rank_fusion PUBLIC attribute_data_type)
+target_link_libraries(rank_fusion PUBLIC vmsdklib)
 
 set(SRCS_MULTI_SEARCH ${CMAKE_CURRENT_LIST_DIR}/multi_search.cc
                       ${CMAKE_CURRENT_LIST_DIR}/multi_search.h)

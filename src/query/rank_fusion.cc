@@ -5,11 +5,10 @@
  *
  */
 
-#include "src/query/fusion.h"
+#include "src/query/rank_fusion.h"
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdio>
 #include <functional>
 #include <optional>
 #include <string>
@@ -17,12 +16,13 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/strings/str_format.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 
-namespace valkey_search::query::fusion {
+namespace valkey_search::query::rank_fusion {
 namespace {
 
 // Per-doc accumulator. external_id_ptr points at the InternedStringPtr from
@@ -39,11 +39,7 @@ struct FusedEntry {
 };
 
 // Format a double the way the rest of the code formats reply doubles.
-std::string FormatScore(double v) {
-  char buf[50];
-  std::snprintf(buf, sizeof(buf), "%.12g", v);
-  return {buf};
-}
+std::string FormatScore(double v) { return absl::StrFormat("%.12g", v); }
 
 // Add a per-arm score to a fused neighbor's attribute_contents under the given
 // alias. If the neighbor doesn't yet have an attribute_contents map, allocate
@@ -124,7 +120,7 @@ std::vector<indexes::Neighbor> AssembleResult(
 
 }  // namespace
 
-std::vector<indexes::Neighbor> FuseRRF(std::vector<ArmInput> arms) {
+std::vector<indexes::Neighbor> RRF(std::vector<ArmInput> arms) {
   absl::flat_hash_map<std::string, FusedEntry> accum;
   for (size_t arm_i = 0; arm_i < arms.size(); ++arm_i) {
     const auto& arm = arms[arm_i];
@@ -137,8 +133,7 @@ std::vector<indexes::Neighbor> FuseRRF(std::vector<ArmInput> arms) {
             : std::min(static_cast<size_t>(arm.window), arm.neighbors->size());
     for (size_t rank = 0; rank < cap; ++rank) {
       const auto& n = (*arm.neighbors)[rank];
-      const std::string key = std::string(n.external_id->Str());
-      auto [it, inserted] = accum.try_emplace(key);
+      auto [it, inserted] = accum.try_emplace(n.external_id->Str());
       if (inserted) {
         it->second.representative = &n;
         it->second.per_arm_distance.assign(arms.size(), std::nullopt);
@@ -151,7 +146,7 @@ std::vector<indexes::Neighbor> FuseRRF(std::vector<ArmInput> arms) {
   return AssembleResult(arms, accum);
 }
 
-std::vector<indexes::Neighbor> FuseLinear(std::vector<ArmInput> arms) {
+std::vector<indexes::Neighbor> Linear(std::vector<ArmInput> arms) {
   // Per-arm normalization: walk neighbors[0..window) and capture min/max of
   // `distance`. Then translate distance -> normalized score in [0,1]:
   //
@@ -191,8 +186,7 @@ std::vector<indexes::Neighbor> FuseLinear(std::vector<ArmInput> arms) {
 
     for (size_t rank = 0; rank < cap; ++rank) {
       const auto& n = (*arm.neighbors)[rank];
-      const std::string key = std::string(n.external_id->Str());
-      auto [it, inserted] = accum.try_emplace(key);
+      auto [it, inserted] = accum.try_emplace(n.external_id->Str());
       if (inserted) {
         it->second.representative = &n;
         it->second.per_arm_distance.assign(arms.size(), std::nullopt);
@@ -215,7 +209,7 @@ std::vector<indexes::Neighbor> FuseLinear(std::vector<ArmInput> arms) {
   return AssembleResult(arms, accum);
 }
 
-std::vector<indexes::Neighbor> FuseFunction(
+std::vector<indexes::Neighbor> Function(
     std::vector<ArmInput> arms,
     const std::function<double(const std::vector<std::optional<double>>&)>&
         score_fn) {
@@ -232,8 +226,7 @@ std::vector<indexes::Neighbor> FuseFunction(
             : std::min(static_cast<size_t>(arm.window), arm.neighbors->size());
     for (size_t rank = 0; rank < cap; ++rank) {
       const auto& n = (*arm.neighbors)[rank];
-      const std::string key = std::string(n.external_id->Str());
-      auto [it, inserted] = accum.try_emplace(key);
+      auto [it, inserted] = accum.try_emplace(n.external_id->Str());
       if (inserted) {
         it->second.representative = &n;
         it->second.per_arm_distance.assign(arms.size(), std::nullopt);
@@ -248,4 +241,4 @@ std::vector<indexes::Neighbor> FuseFunction(
   return AssembleResult(arms, accum);
 }
 
-}  // namespace valkey_search::query::fusion
+}  // namespace valkey_search::query::rank_fusion

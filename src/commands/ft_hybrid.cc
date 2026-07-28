@@ -145,7 +145,11 @@ void RestoreAliases(std::vector<indexes::Neighbor> &neighbors,
       n.attribute_contents.emplace();
     }
     for (auto &[k, v] : it->second) {
-      n.attribute_contents->emplace(k, std::move(v));
+      // A YIELD_SCORE_AS alias may collide with a real database field name that
+      // the content fetch already populated. The user explicitly asked for the
+      // score under this alias, so it must win — overwrite rather than emplace
+      // (which would silently keep the database field and drop the score).
+      n.attribute_contents->insert_or_assign(k, std::move(v));
     }
   }
 }
@@ -177,8 +181,10 @@ class FusedResolver : public query::SearchParameters {
  private:
   void DoComplete(std::unique_ptr<query::SearchParameters> /*self*/) {
     RestoreAliases(search_result.neighbors, saved_aliases);
+    // Preserve whatever status ResolveContent produced (e.g. an index-dropped
+    // error). Forcing OkStatus here would turn a content-resolution failure
+    // into a silent empty-but-successful reply.
     envelope->search_result = std::move(search_result);
-    envelope->search_result.status = absl::OkStatus();
     auto *raw = envelope.release();
     raw->blocked_client->SetReplyPrivateData(raw);
     raw->blocked_client->UnblockClient();
@@ -188,6 +194,15 @@ class FusedResolver : public query::SearchParameters {
 // Local async completion: all arms have delivered raw (content-free) results.
 // Fuse, then run the single atomic content resolution over the fused list.
 void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
+  // If an arm already failed (MultiSearchTracker::Finalize populated the error
+  // in non-partial mode), skip fusion and content resolution and surface the
+  // specific arm error directly, rather than processing failed arms as success.
+  if (!params->search_result.status.ok()) {
+    auto *raw = params.release();
+    raw->blocked_client->SetReplyPrivateData(raw);
+    raw->blocked_client->UnblockClient();
+    return;
+  }
   auto fused = BuildFusedNeighbors(*params);
   auto resolver = std::make_unique<FusedResolver>();
   resolver->index_schema = params->index_schema;

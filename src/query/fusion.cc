@@ -197,9 +197,17 @@ std::vector<indexes::Neighbor> FuseLinear(std::vector<ArmInput> arms) {
         it->second.representative = &n;
         it->second.per_arm_distance.assign(arms.size(), std::nullopt);
       }
-      double normalized =
-          range > 0.0 ? 1.0 - (static_cast<double>(n.distance) - min_d) / range
-                      : 1.0;
+      // Min-max normalize to [0,1]. For distance-based arms (the default,
+      // lower = better) invert so a smaller distance yields a higher score.
+      // For score-based arms (higher = better) keep the raw ordering, otherwise
+      // the best-scoring document would be pushed to 0.0 and its rank inverted.
+      double normalized;
+      if (range <= 0.0) {
+        normalized = 1.0;
+      } else {
+        const double scaled = (static_cast<double>(n.distance) - min_d) / range;
+        normalized = arm.higher_is_better ? scaled : 1.0 - scaled;
+      }
       it->second.score += arm.weight * normalized;
       it->second.per_arm_distance[arm_i] = static_cast<double>(n.distance);
     }

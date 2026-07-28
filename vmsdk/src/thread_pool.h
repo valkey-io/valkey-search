@@ -123,18 +123,6 @@ class ThreadPool {
   /// Get the current high priority weight
   int GetHighPriorityWeight() const;
 
-  /// Set the maximum age (ms) for tasks in kHigh/kLow queues.
-  /// Tasks older than this are dropped at dequeue time. 0 = disabled.
-  void SetMaxTaskAge(int64_t ms) {
-    max_task_age_ms_.store(ms, std::memory_order_relaxed);
-  }
-  int64_t GetMaxTaskAge() const {
-    return max_task_age_ms_.load(std::memory_order_relaxed);
-  }
-  uint64_t GetTasksDrained() const {
-    return tasks_drained_.load(std::memory_order_relaxed);
-  }
-
   /// Resize the sample queue and clear existing samples
   void ResizeSampleQueue(size_t new_size);
 
@@ -195,11 +183,6 @@ class ThreadPool {
   size_t sample_index_ ABSL_GUARDED_BY(queue_mutex_){0};
   size_t current_sample_count_ ABSL_GUARDED_BY(queue_mutex_){0};
   std::atomic<double> recent_avg_wait_time_{0.0};
-
-  // Maximum age (ms) for tasks in kHigh/kLow queues. Tasks older than this
-  // are dropped at dequeue time without execution. 0 = disabled (no drain).
-  std::atomic<int64_t> max_task_age_ms_{0};
-  std::atomic<uint64_t> tasks_drained_{0};
 
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
 };

@@ -232,16 +232,25 @@ constexpr absl::string_view kLocalSearchMaxPriority{
     "local-search-max-priority"};
 static auto local_search_max_priority =
     config::BooleanBuilder(kLocalSearchMaxPriority, false)
-        .Dev()
         .Build();
 
 /// Maximum reader thread pool queue depth before rejecting new queries.
 /// When the queue exceeds this threshold, FT.SEARCH is rejected before fan-out
 /// to prevent cascading timeouts. 0 = unlimited (disabled).
 constexpr absl::string_view kMaxQueryQueueDepth{"max-query-queue-depth"};
+constexpr int kDefaultMaxQueryQueueDepth{10000};
 static auto max_query_queue_depth =
-    config::NumberBuilder(kMaxQueryQueueDepth, 0, 0, INT_MAX)
-        .Dev()
+    config::NumberBuilder(kMaxQueryQueueDepth, kDefaultMaxQueryQueueDepth, 0,
+                          INT_MAX)
+        .Build();
+
+/// Controls how much the queue depth limit scales with cluster size (0-100).
+/// 0 = fixed limit (ignore cluster size). 100 = divide limit by shard count.
+/// Values in between blend sub-linearly.
+constexpr absl::string_view kQueueDepthScalingFactor{
+    "queue-depth-scaling-factor"};
+static auto queue_depth_scaling_factor =
+    config::NumberBuilder(kQueueDepthScalingFactor, 0, 0, 100)
         .Build();
 
 /// Enable search result background cleanup
@@ -612,6 +621,10 @@ const vmsdk::config::Boolean& GetLocalSearchMaxPriority() {
 
 vmsdk::config::Number& GetMaxQueryQueueDepth() {
   return dynamic_cast<vmsdk::config::Number&>(*max_query_queue_depth);
+}
+
+vmsdk::config::Number& GetQueueDepthScalingFactor() {
+  return dynamic_cast<vmsdk::config::Number&>(*queue_depth_scaling_factor);
 }
 
 const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {

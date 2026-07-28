@@ -319,10 +319,25 @@ absl::Status PerformSearchFanoutAsync(
   // This prevents the death spiral where fan-out amplifies overload (each query
   // creates N partition tasks that will never complete). Failing fast here means
   // the customer gets a clear error and the system stays out of the hole.
-  auto max_depth = options::GetMaxQueryQueueDepth().GetValue();
-  if (max_depth > 0 && thread_pool->QueueSize() > static_cast<size_t>(max_depth)) {
-    return absl::ResourceExhaustedError(
-        "Search query queue depth exceeded");
+  //
+  // The effective limit is optionally scaled by cluster size: larger clusters
+  // get a tighter per-node limit because each admitted query amplifies into
+  // more partition tasks across more shards.
+  auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
+  if (configured_limit > 0) {
+    size_t effective_limit = configured_limit;
+    auto scaling_factor = options::GetQueueDepthScalingFactor().GetValue();
+    if (scaling_factor > 0 && search_targets.size() > 1) {
+      double divisor =
+          1.0 + (scaling_factor / 100.0) * (search_targets.size() - 1);
+      effective_limit =
+          std::max(static_cast<size_t>(1),
+                   static_cast<size_t>(configured_limit / divisor));
+    }
+    if (thread_pool->QueueSize() > effective_limit) {
+      return absl::ResourceExhaustedError(
+          "Search query queue depth exceeded");
+    }
   }
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   uint64_t index_size = parameters->index_schema->GetDbKeyInfoSize();

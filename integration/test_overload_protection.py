@@ -129,6 +129,9 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
             "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
         self.new_client_for_primary(2).execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", "background_search_completing")
+        assert timeouts_off > 0, (
+            f"Expected timeouts without fix (baseline broken). "
+            f"timeouts_off={timeouts_off}")
         assert successes_on > 0, (
             f"Expected successes with local-search-max-priority=yes. "
             f"timeouts_off={timeouts_off}, successes_on={successes_on}")

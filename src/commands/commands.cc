@@ -16,7 +16,7 @@
 #include "src/commands/ft_search.h"
 #include "src/metrics.h"
 #include "src/query/fanout.h"
-#include "src/query/multi_search.h"  // for ExecuteCommand<MultiSearchParameters>
+#include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"

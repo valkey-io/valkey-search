@@ -40,7 +40,7 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
         self._create_index()
         self._config_all("search.reader-threads", 1)
         self._config_all("search.max-query-queue-depth", 2)
-        self._config_all("search.queue-depth-scaling-factor", 0)
+        self._config_all("search.queue-depth-scaling-factor", "0.0")
         self._config_all("search.default-timeout-ms", 10000)
 
         node0 = self.new_client_for_primary(0)
@@ -77,7 +77,7 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
         # 3 shards, scaling=100: effective = 6 / (1 + 1.0*(3-1)) = 2
         self._config_all("search.reader-threads", 1)
         self._config_all("search.max-query-queue-depth", 6)
-        self._config_all("search.queue-depth-scaling-factor", 100)
+        self._config_all("search.queue-depth-scaling-factor", "1.0")
         self._config_all("search.default-timeout-ms", 10000)
 
         node0 = self.new_client_for_primary(0)

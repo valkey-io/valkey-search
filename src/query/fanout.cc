@@ -326,10 +326,10 @@ absl::Status PerformSearchFanoutAsync(
   auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
   if (configured_limit > 0) {
     size_t effective_limit = configured_limit;
-    auto scaling_factor = options::GetQueueDepthScalingFactor().GetValue();
-    if (scaling_factor > 0 && search_targets.size() > 1) {
+    auto scaling_factor = options::GetQueueDepthScalingFactor();
+    if (scaling_factor > 0.0 && search_targets.size() > 1) {
       double divisor =
-          1.0 + (scaling_factor / 100.0) * (search_targets.size() - 1);
+          1.0 + scaling_factor * (search_targets.size() - 1);
       effective_limit =
           std::max(static_cast<size_t>(1),
                    static_cast<size_t>(configured_limit / divisor));

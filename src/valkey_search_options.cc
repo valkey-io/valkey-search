@@ -244,13 +244,13 @@ static auto max_query_queue_depth =
                           INT_MAX)
         .Build();
 
-/// Controls how much the queue depth limit scales with cluster size (0-100).
-/// 0 = fixed limit (ignore cluster size). 100 = divide limit by shard count.
+/// Controls how much the queue depth limit scales with cluster size (0.0-1.0).
+/// 0.0 = fixed limit (ignore cluster size). 1.0 = divide limit by shard count.
 /// Values in between blend sub-linearly.
 constexpr absl::string_view kQueueDepthScalingFactor{
     "queue-depth-scaling-factor"};
 static auto queue_depth_scaling_factor =
-    config::NumberBuilder(kQueueDepthScalingFactor, 100, 0, 100)
+    config::DoubleBuilder(kQueueDepthScalingFactor, 1.0, 0.0, 1.0)
         .Build();
 
 /// Enable search result background cleanup
@@ -623,8 +623,8 @@ vmsdk::config::Number& GetMaxQueryQueueDepth() {
   return dynamic_cast<vmsdk::config::Number&>(*max_query_queue_depth);
 }
 
-vmsdk::config::Number& GetQueueDepthScalingFactor() {
-  return dynamic_cast<vmsdk::config::Number&>(*queue_depth_scaling_factor);
+double GetQueueDepthScalingFactor() {
+  return queue_depth_scaling_factor->GetValue();
 }
 
 const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {

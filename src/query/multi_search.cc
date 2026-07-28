@@ -115,6 +115,7 @@ void MultiSearchTracker::ReleaseOuterReaderLock() {
 
 void MultiSearchTracker::Finalize() {
   std::unique_ptr<MultiSearchParameters> params;
+  absl::Status first_error;
   {
     absl::MutexLock lock(&mu_);
     params = std::move(parameters_);
@@ -125,9 +126,12 @@ void MultiSearchTracker::Finalize() {
       params->retained_arm_owners.push_back(std::move(owner));
     }
     arm_owners_.clear();
+    // Read first_error_ under mu_ (it is ABSL_GUARDED_BY(mu_)); use the local
+    // copy below, after the lock is released.
+    first_error = first_error_;
   }
   if (any_arm_failed_.load() && !params->enable_partial_results) {
-    params->search_result.status = first_error_;
+    params->search_result.status = first_error;
   }
   // Release the outer reader lock — every arm has observed a consistent index
   // snapshot by this point, so writers may now switch in. (Done BEFORE the

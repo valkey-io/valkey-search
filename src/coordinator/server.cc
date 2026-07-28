@@ -16,6 +16,7 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
 #include "grpcpp/health_check_service_interface.h"
@@ -192,39 +193,17 @@ void Service::EnqueueSearchRequest(
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
   search_operation->on_done = std::move(on_done);
-  // Move the on_done callback's reference to a local before the SearchAsync
-  // potentially fails: if SearchAsync succeeds, the callback travels with
-  // search_operation; if it fails, we need to invoke on_done with the error.
-  ArmCompletionCallback failure_cb;
-  // We cannot easily duplicate the on_done callback because AnyInvocable is
-  // move-only. Instead, attempt SearchAsync; if it fails, the search_operation
-  // (which still owns the callback) is returned to us via the moved-from
-  // unique_ptr — we move it back out before invoking the callback.
-  auto* search_op_raw = search_operation.get();
+  // SearchAsync unconditionally schedules the operation on the reader thread
+  // pool and currently always returns OkStatus; the moved-in on_done travels
+  // with the operation and is invoked from the scheduled task on completion.
+  // Guard defensively in case that ever changes — but never touch the
+  // moved-from operation here (that would be a use-after-move).
   auto status =
       query::SearchAsync(std::move(search_operation), reader_thread_pool,
                          query::SearchMode::kRemote);
-
   if (!status.ok()) {
     VMSDK_LOG(WARNING, detached_ctx)
         << "Failed to enqueue search request: " << status.message();
-    RecordSearchMetrics(true, nullptr);
-    // SearchAsync is documented to consume the unique_ptr; we cannot recover
-    // it. Invoke the callback indirectly via the raw pointer (still alive in
-    // the thread pool's hands) — but to be safe under the failure path, we
-    // simply call back through the original on_done via the raw search
-    // operation (whose on_done has been moved into the queued task).
-    // Because on_done has moved out of our unique_ptr, the only safe action
-    // is to log and let the queued path eventually invoke it. Without a
-    // reliable hook, we synthesize a failure by overwriting the search
-    // result and letting the normal completion path run — but SearchAsync
-    // failure means the operation was never queued. In practice this path
-    // is reached only on enqueue failure (rare); to keep the API coherent,
-    // we move on_done out of search_op_raw and invoke it directly.
-    auto cb = std::move(search_op_raw->on_done);
-    if (cb) {
-      cb(ToGrpcStatus(status));
-    }
   }
 }
 
@@ -324,6 +303,11 @@ grpc::ServerUnaryReactor* Service::MultiSearchIndexPartition(
   struct Completion {
     grpc::ServerUnaryReactor* reactor;
     std::atomic<int> remaining;
+    absl::Mutex mu;
+    // First arm error, if any. A per-arm internal failure is a transport-level
+    // error and must be reported as the reactor's gRPC status (not swallowed as
+    // OK), so gRPC interceptors and node failure counters observe it.
+    grpc::Status first_error ABSL_GUARDED_BY(mu);
   };
   auto completion = std::make_shared<Completion>();
   completion->reactor = reactor;
@@ -338,10 +322,19 @@ grpc::ServerUnaryReactor* Service::MultiSearchIndexPartition(
           sub_resp->set_grpc_code(static_cast<uint32_t>(s.error_code()));
           if (!s.ok()) {
             sub_resp->set_error_message(s.error_message());
+            absl::MutexLock lock(&completion->mu);
+            if (completion->first_error.ok()) {
+              completion->first_error = s;
+            }
           }
           if (completion->remaining.fetch_sub(1, std::memory_order_acq_rel) ==
               1) {
-            completion->reactor->Finish(grpc::Status::OK);
+            grpc::Status final_status;
+            {
+              absl::MutexLock lock(&completion->mu);
+              final_status = completion->first_error;
+            }
+            completion->reactor->Finish(final_status);
           }
         });
   }

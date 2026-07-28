@@ -57,6 +57,13 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
                                  float(i * 3), float(i * 4)),
                 },
             )
+        # Indexing is asynchronous; wait for all 10 docs to be searchable before
+        # tests assert exact counts, otherwise they race the background indexer.
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 10,
+            timeout=10)
 
     Q = _vec(1.0, 2.0, 3.0, 4.0)
 
@@ -461,7 +468,13 @@ class TestFtHybridCluster(ValkeySearchClusterTestCase):
                                  float(i * 3), float(i * 4)),
                 },
             )
-        time.sleep(1)
+        # Wait for indexing to complete before asserting, instead of a
+        # fixed sleep that is both flaky under load and slow on fast runs.
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 30,
+            timeout=15)
         return cluster, client
 
     def test_fanout_basic_rrf(self):
@@ -562,7 +575,13 @@ class TestFtHybridClusterConsistency(ValkeySearchClusterTestCaseDebugMode):
                                  float(i * 3), float(i * 4)),
                 },
             )
-        time.sleep(1)
+        # Wait for indexing to complete before asserting, instead of a
+        # fixed sleep that is both flaky under load and slow on fast runs.
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 15,
+            timeout=15)
         return cluster, client
 
     def test_index_fingerprint_mismatch_fails_fanout(self):
@@ -625,13 +644,13 @@ class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):
         IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
 
         # Pause mutation processing, then start a mutation on doc:1.
-        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+        client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
         hset_thread, _, _ = run_in_thread(
             lambda: self.server.get_new_client().execute_command(
                 "HSET", "doc:1", "content", "updated", "vec", vec2))
         waiters.wait_for_true(
             lambda: client.execute_command(
-                "FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0,
+                "FT._DEBUG", "PAUSEPOINT", "TEST", "mutation_processing") > 0,
             timeout=5)
 
         # FT.HYBRID with a text SEARCH arm: the post-fusion contention check
@@ -652,13 +671,15 @@ class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):
         assert search_res[0] is None and search_thread.is_alive()
 
         # Release the mutation; the fused validation re-runs and completes.
-        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
         hset_thread.join()
         search_thread.join()
         assert search_err[0] is None
         # doc:1 no longer matches "hello" after the mutation; fused result is
         # empty for the SEARCH arm, leaving only the VSIM match for doc:1.
         assert isinstance(search_res[0], list)
+        assert search_res[0][0] == 1  # exactly one fused record survives
+        assert len(search_res[0]) == 2  # count + the single VSIM record
 
 
 # =============================================================================
@@ -912,7 +933,13 @@ class TestFtHybridClusterFunctionMerge(ValkeySearchClusterTestCase):
                     "vec": _vec(float(i), 0.0, 0.0, 0.0),
                 },
             )
-        time.sleep(1)
+        # Wait for indexing to complete before asserting, instead of a
+        # fixed sleep that is both flaky under load and slow on fast runs.
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == n_docs,
+            timeout=15)
         return cluster, client
 
     @staticmethod

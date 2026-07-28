@@ -38,7 +38,6 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
     def test_queue_depth_rejection(self):
         """Queries rejected with proper error when queue exceeds limit."""
         self._create_index()
-        self._config_all("search.reader-threads", 1)
         self._config_all("search.max-query-queue-depth", 2)
         self._config_all("search.queue-depth-scaling-factor", "0.0")
         self._config_all("search.default-timeout-ms", 10000)
@@ -69,7 +68,6 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
         """Scaling factor reduces effective limit based on shard count."""
         self._create_index()
         # 3 shards, scaling=100: effective = 6 / (1 + 1.0*(3-1)) = 2
-        self._config_all("search.reader-threads", 1)
         self._config_all("search.max-query-queue-depth", 6)
         self._config_all("search.queue-depth-scaling-factor", "1.0")
         self._config_all("search.default-timeout-ms", 10000)
@@ -99,7 +97,6 @@ class TestOverloadProtection(ValkeySearchClusterTestCaseDebugMode):
     def test_local_search_max_priority(self):
         """Local shard completes via kMax priority when remote shards are paused."""
         self._create_index()
-        self._config_all("search.reader-threads", 2)
         self._config_all("search.default-timeout-ms", 2000)
         self._config_all("search.max-query-queue-depth", 0)
         # Pause remote primaries.

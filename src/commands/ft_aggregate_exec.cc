@@ -522,7 +522,7 @@ bool ReplyWithValue(ValkeyModuleCtx* ctx,
 }
 
 // Process the query setup for vector vs non-vector queries and set up indices
-absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
+absl::StatusOr<std::pair<size_t, size_t>> PrepareNeighborRecords(
     ValkeyModuleCtx* ctx, std::vector<indexes::Neighbor>& neighbors,
     AggregateParameters& parameters) {
   size_t key_index = 0, scores_index = 0;
@@ -699,7 +699,7 @@ absl::Status RunAggregatePipeline(ValkeyModuleCtx* ctx,
                                   AggregateParameters& parameters) {
   // 1. Process query setup and get key/score indices
   VMSDK_ASSIGN_OR_RETURN(
-      auto indices, ProcessNeighborsForProcessing(ctx, neighbors, parameters));
+      auto indices, PrepareNeighborRecords(ctx, neighbors, parameters));
   auto [key_index, scores_index] = indices;
 
   // 2. Create records from neighbors

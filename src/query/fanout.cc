@@ -457,8 +457,7 @@ void PerformRemoteMultiSearchRequest(
   auto client = coordinator_client_pool->GetClient(address);
   client->MultiSearchIndexPartition(
       std::move(request),
-      [per_arm_trackers = std::move(per_arm_trackers),
-       address = std::string(address)](
+      [per_arm_trackers = std::move(per_arm_trackers), address](
           grpc::Status status,
           coordinator::MultiSearchIndexPartitionResponse &response) mutable {
         const int num_arms = static_cast<int>(per_arm_trackers.size());
@@ -501,8 +500,7 @@ void PerformRemoteMultiSearchRequestAsync(
         per_arm_trackers,
     vmsdk::ThreadPool *thread_pool) {
   thread_pool->Schedule(
-      [coordinator_client_pool, address = std::string(address),
-       request = std::move(request),
+      [coordinator_client_pool, address, request = std::move(request),
        per_arm_trackers = std::move(per_arm_trackers)]() mutable {
         PerformRemoteMultiSearchRequest(std::move(request), address,
                                         coordinator_client_pool,

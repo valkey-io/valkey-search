@@ -5,8 +5,7 @@
  *
  */
 
-#ifndef VALKEYSEARCH_SRC_QUERY_FUSION_H_
-#define VALKEYSEARCH_SRC_QUERY_FUSION_H_
+#pragma once
 
 #include <cstdint>
 #include <functional>
@@ -16,7 +15,7 @@
 
 #include "src/indexes/vector_base.h"
 
-namespace valkey_search::query::fusion {
+namespace valkey_search::query::rank_fusion {
 
 // Per-arm input to the fusion stage. The fusion functions consume the
 // neighbors by reference but do not modify them; the caller retains ownership.
@@ -42,7 +41,7 @@ struct ArmInput {
   // Vector arms are distance-based (lower = better), which is the default and
   // the only case today. Score-based arms — e.g. future BM25 text scoring,
   // where higher = better — set this true so LINEAR min-max normalization does
-  // NOT invert their ranking. See FuseLinear. (RRF is rank-based and unaffected.)
+  // NOT invert their ranking. See Linear. (RRF is rank-based and unaffected.)
   bool higher_is_better = false;
 };
 
@@ -56,31 +55,30 @@ struct ArmInput {
 // `attribute_contents` map gains a key/value pair: alias -> raw arm distance
 // (formatted as "%.12g"). Docs absent from a given arm have no entry for that
 // arm's alias.
-std::vector<indexes::Neighbor> FuseRRF(std::vector<ArmInput> arms);
+std::vector<indexes::Neighbor> RRF(std::vector<ArmInput> arms);
 
 // Linear combination: for each arm, min-max normalize the arm's distances to
 // [0,1] (lower distance -> higher normalized score), then sum
 // `weight_i * normalized_i` per doc. Missing-from-arm contributes 0 to that
 // arm's term.
 //
-// Score storage and `score_alias` propagation behave identically to FuseRRF.
-std::vector<indexes::Neighbor> FuseLinear(std::vector<ArmInput> arms);
+// Score storage and `score_alias` propagation behave identically to RRF.
+std::vector<indexes::Neighbor> Linear(std::vector<ArmInput> arms);
 
 // User-defined combination (COMBINE FUNCTION). Builds the union of documents
 // across arms, gathers each document's per-arm raw scores (the arm distance,
 // or nullopt where the document did not appear in that arm), and calls
 // `score_fn` to compute the combined score. `score_fn` receives a vector
 // indexed by arm position. Score storage (Neighbor::distance, higher = better)
-// and `score_alias` propagation behave identically to FuseRRF.
+// and `score_alias` propagation behave identically to RRF.
 //
 // `score_fn` is kept as a std::function so the fusion library stays free of any
 // dependency on the expression compiler — the caller (ft_hybrid.cc) supplies a
 // closure that evaluates the compiled COMBINE FUNCTION expression.
-std::vector<indexes::Neighbor> FuseFunction(
+std::vector<indexes::Neighbor> Function(
     std::vector<ArmInput> arms,
     const std::function<double(const std::vector<std::optional<double>>&)>&
         score_fn);
 
-}  // namespace valkey_search::query::fusion
+}  // namespace valkey_search::query::rank_fusion
 
-#endif  // VALKEYSEARCH_SRC_QUERY_FUSION_H_

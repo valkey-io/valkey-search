@@ -43,7 +43,7 @@ class Expression;
 namespace valkey_search::query {
 
 // Configuration for the COMBINE fusion stage. Populated by the FT.HYBRID
-// parser; consumed by `query::fusion::Fuse*` in ft_hybrid.cc.
+// parser; consumed by `query::rank_fusion::{RRF,Linear,Function}` in ft_hybrid.cc.
 //   kRRF      — reciprocal rank fusion (default).
 //   kLinear   — weighted linear combination of per-arm normalized scores.
 //   kFunction — user-defined expression over the per-arm scores (the compiled

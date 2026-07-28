@@ -52,8 +52,7 @@ struct Result {
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
             [[maybe_unused]] int argc) {
-  return ValkeyModule_ReplyWithError(
-      ctx, query::kTimeoutMsg.data());
+  return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -71,8 +70,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   if (!parameters->enable_partial_results &&
       parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, query::kTimeoutMsg.data());
+    return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
   }
   parameters->SendReply(ctx, parameters->search_result);
   return VALKEYMODULE_OK;
@@ -196,8 +194,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // Check if operation was cancelled and partial results are disabled.
       if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
-        ValkeyModule_ReplyWithError(
-            ctx, query::kTimeoutMsg.data());
+        ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }

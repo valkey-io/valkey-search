@@ -476,6 +476,24 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   }
 
   auto &selected_queue = GetPriorityTasksQueue(selected_priority);
+  // Drain expired tasks from the front of the selected queue.
+  // Since tasks are enqueued in order, all expired tasks are at the front.
+  // Drop them without execution — the lambda destructor handles cleanup
+  // (decrements shared_ptr refcount on the tracker, completing the query).
+  int64_t max_age = max_task_age_ms_.load(std::memory_order_relaxed);
+  if (max_age > 0) {
+    auto now = std::chrono::steady_clock::now();
+    auto max_duration = std::chrono::milliseconds(max_age);
+    while (!selected_queue.empty()) {
+      auto age = now - selected_queue.front().enqueue_time;
+      if (age <= max_duration) break;  // Found a live task — stop draining
+      selected_queue.pop();  // Drop expired task
+      tasks_drained_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (selected_queue.empty()) {
+      return std::nullopt;  // All tasks were expired
+    }
+  }
   auto task_with_time = std::move(selected_queue.front());
   selected_queue.pop();
 

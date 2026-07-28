@@ -315,6 +315,15 @@ absl::Status PerformSearchFanoutAsync(
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
+  // Reject queries before fan-out if the reader thread pool queue is too deep.
+  // This prevents the death spiral where fan-out amplifies overload (each query
+  // creates N partition tasks that will never complete). Failing fast here means
+  // the customer gets a clear error and the system stays out of the hole.
+  auto max_depth = options::GetMaxQueryQueueDepth().GetValue();
+  if (max_depth > 0 && thread_pool->QueueSize() > static_cast<size_t>(max_depth)) {
+    return absl::ResourceExhaustedError(
+        "Search query queue depth exceeded");
+  }
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   uint64_t index_size = parameters->index_schema->GetDbKeyInfoSize();
   uint32_t min_index_size =

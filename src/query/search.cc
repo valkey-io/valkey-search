@@ -10,10 +10,12 @@
 #include <absl/strings/str_split.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <thread>
 #include <optional>
 #include <queue>
 #include <string>
@@ -98,6 +100,9 @@ DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
+
+// TEST ONLY: Simulate slow query execution for overload reproduction
+CONTROLLED_SIZE_T(ForceQueryDelayMs, 0);
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -842,8 +847,22 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  // Reject already-cancelled queries before acquiring the time-slice mutex.
+  // Without this, expired queries that sat in the queue still acquire a reader
+  // slot and waste mutex time before discovering they're cancelled deep in the
+  // iteration loop.
+  if (parameters.cancellation_token->IsCancelled()) {
+    return absl::CancelledError("Query timed out while waiting in queue");
+  }
   vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;
+
+  // TEST ONLY: Simulate slow query execution (e.g., pre-PR#994 tag regression)
+  // Set via: FT._DEBUG CONTROLLED_VARIABLE SET ForceQueryDelayMs <ms>
+  if (ForceQueryDelayMs.GetValue() > 0) {
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(ForceQueryDelayMs.GetValue()));
+  }
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
   if (search_mode == SearchMode::kRemote) {
@@ -875,6 +894,16 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
+  // When local-search-max-priority is enabled, local shard queries get kMax
+  // priority so they always complete even under overload. This ensures
+  // partial-results load shedding works correctly — without this, local queries
+  // sit in the same saturated queue as remote partition requests and timeout,
+  // causing 0 successful queries even with enable-partial-results=yes.
+  auto priority = vmsdk::ThreadPool::Priority::kHigh;
+  if (search_mode == SearchMode::kLocal &&
+      options::GetLocalSearchMaxPriority().GetValue()) {
+    priority = vmsdk::ThreadPool::Priority::kMax;
+  }
   thread_pool->Schedule(
       [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
@@ -894,7 +923,7 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
             CHECK(false) << "Unknown content processing mode";
         }
       },
-      vmsdk::ThreadPool::Priority::kHigh);
+      priority);
   return absl::OkStatus();
 }
 

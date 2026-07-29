@@ -31,6 +31,7 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/iostream.h"
@@ -39,7 +40,8 @@
 
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
-}
+class IndexSchema;
+}  // namespace valkey_search
 
 namespace valkey_search::indexes {
 
@@ -60,6 +62,10 @@ struct Neighbor {
   float distance;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
+  // Per-VectorRangePredicate distances, indexed by score_slot assigned during
+  // parse. Empty for KNN and non-VR searches.
+  std::vector<float> vr_scores;
+
   Neighbor() : distance(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
       : external_id(external_id), distance(distance), sequence_number(0) {}
@@ -73,13 +79,15 @@ struct Neighbor {
       : external_id(std::move(other.external_id)),
         distance(other.distance),
         sequence_number(other.sequence_number),
-        attribute_contents(std::move(other.attribute_contents)) {}
+        attribute_contents(std::move(other.attribute_contents)),
+        vr_scores(std::move(other.vr_scores)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
+      vr_scores = std::move(other.vr_scores);
     }
     return *this;
   }
@@ -186,6 +194,36 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
 
+  // Returns all neighbors within `radius` of `query`. For HNSW indexes this
+  // uses the graph-traversal EpsilonSearchStopCondition path (O(log N +
+  // result_count)); for Flat indexes it falls back to a linear scan.
+  virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
+      absl::string_view query, float radius, cancel::Token& cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
+
+  // Returns the distance and internal label for the given key, or an error if
+  // the key is not tracked. Used by AddPrefilteredKey and PrefilterEvaluator.
+  // Prefer IsWithinVectorRange for callers that only need a pass/fail check.
+  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+  ComputeDistanceFromRecord(const InternedStringPtr& key,
+                            absl::string_view query) const;
+
+  // Returns the distance from the stored vector for `key` to `query` if the
+  // distance is <= `radius`; returns std::nullopt if outside the radius;
+  // returns an error if the key is not tracked in this index.
+  absl::StatusOr<std::optional<float>> IsWithinVectorRange(
+      const InternedStringPtr& key, absl::string_view query,
+      float radius) const {
+    auto result = ComputeDistanceFromRecord(key, query);
+    if (!result.ok()) {
+      return result.status();
+    }
+    float distance = result->first;
+    if (distance > radius) {
+      return std::nullopt;
+    }
+    return distance;
+  }
   bool IsVectorIndex() const override { return true; }
 
  protected:
@@ -275,9 +313,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
-  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-  ComputeDistanceFromRecord(const InternedStringPtr& key,
-                            absl::string_view query) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 
@@ -285,10 +320,18 @@ class PrefilterEvaluator : public query::Evaluator {
  public:
   explicit PrefilterEvaluator(
       const valkey_search::indexes::text::TextIndex* text_index,
-      QueryOperations query_operations)
-      : query::Evaluator(query_operations), text_index_(text_index) {}
+      QueryOperations query_operations,
+      const valkey_search::IndexSchema* index_schema)
+      : query::Evaluator(query_operations),
+        text_index_(text_index),
+        index_schema_(index_schema) {}
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
+  // Like Evaluate(), but returns the full EvaluationResult so that callers
+  // handling VectorRange queries can read the score_slot and vr_distance
+  // without a side-channel.
+  query::EvaluationResult EvaluateFull(const query::Predicate& predicate,
+                                       const InternedStringPtr& key);
   const InternedStringPtr& GetTargetKey() const override {
     CHECK(key_);
     return *key_;
@@ -302,8 +345,11 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate& predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
                                        bool require_positions) override;
+  query::EvaluationResult EvaluateVectorRange(
+      const query::VectorRangePredicate& predicate) override;
   const valkey_search::indexes::text::TextIndex* text_index_;
   const InternedStringPtr* key_{nullptr};
+  const valkey_search::IndexSchema* index_schema_{nullptr};
 };
 
 }  // namespace valkey_search::indexes

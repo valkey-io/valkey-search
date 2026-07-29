@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -35,6 +36,7 @@
 #include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -78,30 +80,38 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
 }  // namespace
 
 namespace indexes {
-bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
-                                  const InternedStringPtr &key) {
+bool PrefilterEvaluator::Evaluate(const query::Predicate& predicate,
+                                  const InternedStringPtr& key) {
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
   return res.matches;
 }
 
+query::EvaluationResult PrefilterEvaluator::EvaluateFull(
+    const query::Predicate& predicate, const InternedStringPtr& key) {
+  key_ = &key;
+  auto res = predicate.Evaluate(*this);
+  key_ = nullptr;
+  return res;
+}
+
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
-    const query::TagPredicate &predicate) {
+    const query::TagPredicate& predicate) {
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
-    const query::NumericPredicate &predicate) {
+    const query::NumericPredicate& predicate) {
   CHECK(key_);
   auto value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
-    const query::TextPredicate &predicate, bool require_positions) {
+    const query::TextPredicate& predicate, bool require_positions) {
   CHECK(key_);
   if (!text_index_) {
     return query::EvaluationResult(false);
@@ -109,8 +119,44 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
+query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
+    const query::VectorRangePredicate& predicate) {
+  CHECK(key_);
+  auto query_vector = predicate.GetQueryVector();
+  if (query_vector.empty()) {
+    return query::EvaluationResult(false);
+  }
+  DCHECK(index_schema_)
+      << "PrefilterEvaluator requires a non-null index_schema "
+         "to evaluate VectorRange predicates";
+  if (!index_schema_) {
+    return query::EvaluationResult(false);
+  }
+  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  if (!index.ok()) {
+    return query::EvaluationResult(false);
+  }
+  auto* vector_index = dynamic_cast<VectorBase*>(index->get());
+  if (!vector_index) {
+    return query::EvaluationResult(false);
+  }
+  auto distance_result =
+      vector_index->ComputeDistanceFromRecord(*key_, query_vector);
+  if (!distance_result.ok()) {
+    // Key not tracked in this vector index — treat as non-matching.
+    return query::EvaluationResult(false);
+  }
+  float distance = distance_result->first;
+  if (distance > static_cast<float>(predicate.GetRadius())) {
+    return query::EvaluationResult(false);
+  }
+  // Return distance and score slot so the caller can populate
+  // Neighbor::vr_scores[slot] without a side-channel.
+  return query::EvaluationResult(true, predicate.GetScoreSlot(), distance);
+}
+
 template <typename T>
-T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
+T CopyAndNormalizeEmbedding(T* dst, T* src, size_t size) {
   T magnitude = 0.0f;
   for (size_t i = 0; i < size; i++) {
     magnitude += src[i] * src[i];
@@ -124,11 +170,11 @@ T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
 }
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float *magnitude) {
+                                     float* magnitude) {
   std::vector<char> ret(record.size());
   if (type_size == sizeof(float)) {
     float result = CopyAndNormalizeEmbedding(
-        (float *)&ret[0], (float *)record.data(), ret.size() / sizeof(float));
+        (float*)&ret[0], (float*)record.data(), ret.size() / sizeof(float));
     if (magnitude) {
       *magnitude = result;
     }
@@ -140,7 +186,7 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
 template <typename T>
 void VectorBase::Init(int dimensions,
                       valkey_search::data_model::DistanceMetric distance_metric,
-                      std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
+                      std::unique_ptr<hnswlib::SpaceInterface<T>>& space) {
   space = CreateSpace<T>(dimensions, distance_metric);
   distance_metric_ = distance_metric;
   if (distance_metric ==
@@ -150,7 +196,7 @@ void VectorBase::Init(int dimensions,
 }
 
 InternedStringPtr VectorBase::InternVector(absl::string_view record,
-                                           std::optional<float> &magnitude) {
+                                           std::optional<float>& magnitude) {
   if (!IsValidSizeVector(record)) {
     return {};
   }
@@ -159,13 +205,13 @@ InternedStringPtr VectorBase::InternVector(absl::string_view record,
     auto norm_record =
         NormalizeEmbedding(record, GetDataTypeSize(), &magnitude.value());
     return StringInternStore::Intern(
-        absl::string_view((const char *)norm_record.data(), norm_record.size()),
+        absl::string_view((const char*)norm_record.data(), norm_record.size()),
         vector_allocator_.get());
   }
   return StringInternStore::Intern(record, vector_allocator_.get());
 }
 
-absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
+absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr& key,
                                                    absl::string_view record) {
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
@@ -191,7 +237,7 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
 }
 
 absl::StatusOr<uint64_t> VectorBase::GetInternalId(
-    const InternedStringPtr &key) const {
+    const InternedStringPtr& key) const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
@@ -201,7 +247,7 @@ absl::StatusOr<uint64_t> VectorBase::GetInternalId(
 }
 
 absl::StatusOr<uint64_t> VectorBase::GetInternalIdDuringSearch(
-    const InternedStringPtr &key) const {
+    const InternedStringPtr& key) const {
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
     return absl::InvalidArgumentError("Record was not found");
@@ -219,7 +265,7 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 }
 
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
-    const InternedStringPtr &key, absl::string_view record) {
+    const InternedStringPtr& key, absl::string_view record) {
   // VectorExternalizer tracks added entries. We need to untrack mutations which
   // are processed as modified records.
   std::optional<float> magnitude;
@@ -257,11 +303,11 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
-    std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res) {
+    std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res) {
   std::vector<Neighbor> ret;
   ret.reserve(knn_res.size());
   while (!knn_res.empty()) {
-    auto &ele = knn_res.top();
+    auto& ele = knn_res.top();
     auto vector_key = GetKeyDuringSearch(ele.second);
     if (!vector_key.ok()) {
       knn_res.pop();
@@ -277,13 +323,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
 }
 
 absl::StatusOr<std::vector<char>> VectorBase::GetValue(
-    const InternedStringPtr &key) const {
+    const InternedStringPtr& key) const {
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
+  char* value = GetValueImpl(it->second.internal_id);
   if (normalize_) {
     if (it->second.magnitude < 0) {
       return absl::InternalError("Magnitude is not initialized");
@@ -297,7 +343,7 @@ absl::StatusOr<std::vector<char>> VectorBase::GetValue(
 }
 
 absl::StatusOr<bool> VectorBase::RemoveRecord(
-    const InternedStringPtr &key,
+    const InternedStringPtr& key,
     [[maybe_unused]] indexes::DeletionType deletion_type) {
   VMSDK_ASSIGN_OR_RETURN(auto res, UnTrackKey(key));
   if (!res.has_value()) {
@@ -308,7 +354,7 @@ absl::StatusOr<bool> VectorBase::RemoveRecord(
 }
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
-    const InternedStringPtr &key) {
+    const InternedStringPtr& key) {
   if (key->Str().empty()) {
     return std::nullopt;
   }
@@ -330,16 +376,16 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
   return id;
 }
 
-char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
+char* VectorBase::TrackVector(uint64_t internal_id, char* vector, size_t len) {
   auto interned_vector = StringInternStore::Intern(
       absl::string_view(vector, len), vector_allocator_.get());
   TrackVector(internal_id, interned_vector);
-  return (char *)interned_vector->Str().data();
+  return (char*)interned_vector->Str().data();
 }
 
-absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
+absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr& key,
                                               float magnitude,
-                                              const InternedStringPtr &vector) {
+                                              const InternedStringPtr& vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
@@ -360,8 +406,8 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 // Return false if the tracked vector matches the input vector.
 // Otherwise, track the new vector and return true.
 absl::StatusOr<bool> VectorBase::UpdateMetadata(
-    const InternedStringPtr &key, float magnitude,
-    const InternedStringPtr &vector) {
+    const InternedStringPtr& key, float magnitude,
+    const InternedStringPtr& vector) {
   if (key->Str().empty()) {
     return absl::InvalidArgumentError("key can't be empty");
   }
@@ -382,7 +428,7 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
   return true;
 }
 
-int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+int VectorBase::RespondWithInfo(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "type");
   ValkeyModule_ReplyWithSimpleString(ctx, "VECTOR");
   ValkeyModule_ReplyWithSimpleString(ctx, "index");
@@ -416,7 +462,7 @@ absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
 absl::Status VectorBase::SaveTrackedKeys(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
-  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
+  for (const auto& [key, metadata] : tracked_metadata_by_key_) {
     data_model::TrackedKeyMetadata metadata_pb;
     metadata_pb.set_key(key->Str());
     metadata_pb.set_internal_id(metadata.internal_id);
@@ -429,8 +475,8 @@ absl::Status VectorBase::SaveTrackedKeys(
   return absl::OkStatus();
 }
 
-void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
-                                   const AttributeDataType *attribute_data_type,
+void VectorBase::ExternalizeVector(ValkeyModuleCtx* ctx,
+                                   const AttributeDataType* attribute_data_type,
                                    absl::string_view key_cstr,
                                    absl::string_view attribute_identifier) {
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
@@ -456,8 +502,8 @@ void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
 }
 
 absl::Status VectorBase::LoadTrackedKeys(
-    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    SupplementalContentChunkIter &&iter) {
+    ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+    SupplementalContentChunkIter&& iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
@@ -500,16 +546,35 @@ uint32_t VectorBase::GetMutationWeight() const {
 }
 
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
+VectorBase::ComputeDistanceFromRecord(const InternedStringPtr& key,
                                       absl::string_view query) const {
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalIdDuringSearch(key));
+  if (normalize_) {
+    auto norm_query = NormalizeEmbedding(query, GetDataTypeSize());
+    auto result = ComputeDistanceFromRecordImpl(
+        internal_id, absl::string_view(norm_query.data(), norm_query.size()));
+    if (result.ok()) {
+      // Cosine distance is defined in [0, 2], but float32 rounding can produce
+      // values slightly outside this range.  Clamp to maintain correct
+      // boundary semantics for VECTOR_RANGE radius comparisons.
+      if (result->first <= std::numeric_limits<float>::epsilon()) {
+        result->first = 0.0f;
+      } else if (result->first >=
+                 2.0f - std::numeric_limits<float>::epsilon()) {
+        // Ensure anti-parallel vectors produce distance slightly above 2.0 so
+        // that a radius of exactly 2.0 excludes them (matches Redis behavior).
+        result->first = std::nextafter(2.0f, 3.0f);
+      }
+    }
+    return result;
+  }
   return ComputeDistanceFromRecordImpl(internal_id, query);
 }
 
 bool VectorBase::AddPrefilteredKey(
-    absl::string_view query, uint64_t count, const InternedStringPtr &key,
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<const char *> &top_keys) const {
+    absl::string_view query, uint64_t count, const InternedStringPtr& key,
+    std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
+    absl::flat_hash_set<const char*>& top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
   if (!result.ok()) {
     return false;
@@ -540,12 +605,12 @@ vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
       absl::StrSplit(record_str, ',', absl::SkipWhitespace());
   std::string binary_string;
   binary_string.reserve(float_strings.size() * sizeof(float));
-  for (const auto &float_str : float_strings) {
+  for (const auto& float_str : float_strings) {
     float value;
     if (!absl::SimpleAtof(float_str, &value)) {
       return nullptr;
     }
-    binary_string += std::string((char *)&value, sizeof(float));
+    binary_string += std::string((char*)&value, sizeof(float));
   }
   return vmsdk::MakeUniqueValkeyString(binary_string);
 }
@@ -557,38 +622,38 @@ size_t VectorBase::GetTrackedKeyCount() const {
 
 size_t VectorBase::GetUnTrackedKeyCount() const { return 0; }
 
-bool VectorBase::IsTracked(const InternedStringPtr &key) const {
+bool VectorBase::IsTracked(const InternedStringPtr& key) const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   return (it != tracked_metadata_by_key_.end());
 }
 
-bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
+bool VectorBase::IsUnTracked(const InternedStringPtr& key) const {
   return false;
 }
 
-void VectorBase::UnTrack(const InternedStringPtr &key) {}
+void VectorBase::UnTrack(const InternedStringPtr& key) {}
 
 absl::Status VectorBase::ForEachTrackedKey(
-    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
   absl::MutexLock lock(&key_to_metadata_mutex_);
-  for (const auto &[key, _] : tracked_metadata_by_key_) {
+  for (const auto& [key, _] : tracked_metadata_by_key_) {
     VMSDK_RETURN_IF_ERROR(fn(key));
   }
   return absl::OkStatus();
 }
 
 absl::Status VectorBase::ForEachUnTrackedKey(
-    absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
+    absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const {
   return absl::OkStatus();
 }
 
 template void VectorBase::Init<float>(
     int dimensions, data_model::DistanceMetric distance_metric,
-    std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
+    std::unique_ptr<hnswlib::SpaceInterface<float>>& space);
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
+    std::priority_queue<std::pair<float, hnswlib::labeltype>>& knn_res);
 }  // namespace indexes
 
 }  // namespace valkey_search

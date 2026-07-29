@@ -375,8 +375,7 @@ class TestMultiDBCME(ValkeySearchClusterTestCaseDebugMode):
         for db_num in range(num_dbs):
             waiters.wait_for_equal(
                 lambda db=db_num: index.info(dest_clients[db]).num_docs,
-                len(key_names),
-                timeout=10
+                len(key_names)
             )
         # Wait longer than cluster map expiration (250ms default) plus some buffer
         time.sleep(1)

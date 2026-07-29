@@ -341,6 +341,38 @@ class CountDistinct : public GroupBy::ReducerInstance {
   }
 };
 
+class ToList : public GroupBy::ReducerInstance {
+  absl::flat_hash_set<expr::Value> unique_values_;
+  std::vector<expr::Value> ordered_values_;
+  void ProcessRecord(const ArgVector& values) override {
+    if (values[0].IsNil()) {
+      return;
+    }
+    // Flatten one level: if the field value is itself an array, collect
+    // its individual elements rather than the array as a whole.
+    if (values[0].IsArray()) {
+      auto arr = values[0].GetArray();
+      for (const auto& elem : *arr) {
+        if (elem.IsNil()) {
+          continue;
+        }
+        if (!unique_values_.contains(elem)) {
+          unique_values_.insert(elem);
+          ordered_values_.push_back(elem);
+        }
+      }
+      return;
+    }
+    if (!unique_values_.contains(values[0])) {
+      unique_values_.insert(values[0]);
+      ordered_values_.push_back(values[0]);
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(ordered_values_);
+  }
+};
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -362,13 +394,15 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
                                               cnt, ") to reducer ", name));
   }
+  std::vector<std::string> arg_texts;
   for (int i = 0; i < cnt; ++i) {
     VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
                            _ << "Missing Reducer argument " << i);
-    VMSDK_ASSIGN_OR_RETURN(
-        auto expr,
-        expr::Expression::Compile(parameters, vmsdk::ToStringView(arg)),
-        _ << " in GROUPBY stage");
+    auto arg_sv = vmsdk::ToStringView(arg);
+    arg_texts.emplace_back(arg_sv);
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
     r->args_.emplace_back(std::move(expr));
   }
   if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
@@ -379,10 +413,21 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    std::ostringstream os;
-    os << *r;
+    // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
+    // for memory allocator issue causing ostringstream to crash.
+    // std::ostringstream os;
+    // os << *r;
+    // VMSDK_ASSIGN_OR_RETURN(auto output,
+    //                        parameters.MakeReference(os.str(), true));
+    std::string default_name(r->name_);
+    default_name += '(';
+    for (size_t i = 0; i < arg_texts.size(); ++i) {
+      if (i > 0) default_name += ',';
+      default_name += arg_texts[i];
+    }
+    default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(os.str(), true));
+                           parameters.MakeReference(default_name, true));
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   }
@@ -398,6 +443,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"MAX", &BasicReducerParser<Max, 1, 1>},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
+    {"TOLIST", &BasicReducerParser<ToList, 1, 1>},
 };
 
 }  // namespace aggregate

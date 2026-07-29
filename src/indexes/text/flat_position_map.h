@@ -85,10 +85,16 @@ class FlatPositionMap {
   // Get partition count
   uint32_t GetNumPartitions() const;
 
-  // Get total term frequency
-  size_t CountTermFrequency() const;
+  // Get total term frequency (pre-computed during Create, O(1) lookup)
+  size_t GetTermFrequency() const;
+
+  // Compute term frequency by iterating (used internally during Create)
+  static size_t ComputeTermFrequency(
+      const absl::btree_map<Position, FieldMask>& position_map);
 
   // Access to raw data pointer (stored immediately after this object)
+  // Layout: [term_frequency (4 bytes)] [header counts] [partition map]
+  // [position data]
   inline char* data() { return reinterpret_cast<char*>(this + 1); }
 
   inline const char* data() const {

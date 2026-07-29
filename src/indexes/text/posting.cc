@@ -69,7 +69,7 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
 
   // Use member functions to get counts
   size_t position_count = flat_map->CountPositions();
-  size_t term_frequency = flat_map->CountTermFrequency();
+  size_t term_frequency = flat_map->GetTermFrequency();
 
   metadata->total_positions -= position_count;
   metadata->total_term_frequency -= term_frequency;
@@ -94,7 +94,7 @@ size_t Postings::GetPositionCount() const {
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
   for (const auto& [key, flat_map] : key_to_positions_) {
-    total_frequency += flat_map->CountTermFrequency();
+    total_frequency += flat_map->GetTermFrequency();
   }
   return total_frequency;
 }
@@ -129,6 +129,13 @@ void Postings::KeyIterator::NextKey() {
 bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
+
+  CHECK(current_->second != nullptr)
+      << "Posting list contains a key with no FlatPositionMap";
+
+  // When querying all fields (~0ULL), any non-zero position mask will match,
+  // and every key in the posting list has at least one position entry.
+  if (field_mask == ~0ULL) return true;
 
   FlatPositionMap* flat_map = current_->second;
 

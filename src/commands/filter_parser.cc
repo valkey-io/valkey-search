@@ -252,13 +252,29 @@ absl::StatusOr<double> FilterParser::ParseNumber() {
   }
   std::string number_str;
   double value;
-  int multiplier = Match('-', false) ? -1 : 1;
-  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+  if (!IsEnd() && Peek() == '-') {
     number_str += expression_[pos_++];
   }
-  if (absl::AsciiStrToLower(number_str) != "nan" &&
-      absl::SimpleAtod(number_str, &value)) {
-    return value * multiplier;
+  bool exponent_seen = false;
+  bool exponent_sign_allowed = false;
+  while (!IsEnd()) {
+    const auto next = Peek();
+    if (std::isdigit(static_cast<unsigned char>(next)) || next == '.') {
+      number_str += expression_[pos_++];
+      exponent_sign_allowed = false;
+    } else if ((next == 'e' || next == 'E') && !exponent_seen) {
+      number_str += expression_[pos_++];
+      exponent_seen = true;
+      exponent_sign_allowed = true;
+    } else if ((next == '+' || next == '-') && exponent_sign_allowed) {
+      number_str += expression_[pos_++];
+      exponent_sign_allowed = false;
+    } else {
+      break;
+    }
+  }
+  if (!number_str.empty() && absl::SimpleAtod(number_str, &value)) {
+    return value;
   }
   return absl::InvalidArgumentError(
       absl::StrCat("Invalid number: ", number_str));
@@ -312,7 +328,17 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
 
 absl::StatusOr<absl::string_view> FilterParser::ParseTagString() {
   SkipWhitespace();
-  auto stop_pos = expression_.substr(pos_).find('}');
+  // Scan for the closing '}' while respecting backslash escapes.
+  auto remaining = expression_.substr(pos_);
+  size_t stop_pos = std::string::npos;
+  for (size_t i = 0; i < remaining.size(); ++i) {
+    if (remaining[i] == '\\' && i + 1 < remaining.size()) {
+      ++i;  // skip escaped character
+    } else if (remaining[i] == '}') {
+      stop_pos = i;
+      break;
+    }
+  }
   if (stop_pos == std::string::npos) {
     return absl::InvalidArgumentError("Missing closing TAG bracket, '}'");
   }
@@ -877,6 +903,72 @@ FilterParser::ParseTextTokens(
   return pred;
 }
 
+// Parses a QMA block. Expects the parser position to be after `=> {`.
+// Parses `$weight:` followed by a positive float, expects closing `}`.
+// Returns the weight value on success.
+absl::StatusOr<double> FilterParser::ParseQMABlock() {
+  SkipWhitespace();
+  // Parse attribute name starting with $
+  if (!Match('$')) {
+    if (IsEnd() || Peek() == '}') {
+      return absl::InvalidArgumentError("Missing value for $weight attribute");
+    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected character in QMA block at position ", pos_ + 1,
+                     ": expected '$'"));
+  }
+  // Parse the attribute name
+  std::string attr_name;
+  while (!IsEnd() && Peek() != ':' && !std::isspace(Peek()) && Peek() != '}') {
+    attr_name += expression_[pos_++];
+  }
+  // Only $weight is supported
+  if (attr_name != "weight") {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported QMA attribute: `$", attr_name, "`"));
+  }
+  // Expect colon after attribute name
+  if (!Match(':')) {
+    return absl::InvalidArgumentError("Missing value for $weight attribute");
+  }
+  SkipWhitespace();
+  // Parse the weight value
+  if (IsEnd() || Peek() == ';' || Peek() == '}') {
+    return absl::InvalidArgumentError("Missing value for $weight attribute");
+  }
+  // Parse the number manually to handle positive-only constraint
+  std::string number_str;
+  bool has_negative = false;
+  if (!IsEnd() && Peek() == '-') {
+    has_negative = true;
+    number_str += expression_[pos_++];
+  }
+  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+    number_str += expression_[pos_++];
+  }
+  double value;
+  if (number_str.empty() || (has_negative && number_str.size() == 1)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a positive number");
+  }
+  if (!absl::SimpleAtod(number_str, &value)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a positive number");
+  }
+  if (value <= 0.0) {
+    return absl::InvalidArgumentError("Weight must be a positive number");
+  }
+  SkipWhitespace();
+  // Consume optional semicolon
+  Match(';');
+  SkipWhitespace();
+  // Expect closing brace
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Missing closing '}' in QMA block");
+  }
+  return value;
+}
+
 // Parsing rules:
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has lower precedence than the AND operator. precedence. For
@@ -936,6 +1028,30 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         return absl::InvalidArgumentError(
             absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
       }
+      // Check for QMA block: => { ... } after closing )
+      {
+        SkipWhitespace();
+        size_t saved_pos = pos_;
+        if (!IsEnd() && pos_ + 1 < expression_.size() &&
+            expression_[pos_] == '=' && expression_[pos_ + 1] == '>') {
+          // Look ahead past => and optional whitespace for {
+          size_t lookahead = pos_ + 2;
+          while (lookahead < expression_.size() &&
+                 std::isspace(expression_[lookahead])) {
+            lookahead++;
+          }
+          if (lookahead < expression_.size() && expression_[lookahead] == '{') {
+            // This is a QMA block, consume => and { then parse
+            pos_ = lookahead + 1;
+            VMSDK_ASSIGN_OR_RETURN(auto weight, ParseQMABlock());
+            predicate->SetWeight(static_cast<float>(weight));
+          } else {
+            // Not a QMA block (could be => [ which is vector delimiter,
+            // but that should have been handled upstream). Restore position.
+            pos_ = saved_pos;
+          }
+        }
+      }
       if (result.prev_predicate) {
         node_count_++;
       }
@@ -959,6 +1075,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       }
       VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
       predicate = std::move(sub_result.prev_predicate);
+      if (!predicate) {
+        return absl::InvalidArgumentError("Missing OR term");
+      }
       if (result.prev_predicate) {
         node_count_++;
       } else {

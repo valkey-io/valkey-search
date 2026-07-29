@@ -62,8 +62,8 @@ uint32_t ValkeySearch::GetHNSWBlockSize() const {
   return options::GetHNSWBlockSize().GetValue();
 }
 
-void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
+absl::Status ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
+  return options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {

@@ -18,11 +18,9 @@
 #include <utility>
 #include <vector>
 
-#include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
-#include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -48,29 +46,54 @@ namespace valkey_search::indexes {
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float* magnitude = nullptr);
 
+// Default score value used when no scorer has been applied yet.
+inline constexpr float kDefaultScore = 0.0f;
+
+// Lightweight result entry used during non-vector search collection.
+// Trivially destructible — destroying a vector of 10K of these is a no-op.
+struct BorrowedNeighbor {
+  BorrowedInternedStringPtr key;
+  float distance;
+  float score;
+};
+static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
+              "BorrowedNeighbor must be trivially destructible");
+
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
+  float score;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), sequence_number(0) {}
+  Neighbor() : distance(0.0f), score(kDefaultScore), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
-      : external_id(external_id), distance(distance), sequence_number(0) {}
+      : external_id(external_id),
+        distance(distance),
+        score(distance),
+        sequence_number(0) {}
+  Neighbor(const InternedStringPtr& external_id, float distance, float score)
+      : external_id(external_id),
+        distance(distance),
+        score(score),
+        sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance,
            std::optional<RecordsMap>&& attribute_contents)
       : external_id(external_id),
         distance(distance),
+        score(distance),
         sequence_number(0),
         attribute_contents(std::move(attribute_contents)) {}
   Neighbor(Neighbor&& other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
+        score(other.score),
         sequence_number(other.sequence_number),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
+      score = other.score;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
     }
@@ -78,7 +101,7 @@ struct Neighbor {
   }
   friend std::ostream& operator<<(std::ostream& os, const Neighbor& n) {
     os << "Key: " << n.external_id->Str() << " Dist: " << n.distance
-       << " Seq: " << n.sequence_number;
+       << " Score: " << n.score << " Seq: " << n.sequence_number;
     if (n.attribute_contents.has_value()) {
       os << ' ' << *n.attribute_contents;
     } else {
@@ -121,15 +144,15 @@ absl::string_view LookupKeyByValue(
 
 class VectorBase : public IndexBase, public hnswlib::VectorTracker {
  public:
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view record) override
+  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+                                         absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
                                     indexes::DeletionType deletion_type =
                                         indexes::DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view record) override
+  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr& key,
+                                            absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
@@ -171,12 +194,15 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
       std::priority_queue<std::pair<T, hnswlib::labeltype>>& knn_res);
   absl::StatusOr<std::vector<char>> GetValue(const InternedStringPtr& key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  virtual size_t GetDataTypeSize() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
+
+  bool IsVectorIndex() const override { return true; }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
@@ -211,7 +237,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
                                         absl::string_view record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const = 0;
 
-  virtual size_t GetDataTypeSize() const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex* vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

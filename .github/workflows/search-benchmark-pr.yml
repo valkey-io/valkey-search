@@ -47,16 +47,17 @@ on:
         type: boolean
         default: false
       timeout_minutes:
-        description: "Job timeout in minutes (default 900)"
+        description: "Job timeout in minutes (default 1500)"
         required: false
-        default: "900"
+        default: "1500"
         type: string
   pull_request_target:
     types: [labeled]
 
-# For label-triggered runs, serialize per PR+label so re-labels queue rather
-# than contaminate results. On-demand (workflow_dispatch) runs have no
-# concurrency constraint — each runs independently.
+# Concurrency: group by PR number + label name. Same label re-added cancels
+# the in-progress run and starts fresh. Different labels produce separate
+# groups; parallel execution is prevented by the single self-hosted runner.
+# On-demand (workflow_dispatch) runs use a unique run ID so they never collide.
 concurrency:
   group: ${{ github.event_name == 'pull_request_target' && format('benchmark-{0}-{1}', github.event.pull_request.number, github.event.label.name) || format('on-demand-{0}', github.run_id) }}
   cancel-in-progress: true
@@ -155,7 +156,7 @@ jobs:
   benchmark:
     needs: resolve
     runs-on: [self-hosted, valkey-search-arm-pr]
-    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '900') }}
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '1500') }}
     env:
       # Module configuration
       MODULE_NAME: "search"
@@ -201,6 +202,7 @@ jobs:
           ref: npy_support
           path: valkey_ram
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Checkout valkey (for valkey-server)
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -235,6 +237,7 @@ jobs:
           repository: ${{ env.PERF_BENCHMARK_REPO }}
           ref: ${{ env.PERF_BENCHMARK_BRANCH }}
           path: ${{ env.PERF_BENCHMARK_DIR }}
+          persist-credentials: false
 
       - name: Setup persistent datasets cache
         run: |

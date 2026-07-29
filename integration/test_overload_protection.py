@@ -16,7 +16,7 @@ from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 from utils import IndexingTestHelper
 
 
-class TestQueueDepthSingleNode(ValkeySearchTestCaseDebugMode):
+class TestOverloadProtectionSingleNode(ValkeySearchTestCaseDebugMode):
     """Queue depth rejection on a single node (no fanout, direct SearchAsync)."""
 
     def test_queue_depth_single_node(self):
@@ -34,7 +34,6 @@ class TestQueueDepthSingleNode(ValkeySearchTestCaseDebugMode):
                                "search.max-query-queue-depth", "100")
         client.execute_command("CONFIG", "SET",
                                "search.queue-depth-scaling-factor", "0.0")
-
         # Force rejection.
         client.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
@@ -45,11 +44,9 @@ class TestQueueDepthSingleNode(ValkeySearchTestCaseDebugMode):
                 "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
         except ResponseError as e:
             rejected = str(e)
-
         assert rejected is not None, "Expected rejection on single node"
         assert "queue depth exceeded" in rejected.lower(), (
             f"Wrong error: {rejected}")
-
         # Disable force -- should succeed.
         client.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
@@ -57,7 +54,6 @@ class TestQueueDepthSingleNode(ValkeySearchTestCaseDebugMode):
         result = client.execute_command(
             "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
         assert result is not None
-
         # Disabled when limit=0.
         client.execute_command("CONFIG", "SET",
                                "search.max-query-queue-depth", "0")
@@ -105,7 +101,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         """Queue depth rejection and scaling on coordinator path."""
         self._create_index()
         replica = self._replica_client()
-
         # Rejection fires with correct error message.
         self._config_all("search.max-query-queue-depth", 100)
         self._config_all("search.queue-depth-scaling-factor", "0.0")
@@ -121,7 +116,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         assert with_rejection is not None, "Expected rejection when forced"
         assert "queue depth exceeded" in with_rejection.lower(), (
             f"Wrong error message: {with_rejection}")
-
         # Disable force -- query should succeed.
         replica.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
@@ -129,7 +123,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         result = replica.execute_command(
             "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
         assert result is not None
-
         # Scaling factor: 2 shards, scaling=1.0: effective = 6/(1+1*(2-1)) = 3.
         self._config_all("search.max-query-queue-depth", 6)
         self._config_all("search.queue-depth-scaling-factor", "1.0")
@@ -147,3 +140,43 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
             "ForceQueueDepthExceeded", "no")
         assert rejected, "Expected rejection with scaling active"
+
+    def test_server_side_queue_depth(self):
+        """Server rejects incoming partition requests when its queue is full.
+        Forces the remote shard's primary to reject partition requests via
+        ForceServerQueueDepthExceeded. The coordinator should handle this
+        gracefully — with enable_partial_results (default), it returns
+        results from the local shard only.
+        """
+        self._create_index()
+        self._config_all("search.max-query-queue-depth", 100)
+        replica = self._replica_client()
+        # Baseline: full results from both shards.
+        full_result = replica.execute_command(
+            "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "10")
+        full_count = full_result[0]
+        assert full_count > 0, "Baseline should return results"
+        # Force remote shard's primary AND replica to reject (kRandom may
+        # pick either).
+        self.replication_groups[1].primary.client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+            "ForceServerQueueDepthExceeded", "yes")
+        self.replication_groups[1].replicas[0].client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+            "ForceServerQueueDepthExceeded", "yes")
+        # With remote shard rejecting, we get partial results (local only).
+        partial_result = replica.execute_command(
+            "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "10")
+        partial_count = partial_result[0]
+        # Cleanup.
+        self.replication_groups[1].primary.client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+            "ForceServerQueueDepthExceeded", "no")
+        self.replication_groups[1].replicas[0].client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+            "ForceServerQueueDepthExceeded", "no")
+        # Partial count should be less than full (missing remote shard's docs).
+        assert partial_count < full_count, (
+            f"Expected partial < full. partial={partial_count}, full={full_count}")
+        assert partial_count > 0, (
+            f"Expected some results from local shard. partial={partial_count}")

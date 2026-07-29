@@ -167,6 +167,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
             "FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher")
         self.replication_groups[1].replicas[0].client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET", "search_entries_fetcher")
-        assert successes > 0, (
-            f"Expected partial results with local-search-max-priority=yes. "
+        assert successes == 3, (
+            f"Expected all queries to return partial results. "
             f"successes={successes}, errors={errors[:3]}")

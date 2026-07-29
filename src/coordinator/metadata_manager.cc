@@ -683,6 +683,9 @@ absl::Status MetadataManager::LoadMetadata(
                                             /*trigger_callbacks=*/false,
                                             /*prefer_incoming=*/true));
   }
+
+  // Increment completed section counter for restore progress tracking
+  Metrics::GetStats().rdb_restore_completed_indexes++;
   return absl::OkStatus();
 }
 

@@ -30,7 +30,7 @@ allocates the graph by ~20× at 100K vectors.
   `.build-release/_deps/svs-src/{include,lib}/` — same runtime
   valkey-search links against.
 - **hnswlib**: the benchmark reuses the vendored upstream hnswlib under
-  `svs_integration_tests/hnsw/third_party/hnswlib/`. No separate clone
+  `integration/svs/hnsw/third_party/hnswlib/`. No separate clone
   needed.
 - **g++ with C++20** (SVS runtime headers use `std::span`).
 

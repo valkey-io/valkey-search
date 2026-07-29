@@ -1,7 +1,7 @@
 #!/bin/bash
 # Compare SVS memory footprint before and after the raw_vectors_ removal.
 #
-# Methodology: follows SVS_MEMORY_FOOTPRINT_INVESTIGATION.md — uses VmRSS
+# Methodology: follows docs/svs/MEMORY_FOOTPRINT_INVESTIGATION.md — uses VmRSS
 # as ground truth (captures heap + mmap), runs MEMORY PURGE before
 # measurement to reduce fragmentation noise, and captures smaps
 # decomposition for attribution.

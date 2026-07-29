@@ -648,7 +648,6 @@ vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
 
-<<<<<<< HEAD
 config::Number& GetRaxTargetMutexPoolSize() {
   return dynamic_cast<config::Number&>(*rax_target_mutex_pool_size);
 }

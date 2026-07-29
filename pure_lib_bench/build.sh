@@ -2,7 +2,7 @@
 # Compile the two pure-library benchmarks.
 #
 # - bench_hnsw links against vendored upstream hnswlib (reused from
-#   svs_integration_tests/hnsw/third_party/).
+#   integration/svs/hnsw/third_party/).
 # - bench_svs links against libsvs_runtime.so from the main
 #   valkey-search build (.build-release/_deps/svs-src/).
 #
@@ -14,7 +14,7 @@ cd "$(dirname "$0")"
 
 REPO_ROOT="$(cd .. && pwd)"
 SVS_DEPS="$REPO_ROOT/.build-release/_deps/svs-src"
-HNSWLIB_DIR="$REPO_ROOT/svs_integration_tests/hnsw/third_party"
+HNSWLIB_DIR="$REPO_ROOT/integration/svs/hnsw/third_party"
 
 if [ ! -f "$SVS_DEPS/lib/libsvs_runtime.so" ]; then
   echo "missing $SVS_DEPS/lib/libsvs_runtime.so"

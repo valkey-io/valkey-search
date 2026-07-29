@@ -132,7 +132,6 @@ const config::Boolean& GetRdbReadV2();
 /// Return the threshold for async fanout operations
 config::Number& GetAsyncFanoutThreshold();
 
-<<<<<<< HEAD
 /// Return the pool size for per-word Postings bucket mutexes
 config::Number& GetRaxTargetMutexPoolSize();
 

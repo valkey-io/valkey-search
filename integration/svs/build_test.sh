@@ -7,14 +7,14 @@
 #   ./build_test.sh all
 #
 # Layout:
-#   svs_integration_tests/
+#   integration/svs/
 #     hnsw/  — tests linked against vendored upstream hnswlib v0.8.0
 #              (header-only, no external deps)
 #     svs/   — tests linked against libsvs_runtime.so (from the main build)
 set -e
 
 THIS_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$THIS_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$THIS_DIR/../.." && pwd)"
 SVS_DEPS="$REPO_ROOT/.build-release/_deps/svs-src"
 
 CXX=${CXX:-g++}

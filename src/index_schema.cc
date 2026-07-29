@@ -2242,16 +2242,4 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   }
 }
 
-void IndexSchema::SetTextSizeEstimationConditions() {
-  if (text_index_schema_) {
-    for (const auto &[_, attr] : attributes_) {
-      if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kHNSW ||
-          attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kSVS) {
-        text_index_schema_->EnableSubtreeItemCountTracking();
-      }
-    }
-  }
-}
-
-
 }  // namespace valkey_search

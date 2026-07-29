@@ -20,7 +20,7 @@
 //   2. cmake -S . -B .build-release -DCMAKE_BUILD_TYPE=Release
 //            -DENABLE_SVS=ON -G Ninja
 //      ninja -C .build-release libsearch.so
-//   3. cd svs_integration_tests
+//   3. cd integration/svs
 //      ./build_test.sh svs/test_01_call_pattern
 //   4. ./svs/test_01_call_pattern
 //

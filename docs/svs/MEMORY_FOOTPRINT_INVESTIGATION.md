@@ -6,12 +6,12 @@ into the three logical layers (Valkey core, valkey-search module, index graph).
 
 **Scope:** This document is about the current `svs-iteration-0` prototype. It
 does **not** include the "drop `raw_vectors_`" fix proposed in
-`SVS_INTEGRATION_SPEC.md §3.5` — those numbers are measured after the fix
+`docs/svs/INTEGRATION_SPEC.md §3.5` — those numbers are measured after the fix
 separately below.
 
 **Reproducibility:** Experiment scripts live at the repo root as
-[`measure_memory.sh`](./measure_memory.sh) and
-[`measure_smaps.sh`](./measure_smaps.sh). Snapshots are in
+[`measure_memory.sh`](../../scripts/benchmark/measure_memory_compare.sh) and
+[`measure_smaps.sh`](../../scripts/benchmark/measure_smaps.sh). Snapshots are in
 `/tmp/memory_experiment/` after running.
 
 ---
@@ -249,7 +249,7 @@ If all three happen, projected SVS LVQ4X8 total RSS drops from ~1,730 MiB to
 ~1,440 MiB — below HNSW.  If only the first two happen and valkey-search
 defaults to KEEP-intern-store, memory stays at ~1,730 MiB.
 
-Details and trade-offs: see `SVS_INTEGRATION_SPEC.md §3.5`.
+Details and trade-offs: see `docs/svs/INTEGRATION_SPEC.md §3.5`.
 
 ---
 
@@ -384,11 +384,11 @@ ninja -C .build-release libsearch.so
 
 ```
 # Primary experiment: 9 snapshots (3 configs × 3 stages)
-./measure_memory.sh
+../../scripts/benchmark/measure_memory_compare.sh
 # ~3-5 minutes wall-clock
 
 # Follow-up: smaps decomposition per config
-./measure_smaps.sh
+../../scripts/benchmark/measure_smaps.sh
 # ~3-5 minutes wall-clock
 
 # Snapshots land in /tmp/memory_experiment/
@@ -411,8 +411,8 @@ internal memory.
 ### 8.4 Varying the scale
 
 ```
-N=1000000 DIM=768 ./measure_memory.sh      # 1M vectors
-N=100000 DIM=1536 ./measure_memory.sh      # 100K × 1536d
+N=1000000 DIM=768 ../../scripts/benchmark/measure_memory_compare.sh      # 1M vectors
+N=100000 DIM=1536 ../../scripts/benchmark/measure_memory_compare.sh      # 100K × 1536d
 ```
 
 ---

@@ -20,7 +20,7 @@ Each `svs/test_0X_*.cc` is a direct twin of `hnsw/test_0X_*.cc`. Read
 them side by side to see how the current SVS runtime differs from the
 behavior valkey-search gets from hnswlib.
 
-These tests are companions to [`../SVS_INTEGRATION_SPEC.md`](../SVS_INTEGRATION_SPEC.md).
+These tests are companions to [`../../docs/svs/INTEGRATION_SPEC.md`](../../docs/svs/INTEGRATION_SPEC.md).
 
 ## Dependencies
 
@@ -50,7 +50,7 @@ ninja -C .build-release libsearch.so
 ## Building and running
 
 ```bash
-cd svs_integration_tests
+cd integration/svs
 
 # Build one test:
 ./build_test.sh hnsw/test_02_concurrent_search
@@ -74,7 +74,7 @@ then run this block verbatim. It takes ~2 minutes wall-clock on an 8-vCPU
 host.
 
 ```bash
-cd svs_integration_tests
+cd integration/svs
 
 # Build all 16 tests. Tests 07 and 08 on the SVS side will FAIL at link
 # time with 'undefined reference to svs::runtime::v0::dynamic_vamana_

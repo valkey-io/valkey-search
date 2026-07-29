@@ -50,6 +50,44 @@ namespace valkey_search::coordinator {
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
 CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
 
+// Custom MessageAllocator that defers protobuf response destruction to the
+// utility thread pool. Without this, gRPC's event engine threads spend
+// significant CPU destroying large SearchIndexPartitionResponse objects
+// (NeighborEntry repeated fields with string allocations) in CallOnDone,
+// blocking them from dispatching new incoming requests.
+class DeferredDestroyMessageHolder
+    : public grpc::MessageHolder<SearchIndexPartitionRequest,
+                                 SearchIndexPartitionResponse> {
+ public:
+  DeferredDestroyMessageHolder() {
+    this->set_request(&request_);
+    this->set_response(&response_);
+  }
+
+  void Release() override {
+    // Schedule destruction on the utility thread pool instead of destroying
+    // inline on the gRPC event engine thread. The response has already been
+    // serialized and sent by this point — we only need to free the memory.
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [holder = this]() { delete holder; });
+  }
+
+ private:
+  SearchIndexPartitionRequest request_;
+  SearchIndexPartitionResponse response_;
+};
+
+class SearchPartitionMessageAllocator
+    : public grpc::MessageAllocator<SearchIndexPartitionRequest,
+                                    SearchIndexPartitionResponse> {
+ public:
+  grpc::MessageHolder<SearchIndexPartitionRequest,
+                      SearchIndexPartitionResponse>*
+  AllocateMessages() override {
+    return new DeferredDestroyMessageHolder();
+  }
+};
+
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
     const GetGlobalMetadataRequest* request,
@@ -378,6 +416,11 @@ std::unique_ptr<Server> ServerImpl::Create(
   auto coordinator_service = std::make_unique<Service>(
       vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx),
       reader_thread_pool);
+  // Defer response destruction to utility thread pool to avoid blocking gRPC
+  // event engine threads on expensive protobuf cleanup (NeighborEntry fields).
+  static SearchPartitionMessageAllocator search_allocator;
+  coordinator_service->SetMessageAllocatorFor_SearchIndexPartition(
+      &search_allocator);
   grpc::ServerBuilder builder;
   builder.AddListeningPort(server_address, creds);
   // Set the SO_REUSEADDR option

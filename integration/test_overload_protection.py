@@ -6,6 +6,7 @@ Configs tested:
   - search.queue-depth-scaling-factor: Scales queue limit by cluster size.
 """
 
+import pytest
 from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
     ValkeySearchClusterTestCaseDebugMode,
@@ -67,7 +68,7 @@ class TestQueueDepthSingleNode(ValkeySearchTestCaseDebugMode):
             client.execute_command(
                 "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
         except ResponseError as e:
-            assert False, f"Should not reject when limit=0: {e}"
+            pytest.fail(f"Should not reject when limit=0: {e}")
         finally:
             client.execute_command(
                 "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",

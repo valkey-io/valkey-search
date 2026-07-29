@@ -229,7 +229,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                      static_cast<size_t>(configured_limit / divisor));
       }
       if (ForceQueueDepthExceeded.GetValue() ||
-          thread_pool->QueueSize() > effective_limit) {
+          thread_pool->QueueSize() >= effective_limit) {
         return absl::ResourceExhaustedError(
             "Search query queue depth exceeded");
       }

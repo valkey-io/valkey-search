@@ -845,9 +845,12 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   // Reject already-cancelled queries before acquiring the time-slice mutex.
   // Without this, expired queries that sat in the queue still acquire a reader
   // slot and waste mutex time before discovering they're cancelled deep in the
-  // iteration loop.
+  // iteration loop. Return OkStatus with empty results (same as what the
+  // iteration loop produces when it discovers cancellation mid-search) so the
+  // coordinator tracker counts this as a "successful" node with 0 results —
+  // enabling partial results from other shards that did complete.
   if (parameters.cancellation_token->IsCancelled()) {
-    return absl::CancelledError(kTimeoutMsg);
+    return absl::OkStatus();
   }
   vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
   ++Metrics::GetStats().time_slice_queries;
@@ -882,16 +885,6 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
-  // When local-search-max-priority is enabled, local shard queries get kMax
-  // priority so they always complete even under overload. This ensures
-  // partial-results load shedding works correctly — without this, local queries
-  // sit in the same saturated queue as remote partition requests and timeout,
-  // causing 0 successful queries even with enable-partial-results=yes.
-  auto priority = vmsdk::ThreadPool::Priority::kHigh;
-  if (search_mode == SearchMode::kLocal &&
-      options::GetLocalSearchMaxPriority().GetValue()) {
-    priority = vmsdk::ThreadPool::Priority::kMax;
-  }
   thread_pool->Schedule(
       [parameters = std::move(parameters), search_mode]() mutable {
         auto res = Search(*parameters, search_mode);
@@ -911,7 +904,7 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
             CHECK(false) << "Unknown content processing mode";
         }
       },
-      priority);
+      vmsdk::ThreadPool::Priority::kHigh);
   return absl::OkStatus();
 }
 

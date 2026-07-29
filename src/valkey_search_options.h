@@ -76,9 +76,6 @@ absl::Status Reset();
 /// Default option of delivering partial results when timeout occurs
 const config::Boolean& GetPreferPartialResults();
 
-/// Whether local shard queries get kMax priority during fan-out
-const config::Boolean& GetLocalSearchMaxPriority();
-
 /// Maximum query queue depth before rejecting new queries (0 = unlimited)
 config::Number& GetMaxQueryQueueDepth();
 

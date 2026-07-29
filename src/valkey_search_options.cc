@@ -225,14 +225,6 @@ constexpr absl::string_view kEnableConsistentResults{
 static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
 
-/// When enabled, local shard queries during fan-out get kMax priority in the
-/// thread pool, ensuring they complete even under overload. This makes
-/// partial-results load shedding work correctly.
-constexpr absl::string_view kLocalSearchMaxPriority{
-    "local-search-max-priority"};
-static auto local_search_max_priority =
-    config::BooleanBuilder(kLocalSearchMaxPriority, false).Build();
-
 /// Maximum reader thread pool queue depth before rejecting new queries.
 /// When the queue exceeds this threshold, FT.SEARCH is rejected before fan-out
 /// to prevent cascading timeouts. 0 = unlimited (disabled).
@@ -611,10 +603,6 @@ const vmsdk::config::Boolean& GetPreferPartialResults() {
 
 const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
-}
-
-const vmsdk::config::Boolean& GetLocalSearchMaxPriority() {
-  return static_cast<vmsdk::config::Boolean&>(*local_search_max_priority);
 }
 
 vmsdk::config::Number& GetMaxQueryQueueDepth() {

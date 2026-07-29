@@ -88,6 +88,7 @@ jobs:
       merge_commit_sha: ${{ steps.pr.outputs.merge_commit_sha }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
       base_ref: ${{ steps.pr.outputs.base_ref }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
       pr_number: ${{ steps.pr.outputs.pr_number }}
       cluster_filter: ${{ steps.pr.outputs.cluster_filter }}
       skip_profiling: ${{ steps.pr.outputs.skip_profiling }}
@@ -116,6 +117,7 @@ jobs:
               core.setOutput('merge_commit_sha', pr.data.merge_commit_sha);
               core.setOutput('head_sha', pr.data.head.sha);
               core.setOutput('base_ref', pr.data.base.ref);
+              core.setOutput('base_sha', pr.data.base.sha);
               core.setOutput('pr_number', String(prNumber));
               const clusterInput = '${{ github.event.inputs.cluster_mode }}';
               core.setOutput('cluster_filter', clusterInput || '');
@@ -132,6 +134,7 @@ jobs:
               core.setOutput('merge_commit_sha', pr.merge_commit_sha);
               core.setOutput('head_sha', pr.head.sha);
               core.setOutput('base_ref', pr.base.ref);
+              core.setOutput('base_sha', pr.base.sha);
               core.setOutput('pr_number', String(pr.number));
               core.setOutput('cluster_filter', '');
               core.setOutput('skip_profiling', label === 'run-search-benchmark-skip-profiling' ? 'true' : 'false');
@@ -143,6 +146,7 @@ jobs:
           echo "merge_commit_sha: ${{ steps.pr.outputs.merge_commit_sha }}"
           echo "head_sha: ${{ steps.pr.outputs.head_sha }}"
           echo "base_ref: ${{ steps.pr.outputs.base_ref }}"
+          echo "base_sha: ${{ steps.pr.outputs.base_sha }}"
           echo "pr_number: ${{ steps.pr.outputs.pr_number }}"
           echo "cluster_filter: ${{ steps.pr.outputs.cluster_filter }}"
           echo "skip_profiling: ${{ steps.pr.outputs.skip_profiling }}"
@@ -220,7 +224,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
           repository: ${{ github.repository }}
-          ref: ${{ needs.resolve.outputs.base_ref }}
+          ref: ${{ needs.resolve.outputs.base_sha }}
           path: ${{ env.MODULE_BASELINE_DIR }}
           fetch-depth: 0
           persist-credentials: false

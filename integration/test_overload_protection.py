@@ -3,7 +3,6 @@ Integration tests for search overload protection.
 
 Configs tested:
   - search.max-query-queue-depth: Rejects queries when queue exceeds limit.
-  - search.queue-depth-scaling-factor: Scales queue limit by cluster size.
 """
 
 import pytest
@@ -32,8 +31,7 @@ class TestOverloadProtectionSingleNode(ValkeySearchTestCaseDebugMode):
 
         client.execute_command("CONFIG", "SET",
                                "search.max-query-queue-depth", "100")
-        client.execute_command("CONFIG", "SET",
-                               "search.queue-depth-scaling-factor", "0.0")
+
         # Force rejection.
         client.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
@@ -98,12 +96,12 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         return self.replication_groups[0].replicas[0].client
 
     def test_queue_depth_cluster(self):
-        """Queue depth rejection and scaling on coordinator path."""
+        """Queue depth rejection on coordinator path."""
         self._create_index()
         replica = self._replica_client()
+
         # Rejection fires with correct error message.
         self._config_all("search.max-query-queue-depth", 100)
-        self._config_all("search.queue-depth-scaling-factor", "0.0")
         replica.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
             "ForceQueueDepthExceeded", "yes")
@@ -116,6 +114,7 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         assert with_rejection is not None, "Expected rejection when forced"
         assert "queue depth exceeded" in with_rejection.lower(), (
             f"Wrong error message: {with_rejection}")
+
         # Disable force -- query should succeed.
         replica.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
@@ -123,23 +122,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         result = replica.execute_command(
             "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
         assert result is not None
-        # Scaling factor: 2 shards, scaling=1.0: effective = 6/(1+1*(2-1)) = 3.
-        self._config_all("search.max-query-queue-depth", 6)
-        self._config_all("search.queue-depth-scaling-factor", "1.0")
-        replica.execute_command(
-            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
-            "ForceQueueDepthExceeded", "yes")
-        rejected = False
-        try:
-            replica.execute_command(
-                "FT.SEARCH", "idx", "@tag1:{common}", "LIMIT", "0", "1")
-        except ResponseError as e:
-            if "queue depth exceeded" in str(e).lower():
-                rejected = True
-        replica.execute_command(
-            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
-            "ForceQueueDepthExceeded", "no")
-        assert rejected, "Expected rejection with scaling active"
 
     def test_server_side_queue_depth(self):
         """Server rejects incoming partition requests when its queue is full.

@@ -217,19 +217,13 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
 
     // Reject queries before creating a blocked client if the reader thread
     // pool queue is too deep. Covers both fanout and single-node paths.
+    // No scaling factor needed — each node protects its own queue via the
+    // server-side check in coordinator/server.cc.
     auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
     if (configured_limit > 0) {
       auto *thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
-      size_t effective_limit = configured_limit;
-      auto scaling_factor = options::GetQueueDepthScalingFactor();
-      if (scaling_factor > 0.0 && search_targets.size() > 1) {
-        double divisor = 1.0 + scaling_factor * (search_targets.size() - 1);
-        effective_limit =
-            std::max(static_cast<size_t>(1),
-                     static_cast<size_t>(configured_limit / divisor));
-      }
       if (ForceQueueDepthExceeded.GetValue() ||
-          thread_pool->QueueSize() >= effective_limit) {
+          thread_pool->QueueSize() >= static_cast<size_t>(configured_limit)) {
         return absl::ResourceExhaustedError(
             "Search query queue depth exceeded");
       }

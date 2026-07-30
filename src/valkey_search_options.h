@@ -79,9 +79,6 @@ const config::Boolean& GetPreferPartialResults();
 /// Maximum query queue depth before rejecting new queries (0 = unlimited)
 config::Number& GetMaxQueryQueueDepth();
 
-/// Queue depth scaling factor by cluster size (0.0-1.0)
-double GetQueueDepthScalingFactor();
-
 /// Default option of delivering consistent results when timeout occurs
 const config::Boolean& GetPreferConsistentResults();
 

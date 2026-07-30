@@ -224,8 +224,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       auto *thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
       if (ForceQueueDepthExceeded.GetValue() ||
           thread_pool->QueueSize() >= static_cast<size_t>(configured_limit)) {
-        return absl::ResourceExhaustedError(
-            "Search query queue depth exceeded");
+        return absl::ResourceExhaustedError(query::kQueueDepthMsg);
       }
     }
 

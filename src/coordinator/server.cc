@@ -240,7 +240,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
     if (configured_limit > 0 && (ForceServerQueueDepthExceeded.GetValue() ||
                                  reader_thread_pool_->QueueSize() >=
                                      static_cast<size_t>(configured_limit))) {
-      return absl::ResourceExhaustedError("Search query queue depth exceeded");
+      return absl::ResourceExhaustedError(query::kQueueDepthMsg);
     }
     EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
                          detached_ctx_.get(), response, reactor,

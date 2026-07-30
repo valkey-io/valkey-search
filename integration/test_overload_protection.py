@@ -28,10 +28,8 @@ class TestOverloadProtectionSingleNode(ValkeySearchTestCaseDebugMode):
         for i in range(10):
             client.hset(f"d:{i}", mapping={"tag1": "common"})
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-
         client.execute_command("CONFIG", "SET",
                                "search.max-query-queue-depth", "100")
-
         # Force rejection.
         client.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
@@ -99,7 +97,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         """Queue depth rejection on coordinator path."""
         self._create_index()
         replica = self._replica_client()
-
         # Rejection fires with correct error message.
         self._config_all("search.max-query-queue-depth", 100)
         replica.execute_command(
@@ -114,7 +111,6 @@ class TestOverloadProtectionCluster(ValkeySearchClusterTestCaseDebugMode):
         assert with_rejection is not None, "Expected rejection when forced"
         assert "queue depth exceeded" in with_rejection.lower(), (
             f"Wrong error message: {with_rejection}")
-
         # Disable force -- query should succeed.
         replica.execute_command(
             "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",

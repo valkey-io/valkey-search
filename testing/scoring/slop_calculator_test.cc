@@ -8,6 +8,7 @@
 #include "src/indexes/scoring/slop_calculator.h"
 
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -21,7 +22,7 @@ namespace {
 // (single-char tokens are dropped, so only the words below have positions)
 //   apple=0 red=1 blue=2 banana=3 yellow=4 green=5 grape=6 purple=7
 //   orange=8 cherry=9 pink=10 violet=11 one=12 two=13 three=14 four=15
-//   five=16 six=17
+//   five=16 six=17 seven=18 eight=19 nine=20 ten=21 zero=22
 
 using Pos = std::vector<SlopPosition>;
 
@@ -154,6 +155,20 @@ TEST(SlopCalculatorTest, AbsentOrBranchDropped) {
   Term(calc, {0});  // apple
   Term(calc, {2});  // blue
   EXPECT_EQ(calc.Finalize(), 2u);
+}
+
+// Case 12: extreme gaps saturate sum_squares to UINT64_MAX. IntSqrt must
+// stay in integer space near the u64 max, where (x+1)*(x+1) would wrap.
+// Positions 0 and UINT32_MAX give a gap of UINT32_MAX; two such gaps
+// saturate the squared sum to UINT64_MAX. floor(sqrt(UINT64_MAX)) is
+// 4294967295 (== UINT32_MAX), which must not overflow the uint32_t result.
+TEST(SlopCalculatorTest, IntSqrtNoOverflowNearU64Max) {
+  constexpr SlopPosition kMax = std::numeric_limits<SlopPosition>::max();
+  SlopCalculator calc;
+  Term(calc, {0});
+  Term(calc, {kMax});
+  Term(calc, {0});
+  EXPECT_EQ(calc.Finalize(), kMax);
 }
 
 TEST(SlopCalculatorDeathTest, ExitWithoutEnterCrashes) {

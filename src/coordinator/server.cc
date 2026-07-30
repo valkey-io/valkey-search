@@ -35,6 +35,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -49,6 +50,7 @@ namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
 CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
+CONTROLLED_BOOLEAN(ForceServerQueueDepthExceeded, false);
 
 grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
     grpc::CallbackServerContext* context,
@@ -143,7 +145,7 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     if (cancellation_token->IsCancelled()) {
       reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                       "Search operation cancelled due to timeout"});
+                       std::string(query::kTimeoutMsg)});
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
@@ -231,6 +233,15 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           PerformSlotConsistencyCheck(request->slot_fingerprint())));
     }
     // Consistency checks passed, now enqueue the search
+    // Server-side queue depth check: reject partition requests when the reader
+    // thread pool is overloaded. Without this, coordinators keep sending work
+    // to an already-saturated node while its pair in the shard sits idle.
+    auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
+    if (configured_limit > 0 && (ForceServerQueueDepthExceeded.GetValue() ||
+                                 reader_thread_pool_->QueueSize() >=
+                                     static_cast<size_t>(configured_limit))) {
+      return absl::ResourceExhaustedError(query::kQueueDepthMsg);
+    }
     EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
                          detached_ctx_.get(), response, reactor,
                          std::move(latency_sample));

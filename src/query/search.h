@@ -360,6 +360,14 @@ bool QueryHasTextPredicate(const SearchParameters& parameters);
 // score_slot, and return the total count of VR predicates found.
 size_t AssignVectorRangeScoreSlots(Predicate* predicate);
 
+// Returns the score field names for all VR predicates in score_slot order.
+// Entry i is the name for score_slot i:
+//   - the explicit $yield_distance_as alias if set, otherwise
+//   - the default "__<alias>_score" string.
+// Returns an empty vector when num_vr_predicates == 0.
+std::vector<std::string> CollectVrScoreFields(
+    const SearchParameters& parameters);
+
 // Return the distance score field name for the first (slot-0) VR predicate in
 // the query (i.e. the yield_distance_as alias or "__<alias>_score" default).
 // Returns empty string if there are no VR predicates.

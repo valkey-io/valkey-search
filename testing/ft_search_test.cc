@@ -726,6 +726,191 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+// ---------------------------------------------------------------------------
+// Multi-VR SerializeNonVectorNeighbors tests
+// These tests exercise the updated serialization path that loops over all VR
+// score slots rather than emitting only slot 0.
+// ---------------------------------------------------------------------------
+
+class MultiVrSendReplyTest : public ValkeySearchTest {
+ public:
+  struct NeighborSpec {
+    std::string external_id;
+    float dist0;
+    float dist1;
+  };
+
+  struct TestResult {
+    std::string reply;
+  };
+
+  // Build a SearchCommand with two VR predicates composed via AND and exercise
+  // SendReply. Uses fake_ctx_ from the base class.
+  TestResult RunTest(
+      const std::string& slot0_field, std::optional<std::string> slot0_alias,
+      const std::string& slot1_field, std::optional<std::string> slot1_alias,
+      const std::vector<NeighborSpec>& neighbor_specs, bool no_content,
+      const std::vector<TestReturnAttribute>& return_attributes = {}) {
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(An<ValkeyModuleKey*>(),
+                        VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
+                        An<const char*>(), An<int*>(), An<void*>()))
+        .WillRepeatedly([](ValkeyModuleKey*, int, const char*, int* exists,
+                           void*) {
+          *exists = 1;
+          return VALKEYMODULE_OK;
+        });
+    EXPECT_CALL(*kMockValkeyModule,
+                ScanKey(An<ValkeyModuleKey*>(), An<ValkeyModuleScanCursor*>(),
+                        An<ValkeyModuleScanKeyCB>(), An<void*>()))
+        .WillRepeatedly([](ValkeyModuleKey* key,
+                           ValkeyModuleScanCursor* cursor,
+                           ValkeyModuleScanKeyCB fn, void* privdata) {
+          // Return one field "tag1"="val1", then end.
+          ++cursor->cursor;
+          if ((cursor->cursor % 2) == 1) {
+            static const absl::string_view f = "tag1";
+            static const absl::string_view v = "val1";
+            auto fs = vmsdk::MakeUniqueValkeyString(f);
+            auto vs = vmsdk::MakeUniqueValkeyString(v);
+            fn(key, fs.get(), vs.get(), privdata);
+            return 1;
+          }
+          fn(key, nullptr, nullptr, privdata);
+          return 0;
+        });
+    EXPECT_CALL(*kMockValkeyModule,
+                OpenKey(&fake_ctx_, An<ValkeyModuleString*>(), testing::_))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey*>()))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+    auto test_index_schema =
+        CreateVectorHNSWSchema("idx", &fake_ctx_, nullptr).value();
+
+    // Build two VR predicates.
+    auto pred0 = std::make_unique<query::VectorRangePredicate>(
+        slot0_field, slot0_field + "_id", 1.0, "blob0", slot0_alias,
+        std::nullopt);
+    pred0->SetScoreSlot(0);
+
+    auto pred1 = std::make_unique<query::VectorRangePredicate>(
+        slot1_field, slot1_field + "_id", 1.0, "blob1", slot1_alias,
+        std::nullopt);
+    pred1->SetScoreSlot(1);
+
+    std::vector<std::unique_ptr<query::Predicate>> children;
+    children.push_back(std::move(pred0));
+    children.push_back(std::move(pred1));
+    auto root = std::make_unique<query::ComposedPredicate>(
+        query::LogicalOperator::kAnd, std::move(children));
+
+    // Build neighbors.
+    std::vector<indexes::Neighbor> neighbors;
+    for (const auto& spec : neighbor_specs) {
+      indexes::Neighbor n;
+      n.external_id = StringInternStore::Intern(spec.external_id);
+      n.distance = spec.dist0;
+      n.vr_scores = {spec.dist0, spec.dist1};
+      neighbors.push_back(std::move(n));
+    }
+
+    auto parameters = std::make_unique<SearchCommand>(0);
+    parameters->timeout_ms = 10000;
+    parameters->index_schema = test_index_schema;
+    parameters->attribute_alias = "";  // non-vector query
+    parameters->limit = {.first_index = 0, .number = 100};
+    parameters->no_content = no_content;
+    parameters->num_vr_predicates = 2;
+    parameters->filter_parse_results.root_predicate = std::move(root);
+    for (const auto& ra : return_attributes) {
+      parameters->return_attributes.push_back(ToReturnAttribute(ra));
+    }
+
+    size_t neighbor_count = neighbors.size();
+    query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                                *parameters);
+    parameters->SendReply(&fake_ctx_, wrapper);
+    auto reply = fake_ctx_.reply_capture.GetReply();
+    fake_ctx_.reply_capture.ClearReply();
+    return {reply};
+  }
+};
+
+// Two VR predicates with explicit aliases: reply contains both distance pairs.
+TEST_F(MultiVrSendReplyTest, TwoVrPredicatesBothAliases) {
+  auto result = RunTest(
+      "vec1", "d1", "vec2", "d2",
+      {{"k1", 0.1f, 0.2f}, {"k2", 0.3f, 0.4f}},
+      /*no_content=*/false);
+
+  auto parsed = ParseRespReply(result.reply);
+  // Per key: [d1, dist0, d2, dist1, tag1, val1]
+  auto expected = ParseRespReply(
+      "*5\r\n:2\r\n"
+      "$2\r\nk1\r\n"
+      "*6\r\n$2\r\nd1\r\n$13\r\n0.10000000149\r\n"
+      "$2\r\nd2\r\n$13\r\n0.20000000298\r\n"
+      "$4\r\ntag1\r\n$4\r\nval1\r\n"
+      "$2\r\nk2\r\n"
+      "*6\r\n$2\r\nd1\r\n$14\r\n0.300000011921\r\n"
+      "$2\r\nd2\r\n$13\r\n0.40000000596\r\n"
+      "$4\r\ntag1\r\n$4\r\nval1\r\n");
+  EXPECT_EQ(parsed, expected);
+}
+
+// Two VR predicates, NOCONTENT: only key names, no score fields.
+TEST_F(MultiVrSendReplyTest, TwoVrPredicatesNoContent) {
+  auto result = RunTest(
+      "vec1", "d1", "vec2", "d2",
+      {{"k1", 0.1f, 0.2f}, {"k2", 0.3f, 0.4f}},
+      /*no_content=*/true);
+
+  auto parsed = ParseRespReply(result.reply);
+  auto expected = ParseRespReply("*3\r\n:2\r\n$2\r\nk1\r\n$2\r\nk2\r\n");
+  EXPECT_EQ(parsed, expected);
+}
+
+// Two VR predicates with RETURN: requested fields plus both distance pairs.
+TEST_F(MultiVrSendReplyTest, TwoVrPredicatesWithReturn) {
+  auto result = RunTest(
+      "vec1", "d1", "vec2", "d2",
+      {{"k1", 0.5f, 0.6f}},
+      /*no_content=*/false,
+      {{.identifier = "d1", .alias = "d1"},
+       {.identifier = "tag1", .alias = "tag1"},
+       {.identifier = "d2", .alias = "d2"}});
+
+  auto parsed = ParseRespReply(result.reply);
+  // Return: d1 (score), tag1 (content), d2 (score) — in RETURN order.
+  auto expected = ParseRespReply(
+      "*3\r\n:1\r\n"
+      "$2\r\nk1\r\n"
+      "*6\r\n$2\r\nd1\r\n$3\r\n0.5\r\n"
+      "$4\r\ntag1\r\n$4\r\nval1\r\n"
+      "$2\r\nd2\r\n$14\r\n0.600000023842\r\n");
+  EXPECT_EQ(parsed, expected);
+}
+
+// Two VR predicates with default (no alias) names.
+TEST_F(MultiVrSendReplyTest, TwoVrPredicatesDefaultNames) {
+  auto result = RunTest(
+      "myvec1", std::nullopt, "myvec2", std::nullopt,
+      {{"k1", 0.1f, 0.9f}},
+      /*no_content=*/false);
+
+  auto parsed = ParseRespReply(result.reply);
+  // Default names: __myvec1_score (14 chars), __myvec2_score (14 chars).
+  auto expected = ParseRespReply(
+      "*3\r\n:1\r\n"
+      "$2\r\nk1\r\n"
+      "*6\r\n"
+      "$14\r\n__myvec1_score\r\n$13\r\n0.10000000149\r\n"
+      "$14\r\n__myvec2_score\r\n$14\r\n0.899999976158\r\n"
+      "$4\r\ntag1\r\n$4\r\nval1\r\n");
+  EXPECT_EQ(parsed, expected);
+}
+
 using ::testing::TestParamInfo;
 using ::testing::ValuesIn;
 

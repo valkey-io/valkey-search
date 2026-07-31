@@ -144,6 +144,10 @@ struct SearchPartitionResultsTracker {
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->score(), std::move(attribute_contents)};
+      // Restore VR scores so $yield_distance_as works after fanout merge.
+      for (float vr_score : neighbor_entry->vr_scores()) {
+        neighbor.vr_scores.push_back(vr_score);
+      }
       AddResult(neighbor);
     }
   }

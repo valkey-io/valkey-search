@@ -108,6 +108,11 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
         contents->set_content(vmsdk::ToStringView(record.value.get()));
       }
     }
+    // Serialize VR scores so the coordinator can populate them in the merged
+    // Neighbor objects. These are needed for $yield_distance_as in FT.SEARCH.
+    for (float vr_score : neighbor.vr_scores) {
+      neighbor_proto->add_vr_scores(vr_score);
+    }
   }
 }
 

@@ -625,6 +625,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
+// Forward declaration — defined after ForEachVectorRangePredicate below.
+static void PopulateVrScoresForNeighbors(std::vector<indexes::Neighbor>&,
+                                         const SearchParameters&);
+
 // Handle standalone Vector Range queries (no KNN). For the common case of a
 // single VectorRange predicate with no other filters, delegates to the vector
 // index's SearchRange method (HNSW uses EpsilonSearchStopCondition for O(log N
@@ -761,6 +765,23 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
 
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
+  }
+
+  // For queries with multiple VR predicates, the main EvaluateFull() only
+  // propagates a single VR score. Re-evaluate all VR predicates individually
+  // to populate every vr_scores slot correctly.
+  if (parameters.num_vr_predicates > 1) {
+    PopulateVrScoresForNeighbors(neighbors, parameters);
+    // Re-sort using slot-0 distance (primary sort key) now that vr_scores
+    // has been fully populated.
+    std::sort(neighbors.begin(), neighbors.end(),
+              [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+                float da = a.vr_scores.empty() ? a.distance : a.vr_scores[0];
+                float db = b.vr_scores.empty() ? b.distance : b.vr_scores[0];
+                if (da != db) return da < db;
+                return a.external_id->Str() < b.external_id->Str();
+              });
+    return neighbors;
   }
 
   // Sort by ascending distance; use key as a stable secondary so that results
@@ -1043,6 +1064,12 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   } else {
     VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                            DoSearchVector(parameters, search_mode, lock));
+    // For KNN queries that also have VR predicates in their filter, populate
+    // vr_scores for each neighbor so that VR distance fields are available
+    // in FT.AGGREGATE and FT.SEARCH responses.
+    if (parameters.num_vr_predicates > 0) {
+      PopulateVrScoresForNeighbors(neighbors, parameters);
+    }
     VMSDK_ASSIGN_OR_RETURN(
         auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
     size_t total_count = result.size();
@@ -1182,39 +1209,83 @@ static absl::Status ForEachVectorRangePredicate(
   }
 }
 
-// Return the score field name for the first (slot-0) VR predicate.
-std::string GetVrScoreFieldName(const SearchParameters &parameters) {
+// Returns the score field names for all VR predicates in score_slot order.
+std::vector<std::string> CollectVrScoreFields(
+    const SearchParameters &parameters) {
   if (parameters.num_vr_predicates == 0 ||
       !parameters.filter_parse_results.root_predicate) {
-    return "";
+    return {};
   }
-  const VectorRangePredicate* first_vr = nullptr;
-  std::function<void(const Predicate *)> find = [&](const Predicate *pred) {
-    if (!pred || first_vr) return;
-    if (pred->GetType() == PredicateType::kVectorRange) {
-      const auto* vr = static_cast<const VectorRangePredicate *>(pred);
-      if (vr->GetScoreSlot() == 0) {
-        first_vr = vr;
-      }
-      return;
+  std::vector<std::string> result(parameters.num_vr_predicates);
+  ForEachVectorRangePredicate(
+      parameters.filter_parse_results.root_predicate.get(),
+      [&](VectorRangePredicate *vr) -> absl::Status {
+        size_t slot = vr->GetScoreSlot();
+        if (slot < result.size()) {
+          const auto &score_as = vr->GetScoreAs();
+          result[slot] = score_as.has_value()
+                             ? score_as.value()
+                             : absl::StrCat("__", vr->GetAlias(), "_score");
+        }
+        return absl::OkStatus();
+      })
+      .IgnoreError();
+  return result;
+}
+
+// Return the score field name for the first (slot-0) VR predicate.
+std::string GetVrScoreFieldName(const SearchParameters &parameters) {
+  auto fields = CollectVrScoreFields(parameters);
+  return fields.empty() ? "" : fields[0];
+}
+
+// Populate vr_scores for all VR predicates in the predicate tree.
+// For each VectorRangePredicate, compute the distance from the predicate's
+// query vector to the neighbor's key and store it in vr_scores[slot].
+// Used as a post-pass when the main eval path cannot propagate multiple VR
+// distances (e.g. AND of two VR predicates, or KNN+VR filter).
+static void PopulateVrScoresForNeighbors(
+    std::vector<indexes::Neighbor>& neighbors,
+    const SearchParameters& parameters) {
+  if (parameters.num_vr_predicates == 0 ||
+      !parameters.filter_parse_results.root_predicate) {
+    return;
+  }
+  // Collect all VR predicates in slot order.
+  std::vector<VectorRangePredicate*> vr_preds(parameters.num_vr_predicates,
+                                              nullptr);
+  ForEachVectorRangePredicate(
+      parameters.filter_parse_results.root_predicate.get(),
+      [&](VectorRangePredicate* vr) -> absl::Status {
+        size_t slot = vr->GetScoreSlot();
+        if (slot < vr_preds.size()) {
+          vr_preds[slot] = vr;
+        }
+        return absl::OkStatus();
+      })
+      .IgnoreError();
+
+  // For each neighbor, compute the distance from each VR predicate's query
+  // vector to the neighbor's stored vector and store in vr_scores[slot].
+  for (auto& n : neighbors) {
+    if (n.vr_scores.size() < parameters.num_vr_predicates) {
+      n.vr_scores.assign(parameters.num_vr_predicates, 0.0f);
     }
-    if (pred->GetType() == PredicateType::kComposedAnd ||
-        pred->GetType() == PredicateType::kComposedOr) {
-      for (const auto &child :
-           static_cast<const ComposedPredicate *>(pred)->GetChildren()) {
-        find(child.get());
-      }
-    } else if (pred->GetType() == PredicateType::kNegate) {
-      find(static_cast<const NegatePredicate *>(pred)->GetPredicate());
+    for (size_t slot = 0; slot < vr_preds.size(); ++slot) {
+      VectorRangePredicate* vr = vr_preds[slot];
+      if (!vr) continue;
+      auto index_result = parameters.index_schema->GetIndex(vr->GetAlias());
+      if (!index_result.ok()) continue;
+      auto* vector_index =
+          dynamic_cast<indexes::VectorBase*>(index_result.value().get());
+      if (!vector_index) continue;
+      auto dist_result =
+          vector_index->ComputeDistanceFromRecord(n.external_id,
+                                                  vr->GetQueryVector());
+      if (!dist_result.ok()) continue;
+      n.vr_scores[slot] = dist_result->first;
     }
-  };
-  find(parameters.filter_parse_results.root_predicate.get());
-  if (!first_vr) return "";
-  const auto &score_as = first_vr->GetScoreAs();
-  if (score_as.has_value()) return score_as.value();
-  // Use default name __<alias>_score so it can be referenced in RETURN and
-  // SORTBY even without an explicit $yield_distance_as attribute.
-  return absl::StrCat("__", first_vr->GetAlias(), "_score");
+  }
 }
 
 absl::StatusOr<absl::string_view> SubstituteParam(

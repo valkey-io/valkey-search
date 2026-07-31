@@ -78,6 +78,12 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   auto range = search_result.GetSerializationRange(parameters);
 
+  // Collect VR score field names for KNN+VR queries (empty for pure KNN).
+  std::vector<std::string> vr_fields;
+  if (parameters.num_vr_predicates > 0) {
+    vr_fields = query::CollectVrScoreFields(parameters);
+  }
+
   ValkeyModule_ReplyWithArray(ctx, 2 * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
 
@@ -85,9 +91,29 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
     if (parameters.return_attributes.empty()) {
+      // Count populated VR score slots for this neighbor.
+      size_t populated_vr = 0;
+      for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
+        if (!vr_fields[slot].empty() && slot < neighbors[i].vr_scores.size()) {
+          ++populated_vr;
+        }
+      }
       ValkeyModule_ReplyWithArray(
-          ctx, 2 * neighbors[i].attribute_contents.value().size() + 2);
+          ctx, 2 * neighbors[i].attribute_contents.value().size() + 2 +
+                   2 * populated_vr);
       ReplyScore(ctx, *parameters.score_as, neighbors[i]);
+      // Emit VR distance fields after the KNN score.
+      for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
+        if (vr_fields[slot].empty() || slot >= neighbors[i].vr_scores.size()) {
+          continue;
+        }
+        ValkeyModule_ReplyWithString(
+            ctx, vmsdk::MakeUniqueValkeyString(vr_fields[slot]).get());
+        auto score_value =
+            absl::StrFormat("%.12g", neighbors[i].vr_scores[slot]);
+        ValkeyModule_ReplyWithString(
+            ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+      }
       for (auto& attribute_content : neighbors[i].attribute_contents.value()) {
         ValkeyModule_ReplyWithString(ctx,
                                      attribute_content.second.GetIdentifier());
@@ -97,14 +123,31 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
       ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
       size_t cnt = 0;
       for (const auto& return_attribute : parameters.return_attributes) {
-        if (vmsdk::ToStringView(parameters.score_as.get()) ==
-            vmsdk::ToStringView(return_attribute.identifier.get())) {
+        absl::string_view ret_id =
+            vmsdk::ToStringView(return_attribute.identifier.get());
+        if (vmsdk::ToStringView(parameters.score_as.get()) == ret_id) {
           ReplyScore(ctx, *parameters.score_as, neighbors[i]);
           ++cnt;
           continue;
         }
-        auto it = neighbors[i].attribute_contents.value().find(
-            vmsdk::ToStringView(return_attribute.identifier.get()));
+        // Check if this return attribute is a VR score field.
+        bool handled = false;
+        for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
+          if (!vr_fields[slot].empty() && ret_id == vr_fields[slot]) {
+            if (slot < neighbors[i].vr_scores.size()) {
+              ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+              auto score_value =
+                  absl::StrFormat("%.12g", neighbors[i].vr_scores[slot]);
+              ValkeyModule_ReplyWithString(
+                  ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+              ++cnt;
+            }
+            handled = true;
+            break;
+          }
+        }
+        if (handled) continue;
+        auto it = neighbors[i].attribute_contents.value().find(ret_id);
         if (it != neighbors[i].attribute_contents.value().end()) {
           ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
           ValkeyModule_ReplyWithString(ctx, it->second.value.get());
@@ -140,17 +183,14 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
   const auto& neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(command);
 
-  // Determine if this is a vector range query that needs distance scores.
-  bool is_vector_range = command.IsVectorRangeQuery();
-  std::string score_field_name;
-  if (is_vector_range) {
-    score_field_name = query::GetVrScoreFieldName(command);
+  // Collect all VR score field names in score_slot order (empty vector when
+  // this is not a vector-range query). Each entry i is the name for slot i.
+  // The RL compatibility layer strips auto-generated __*_score fields from VK
+  // output when absent in RL, so emitting them by default is safe.
+  std::vector<std::string> vr_fields;
+  if (command.IsVectorRangeQuery()) {
+    vr_fields = query::CollectVrScoreFields(command);
   }
-  // Emit the VR score field whenever this is a VR query and we have a field
-  // name (either explicit or default). The RL compatibility layer strips
-  // auto-generated __*_score fields from VK output when absent in RL, so
-  // emitting it by default does not cause compatibility regressions.
-  bool emit_vr_score = !score_field_name.empty();
 
   // When with_sort_keys is true, we add an extra element per result (the sort
   // key)
@@ -172,19 +212,27 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
 
     const auto& contents = neighbors[i].attribute_contents.value();
 
+    // Count how many VR score slots are actually populated for this neighbor.
+    size_t populated_vr_slots = 0;
+    for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
+      if (!vr_fields[slot].empty() && slot < neighbors[i].vr_scores.size()) {
+        ++populated_vr_slots;
+      }
+    }
+
     if (command.return_attributes.empty()) {
-      // For vector range queries, add 2 extra elements for the distance score.
-      size_t array_size =
-          emit_vr_score ? 2 * contents.size() + 2 : 2 * contents.size();
+      // Each populated VR score contributes one (name, value) pair.
+      size_t array_size = 2 * contents.size() + 2 * populated_vr_slots;
       ValkeyModule_ReplyWithArray(ctx, array_size);
-      // Include distance score for vector range queries.
-      if (emit_vr_score) {
+      // Emit one (field_name, distance) pair per populated VR score slot.
+      for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
+        if (vr_fields[slot].empty() || slot >= neighbors[i].vr_scores.size()) {
+          continue;
+        }
         ValkeyModule_ReplyWithString(
-            ctx, vmsdk::MakeUniqueValkeyString(score_field_name).get());
-        float vr_dist = neighbors[i].vr_scores.empty()
-                            ? neighbors[i].distance
-                            : neighbors[i].vr_scores[0];
-        auto score_value = absl::StrFormat("%.12g", vr_dist);
+            ctx, vmsdk::MakeUniqueValkeyString(vr_fields[slot]).get());
+        auto score_value =
+            absl::StrFormat("%.12g", neighbors[i].vr_scores[slot]);
         ValkeyModule_ReplyWithString(
             ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
       }
@@ -196,33 +244,30 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
     } else {
       ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
       size_t cnt = 0;
-      // Include distance score for vector range queries when the score field
-      // is in the RETURN list.
-      if (emit_vr_score) {
-        for (const auto& return_attribute : command.return_attributes) {
-          if (score_field_name ==
-              vmsdk::ToStringView(return_attribute.identifier.get())) {
-            ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-            float vr_dist = neighbors[i].vr_scores.empty()
-                                ? neighbors[i].distance
-                                : neighbors[i].vr_scores[0];
-            auto score_value = absl::StrFormat("%.12g", vr_dist);
-            ValkeyModule_ReplyWithString(
-                ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
-            ++cnt;
+      // Build a set of VR field names for O(1) lookup when iterating RETURN.
+      // For each RETURN attribute that matches a VR field, emit the distance.
+      for (const auto& return_attribute : command.return_attributes) {
+        absl::string_view ret_id =
+            vmsdk::ToStringView(return_attribute.identifier.get());
+        // Check if this return attribute is a VR score field.
+        bool handled = false;
+        for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
+          if (!vr_fields[slot].empty() && ret_id == vr_fields[slot]) {
+            if (slot < neighbors[i].vr_scores.size()) {
+              ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+              auto score_value =
+                  absl::StrFormat("%.12g", neighbors[i].vr_scores[slot]);
+              ValkeyModule_ReplyWithString(
+                  ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+              ++cnt;
+            }
+            handled = true;
             break;
           }
         }
-      }
-      for (const auto& return_attribute : command.return_attributes) {
-        // Skip the score field if already handled above.
-        if (emit_vr_score &&
-            score_field_name ==
-                vmsdk::ToStringView(return_attribute.identifier.get())) {
-          continue;
-        }
-        auto it = contents.find(
-            vmsdk::ToStringView(return_attribute.identifier.get()));
+        if (handled) continue;
+        // Regular attribute lookup.
+        auto it = contents.find(ret_id);
         if (it != contents.end()) {
           ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
           ValkeyModule_ReplyWithString(ctx, it->second.value.get());
@@ -276,10 +321,15 @@ void ApplySorting(std::vector<indexes::Neighbor>& neighbors,
   // If sorting by the vector range distance alias, sort directly by the
   // precomputed neighbor distance rather than looking it up in
   // attribute_contents.
+  // NOTE: slot 0 (vr_scores[0]) is always the primary sort key. When multiple
+  // VR predicates are present, slot 0 corresponds to the first VR predicate
+  // in parse order and is the tie-breaking key for default ascending sort.
   std::string score_field = query::GetVrScoreFieldName(parameters);
   if (!score_field.empty() && sortby.field == score_field) {
     auto distance_compare = [&](const indexes::Neighbor& a,
                                 const indexes::Neighbor& b) -> bool {
+      // slot 0 is the primary sort key; fall back to distance if vr_scores
+      // is empty (should not occur in practice for VR queries).
       float dist_a = a.vr_scores.empty() ? a.distance : a.vr_scores[0];
       float dist_b = b.vr_scores.empty() ? b.distance : b.vr_scores[0];
       if (dist_a < dist_b) {

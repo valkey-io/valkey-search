@@ -161,6 +161,9 @@ message NeighborEntry {
   string key = 1;
   float score = 2;
   repeated AttributeContentEntry attribute_contents = 3;
+  // VR distance values in score_slot order. Only set when the query contains
+  // VECTOR_RANGE predicates with $yield_distance_as aliases.
+  repeated float vr_scores = 4;
 }
 
 message SearchIndexPartitionResponse {

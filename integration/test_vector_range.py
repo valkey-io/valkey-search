@@ -1422,3 +1422,320 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         assert distances == sorted(distances), (
             f"Distances not in ASC order after SORTBY: {distances}"
         )
+
+    # =================================================================
+    # Multi-score VR support (task 7)
+    # =================================================================
+
+    def _create_two_vec_hnsw_index(self, client, index_name="idx",
+                                   prefix="doc:", dim=3, distance="L2"):
+        """Create an HNSW index with two vector fields: vec1 and vec2."""
+        cmd = [
+            "FT.CREATE", index_name, "ON", "HASH",
+            "PREFIX", "1", prefix,
+            "SCHEMA",
+            "vec1", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", str(dim),
+            "DISTANCE_METRIC", distance,
+            "vec2", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", str(dim),
+            "DISTANCE_METRIC", distance,
+        ]
+        assert client.execute_command(*cmd) == b"OK"
+
+    def _load_two_vec_data(self, client):
+        """
+        Load 5 documents with two independent vector fields.
+
+        Layout (both fields on the same axis for predictable L2 distances):
+          doc:0  vec1=(0,0,0) vec2=(0,0,0)  – origin for both
+          doc:1  vec1=(1,0,0) vec2=(2,0,0)
+          doc:2  vec1=(2,0,0) vec2=(1,0,0)
+          doc:3  vec1=(3,0,0) vec2=(3,0,0)
+          doc:4  vec1=(10,0,0) vec2=(10,0,0) – far away on both
+        """
+        data = {
+            "doc:0": {"vec1": [0.0, 0.0, 0.0], "vec2": [0.0, 0.0, 0.0]},
+            "doc:1": {"vec1": [1.0, 0.0, 0.0], "vec2": [2.0, 0.0, 0.0]},
+            "doc:2": {"vec1": [2.0, 0.0, 0.0], "vec2": [1.0, 0.0, 0.0]},
+            "doc:3": {"vec1": [3.0, 0.0, 0.0], "vec2": [3.0, 0.0, 0.0]},
+            "doc:4": {"vec1": [10.0, 0.0, 0.0], "vec2": [10.0, 0.0, 0.0]},
+        }
+        for key, fields in data.items():
+            client.hset(key, mapping={
+                field: float_to_bytes(vec)
+                for field, vec in fields.items()
+            })
+
+    # -----------------------------------------------------------------
+    # 7.1  KNN + VR filter, both with score aliases — FT.AGGREGATE
+    # -----------------------------------------------------------------
+
+    def test_knn_with_vr_filter_both_score_as(self):
+        """
+        KNN query with a VR predicate in the filter expression, where both the
+        KNN AS alias and the VR $yield_distance_as alias are specified.
+
+        FT.AGGREGATE must register both fields and populate them correctly:
+          - knn_dist: the KNN distance from the KNN search vector
+          - vr_dist:  the VR distance computed during filtering
+
+        Because the same field (vec) is used for both, distances should be
+        equal for every result.
+
+        Requirements: 1.3, 2.2, 3.2
+        """
+        client = self.server.get_new_client()
+        self._create_hnsw_index(client)
+        self._load_vector_data(client)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+
+        # VR filter radius=5 passes doc:0,1,2.  KNN 5 runs on those candidates.
+        # Both VR and KNN use the same blob (query from origin), so distances
+        # should be equal.
+        result = self._aggregate(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $vrblob]=>{$yield_distance_as: vr_dist}"
+            "=>[KNN 5 @vec $kblob AS knn_dist]",
+            "PARAMS", "4", "vrblob", query_blob, "kblob", query_blob,
+            "LOAD", "2", "knn_dist", "vr_dist",
+        )
+
+        assert result[0] >= 1, "Expected at least one result"
+
+        for row in result[1:]:
+            fields = {
+                row[i].decode("utf-8"): row[i + 1]
+                for i in range(0, len(row), 2)
+            }
+            assert "knn_dist" in fields, (
+                f"knn_dist missing from row: {list(fields.keys())}"
+            )
+            assert "vr_dist" in fields, (
+                f"vr_dist missing from row: {list(fields.keys())}"
+            )
+            knn_d = float(fields["knn_dist"])
+            vr_d = float(fields["vr_dist"])
+            assert knn_d >= 0.0
+            assert vr_d >= 0.0
+            # Both distances are from the same blob to the same field, so they
+            # must be equal (within float precision).
+            assert abs(knn_d - vr_d) < 0.01, (
+                f"knn_dist ({knn_d}) and vr_dist ({vr_d}) should be equal"
+            )
+
+    # -----------------------------------------------------------------
+    # 7.2  Two VR predicates with distinct aliases — FT.AGGREGATE
+    # -----------------------------------------------------------------
+
+    def test_two_vr_predicates_score_as(self):
+        """
+        AND of two VR predicates on two different vector fields, each with its
+        own $yield_distance_as alias.
+
+        FT.AGGREGATE must register both d1 and d2 and populate them with the
+        correct per-field distances for every matching result.
+
+        Requirements: 1.1, 2.1
+        """
+        client = self.server.get_new_client()
+        self._create_two_vec_hnsw_index(client)
+        self._load_two_vec_data(client)
+
+        # Query vectors at origin for both fields.
+        blob1 = float_to_bytes([0.0, 0.0, 0.0])
+        blob2 = float_to_bytes([0.0, 0.0, 0.0])
+
+        # vec1 radius=5: L2 from origin — doc:0(0),doc:1(1),doc:2(4) pass; doc:3(9),doc:4(100) fail
+        # vec2 radius=5: L2 from origin — doc:0(0),doc:1(4),doc:2(1) pass; doc:3(9),doc:4(100) fail
+        # AND → doc:0, doc:1, doc:2
+        result = self._aggregate(
+            client, "idx",
+            "(@vec1:[VECTOR_RANGE 5 $b1]=>{$yield_distance_as: d1}"
+            " @vec2:[VECTOR_RANGE 5 $b2]=>{$yield_distance_as: d2})",
+            "PARAMS", "4", "b1", blob1, "b2", blob2,
+            "LOAD", "2", "d1", "d2",
+        )
+
+        assert result[0] >= 1, "Expected at least one result"
+
+        # Expected L2 distances from origin for each doc:
+        expected = {
+            "doc:0": (0.0, 0.0),
+            "doc:1": (1.0, 4.0),
+            "doc:2": (4.0, 1.0),
+        }
+
+        for row in result[1:]:
+            fields = {
+                row[i].decode("utf-8"): row[i + 1]
+                for i in range(0, len(row), 2)
+            }
+            assert "d1" in fields, f"d1 missing from row: {list(fields.keys())}"
+            assert "d2" in fields, f"d2 missing from row: {list(fields.keys())}"
+
+            key = fields.get("__key")
+            if key is not None:
+                key = key.decode("utf-8")
+                if key in expected:
+                    exp_d1, exp_d2 = expected[key]
+                    got_d1 = float(fields["d1"])
+                    got_d2 = float(fields["d2"])
+                    assert abs(got_d1 - exp_d1) < 0.01, (
+                        f"{key}: d1 expected {exp_d1}, got {got_d1}"
+                    )
+                    assert abs(got_d2 - exp_d2) < 0.01, (
+                        f"{key}: d2 expected {exp_d2}, got {got_d2}"
+                    )
+
+    # -----------------------------------------------------------------
+    # 7.3  Two VR predicates with distinct aliases — FT.SEARCH
+    # -----------------------------------------------------------------
+
+    def test_two_vr_predicates_ft_search(self):
+        """
+        Same two-VR query as 7.2 but issued via FT.SEARCH.
+
+        Both distance fields (d1 and d2) must appear for every key in the
+        reply, in score_slot order (d1 before d2), with correct values.
+
+        Requirements: 3.1
+        """
+        client = self.server.get_new_client()
+        self._create_two_vec_hnsw_index(client)
+        self._load_two_vec_data(client)
+
+        blob1 = float_to_bytes([0.0, 0.0, 0.0])
+        blob2 = float_to_bytes([0.0, 0.0, 0.0])
+
+        result = self._search(
+            client, "idx",
+            "(@vec1:[VECTOR_RANGE 5 $b1]=>{$yield_distance_as: d1}"
+            " @vec2:[VECTOR_RANGE 5 $b2]=>{$yield_distance_as: d2})",
+            "PARAMS", "4", "b1", blob1, "b2", blob2,
+        )
+
+        assert result[0] >= 1, "Expected at least one result"
+
+        parsed = parse_result_with_fields(result)
+        for key, fields in parsed.items():
+            assert "d1" in fields, f"d1 missing from key {key}: {list(fields.keys())}"
+            assert "d2" in fields, f"d2 missing from key {key}: {list(fields.keys())}"
+            d1 = float(fields["d1"])
+            d2 = float(fields["d2"])
+            assert d1 >= 0.0
+            assert d2 >= 0.0
+
+        # Validate specific expected values for known keys.
+        expected = {
+            "doc:0": (0.0, 0.0),
+            "doc:1": (1.0, 4.0),
+            "doc:2": (4.0, 1.0),
+        }
+        for key, (exp_d1, exp_d2) in expected.items():
+            if key in parsed:
+                got_d1 = float(parsed[key]["d1"])
+                got_d2 = float(parsed[key]["d2"])
+                assert abs(got_d1 - exp_d1) < 0.01, (
+                    f"{key}: d1 expected {exp_d1}, got {got_d1}"
+                )
+                assert abs(got_d2 - exp_d2) < 0.01, (
+                    f"{key}: d2 expected {exp_d2}, got {got_d2}"
+                )
+
+    # -----------------------------------------------------------------
+    # 7.4  Two VR predicates with SORTBY d1 — ordering by slot-0
+    # -----------------------------------------------------------------
+
+    def test_two_vr_predicates_sortby(self):
+        """
+        Two VR predicates in FT.AGGREGATE with SORTBY d1 ASC.
+
+        Results must be ordered by the slot-0 (d1) distance, not by d2.
+        Uses the asymmetric data layout where d1 != d2 for doc:1 and doc:2,
+        so the two orderings are observably different.
+
+        Requirements: 4.1
+        """
+        client = self.server.get_new_client()
+        self._create_two_vec_hnsw_index(client)
+        self._load_two_vec_data(client)
+
+        blob1 = float_to_bytes([0.0, 0.0, 0.0])
+        blob2 = float_to_bytes([0.0, 0.0, 0.0])
+
+        result = self._aggregate(
+            client, "idx",
+            "(@vec1:[VECTOR_RANGE 5 $b1]=>{$yield_distance_as: d1}"
+            " @vec2:[VECTOR_RANGE 5 $b2]=>{$yield_distance_as: d2})",
+            "PARAMS", "4", "b1", blob1, "b2", blob2,
+            "LOAD", "2", "d1", "d2",
+            "SORTBY", "2", "@d1", "ASC",
+        )
+
+        assert result[0] >= 2, "Expected at least two results to verify ordering"
+
+        d1_values = []
+        for row in result[1:]:
+            fields = {
+                row[i].decode("utf-8"): row[i + 1]
+                for i in range(0, len(row), 2)
+            }
+            assert "d1" in fields, f"d1 missing from row: {list(fields.keys())}"
+            assert "d2" in fields, f"d2 missing from row: {list(fields.keys())}"
+            d1_values.append(float(fields["d1"]))
+
+        # Results must be in non-decreasing d1 order.
+        assert d1_values == sorted(d1_values), (
+            f"Results not sorted by d1 ASC: {d1_values}"
+        )
+
+    # -----------------------------------------------------------------
+    # 7.5  KNN + VR filter, both with score aliases — FT.SEARCH
+    # -----------------------------------------------------------------
+
+    def test_knn_with_vr_filter_ft_search(self):
+        """
+        KNN query with a VR predicate in the filter expression, both with
+        score aliases, issued via FT.SEARCH.
+
+        The reply for each key must contain both the KNN score field (knn_dist)
+        and the VR distance field (vr_dist).
+
+        Because both use the same vector field and the same query blob, the
+        two distances must be equal for every result.
+
+        Requirements: 3.2
+        """
+        client = self.server.get_new_client()
+        self._create_hnsw_index(client)
+        self._load_vector_data(client)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+
+        result = self._search(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $vrblob]=>{$yield_distance_as: vr_dist}"
+            "=>[KNN 5 @vec $kblob AS knn_dist]",
+            "PARAMS", "4", "vrblob", query_blob, "kblob", query_blob,
+        )
+
+        assert result[0] >= 1, "Expected at least one result"
+
+        parsed = parse_result_with_fields(result)
+        for key, fields in parsed.items():
+            assert "knn_dist" in fields, (
+                f"knn_dist missing from key {key}: {list(fields.keys())}"
+            )
+            assert "vr_dist" in fields, (
+                f"vr_dist missing from key {key}: {list(fields.keys())}"
+            )
+            knn_d = float(fields["knn_dist"])
+            vr_d = float(fields["vr_dist"])
+            assert knn_d >= 0.0
+            assert vr_d >= 0.0
+            # Both computed from the same blob against the same field.
+            assert abs(knn_d - vr_d) < 0.01, (
+                f"{key}: knn_dist ({knn_d}) != vr_dist ({vr_d})"
+            )

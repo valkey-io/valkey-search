@@ -65,6 +65,18 @@ absl::Status ManipulateReturnsClause(AggregateParameters& params) {
       if (load == vmsdk::ToStringView(params.score_as.get())) {
         continue;
       }
+      // Also skip VR score field names — they are synthetic computed fields
+      // that are not in the index schema.
+      bool is_vr_field = false;
+      for (const auto& vr_name : params.vr_score_field_names_) {
+        if (load == vr_name) {
+          is_vr_field = true;
+          break;
+        }
+      }
+      if (is_vr_field) {
+        continue;
+      }
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
       auto indexer_type = indexer->GetIndexerType();
@@ -99,13 +111,15 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator& itr) {
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
-  // For vector range queries, set score_as to the VR score field name so
-  // that the score slot (index 1) is registered under the correct name and
-  // LOAD / APPLY expressions can reference it.
-  if (IsNonVectorQuery() && num_vr_predicates > 0) {
-    auto vr_score_field = query::GetVrScoreFieldName(*this);
-    if (!vr_score_field.empty()) {
-      score_as = vmsdk::MakeUniqueValkeyString(vr_score_field);
+  // Collect VR score field names for all VR predicates (if any).
+  if (num_vr_predicates > 0) {
+    vr_score_field_names_ = query::CollectVrScoreFields(*this);
+
+    // For non-vector queries the mandatory slot-1 record attribute must carry
+    // the primary (slot-0) VR distance. Set score_as so the unconditional
+    // AddRecordAttribute call below uses the correct name.
+    if (IsNonVectorQuery() && !vr_score_field_names_.empty()) {
+      score_as = vmsdk::MakeUniqueValkeyString(vr_score_field_names_[0]);
     }
   }
   // Ensure that key is first value if it gets included...
@@ -113,6 +127,16 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator& itr) {
   auto score_sv = vmsdk::ToStringView(score_as.get());
   CHECK(AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone) ==
         1);
+
+  // Register additional VR score fields.
+  // Non-vector queries: slot 0 is already at index 1, start from slot 1.
+  // KNN queries: no overlap with score_as, register all slots.
+  const size_t vr_start = IsNonVectorQuery() ? 1 : 0;
+  for (size_t slot = vr_start; slot < vr_score_field_names_.size(); ++slot) {
+    const auto& name = vr_score_field_names_[slot];
+    if (name.empty()) continue;
+    AddRecordAttribute(name, name, indexes::IndexerType::kNone);
+  }
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -300,12 +324,17 @@ absl::Status CreateRecordsFromNeighbors(
     // Set score field for vector queries
     if (parameters.IsVectorQuery()) {
       rec->fields_.at(scores_index) = expr::Value(n.distance);
-    } else if (parameters.IsNonVectorQuery() &&
-               parameters.num_vr_predicates > 0) {
-      // For VR queries, inject the distance from vr_scores[0] (slot 0 = the
-      // primary predicate). Fall back to n.distance if vr_scores is empty.
-      float vr_dist = n.vr_scores.empty() ? n.distance : n.vr_scores[0];
-      rec->fields_.at(scores_index) = expr::Value(vr_dist);
+    }
+
+    // Write all VR distances into their registered record attribute slots.
+    for (size_t slot = 0; slot < parameters.vr_score_field_names_.size();
+         ++slot) {
+      const auto& name = parameters.vr_score_field_names_[slot];
+      if (name.empty()) continue;
+      if (slot >= n.vr_scores.size()) continue;  // slot not populated → omit
+      auto it = parameters.record_indexes_by_alias_.find(name);
+      if (it == parameters.record_indexes_by_alias_.end()) continue;
+      rec->fields_.at(it->second) = expr::Value(n.vr_scores[slot]);
     }
 
     // Process attribute contents

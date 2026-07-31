@@ -371,5 +371,43 @@ void ScoreTextQuery(const IndexSchema& index_schema,
                     const indexes::scoring::Scorer* scorer,
                     std::vector<indexes::BorrowedNeighbor>& candidates);
 
+// Recomputes composed relevance scores for single already-matched documents by
+// walking the predicate tree through the exact same Scorer seam ScoreTextQuery
+// uses: ResolveLeaves (dt/IDF) -> ScoreNode (per-leaf ScoreLeaf / weight +
+// AND/OR composition) -> Scorer::ComposeDocumentScore. Every input
+// (total_docs, avg_doc_len, per-term IDF, term frequency, doc_len, document
+// score) is sourced IDENTICALLY to ScoreTextQuery, so values returned here are
+// on the same scale as shard-side scores and rank correctly against
+// non-recomputed neighbors.
+//
+// All document-independent inputs (posting lists, per-term IDF, corpus stats)
+// are resolved ONCE at construction, so scoring N mutated documents in a reply
+// costs one resolve instead of N. Construct lazily on the first document that
+// needs a recompute and reuse for the rest of the reply.
+//
+// The constructor and Score() each acquire the index reader lock internally,
+// so callers must NOT already hold it (enforced by a CHECK; the lock is
+// non-reentrant). Used by the main-thread content-fetch revalidation path
+// (response_generator.cc VerifyFilter) where a document mutated between
+// scoring and fetch needs a fresh, scale-consistent score. Score() returns
+// nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
+// ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
+// never a drop.
+class SingleDocumentScorer {
+ public:
+  SingleDocumentScorer(const IndexSchema& index_schema,
+                       const Predicate* root_predicate,
+                       const indexes::scoring::Scorer* scorer);
+  ~SingleDocumentScorer();
+  SingleDocumentScorer(const SingleDocumentScorer&) = delete;
+  SingleDocumentScorer& operator=(const SingleDocumentScorer&) = delete;
+
+  std::optional<float> Score(const InternedStringPtr& key) const;
+
+ private:
+  struct State;
+  std::unique_ptr<State> state_;
+};
+
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

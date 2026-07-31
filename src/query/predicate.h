@@ -13,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -54,6 +53,13 @@ class NumericPredicate;
 
 struct EvaluationResult {
   bool matches;
+  // Per-document relevance score carried out of a main-thread revalidation
+  // (see response_generator.cc VerifyFilter). Only meaningful when
+  // matches == true and the caller requested a recompute; it is filled with a
+  // value produced through the same Scorer seam as the shard-side
+  // ScoreTextQuery (search.cc SingleDocumentScorer), so it is on the same
+  // scale. Left at 0.0f on the membership-only fast path.
+  float score{0.0f};
   std::unique_ptr<valkey_search::indexes::text::TextIterator> filter_iterator;
 
   // Constructor 1: For non-text predicates (no iterator)

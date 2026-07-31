@@ -851,10 +851,22 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       return ctx.scorer->ScoreLeaf(leaf.term_weight, tf, doc_len, avg_doc_len,
                                    predicate->GetWeight());
     }
-    // TODO: scoring for tag/numeric.
-    case PredicateType::kNegate:
+    // TODO: full tag/numeric scoring semantics are planned; for now a
+    // matched leaf contributes its $weight only.
+    // Numeric/Tag leaves carry no IDF/TF, so a matched leaf contributes its
+    // own $weight. This mirrors the historical ComputeMatchedPredicateScore
+    // leaf semantics. The recompute path (SingleDocumentScorer) walks this same
+    // ScoreNode, so a document scored here ranks identically if it is later
+    // revalidated after a mutation. A tag/numeric candidate only reaches the
+    // extra step because the pre-filter admitted it, so there is no nullopt
+    // (non-match) path here — unlike a Term leaf, which re-derives its match
+    // from tf.
     case PredicateType::kTag:
     case PredicateType::kNumeric:
+      return predicate->GetWeight();
+    // kNegate is a filter already applied by the pre-filter, and kNone has no
+    // term occurrence to score; neither contributes to relevance.
+    case PredicateType::kNegate:
     case PredicateType::kNone:
       return 0.0f;
   }
@@ -870,7 +882,10 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   if (candidates.empty()) return;
 
   const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
-  CHECK(total_docs > 0);
+  // Candidates came from this index, so total_docs should be > 0; degrade to
+  // "no scores" rather than aborting if the invariant ever breaks (mirrors
+  // SingleDocumentScorer). Candidates keep their initial 0.0 score.
+  if (total_docs == 0) return;
 
   // Resolve each term leaf's posting list and per-term weight once; the
   // per-document walk below then only does the cheap per-key lookup.
@@ -905,6 +920,100 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   }
 
   candidates = std::move(scored);
+}
+
+// State captured once at construction: everything ScoreTextQuery derives
+// before its per-candidate loop. ResolvedLeaf holds ref-counted Postings
+// pointers, so the resolved snapshot stays valid across lock releases.
+struct SingleDocumentScorer::State {
+  const IndexSchema &index_schema;
+  const Predicate *root_predicate;
+  const indexes::scoring::Scorer *scorer;
+  ResolvedLeaves resolved;
+  uint32_t total_docs = 0;
+  uint64_t total_doc_len = 0;
+  bool needs_doc_len = false;
+  bool has_score_field = false;
+  float default_document_score = 1.0f;
+};
+
+SingleDocumentScorer::SingleDocumentScorer(
+    const IndexSchema &index_schema, const Predicate *root_predicate,
+    const indexes::scoring::Scorer *scorer)
+    : state_(new State{index_schema, root_predicate, scorer}) {
+  CHECK(root_predicate != nullptr);
+  CHECK(scorer != nullptr);
+  // TimeSlicedMRMWMutex is NOT reentrant: a nested acquire on a thread that
+  // already holds a time-sliced lock can deadlock in SwitchWithWait() when the
+  // inverse mode is waiting and the time quota is exceeded. Enforce the
+  // "callers must NOT already hold the lock" contract instead of relying on a
+  // header comment.
+  CHECK(!vmsdk::IsTimeSlicedMutexHeldByCurrentThread())
+      << "SingleDocumentScorer acquires the index reader lock internally and "
+         "must not be constructed while a TimeSlicedMRMWMutex is already held "
+         "on this thread (non-reentrant; risk of mode-switch deadlock)";
+
+  // Runs on the main thread during content fetch, outside the background
+  // search's reader lock, so acquire our own to read index_key_info_ /
+  // text-index metadata safely against background mutations.
+  vmsdk::ReaderMutexLock lock(
+      &const_cast<IndexSchema &>(index_schema).GetTimeSlicedMutex());
+
+  // Source EVERY scoring input exactly as ScoreTextQuery does so a recomputed
+  // score is on the same scale as the shard-side score:
+  //   - total_docs          : GetIndexKeyInfoSize()
+  //   - dt + per-term IDF   : ResolveLeaves() over the GLOBAL posting lists
+  //                           (FindPostingsTarget/GetKeyCount) - NOT the
+  //                           per-key text index used for membership
+  //                           revalidation.
+  //   - avg_doc_len         : GetTotalDocumentLength()
+  //   - document score      : HasScoreField()/GetScore().
+  // All of it is document-independent, so it is resolved ONCE here; Score()
+  // only does the cheap per-key work (tf lookup, doc_len, document score).
+  state_->total_docs = index_schema.GetIndexKeyInfoSize();
+  // ScoreTextQuery CHECK()s total_docs > 0 (it only runs when candidates
+  // exist). This path can be reached for a pure numeric/tag query on an empty
+  // corpus, so degrade to "Score() returns nullopt" instead of aborting.
+  if (state_->total_docs == 0) return;
+  ResolveLeaves(root_predicate, state_->total_docs, scorer, state_->resolved);
+  state_->needs_doc_len =
+      scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
+  state_->total_doc_len =
+      state_->needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
+  state_->has_score_field = index_schema.HasScoreField();
+  state_->default_document_score = index_schema.GetScore();
+}
+
+SingleDocumentScorer::~SingleDocumentScorer() = default;
+
+std::optional<float> SingleDocumentScorer::Score(
+    const InternedStringPtr &key) const {
+  if (state_->total_docs == 0) return std::nullopt;
+  CHECK(!vmsdk::IsTimeSlicedMutexHeldByCurrentThread())
+      << "SingleDocumentScorer::Score acquires the index reader lock "
+         "internally and must not be called while a TimeSlicedMRMWMutex is "
+         "already held on this thread";
+  // Per-key reads (LookupTermFrequency, GetDocumentLength, GetDocumentScore)
+  // touch index structures, so take the reader lock for the walk. The
+  // document-independent inputs were captured at construction.
+  vmsdk::ReaderMutexLock lock(
+      &const_cast<IndexSchema &>(state_->index_schema).GetTimeSlicedMutex());
+
+  ScoreContext ctx{state_->index_schema,    state_->scorer,
+                   state_->resolved,        state_->total_docs,
+                   state_->total_doc_len,   state_->needs_doc_len,
+                   state_->has_score_field, state_->default_document_score};
+  const BorrowedInternedStringPtr borrowed_key(key);
+  // Single source of scoring math: the same ScoreNode walk ScoreTextQuery runs
+  // per candidate. nullopt means ScoreNode re-derived a non-match (e.g. a term
+  // absent from the global postings for this key); the caller scores 0 rather
+  // than dropping the already-admitted document.
+  auto sum = ScoreNode(state_->root_predicate, borrowed_key, ctx);
+  if (!sum) return std::nullopt;
+  const float document_score =
+      ctx.has_score_field ? state_->index_schema.GetDocumentScore(borrowed_key)
+                          : ctx.default_document_score;
+  return state_->scorer->ComposeDocumentScore(*sum, document_score);
 }
 
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
@@ -1029,9 +1138,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   // extra step scoring logic: score all the candidates after prefilter
   // only used by combined (text + numeric/tag/negate) queries
   if (!iterator_scoring_enabled && !borrowed.empty() &&
-      !parameters.filter_parse_results.is_match_all &&
-      parameters.filter_parse_results.query_operations &
-          QueryOperations::kContainsText) {
+      !parameters.filter_parse_results.is_match_all) {
     const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,

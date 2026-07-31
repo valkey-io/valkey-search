@@ -1530,5 +1530,144 @@ INSTANTIATE_TEST_SUITE_P(
     }),
     [](const TestParamInfo<ScoreCase> &info) { return info.param.test_name; });
 
+// --- ScoreNode weight semantics: numeric/tag/negate leaves + composition ---
+//
+// ScoreNode inspects only a leaf's PredicateType and weight for non-text
+// predicates, so these tests drive it through the public ScoreTextQuery API
+// with a minimal concrete predicate rather than building real Numeric/Tag
+// indexes. They lock in the contract that a matched numeric/tag leaf
+// contributes its $weight (the behavior the extra-step path shares with the
+// recompute path), while kNegate contributes nothing. With no SCORE field the
+// document score is 1.0, so the candidate's final score equals the ScoreNode
+// sum.
+
+// Minimal Predicate whose only observable state is its type and weight.
+class WeightLeaf : public query::Predicate {
+ public:
+  WeightLeaf(query::PredicateType type, float weight) : query::Predicate(type) {
+    SetWeight(weight);
+  }
+  query::EvaluationResult Evaluate(
+      query::Evaluator & /*evaluator*/) const override {
+    return query::EvaluationResult(true);
+  }
+};
+
+std::unique_ptr<query::Predicate> MakeLeaf(query::PredicateType type,
+                                           float weight) {
+  return std::make_unique<WeightLeaf>(type, weight);
+}
+
+class ScoreNodeTest : public ValkeySearchTest {
+ protected:
+  // Scores one candidate document through the public extra-step entry point.
+  // Creates the index schema as a local so it is destroyed within the test
+  // body (while the global KeyspaceEventManager is still alive), rather than
+  // at fixture teardown. Registers one key so total_docs > 0; numeric/tag/
+  // negate leaves never touch postings, so an otherwise empty schema is
+  // sufficient.
+  std::optional<float> Score(const query::Predicate *predicate) {
+    auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+    const auto *scorer =
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+    auto key = StringInternStore::Intern("doc_key");
+    index_schema->SetIndexMutationSequenceNumber(key, 0);
+    std::vector<indexes::BorrowedNeighbor> candidates;
+    candidates.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
+    query::ScoreTextQuery(*index_schema, predicate, scorer, candidates);
+    if (candidates.empty()) return std::nullopt;
+    return candidates[0].score;
+  }
+};
+
+TEST_F(ScoreNodeTest, NumericLeafContributesWeight) {
+  auto p = MakeLeaf(query::PredicateType::kNumeric, 3.0f);
+  auto score = Score(p.get());
+  ASSERT_TRUE(score.has_value());
+  EXPECT_FLOAT_EQ(*score, 3.0f);
+}
+
+TEST_F(ScoreNodeTest, TagLeafContributesWeight) {
+  auto p = MakeLeaf(query::PredicateType::kTag, 2.0f);
+  auto score = Score(p.get());
+  ASSERT_TRUE(score.has_value());
+  EXPECT_FLOAT_EQ(*score, 2.0f);
+}
+
+TEST_F(ScoreNodeTest, NegateLeafContributesZero) {
+  auto p = MakeLeaf(query::PredicateType::kNegate, 5.0f);
+  auto score = Score(p.get());
+  ASSERT_TRUE(score.has_value());
+  EXPECT_FLOAT_EQ(*score, 0.0f);
+}
+
+TEST_F(ScoreNodeTest, AndSumsNumericAndTagScaledByGroupWeight) {
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(MakeLeaf(query::PredicateType::kNumeric, 2.0f));
+  children.push_back(MakeLeaf(query::PredicateType::kTag, 3.0f));
+  auto composed = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(children));
+  composed->SetWeight(2.0f);
+  auto score = Score(composed.get());
+  ASSERT_TRUE(score.has_value());
+  // AND: group_weight * sum(children) = 2.0 * (2.0 + 3.0)
+  EXPECT_FLOAT_EQ(*score, 10.0f);
+}
+
+TEST_F(ScoreNodeTest, OrSumsMatchingNumericAndTagLeaves) {
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(MakeLeaf(query::PredicateType::kNumeric, 2.0f));
+  children.push_back(MakeLeaf(query::PredicateType::kTag, 3.0f));
+  auto composed = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kOr, std::move(children));
+  auto score = Score(composed.get());
+  ASSERT_TRUE(score.has_value());
+  // OR: group_weight(default 1.0) * sum(matching children) = 1.0 * (2.0 + 3.0)
+  EXPECT_FLOAT_EQ(*score, 5.0f);
+}
+
+// The recompute path (SingleDocumentScorer) MUST land on the same scale as the
+// shard-side extra-step path (ScoreTextQuery): both walk the same ScoreNode and
+// compose via the same Scorer, sourcing total_docs / document score from the
+// same IndexSchema accessors. This test pins the two paths to the identical
+// value for the same key and query, so a recomputed neighbor ranks correctly
+// against non-recomputed ones.
+TEST_F(ScoreNodeTest, SingleDocumentScorerMatchesScoreTextQuery) {
+  auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+
+  // Populate index_key_info_ so GetIndexKeyInfoSize() (the corpus size both
+  // paths read) is non-zero, satisfying ScoreTextQuery's CHECK(total_docs > 0).
+  auto key = StringInternStore::Intern("doc_key");
+  index_schema->SetIndexMutationSequenceNumber(key, 0);
+
+  // AND(numeric*2.0, tag*3.0) scaled by group weight 2.0 -> 2.0 * (2.0 + 3.0).
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(MakeLeaf(query::PredicateType::kNumeric, 2.0f));
+  children.push_back(MakeLeaf(query::PredicateType::kTag, 3.0f));
+  auto composed = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(children));
+  composed->SetWeight(2.0f);
+
+  // Extra-step path: score the key as a candidate.
+  std::vector<indexes::BorrowedNeighbor> candidates;
+  indexes::BorrowedNeighbor candidate{BorrowedInternedStringPtr(key), 0.0f,
+                                      0.0f};
+  candidates.push_back(candidate);
+  query::ScoreTextQuery(*index_schema, composed.get(), scorer, candidates);
+  ASSERT_EQ(candidates.size(), 1);
+
+  // Recompute path: score the same key in isolation. Document-independent
+  // inputs are resolved once at construction, matching the per-reply reuse in
+  // response_generator.cc.
+  query::SingleDocumentScorer document_scorer(*index_schema, composed.get(),
+                                              scorer);
+  auto recomputed = document_scorer.Score(key);
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, candidates[0].score);
+  EXPECT_FLOAT_EQ(*recomputed, 10.0f);
+}
+
 }  // namespace
 }  // namespace valkey_search

@@ -33,6 +33,23 @@ inline const TimeSlicedMRMWStats& GetGlobalTimeSlicedMRMWStats() {
   return global_stats;
 }
 
+// Per-thread count of TimeSlicedMRMWMutex guards (reader or writer) currently
+// held by this thread. TimeSlicedMRMWMutex is NOT reentrant: a nested acquire
+// on the same thread can deadlock in SwitchWithWait() when the inverse mode is
+// waiting and the time quota is exceeded, because the pending mode switch can
+// never drain this thread's own outer lock. Code that acquires a lock
+// internally (rather than relying on a caller's lock) can use
+// IsTimeSlicedMutexHeldByCurrentThread() to enforce its "caller must not hold
+// the lock" contract with a CHECK instead of a comment.
+// Note: the depth is global per-thread across all mutex instances, which is
+// intentionally conservative -- holding ANY time-sliced lock while acquiring
+// another risks cross-instance lock-order issues as well.
+extern thread_local uint32_t time_sliced_mutex_held_depth;
+
+inline bool IsTimeSlicedMutexHeldByCurrentThread() {
+  return time_sliced_mutex_held_depth > 0;
+}
+
 struct MRMWMutexOptions {
   absl::Duration read_quota_duration;
   absl::Duration read_switch_grace_period;
@@ -146,6 +163,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
     ++global_stats.read_periods;
     timer_.Reset();
     mutex->ReaderLock(may_prolong_, ignore_time_quota);
+    ++time_sliced_mutex_held_depth;
   }
 
   ReaderMutexLock(const ReaderMutexLock&) = delete;
@@ -154,6 +172,7 @@ class ABSL_SCOPED_LOCKABLE ReaderMutexLock {
   ReaderMutexLock& operator=(ReaderMutexLock&&) = delete;
   void SetMayProlong();
   ~ReaderMutexLock() ABSL_UNLOCK_FUNCTION() {
+    --time_sliced_mutex_held_depth;
     mutex_->Unlock(may_prolong_, ignore_time_quota_);
     global_stats.read_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());
@@ -177,6 +196,7 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
     ++global_stats.write_periods;
     timer_.Reset();
     mutex->WriterLock(may_prolong_, ignore_time_quota);
+    ++time_sliced_mutex_held_depth;
   }
 
   WriterMutexLock(const WriterMutexLock&) = delete;
@@ -185,6 +205,7 @@ class ABSL_SCOPED_LOCKABLE WriterMutexLock {
   WriterMutexLock& operator=(WriterMutexLock&&) = delete;
   void SetMayProlong();
   ~WriterMutexLock() ABSL_UNLOCK_FUNCTION() {
+    --time_sliced_mutex_held_depth;
     mutex_->Unlock(may_prolong_, ignore_time_quota_);
     global_stats.write_time_microseconds +=
         absl::ToInt64Microseconds(timer_.Duration());

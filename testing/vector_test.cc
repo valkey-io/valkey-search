@@ -268,7 +268,7 @@ void TestIndex(T* index, int dimensions, int vector_size) {
       bool found = false;
       for (const auto& neighbors : res.value()) {
         if (neighbors.external_id == IndexToKey(i)) {
-          EXPECT_LT(neighbors.distance - res.value()[0].distance, 0.0001);
+          EXPECT_LT(neighbors.score - res.value()[0].score, 0.0001);
           found = true;
           break;
         }

@@ -102,6 +102,9 @@ message Predicate {
     InfixPredicate infix = 9;
     FuzzyPredicate fuzzy = 10;
   }
+  // Query-modifier weight ($weight:N). Defaults to 1.0 when unset so scoring on
+  // the shard matches standalone. Applies to leaf and composed predicates.
+  optional float weight = 11;
 }
 
 message ReturnParameter {

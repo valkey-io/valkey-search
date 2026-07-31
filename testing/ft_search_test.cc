@@ -224,8 +224,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -246,9 +246,9 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553},
-                         {.external_id = "ghi", .distance = 0.03}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553},
+                         {.external_id = "ghi", .score = 0.03}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -267,8 +267,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 100, .number = 105},
@@ -281,8 +281,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 0},
@@ -295,8 +295,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "ext_1", .distance = 0.00999999977648},
-                         {.external_id = "ext_2", .distance = 0.019999999553}},
+                        {{.external_id = "ext_1", .score = 0.00999999977648},
+                         {.external_id = "ext_2", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_2",
                     .score_as = "score_as_2",
                     .limit = {.first_index = 0, .number = 1},
@@ -314,8 +314,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "ext_1", .distance = 0.00999999977648},
-                         {.external_id = "ext_2", .distance = 0.019999999553}},
+                        {{.external_id = "ext_1", .score = 0.00999999977648},
+                         {.external_id = "ext_2", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_2",
                     .score_as = "__vector_score",
                     .limit = {.first_index = 1, .number = 1},
@@ -332,8 +332,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -353,8 +353,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -378,8 +378,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -405,8 +405,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -435,9 +435,9 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "ext_1", .distance = 0.00999999977648},
-                         {.external_id = "ext_2", .distance = 0.019999999553},
-                         {.external_id = "ext_3", .distance = 0.0299999993294}},
+                        {{.external_id = "ext_1", .score = 0.00999999977648},
+                         {.external_id = "ext_2", .score = 0.019999999553},
+                         {.external_id = "ext_3", .score = 0.0299999993294}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 1, .number = 5},

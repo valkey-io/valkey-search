@@ -250,9 +250,9 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
                         GENERATE_FLAG_PARSER(AggregateParameters, inorder));
   parser.AddParamParser(kVerbatim,
                         GENERATE_FLAG_PARSER(AggregateParameters, verbatim));
-  parser.AddParamParser(
-      kScorerParam,
-      GENERATE_ENUM_PARSER(AggregateParameters, scorer, *query::kScorerByStr));
+  parser.AddParamParser(kScorerParam,
+                        GENERATE_ENUM_PARSER(AggregateParameters, scorer,
+                                             *indexes::scoring::kScorerByStr));
   parser.AddParamParser(kLoadParam, ConstructLoadParser());
   parser.AddParamParser(kApplyParam, ConstructApplyParser());
   parser.AddParamParser(kFilterParam, ConstructFilterParser());

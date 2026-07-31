@@ -34,6 +34,7 @@ Key.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,15 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
+// SCORING-EXTRA-STEP-ONLY, remove when iterator scoring is done
+// Btree value: the position map pointer plus a mirror of its (immutable)
+// term frequency, co-located so tf reads avoid chasing into the separately
+// allocated FlatPositionMap block.
+struct PostingValue {
+  FlatPositionMap* map;
+  uint32_t tf;
+};
+
 struct Postings {
   struct KeyIterator;
 
@@ -92,6 +102,10 @@ struct Postings {
 
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
+
+  // lookup tf for the specific key, only used in extra-step scoring
+  std::optional<uint32_t> LookupTermFrequency(
+      BorrowedInternedStringPtr key) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -121,17 +135,22 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // get tf for the current key, only used in iterator scoring
+    size_t GetTermFrequency() const;
+
    private:
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, FlatPositionMap*>* key_map_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator current_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator end_;
+    const absl::btree_map<Key, PostingValue>* key_map_;
+    absl::btree_map<Key, PostingValue>::const_iterator current_;
+    absl::btree_map<Key, PostingValue>::const_iterator end_;
   };
 
  private:
-  absl::btree_map<Key, FlatPositionMap*> key_to_positions_;
+  // Cache tf in PostingValue to avoid a map lookup
+  // PostValue should be removed and restored if no extra-step
+  absl::btree_map<Key, PostingValue> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

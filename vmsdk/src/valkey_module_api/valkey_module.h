@@ -689,7 +689,8 @@ typedef struct ValkeyModuleClientInfo {
 
 #define ValkeyModuleClientInfo ValkeyModuleClientInfoV1
 
-#define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 {.version = 1}
+#define VALKEYMODULE_CLIENTINFO_INITIALIZER_V1 \
+  { .version = 1 }
 
 #define VALKEYMODULE_REPLICATIONINFO_VERSION 1
 typedef struct ValkeyModuleReplicationInfo {
@@ -785,7 +786,8 @@ typedef struct ValkeyModuleClusterInfo {
 
 #define ValkeyModuleClusterInfo ValkeyModuleClusterInfoV1
 
-#define VALKEYMODULE_CLUSTERINFO_INITIALIZER_V1 {.version = 1}
+#define VALKEYMODULE_CLUSTERINFO_INITIALIZER_V1 \
+  { .version = 1 }
 
 /* If PSC connection cannot be extracted from a client,
  * Consider it to be 0. */

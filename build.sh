@@ -372,6 +372,17 @@ function check_tools() {
     check_tool ${build_tool}
 }
 
+function check_and_clean_on_branch_change() {
+    local current_branch=$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    local branch_stamp="${BUILD_DIR}/.last_build_branch"
+    if [ -d "${BUILD_DIR}" ] && [ -f "${branch_stamp}" ] && [ "$(cat "${branch_stamp}")" != "${current_branch}" ]; then
+        printf "${BOLD_PINK}Notice: Branch changed from $(cat "${branch_stamp}") to ${current_branch}. Cleaning stale protobuf artifacts...${RESET}\n"
+        rm -f "${BUILD_DIR}"/src/*.pb.* 2>/dev/null || true
+    fi
+    mkdir -p "${BUILD_DIR}"
+    echo "${current_branch}" > "${branch_stamp}"
+}
+
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
 function is_configure_required() {
     if [[ "${BUILD_TOOL}" =~ ninja ]]; then
@@ -436,6 +447,8 @@ fi
 
 TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
+
+check_and_clean_on_branch_change
 
 printf "Checking if configure is required..."
 

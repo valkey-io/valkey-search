@@ -9,14 +9,13 @@
 
 #include <cerrno>
 #include <cstddef>
-#include <fstream>
 #include <optional>
 #include <string>
-#include <unordered_map>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
+#include "absl/log/internal/log_message.h"
 #include "absl/log/log_entry.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -150,3 +149,31 @@ void ValkeyIOLogSink::Send(const absl::LogEntry& entry) {
 }
 
 }  // namespace vmsdk
+
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+// Explicitly instantiate Abseil LogMessage operator<< templates for GCC on
+// Linux to prevent undefined reference linker errors in standalone test
+// executables.
+namespace absl {
+ABSL_NAMESPACE_BEGIN
+namespace log_internal {
+template LogMessage &LogMessage::operator<<(const char &);
+template LogMessage &LogMessage::operator<<(const signed char &);
+template LogMessage &LogMessage::operator<<(const unsigned char &);
+template LogMessage &LogMessage::operator<<(const short &);
+template LogMessage &LogMessage::operator<<(const unsigned short &);
+template LogMessage &LogMessage::operator<<(const int &);
+template LogMessage &LogMessage::operator<<(const unsigned int &);
+template LogMessage &LogMessage::operator<<(const long &);
+template LogMessage &LogMessage::operator<<(const unsigned long &);
+template LogMessage &LogMessage::operator<<(const long long &);
+template LogMessage &LogMessage::operator<<(const unsigned long long &);
+template LogMessage &LogMessage::operator<<(void *const &);
+template LogMessage &LogMessage::operator<<(const void *const &);
+template LogMessage &LogMessage::operator<<(const float &);
+template LogMessage &LogMessage::operator<<(const double &);
+template LogMessage &LogMessage::operator<<(const bool &);
+}  // namespace log_internal
+ABSL_NAMESPACE_END
+}  // namespace absl
+#endif

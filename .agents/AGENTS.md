@@ -37,7 +37,7 @@ Valkey Search operates in a hybrid multi-threaded environment where the Valkey M
 - The devcontainer is configured with `--network host`, sharing the host's networking stack. 
 - Running integration tests directly inside the devcontainer will cause failures due to port collisions on standard ports (e.g., `6379`) if a Valkey/Redis instance is already running on the host machine. Tests must be executed using dynamic non-privileged ports or wrapped in a dedicated bridge-network Docker container.
 
-## ⚠️ Coding Gotchas & Clang-Tidy Hygiene
+## ⚠️ Coding Gotchas, Clang-Format & Clang-Tidy Hygiene
 
 ### 1. Bugprone Use-After-Move
 - Always be vigilant about moving `shared_ptr` or heavy objects into constructors or class members.
@@ -55,6 +55,14 @@ Valkey Search operates in a hybrid multi-threaded environment where the Valkey M
     -warnings-as-errors='*'
   ```
 - Any violation of mutex guards or thread annotations should be treated as a blocking release error.
+
+### 3. Clang-Format inside Devcontainer
+- Always run `clang-format` (and formatting checks such as `./ci/clang-format-changes.sh`) from **within the devcontainer** to ensure version consistency across environments.
+- Execute formatting commands under the devcontainer using `.devcontainer/run_in_docker.sh`:
+  ```bash
+  .devcontainer/run_in_docker.sh ./ci/clang-format-changes.sh
+  .devcontainer/run_in_docker.sh clang-format -i <file_paths>
+  ```
 
 ## 🏷️ Commit & DCO Hygiene
 - **Developer Certificate of Origin (DCO)**: The repository strictly enforces DCO compliance on all PR contributions.

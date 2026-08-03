@@ -27,9 +27,9 @@
 
 namespace valkey_search::indexes {
 
-class InputVector {
+class QueryVector {
  public:
-  InputVector(const std::shared_ptr<const VectorRecord> &vector_record,
+  QueryVector(const std::shared_ptr<const VectorRecord> &vector_record,
               size_t vector_record_size, bool normalize);
   inline const char *GetRawVector() const {
     return vector_record_->GetRawVector();
@@ -54,7 +54,7 @@ template <typename T>
 class VectorHNSW : public VectorBase {
  public:
   using HNSWIndex =
-      hnswlib::HierarchicalNSW<T, InputVector,
+      hnswlib::HierarchicalNSW<T, QueryVector,
                                std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(

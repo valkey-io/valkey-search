@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "vmsdk/src/info.h"  // IWYU pragma: keep
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
 
@@ -77,6 +78,9 @@ absl::Status Reset();
 
 /// Default option of delivering partial results when timeout occurs
 const config::Boolean &GetPreferPartialResults();
+
+/// Maximum query queue depth before rejecting new queries (0 = unlimited)
+config::Number &GetMaxQueryQueueDepth();
 
 /// Default option of delivering consistent results when timeout occurs
 const config::Boolean &GetPreferConsistentResults();

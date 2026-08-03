@@ -845,6 +845,16 @@ SerializationRange SearchResult::GetSerializationRange(
 }
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
+  // Reject already-cancelled queries before acquiring the time-slice mutex.
+  // Without this, expired queries that sat in the queue still acquire a reader
+  // slot and waste mutex time before discovering they're cancelled deep in the
+  // iteration loop. Return OkStatus with empty results (same as what the
+  // iteration loop produces when it discovers cancellation mid-search) so the
+  // coordinator tracker counts this as a "successful" node with 0 results —
+  // enabling partial results from other shards that did complete.
+  if (parameters.cancellation_token->IsCancelled()) {
+    return absl::OkStatus();
+  }
   auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
   vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;

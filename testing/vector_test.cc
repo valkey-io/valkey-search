@@ -889,7 +889,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   float magnitude = kDefaultMagnitude;
   for (int t = 0; t < kThreads; ++t) {
-    algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
+    algo.addPoint(QueryVector(VectorRecord::Construct(v_bytes, magnitude,
                                                       vector_allocator.get()),
                               v_bytes.size(), false),
                   t);
@@ -1056,7 +1056,7 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
     float reciprocal_magnitude = CalcReciprocalMagnitude(v.data(), v.size());
 
     algo.addPoint(
-        InputVector(VectorRecord::Construct(v_bytes, reciprocal_magnitude,
+        QueryVector(VectorRecord::Construct(v_bytes, reciprocal_magnitude,
                                             vector_allocator.get()),
                     v_bytes.size(), false),
         /*label=*/i, force_levels[i]);

@@ -30,6 +30,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
@@ -143,7 +144,7 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
     : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
                  attribute_identifier) {}
 
-InputVector::InputVector(
+QueryVector::QueryVector(
     const std::shared_ptr<const VectorRecord> &vector_record,
     size_t vector_record_size, bool normalize)
     : vector_record_(std::move(vector_record)) {
@@ -160,7 +161,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint(InputVector(std::move(vector_record), GetVectorDataSize(),
+      algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
                                   normalize_),
                       internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
@@ -294,7 +295,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
     absl::ReaderMutexLock lock(&resize_mutex_);
     VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
     algo_->addPoint(
-        InputVector(std::move(vector_record), GetVectorDataSize(), normalize_),
+        QueryVector(std::move(vector_record), GetVectorDataSize(), normalize_),
         internal_id, algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
@@ -348,13 +349,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
           : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
-    InputVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
+    QueryVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
                                                   GetVectorAllocator()),
                           query.size(), normalize_);
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
-      return absl::CancelledError("Search operation cancelled due to timeout");
+      return absl::CancelledError(query::kTimeoutMsg);
     }
     return CreateReply(res);
   } catch (const std::exception &e) {

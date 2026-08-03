@@ -146,7 +146,11 @@ function build() {
     make
 }
 
-BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${san_suffix}
+if [ -n "${san_suffix}" ]; then
+    BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${san_suffix}
+else
+    BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX}
+fi
 BUILD_DIR=${ROOT_DIR}/${BUILD_DIR_BASENAME}
 VALKEY_SEARCH_PATH=${MODULE_ROOT}/${BUILD_DIR_BASENAME}/libsearch.${MODULE_EXT}
 

@@ -30,6 +30,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
@@ -342,7 +343,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
-      return absl::CancelledError("Search operation cancelled due to timeout");
+      return absl::CancelledError(query::kTimeoutMsg);
     }
     return CreateReply(res);
   } catch (const std::exception &e) {

@@ -3,6 +3,7 @@ import difflib
 import json
 import logging
 import os
+import math
 import pprint
 import time
 from typing import Any, List
@@ -372,6 +373,18 @@ class VSSOutput:
                     except Exception:
                         print("__eq__ Exception: {}, {}\n".format(self.keys[k][attr], other.keys[k][attr]))
                         return False
+                elif attr == "score":
+                    try:
+                        if not math.isclose(
+                            float(self.keys[k][attr]),
+                            float(other.keys[k][attr]),
+                            rel_tol=1e-5,
+                            abs_tol=1e-5,
+                        ):
+                            return False
+                    except Exception:
+                        if self.keys[k][attr] != other.keys[k][attr]:
+                            return False
                 else:
                     if self.keys[k][attr] != other.keys[k][attr]:
                         return False

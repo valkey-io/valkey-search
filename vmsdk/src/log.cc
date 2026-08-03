@@ -147,13 +147,12 @@ void ValkeyIOLogSink::Send(const absl::LogEntry& entry) {
   ValkeyModule_LogIOError(io_, ReportedLogLevel(entry.verbosity()), "%s",
                           GetSinkFormatter()(entry).c_str());
 }
-
 }  // namespace vmsdk
 
 #if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
 // Explicitly instantiate Abseil LogMessage operator<< templates for GCC on
 // Linux to prevent undefined reference linker errors in standalone test
-// executables.
+// executables and shared library loaders.
 namespace absl {
 ABSL_NAMESPACE_BEGIN
 namespace log_internal {

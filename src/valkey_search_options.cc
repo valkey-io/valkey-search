@@ -604,13 +604,12 @@ const vmsdk::config::Boolean &GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean &>(prefer_consistent_results);
 }
 
-vmsdk::config::Number &GetMaxQueryQueueDepth() {
-  return dynamic_cast<vmsdk::config::Number &>(*max_query_queue_depth);
+vmsdk::config::Number& GetMaxQueryQueueDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_query_queue_depth);
 }
 
-const vmsdk::config::Boolean &GetSearchResultBackgroundCleanup() {
-  return static_cast<vmsdk::config::Boolean &>(
-      search_result_background_cleanup);
+const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
+  return static_cast<vmsdk::config::Boolean&>(search_result_background_cleanup);
 }
 
 vmsdk::config::Number &GetHighPriorityWeight() {

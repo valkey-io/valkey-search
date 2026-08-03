@@ -219,7 +219,7 @@ class VectorBase : public IndexBase {
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
   absl::StatusOr<std::vector<char>> GetVectorDuringSearch(
-      const InternedStringPtr &key) const;
+      const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   InternedStringPtr InternVector(absl::string_view record,

@@ -11,13 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
@@ -50,15 +48,14 @@ class VectorFlat : public VectorBase {
     return space_.get();
   }
   int GetBlockSize() const { return block_size_; }
-  size_t GetCapacity() const override
-      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+  size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->data_->getCapacity();
   }
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
-      ABSL_LOCKS_EXCLUDED(resize_mutex_);
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -77,11 +74,12 @@ class VectorFlat : public VectorBase {
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   T ComputeDistance(absl::string_view query, VectorRecord *vector_record,
-                    float query_magnitude) const override;
+                    float query_magnitude) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const override;
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
-      uint64_t internal_id) const override;
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,

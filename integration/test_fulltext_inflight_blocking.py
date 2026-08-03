@@ -24,7 +24,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
     def test_fulltext_inflight_blocking_with_pausepoint(self):
         """Test that full-text queries block and retry on sequential in-flight mutations."""
         client: Valkey = self.server.get_new_client()
-
+ 
         client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
             "SCHEMA", "content", "TEXT"
@@ -33,19 +33,25 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         client.execute_command("HSET", "doc:2", "content", "hello there")
         IndexingTestHelper.is_indexing_complete_on_node(client, "idx")
         assert client.execute_command("FT.SEARCH", "idx", "@content:hello")[0] == 2
-
+ 
         # Pause mutation processing to keep key in-flight
         client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
-
+ 
         # HSET blocks at pausepoint, run in background
         hset1_thread, _, hset1_err = run_in_thread(
             lambda: self.server.get_new_client().execute_command(
                 "HSET", "doc:1", "content", "updated1"
             )
         )
-        waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
-        )
+        
+        def check_hset1():
+            if hset1_err[0] is not None:
+                raise hset1_err[0]
+            if not hset1_thread.is_alive():
+                raise RuntimeError("hset1 thread finished unexpectedly")
+            return client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
+            
+        waiters.wait_for_true(check_hset1)
 
         # Search blocks on doc:1
         search_thread, search_res, search_err = run_in_thread(
@@ -53,9 +59,14 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
                 "FT.SEARCH", "idx", "@content:hello"
             )
         )
-        waiters.wait_for_true(
-            lambda: client.info("SEARCH")["search_text_query_blocked_count"] >= 1
-        )
+        def check_search():
+            if search_err[0] is not None:
+                raise search_err[0]
+            if not search_thread.is_alive():
+                raise RuntimeError("search thread finished unexpectedly")
+            return client.info("SEARCH")["search_text_query_blocked_count"] >= 1
+
+        waiters.wait_for_true(check_search)
         assert search_res[0] is None and search_thread.is_alive()
 
         # Using another block point for doc:2 at an earlier point than mutation_processing 
@@ -67,9 +78,15 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
                 "HSET", "doc:2", "content", "updated2 hello"
             )
         )
-        waiters.wait_for_true(
-            lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0
-        )
+
+        def check_hset2():
+            if hset2_err[0] is not None:
+                raise hset2_err[0]
+            if not hset2_thread.is_alive():
+                raise RuntimeError("hset2 thread finished unexpectedly")
+            return client.execute_command("FT._DEBUG PAUSEPOINT TEST block_mutation_queue") > 0
+
+        waiters.wait_for_true(check_hset2)
 
         # Release doc:1 to be indexed
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")

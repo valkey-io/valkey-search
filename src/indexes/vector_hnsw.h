@@ -76,17 +76,14 @@ class VectorHNSW : public VectorBase {
     return space_.get();
   }
 
-  size_t GetCapacity() const override
-      ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+  size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->max_elements_;
   }
-  int GetM() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
-    return algo_->M_;
-  }
-  int GetEfConstruction() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+  int GetM() const ABSL_NO_THREAD_SAFETY_ANALYSIS { return algo_->M_; }
+  int GetEfConstruction() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->ef_construction_;
   }
-  size_t GetEfRuntime() const ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
+  size_t GetEfRuntime() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->ef_;
   }
 
@@ -95,7 +92,7 @@ class VectorHNSW : public VectorBase {
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<size_t> ef_runtime = std::nullopt,
-      bool enable_partial_results = false);
+      bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -114,7 +111,8 @@ class VectorHNSW : public VectorBase {
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   T ComputeDistance(absl::string_view query, VectorRecord *vector_record,
-                    float query_magnitude) const override;
+                    float query_magnitude) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->getPoint(internal_id);
@@ -123,7 +121,7 @@ class VectorHNSW : public VectorBase {
     return *ptr;
   }
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
-      uint64_t internal_id) const override;
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 
 project(
     ValkeySearch
-    VERSION 1.0.0
     LANGUAGES C CXX
 )
 

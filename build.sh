@@ -544,6 +544,7 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     fi
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
+    export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
     ./run.sh ${params} || EXIT_CODE=1
     popd >/dev/null

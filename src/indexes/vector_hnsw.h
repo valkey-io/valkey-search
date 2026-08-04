@@ -61,13 +61,14 @@ class VectorHNSW : public VectorBase {
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      data_model::AttributeDataType attribute_data_type)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      data_model::AttributeDataType attribute_data_type,
+      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
       ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter &&iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter &&iter,
+      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -139,7 +140,8 @@ class VectorHNSW : public VectorBase {
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type);
+             data_model::AttributeDataType attribute_data_type,
+             uint32_t db_num);
   absl::Status AlgoDeleteRecord(uint64_t label)
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
 

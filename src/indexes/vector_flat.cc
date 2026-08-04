@@ -28,6 +28,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "vmsdk/src/log.h"
@@ -48,13 +49,13 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type) {
+    data_model::AttributeDataType attribute_data_type, uint32_t db_num) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
-                          attribute_identifier, attribute_data_type));
+                          attribute_identifier, attribute_data_type, db_num));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =
@@ -82,14 +83,15 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
-    absl::string_view attribute_identifier,
-    SupplementalContentChunkIter &&iter) {
+    absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
+    uint32_t db_num) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
-                          attribute_identifier, attribute_data_type->ToProto()),
+                          attribute_identifier, attribute_data_type->ToProto(),
+                          db_num),
         vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
@@ -120,9 +122,9 @@ template <typename T>
 VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type)
+    data_model::AttributeDataType attribute_data_type, uint32_t db_num)
     : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier),
+                 attribute_identifier, db_num),
       block_size_(block_size) {}
 
 template <typename T>
@@ -215,7 +217,8 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    bool enable_partial_results) {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(
         "Error parsing vector similarity query: query vector blob size (",
@@ -236,9 +239,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
         filter.get(), &canceler);
 
-    // if (cancellation_token->IsCancelled()) {
-    //   return absl::CancelledError("Search operation cancelled");
-    // }
+    if (!enable_partial_results && cancellation_token->IsCancelled()) {
+      return absl::CancelledError(query::kTimeoutMsg);
+    }
     return CreateReply(res);
   } catch (const std::exception &e) {
     Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(

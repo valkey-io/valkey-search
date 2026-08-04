@@ -157,8 +157,8 @@ void VectorBase::Init(int dimensions,
 std::shared_ptr<const VectorRecord> VectorBase::GetOrConstructVectorRecord(
     const InternedStringPtr &key, absl::string_view record) const {
   auto [vector_record, vector_record_size] =
-      VectorRegistry::Instance().LookupRecord(key,
-                                              interned_attribute_identifier_);
+      VectorRegistry::Instance().LookupRecord(
+          key, interned_attribute_identifier_, db_num_);
   if (vector_record && vector_record_size == record.size() &&
       std::memcmp(vector_record->GetRawVector(), record.data(),
                   record.size()) == 0) {
@@ -309,8 +309,8 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
           << internal_id.value() << ": " << remove_vector_res.message();
     }
   }
-  VectorRegistry::Instance().UntrackIfUnused(key,
-                                             interned_attribute_identifier_);
+  VectorRegistry::Instance().UntrackIfUnused(
+      key, interned_attribute_identifier_, db_num_);
 }
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
@@ -458,7 +458,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     }
     auto vector_record = VectorRegistry::Instance().Track(
         interned_key, interned_attribute_identifier_, record.value().get(),
-        vector_allocator_.get(), attribute_data_type->ToProto());
+        vector_allocator_.get(), attribute_data_type->ToProto(), db_num_);
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = vector_record;
   }
@@ -581,7 +581,8 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 
 VectorBase::~VectorBase() {
   VectorRegistry::Instance().BatchUntrackIfUnused(
-      interned_attribute_identifier_, std::move(tracked_metadata_by_key_));
+      interned_attribute_identifier_, std::move(tracked_metadata_by_key_),
+      db_num_);
 }
 
 template void VectorBase::Init<float>(

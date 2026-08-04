@@ -174,10 +174,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                       ? indexes::VectorHNSW<float>::LoadFromRDB(
                             ctx, &index_schema->GetAttributeDataType(),
                             index.vector_index(), attribute.identifier(),
-                            std::move(*iter))
+                            std::move(*iter), index_schema->GetDBNum())
                       : indexes::VectorHNSW<float>::Create(
                             index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto()));
+                            index_schema->GetAttributeDataType().ToProto(),
+                            index_schema->GetDBNum()));
               return index;
             }
             default: {
@@ -197,10 +198,11 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
                       ? indexes::VectorFlat<float>::LoadFromRDB(
                             ctx, &index_schema->GetAttributeDataType(),
                             index.vector_index(), attribute.identifier(),
-                            std::move(*iter))
+                            std::move(*iter), index_schema->GetDBNum())
                       : indexes::VectorFlat<float>::Create(
                             index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto()));
+                            index_schema->GetAttributeDataType().ToProto(),
+                            index_schema->GetDBNum()));
               return index;
             }
             default: {
@@ -586,7 +588,7 @@ bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
 
 void TrackRecord(const Key &key, const Attribute &attribute,
                  const data_model::AttributeDataType &attribute_data_type,
-                 ValkeyModuleString *record) {
+                 ValkeyModuleString *record, uint32_t db_num) {
   if (!indexes::IsVectorIndex(attribute.GetIndex())) {
     return;
   }
@@ -601,7 +603,7 @@ void TrackRecord(const Key &key, const Attribute &attribute,
       vector_base ? vector_base->GetInternedAttributeIdentifier()
                   : StringInternStore::Intern(attribute.GetIdentifier()),
       record, vector_base ? vector_base->GetVectorAllocator() : nullptr,
-      attribute_data_type);
+      attribute_data_type, db_num);
 }
 
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
@@ -625,7 +627,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     if (!key_obj) {
       added = true;
       TrackRecord(interned_key, attribute, attribute_data_type_->ToProto(),
-                  nullptr);
+                  nullptr, GetDBNum());
       mutated_attributes[attribute_itr.first] = {
           nullptr, indexes::DeletionType::kRecord};
       continue;
@@ -635,7 +637,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
             ->GetRecord(ctx, key_obj.get(), key_cstr, attribute.GetIdentifier())
             .value_or(vmsdk::UniqueValkeyString());
     TrackRecord(interned_key, attribute, attribute_data_type_->ToProto(),
-                record.get());
+                record.get(), GetDBNum());
     if (AddAttributeData(mutated_attributes, attribute, *attribute_data_type_,
                          std::move(record))) {
       added = true;

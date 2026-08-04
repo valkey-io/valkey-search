@@ -35,13 +35,14 @@ class VectorFlat : public VectorBase {
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      data_model::AttributeDataType attribute_data_type)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      data_model::AttributeDataType attribute_data_type,
+      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> LoadFromRDB(
       ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter &&iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter &&iter,
+      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -60,8 +61,8 @@ class VectorFlat : public VectorBase {
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
+      bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -95,7 +96,8 @@ class VectorFlat : public VectorBase {
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,
              uint32_t block_size, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type);
+             data_model::AttributeDataType attribute_data_type,
+             uint32_t db_num);
 
  private:
   std::unique_ptr<FlatIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);

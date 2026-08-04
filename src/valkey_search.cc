@@ -412,10 +412,16 @@ static vmsdk::info_field::Integer vector_registry_get_record_misses(
 
 static vmsdk::info_field::Integer vector_registry_shared_externally_errors(
     "vector_registry", "vector_registry_shared_externally_errors",
-    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorRegistry::Instance()
           .GetStats()
           .hash_sharing_errors.GetTotal();
+    }));
+
+static vmsdk::info_field::Integer vector_registry_sharing_active(
+    "vector_registry", "vector_registry_sharing_active",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return VectorRegistry::Instance().IsSharingActive() ? 1 : 0;
     }));
 
 static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(

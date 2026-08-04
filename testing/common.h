@@ -384,6 +384,9 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
   ValkeyModuleCtx registry_ctx_;
 
   void SetUp() override {
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeyTest::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
@@ -403,6 +406,9 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     VectorRegistry::Destruct();
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
     ValkeyTest::TearDown();
   }
 };

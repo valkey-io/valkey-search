@@ -1187,6 +1187,9 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   // Currently these tests only work with RDB version 1
   // TODO: Will be fixed to work with RDB version 2
   void SetUp() override {
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeySearchTest::SetUp();
     auto &write_v2 =
         const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
@@ -1203,6 +1206,9 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
     VMSDK_EXPECT_OK(write_v2.SetValue(true));
     VMSDK_EXPECT_OK(read_v2.SetValue(true));
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
     ValkeySearchTest::TearDown();
   }
 };
@@ -1278,7 +1284,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             "hnsw_attribute",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("hnsw_attribute", "hnsw_identifier",
                                            hnsw_index));
@@ -1300,7 +1306,7 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
             CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        block_size),
             "flat_identifier",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("flat_attribute", "flat_identifier",
                                            flat_index));
@@ -1631,7 +1637,7 @@ class IndexSchemaFriendTest : public ValkeySearchTest {
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             attribute_identifier,
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex(attribute_identifier,
                                            "hnsw_identifier", hnsw_index));
@@ -1813,6 +1819,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
 }
 
 TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
+  vmsdk::WriterMutexLock lock(&index_schema->GetTimeSlicedMutex());
   absl::string_view data_ptr;
   EXPECT_EQ(index_schema->attributes_.size(), 1);
   auto mutated_attributes_1 =
@@ -1862,6 +1869,7 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {
 // the entry in the map), then call InTrackedMutationRecords. With the fix it
 // returns false cleanly; without the fix it crashes under ASAN.
 TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
+  vmsdk::WriterMutexLock lock(&index_schema->GetTimeSlicedMutex());
   absl::string_view data_ptr;
   auto mutated_attributes =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
@@ -1890,7 +1898,8 @@ TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
       index_schema->InTrackedMutationRecords(key, attribute_identifier));
 }
 
-TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
+TEST_F(IndexSchemaFriendTest, MutatedAttributes)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto tester = [this](absl::string_view data_ptr,
                        absl::string_view track_before_consumption_data_ptr,
                        absl::string_view track_after_consumption_data_ptr) {
@@ -1980,7 +1989,8 @@ TEST_F(IndexSchemaFriendTest, MutatedAttributes) {
 // when any indexed field contains invalid data, and verifies both the new
 // (Redisearch-compatible) and the legacy behavior based on
 // search.emulate-release. See COMPATIBILITY.md.
-TEST_F(IndexSchemaFriendTest, InvalidDataDropsKey) {
+TEST_F(IndexSchemaFriendTest, InvalidDataDropsKey)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
   // The fixture already has an HNSW index "hnsw_id"; add a numeric and a tag
   // index so a single key can carry an invalid numeric field alongside a valid
   // tag field.
@@ -2248,7 +2258,8 @@ TEST_F(IndexSchemaRDBTest, DrainMutationQueueOnSaveEnabled) {
   VMSDK_EXPECT_OK(drain_config.SetValue(drain_config_old_value));
 }
 
-TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
+TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
   const int num_vectors = 1000;
   const int dimensions = 64;
   const int additional_index_vectors = 100;
@@ -2281,7 +2292,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             "embedding",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
@@ -2444,7 +2455,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             "embedding",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
@@ -2716,7 +2727,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             "embedding1",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("embedding1", "emb1_id", hnsw_index1));
@@ -2726,7 +2737,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
             CreateHNSWVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        m, ef_construction, ef_runtime),
             "embedding2",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("embedding2", "emb2_id", hnsw_index2));
@@ -2736,7 +2747,7 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
             CreateFlatVectorIndexProto(dimensions, distance_metric, initial_cap,
                                        block_size),
             "embedding3",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("embedding3", "emb3_id", flat_index));
@@ -2952,7 +2963,7 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
           CreateHNSWVectorIndexProto(
               dimensions, data_model::DistanceMetric::DISTANCE_METRIC_L2, 100,
               16, 200, 50),
-          "emb_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+          "emb_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
           .value();
   VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
@@ -2964,15 +2975,16 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_data);
   VectorRegistry::Instance().Track(
       key, hnsw_index->GetInternedAttributeIdentifier(), valkey_vec.get(),
-      nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+      nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
 
   auto [res_record, res_size] = VectorRegistry::Instance().LookupRecord(
-      key, hnsw_index->GetInternedAttributeIdentifier());
+      key, hnsw_index->GetInternedAttributeIdentifier(), 0);
   EXPECT_NE(res_record, nullptr);
 
   // 2. Mock OpenKey to return nullptr (simulating deleted key)
   EXPECT_CALL(*kMockValkeyModule,
-              OpenKey(&fake_ctx_, key_valkey_str.get(), testing::_))
+              OpenKey(testing::_, key_valkey_str.get(), testing::_))
+      .Times(1)
       .WillOnce(Return(nullptr));
 
   // 3. Process the deletion notification
@@ -2982,7 +2994,7 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   // 4. Verify that the registry entry is now erased
   auto [res_record_after, res_size_after] =
       VectorRegistry::Instance().LookupRecord(
-          key, hnsw_index->GetInternedAttributeIdentifier());
+          key, hnsw_index->GetInternedAttributeIdentifier(), 0);
   EXPECT_EQ(res_record_after, nullptr);
 }
 

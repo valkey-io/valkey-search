@@ -38,8 +38,9 @@ void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
 std::pair<std::shared_ptr<indexes::VectorRecord>, size_t>
 VectorRegistry::LookupRecord(
     const InternedStringPtr &key,
-    const InternedStringPtr &interned_attribute_identifier) const {
-  RegistryKey search_key = std::make_pair(key, interned_attribute_identifier);
+    const InternedStringPtr &interned_attribute_identifier,
+    uint32_t db_num) const {
+  RegistryKey search_key{db_num, key, interned_attribute_identifier};
   absl::MutexLock lock(&mutex_);
   auto it = tracked_vectors_.find(search_key);
   if (it != tracked_vectors_.end()) {
@@ -53,14 +54,19 @@ VectorRegistry::LookupRecord(
 std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
     const InternedStringPtr &key, const InternedStringPtr &attribute_identifier,
     ValkeyModuleString *vector, Allocator *allocator,
-    const data_model::AttributeDataType &attribute_data_type) {
-  RegistryKey search_key = std::make_pair(key, attribute_identifier);
+    const data_model::AttributeDataType &attribute_data_type, uint32_t db_num) {
+  RegistryKey search_key{db_num, key, attribute_identifier};
 
   std::shared_ptr<indexes::VectorRecord> vector_record;
   size_t vector_size;
+  bool needs_sharing = false;
   {
     absl::MutexLock lock(&mutex_);
     if (!vector) {
+      // If the vector is nullptr, it indicates the key/attribute was deleted
+      // from Valkey. Therefore, the sharing reference in the Valkey Hash is
+      // already gone or invalid, and there is no need to call
+      // DetachFromValkeyHash.
       tracked_vectors_.erase(search_key);
       return nullptr;
     }
@@ -73,6 +79,10 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
       vector_record = it->second.vector_record;
       vector_size = it->second.vector_record_size;
     } else {
+      // If the payload changed (mismatch), the Valkey Hash field has already
+      // been overwritten with a new raw vector value, so the old sharing
+      // reference is already gone. Thus, there is no need to call
+      // DetachFromValkeyHash.
       float reciprocal_magnitude = indexes::CalcReciprocalMagnitude(
           reinterpret_cast<const float *>(vector_str.data()),
           vector_str.size() / sizeof(float));
@@ -80,15 +90,19 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
           vector_str, reciprocal_magnitude, allocator);
       vector_size = vector_str.size();
       tracked_vectors_[search_key] = {vector_record, vector_size};
+      needs_sharing = true;
     }
   }
-  ShareWithValkeyHash(key, attribute_identifier->Str(), vector_record.get(),
-                      vector_size, attribute_data_type);
+  if (needs_sharing) {
+    ShareWithValkeyHash(db_num, key, attribute_identifier->Str(),
+                        vector_record.get(), vector_size, attribute_data_type);
+  }
   return vector_record;
 }
 
 bool VectorRegistry::ShareWithValkeyHash(
-    const InternedStringPtr &key, absl::string_view attribute_identifier,
+    uint32_t db_num, const InternedStringPtr &key,
+    absl::string_view attribute_identifier,
     const indexes::VectorRecord *vector_record, size_t vector_size,
     const data_model::AttributeDataType &attribute_data_type) {
   vmsdk::VerifyMainThread();
@@ -98,6 +112,7 @@ bool VectorRegistry::ShareWithValkeyHash(
     return false;
   }
   auto key_str = vmsdk::MakeUniqueValkeyString(key->Str());
+  ValkeyModule_SelectDb(ctx_.get(), db_num);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx_.get(), key_str.get(),
       VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_WRITE);
@@ -136,44 +151,56 @@ bool VectorRegistry::ShareWithValkeyHash(
 void VectorRegistry::BatchUntrackIfUnused(
     const InternedStringPtr &attribute_identifier,
     InternedStringHashMap<indexes::TrackedKeyMetadata>
-        &&tracked_metadata_by_key) {
+        &&tracked_metadata_by_key,
+    uint32_t db_num) {
   absl::MutexLock lock(&mutex_);
   for (auto &&[key, _] : tracked_metadata_by_key) {
-    RegistryKey search_key = std::make_pair(key, attribute_identifier);
+    RegistryKey search_key{db_num, key, attribute_identifier};
     LockFreeUntrackIfUnused(search_key);
   }
 }
 
 void VectorRegistry::DetachFromValkeyHash(const RegistryKey &search_key) {
-  auto key_str = vmsdk::MakeUniqueValkeyString(search_key.first->Str());
+  auto key_str = vmsdk::MakeUniqueValkeyString(search_key.key->Str());
+  ValkeyModule_SelectDb(ctx_.get(), search_key.db_num);
   auto open_key = vmsdk::MakeUniqueValkeyOpenKey(ctx_.get(), key_str.get(),
                                                  VALKEYMODULE_WRITE);
   if (!open_key) {
     return;
   }
   auto attribute_identifier_str =
-      vmsdk::MakeUniqueValkeyString(search_key.second->Str());
+      vmsdk::MakeUniqueValkeyString(search_key.attribute_identifier->Str());
   if (ValkeyModule_KeyType(open_key.get()) != VALKEYMODULE_KEYTYPE_HASH) {
     return;
   }
-  if (ValkeyModule_HashHasStringRef(
-          open_key.get(), attribute_identifier_str.get()) != VALKEYMODULE_OK) {
+  if (!ValkeyModule_HashHasStringRef(open_key.get(),
+                                     attribute_identifier_str.get())) {
     return;
   }
+  auto it = tracked_vectors_.find(search_key);
+  if (it == tracked_vectors_.end()) {
+    return;
+  }
+  auto new_val = vmsdk::MakeUniqueValkeyString(absl::string_view(
+      it->second.vector_record->GetRawVector(), it->second.vector_record_size));
   ValkeyModuleString *record{nullptr};
   ValkeyModule_HashGet(open_key.get(), VALKEYMODULE_HASH_NONE,
                        attribute_identifier_str.get(), &record, nullptr);
   if (!record) {
     return;
   }
+  auto db_val = vmsdk::UniquePtrValkeyString(record);
+  if (ValkeyModule_StringCompare(db_val.get(), new_val.get()) != 0) {
+    return;
+  }
   ValkeyModule_HashSet(open_key.get(), VALKEYMODULE_HASH_NONE,
-                       attribute_identifier_str.get(), record, nullptr);
+                       attribute_identifier_str.get(), new_val.get(), nullptr);
 }
 
 void VectorRegistry::UntrackIfUnused(
     const InternedStringPtr &key,
-    const InternedStringPtr &interned_attribute_identifier) {
-  RegistryKey search_key = std::make_pair(key, interned_attribute_identifier);
+    const InternedStringPtr &interned_attribute_identifier, uint32_t db_num) {
+  RegistryKey search_key{db_num, key, interned_attribute_identifier};
   absl::MutexLock lock(&mutex_);
   LockFreeUntrackIfUnused(search_key);
 }

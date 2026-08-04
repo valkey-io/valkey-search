@@ -52,7 +52,7 @@ class VectorRegistry {
       const InternedStringPtr &key,
       const InternedStringPtr &attribute_identifier, ValkeyModuleString *vector,
       Allocator *allocator,
-      const data_model::AttributeDataType &attribute_data_type)
+      const data_model::AttributeDataType &attribute_data_type, uint32_t db_num)
       ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Retrieves the tracked VectorRecord and raw payload byte size for a given
@@ -60,15 +60,15 @@ class VectorRegistry {
   // lookup_record_misses if not present.
   std::pair<std::shared_ptr<indexes::VectorRecord>, size_t> LookupRecord(
       const InternedStringPtr &key,
-      const InternedStringPtr &interned_attribute_identifier) const
-      ABSL_LOCKS_EXCLUDED(mutex_);
+      const InternedStringPtr &interned_attribute_identifier,
+      uint32_t db_num) const ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Batch untracks a map of keys if the registry holds the last remaining
   // reference to each vector record.
   void BatchUntrackIfUnused(const InternedStringPtr &attribute_identifier,
                             InternedStringHashMap<indexes::TrackedKeyMetadata>
-                                &&tracked_metadata_by_key)
-      ABSL_LOCKS_EXCLUDED(mutex_);
+                                &&tracked_metadata_by_key,
+                            uint32_t db_num) ABSL_LOCKS_EXCLUDED(mutex_);
 
   struct Stats {
     size_t entry_cnt;
@@ -81,14 +81,30 @@ class VectorRegistry {
 
   ValkeyModuleCtx *GetCtx() const { return ctx_.get(); }
 
+  bool IsSharingActive() const { return hash_vector_sharing_; }
+
   // Untracks a vector record entry from the registry if the registry holds the
   // sole remaining reference (use_count == 1).
   void UntrackIfUnused(const InternedStringPtr &key,
-                       const InternedStringPtr &interned_attribute_identifier)
-      ABSL_LOCKS_EXCLUDED(mutex_);
+                       const InternedStringPtr &interned_attribute_identifier,
+                       uint32_t db_num) ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
-  using RegistryKey = std::pair<InternedStringPtr, InternedStringPtr>;
+  struct RegistryKey {
+    uint32_t db_num;
+    InternedStringPtr key;
+    InternedStringPtr attribute_identifier;
+
+    bool operator==(const RegistryKey &o) const {
+      return db_num == o.db_num && key == o.key &&
+             attribute_identifier == o.attribute_identifier;
+    }
+
+    template <typename H>
+    friend H AbslHashValue(H h, const RegistryKey &k) {
+      return H::combine(std::move(h), k.db_num, k.key, k.attribute_identifier);
+    }
+  };
 
   struct RegistryValue {
     std::shared_ptr<indexes::VectorRecord> vector_record;
@@ -115,13 +131,15 @@ class VectorRegistry {
   // Shares a tracked vector string memory reference directly with the Valkey
   // Hash data model in the engine.
   bool ShareWithValkeyHash(
-      const InternedStringPtr &key, absl::string_view attribute_identifier,
+      uint32_t db_num, const InternedStringPtr &key,
+      absl::string_view attribute_identifier,
       const indexes::VectorRecord *vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
 
   // Reverts external shared vector references in the Valkey engine back to
   // standard string values prior to untracking.
-  void DetachFromValkeyHash(const RegistryKey &search_key);
+  void DetachFromValkeyHash(const RegistryKey &search_key)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Helper method that checks use_count and untracks an entry while mutex_ is
   // held.

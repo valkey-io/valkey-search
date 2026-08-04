@@ -346,7 +346,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
   }
 

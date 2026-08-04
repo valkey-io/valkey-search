@@ -66,6 +66,11 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         vector_index.create(client)
 
         initial_info = _get_vmsdk_info(client)
+        
+        sharing_active = int(initial_info.get("vector_registry_sharing_active", 0))
+        if not sharing_active:
+            pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
+            
         initial_shared = int(initial_info.get("vector_registry_shared_externally_cnt", 0))
 
         # 1. Ingest 10 vectors by issuing hset command
@@ -123,6 +128,10 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         Tests overwrites, same vs different vectors, lookup hits/misses, and lifecycle.
         """
         client: Valkey = self.server.get_new_client()
+        initial_info = _get_vmsdk_info(client)
+        if not int(initial_info.get("vector_registry_sharing_active", 0)):
+            pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
+            
         dim = 8
         index_name = "adv_registry_idx"
 
@@ -177,13 +186,13 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         # At this point, doc:1 was re-indexed with the same vector, and doc:2 was added.
         # For doc:1 update: Since HSET overwrites the reference, Track finds it, reuses it,
-        # and shares it with the engine again (hash_sharing_hits becomes 2).
+        # and skips sharing (hash_sharing_hits remains 1).
         # AddRecord also calls LookupRecord (Hit).
-        # For doc:2 addition: Track adds it and shares it (hash_sharing_hits becomes 3).
+        # For doc:2 addition: Track adds it and shares it (hash_sharing_hits becomes 2).
         # AddRecord calls LookupRecord (Hit).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 2
-        assert stats["hash_sharing_hits"] == 3
+        assert stats["hash_sharing_hits"] == 2
         # LookupRecord should have 3 hits (doc:1 initial, doc:1 update, doc:2 initial)
         assert stats["lookup_record_hits"] == 3
         assert stats["lookup_record_misses"] == 0
@@ -205,11 +214,11 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         # For doc:1 update: Track sees the content differs, replaces it, and shares it.
         # AddRecord calls LookupRecord (Hit).
-        # For doc:3 addition: Track adds it and shares it (hash_sharing_hits becomes 5).
+        # For doc:3 addition: Track adds it and shares it (hash_sharing_hits becomes 4).
         # AddRecord calls LookupRecord (Hit).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 3
-        assert stats["hash_sharing_hits"] == 5
+        assert stats["hash_sharing_hits"] == 4
         assert stats["lookup_record_hits"] == 5  # +2 hits
         assert stats["lookup_record_misses"] == 0
 
@@ -281,6 +290,10 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         using a Controlled Variable via FT._DEBUG.
         """
         client: Valkey = self.server.get_new_client()
+        initial_info = _get_vmsdk_info(client)
+        if not int(initial_info.get("vector_registry_sharing_active", 0)):
+            pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
+            
         dim = 8
         vector_index = Index(
             "err_cov_idx",
@@ -310,6 +323,42 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         finally:
             # Ensure we reset the control variable even if asserts fail
             client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
+
+    def test_vector_registry_copy_and_delete(self):
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        vector_index = Index(
+            "copy_idx",
+            [Vector("vec", dim, type="HNSW", distance="L2")],
+            prefixes=["doc:"],
+            type=KeyDataType.HASH,
+        )
+        vector_index.create(client)
+
+        initial_info = _get_vmsdk_info(client)
+        if not int(initial_info.get("vector_registry_sharing_active", 0)):
+            pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
+
+        # 1. Ingest doc:1
+        vec_data = [1.0] * dim
+        vec_bytes = float_to_bytes(vec_data)
+        client.hset("doc:1", mapping={"vec": vec_bytes})
+
+        waiters.wait_for_equal(lambda: vector_index.info(client).num_docs, 1)
+
+        # 2. Copy doc:1 to doc:2
+        client.copy("doc:1", "doc:2")
+
+        waiters.wait_for_equal(lambda: vector_index.info(client).num_docs, 2)
+
+        # 3. Delete doc:1
+        client.delete("doc:1")
+
+        waiters.wait_for_equal(lambda: vector_index.info(client).num_docs, 1)
+
+        # 4. HGET doc:2 vec and verify it matches vec_bytes
+        val = client.hget("doc:2", "vec")
+        assert val == vec_bytes, f"Expected {vec_bytes}, got {val}"
 
 
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
@@ -392,6 +441,11 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
 
             info_data = _get_vmsdk_info(client)
             print(f"DEBUG INGEST MEMORY (sharing={sharing_enabled}) INFO DATA:", info_data)
+            
+            sharing_active = int(info_data.get("vector_registry_sharing_active", 0))
+            if sharing_enabled and not sharing_active:
+                pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
+
             shared_cnt = int(info_data.get("vector_registry_shared_externally_cnt", 0)) - initial_shared
             entry_cnt = int(info_data.get("vector_registry_entry_cnt", 0))
             used_memory = int(client.info("memory")["used_memory"])

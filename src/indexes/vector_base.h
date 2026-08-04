@@ -243,8 +243,9 @@ class VectorBase : public IndexBase {
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
-             absl::string_view attribute_identifier)
+             absl::string_view attribute_identifier, uint32_t db_num)
       : IndexBase(indexer_type),
+        db_num_(db_num),
         dimensions_(dimensions),
         attribute_identifier_(attribute_identifier),
         interned_attribute_identifier_(
@@ -285,6 +286,7 @@ class VectorBase : public IndexBase {
   virtual std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const = 0;
 
+  uint32_t db_num_;
   int dimensions_;
   std::string attribute_identifier_;
   InternedStringPtr interned_attribute_identifier_;

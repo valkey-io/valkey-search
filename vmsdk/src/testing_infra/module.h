@@ -1644,6 +1644,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_RegisterStringConfig = &TestValkeyModule_RegisterStringConfig;
   ValkeyModule_RegisterEnumConfig = &TestValkeyModule_RegisterEnumConfig;
   ValkeyModule_LoadConfigs = &TestValkeyModule_LoadConfigs;
+  ValkeyModule_StringCompare = &TestValkeyModule_StringCompare;
   ValkeyModule_SetConnectionProperties =
       &TestValkeyModule_SetConnectionProperties;
   ValkeyModule_SetShardId = &TestValkeyModule_SetShardId;

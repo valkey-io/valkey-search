@@ -1,6 +1,6 @@
 # Enable default check groups and the include-cleaner check
 # Explicitly disable styling and complexity checks that conflict with standard codebase patterns
-Checks: 'clang-diagnostic-*,clang-analyzer-*,abseil-*,bugprone-*,modernize-*,-modernize-use-trailing-return-type,-modernize-use-nodiscard,performance-*,readability-*,-readability-identifier-length,-readability-uppercase-literal-suffix,-readability-function-cognitive-complexity,misc-unused-using-decls,misc-include-cleaner'
+Checks: 'clang-diagnostic-*,clang-analyzer-*,abseil-*,bugprone-*,modernize-*,-modernize-use-trailing-return-type,-modernize-use-nodiscard,performance-*,readability-*,-readability-identifier-length,-readability-uppercase-literal-suffix,-readability-function-cognitive-complexity,-readability-implicit-bool-conversion,misc-unused-using-decls,misc-include-cleaner'
 
 # Analyze headers from src, vmsdk (including its tests), and project tests
 HeaderFilterRegex: 'src/.*|vmsdk/.*|tests/.*|testing/.*'

@@ -25,6 +25,23 @@ if [ "$UPDATE" = false ] && [ -z "$FILE" ]; then
   exit 1
 fi
 
+# Helper function to find the best compilation database file
+get_tidy_db_file() {
+  if [ -f ".build-release-container/compile_commands.json" ]; then
+    echo ".build-release-container/compile_commands.json"
+  elif [ -f ".build-debug-container/compile_commands.json" ]; then
+    echo ".build-debug-container/compile_commands.json"
+  elif [ -f ".build-release/compile_commands.json" ]; then
+    echo ".build-release/compile_commands.json"
+  elif [ -f ".build-debug/compile_commands.json" ]; then
+    echo ".build-debug/compile_commands.json"
+  elif [ -f "compile_commands.json" ]; then
+    echo "compile_commands.json"
+  else
+    echo ""
+  fi
+}
+
 # Multi-file update mode
 if [ "$UPDATE" = true ]; then
   BASE_BRANCH="${BASE_BRANCH:-origin/main}"
@@ -91,9 +108,16 @@ get_header_filter() {
 
 # Helper function to setup the compilation database with adjusted paths (for source files)
 setup_tidy_db() {
-  local db_file="compile_commands.json"
+  local db_file
+  db_file=$(get_tidy_db_file)
   TIDY_DB_DIR="."
   TEMP_DB_DIR=""
+  
+  if [ -z "$db_file" ]; then
+    echo "Warning: No compilation database found. clang-tidy checks may fail." >&2
+    return
+  fi
+  
   if [ -f "$db_file" ]; then
     local host_dir
     host_dir=$(grep -m1 '"directory":' "$db_file" | sed -E 's/.*"directory": "([^"]*)".*/\1/')
@@ -109,6 +133,8 @@ setup_tidy_db() {
       TEMP_DB_DIR=$(mktemp -d)
       sed "s|$host_root|$container_root|g" "$db_file" > "$TEMP_DB_DIR/compile_commands.json"
       TIDY_DB_DIR="$TEMP_DB_DIR"
+    else
+      TIDY_DB_DIR=$(dirname "$db_file")
     fi
   fi
 }
@@ -116,7 +142,7 @@ setup_tidy_db() {
 # Fix mode (single file)
 if [ "$FIX" = true ]; then
   if [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
-    TIDY_ARGS=("-fix" "--header-filter=$(get_header_filter "$FILE")")
+    TIDY_ARGS=("-fix" "-checks=-misc-include-cleaner" "--header-filter=$(get_header_filter "$FILE")")
     
     if [[ "$FILE" =~ \.(h|hpp)$ ]]; then
       CC_FILE="${FILE%.*}.cc"
@@ -126,13 +152,13 @@ if [ "$FIX" = true ]; then
       
       if [ -f "$CC_FILE" ]; then
         echo "Header file detected. Fixing clang-tidy issues using $CC_FILE context..."
-        DB_FILE="compile_commands.json"
-        if [ -f "$DB_FILE" ]; then
+        DB_FILE=$(get_tidy_db_file)
+        if [ -n "$DB_FILE" ] && [ -f "$DB_FILE" ]; then
           FLAGS=$(python3 ci/extract_flags.py "$DB_FILE" "$CC_FILE")
           echo "Running clang-tidy with fixes on $FILE..."
           clang-tidy "${TIDY_ARGS[@]}" "$FILE" -- -x c++ $FLAGS || echo "clang-tidy reported errors during fixing."
         else
-          echo "Warning: compile_commands.json not found. Skipping clang-tidy fixes for header."
+          echo "Warning: No compilation database found. Skipping clang-tidy fixes for header."
         fi
       else
         echo "Warning: No matching source file found for header $FILE. Skipping clang-tidy fixes."
@@ -179,15 +205,15 @@ if [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
     
     if [ -f "$CC_FILE" ]; then
       echo "Header file detected. Running clang-tidy on $FILE using $CC_FILE context..."
-      DB_FILE="compile_commands.json"
-      if [ -f "$DB_FILE" ]; then
+      DB_FILE=$(get_tidy_db_file)
+      if [ -n "$DB_FILE" ] && [ -f "$DB_FILE" ]; then
         FLAGS=$(python3 ci/extract_flags.py "$DB_FILE" "$CC_FILE")
         if ! clang-tidy "${TIDY_ARGS[@]}" -warnings-as-errors='*' "$FILE" -- -x c++ $FLAGS; then
           echo "clang-tidy failed for $FILE" >&2
           exit 1
         fi
       else
-        echo "Warning: compile_commands.json not found. Skipping clang-tidy for header."
+        echo "Warning: No compilation database found. Skipping clang-tidy for header."
       fi
     else
       echo "Warning: No matching source file found for header $FILE. Skipping clang-tidy."

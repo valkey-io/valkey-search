@@ -1965,6 +1965,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     consumed_data = index_schema->ConsumeTrackedMutatedAttribute(key, false);
     EXPECT_FALSE(consumed_data.has_value());
     EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 0);
+    WaitWorkerTasksAreCompleted(mutations_thread_pool);
   };
 
   auto vectors = DeterministicallyGenerateVectors(3, dimensions, 2);

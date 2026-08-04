@@ -1041,12 +1041,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       // A label can appear on multiple slots in RDBs written by older versions.
       // There can be one live slot and any number of tombstoned slots all
       // carrying the same label. This is not fundamentally incorrect, we just
-      // need to carefully rebuild the label lookup to point the label atthe
+      // need to carefully rebuild the label lookup to point the label at the
       // live slot if there is one.
       auto dup_it = label_lookup_.find(ext_label);
       if (dup_it == label_lookup_.end()) {
         label_lookup_[ext_label] = i;
       } else if (!isMarkedDeleted(static_cast<tableint>(i))) {
+        loadCheck(isMarkedDeleted(dup_it->second),
+                  "duplicate live label in index");
         // Overwrite mapping to tombstoned slot with the live one.
         dup_it->second = i;
       }

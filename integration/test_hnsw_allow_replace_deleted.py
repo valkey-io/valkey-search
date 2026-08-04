@@ -209,6 +209,7 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
     """
 
     def append_startup_args(self, args):
+        args = super().append_startup_args(args)
         args["search.hnsw-allow-replace-deleted"] = "yes"
         # Two writer threads so the parked modify and the delete run
         # concurrently on separate workers.
@@ -268,12 +269,14 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
             "FT._DEBUG", "PAUSEPOINT", "RESET",
             "hnsw_modify_between_delete_and_add") == b"OK"
         update_thread.join()
+        assert update_err[0] is None, \
+            f"Modify HSET raised in its thread: {update_err[0]!r}"
 
         # Reloading from the RDB rebuilds label_lookup_ from the on-disk
         # labels. A buggy index fails to load with "duplicate label in index".
         # The fixed index routes the existing label to an in-place update, so
         # it loads cleanly.
-        client2.execute_command("SAVE")
+        assert client2.execute_command("SAVE") == b"OK"
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
         waiters.wait_for_true(

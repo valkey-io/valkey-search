@@ -1081,12 +1081,12 @@ TEST_F(VectorIndexTest, RejectLevel0NeighborOutOfRange) {
   ExpectReject(std::move(golden), "level-0 neighbor id out of range");
 }
 
-TEST_F(VectorIndexTest, RejectDuplicateLabel) {
+TEST_F(VectorIndexTest, RejectDuplicateLiveLabel) {
   auto golden = MultiLayerGolden();
   auto label0 = PeekAt<hnswlib::labeltype>(golden.chunks[1], kLabelOff);
   PokeAt<hnswlib::labeltype>(&golden.chunks[3], kLabelOff,
                              label0);  // element 2 dup
-  ExpectReject(std::move(golden), "duplicate label in index");
+  ExpectReject(std::move(golden), "duplicate live label in index");
 }
 
 // ---- Upper-level record corruption ---------------------------------------

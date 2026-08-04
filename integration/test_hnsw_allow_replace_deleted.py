@@ -8,6 +8,7 @@ from valkeytestframework.conftest import resource_port_tracker
 from indexes import Index, Vector
 from ft_info_parser import FTInfoParser
 from util import waiters
+from utils import pausepoint_hit, run_in_thread
 
 
 class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
@@ -184,3 +185,111 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
             f"KNN search returned {search_result[0]}, expected 4"
 
         client.execute_command("FT.DROPINDEX", "idx")
+
+
+class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
+    """
+    Reproduce the duplicate-label RDB corruption from a modify/delete race.
+
+    ModifyRecordImpl is not atomic. It first calls markDelete() on the record to
+    tombstone the existing slot with the label and then calls addPoint() to add
+    the new vector with the exact same label. Theoretically,
+    std::unordered_set<tableint> deleted_elements makes no promises about which
+    slot deleted_elements.begin() points to. In practice though, it's always
+    the last added slot. In the normal case, the same slot will be updated and
+    there will be no duplicate labels. The problem occurs when another document
+    is deleted between markDelete() and addPoint(). It will put another
+    tombstoned slot at the front of deleted_elements and the addPoint() for the
+    modified record will use it, adding the label to a new slot and still keeping
+    the same label in the old slot it just tombstoned.
+
+    The pausepoint "hnsw_modify_between_delete_and_add" sits between those two
+    calls, so the test can sequence the race deterministically rather than
+    relying on timing.
+    """
+
+    def append_startup_args(self, args):
+        args["search.hnsw-allow-replace-deleted"] = "yes"
+        # Two writer threads so the parked modify and the delete run
+        # concurrently on separate workers.
+        args["search.writer-threads"] = "2"
+        return args
+
+    def test_modify_steals_deleted_slot_causing_duplicate_label(self):
+        client: Valkey = self.server.get_new_client()
+
+        hnsw_index = Index(
+            "idx",
+            [Vector("vector", 4, type="HNSW", distance="L2")],
+            prefixes=["doc:"]
+        )
+        hnsw_index.create(client)
+
+        vec0 = struct.pack('<4f', 1.0, 2.0, 3.0, 4.0)
+        vec1 = struct.pack('<4f', 5.0, 6.0, 7.0, 8.0)
+        client.hset("doc:0", mapping={"vector": vec0})
+        client.hset("doc:1", mapping={"vector": vec1})
+
+        waiters.wait_for_equal(
+            lambda: hnsw_index.info(client).num_docs, 2
+        )
+
+        # Pause the next modify between its markDelete and addPoint.
+        assert client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET",
+            "hnsw_modify_between_delete_and_add") == b"OK"
+
+        # Modify doc:0. markDelete runs on its slot, and then the thread parks
+        # at the pausepoint before addPoint.
+        vec0_new = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
+        update_thread, _, update_err = run_in_thread(
+            lambda: client.hset("doc:0", mapping={"vector": vec0_new})
+        )
+        waiters.wait_for_true(
+            lambda: pausepoint_hit(
+                client, "hnsw_modify_between_delete_and_add")
+        )
+
+        # Delete doc:1 while the modify is parked. This adds doc:1's slot to
+        # deleted_elements alongside the parked modify's own slot. doc:0 is
+        # still being updated rather than removed, so the index settles at one
+        # tracked document.
+        client2 = self.server.get_new_client()
+        client2.delete("doc:1")
+        waiters.wait_for_equal(
+            lambda: hnsw_index.info(client2).num_docs, 1
+        )
+
+        # Resume the modify. Its addPoint pops a slot off deleted_elements to
+        # reuse. If that happens to be doc:1's slot, doc:0's label is stamped
+        # onto it while doc:0's original slot still carries the same label, and
+        # now two on-disk records share one label.
+        assert client2.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET",
+            "hnsw_modify_between_delete_and_add") == b"OK"
+        update_thread.join()
+
+        # Reloading from the RDB rebuilds label_lookup_ from the on-disk
+        # labels. A buggy index fails to load with "duplicate label in index".
+        # The fixed index routes the existing label to an in-place update, so
+        # it loads cleanly.
+        client2.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+        client = self.server.get_new_client()
+        waiters.wait_for_true(
+            lambda: hnsw_index.backfill_complete(client)
+        )
+        ft_info = hnsw_index.info(client)
+        assert ft_info.num_docs == 1, \
+            f"Expected 1 doc after update+delete, got {ft_info.num_docs}"
+
+        # The survivor should be doc:0 carrying its updated vector.
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 2 @vector $q]",
+            "PARAMS", "2", "q", vec0_new,
+        )
+        assert search_result[0] == 1, \
+            f"Expected 1 search result, got {search_result[0]}"
+        assert search_result[1] == b"doc:0", \
+            f"Expected doc:0 to survive, got {search_result[1]}"

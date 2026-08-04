@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -843,6 +844,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
              *(char **)((*data_level0_memory_)[i] + offsetData_), vector_size_);
       memcpy(buf.data() + size_links_level0_ + vector_size_,
              (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
+
       VMSDK_RETURN_IF_ERROR(
           output.SaveChunk(buf.data(), serialize_size_data_per_element_));
     };
@@ -1035,9 +1037,19 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
 
       labeltype ext_label = getExternalLabel(i);
-      loadCheck(label_lookup_.find(ext_label) == label_lookup_.end(),
-                "duplicate label in index");
-      label_lookup_[ext_label] = i;
+
+      // A label can appear on multiple slots in RDBs written by older versions.
+      // There can be one live slot and any number of tombstoned slots all
+      // carrying the same label. This is not fundamentally incorrect, we just
+      // need to carefully rebuild the label lookup to point the label atthe
+      // live slot if there is one.
+      auto dup_it = label_lookup_.find(ext_label);
+      if (dup_it == label_lookup_.end()) {
+        label_lookup_[ext_label] = i;
+      } else if (!isMarkedDeleted(static_cast<tableint>(i))) {
+        // Overwrite mapping to tombstoned slot with the live one.
+        dup_it->second = i;
+      }
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
       loadCheck(size_chunk->size() == sizeof(size_t),
@@ -1275,8 +1287,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     std::unique_lock<std::mutex> lock_deleted_elements(deleted_elements_lock);
     bool is_vacant_place = !deleted_elements.empty();
     if (is_vacant_place) {
-      internal_id_replaced = *deleted_elements.begin();
-      deleted_elements.erase(internal_id_replaced);
+      auto it = deleted_elements.begin();
+      internal_id_replaced = *it;
+      deleted_elements.erase(it);
     }
     lock_deleted_elements.unlock();
 

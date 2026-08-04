@@ -77,6 +77,24 @@ class Metrics {
     vmsdk::LatencySampler flat_vector_index_search_latency{
         absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
         absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    vmsdk::LatencySampler svs_vector_index_search_latency{
+        absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
+        absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    vmsdk::LatencySampler svs_flush_latency{
+        absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
+        absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    vmsdk::LatencySampler svs_search_core_latency{
+        absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
+        absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    vmsdk::LatencySampler svs_search_lock_wait_latency{
+        absl::ToInt64Nanoseconds(absl::Nanoseconds(1)),
+        absl::ToInt64Nanoseconds(absl::Seconds(1)), LATENCY_PRECISION};
+    std::atomic<uint64_t> svs_flush_cnt{0};
+    std::atomic<uint64_t> svs_flushed_vectors_cnt{0};
+    std::atomic<uint64_t> svs_pending_buffer_vectors{0};
+    std::atomic<uint64_t> svs_search_cnt{0};
+    std::atomic<uint64_t> svs_searches_during_flush_cnt{0};
+    std::atomic<uint64_t> svs_search_blackout_us_total{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_success_cnt{0};
     std::atomic<uint64_t> coordinator_server_get_global_metadata_failure_cnt{0};
     std::atomic<uint64_t> coordinator_server_search_index_partition_success_cnt{

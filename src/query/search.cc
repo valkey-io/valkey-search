@@ -39,6 +39,9 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#ifdef ENABLE_SVS
+#include "src/indexes/vector_svs.h"
+#endif
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/planner.h"
@@ -164,6 +167,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
         std::move(latency_sample));
     return res;
   }
+#ifdef ENABLE_SVS
+  if (vector_index->GetIndexerType() == indexes::IndexerType::kSVS) {
+    auto vector_svs = dynamic_cast<indexes::VectorSVS<float> *>(vector_index);
+    return vector_svs->Search(parameters.query, parameters.k,
+                              parameters.cancellation_token,
+                              std::move(inline_filter),
+                              parameters.search_window_size);
+  }
+#endif
   CHECK(false) << "Unsupported indexer type: "
                << (int)vector_index->GetIndexerType();
 }
@@ -550,7 +562,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         }
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
-        case indexes::IndexerType::kFlat: {
+        case indexes::IndexerType::kFlat:
+        case indexes::IndexerType::kSVS: {
           auto vector_index =
               dynamic_cast<indexes::VectorBase *>(attribute_info.index);
           auto vector = vector_index->GetValue(neighbor.external_id);
@@ -695,8 +708,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
   auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
-  if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-      index->GetIndexerType() != indexes::IndexerType::kFlat) {
+  if (!indexes::IsVectorIndexType(index->GetIndexerType())) {
     return absl::InvalidArgumentError(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
@@ -991,6 +1003,13 @@ absl::Status ParseKnnInner(query::SearchParameters &parameters,
         return absl::InvalidArgumentError("EF_RUNTIME argument is missing");
       }
       parameters.parse_vars.ef_string = params[i++];
+    } else if (absl::EqualsIgnoreCase(params[i], "SEARCH_WINDOW_SIZE")) {
+      i++;
+      if (i == params.size()) {
+        return absl::InvalidArgumentError(
+            "SEARCH_WINDOW_SIZE argument is missing");
+      }
+      parameters.parse_vars.search_window_size_string = params[i++];
     } else if (absl::EqualsIgnoreCase(params[i], kAsParam)) {
       i++;
       if (i == params.size()) {
@@ -1115,8 +1134,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         << "`. ";
     // Validate the index exists and is a vector index.
     VMSDK_ASSIGN_OR_RETURN(auto index, index_schema->GetIndex(attribute_alias));
-    if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
-        index->GetIndexerType() != indexes::IndexerType::kFlat) {
+    if (!indexes::IsVectorIndexType(index->GetIndexerType())) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Index field `", attribute_alias, "` is not a Vector index "));
     }
@@ -1164,6 +1182,15 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
         auto ef_string,
         SubstituteParam(parameters, parameters.parse_vars.ef_string));
     VMSDK_ASSIGN_OR_RETURN(parameters.ef, vmsdk::To<unsigned>(ef_string));
+  }
+
+  if (!parameters.parse_vars.search_window_size_string.empty()) {
+    VMSDK_ASSIGN_OR_RETURN(
+        auto sws_string,
+        SubstituteParam(parameters,
+                        parameters.parse_vars.search_window_size_string));
+    VMSDK_ASSIGN_OR_RETURN(parameters.search_window_size,
+                           vmsdk::To<unsigned>(sws_string));
   }
 
   if (!parameters.parse_vars.score_as_string.empty()) {

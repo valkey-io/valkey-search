@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
@@ -74,8 +75,7 @@ class VectorHNSW : public VectorBase {
     return space_.get();
   }
 
-  size_t GetCapacity() const override ABSL_LOCKS_EXCLUDED(resize_mutex_) {
-    absl::ReaderMutexLock lock(&resize_mutex_);
+  size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->max_elements_;
   }
   // Reading immutable index parameters does not require a mutex. Bypassing

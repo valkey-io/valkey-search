@@ -230,41 +230,35 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
         vec1 = struct.pack('<4f', 5.0, 6.0, 7.0, 8.0)
         client.hset("doc:0", mapping={"vector": vec0})
         client.hset("doc:1", mapping={"vector": vec1})
-
-        waiters.wait_for_equal(
-            lambda: hnsw_index.info(client).num_docs, 2
-        )
+        assert hnsw_index.info(client).num_docs == 2
 
         # Pause the next modify between its markDelete and addPoint.
         assert client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET",
             "hnsw_modify_between_delete_and_add") == b"OK"
 
-        # Modify doc:0. markDelete runs on its slot, and then the thread parks
+        # Modify doc:1. markDelete runs on its slot, and then the thread parks
         # at the pausepoint before addPoint.
-        vec0_new = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
+        vec1_new = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
         update_thread, _, update_err = run_in_thread(
-            lambda: client.hset("doc:0", mapping={"vector": vec0_new})
+            lambda: client.hset("doc:1", mapping={"vector": vec1_new})
         )
         waiters.wait_for_true(
             lambda: pausepoint_hit(
                 client, "hnsw_modify_between_delete_and_add")
         )
 
-        # Delete doc:1 while the modify is parked. This adds doc:1's slot to
-        # deleted_elements alongside the parked modify's own slot. doc:0 is
-        # still being updated rather than removed, so the index settles at one
-        # tracked document.
+        # Delete doc:0 while the modify is parked. This adds doc:0's slot to
+        # deleted_elements.
         client2 = self.server.get_new_client()
-        client2.delete("doc:1")
+        client2.delete("doc:0")
         waiters.wait_for_equal(
             lambda: hnsw_index.info(client2).num_docs, 1
         )
 
         # Resume the modify. Its addPoint pops a slot off deleted_elements to
-        # reuse. If that happens to be doc:1's slot, doc:0's label is stamped
-        # onto it while doc:0's original slot still carries the same label, and
-        # now two on-disk records share one label.
+        # reuse. In practice we expect that to be doc:0's slot, so doc:1's live
+        # record mapped in label_lookup_ lands on slot 0 and its tombstone on slot 1.
         assert client2.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "RESET",
             "hnsw_modify_between_delete_and_add") == b"OK"
@@ -273,10 +267,8 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
             f"Modify HSET raised in its thread: {update_err[0]!r}"
 
         # Reloading from the RDB rebuilds label_lookup_ from the on-disk
-        # labels. A buggy index fails to load with "duplicate label in index".
-        # The fixed index routes the existing label to an in-place update, so
-        # it loads cleanly.
-        assert client2.execute_command("SAVE") == b"OK"
+        # labels. There should be no validation error hit.
+        assert client2.execute_command("SAVE")
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
         waiters.wait_for_true(
@@ -286,13 +278,32 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
         assert ft_info.num_docs == 1, \
             f"Expected 1 doc after update+delete, got {ft_info.num_docs}"
 
-        # The survivor should be doc:0 carrying its updated vector.
+        # The survivor should be doc:1 carrying its updated vector.
         search_result = client.execute_command(
             "FT.SEARCH", "idx",
             "*=>[KNN 2 @vector $q]",
-            "PARAMS", "2", "q", vec0_new,
+            "PARAMS", "2", "q", vec1_new,
+            "RETURN", "1", "vector",
         )
         assert search_result[0] == 1, \
             f"Expected 1 search result, got {search_result[0]}"
-        assert search_result[1] == b"doc:0", \
-            f"Expected doc:0 to survive, got {search_result[1]}"
+        assert search_result[1] == b"doc:1", \
+            f"Expected doc:1 to survive, got {search_result[1]}"
+        returned_fields = search_result[2]
+        vector_value = returned_fields[returned_fields.index(b"vector") + 1]
+        assert vector_value == vec1_new, \
+            f"Expected doc:1 to carry the updated vector, got {vector_value!r}"
+
+        # Deleting the survivor must actually remove it, proving label_lookup_
+        # resolves the label to the live slot rather than a tombstone.
+        client.delete("doc:1")
+        hnsw_index.info(client).num_docs == 0
+        int(client.info("SEARCH").get(
+            "search_hnsw_remove_exceptions_count", 0)) == 0
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 2 @vector $q]",
+            "PARAMS", "2", "q", vec1_new,
+        )
+        assert search_result[0] == 0, \
+            f"Expected doc:1 to be deleted, got {search_result[0]} results"

@@ -3,7 +3,6 @@ import difflib
 import json
 import logging
 import os
-import math
 import pprint
 import time
 from typing import Any, List
@@ -375,11 +374,11 @@ class VSSOutput:
                         return False
                 elif attr == "score":
                     try:
-                        if not math.isclose(
+                        if not np.isclose(
                             float(self.keys[k][attr]),
                             float(other.keys[k][attr]),
-                            rel_tol=1e-5,
-                            abs_tol=1e-5,
+                            rtol=1e-5,
+                            atol=1e-6,
                         ):
                             return False
                     except Exception:

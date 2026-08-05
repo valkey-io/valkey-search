@@ -464,6 +464,22 @@ size_t Tag::GetUnTrackedKeyCount() const {
   return untracked_keys_.size();
 }
 
+size_t Tag::GetTagValueDocCount(absl::string_view value) const {
+  std::string norm = Normalize(value);
+  absl::MutexLock lock(&index_mutex_);
+  void* slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char*>(norm.data()), norm.size(),
+              &slot) != 1) {
+    return 0;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to read size, then Release to
+  // leave the live storage planted in the rax slot (mirrors Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  size_t count = bag.size();
+  (void)bag.Release();
+  return count;
+}
+
 bool Tag::IsTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.contains(key);

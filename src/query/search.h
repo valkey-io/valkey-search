@@ -358,10 +358,6 @@ bool ShouldReturnNoResults(const SearchParameters& parameters);
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
-// Computes the weighted score for a predicate tree where the document is known
-// to match. Exposed for testing.
-float ComputeMatchedPredicateScore(const Predicate* predicate);
-
 // Scores admitted candidate documents by walking the predicate tree.
 // For each TermPredicate leaf, looks up each candidate's term frequency
 // and feeds the scorer. Writes scores into candidates in-place. Sorting and

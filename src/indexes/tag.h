@@ -145,6 +145,13 @@ class Tag : public IndexBase {
 
   char GetSeparator() const { return separator_; }
   bool IsCaseSensitive() const { return case_sensitive_; }
+
+  // Number of documents carrying tag value `value` (0 if the value is absent).
+  // `value` is normalized (lowercased unless case-sensitive) before lookup, so
+  // callers pass the raw query value. Feeds the BM25 IDF document frequency
+  // (dt) for tag scoring. O(1) rax lookup plus a bag size read.
+  size_t GetTagValueDocCount(absl::string_view value) const
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(

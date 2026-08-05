@@ -358,47 +358,10 @@ void RunSingleNeighborRecompute(
 }
 }  // namespace
 
-// (a)/(b): a mutated non-vector neighbor with a numeric leaf gets its score
-// recomputed through the scorer (weight * default document score 1.0) and the
-// value written to Neighbor.score.
-TEST_F(ResponseGeneratorTest, RecomputeNumericLeafScoreAppliedOnMutation) {
-  ValkeyModuleCtx fake_ctx;
-  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
-      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
-
-  UnitTestSearchParameters parameters;  // attribute_alias empty -> non-vector
-  MockAttributeDataType data_type;
-  std::vector<indexes::Neighbor> neighbors;
-  RunSingleNeighborRecompute(&fake_ctx, parameters, data_type, "k1",
-                             /*mutated=*/true, query::PredicateType::kNumeric,
-                             /*weight=*/3.0f, /*initial_neighbor_score=*/0.0f,
-                             /*vector_identifier=*/std::nullopt, neighbors);
-
-  ASSERT_EQ(neighbors.size(), 1);
-  EXPECT_FLOAT_EQ(neighbors[0].score, 3.0f);
-}
-
-// (b): a matched tag leaf recomputes to its weight as well.
-TEST_F(ResponseGeneratorTest, RecomputeTagLeafScoreEqualsWeight) {
-  ValkeyModuleCtx fake_ctx;
-  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
-      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
-
-  UnitTestSearchParameters parameters;
-  MockAttributeDataType data_type;
-  std::vector<indexes::Neighbor> neighbors;
-  RunSingleNeighborRecompute(&fake_ctx, parameters, data_type, "k1",
-                             /*mutated=*/true, query::PredicateType::kTag,
-                             /*weight=*/2.0f, /*initial_neighbor_score=*/0.0f,
-                             /*vector_identifier=*/std::nullopt, neighbors);
-
-  ASSERT_EQ(neighbors.size(), 1);
-  EXPECT_FLOAT_EQ(neighbors[0].score, 2.0f);
-}
-
-// (c): a neighbor that did NOT mutate (db_seq == sequence_number) keeps its
-// carried score untouched — VerifyFilter returns on the fast path with no
-// recomputed score.
+// A neighbor that did NOT mutate (db_seq == sequence_number) keeps its carried
+// score untouched — VerifyFilter returns on the fast path with no recomputed
+// score. (The magnitude of a recomputed numeric/tag score is covered by the
+// query-level TagScoreTest in search_test.cc, which uses real indexes.)
 TEST_F(ResponseGeneratorTest, NoRecomputeWhenNeighborNotMutated) {
   ValkeyModuleCtx fake_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
@@ -417,8 +380,8 @@ TEST_F(ResponseGeneratorTest, NoRecomputeWhenNeighborNotMutated) {
   EXPECT_FLOAT_EQ(neighbors[0].score, 7.0f);
 }
 
-// (d): a vector (KNN) query is never rescored — Neighbor.score there is a
-// distance and must be preserved even when the document mutated.
+// A vector (KNN) query is never rescored — Neighbor.score there is a distance
+// and must be preserved even when the document mutated.
 TEST_F(ResponseGeneratorTest, VectorQueryNeverRescoredOnMutation) {
   ValkeyModuleCtx fake_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
@@ -435,7 +398,7 @@ TEST_F(ResponseGeneratorTest, VectorQueryNeverRescoredOnMutation) {
       /*vector_identifier=*/std::make_optional<std::string>("vec"), neighbors);
 
   ASSERT_EQ(neighbors.size(), 1);
-  // The KNN distance-as-score is preserved (NOT overwritten by weight 3.0).
+  // The KNN distance-as-score is preserved, not recomputed.
   EXPECT_FLOAT_EQ(neighbors[0].score, 0.5f);
 }
 

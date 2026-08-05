@@ -7,6 +7,7 @@
 
 #include "src/query/search.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -1384,10 +1385,14 @@ INSTANTIATE_TEST_SUITE_P(
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {
  protected:
-  // Schema with one text field "text" and the given docs committed, so
-  // ScoreTextQuery sees real posting lists and a non-zero corpus.
-  std::shared_ptr<MockIndexSchema> BuildSchema(
-      const std::vector<std::pair<std::string, std::string>> &docs) {
+  // Schema with a text field "text", a case-insensitive tag field "color", and
+  // a numeric field "rating", so ScoreTextQuery sees real posting lists and a
+  // non-zero corpus. Each doc is (key, text, color); an empty color leaves the
+  // doc untracked by the tag index, and the numeric field needs no records
+  // (ScoreNode's numeric case returns 0 without touching the index).
+  std::shared_ptr<MockIndexSchema> BuildTextTagSchema(
+      const std::vector<std::tuple<std::string, std::string, std::string>>
+          &docs) {
     auto schema = CreateIndexSchema(kIndexSchemaName).value();
     EXPECT_CALL(*schema, GetIdentifier(::testing::_))
         .Times(::testing::AnyNumber());
@@ -1397,11 +1402,40 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
         CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
         text_schema);
     VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
-    for (const auto &[k, content] : docs) {
+    auto tag = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+    VMSDK_EXPECT_OK(schema->AddIndex("color", "color", tag));
+    // A numeric field so text+numeric composition can be scored. ScoreNode's
+    // kNumeric case returns 0 without touching the index (the pre-filter admits
+    // range membership), so the numeric index needs no records for scoring.
+    auto numeric =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
+    for (const auto &[k, content, color] : docs) {
       auto key = StringInternStore::Intern(k);
       VMSDK_EXPECT_OK(text->AddRecord(key, content));
       text_schema->CommitKeyData(key);
-      // Register the key so GetIndexKeyInfoSize() (total_docs) is non-zero.
+      if (!color.empty()) {
+        VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+      }
+      schema->SetIndexMutationSequenceNumber(key, 0);
+    }
+    return schema;
+  }
+
+  // Schema with ONLY a case-insensitive tag field "color" (no text field), for
+  // the degenerate text-less case. Each doc is (key, color).
+  std::shared_ptr<MockIndexSchema> BuildTagOnlySchema(
+      const std::vector<std::pair<std::string, std::string>> &docs) {
+    auto schema = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    auto tag = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+    VMSDK_EXPECT_OK(schema->AddIndex("color", "color", tag));
+    for (const auto &[k, color] : docs) {
+      auto key = StringInternStore::Intern(k);
+      VMSDK_EXPECT_OK(tag->AddRecord(key, color));
       schema->SetIndexMutationSequenceNumber(key, 0);
     }
     return schema;
@@ -1427,13 +1461,14 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
 };
 
 // Every case has the same shape: score `filter` against `key`, compare to a
-// linear combination of baseline single-filter scores. `expected` receives the
-// baseline scores in the order they appear in `baselines`. Optional
-// `no_match_keys` asserts the filter returns nullopt for keys that must not
-// match. Case names are preserved from the deleted weight_score_test.cc.
+// linear combination of baseline single-filter scores on the same key.
+// `expected` receives the baseline scores in the order they appear in
+// `baselines`. Optional `no_match_keys` asserts the filter returns nullopt for
+// keys that must not match. Docs are (key, text, color); pass "" for either
+// field a case does not use.
 struct ScoreCase {
   std::string test_name;
-  std::vector<std::pair<std::string, std::string>> docs;
+  std::vector<std::tuple<std::string, std::string, std::string>> docs;
   std::string key;
   std::vector<std::string> baselines;
   std::string filter;
@@ -1446,7 +1481,7 @@ class ScoreTextQueryTest : public ScoreTextQueryTestBase,
 
 TEST_P(ScoreTextQueryTest, ScoreMatchesFormula) {
   const auto &c = GetParam();
-  auto schema = BuildSchema(c.docs);
+  auto schema = BuildTextTagSchema(c.docs);
   std::vector<float> bases;
   for (const auto &f : c.baselines) {
     auto s = Score(*schema, f, c.key);
@@ -1465,15 +1500,16 @@ TEST_P(ScoreTextQueryTest, ScoreMatchesFormula) {
 INSTANTIATE_TEST_SUITE_P(
     ScoreTextQueryTests, ScoreTextQueryTest,
     ValuesIn<ScoreCase>({
-        // Leaf weight scales the score linearly。
+        // --- Text leaf weight + AND/OR composition ---
+        // Leaf weight scales the score linearly.
         {.test_name = "text_weight_0_1",
-         .docs = {{"key1", "hello world"}},
+         .docs = {{"key1", "hello world", ""}},
          .key = "key1",
          .baselines = {"@text:hello"},
          .filter = "(@text:hello) => { $weight: 0.1; }",
          .expected = [](const auto &b) { return 0.1f * b[0]; }},
         {.test_name = "text_weight_100",
-         .docs = {{"key1", "hello world"}},
+         .docs = {{"key1", "hello world", ""}},
          .key = "key1",
          .baselines = {"@text:hello"},
          .filter = "(@text:hello) => { $weight: 100; }",
@@ -1481,39 +1517,39 @@ INSTANTIATE_TEST_SUITE_P(
         // AND with default weight sums matching children; a missing child
         // rejects the doc entirely.
         {.test_name = "AndPredicateScoreSumsChildWeights",
-         .docs = {{"key1", "hello world"}, {"key2", "hello there"}},
+         .docs = {{"key1", "hello world", ""}, {"key2", "hello there", ""}},
          .key = "key1",
          .baselines = {"@text:hello", "@text:world"},
          .filter = "@text:hello @text:world",
          .expected = [](const auto &b) { return b[0] + b[1]; },
          .no_match_keys = {"key2"}},
         {.test_name = "AndPredicateOwnWeightMultipliesSum",
-         .docs = {{"key1", "hello world"}},
+         .docs = {{"key1", "hello world", ""}},
          .key = "key1",
          .baselines = {"@text:hello @text:world"},
          .filter = "(@text:hello @text:world) => { $weight: 4.0; }",
          .expected = [](const auto &b) { return 4.0f * b[0]; }},
         {.test_name = "AndDefaultWeightChildrenSumToCount",
-         .docs = {{"key1", "hello brave new world"}},
+         .docs = {{"key1", "hello brave new world", ""}},
          .key = "key1",
          .baselines = {"@text:hello", "@text:brave", "@text:world"},
          .filter = "@text:hello @text:brave @text:world",
          .expected = [](const auto &b) { return b[0] + b[1] + b[2]; }},
         {.test_name = "OrPredicateDefaultWeightChildrenSum",
-         .docs = {{"key1", "hello world"}},
+         .docs = {{"key1", "hello world", ""}},
          .key = "key1",
          .baselines = {"@text:hello", "@text:world"},
          .filter = "@text:hello | @text:world",
          .expected = [](const auto &b) { return b[0] + b[1]; }},
         {.test_name = "NestedAndWeightsComposeMultiplicatively",
-         .docs = {{"key1", "hello brave new world"}},
+         .docs = {{"key1", "hello brave new world", ""}},
          .key = "key1",
          .baselines = {"@text:hello", "@text:brave", "@text:world"},
          .filter = "(@text:hello @text:brave) => { $weight: 4.0; } @text:world",
          .expected = [](const auto &b) { return 4.0f * (b[0] + b[1]) + b[2]; }},
         // Negation is a filter, not a scoring clause: it contributes 0.
         {.test_name = "NegateContributesZero",
-         .docs = {{"key1", "hello world"}},
+         .docs = {{"key1", "hello world", ""}},
          .key = "key1",
          .baselines = {"@text:hello"},
          .filter = "@text:hello -@text:missing",
@@ -1522,151 +1558,160 @@ INSTANTIATE_TEST_SUITE_P(
         // filtering happens before scoring, so ScoreNode still adds zero for
         // the negation.
         {.test_name = "NegateDoesNotInflateEnclosingAnd",
-         .docs = {{"key1", "hello world"}, {"key2", "hello there"}},
+         .docs = {{"key1", "hello world", ""}, {"key2", "hello there", ""}},
          .key = "key2",
          .baselines = {"@text:hello"},
          .filter = "@text:hello -@text:there",
          .expected = [](const auto &b) { return b[0]; }},
+
+        // --- Numeric: a filter, never a ranker (contributes 0) ---
+        // Adding a numeric clause to a text query changes nothing.
+        {.test_name = "NumericClauseAddsZeroToText",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "@text:hello @rating:[0 100]",
+         .expected = [](const auto &b) { return b[0]; }},
+        // The enclosing group weight multiplies the text term; numeric adds 0.
+        {.test_name = "NumericInWeightedGroupContributesZero",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "(@text:hello @rating:[0 100]) => { $weight: 4.0; }",
+         .expected = [](const auto &b) { return 4.0f * b[0]; }},
+
+        // --- Tag: BM25 term with F ≡ 1, IDF over per-tag-value doc count ---
+        // $weight scales the tag term linearly.
+        {.test_name = "TagWeightScalesTerm",
+         .docs = {{"d1", "aa bb", "red"}, {"d2", "aa bb", "blue"}},
+         .key = "d1",
+         .baselines = {"@color:{red}"},
+         .filter = "(@color:{red}) => { $weight: 3.0; }",
+         .expected = [](const auto &b) { return 3.0f * b[0]; }},
+        // Text + tag AND sums the text term and the tag term.
+        {.test_name = "TextAndTagTermsSum",
+         .docs = {{"d1", "hello world", "red"}, {"d2", "hello there", "blue"}},
+         .key = "d1",
+         .baselines = {"@text:hello", "@color:{red}"},
+         .filter = "@text:hello @color:{red}",
+         .expected = [](const auto &b) { return b[0] + b[1]; }},
+        // A union {red|blue} on a doc carrying both sums both value terms.
+        {.test_name = "TagUnionSumsMatchedValues",
+         .docs = {{"d1", "aa bb", "red"},
+                  {"d2", "aa bb", "blue"},
+                  {"d3", "aa bb", "red,blue"}},
+         .key = "d3",
+         .baselines = {"@color:{red}", "@color:{blue}"},
+         .filter = "@color:{red|blue}",
+         .expected = [](const auto &b) { return b[0] + b[1]; }},
+        // A union of values that collapse to the same tag under the index's
+        // case rules ({red|Red} on a case-insensitive index) must score the
+        // value ONCE, not once per query spelling.
+        {.test_name = "TagUnionCaseVariantsScoreOnce",
+         .docs = {{"d1", "aa bb", "red"}, {"d2", "aa bb", "blue"}},
+         .key = "d1",
+         .baselines = {"@color:{red}"},
+         .filter = "@color:{red|Red}",
+         .expected = [](const auto &b) { return b[0]; }},
     }),
     [](const TestParamInfo<ScoreCase> &info) { return info.param.test_name; });
 
-// --- ScoreNode weight semantics: numeric/tag/negate leaves + composition ---
+// --- Tag scoring: relationships not expressible as a same-key formula --------
 //
-// ScoreNode inspects only a leaf's PredicateType and weight for non-text
-// predicates, so these tests drive it through the public ScoreTextQuery API
-// with a minimal concrete predicate rather than building real Numeric/Tag
-// indexes. They lock in the contract that a matched numeric/tag leaf
-// contributes its $weight (the behavior the extra-step path shares with the
-// recompute path), while kNegate contributes nothing. With no SCORE field the
-// document score is 1.0, so the candidate's final score equals the ScoreNode
-// sum.
+// The formula-shaped cases ($weight, union sum, text+tag sum, numeric adds 0)
+// live in the ScoreTextQueryTest param suite above. These remaining tests
+// compare scores ACROSS keys / schemas, so they stay as standalone TEST_Fs on
+// the shared ScoreTextQueryTestBase fixture. Semantics:
+// docs/redis_numeric_tag_scoring.md.
 
-// Minimal Predicate whose only observable state is its type and weight.
-class WeightLeaf : public query::Predicate {
- public:
-  WeightLeaf(query::PredicateType type, float weight) : query::Predicate(type) {
-    SetWeight(weight);
-  }
-  query::EvaluationResult Evaluate(
-      query::Evaluator & /*evaluator*/) const override {
-    return query::EvaluationResult(true);
-  }
-};
-
-std::unique_ptr<query::Predicate> MakeLeaf(query::PredicateType type,
-                                           float weight) {
-  return std::make_unique<WeightLeaf>(type, weight);
+// A rarer tag value scores higher (IDF). Text length is held equal across docs,
+// so ordering is driven purely by tag-value document frequency:
+// red -> 3 docs, blue -> 2, green -> 1, hence IDF(green) > IDF(blue) >
+// IDF(red).
+TEST_F(ScoreTextQueryTestBase, RarerTagValueScoresHigher) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "aa bb", "red"},
+      {"d2", "aa bb", "red,blue"},
+      {"d3", "aa bb", "red,blue,green"},
+  });
+  auto red = Score(*schema, "@color:{red}", "d1");
+  auto blue = Score(*schema, "@color:{blue}", "d2");
+  auto green = Score(*schema, "@color:{green}", "d3");
+  ASSERT_TRUE(red && blue && green);
+  EXPECT_GT(*green, *blue);
+  EXPECT_GT(*blue, *red);
+  EXPECT_GT(*red, 0.0f);
 }
 
-class ScoreNodeTest : public ValkeySearchTest {
- protected:
-  // Scores one candidate document through the public extra-step entry point.
-  // Creates the index schema as a local so it is destroyed within the test
-  // body (while the global KeyspaceEventManager is still alive), rather than
-  // at fixture teardown. Registers one key so total_docs > 0; numeric/tag/
-  // negate leaves never touch postings, so an otherwise empty schema is
-  // sufficient.
-  std::optional<float> Score(const query::Predicate *predicate) {
-    auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
-    const auto *scorer =
-        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-    auto key = StringInternStore::Intern("doc_key");
-    index_schema->SetIndexMutationSequenceNumber(key, 0);
-    std::vector<indexes::BorrowedNeighbor> candidates;
-    candidates.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
-    query::ScoreTextQuery(*index_schema, predicate, scorer, candidates);
-    if (candidates.empty()) return std::nullopt;
-    return candidates[0].score;
-  }
-};
-
-TEST_F(ScoreNodeTest, NumericLeafContributesWeight) {
-  auto p = MakeLeaf(query::PredicateType::kNumeric, 3.0f);
-  auto score = Score(p.get());
-  ASSERT_TRUE(score.has_value());
-  EXPECT_FLOAT_EQ(*score, 3.0f);
+// Tag term frequency is NOT counted (F ≡ 1): a value repeated within a document
+// scores the same as a single occurrence. doc_len also counts TEXT tokens only,
+// not tags, so the same holds for differing tag counts. Text is held equal.
+TEST_F(ScoreTextQueryTestBase, TagFrequencyAndTagCountDoNotAffectScore) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "aa bb", "red"},
+      {"d2", "aa bb", "red,red,red"},
+      {"d3", "aa bb", "red,blue,green,yellow,purple"},
+  });
+  auto single = Score(*schema, "@color:{red}", "d1");
+  auto repeated = Score(*schema, "@color:{red}", "d2");   // F still 1
+  auto many_tags = Score(*schema, "@color:{red}", "d3");  // doc_len still 2
+  ASSERT_TRUE(single && repeated && many_tags);
+  EXPECT_FLOAT_EQ(*single, *repeated);
+  EXPECT_FLOAT_EQ(*single, *many_tags);
 }
 
-TEST_F(ScoreNodeTest, TagLeafContributesWeight) {
-  auto p = MakeLeaf(query::PredicateType::kTag, 2.0f);
-  auto score = Score(p.get());
-  ASSERT_TRUE(score.has_value());
-  EXPECT_FLOAT_EQ(*score, 2.0f);
+// Shorter TEXT gets a mild boost on its tag term (doc-length normalization uses
+// the TEXT length).
+TEST_F(ScoreTextQueryTestBase, ShorterTextBoostsTagTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "aa", "red"},           // text length 1
+      {"d2", "aa bb cc dd", "red"},  // text length 4
+  });
+  auto short_doc = Score(*schema, "@color:{red}", "d1");
+  auto long_doc = Score(*schema, "@color:{red}", "d2");
+  ASSERT_TRUE(short_doc && long_doc);
+  EXPECT_GT(*short_doc, *long_doc);
 }
 
-TEST_F(ScoreNodeTest, NegateLeafContributesZero) {
-  auto p = MakeLeaf(query::PredicateType::kNegate, 5.0f);
-  auto score = Score(p.get());
+// On a text-less index every doc has TEXT length 0, so avg_doc_len is 0 and the
+// scorer returns a well-defined 0 — NOT Redis's nan. The candidate is kept
+// (matched), just contributes nothing to relevance.
+TEST_F(ScoreTextQueryTestBase, TextLessIndexScoresZeroNotNan) {
+  auto schema = BuildTagOnlySchema({{"d1", "red"}, {"d2", "blue"}});
+  auto score = Score(*schema, "@color:{red}", "d1");
   ASSERT_TRUE(score.has_value());
+  EXPECT_FALSE(std::isnan(*score));
   EXPECT_FLOAT_EQ(*score, 0.0f);
 }
 
-TEST_F(ScoreNodeTest, AndSumsNumericAndTagScaledByGroupWeight) {
-  std::vector<std::unique_ptr<query::Predicate>> children;
-  children.push_back(MakeLeaf(query::PredicateType::kNumeric, 2.0f));
-  children.push_back(MakeLeaf(query::PredicateType::kTag, 3.0f));
-  auto composed = std::make_unique<query::ComposedPredicate>(
-      query::LogicalOperator::kAnd, std::move(children));
-  composed->SetWeight(2.0f);
-  auto score = Score(composed.get());
-  ASSERT_TRUE(score.has_value());
-  // AND: group_weight * sum(children) = 2.0 * (2.0 + 3.0)
-  EXPECT_FLOAT_EQ(*score, 10.0f);
-}
-
-TEST_F(ScoreNodeTest, OrSumsMatchingNumericAndTagLeaves) {
-  std::vector<std::unique_ptr<query::Predicate>> children;
-  children.push_back(MakeLeaf(query::PredicateType::kNumeric, 2.0f));
-  children.push_back(MakeLeaf(query::PredicateType::kTag, 3.0f));
-  auto composed = std::make_unique<query::ComposedPredicate>(
-      query::LogicalOperator::kOr, std::move(children));
-  auto score = Score(composed.get());
-  ASSERT_TRUE(score.has_value());
-  // OR: group_weight(default 1.0) * sum(matching children) = 1.0 * (2.0 + 3.0)
-  EXPECT_FLOAT_EQ(*score, 5.0f);
-}
-
-// The recompute path (SingleDocumentScorer) MUST land on the same scale as the
-// shard-side extra-step path (ScoreTextQuery): both walk the same ScoreNode and
-// compose via the same Scorer, sourcing total_docs / document score from the
-// same IndexSchema accessors. This test pins the two paths to the identical
-// value for the same key and query, so a recomputed neighbor ranks correctly
-// against non-recomputed ones.
-TEST_F(ScoreNodeTest, SingleDocumentScorerMatchesScoreTextQuery) {
-  auto index_schema = CreateIndexSchema(kIndexSchemaName).value();
+// The recompute path (SingleDocumentScorer) must land on the same scale as the
+// shard-side extra-step path (ScoreTextQuery) — both walk the same ScoreNode.
+// Pinned at a real NON-ZERO value (text + tag terms) so a magnitude divergence
+// in either path is caught; the numeric clause adds 0 and must not perturb it.
+TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "hello world", "red"},
+      {"d2", "hello there", "blue"},
+  });
   const auto *scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@text:hello @color:{red} @rating:[0 100]";
 
-  // Populate index_key_info_ so GetIndexKeyInfoSize() (the corpus size both
-  // paths read) is non-zero, satisfying ScoreTextQuery's CHECK(total_docs > 0).
-  auto key = StringInternStore::Intern("doc_key");
-  index_schema->SetIndexMutationSequenceNumber(key, 0);
+  // Extra-step path: Score() takes the reader lock internally.
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
 
-  // AND(numeric*2.0, tag*3.0) scaled by group weight 2.0 -> 2.0 * (2.0 + 3.0).
-  std::vector<std::unique_ptr<query::Predicate>> children;
-  children.push_back(MakeLeaf(query::PredicateType::kNumeric, 2.0f));
-  children.push_back(MakeLeaf(query::PredicateType::kTag, 3.0f));
-  auto composed = std::make_unique<query::ComposedPredicate>(
-      query::LogicalOperator::kAnd, std::move(children));
-  composed->SetWeight(2.0f);
-
-  // Extra-step path: score the key as a candidate.
-  std::vector<indexes::BorrowedNeighbor> candidates;
-  indexes::BorrowedNeighbor candidate{BorrowedInternedStringPtr(key), 0.0f,
-                                      0.0f};
-  candidates.push_back(candidate);
-  query::ScoreTextQuery(*index_schema, composed.get(), scorer, candidates);
-  ASSERT_EQ(candidates.size(), 1);
-
-  // Recompute path: score the same key in isolation. Document-independent
-  // inputs are resolved once at construction, matching the per-reply reuse in
-  // response_generator.cc.
-  query::SingleDocumentScorer document_scorer(*index_schema, composed.get(),
-                                              scorer);
-  auto recomputed = document_scorer.Score(key);
+  // Recompute path: SingleDocumentScorer takes the lock itself, so construct
+  // and call it WITHOUT the reader lock held.
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::SingleDocumentScorer document_scorer(
+      *schema, parsed.value().root_predicate.get(), scorer);
+  auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
   ASSERT_TRUE(recomputed.has_value());
-  EXPECT_FLOAT_EQ(*recomputed, candidates[0].score);
-  EXPECT_FLOAT_EQ(*recomputed, 10.0f);
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
 }
 
 }  // namespace

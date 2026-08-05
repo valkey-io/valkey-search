@@ -28,6 +28,8 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
@@ -624,48 +626,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
-// Computes the weighted score for a predicate tree where the document is known
-// to match. For AND predicates, all children match so we sum their weighted
-// contributions. For OR predicates, we use the predicate's own weight (since we
-// don't know which branch matched without re-evaluation). For leaf predicates,
-// the contribution is 1.0 * weight.
-float ComputeMatchedPredicateScore(const Predicate *predicate) {
-  if (!predicate) {
-    return 0.0f;
-  }
-  switch (predicate->GetType()) {
-    case PredicateType::kComposedAnd: {
-      auto composed = dynamic_cast<const ComposedPredicate *>(predicate);
-      float score = 0.0f;
-      for (const auto &child : composed->GetChildren()) {
-        score += ComputeMatchedPredicateScore(child.get());
-      }
-      // Apply the composed predicate's own weight as a multiplier
-      return score * predicate->GetWeight();
-    }
-    case PredicateType::kComposedOr: {
-      // Use the predicate's own weight as the contribution
-      return 1.0f * predicate->GetWeight();
-    }
-    case PredicateType::kNegate: {
-      // Negation is a filter, not a scoring clause.
-      return 0.0f;
-    }
-    case PredicateType::kTag:
-    case PredicateType::kNumeric:
-    case PredicateType::kText:
-      return 1.0f * predicate->GetWeight();
-    default:
-      return 0.0f;
-  }
-}
-
 // A term leaf's posting lists resolved once per query. A term matches via its
 // original word plus any stem variants that stem to the same root (mirroring
 // TermPredicate::Evaluate), so a leaf can resolve to several posting lists. The
 // lists and document frequency (dt) are identical for every candidate, so they
 // are resolved up front by ResolveLeaves rather than re-walked per document.
 struct ResolvedLeaf {
+  // --- Text leaf (TermPredicate) ---
   // Original term posting list first, followed by any stem-variant lists. Empty
   // when the term (and all its variants) are absent from the index.
   absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
@@ -675,6 +642,16 @@ struct ResolvedLeaf {
   // Query-invariant per-term weight (BM25 IDF), computed once here instead of
   // per candidate document.
   float term_weight = 0.0f;
+
+  // --- Tag leaf (TagPredicate) ---
+  // Null for text leaves. When set, `tag_values` holds one (query tag value,
+  // precomputed IDF) entry per value that actually exists in the index; the
+  // per-document walk looks the document's tags up via `tag_index` and sums the
+  // BM25 term (with F ≡ 1) for each value the document carries. The one
+  // dynamic_cast to TagPredicate happens once here (in ResolveLeaves), so the
+  // per-candidate ScoreNode walk needs only a cheap map lookup.
+  const indexes::Tag *tag_index = nullptr;
+  absl::InlinedVector<std::pair<std::string, float>, 4> tag_values;
 };
 
 // Keyed on the base Predicate* (not TermPredicate*) so the per-document scoring
@@ -760,6 +737,42 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       leaf.term_weight =
           scorer->PrecomputeIDF(total_docs, leaf.num_doc_contain_term);
       resolved.emplace(term_pred, std::move(leaf));
+      break;
+    }
+    case PredicateType::kTag: {
+      // Only a real TagPredicate carries the index + values needed to score;
+      // dynamic_cast guards against a non-TagPredicate kTag leaf (e.g. a test
+      // mock), which resolves to an empty leaf and contributes 0.
+      auto tag_pred = dynamic_cast<const TagPredicate *>(predicate);
+      if (!tag_pred || resolved.contains(tag_pred)) break;
+      const indexes::Tag *tag_index = tag_pred->GetIndex();
+      if (tag_index == nullptr) break;
+
+      // A tag value is scored as a BM25 term with F ≡ 1: IDF over the number of
+      // documents carrying that value (dt). Resolve dt + IDF once per value
+      // here; the per-document walk sums the values a document actually
+      // carries. A union (`{red|blue}`) resolves several values, each
+      // contributing its own term.
+      ResolvedLeaf leaf;
+      leaf.tag_index = tag_index;
+      // Dedupe query values that collapse to the same tag under the index's
+      // case rules (e.g. `{red|Red}` on a case-insensitive index)
+      const bool case_sensitive = tag_index->IsCaseSensitive();
+      absl::flat_hash_set<std::string> seen;
+      for (const auto &value : tag_pred->GetTags()) {
+        std::string norm =
+            case_sensitive ? value : absl::AsciiStrToLower(value);
+        if (!seen.insert(norm).second) continue;
+        uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
+            tag_index->GetTagValueDocCount(value), total_docs));
+        // A value absent from the index (dt == 0) has no matching document and
+        // never contributes a term; skip it so the per-document walk stays a
+        // simple sum over present values.
+        if (dt == 0) continue;
+        leaf.tag_values.emplace_back(value,
+                                     scorer->PrecomputeIDF(total_docs, dt));
+      }
+      resolved.emplace(tag_pred, std::move(leaf));
       break;
     }
     default:
@@ -851,19 +864,61 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       return ctx.scorer->ScoreLeaf(leaf.term_weight, tf, doc_len, avg_doc_len,
                                    predicate->GetWeight());
     }
-    // TODO: full tag/numeric scoring semantics are planned; for now a
-    // matched leaf contributes its $weight only.
-    // Numeric/Tag leaves carry no IDF/TF, so a matched leaf contributes its
-    // own $weight. This mirrors the historical ComputeMatchedPredicateScore
-    // leaf semantics. The recompute path (SingleDocumentScorer) walks this same
-    // ScoreNode, so a document scored here ranks identically if it is later
-    // revalidated after a mutation. A tag/numeric candidate only reaches the
-    // extra step because the pre-filter admitted it, so there is no nullopt
-    // (non-match) path here — unlike a Term leaf, which re-derives its match
-    // from tf.
-    case PredicateType::kTag:
+    // A numeric range match is a filter, never a ranker: it carries no IDF, no
+    // term frequency, and no doc-length component, so under BM25STD it
+    // contributes nothing (Redis reports "Irrelevant token -> score is 0").
+    // Returning 0 leaves ordering unchanged whether or not a numeric clause is
+    // present — a numeric candidate only reaches here because the pre-filter
+    // admitted it, so there is no nullopt (non-match) path.
     case PredicateType::kNumeric:
-      return predicate->GetWeight();
+      return 0.0f;
+    // A tag value is scored as a BM25 term with F ≡ 1 (term frequency is not
+    // counted): IDF over the per-tag-value document count, normalized by the
+    // document's TEXT length, honoring $weight. A union (`{red|blue}`) sums the
+    // terms for every matched value the document carries. Doc-length inputs
+    // come from the index's TEXT field; on a text-less index avg_doc_len is 0
+    // and ScoreLeaf returns 0 (a well-defined score, not Redis's nan).
+    case PredicateType::kTag: {
+      auto it = ctx.resolved.find(predicate);
+      // A tag leaf is always resolved (unlike non-scored text predicates), but
+      // guard defensively: an unresolved or index-less leaf contributes 0
+      // without rejecting the already-admitted candidate.
+      if (it == ctx.resolved.end()) return 0.0f;
+      const ResolvedLeaf &leaf = it->second;
+      if (leaf.tag_index == nullptr || leaf.tag_values.empty()) return 0.0f;
+
+      bool case_sensitive = true;
+      auto doc_tags =
+          leaf.tag_index->GetValue(key.AsInternedRef(), case_sensitive);
+      if (!doc_tags) return 0.0f;
+
+      float avg_doc_len = 0.0f;
+      uint32_t doc_len = 0;
+      if (ctx.needs_doc_len && ctx.total_docs > 0) {
+        avg_doc_len = static_cast<float>(ctx.total_doc_len) /
+                      static_cast<float>(ctx.total_docs);
+        doc_len = ctx.index_schema.GetDocumentLength(key);
+      }
+
+      // Sum the BM25 term (F ≡ 1) for each resolved value the document carries.
+      // Matching mirrors TagPredicate::Evaluate: case-insensitive unless the
+      // index is case-sensitive.
+      float sum = 0.0f;
+      for (const auto &[value, idf] : leaf.tag_values) {
+        bool present = false;
+        for (const auto &doc_tag : *doc_tags) {
+          if (case_sensitive ? (doc_tag == value)
+                             : absl::EqualsIgnoreCase(doc_tag, value)) {
+            present = true;
+            break;
+          }
+        }
+        if (!present) continue;
+        sum += ctx.scorer->ScoreLeaf(idf, /*term_frequency=*/1, doc_len,
+                                     avg_doc_len, predicate->GetWeight());
+      }
+      return sum;
+    }
     // kNegate is a filter already applied by the pre-filter, and kNone has no
     // term occurrence to score; neither contributes to relevance.
     case PredicateType::kNegate:

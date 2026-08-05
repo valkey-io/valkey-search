@@ -161,6 +161,57 @@ INDEX_MIX = ScoringIndex(
 # N=4 (text docs only) these would be ~0.303 / ~0.203 instead.
 MIX_HELLO_SCORES = {"d:3": 0.974311, "d:1": 0.650739, "d:2": 0.650739}
 
+# --- idxMix tag / numeric scores (verified against Redis 8.6) ---------------
+# A tag value is a BM25 term with F == 1, IDF over the per-tag-value document
+# count (dt), normalized by the document's TEXT length. N=10, avg_doc_len=0.70.
+#   cat dt: a=2 (d:1,d:3), b=2 (d:1,d:2), c=1 (d:4), x=6 (d:5..10).
+# @cat:{a}: rarer-per-shorter-text d:3 (text len 1) outranks d:1 (text len 2).
+MIX_CAT_A_SCORES = {"d:3": 1.260592, "d:1": 0.841945}
+# @cat:{c}: dt=1 (highest tag IDF here); single match d:4.
+MIX_CAT_C_SCORE = 1.132230
+# @cat:{x}: dt=6, six text-less docs -> doc_len 0, all identical.
+MIX_CAT_X_SCORE = 0.890311
+# @cat:{a|b}: union sums matched values; d:1 carries both (a+b), d:3 only a,
+# d:2 only b.
+MIX_CAT_A_OR_B_SCORES = {"d:1": 1.683890, "d:3": 1.260592, "d:2": 0.841945}
+# hello @cat:{a}: text term + tag term summed (d:3 = 0.974311 + 1.260592).
+MIX_HELLO_AND_CAT_A_SCORES = {"d:3": 2.234903, "d:1": 1.492684}
+
+# idxNumOnly / idxTagOnly: indexes with NO text field. BM25 doc-length
+# normalization needs a TEXT field (avg_doc_len derives from it); without one
+# avg_doc_len is 0. Numeric never ranks, and a tag term with avg_doc_len 0
+# scores a well-defined 0 (our implementation returns 0 here rather than Redis's
+# nan). So every matching doc scores 0 on either index.
+INDEX_NUM_ONLY = ScoringIndex(
+    "idxNumOnly",
+    ["FT.CREATE", "idxNumOnly", "ON", "HASH", "PREFIX", "1", "n:",
+     "SCHEMA", "rank", "NUMERIC"],
+    {f"n:{i}": {"rank": str(i)} for i in range(1, 5)},
+)
+INDEX_TAG_ONLY = ScoringIndex(
+    "idxTagOnly",
+    ["FT.CREATE", "idxTagOnly", "ON", "HASH", "PREFIX", "1", "t:",
+     "SCHEMA", "cat", "TAG"],
+    {
+        "t:1": {"cat": "red"},
+        "t:2": {"cat": "red,blue"},
+        "t:3": {"cat": "green"},
+    },
+)
+# index with numeric and tag field (no text field)
+INDEX_NUM_TAG = ScoringIndex(
+    "idxNumTag",
+    ["FT.CREATE", "idxNumTag", "ON", "HASH", "PREFIX", "1", "nt:",
+     "SCHEMA", "rank", "NUMERIC", "cat", "TAG"],
+    {
+        "nt:1": {"rank": 1, "cat": "red"},
+        "nt:2": {"rank": 2, "cat": "red,blue"},
+        "nt:3": {"rank": 3, "cat": "green"},
+        "nt:4": {"rank": 4, "cat": "red,green"},
+        "nt:5": {"rank": 5, "cat": "blue"},
+    },
+)
+
 # =====================================================================
 # Expected scores (verified against Redis 8.6; idxA unless noted)
 # =====================================================================
@@ -593,34 +644,150 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         for key, expected in MIX_HELLO_SCORES.items():
             assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
 
-    # Group 10: mixed text + numeric OR scoring ----------------------------
+    # Group 10: numeric scoring — a filter, never a ranker ------------------
 
-    # 10.1: a text branch OR'd with a numeric branch under an outer group weight
-    # applies that weight to each admitted doc's text score. The numeric branch
-    # matches no doc (ranks are 1..10), so only the three "hello" docs are
-    # admitted, each scored on hello times the outer weight 3.
-    @pytest.mark.skip(reason="TODO numeric and tag scoring")
-    def test_mixed_text_numeric_or_preserves_group_weight(self):
+    # 10.1: a numeric predicate contributes 0 to the score. Adding a numeric
+    # clause to a text query changes neither scores nor order: the four "hello"
+    # docs keep their verified text scores, and the numeric-only docs it also
+    # admits carry no text term (score 0).
+    def test_numeric_clause_contributes_zero(self):
         client = self.server.get_new_client()
         INDEX_MIX.load(client)
-        keys, scores = INDEX_MIX.search(
-            client, "(hello | @rank:[1000 1000])=>{$weight:3}")
-
-        assert set(keys) == {"d:1", "d:2", "d:3"}
-        for key, base in MIX_HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(3 * base, abs=SCORE_ABS_TOL)
-
-    # 10.2: an unweighted text | numeric OR returns the union of the hello docs
-    # and the numeric match (d:5 has rank=5, no body); text docs keep their
-    # verified hello scores and the numeric-only doc contributes no text score.
-    @pytest.mark.skip(reason="TODO numeric and tag scoring")
-    def test_mixed_text_numeric_or_union_membership(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
+        # Text-only baseline.
+        _, base = INDEX_MIX.search(client, "hello")
+        # OR a numeric branch matching a text-less doc (d:5, rank=5, no body).
         keys, scores = INDEX_MIX.search(client, "hello | @rank:[5 5]")
 
         assert set(keys) == {"d:1", "d:2", "d:3", "d:5"}
-        for key, base in MIX_HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(base, abs=SCORE_ABS_TOL)
-        # numeric-only match carries no text term, so no text score.
+        # text docs keep their exact text scores; numeric adds nothing.
+        for key, expected in MIX_HELLO_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+            assert scores[key] == pytest.approx(base[key], abs=SCORE_ABS_TOL)
+        # numeric-only match carries no text term, so score 0.
         assert scores["d:5"] == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+    # 10.2: a pure numeric range scores every matching doc 0, so it only filters
+    # (all ten docs match rank in [0, 100]).
+    def test_numeric_only_scores_zero(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(client, "@rank:[0 100]")
+
+        assert len(keys) == 10
+        for score in scores.values():
+            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+    # Group 11: tag scoring — BM25 term with F == 1 -------------------------
+
+    # 11.1: a tag value is scored with per-tag-value IDF and TEXT-length
+    # normalization. @cat:{a} (dt=2) matches d:1, d:3; the shorter-text d:3
+    # (len 1) outranks d:1 (len 2).
+    def test_tag_single_value_scores(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(client, "@cat:{a}")
+
+        assert keys == ["d:3", "d:1"]
+        for key, expected in MIX_CAT_A_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+    # 11.2: a rarer tag value scores higher (IDF). @cat:{c} (dt=1) on d:4
+    # outscores @cat:{x} (dt=6) on the text-less d:5..10, purely on IDF.
+    def test_tag_rarer_value_scores_higher(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        _, c = INDEX_MIX.search(client, "@cat:{c}")
+        keys_x, x = INDEX_MIX.search(client, "@cat:{x}")
+
+        assert c["d:4"] == pytest.approx(MIX_CAT_C_SCORE, abs=SCORE_ABS_TOL)
+        # dt=6, all six text-less docs identical (doc_len 0).
+        assert len(keys_x) == 6
+        for score in x.values():
+            assert score == pytest.approx(MIX_CAT_X_SCORE, abs=SCORE_ABS_TOL)
+        assert c["d:4"] > x["d:5"]
+
+    # 11.3: a union {a|b} sums the terms for every matched value a doc carries.
+    # d:1 has both (a+b), d:3 only a, d:2 only b.
+    def test_tag_union_sums_matched_values(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(client, "@cat:{a|b}")
+
+        assert keys == ["d:1", "d:3", "d:2"]
+        for key, expected in MIX_CAT_A_OR_B_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # d:1's a+b total equals the sum of its single-value contributions.
+        assert scores["d:1"] == pytest.approx(
+            MIX_CAT_A_SCORES["d:1"] + MIX_CAT_A_OR_B_SCORES["d:2"],
+            abs=SCORE_ABS_TOL)
+
+    # 11.4: tag term frequency is NOT counted (F == 1). A $weight scales the
+    # tag term linearly, exactly like a text leaf.
+    def test_tag_weight_scales_linearly(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        _, base = INDEX_MIX.search(client, "@cat:{a}")
+        _, weighted = INDEX_MIX.search(client, "(@cat:{a})=>{$weight:3}")
+
+        for key, b in MIX_CAT_A_SCORES.items():
+            assert base[key] == pytest.approx(b, abs=SCORE_ABS_TOL)
+            assert weighted[key] == pytest.approx(3 * b, abs=SCORE_ABS_TOL)
+
+    # 11.5: text + tag AND sums the text term and the tag term into each doc's
+    # score; a numeric clause added to the same query contributes 0 (unchanged).
+    def test_text_and_tag_terms_sum_numeric_adds_zero(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(client, "hello @cat:{a}")
+
+        assert keys == ["d:3", "d:1"]
+        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # d:3's total is the text term + the tag term.
+        assert scores["d:3"] == pytest.approx(
+            MIX_HELLO_SCORES["d:3"] + MIX_CAT_A_SCORES["d:3"], abs=SCORE_ABS_TOL)
+        # adding a numeric clause changes nothing (numeric contributes 0).
+        _, with_num = INDEX_MIX.search(client, "hello @cat:{a} @rank:[0 100]")
+        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
+            assert with_num[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+    # Group 12: text-less indexes score 0 (no doc-length normalization) -----
+
+    # 12.1: on a numeric-only index a numeric predicate matches (filters) but
+    # every matching doc scores 0 -- numeric never ranks.
+    def test_numeric_only_index_scores_zero(self):
+        client = self.server.get_new_client()
+        INDEX_NUM_ONLY.load(client)
+        keys, scores = INDEX_NUM_ONLY.search(client, "@rank:[1 4]")
+
+        assert len(keys) == 4
+        for score in scores.values():
+            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+    # 12.2: on a tag-only index (no TEXT field) a tag query matches but scores a
+    # well-defined 0 -- avg_doc_len is 0 without a text field, so the BM25 tag
+    # term degenerates to 0 (our implementation returns 0, not Redis's nan).
+    def test_tag_only_index_scores_zero(self):
+        client = self.server.get_new_client()
+        INDEX_TAG_ONLY.load(client)
+        keys, scores = INDEX_TAG_ONLY.search(client, "@cat:{red}")
+
+        assert set(keys) == {"t:1", "t:2"}
+        for score in scores.values():
+            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+    # 12.3: on a numeric and tag index (no text field), the scores are all 0
+    def test_num_tag_index_scores_zero(self):
+        client = self.server.get_new_client()
+        INDEX_NUM_TAG.load(client)
+        # search by tag red, get 3 docs with score 0
+        keys, scores = INDEX_NUM_TAG.search(client, "@cat:{red}")
+        assert len(keys) == 3
+        for score in scores.values():
+            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+        # search by numeric range 1-5, get 5 docs with score 0
+        keys, scores = INDEX_NUM_TAG.search(client, "@rank:[1 5]")
+        assert len(keys) == 5
+        for score in scores.values():
+            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)

@@ -317,6 +317,8 @@ function print_test_error_and_exit() {
         # Only dump the failed test's output, not the entire accumulated log
         if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
             cat "${CURRENT_TEST_OUTPUT_FILE}"
+        else
+            printf "${RED}No test output produced (test crashed or was terminated).${RESET}\n"
         fi
     fi
 
@@ -368,6 +370,17 @@ function check_tools() {
         build_tool="make"
     fi
     check_tool ${build_tool}
+}
+
+function check_and_clean_on_branch_change() {
+    local current_branch=$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    local branch_stamp="${BUILD_DIR}/.last_build_branch"
+    if [ -d "${BUILD_DIR}" ] && [ -f "${branch_stamp}" ] && [ "$(cat "${branch_stamp}")" != "${current_branch}" ]; then
+        printf "${BOLD_PINK}Notice: Branch changed from $(cat "${branch_stamp}") to ${current_branch}. Cleaning stale protobuf artifacts...${RESET}\n"
+        rm -f "${BUILD_DIR}"/src/*.pb.* 2>/dev/null || true
+    fi
+    mkdir -p "${BUILD_DIR}"
+    echo "${current_branch}" > "${branch_stamp}"
 }
 
 # If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
@@ -435,6 +448,8 @@ fi
 TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
+check_and_clean_on_branch_change
+
 printf "Checking if configure is required..."
 
 FORCE_CMAKE=$(is_configure_required)
@@ -463,30 +478,53 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
+function run_single_test() {
+    local test_exec="$1"
+    echo "==> Running executable: ${test_exec}" >> "${TEST_OUTPUT_FILE}"
+    echo "" >> "${TEST_OUTPUT_FILE}"
+    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
+    print_test_prefix "${test_exec}"
+    if "${test_exec}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1; then
+        cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
+        print_test_ok
+    else
+        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
+            cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
+        fi
+        print_test_error_and_exit
+    fi
+}
+
 if [[ "${RUN_TEST}" == "all" ]]; then
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
     while read -r test; do
-        echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
-        echo "" >> "${TEST_OUTPUT_FILE}"
-        # Write each test's output to a per-test file so on failure we only dump the relevant output
-        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-        print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+        run_single_test "${test}"
     done < <(find "${TESTS_DIR}" -name "*_test" -type f)
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [ ! -z "${RUN_TEST}" ]; then
     rm -f "${TEST_OUTPUT_FILE}"
     CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
-    echo "" >> "${TEST_OUTPUT_FILE}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
+    run_single_test "${TESTS_DIR}/${RUN_TEST}"
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+    params=""
+    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+        params=" --test-errors-stdout"
+    fi
+    if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+        params="${params} --debug"
+    fi
+
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        params="${params} --asan"
+    fi
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+        params="${params} --tsan"
+    fi
+
     if [ ! -z "${TEST_PATTERN}" ]; then
         echo ""
         LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
@@ -495,20 +533,6 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         # Abseil based tests do not support filtering tests based on "-k" flag
         # so when the TEST_PATTERN env variable is found, skip Abseil based tests
         pushd testing/integration >/dev/null
-        params=""
-        if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-            params=" --test-errors-stdout"
-        fi
-        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
-            params="${params} --debug"
-        fi
-
-        if [[ "${SAN_BUILD}" == "address" ]]; then
-            params="${params} --asan"
-        fi
-        if [[ "${SAN_BUILD}" == "thread" ]]; then
-            params="${params} --tsan"
-        fi
         ./run.sh ${params}
         popd >/dev/null
     fi
@@ -520,8 +544,9 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     fi
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
+    export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh || EXIT_CODE=1
+    ./run.sh ${params} || EXIT_CODE=1
     popd >/dev/null
 fi
 

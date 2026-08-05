@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
@@ -27,48 +28,47 @@
 
 namespace valkey_search::indexes {
 
-class InputVector {
+class QueryVector {
  public:
-  InputVector(const std::shared_ptr<VectorRecord> &vector_record,
-              const std::vector<char> &normalized_vector)
-      : reciprocal_magnitude_(vector_record->GetReciprocalMagnitude()),
-        normalized_vector_(normalized_vector),
-        vector_record_(vector_record) {}
-
+  QueryVector(const std::shared_ptr<const VectorRecord> &vector_record,
+              size_t vector_record_size, bool normalize);
   inline const char *GetRawVector() const {
     return vector_record_->GetRawVector();
   }
-  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  inline float GetReciprocalMagnitude() const {
+    return vector_record_->GetReciprocalMagnitude();
+  }
   inline const char *GetNormalizedVector() const {
     return normalized_vector_.data();
   }
 
-  inline std::shared_ptr<VectorRecord> GetVectorRecord() const {
+  inline std::shared_ptr<const VectorRecord> GetVectorRecord() const {
     return vector_record_;
   }
 
  private:
-  float reciprocal_magnitude_;
-  const std::vector<char> &normalized_vector_;
-  std::shared_ptr<VectorRecord> vector_record_;
+  std::shared_ptr<const VectorRecord> vector_record_;
+  std::vector<char> normalized_vector_;
 };
 
 template <typename T>
 class VectorHNSW : public VectorBase {
  public:
   using HNSWIndex =
-      hnswlib::HierarchicalNSW<T, InputVector, std::shared_ptr<VectorRecord>>;
+      hnswlib::HierarchicalNSW<T, QueryVector,
+                               std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      data_model::AttributeDataType attribute_data_type)
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      data_model::AttributeDataType attribute_data_type,
+      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
       ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter &&iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter &&iter,
+      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -79,6 +79,10 @@ class VectorHNSW : public VectorBase {
   size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->max_elements_;
   }
+  // Reading immutable index parameters does not require a mutex. Bypassing
+  // thread-safety analysis because while the pointer algo_ is guarded to
+  // protect mutative operations, these specific fields are strictly constant
+  // after construction.
   int GetM() const ABSL_NO_THREAD_SAFETY_ANALYSIS { return algo_->M_; }
   int GetEfConstruction() const ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->ef_construction_;
@@ -87,6 +91,9 @@ class VectorHNSW : public VectorBase {
     return algo_->ef_;
   }
 
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
@@ -96,30 +103,36 @@ class VectorHNSW : public VectorBase {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(uint64_t internal_id,
-                             const std::shared_ptr<VectorRecord> &vector_record,
-                             const std::vector<char> &norm_record) override
+  absl::Status AddRecordImpl(
+      uint64_t internal_id,
+      std::shared_ptr<const VectorRecord> &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status ModifyRecordImpl(
-      uint64_t internal_id, const std::shared_ptr<VectorRecord> &vector_record,
-      const std::vector<char> &norm_record) override
+      uint64_t internal_id,
+      std::shared_ptr<const VectorRecord> &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
-  T ComputeDistance(absl::string_view query, VectorRecord *vector_record,
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
+  T ComputeDistance(absl::string_view query, const VectorRecord *vector_record,
                     float query_magnitude) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  std::shared_ptr<VectorRecord> &GetVectorLockFree(
+  std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->getPoint(internal_id);
     CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
                           << internal_id;
     return *ptr;
   }
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Therefore, no data
+  // races can occur during the search phase.
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
@@ -127,7 +140,8 @@ class VectorHNSW : public VectorBase {
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type);
+             data_model::AttributeDataType attribute_data_type,
+             uint32_t db_num);
   absl::Status AlgoDeleteRecord(uint64_t label)
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
 

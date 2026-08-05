@@ -153,9 +153,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(parameters.query, parameters.k,
-                                   parameters.cancellation_token,
-                                   std::move(inline_filter));
+    auto res = vector_flat->Search(
+        parameters.query, parameters.k, parameters.cancellation_token,
+        std::move(inline_filter), parameters.enable_partial_results);
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
     return res;
@@ -461,10 +461,9 @@ CalcBestMatchingPrefilteredKeys(
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    query_magnitude =
-        1.0f / indexes::CalcMagnitude(
-                   reinterpret_cast<const float *>(parameters.query.data()),
-                   parameters.query.size() / sizeof(float));
+    query_magnitude = indexes::CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(parameters.query.data()),
+        parameters.query.size() / sizeof(float));
   }
   auto results_appender =
       [&results, &parameters, vector_index, query_magnitude](

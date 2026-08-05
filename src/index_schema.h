@@ -279,8 +279,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
-  void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                     indexes::VectorBase *vector_index);
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -348,7 +346,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
   }
 
@@ -476,11 +474,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
-  absl::flat_hash_map<std::string, indexes::VectorBase *>
-      vector_externalizer_subscriptions_;
-  void VectorExternalizer(const Key &key,
-                          absl::string_view attribute_identifier,
-                          vmsdk::UniqueValkeyString &record);
 
   mutable Stats stats_;
 
@@ -509,11 +502,13 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
                                 vmsdk::UniqueValkeyString data,
-                                indexes::DeletionType deletion_type);
+                                indexes::DeletionType deletion_type)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   // Removes the key from every attribute index (and the schema-level text
   // index). Used to implement the Redisearch-compatible behavior of dropping
   // the entire key when any field contains invalid data.
-  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key);
+  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);

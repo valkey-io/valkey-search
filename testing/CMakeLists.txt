@@ -14,7 +14,6 @@ target_link_libraries(testing_common_base PUBLIC index_schema)
 target_link_libraries(testing_common_base PUBLIC keyspace_event_manager)
 target_link_libraries(testing_common_base PUBLIC schema_manager)
 target_link_libraries(testing_common_base PUBLIC valkey_search)
-target_link_libraries(testing_common_base PUBLIC vector_externalizer)
 target_link_libraries(testing_common_base PUBLIC metadata_manager)
 target_link_libraries(testing_common_base PUBLIC vector_base)
 target_link_libraries(testing_common_base PUBLIC vector_hnsw)
@@ -78,7 +77,8 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_test.cc)
 
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
 target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -95,7 +95,6 @@ set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/server_events_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/multi_exec_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_externalizer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/acl_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc)
 

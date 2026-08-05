@@ -40,7 +40,7 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -384,6 +384,9 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
   ValkeyModuleCtx registry_ctx_;
 
   void SetUp() override {
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeyTest::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     KeyspaceEventManager::InitInstance(
@@ -395,13 +398,17 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
         .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorExternalizer::Instance().Init(&registry_ctx_);
+    VectorRegistry::Construct(&registry_ctx_);
   }
   void TearDown() override {
+    kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorExternalizer::Instance().Reset();
+    VectorRegistry::Destruct();
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
     ValkeyTest::TearDown();
   }
 };
@@ -457,13 +464,14 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
         .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorExternalizer::Instance().Init(&registry_ctx_);
+    VectorRegistry::Construct(&registry_ctx_);
   }
   void TearDown() override {
+    kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorExternalizer::Instance().Reset();
+    VectorRegistry::Destruct();
     vmsdk::ValkeyTestWithParam<T>::TearDown();
   }
 };

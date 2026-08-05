@@ -95,7 +95,7 @@ TEST_F(VectorIndexTest, InitializationHNSW) {
         CreateHNSWVectorIndexProto(kDimensions, distance_metric.first,
                                    kInitialCap, kM, kEFConstruction,
                                    kEFRuntime),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     auto *space = index.value()->GetSpace();
     EXPECT_EQ(distance_metric.second, typeid(*space).name());
     EXPECT_EQ(index.value()->GetDimensions(), kDimensions);
@@ -112,7 +112,7 @@ TEST_F(VectorIndexTest, InitializationFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto index = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric.first,
                                    kInitialCap, kBlockSize),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     auto *space = index.value()->GetSpace();
     EXPECT_EQ(distance_metric.second, typeid(*space).name());
     EXPECT_EQ(index.value()->GetDimensions(), kDimensions);
@@ -157,7 +157,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
           CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2,
                                      kN + 16, kMParam, kEfC, kEfR),
           "attribute_identifier_1",
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
           .value();
 
   auto vectors = DeterministicallyGenerateVectors(kN, kDim, 10.0);
@@ -386,7 +386,7 @@ TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
-      attribute_identifier, attribute_data_type);
+      attribute_identifier, attribute_data_type, 0);
   auto record = vmsdk::MakeUniqueValkeyString(params.record);
   auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
   if (!params.success) {
@@ -439,7 +439,7 @@ TEST_P(VectorIndexParamTest, BasicHNSW) {
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, distance_metric, kInitialCap, kM,
                                  kEFConstruction, kEFRuntime),
-      attribute_identifier, attribute_data_type);
+      attribute_identifier, attribute_data_type, 0);
 
   TestIndex<VectorHNSW<float>>(index->get(), kDimensions, 100,
                                attribute_identifier, attribute_data_type);
@@ -465,7 +465,7 @@ TEST_P(VectorIndexParamTest, BasicFlat) {
   auto index = VectorFlat<float>::Create(
       CreateFlatVectorIndexProto(kDimensions, distance_metric, kInitialCap,
                                  kBlockSize),
-      attribute_identifier, attribute_data_type);
+      attribute_identifier, attribute_data_type, 0);
 
   TestIndex<VectorFlat<float>>(index->get(), kDimensions, 100,
                                attribute_identifier, attribute_data_type);
@@ -478,7 +478,7 @@ TEST_F(VectorIndexTest, ResizeHNSW) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto index = VectorHNSW<float>::Create(
         CreateHNSWVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kM, kEFConstruction, kEFRuntime),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     EXPECT_TRUE(ValkeySearch::Instance().SetHNSWBlockSize(1024).ok());
     uint32_t block_size = ValkeySearch::Instance().GetHNSWBlockSize();
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
@@ -499,7 +499,7 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto index = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kBlockSize),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     auto vectors = DeterministicallyGenerateVectors(
         initial_cap + kBlockSize + 100, kDimensions, 10.0);
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap);
@@ -517,6 +517,35 @@ TEST_F(VectorIndexTest, ResizeFlat) ABSL_NO_THREAD_SAFETY_ANALYSIS {
     }
     EXPECT_EQ(index.value()->GetCapacity(), initial_cap + 2 * kBlockSize);
   }
+}
+
+TEST_F(VectorIndexTest, VectorFlatCosineNormalizationDistance)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int dimensions = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
+                                 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+
+  // Non-unit vector [3.0, 0.0, 0.0, 0.0] with magnitude 3.0
+  std::vector<float> vec1 = {3.0f, 0.0f, 0.0f, 0.0f};
+  std::string vec1_bytes(reinterpret_cast<const char *>(vec1.data()),
+                         vec1.size() * sizeof(float));
+
+  auto key1 = IndexToKey(1);
+  VMSDK_EXPECT_OK(index.value()->AddRecord(key1, vec1_bytes));
+
+  // Search query [5.0, 0.0, 0.0, 0.0] pointing in exact same direction.
+  // Cosine distance should be 0.0 (1 - (3*5)/(3*5) = 0).
+  std::vector<float> query = {5.0f, 0.0f, 0.0f, 0.0f};
+  std::string query_bytes(reinterpret_cast<const char *>(query.data()),
+                          query.size() * sizeof(float));
+
+  auto search_res = index.value()->Search(query_bytes, 1, CancelNever());
+  ASSERT_TRUE(search_res.ok());
+  ASSERT_EQ(search_res.value().size(), 1);
+  EXPECT_NEAR(search_res.value()[0].distance, 0.0f, 1e-5f);
 }
 
 float CalcRecall(VectorFlat<float> *flat_index, VectorHNSW<float> *hnsw_index,
@@ -548,7 +577,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
     auto index_hnsw = VectorHNSW<float>::Create(
         CreateHNSWVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kM, kEFConstruction, kEFRuntime),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     auto vectors = DeterministicallyGenerateVectors(1000, kDimensions, 2.2);
     for (size_t i = 0; i < vectors.size(); ++i) {
       VERIFY_ADD(index_hnsw->get(), vectors, i, ExpectedResults::kSuccess);
@@ -556,7 +585,7 @@ TEST_F(VectorIndexTest, EfRuntimeRecall) {
     auto index_flat = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kBlockSize),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     for (size_t i = 0; i < vectors.size(); ++i) {
       VERIFY_ADD(index_flat->get(), vectors, i, ExpectedResults::kSuccess);
     }
@@ -584,7 +613,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     auto index_flat = VectorFlat<float>::Create(
         CreateFlatVectorIndexProto(kDimensions, distance_metric, initial_cap,
                                    kBlockSize),
-        attribute_identifier, attribute_data_type);
+        attribute_identifier, attribute_data_type, 0);
     VMSDK_EXPECT_OK(index_flat);
     for (size_t i = 0; i < vectors.size(); ++i) {
       VERIFY_ADD(index_flat->get(), vectors, i, ExpectedResults::kSuccess);
@@ -596,7 +625,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     // Create and save empty HNSW index
     {
       auto index_hnsw = VectorHNSW<float>::Create(
-          hnsw_proto, "attribute_identifier_2", attribute_data_type);
+          hnsw_proto, "attribute_identifier_2", attribute_data_type, 0);
       VMSDK_EXPECT_OK(index_hnsw);
       if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
         EXPECT_TRUE((*index_hnsw)->GetNormalize());
@@ -632,7 +661,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
-          "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
+          "attribute_identifier_3", SupplementalContentChunkIter(&rdb), 0);
       VMSDK_EXPECT_OK(loaded_index_hnsw);
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
@@ -657,7 +686,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
     {
       auto loaded_index_hnsw = VectorHNSW<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, hnsw_proto,
-          "attribute_identifier_4", SupplementalContentChunkIter(&rdb));
+          "attribute_identifier_4", SupplementalContentChunkIter(&rdb), 0);
       VMSDK_EXPECT_OK(loaded_index_hnsw);
       VMSDK_EXPECT_OK(
           (*loaded_index_hnsw)
@@ -683,7 +712,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
-      attribute_identifier, attribute_data_type);
+      attribute_identifier, attribute_data_type, 0);
   VMSDK_EXPECT_OK(index);
   auto vectors = DeterministicallyGenerateVectors(10, kDimensions, 10.0);
   for (size_t i = 0; i < vectors.size(); ++i) {
@@ -730,7 +759,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     // Create and save empty Flat index
     {
       auto index = VectorFlat<float>::Create(flat_proto, attribute_identifier,
-                                             attribute_data_type);
+                                             attribute_data_type, 0);
       if (distance_metric == data_model::DISTANCE_METRIC_COSINE) {
         EXPECT_TRUE(index.value()->GetNormalize());
       }
@@ -764,7 +793,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     {
       auto index_pr = VectorFlat<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, flat_proto,
-          "attribute_identifier_2", SupplementalContentChunkIter(&rdb));
+          "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
       VMSDK_EXPECT_OK(
@@ -812,7 +841,7 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
 
       auto index_pr = VectorFlat<float>::LoadFromRDB(
           &fake_ctx_, &hash_attribute_data_type_, flat_proto,
-          "attribute_identifier_3", SupplementalContentChunkIter(&rdb));
+          "attribute_identifier_3", SupplementalContentChunkIter(&rdb), 0);
       VMSDK_EXPECT_OK(index_pr);
       auto index = std::move(index_pr.value());
       VMSDK_EXPECT_OK(
@@ -859,11 +888,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
 
   float magnitude = kDefaultMagnitude;
-  std::vector<char> norm_record;
   for (int t = 0; t < kThreads; ++t) {
-    algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
+    algo.addPoint(QueryVector(VectorRecord::Construct(v_bytes, magnitude,
                                                       vector_allocator.get()),
-                              norm_record),
+                              v_bytes.size(), false),
                   t);
   }
 
@@ -947,13 +975,14 @@ TEST_F(VectorIndexTest, LoadRecomputesAlignedOffsetForOldSnapshot) {
   VectorHNSW<float>::HNSWIndex algo;
   SingleChunkInputStream input(serialized);
   auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
-    float magnitude =
-        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
-                      vector_data.size() / sizeof(float));
-    return VectorRecord::Construct(vector_data, magnitude);
+    float reciprocal_magnitude = CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(vector_data.data()),
+        vector_data.size() / sizeof(float));
+    return VectorRecord::Construct(vector_data, reciprocal_magnitude);
   };
-  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16, kM,
-                                 /*validate=*/true, generator));
+  VMSDK_EXPECT_OK(algo.LoadIndex(input, &l2_space, /*max_elements_i=*/16,
+                                 /*expected_m=*/kM, /*validate=*/true,
+                                 generator));
   EXPECT_EQ(algo.offsetData_ % alignof(char *), 0u);
   EXPECT_EQ(algo.size_data_per_element_ % alignof(char *), 0u);
 }
@@ -1016,7 +1045,6 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
                                     /*allow_replace_deleted=*/false,
                                     /*random_seed=*/100);
 
-  std::vector<char> norm_record;
   auto vector_allocator = CREATE_UNIQUE_PTR(
       FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
 
@@ -1025,15 +1053,16 @@ ChunkStream BuildGoldenChunks(const std::vector<int> &force_levels,
     v[i % kDimensions] = static_cast<float>(i + 1);
     absl::string_view v_bytes(reinterpret_cast<const char *>(v.data()),
                               v.size() * sizeof(float));
-    float magnitude = CalcMagnitude(v.data(), v.size());
+    float reciprocal_magnitude = CalcReciprocalMagnitude(v.data(), v.size());
 
-    algo.addPoint(InputVector(VectorRecord::Construct(v_bytes, magnitude,
-                                                      vector_allocator.get()),
-                              norm_record),
-                  /*label=*/i, force_levels[i]);
+    algo.addPoint(
+        QueryVector(VectorRecord::Construct(v_bytes, reciprocal_magnitude,
+                                            vector_allocator.get()),
+                    v_bytes.size(), false),
+        /*label=*/i, force_levels[i]);
   }
   ChunkStream golden;
-  auto serializer = [](const std::shared_ptr<VectorRecord> &record,
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {
     size_t vector_size = kDimensions * sizeof(float);
     return std::vector<char>(record->GetRawVector(),
@@ -1049,10 +1078,10 @@ absl::Status LoadGolden(ChunkStream &golden, size_t max_elements,
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo;
   auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
-    float magnitude =
-        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
-                      vector_data.size() / sizeof(float));
-    return VectorRecord::Construct(vector_data, magnitude);
+    float reciprocal_magnitude = CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(vector_data.data()),
+        vector_data.size() / sizeof(float));
+    return VectorRecord::Construct(vector_data, reciprocal_magnitude);
   };
   try {
     return algo.LoadIndex(golden, &space, max_elements, kM, validate,
@@ -1133,10 +1162,10 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   hnswlib::L2Space space{kDimensions};
   VectorHNSW<float>::HNSWIndex algo;
   auto generator = [](absl::string_view vector_data, bool is_marked_deleted) {
-    float magnitude =
-        CalcMagnitude(reinterpret_cast<const float *>(vector_data.data()),
-                      vector_data.size() / sizeof(float));
-    return VectorRecord::Construct(vector_data, magnitude);
+    float reciprocal_magnitude = CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(vector_data.data()),
+        vector_data.size() / sizeof(float));
+    return VectorRecord::Construct(vector_data, reciprocal_magnitude);
   };
   golden.Rewind();
   VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, kM,
@@ -1145,7 +1174,7 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   EXPECT_EQ(algo.maxlevel_, 2);
   EXPECT_EQ(algo.element_levels_[algo.enterpoint_node_], 2);
   ChunkStream resaved;
-  auto serializer = [](const std::shared_ptr<VectorRecord> &record,
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {
     size_t vector_size = kDimensions * sizeof(float);
     return std::vector<char>(record->GetRawVector(),

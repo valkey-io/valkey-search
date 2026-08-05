@@ -206,7 +206,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
     """
 
     RDB_FILENAME = "hnsw_duplicate_label.rdb"
-    RDB_FIXTURE = f"test-data/{RDB_FILENAME}"
+    RDB_FIXTURE = f"rdbs/{RDB_FILENAME}"
     SURVIVOR_VEC = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
 
     # TODO: Make functionality common once https://github.com/valkey-io/valkey-search/pull/1172 is merged

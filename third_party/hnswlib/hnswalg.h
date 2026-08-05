@@ -1137,13 +1137,20 @@ class HierarchicalNSW
     return absl::OkStatus();
   }
 
-  StoredVectorT *getPoint(labeltype label) const {
+  StoredVectorT *GetPointLockFree(labeltype label) const {
     auto search = label_lookup_.find(label);
     if (search == label_lookup_.end() || isMarkedDeleted(search->second)) {
       return nullptr;
     }
     return GetDataPtrByInternalId(search->second);
   }
+
+  StoredVectorT *GetPoint(labeltype label) const {
+    std::unique_lock<std::mutex> lock_table(label_lookup_lock);
+    return GetPointLockFree(label);
+  }
+
+  StoredVectorT *getPoint(labeltype label) const { return GetPoint(label); }
 
   template <typename data_t>
   std::vector<data_t> getDataByLabel(labeltype label) const {

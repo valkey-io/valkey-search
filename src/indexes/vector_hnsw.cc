@@ -54,7 +54,7 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type, uint32_t db_num) {
+    data_model::AttributeDataType attribute_data_type, int db_num) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
@@ -92,7 +92,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    uint32_t db_num) {
+    int db_num) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
@@ -142,14 +142,14 @@ template <typename T>
 VectorHNSW<T>::VectorHNSW(int dimensions,
                           absl::string_view attribute_identifier,
                           data_model::AttributeDataType attribute_data_type,
-                          uint32_t db_num)
+                          int db_num)
     : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
                  attribute_identifier, db_num) {}
 
 QueryVector::QueryVector(
     const std::shared_ptr<const VectorRecord> &vector_record,
     size_t vector_record_size, bool normalize)
-    : vector_record_(std::move(vector_record)) {
+    : vector_record_(vector_record) {
   if (normalize) {
     normalized_vector_ = NormalizeVector(
         absl::string_view(vector_record_->GetRawVector(), vector_record_size),
@@ -188,9 +188,10 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
         ctx,
-        LookupKeyByValue(*kVectorDataTypeByStr,
-                         data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
-            .data());
+        std::string(LookupKeyByValue(
+                        *kVectorDataTypeByStr,
+                        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32))
+            .c_str());
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
@@ -199,9 +200,10 @@ int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
       ctx,
-      LookupKeyByValue(*kVectorAlgoByStr,
-                       data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm)
-          .data());
+      std::string(LookupKeyByValue(
+                      *kVectorAlgoByStr,
+                      data_model::VectorIndex::AlgorithmCase::kHnswAlgorithm))
+          .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "m");
   absl::ReaderMutexLock lock(&resize_mutex_);
   ValkeyModule_ReplyWithLongLong(ctx, GetM());
@@ -295,10 +297,9 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
     uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
     algo_->addPoint(
         QueryVector(std::move(vector_record), GetVectorDataSize(), normalize_),
-        internal_id, algo_->allow_replace_deleted_);
+        internal_id, /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(

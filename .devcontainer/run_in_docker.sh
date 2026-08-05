@@ -13,9 +13,9 @@ USER_NAME=$(id -un)
 USER_GNAME=$(id -gn)
 
 # Determine the command to run
-CMD="$*"
-if [ -z "$CMD" ]; then
-  CMD="bash"
+COMMAND=("$@")
+if [ ${#COMMAND[@]} -eq 0 ]; then
+  COMMAND=("bash")
 fi
 
 # Detect if running in an interactive terminal (TTY)
@@ -24,38 +24,33 @@ if [ -t 0 ] && [ -t 1 ]; then
   INTERACTIVE_FLAGS="-it"
 fi
 
-# Set up SSH Agent socket proxy
-PROXY_PID=""
-PROXY_SOCKET="$WORKSPACE_DIR/.ssh-agent-$$.sock"
-SSH_AUTH_SOCK_CONTAINER=""
-
-if [ -S "$SSH_AUTH_SOCK" ]; then
-  # Start the Python socket proxy in the background to forward the SSH agent socket
-  python3 "$WORKSPACE_DIR/.devcontainer/socket_proxy.py" "$PROXY_SOCKET" "$SSH_AUTH_SOCK" >/dev/null 2>&1 &
-  PROXY_PID=$!
-  # Wait briefly to ensure the socket file is created
-  sleep 0.1
-  # Set the SSH_AUTH_SOCK path to be used inside the container
-   SSH_AUTH_SOCK_CONTAINER="$CONTAINER_WORKSPACE/.ssh-agent-$$.sock"
-fi
+CREATED_CONTAINER=false
 
 cleanup() {
-  if [ -f "$WORKSPACE_DIR/.build-debug-container/compile_commands.json" ]; then
-    python3 -c '
+  HOST_DEPS_DIR="/tmp/valkey-search-deps"
+  if [ -n "$CONTAINER_ID" ]; then
+    mkdir -p "$HOST_DEPS_DIR"
+    docker cp "$CONTAINER_ID:/opt/valkey-search-deps/." "$HOST_DEPS_DIR" 2>/dev/null || true
+  fi
+  for comp_db in "$WORKSPACE_DIR"/.build-*/compile_commands.json "$WORKSPACE_DIR"/.build-*-container/compile_commands.json; do
+    if [ -f "$comp_db" ] && [ -s "$comp_db" ]; then
+      python3 -c '
 import sys
 with open(sys.argv[1], "r") as f:
     content = f.read()
 content = content.replace(sys.argv[2], sys.argv[3])
+if len(sys.argv) > 5 and sys.argv[4] and sys.argv[5]:
+    content = content.replace(sys.argv[4], sys.argv[5])
 with open(sys.argv[1], "w") as f:
     f.write(content)
-' "$WORKSPACE_DIR/.build-debug-container/compile_commands.json" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" 2>/dev/null || true
-    ln -sfn .build-debug-container/compile_commands.json "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
-  fi
-  if [ -n "$PROXY_PID" ]; then
-    kill "$PROXY_PID" 2>/dev/null || true
-  fi
-  if [ -S "$PROXY_SOCKET" ]; then
-    rm -f "$PROXY_SOCKET" 2>/dev/null || true
+' "$comp_db" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" "/opt/valkey-search-deps" "$HOST_DEPS_DIR" 2>/dev/null || true
+      rel_path="${comp_db#$WORKSPACE_DIR/}"
+      ln -sfn "$rel_path" "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
+      break
+    fi
+  done
+  if [ "$CREATED_CONTAINER" = "true" ] && [ -n "$CONTAINER_ID" ]; then
+    docker rm -f "$CONTAINER_ID" 2>/dev/null || true
   fi
 }
 # Register cleanup trap
@@ -73,89 +68,77 @@ if [ -n "$CONTAINER_ID" ]; then
     docker exec -u root "$CONTAINER_ID" chown "$USER_UID:$USER_GID" "/home/$USER_NAME/.gitconfig"
   fi
 
-  # Copy .ssh folder from host if it exists to ensure git SSH configs are available inside
+  # Copy non-secret SSH configuration from host if it exists (never private keys)
   if [ -d "$HOME/.ssh" ]; then
-    docker cp "$HOME/.ssh" "$CONTAINER_ID:/home/$USER_NAME/.ssh"
-    docker exec -u root "$CONTAINER_ID" chown -R "$USER_UID:$USER_GID" "/home/$USER_NAME/.ssh"
-    docker exec -u "$USER_NAME" "$CONTAINER_ID" chmod 700 "/home/$USER_NAME/.ssh"
-    docker exec -u "$USER_NAME" "$CONTAINER_ID" find "/home/$USER_NAME/.ssh" -type f -exec chmod 600 {} + 2>/dev/null || true
+    docker exec -u "$USER_NAME" "$CONTAINER_ID" mkdir -p "/home/$USER_NAME/.ssh" 2>/dev/null || true
+    for item in config known_hosts known_hosts2; do
+      if [ -f "$HOME/.ssh/$item" ]; then
+        docker cp "$HOME/.ssh/$item" "$CONTAINER_ID:/home/$USER_NAME/.ssh/$item"
+        docker exec -u root "$CONTAINER_ID" chown "$USER_UID:$USER_GID" "/home/$USER_NAME/.ssh/$item"
+        docker exec -u "$USER_NAME" "$CONTAINER_ID" chmod 600 "/home/$USER_NAME/.ssh/$item"
+      fi
+    done
+    docker exec -u "$USER_NAME" "$CONTAINER_ID" chmod 700 "/home/$USER_NAME/.ssh" 2>/dev/null || true
   fi
   
   # Execute inside the container
   ENV_FLAGS=("-e" "TERM=$TERM" "-e" "BUILD_DIR_SUFFIX=-container")
-  if [ -n "$SSH_AUTH_SOCK_CONTAINER" ]; then
-    ENV_FLAGS+=("-e" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK_CONTAINER")
-  fi
 
-  if [ "$CMD" = "bash" ]; then
-    docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "$CONTAINER_WORKSPACE" "$CONTAINER_ID" bash
-  else
-    docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "$CONTAINER_WORKSPACE" "$CONTAINER_ID" bash -c "$CMD"
-  fi
+  docker exec $INTERACTIVE_FLAGS "${ENV_FLAGS[@]}" -u "$USER_NAME" -w "$CONTAINER_WORKSPACE" "$CONTAINER_ID" "${COMMAND[@]}"
 else
   # Fallback: Build and run a new container
   IMAGE_NAME="valkey-search-dev"
   
   # Build/update the docker image using the Dockerfile from .devcontainer
-  docker build -q -t "$IMAGE_NAME" \
+  if ! docker build -q -t "$IMAGE_NAME" \
     --build-arg USER_UID="$USER_UID" \
     --build-arg USER_NAME="$USER_NAME" \
     --build-arg USER_GID="$USER_GID" \
     --build-arg USER_GNAME="$USER_GNAME" \
     -f "$WORKSPACE_DIR/.devcontainer/Dockerfile" \
-    "$WORKSPACE_DIR/.devcontainer"
-
-  # Mount .gitconfig if it exists on the host
-  GITCONFIG_MOUNT=""
-  if [ -f "$HOME/.gitconfig" ]; then
-    GITCONFIG_MOUNT="-v $HOME/.gitconfig:/home/$USER_NAME/.gitconfig:ro"
+    "$WORKSPACE_DIR/.devcontainer"; then
+    echo "Error: Failed to build Docker image '$IMAGE_NAME'." >&2
+    exit 1
   fi
 
-  # Mount .ssh if it exists on the host
-  SSH_MOUNT=""
-  if [ -d "$HOME/.ssh" ]; then
-    SSH_MOUNT="-v $HOME/.ssh:/home/$USER_NAME/.ssh:ro"
+  # Mount .gitconfig if it exists on the host
+  GITCONFIG_MOUNT=()
+  if [ -f "$HOME/.gitconfig" ]; then
+    GITCONFIG_MOUNT=("-v" "$HOME/.gitconfig:/home/$USER_NAME/.gitconfig:ro")
+  fi
+
+  # Mount non-secret SSH config files if they exist on the host (never private keys)
+  SSH_MOUNTS=()
+  if [ -f "$HOME/.ssh/config" ]; then
+    SSH_MOUNTS+=("-v" "$HOME/.ssh/config:/home/$USER_NAME/.ssh/config:ro")
+  fi
+  if [ -f "$HOME/.ssh/known_hosts" ]; then
+    SSH_MOUNTS+=("-v" "$HOME/.ssh/known_hosts:/home/$USER_NAME/.ssh/known_hosts:ro")
   fi
 
   # Mount .ccache if it exists on the host, or create it
-  CCACHE_MOUNT=""
+  CCACHE_MOUNT=()
   if [ ! -d "$HOME/.ccache-valkey-devcontainer" ]; then
     mkdir -p "$HOME/.ccache-valkey-devcontainer"
   fi
-  CCACHE_MOUNT="-v $HOME/.ccache-valkey-devcontainer:/home/$USER_NAME/.ccache"
+  CCACHE_MOUNT=("-v" "$HOME/.ccache-valkey-devcontainer:/home/$USER_NAME/.ccache")
 
   ENV_FLAGS=("-e" "TERM=$TERM" "-e" "BUILD_DIR_SUFFIX=-container")
-  if [ -n "$SSH_AUTH_SOCK_CONTAINER" ]; then
-    ENV_FLAGS+=("-e" "SSH_AUTH_SOCK=$SSH_AUTH_SOCK_CONTAINER")
-  fi
+  CREATED_CONTAINER=true
+  CONTAINER_ID="valkey-search-runner-$$"
 
-  if [ "$CMD" = "bash" ]; then
-    docker run $INTERACTIVE_FLAGS --rm \
-      -v "$WORKSPACE_DIR":"$CONTAINER_WORKSPACE" \
-      -w "$CONTAINER_WORKSPACE" \
-      -u "$USER_UID:$USER_GID" \
-      $GITCONFIG_MOUNT \
-      $SSH_MOUNT \
-      $CCACHE_MOUNT \
-      --network host \
-      --security-opt seccomp=unconfined \
-      --cap-add SYS_PTRACE \
-      "${ENV_FLAGS[@]}" \
-      "$IMAGE_NAME" \
-      bash
-  else
-    docker run $INTERACTIVE_FLAGS --rm \
-      -v "$WORKSPACE_DIR":"$CONTAINER_WORKSPACE" \
-      -w "$CONTAINER_WORKSPACE" \
-      -u "$USER_UID:$USER_GID" \
-      $GITCONFIG_MOUNT \
-      $SSH_MOUNT \
-      $CCACHE_MOUNT \
-      --network host \
-      --security-opt seccomp=unconfined \
-      --cap-add SYS_PTRACE \
-      "${ENV_FLAGS[@]}" \
-      "$IMAGE_NAME" \
-      bash -c "$CMD"
-  fi
+  docker run $INTERACTIVE_FLAGS \
+    --name "$CONTAINER_ID" \
+    -v "$WORKSPACE_DIR":"$CONTAINER_WORKSPACE" \
+    -w "$CONTAINER_WORKSPACE" \
+    -u "$USER_UID:$USER_GID" \
+    "${GITCONFIG_MOUNT[@]}" \
+    "${SSH_MOUNTS[@]}" \
+    "${CCACHE_MOUNT[@]}" \
+    --network host \
+    --security-opt seccomp=unconfined \
+    --cap-add SYS_PTRACE \
+    "${ENV_FLAGS[@]}" \
+    "$IMAGE_NAME" \
+    "${COMMAND[@]}"
 fi

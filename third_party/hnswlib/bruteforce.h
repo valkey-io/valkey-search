@@ -120,13 +120,21 @@ class BruteforceSearch
            &label, sizeof(labeltype));
   }
 
-  VectorRecordT *getPoint(labeltype cur_external) {
-    std::unique_lock<std::mutex> lock(index_lock);
+  VectorRecordT *GetPointLockFree(labeltype cur_external) const {
     auto found = dict_external_to_internal.find(cur_external);
     if (found == dict_external_to_internal.end()) {
       return nullptr;
     }
     return GetDataPtrByInternalId(found->second);
+  }
+
+  VectorRecordT *GetPoint(labeltype cur_external) {
+    std::unique_lock<std::mutex> lock(index_lock);
+    return GetPointLockFree(cur_external);
+  }
+
+  VectorRecordT *getPoint(labeltype cur_external) {
+    return GetPoint(cur_external);
   }
 
   void removePoint(labeltype cur_external) {

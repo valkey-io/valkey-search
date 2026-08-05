@@ -24,6 +24,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/log.h"
@@ -33,14 +34,7 @@
 
 class MockValkeyModule {
  public:
-  MockValkeyModule() {
-    ON_CALL(*this, EventLoopAddOneShot)
-        .WillByDefault([this](ValkeyModuleEventLoopOneShotFunc callback,
-                              void *data) -> int {
-          one_shots.push_back({callback, data});
-          return 0;
-        });
-  };
+  MockValkeyModule();
   ~MockValkeyModule() { RunPendingOneShots(); }
   MOCK_METHOD(ValkeyModuleBlockedClient *, BlockClientOnAuth,
               (ValkeyModuleCtx * ctx, ValkeyModuleAuthCallback reply_callback,
@@ -285,13 +279,30 @@ class MockValkeyModule {
   MOCK_METHOD(long long, Milliseconds, ());
 
   void RunPendingOneShots() {
-    for (auto &one_shot : one_shots) {
+    std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> shots;
+    {
+      absl::MutexLock lock(&one_shots_mutex_);
+      shots = std::move(one_shots);
+      one_shots.clear();
+    }
+    for (auto &one_shot : shots) {
       one_shot.first(one_shot.second);
     }
-    one_shots.clear();
   }
+  mutable absl::Mutex one_shots_mutex_;
   std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> one_shots;
 };
+
+inline MockValkeyModule::MockValkeyModule() {
+  ON_CALL(*this, EventLoopAddOneShot)
+      .WillByDefault(
+          [this](ValkeyModuleEventLoopOneShotFunc callback, void *data) -> int {
+            absl::MutexLock lock(&one_shots_mutex_);
+            one_shots.push_back({callback, data});
+            return 0;
+          });
+}
+
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockValkeyModule is a fake Valkey module used for static wrappers
 // around MockValkeyModule methods.
@@ -602,15 +613,14 @@ inline ValkeyModuleString *TestValkeyModule_CreateString(ValkeyModuleCtx *ctx
 
 inline void TestValkeyModule_FreeString(ValkeyModuleCtx *ctx [[maybe_unused]],
                                         ValkeyModuleString *str) {
-  str->cnt--;
-  if (str->cnt == 0) {
+  if (--str->cnt == 0) {
     delete str;
   }
 }
 
 inline void TestValkeyModule_RetainString(ValkeyModuleCtx *ctx [[maybe_unused]],
                                           ValkeyModuleString *str) {
-  str->cnt++;
+  ++str->cnt;
 }
 
 inline int TestValkeyModule_EventLoopAdd(int fd, int mask,

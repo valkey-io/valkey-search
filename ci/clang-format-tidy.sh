@@ -5,11 +5,15 @@ FIX=false
 UPDATE=false
 FILE=""
 
+FORMAT_ONLY=false
+
 for arg in "$@"; do
   if [ "$arg" = "--fix" ]; then
     FIX=true
   elif [ "$arg" = "--update" ]; then
     UPDATE=true
+  elif [ "$arg" = "--format-only" ]; then
+    FORMAT_ONLY=true
   else
     FILE="$arg"
   fi
@@ -68,14 +72,19 @@ if [ "$UPDATE" = true ]; then
     fi
     
     echo "================================================================================"
+    local extra_args=()
+    if [ "$FORMAT_ONLY" = true ]; then
+      extra_args+=("--format-only")
+    fi
+
     if [ "$FIX" = true ]; then
       echo "Processing (Fix Mode): $file"
-      if ! "$0" --fix "$file"; then
+      if ! "$0" --fix "${extra_args[@]}" "$file"; then
         failed=true
       fi
     else
       echo "Processing (Check Mode): $file"
-      if ! "$0" "$file"; then
+      if ! "$0" "${extra_args[@]}" "$file"; then
         failed=true
       fi
     fi
@@ -141,7 +150,7 @@ setup_tidy_db() {
 
 # Fix mode (single file)
 if [ "$FIX" = true ]; then
-  if [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
+  if [ "$FORMAT_ONLY" = false ] && [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
     TIDY_ARGS=("-fix" "-checks=-misc-include-cleaner" "--header-filter=$(get_header_filter "$FILE")")
     
     if [[ "$FILE" =~ \.(h|hpp)$ ]]; then
@@ -156,7 +165,7 @@ if [ "$FIX" = true ]; then
         if [ -n "$DB_FILE" ] && [ -f "$DB_FILE" ]; then
           FLAGS=$(python3 ci/extract_flags.py "$DB_FILE" "$CC_FILE")
           echo "Running clang-tidy with fixes on $FILE..."
-          clang-tidy "${TIDY_ARGS[@]}" "$FILE" -- -x c++ $FLAGS || echo "clang-tidy reported errors during fixing."
+          clang-tidy "${TIDY_ARGS[@]}" "$FILE" -- -x c++-header $FLAGS || echo "clang-tidy reported errors during fixing."
         else
           echo "Warning: No compilation database found. Skipping clang-tidy fixes for header."
         fi
@@ -194,7 +203,7 @@ rm -f "$TEMP_FILE"
 echo "Formatting is OK."
 
 # 2. Run clang-tidy check (only for C++ files)
-if [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
+if [ "$FORMAT_ONLY" = false ] && [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
   TIDY_ARGS=("--header-filter=$(get_header_filter "$FILE")")
   
   if [[ "$FILE" =~ \.(h|hpp)$ ]]; then
@@ -208,7 +217,7 @@ if [[ "$FILE" =~ \.(cc|cpp|h|hpp)$ ]]; then
       DB_FILE=$(get_tidy_db_file)
       if [ -n "$DB_FILE" ] && [ -f "$DB_FILE" ]; then
         FLAGS=$(python3 ci/extract_flags.py "$DB_FILE" "$CC_FILE")
-        if ! clang-tidy "${TIDY_ARGS[@]}" -warnings-as-errors='*' "$FILE" -- -x c++ $FLAGS; then
+        if ! clang-tidy "${TIDY_ARGS[@]}" -warnings-as-errors='*' "$FILE" -- -x c++-header $FLAGS; then
           echo "clang-tidy failed for $FILE" >&2
           exit 1
         fi

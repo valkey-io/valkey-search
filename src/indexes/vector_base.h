@@ -213,8 +213,8 @@ class VectorBase : public IndexBase {
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   bool AddPrefilteredKey(
-      absl::string_view query, float product_magnitude, uint64_t count,
-      const InternedStringPtr &key,
+      absl::string_view query, float query_magnitude,
+      const InternedStringPtr &key, uint64_t count,
       std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
       absl::flat_hash_set<const char *> &top_keys) const;
   template <typename T>
@@ -243,7 +243,7 @@ class VectorBase : public IndexBase {
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
-             absl::string_view attribute_identifier, uint32_t db_num)
+             absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
         db_num_(db_num),
         dimensions_(dimensions),
@@ -285,8 +285,10 @@ class VectorBase : public IndexBase {
 
   virtual std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const = 0;
+  virtual std::shared_ptr<const VectorRecord> &GetVector(
+      uint64_t internal_id) const = 0;
 
-  uint32_t db_num_;
+  int db_num_;
   int dimensions_;
   std::string attribute_identifier_;
   InternedStringPtr interned_attribute_identifier_;
@@ -327,7 +329,7 @@ class VectorBase : public IndexBase {
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
-                            float product_magnitude) const;
+                            float query_magnitude) const;
   std::shared_ptr<const VectorRecord> GetOrConstructVectorRecord(
       const InternedStringPtr &key, absl::string_view record) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};

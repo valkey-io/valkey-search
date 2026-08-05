@@ -12,6 +12,7 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
+USE_SYSTEM_MODULES="auto"
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
@@ -34,7 +35,7 @@ Usage: build.sh [options...]
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
     --run-integration-tests[=pattern] Run integration tests.
-    --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --no-system-modules               Disable system dependencies and force building from submodules.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
@@ -121,10 +122,9 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Write test errors to stdout on failure"
         ;;
-    --use-system-modules)
-        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
+    --no-system-modules)
+        USE_SYSTEM_MODULES="no"
         shift || true
-        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --asan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
@@ -158,6 +158,24 @@ while [ $# -gt 0 ]; do
         ;;
     esac
 done
+
+if [[ "${USE_SYSTEM_MODULES}" != "no" ]]; then
+    san_suffix=""
+    if [[ "${SAN_BUILD}" == "address" ]]; then
+        san_suffix="-asan"
+    elif [[ "${SAN_BUILD}" == "thread" ]]; then
+        san_suffix="-tsan"
+    fi
+    DEPS_DIR="/opt/valkey-search-deps${san_suffix}"
+    if [ -d "${DEPS_DIR}" ] && [ -f "${DEPS_DIR}/bin/grpc_cpp_plugin" ]; then
+        CMAKE_DIR="${DEPS_DIR}/lib/cmake"
+        export CMAKE_PREFIX_PATH="${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${CMAKE_DIR}/benchmark:${DEPS_DIR}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+        if [[ "${CMAKE_EXTRA_ARGS}" != *"-DWITH_SUBMODULES_SYSTEM"* ]]; then
+            CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
+        fi
+        echo "Auto-detected system dependencies from ${DEPS_DIR}"
+    fi
+fi
 
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD

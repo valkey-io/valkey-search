@@ -141,14 +141,14 @@ SchemaManager::SchemaManager(
   }
 }
 
-absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
+absl::Status GenerateIndexAlreadyExistsError(int db_num,
                                              absl::string_view name) {
   return absl::AlreadyExistsError(
       absl::StrFormat("Index %s in database %d already exists.", name, db_num));
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
-    uint32_t db_num, absl::string_view name) const {
+    int db_num, absl::string_view name) const {
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
     return absl::NotFoundError(absl::StrCat(
@@ -173,7 +173,7 @@ absl::Status SchemaManager::ImportIndexSchema(
     std::shared_ptr<IndexSchema> index_schema) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
-  uint32_t db_num = index_schema->GetDBNum();
+  int db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
@@ -190,7 +190,7 @@ absl::Status SchemaManager::ImportIndexSchema(
 
 absl::Status SchemaManager::CreateIndexSchemaInternal(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
-  uint32_t db_num = index_schema_proto.db_num();
+  int db_num = static_cast<int>(index_schema_proto.db_num());
   const std::string &name = index_schema_proto.name();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
@@ -230,8 +230,9 @@ SchemaManager::CreateIndexSchema(
                              coordinator::ObjName(index_schema_proto.db_num(),
                                                   index_schema_proto.name()))
             .ok()) {
-      return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
-                                             index_schema_proto.name());
+      return GenerateIndexAlreadyExistsError(
+          static_cast<int>(index_schema_proto.db_num()),
+          index_schema_proto.name());
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
@@ -253,7 +254,7 @@ SchemaManager::CreateIndexSchema(
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
-    uint32_t db_num, absl::string_view name) const {
+    int db_num, absl::string_view name) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
@@ -263,8 +264,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>>
-SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
-                                         absl::string_view name) {
+SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
     return GenerateIndexNotFoundError(db_num, name);
@@ -281,7 +281,7 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
   return result;
 }
 
-absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
+absl::Status SchemaManager::RemoveIndexSchema(int db_num,
                                               const absl::string_view name) {
   if (coordinator_enabled_) {
     // In coordinated mode, use the metadata_manager as the source of truth.
@@ -309,7 +309,7 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
 }
 
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
-    uint32_t db_num) const {
+    int db_num) const {
   // Copy out the state at the time of the call. Due to the copy - this
   // should not be used in performance critical paths like FT.SEARCH.
   absl::flat_hash_set<std::string> names;
@@ -324,7 +324,7 @@ absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
 }
 
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDB(
-    uint32_t db_num) const {
+    int db_num) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   return GetIndexSchemasInDBInternal(db_num);
 }
@@ -689,7 +689,7 @@ absl::Status SchemaManager::LoadIndex(
                                                   std::move(index_schema_pb),
                                                   std::move(supplemental_iter)),
                          _ << "Failed to load index schema from RDB!");
-  uint32_t db_num = index_schema->GetDBNum();
+  int db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
   // In diskless load scenarios, we stage the index to allow serving from
@@ -777,7 +777,7 @@ void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
 }
 
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
-    uint32_t db_num, absl::string_view name, uint64_t fingerprint,
+    int db_num, absl::string_view name, uint64_t fingerprint,
     uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);

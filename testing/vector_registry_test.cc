@@ -19,6 +19,7 @@
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search {
@@ -289,7 +290,7 @@ TEST_F(VectorRegistryTest, VectorSharingDisabled) {
   SetHashRegistrationSupported(registry, original_supported);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashOpenKeyFails) {
+TEST_F(VectorRegistryTest, ShareWithValkeyOpenKeyFails) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_open_fail");
@@ -310,7 +311,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashOpenKeyFails) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashHasStringRefFails) {
+TEST_F(VectorRegistryTest, ShareWithValkeyHasStringRefFails) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_has_ref_fail");
@@ -333,7 +334,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashHasStringRefFails) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashGetNullRecord) {
+TEST_F(VectorRegistryTest, ShareWithValkeyGetNullRecord) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_get_null");
@@ -362,7 +363,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashGetNullRecord) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashGetPayloadMismatch) {
+TEST_F(VectorRegistryTest, ShareWithValkeyGetPayloadMismatch) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_payload_mismatch");
@@ -397,7 +398,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashGetPayloadMismatch) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashSetStringRefFails) {
+TEST_F(VectorRegistryTest, ShareWithValkeySetStringRefFails) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_set_ref_fail");
@@ -432,7 +433,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashSetStringRefFails) {
             initial_errors + 1);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashSuccess) {
+TEST_F(VectorRegistryTest, ShareWithValkeySuccess) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_success");
@@ -466,7 +467,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashSuccess) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits + 1);
 }
 
-TEST_F(VectorRegistryTest, ShareWithValkeyHashIdenticalVectorReTrack) {
+TEST_F(VectorRegistryTest, ShareWithValkeyIdenticalVectorReTrack) {
   auto &registry = VectorRegistry::Instance();
   SetHashRegistrationSupported(registry, true);
   auto key = StringInternStore::Intern("key_identical_retrack");
@@ -478,21 +479,25 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashIdenticalVectorReTrack) {
   auto valkey_vec1 = vmsdk::MakeUniqueValkeyString(vec_str);
 
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
-      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+      .Times(2)
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
-      .WillOnce(testing::Return(VALKEYMODULE_OK));
+      .Times(2)
+      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
   EXPECT_CALL(*kMockValkeyModule,
               HashGet(testing::_, VALKEYMODULE_HASH_NONE, testing::_,
                       testing::An<ValkeyModuleString **>(),
                       testing::TypedEq<void *>(nullptr)))
-      .WillOnce([&vec_str](ValkeyModuleKey *, int, const char *,
-                           ValkeyModuleString **value_out, void *) {
+      .Times(2)
+      .WillRepeatedly([&vec_str](ValkeyModuleKey *, int, const char *,
+                                 ValkeyModuleString **value_out, void *) {
         *value_out = vmsdk::MakeUniqueValkeyString(vec_str).release();
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule,
               HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
-      .WillOnce(testing::Return(VALKEYMODULE_OK));
+      .Times(2)
+      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
 
   auto initial_hits = registry.GetStats().hash_sharing_hits.GetTotal();
 
@@ -504,14 +509,14 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHashIdenticalVectorReTrack) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits + 1);
 
   // Second Track call with exact same vector data reuses existing VectorRecord
-  // and skips ShareWithValkeyHash.
+  // and re-establishes sharing with Valkey in case the hash field was replaced.
   auto valkey_vec2 = vmsdk::MakeUniqueValkeyString(vec_str);
   auto rec2 = registry.Track(
       key, attr1, valkey_vec2.get(), nullptr,
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec2, nullptr);
   EXPECT_EQ(rec1, rec2);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits + 1);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits + 2);
 }
 
 TEST_F(VectorRegistryTest,
@@ -538,7 +543,7 @@ TEST_F(VectorRegistryTest,
   VMSDK_EXPECT_OK(index_schema->AddIndex("vector", "vector", *hnsw_index));
 
   auto key = StringInternStore::Intern("prefix:1");
-  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
   auto attr_interned = StringInternStore::Intern("vector");
 
   // 1. Prepare initial vector data (100 float values for HNSW index)
@@ -627,7 +632,7 @@ TEST_F(VectorRegistryTest, UntrackWithVectorSharingSuccess) {
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
   auto match_valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
 
-  // Expectations for Track (ShareWithValkeyHash)
+  // Expectations for Track (ShareWithValkey)
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
@@ -649,7 +654,7 @@ TEST_F(VectorRegistryTest, UntrackWithVectorSharingSuccess) {
   ASSERT_NE(rec, nullptr);
 
   // Now we setup expectations for UntrackIfUnused (which calls
-  // DetachFromValkeyHash)
+  // DetachFromValkey)
   EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
       .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
@@ -736,6 +741,125 @@ TEST_F(VectorRegistryTest, NoCollisionBetweenDifferentDBs) {
     auto [lookup_rec2_final, size2_final] = registry.LookupRecord(key, attr, 2);
     EXPECT_EQ(lookup_rec2_final, nullptr);
   }
+}
+
+TEST_F(VectorRegistryTest, MultipleConsumersTrackUseCountAndDetachOnLastDrop) {
+  auto &registry = VectorRegistry::Instance();
+  SetHashRegistrationSupported(registry, true);
+
+  auto key = StringInternStore::Intern("multi_idx_key");
+  auto attr = StringInternStore::Intern("vec");
+
+  std::vector<float> vec_data = {1.0f, 2.0f, 3.0f, 4.0f};
+  std::string vec_str(reinterpret_cast<const char *>(vec_data.data()),
+                      vec_data.size() * sizeof(float));
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  auto match_valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  // Expectations for Track (ShareWithValkey)
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_NONE, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillOnce(
+          testing::DoAll(testing::SetArgPointee<3>(match_valkey_vec.release()),
+                         testing::Return(VALKEYMODULE_OK)));
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+  // 1. First index tracks the vector
+  auto index1_record = registry.Track(
+      key, attr, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_NE(index1_record, nullptr);
+  // 1 reference in index1_record + 1 reference in registry.tracked_vectors_
+  EXPECT_EQ(index1_record.use_count(), 2);
+
+  // 2. Second index looks up and tracks the same vector
+  auto [index2_record, size] = registry.LookupRecord(key, attr, 0);
+  ASSERT_NE(index2_record, nullptr);
+  EXPECT_EQ(index1_record, index2_record);
+  // 1 in index1 + 1 in index2 + 1 in registry
+  EXPECT_EQ(index1_record.use_count(), 3);
+
+  // 3. Second index drops its reference; index 1 is still alive
+  index2_record.reset();
+  EXPECT_EQ(index1_record.use_count(), 2);
+  registry.UntrackIfUnused(key, attr, 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 1);  // Not untracked
+
+  // 4. First index drops its reference; setup expectations for DetachFromValkey
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillOnce(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillOnce(testing::Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillOnce(testing::Return(1));
+
+  auto db_valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_NONE, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillOnce(
+          testing::DoAll(testing::SetArgPointee<3>(db_valkey_vec.release()),
+                         testing::Return(VALKEYMODULE_OK)));
+
+  EXPECT_CALL(*kMockValkeyModule,
+              HashSet(testing::_, VALKEYMODULE_HASH_NONE, testing::_,
+                      testing::_, testing::TypedEq<void *>(nullptr)))
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+
+  index1_record.reset();
+  registry.UntrackIfUnused(key, attr, 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);  // Fully untracked and detached
+}
+
+TEST_F(VectorRegistryTest, ForceHashSharingErrorFallback) {
+  auto &registry = VectorRegistry::Instance();
+  SetHashRegistrationSupported(registry, true);
+
+  auto key = StringInternStore::Intern("doc:err");
+  auto attr = StringInternStore::Intern("vec");
+  std::string vec_str(16, 'a');
+  auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+
+  // Enable forced error injection
+  VMSDK_EXPECT_OK(vmsdk::debug::ControlledSet("ForceHashSharingError", "1"));
+
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_KEYTYPE_HASH));
+  EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
+  auto match_valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_NONE, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillRepeatedly(
+          testing::DoAll(testing::SetArgPointee<3>(match_valkey_vec.release()),
+                         testing::Return(VALKEYMODULE_OK)));
+
+  auto tracked_rec = registry.Track(
+      key, attr, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+
+  EXPECT_NE(tracked_rec, nullptr);
+  EXPECT_GT(registry.GetStats().hash_sharing_errors.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+
+  // Clean up
+  VMSDK_EXPECT_OK(vmsdk::debug::ControlledSet("ForceHashSharingError", "0"));
+  tracked_rec.reset();
+  registry.UntrackIfUnused(key, attr, 0);
+  EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
 }  // namespace valkey_search

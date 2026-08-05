@@ -1,12 +1,16 @@
 import struct
 import os
+import shutil
 import pytest
 
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import (
+    LOGS_DIR,
+    ValkeySearchTestCaseCommon,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import Index, Vector
-from ft_info_parser import FTInfoParser
 from util import waiters
 
 
@@ -65,7 +69,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
         info_before = client.info("SEARCH")
         exc_before = int(info_before.get("search_hnsw_add_exceptions_count", 0))
 
-        os.environ["SKIPLOGCLEAN"] = "1"
+        os.environ.pop("SKIPLOGCLEAN", None)
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
 
@@ -165,6 +169,7 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
 
         # RDB save + reload
         client.execute_command("SAVE")
+        os.environ.pop("SKIPLOGCLEAN", None)
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
 
@@ -188,3 +193,108 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
             f"KNN search returned {search_result[0]}, expected 4"
 
         client.execute_command("FT.DROPINDEX", "idx")
+
+
+class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
+    """
+    Regression test for loading an RDB that carries a duplicate label.
+
+    Previously ModifyRecordImpl first called markDelete() on the record to
+    tombstone the existing slot with the label and then called addPoint() to add
+    the new vector with the exact same label. In the normal case, the same slot
+    was updated and there were no duplicate labels. The problem occurred when
+    another document was deleted between markDelete() and addPoint(), which put
+    another tombstoned slot at the front of deleted_elements. The addPoint()
+    for the modified record reused it, adding the label to a new slot while still
+    keeping the same label on the old slot it had just tombstoned.
+    """
+
+    RDB_FILENAME = "hnsw_duplicate_label.rdb"
+    RDB_FIXTURE = f"rdbs/{RDB_FILENAME}"
+    SURVIVOR_VEC = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
+
+    # TODO: Make functionality common once https://github.com/valkey-io/valkey-search/pull/1172 is merged
+    def _start_server(self, test_name, search_module_args=""):
+        server_path = os.getenv("VALKEY_SERVER_PATH")
+        testdir = f"{LOGS_DIR}/{test_name}"
+        port = self.get_bind_port()
+
+        os.makedirs(testdir, exist_ok=True)
+        shutil.copy(
+            os.path.join(os.path.dirname(__file__), self.RDB_FIXTURE),
+            os.path.join(testdir, self.RDB_FILENAME),
+        )
+
+        lines = [
+            "enable-debug-command yes",
+            f"dbfilename {self.RDB_FILENAME}",
+            f"dir {testdir}",
+            f"port {port}",
+            f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
+            f"loadmodule {os.getenv('MODULE_PATH')} {search_module_args}",
+        ]
+        conf_file = os.path.join(testdir, f"valkey_{port}.conf")
+        with open(conf_file, "w") as f:
+            f.write("\n".join(lines) + "\n")
+
+        server, client = self.create_server(
+            testdir=testdir,
+            server_path=server_path,
+            port=port,
+            conf_file=conf_file,
+            args={"logfile": f"logfile_{port}", "dbfilename": self.RDB_FILENAME},
+        )
+        return server, client, os.path.join(testdir, f"logfile_{port}")
+
+    def test_load_rdb_with_duplicate_label(self):
+        server, client, logfile = self._start_server(
+            "hnsw_dup_label_rdb", search_module_args="--debug-mode yes")
+        client.config_set("search.info-developer-visible", "yes")
+
+        hnsw_index = Index(
+            "idx",
+            [Vector("vector", 4, type="HNSW", distance="L2")],
+            prefixes=["doc:"]
+        )
+        waiters.wait_for_true(
+            lambda: hnsw_index.backfill_complete(client), timeout=10
+        )
+
+        dup_on_load = int(client.info("SEARCH").get(
+            "search_hnsw_duplicate_label_on_load_count", 0))
+        assert dup_on_load == 1, \
+            f"Expected a duplicate label on load, got {dup_on_load}"
+
+        ft_info = hnsw_index.info(client)
+        assert ft_info.num_docs == 1, \
+            f"Expected 1 doc after load, got {ft_info.num_docs}"
+
+        # The survivor should be doc:1 carrying its updated vector.
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 2 @vector $q]",
+            "PARAMS", "2", "q", self.SURVIVOR_VEC,
+            "RETURN", "1", "vector",
+        )
+        assert search_result[0] == 1, \
+            f"Expected 1 search result, got {search_result[0]}"
+        assert search_result[1] == b"doc:1", \
+            f"Expected doc:1 to survive, got {search_result[1]}"
+        returned_fields = search_result[2]
+        vector_value = returned_fields[returned_fields.index(b"vector") + 1]
+        assert vector_value == self.SURVIVOR_VEC, \
+            f"Expected doc:1 to carry the updated vector, got {vector_value!r}"
+
+        # Deleting the survivor must actually remove it, proving label_lookup_
+        # resolves the label to the live slot rather than a tombstone.
+        client.delete("doc:1")
+        assert hnsw_index.info(client).num_docs == 0
+        assert int(client.info("SEARCH").get(
+            "search_hnsw_remove_exceptions_count", 0)) == 0
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 2 @vector $q]",
+            "PARAMS", "2", "q", self.SURVIVOR_VEC,
+        )
+        assert search_result[0] == 0, \
+            f"Expected doc:1 to be deleted, got {search_result[0]} results"

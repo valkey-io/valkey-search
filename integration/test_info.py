@@ -101,7 +101,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             m.decode('utf-8') if isinstance(m, bytes) else m 
             for m in actual_metrics
         )
-        # Expected baseline: 68 APP metrics as of current implementation
+        # Expected baseline: 69 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
             "coordinator_bytes_in",
@@ -126,6 +126,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
             "hnsw_create_exceptions_count",
+            "hnsw_duplicate_label_on_load_count",
             "hnsw_modify_exceptions_count",
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",

@@ -48,13 +48,18 @@ class TestIndexesRestoredPercentStandalone(ValkeySearchTestCaseDebugMode):
 
         # Monitor the metric from a separate connection during DEBUG RELOAD
         monitor_client = self.server.get_new_client()
+        monitor_ready = threading.Event()
         done = threading.Event()
         observed_percents = []
         monitor_error = [None]
 
         def monitor():
-            while not done.is_set():
-                try:
+            try:
+                # Signal readiness after confirming the connection works
+                monitor_client.info("search")
+                monitor_ready.set()
+
+                while not done.is_set():
                     info = monitor_client.info("search")
                     if info.get("search_rdb_restore_in_progress", 0):
                         pct = float(info["search_rdb_indexes_restored_percent"])
@@ -64,13 +69,22 @@ class TestIndexesRestoredPercentStandalone(ValkeySearchTestCaseDebugMode):
                         if pct > 100.0:
                             monitor_error[0] = f"Metric exceeded 100%: {pct}"
                             return
-                except Exception:
-                    pass
-                time.sleep(0.001)
+                    done.wait(0.001)
+            except Exception as exc:
+                monitor_error[0] = f"Monitor exception: {exc}"
+                monitor_ready.set()
 
-        threading.Thread(target=monitor, daemon=True).start()
-        self.client.execute_command("DEBUG", "RELOAD")
-        done.set()
+        thread = threading.Thread(target=monitor, daemon=True)
+        thread.start()
+        assert monitor_ready.wait(timeout=5), "Monitor thread failed to start"
+
+        try:
+            self.client.execute_command("DEBUG", "RELOAD")
+        finally:
+            done.set()
+            thread.join(timeout=5)
+
+        assert not thread.is_alive(), "Monitor thread did not exit cleanly"
 
         print(f"[Standalone] DEBUG RELOAD complete. Observed {len(observed_percents)} progress samples during restore.")
         if observed_percents:

@@ -64,7 +64,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
         info_before = client.info("SEARCH")
         exc_before = int(info_before.get("search_hnsw_add_exceptions_count", 0))
 
-        os.environ["SKIPLOGCLEAN"] = "1"
+        os.environ.pop("SKIPLOGCLEAN", None)
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
 
@@ -162,6 +162,7 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
 
         # RDB save + reload
         client.execute_command("SAVE")
+        os.environ.pop("SKIPLOGCLEAN", None)
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
 
@@ -269,6 +270,7 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
         # Reloading from the RDB rebuilds label_lookup_ from the on-disk
         # labels. There should be no validation error hit.
         assert client2.execute_command("SAVE")
+        os.environ.pop("SKIPLOGCLEAN", None)
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
         waiters.wait_for_true(

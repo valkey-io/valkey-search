@@ -1046,11 +1046,15 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       auto dup_it = label_lookup_.find(ext_label);
       if (dup_it == label_lookup_.end()) {
         label_lookup_[ext_label] = i;
-      } else if (!isMarkedDeleted(static_cast<tableint>(i))) {
-        loadCheck(isMarkedDeleted(dup_it->second),
-                  "duplicate live label in index");
-        // Overwrite mapping to tombstoned slot with the live one.
-        dup_it->second = i;
+      } else {
+        valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
+            1;
+        if (!isMarkedDeleted(static_cast<tableint>(i))) {
+          loadCheck(isMarkedDeleted(dup_it->second),
+                    "duplicate live label in index");
+          // Overwrite mapping to tombstoned slot with the live one.
+          dup_it->second = i;
+        }
       }
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());

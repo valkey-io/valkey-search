@@ -276,6 +276,17 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_true(
             lambda: hnsw_index.backfill_complete(client)
         )
+
+        # NOTE: This is based on an assumption about the implementation
+        # details of the standard library unsorted set. If it doesn't
+        # always hold true, this test can be replaced by a unit test.
+        # I'm keeping this integration test for now though as it nicely
+        # illustrates the end-to-end problem being addressed.
+        dup_on_load = int(client.info("SEARCH").get(
+            "search_hnsw_duplicate_label_on_load_count", 0))
+        assert dup_on_load >= 1, \
+            f"Expected a duplicate label on load, got {dup_on_load}"
+
         ft_info = hnsw_index.info(client)
         assert ft_info.num_docs == 1, \
             f"Expected 1 doc after update+delete, got {ft_info.num_docs}"

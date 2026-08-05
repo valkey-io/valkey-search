@@ -970,6 +970,35 @@ void ExpectReject(ChunkStream golden, absl::string_view substr) {
 
 }  // namespace
 
+TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space, /*max_elements=*/kGoldenMax, kM,
+                                       kEFConstruction, /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/true);
+
+  // Labels 0,1 land at slots 0,1
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    algo.addPoint(vectors[i].data(), /*label=*/i);
+  }
+
+  // Delete the first entry
+  algo.markDelete(0);
+
+  // Add vector with label 1 again. Previously in the replace-deleted case, this
+  // would ovewrite the tombstoned slot 0 and not re-use slot 1 with the same
+  // label.
+  algo.addPoint(vectors[0].data(), /*label=*/1, /*replace_deleted=*/true);
+
+  // Each label keeps its own slot: label 1 stays live on slot 1 and label 0
+  // stays on the still-tombstoned slot 0.
+  EXPECT_EQ(algo.label_lookup_.size(), 2u);
+  EXPECT_EQ(algo.label_lookup_[0], 0u);
+  EXPECT_EQ(algo.label_lookup_[1], 1u);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+  EXPECT_FALSE(algo.isMarkedDeleted(1));
+}
+
 // ---- Happy path ----------------------------------------------------------
 
 TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {

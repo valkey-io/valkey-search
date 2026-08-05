@@ -1288,7 +1288,28 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       addPoint(data_point, label, -1);
       return;
     }
-    // check if there is vacant place
+
+    // If the label already exists, reuse the same slot.
+    {
+      std::unique_lock<std::mutex> lock_table(label_lookup_lock);
+      auto search = label_lookup_.find(label);
+      if (search != label_lookup_.end()) {
+        tableint existing = search->second;
+        lock_table.unlock();
+        if (isMarkedDeleted(existing)) {
+          {
+            std::unique_lock<std::mutex> lock_deleted_elements(
+                deleted_elements_lock);
+            deleted_elements.erase(existing);
+          }
+          unmarkDeletedInternal(existing);
+        }
+        updatePoint(data_point, existing, 1.0);
+        return;
+      }
+    }
+
+    // Otherwise, reuse a vacant tombstoned slot if any.
     tableint internal_id_replaced;
     std::unique_lock<std::mutex> lock_deleted_elements(deleted_elements_lock);
     bool is_vacant_place = !deleted_elements.empty();

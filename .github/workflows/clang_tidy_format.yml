@@ -88,7 +88,7 @@ jobs:
           for FILE in $MODIFIED_FILES; do
             echo "Running clang-format check on $FILE"
             docker run --rm --privileged -v "$(pwd):/workspace" --user "ubuntu:ubuntu" presubmit-image \
-            bash -c "ci/check_clang_format.sh \"$FILE\""
+            bash -c "ci/clang-format-tidy.sh --format-only \"$FILE\""
 
             TS_FILE="$FILE"
             if [[ "$TS_FILE" == *.h ]]; then

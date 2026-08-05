@@ -275,11 +275,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
-    // The concern with calling updatePoint is that it might have implications
-    // on the search accuracy. Need to revisit this in the future.
-    algo_->markDelete(internal_id);
-    PAUSEPOINT("hnsw_modify_between_delete_and_add");
+    // addPoint() routes an existing label to an in-place update.
     algo_->addPoint((T *)record.data(), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {

@@ -1040,9 +1040,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
       // A label can appear on multiple slots in RDBs written by older versions.
       // There can be one live slot and any number of tombstoned slots all
-      // carrying the same label. This is not fundamentally incorrect, we just
-      // need to carefully rebuild the label lookup to point the label at the
-      // live slot if there is one.
+      // carrying the same label. We just need to rebuild the label lookup to
+      // point the label at the live slot if there is one.
       auto dup_it = label_lookup_.find(ext_label);
       if (dup_it == label_lookup_.end()) {
         label_lookup_[ext_label] = i;
@@ -1273,7 +1272,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   /*
    * Adds point. Updates the point if it is already in the index.
    * If replacement of deleted elements is enabled: replaces previously deleted
-   * point if any, updating it with new point
+   * point if any, updating it with new point. If the label already exists in a
+   * slot, the same slot will be used.
    */
   void addPoint(const void *data_point, labeltype label,
                 bool replace_deleted = false) {

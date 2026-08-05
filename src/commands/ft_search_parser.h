@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
 #include <optional>
+#include <string>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -16,30 +17,35 @@
 
 namespace valkey_search {
 namespace options {
-vmsdk::config::Number &GetMaxKnn();
+vmsdk::config::Number& GetMaxKnn();
 }  // namespace options
 
-absl::Status VerifyQueryString(query::SearchParameters &parameters);
+absl::Status VerifyQueryString(query::SearchParameters& parameters);
 
 //
 // Data Unique to the FT.SEARCH command
 //
 struct SearchCommand : public QueryCommand {
   SearchCommand(int db_num) : QueryCommand(db_num) {}
-  absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
-  void SendReply(ValkeyModuleCtx *ctx,
-                 query::SearchResult &search_result) override;
+  absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
+  void SendReply(ValkeyModuleCtx* ctx,
+                 query::SearchResult& search_result) override;
   absl::Status PostParseQueryString() override;
   // By default, FT.SEARCH does not require complete results and can be
   // optimized with LIMIT based trimming. Implement the correct logic here to
   // return true when those clauses are present.
   bool RequiresCompleteResults() const override {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || num_vr_predicates > 0;
   }
 
   query::SerializationRange GetSerializationRange() const;
 
   bool with_sort_keys{false};
+
+  // Returns true if this is a standalone vector range query (no KNN).
+  bool IsVectorRangeQuery() const {
+    return IsNonVectorQuery() && num_vr_predicates > 0;
+  }
 };
 
 }  // namespace valkey_search

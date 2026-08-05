@@ -7,10 +7,15 @@
 #include "src/commands/ft_aggregate_parser.h"
 
 #include <map>
+#include <vector>
 
 #include "gtest/gtest.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/vector_flat.h"
 #include "src/valkey_search_options.h"
+#include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
   return os << "S=" << *(std::string *)s;
@@ -411,6 +416,152 @@ TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
   auto result = expr::Expression::Compile(params, deep_expr);
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
+}
+
+// ---------------------------------------------------------------------------
+// ParseCommand registration tests for VR score fields (task 3.2)
+// ---------------------------------------------------------------------------
+
+// Helper: build a 3-float (12-byte) blob string for dimension-3 vector indexes.
+static std::string MakeBlob3() {
+  std::vector<float> v = {0.1f, 0.2f, 0.3f};
+  return std::string(reinterpret_cast<const char*>(v.data()),
+                     v.size() * sizeof(float));
+}
+
+class ParseCommandRegistrationTest : public ValkeySearchTest {
+ protected:
+  // Creates a schema with one 3-dim flat vector field named `vec_alias`.
+  std::shared_ptr<MockIndexSchema> MakeSchemaWithVec(
+      absl::string_view vec_alias) {
+    auto schema = CreateIndexSchema("test_schema", &fake_ctx_).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber())
+        .WillRepeatedly([&schema](absl::string_view field) {
+          return schema->IndexSchema::GetIdentifier(field);
+        });
+    data_model::VectorIndex proto;
+    proto.set_dimension_count(3);
+    proto.set_initial_cap(100);
+    proto.set_vector_data_type(
+        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+    auto flat = std::make_unique<data_model::FlatAlgorithm>();
+    flat->set_block_size(100);
+    proto.set_allocated_flat_algorithm(flat.release());
+    auto idx =
+        indexes::VectorFlat<float>::Create(
+            proto, std::string(vec_alias) + "_id",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            .value();
+    VMSDK_EXPECT_OK(schema->AddIndex(vec_alias, vec_alias, idx));
+    return schema;
+  }
+
+  // Runs ParseCommand on `params` and returns whether it succeeded.
+  bool RunParseCommand(AggregateParameters& params) {
+    vmsdk::ArgsIterator itr(nullptr, 0);
+    auto status = params.ParseCommand(itr);
+    if (!status.ok()) {
+      ADD_FAILURE() << "ParseCommand failed: " << status;
+      return false;
+    }
+    return true;
+  }
+};
+
+// Non-vector query with one VR predicate: score_as set to VR alias, only one
+// extra attribute registered at index 1.
+TEST_F(ParseCommandRegistrationTest, NonVectorOneVrPredicate) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string =
+      "@vec:[VECTOR_RANGE 0.5 $blob]=>{$yield_distance_as: my_dist}";
+  params.parse_vars.params["blob"] = {1, MakeBlob3()};
+
+  ASSERT_TRUE(RunParseCommand(params));
+
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "my_dist");
+
+  auto it = params.record_indexes_by_alias_.find("my_dist");
+  ASSERT_NE(it, params.record_indexes_by_alias_.end());
+  EXPECT_EQ(it->second, 1u);
+
+  EXPECT_EQ(params.vr_score_field_names_.size(), 1u);
+  EXPECT_EQ(params.vr_score_field_names_[0], "my_dist");
+}
+
+// Non-vector query with two VR predicates: score_as set to slot-0 alias, both
+// aliases registered as record attributes.
+TEST_F(ParseCommandRegistrationTest, NonVectorTwoVrPredicates) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string =
+      "(@vec:[VECTOR_RANGE 0.5 $b1]=>{$yield_distance_as: d1} "
+      "@vec:[VECTOR_RANGE 1.0 $b2]=>{$yield_distance_as: d2})";
+  params.parse_vars.params["b1"] = {1, MakeBlob3()};
+  params.parse_vars.params["b2"] = {1, MakeBlob3()};
+
+  ASSERT_TRUE(RunParseCommand(params));
+
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "d1");
+
+  EXPECT_NE(params.record_indexes_by_alias_.find("d1"),
+            params.record_indexes_by_alias_.end());
+  EXPECT_NE(params.record_indexes_by_alias_.find("d2"),
+            params.record_indexes_by_alias_.end());
+
+  ASSERT_EQ(params.vr_score_field_names_.size(), 2u);
+  EXPECT_EQ(params.vr_score_field_names_[0], "d1");
+  EXPECT_EQ(params.vr_score_field_names_[1], "d2");
+}
+
+// KNN query with one VR predicate in the filter: score_as unchanged (KNN
+// alias), VR alias registered as a separate record attribute.
+TEST_F(ParseCommandRegistrationTest, KnnWithOneVrPredicate) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string =
+      "@vec:[VECTOR_RANGE 0.5 $vrblob]=>{$yield_distance_as: vr_dist}"
+      "=>[KNN 5 @vec $kblob AS knn_dist]";
+  params.parse_vars.params["vrblob"] = {1, MakeBlob3()};
+  params.parse_vars.params["kblob"] = {1, MakeBlob3()};
+  params.parse_vars.score_as_string = "knn_dist";
+
+  ASSERT_TRUE(RunParseCommand(params));
+
+  // score_as must still be the KNN alias.
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "knn_dist");
+
+  // KNN alias at index 1.
+  auto knn_it = params.record_indexes_by_alias_.find("knn_dist");
+  ASSERT_NE(knn_it, params.record_indexes_by_alias_.end());
+  EXPECT_EQ(knn_it->second, 1u);
+
+  // VR alias at a different index.
+  auto vr_it = params.record_indexes_by_alias_.find("vr_dist");
+  ASSERT_NE(vr_it, params.record_indexes_by_alias_.end());
+  EXPECT_NE(vr_it->second, 1u);
+
+  ASSERT_EQ(params.vr_score_field_names_.size(), 1u);
+  EXPECT_EQ(params.vr_score_field_names_[0], "vr_dist");
+}
+
+// KNN query with no VR predicate: vr_score_field_names_ remains empty.
+TEST_F(ParseCommandRegistrationTest, KnnWithNoVrPredicate) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string = "*=>[KNN 5 @vec $kblob AS knn_dist]";
+  params.parse_vars.params["kblob"] = {1, MakeBlob3()};
+  params.parse_vars.score_as_string = "knn_dist";
+
+  ASSERT_TRUE(RunParseCommand(params));
+
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "knn_dist");
+  EXPECT_TRUE(params.vr_score_field_names_.empty());
 }
 
 }  // namespace aggregate

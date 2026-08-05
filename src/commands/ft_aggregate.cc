@@ -45,7 +45,7 @@ struct RealIndexInterface : public IndexInterface {
   RealIndexInterface(std::shared_ptr<IndexSchema> schema) : schema_(schema) {}
 };
 
-absl::Status ManipulateReturnsClause(AggregateParameters &params) {
+absl::Status ManipulateReturnsClause(AggregateParameters& params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
   CHECK(!params.no_content);
@@ -54,7 +54,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     CHECK(params.return_attributes.empty());
     return absl::OkStatus();
   } else {
-    for (const auto &load : params.loads_) {
+    for (const auto& load : params.loads_) {
       //
       // Skip loading of the score and the key, we always get those...
       //
@@ -63,6 +63,18 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         continue;
       }
       if (load == vmsdk::ToStringView(params.score_as.get())) {
+        continue;
+      }
+      // Also skip VR score field names — they are synthetic computed fields
+      // that are not in the index schema.
+      bool is_vr_field = false;
+      for (const auto& vr_name : params.vr_score_field_names_) {
+        if (load == vr_name) {
+          is_vr_field = true;
+          break;
+        }
+      }
+      if (is_vr_field) {
         continue;
       }
       content = true;
@@ -92,18 +104,39 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   return absl::OkStatus();
 }
 
-absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
+absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator& itr) {
   static vmsdk::KeyValueParser<AggregateParameters> parser =
       CreateAggregateParser();
   RealIndexInterface real_index_interface(index_schema);
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
+  // Collect VR score field names for all VR predicates (if any).
+  if (num_vr_predicates > 0) {
+    vr_score_field_names_ = query::CollectVrScoreFields(*this);
+
+    // For non-vector queries the mandatory slot-1 record attribute must carry
+    // the primary (slot-0) VR distance. Set score_as so the unconditional
+    // AddRecordAttribute call below uses the correct name.
+    if (IsNonVectorQuery() && !vr_score_field_names_.empty()) {
+      score_as = vmsdk::MakeUniqueValkeyString(vr_score_field_names_[0]);
+    }
+  }
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
   auto score_sv = vmsdk::ToStringView(score_as.get());
   CHECK(AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone) ==
         1);
+
+  // Register additional VR score fields.
+  // Non-vector queries: slot 0 is already at index 1, start from slot 1.
+  // KNN queries: no overlap with score_as, register all slots.
+  const size_t vr_start = IsNonVectorQuery() ? 1 : 0;
+  for (size_t slot = vr_start; slot < vr_score_field_names_.size(); ++slot) {
+    const auto& name = vr_score_field_names_[slot];
+    if (name.empty()) continue;
+    AddRecordAttribute(name, name, indexes::IndexerType::kNone);
+  }
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -129,16 +162,16 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
 }
 
 // Forward declaration for recursive serialization
-void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
+void SerializeValueToResp(ValkeyModuleCtx* ctx, const expr::Value& value);
 
-void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
+void SerializeArrayToResp(ValkeyModuleCtx* ctx, const expr::Value::Array vec) {
   ValkeyModule_ReplyWithArray(ctx, vec->size());
-  for (const auto &elem : *vec) {
+  for (const auto& elem : *vec) {
     SerializeValueToResp(ctx, elem);
   }
 }
 
-void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
+void SerializeValueToResp(ValkeyModuleCtx* ctx, const expr::Value& value) {
   if (value.IsArray()) {
     SerializeArrayToResp(ctx, value.GetArray());
   } else if (value.IsBool()) {
@@ -156,10 +189,10 @@ void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
   }
 }
 
-bool ReplyWithValue(ValkeyModuleCtx *ctx,
+bool ReplyWithValue(ValkeyModuleCtx* ctx,
                     data_model::AttributeDataType data_type,
                     std::string_view name, indexes::IndexerType indexer_type,
-                    const expr::Value &value, int dialect) {
+                    const expr::Value& value, int dialect) {
   if (value.IsNil()) {
     return false;
   }
@@ -217,8 +250,8 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 
 // Process the query setup for vector vs non-vector queries and set up indices
 absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
-    ValkeyModuleCtx *ctx, std::vector<indexes::Neighbor> &neighbors,
-    AggregateParameters &parameters) {
+    ValkeyModuleCtx* ctx, std::vector<indexes::Neighbor>& neighbors,
+    AggregateParameters& parameters) {
   size_t key_index = 0, scores_index = 0;
 
   std::optional<std::string> vector_identifier;
@@ -232,6 +265,13 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
         vector_identifier,
         parameters.index_schema->GetIdentifier(parameters.attribute_alias));
 
+    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                 indexes::IndexerType::kNone);
+  } else if (parameters.IsNonVectorQuery() &&
+             parameters.num_vr_predicates > 0) {
+    // For VR queries, the score field was already registered in ParseCommand
+    // at index 1. Re-register to get the correct scores_index.
     auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
     scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
                                                  indexes::IndexerType::kNone);
@@ -268,11 +308,11 @@ absl::StatusOr<expr::Value> ProcessFieldValue(
 
 // Create records from neighbors and populate their fields
 absl::Status CreateRecordsFromNeighbors(
-    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
-    size_t key_index, size_t scores_index, RecordSet &records) {
+    std::vector<indexes::Neighbor>& neighbors, AggregateParameters& parameters,
+    size_t key_index, size_t scores_index, RecordSet& records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
-  for (auto &n : neighbors) {
+  for (auto& n : neighbors) {
     auto rec =
         std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
 
@@ -286,11 +326,22 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(scores_index) = expr::Value(n.distance);
     }
 
+    // Write all VR distances into their registered record attribute slots.
+    for (size_t slot = 0; slot < parameters.vr_score_field_names_.size();
+         ++slot) {
+      const auto& name = parameters.vr_score_field_names_[slot];
+      if (name.empty()) continue;
+      if (slot >= n.vr_scores.size()) continue;  // slot not populated → omit
+      auto it = parameters.record_indexes_by_alias_.find(name);
+      if (it == parameters.record_indexes_by_alias_.end()) continue;
+      rec->fields_.at(it->second) = expr::Value(n.vr_scores[slot]);
+    }
+
     // Process attribute contents
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       bool should_drop_record = false;
 
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
+      for (auto& [name, records_map_value] : *n.attribute_contents) {
         auto value = vmsdk::ToStringView(records_map_value.value.get());
         std::optional<size_t> record_index;
 
@@ -343,10 +394,10 @@ absl::Status CreateRecordsFromNeighbors(
 }
 
 // Execute all aggregation stages on the record set
-absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
-                                      RecordSet &records) {
+absl::Status ExecuteAggregationStages(AggregateParameters& parameters,
+                                      RecordSet& records) {
   agg_input_records.Increment(records.size());
-  for (auto &stage : parameters.stages_) {
+  for (auto& stage : parameters.stages_) {
     // Check for timeout
     if (parameters.cancellation_token->IsCancelled() ||
         // Testing purpose only
@@ -362,9 +413,9 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
 }
 
 // Generate the final response from processed records
-absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
-                              AggregateParameters &parameters,
-                              RecordSet &records) {
+absl::Status GenerateResponse(ValkeyModuleCtx* ctx,
+                              AggregateParameters& parameters,
+                              RecordSet& records) {
   ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
 
@@ -387,7 +438,7 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
     }
 
     // Process unreferenced (extra) fields
-    for (const auto &[name, value] : rec->extra_fields_) {
+    for (const auto& [name, value] : rec->extra_fields_) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
               name, indexes::IndexerType::kNone, value, parameters.dialect)) {
@@ -401,9 +452,9 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
-                            std::vector<indexes::Neighbor> &neighbors,
-                            AggregateParameters &parameters) {
+absl::Status SendReplyInner(ValkeyModuleCtx* ctx,
+                            std::vector<indexes::Neighbor>& neighbors,
+                            AggregateParameters& parameters) {
   // 1. Process query setup and get key/score indices
   VMSDK_ASSIGN_OR_RETURN(
       auto indices, ProcessNeighborsForProcessing(ctx, neighbors, parameters));
@@ -433,7 +484,7 @@ bool AggregateParameters::RequiresCompleteResults() const {
 // aggregation. This is only used in construction of the aggregate command to
 // set limit params. These params will be used later on in the SearchResult.
 query::SerializationRange AggregateParameters::GetSerializationRange() const {
-  for (const auto &stage : stages_) {
+  for (const auto& stage : stages_) {
     auto stage_range = stage->GetSerializationRange();
     // Use the first limit.
     if (stage_range) {
@@ -444,8 +495,8 @@ query::SerializationRange AggregateParameters::GetSerializationRange() const {
   return query::SerializationRange::All();
 }
 
-void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
-                                    query::SearchResult &result) {
+void AggregateParameters::SendReply(ValkeyModuleCtx* ctx,
+                                    query::SearchResult& result) {
   auto status = SendReplyInner(ctx, result.neighbors, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
@@ -455,7 +506,7 @@ void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
 
 }  // namespace aggregate
 
-absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+absl::Status FTAggregateCmd(ValkeyModuleCtx* ctx, ValkeyModuleString** argv,
                             int argc) {
   return QueryCommand::Execute(
       ctx, argv, argc,

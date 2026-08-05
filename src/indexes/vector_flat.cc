@@ -51,7 +51,7 @@ namespace valkey_search::indexes {
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
-    const data_model::VectorIndex &vector_index_proto,
+    const data_model::VectorIndex& vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type) {
   try {
@@ -65,7 +65,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
     index->algo_ = std::make_unique<hnswlib::BruteforceSearch<T>>(
         index->space_.get(), vector_index_proto.initial_cap());
     return index;
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while creating a FLAT index: ", e.what()));
@@ -74,14 +74,14 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 
 template <typename T>
 void VectorFlat<T>::TrackVector(uint64_t internal_id,
-                                const InternedStringPtr &vector) {
+                                const InternedStringPtr& vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_[internal_id] = vector;
 }
 
 template <typename T>
 bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
-                                  const InternedStringPtr &vector) {
+                                  const InternedStringPtr& vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
   if (it == tracked_vectors_.end()) {
@@ -98,10 +98,10 @@ void VectorFlat<T>::UnTrackVector(uint64_t internal_id) {
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
-    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    const data_model::VectorIndex &vector_index_proto,
+    ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+    const data_model::VectorIndex& vector_index_proto,
     absl::string_view attribute_identifier,
-    SupplementalContentChunkIter &&iter) {
+    SupplementalContentChunkIter&& iter) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(new VectorFlat<T>(
         vector_index_proto.dimension_count(),
@@ -116,7 +116,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), index.get()));
     return index;
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while loading a FLAT index: ", e.what()));
@@ -161,8 +161,8 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id);
-    } catch (const std::exception &e) {
+      algo_->addPoint((T*)record.data(), internal_id);
+    } catch (const std::exception& e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       std::string error_msg = e.what();
       if (absl::StrContains(
@@ -191,7 +191,7 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
 
   memcpy((*algo_->data_)[found->second] + algo_->data_ptr_size_, &internal_id,
          sizeof(hnswlib::labeltype));
-  *(char **)((*algo_->data_)[found->second]) = (char *)record.data();
+  *(char**)((*algo_->data_)[found->second]) = (char*)record.data();
 
   return absl::OkStatus();
 }
@@ -200,7 +200,7 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->removePoint(internal_id);
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().flat_remove_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while removing a FLAT record: ", e.what()));
@@ -212,18 +212,18 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
  public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {
+  explicit CancelCondition(cancel::Token& token) : token_(token) {
     CHECK(&token);
   }
   bool isCancelled() override { return token_->IsCancelled(); }
 
  private:
-  cancel::Token &token_;
+  cancel::Token& token_;
 };
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
-    absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
+    absl::string_view query, uint64_t count, cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   auto perform_search = [this, count, &filter,
                          &cancellation_token](absl::string_view query)
@@ -232,10 +232,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     try {
       CancelCondition canceler(cancellation_token);
       return algo_->searchKnn(
-          (T *)query.data(),
+          (T*)query.data(),
           std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
           filter.get(), &canceler);
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
       Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
       return absl::InternalError(e.what());
@@ -245,7 +245,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
     VMSDK_ASSIGN_OR_RETURN(
         auto search_result,
-        perform_search(absl::string_view((const char *)norm_record.data(),
+        perform_search(absl::string_view((const char*)norm_record.data(),
                                          norm_record.size())));
     return CreateReply(search_result);
   }
@@ -264,15 +264,54 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_((T *)query.data(),
-                          *(char **)(*algo_->data_)[search->second],
+      algo_->fstdistfunc_((T*)query.data(),
+                          *(char**)(*algo_->data_)[search->second],
                           algo_->dist_func_param_),
       internal_id};
 }
 
+// Linear scan over all tracked keys. This is O(N) but correct for flat
+// indexes which have no graph structure to exploit.
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token& cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  std::vector<char> normalized_vec;
+  absl::string_view query_view = query;
+  if (normalize_) {
+    normalized_vec = NormalizeEmbedding(query, GetDataTypeSize());
+    query_view = absl::string_view((const char*)normalized_vec.data(),
+                                   normalized_vec.size());
+  }
+
+  std::vector<Neighbor> neighbors;
+  auto status =
+      ForEachTrackedKey([&](const InternedStringPtr& key) -> absl::Status {
+        if (cancellation_token->IsCancelled()) {
+          return absl::CancelledError("SearchRange cancelled");
+        }
+        // Apply optional inline filter by internal-id label.
+        auto dist_result = ComputeDistanceFromRecord(key, query_view);
+        if (!dist_result.ok()) {
+          return absl::OkStatus();
+        }
+        if (filter && !(*filter)(dist_result->second)) {
+          return absl::OkStatus();
+        }
+        if (dist_result->first <= radius) {
+          neighbors.emplace_back(key, dist_result->first);
+        }
+        return absl::OkStatus();
+      });
+  if (!status.ok() && !absl::IsCancelled(status)) {
+    return status;
+  }
+  return neighbors;
+}
+
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
-    data_model::VectorIndex *vector_index_proto) const {
+    data_model::VectorIndex* vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
@@ -289,7 +328,7 @@ void VectorFlat<T>::ToProtoImpl(
 }
 
 template <typename T>
-int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(

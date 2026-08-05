@@ -34,6 +34,7 @@
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
@@ -48,13 +49,14 @@
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "third_party/hnswlib/stop_condition.h"
 // clang-format on
 
 namespace hnswlib_helpers {
 
 template <typename T>
 std::optional<hnswlib::tableint> GetInternalIdLockFree(
-    hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
+    hnswlib::HierarchicalNSW<T>* algo, uint64_t internal_id) {
   auto search = algo->label_lookup_.find(internal_id);
   if (search == algo->label_lookup_.end() ||
       algo->isMarkedDeleted(search->second)) {
@@ -65,14 +67,14 @@ std::optional<hnswlib::tableint> GetInternalIdLockFree(
 
 template <typename T>
 std::optional<hnswlib::tableint> GetInternalId(
-    hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
+    hnswlib::HierarchicalNSW<T>* algo, uint64_t internal_id) {
   std::unique_lock<std::mutex> lock_table(algo->label_lookup_lock);
   return GetInternalIdLockFree(algo, internal_id);
 }
 
 template <typename T>
 std::optional<hnswlib::tableint> GetInternalIdDuringSearch(
-    hnswlib::HierarchicalNSW<T> *algo, uint64_t internal_id) {
+    hnswlib::HierarchicalNSW<T>* algo, uint64_t internal_id) {
   return GetInternalIdLockFree(algo, internal_id);
 }
 }  // namespace hnswlib_helpers
@@ -81,7 +83,7 @@ namespace valkey_search::indexes {
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
-    const data_model::VectorIndex &vector_index_proto,
+    const data_model::VectorIndex& vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type) {
   try {
@@ -90,7 +92,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
                           attribute_identifier, attribute_data_type));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
-    const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
+    const auto& hnsw_proto = vector_index_proto.hnsw_algorithm();
     index->algo_ = std::make_unique<hnswlib::HierarchicalNSW<T>>(
         index->space_.get(), vector_index_proto.initial_cap(), hnsw_proto.m(),
         hnsw_proto.ef_construction());
@@ -98,7 +100,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     index->algo_->allow_replace_deleted_ =
         options::GetHNSWAllowReplaceDeleted().GetValue();
     return index;
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("HNSWLib error while creating a record: ", e.what()));
@@ -107,14 +109,14 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
 
 template <typename T>
 void VectorHNSW<T>::TrackVector(uint64_t internal_id,
-                                const InternedStringPtr &vector) {
+                                const InternedStringPtr& vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
   tracked_vectors_[internal_id] = vector;
 }
 
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
-                                  const InternedStringPtr &vector) {
+                                  const InternedStringPtr& vector) {
   absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
   auto it = tracked_vectors_.find(internal_id);
   if (it == tracked_vectors_.end()) {
@@ -132,10 +134,10 @@ void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
-    ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
-    const data_model::VectorIndex &vector_index_proto,
+    ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+    const data_model::VectorIndex& vector_index_proto,
     absl::string_view attribute_identifier,
-    SupplementalContentChunkIter &&iter) {
+    SupplementalContentChunkIter&& iter) {
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(new VectorHNSW<T>(
         vector_index_proto.dimension_count(), attribute_identifier,
@@ -158,7 +160,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("HNSWLib error while loading an index: ", e.what()));
@@ -179,10 +181,10 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id,
+      algo_->addPoint((T*)record.data(), internal_id,
                       algo_->allow_replace_deleted_);
       return absl::OkStatus();
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
       std::string error_msg = e.what();
       if (absl::StrContains(
               error_msg,
@@ -198,7 +200,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
 }
 
 template <typename T>
-int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
+int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -261,7 +263,7 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
           << ", expand by: " << block_size << ", resize time took: "
           << absl::FormatDuration(stop_watch.Duration());
     }
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().hnsw_add_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while adding a record: ", e.what()));
@@ -278,9 +280,9 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     // The concern with calling updatePoint is that it might have implications
     // on the search accuracy. Need to revisit this in the future.
     algo_->markDelete(internal_id);
-    algo_->addPoint((T *)record.data(), internal_id,
+    algo_->addPoint((T*)record.data(), internal_id,
                     algo_->allow_replace_deleted_);
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while modifying a record: ", e.what()));
@@ -293,7 +295,7 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->markDelete(internal_id);
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     ++Metrics::GetStats().hnsw_remove_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while removing a record: ", e.what()));
@@ -305,16 +307,16 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
  public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {}
+  explicit CancelCondition(cancel::Token& token) : token_(token) {}
   bool isCancelled() override { return token_->IsCancelled(); }
 
  private:
-  cancel::Token &token_;
+  cancel::Token& token_;
 };
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
-    absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
+    absl::string_view query, uint64_t count, cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime, bool enable_partial_results) {
   auto perform_search = [this, count, &filter, enable_partial_results,
@@ -324,13 +326,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
+      auto res = algo_->searchKnn((T*)query.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);
       if (!enable_partial_results && cancellation_token->IsCancelled()) {
         return absl::CancelledError(query::kTimeoutMsg);
       }
       return res;
-    } catch (const std::exception &e) {
+    } catch (const std::exception& e) {
       Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
       return absl::InternalError(e.what());
@@ -340,7 +342,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
     VMSDK_ASSIGN_OR_RETURN(
         auto search_result,
-        perform_search(absl::string_view((const char *)norm_record.data(),
+        perform_search(absl::string_view((const char*)norm_record.data(),
                                          norm_record.size())));
     return CreateReply(search_result);
   }
@@ -349,8 +351,82 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
 }
 
 template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token& cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  const size_t max_candidates = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+
+  // Use a standard KNN search with a large ef to explore the graph broadly,
+  // then filter to the radius.  The EpsilonSearchStopCondition approach
+  // fails for small-radius queries because it terminates as soon as any
+  // out-of-radius candidate is encountered — which happens immediately when
+  // the HNSW entry point is far from the query.  Using searchKnn avoids this
+  // by ensuring the exploration covers the full neighborhood.
+  auto perform_search = [this, &filter, max_candidates,
+                         &cancellation_token](absl::string_view query_view)
+                            ABSL_NO_THREAD_SAFETY_ANALYSIS
+      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+    try {
+      CancelCondition cancel_condition(cancellation_token);
+      // Use ef_runtime = max_candidates so the search explores broadly
+      // enough to find all in-range neighbors.
+      auto res = algo_->searchKnn((T*)query_view.data(), max_candidates,
+                                  std::optional<size_t>(max_candidates),
+                                  filter.get(), &cancel_condition);
+      return res;
+    } catch (const std::exception& e) {
+      Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
+          1, std::memory_order_relaxed);
+      return absl::InternalError(e.what());
+    }
+  };
+
+  std::priority_queue<std::pair<T, hnswlib::labeltype>> raw_results;
+  if (normalize_) {
+    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+    VMSDK_ASSIGN_OR_RETURN(
+        raw_results, perform_search(absl::string_view(
+                         (const char*)norm_record.data(), norm_record.size())));
+  } else {
+    VMSDK_ASSIGN_OR_RETURN(raw_results, perform_search(query));
+  }
+
+  // Filter results to only those within the strict radius.  For normalized
+  // (cosine) indexes, apply the same clamping that ComputeDistanceFromRecord
+  // uses so that tiny floating-point noise near 0 does not cause exact-match
+  // vectors to be excluded when radius is 0.
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(raw_results.size());
+  while (!raw_results.empty()) {
+    auto [dist, label] = raw_results.top();
+    raw_results.pop();
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    float clamped_dist = static_cast<float>(dist);
+    if (normalize_) {
+      if (clamped_dist <= std::numeric_limits<float>::epsilon()) {
+        clamped_dist = 0.0f;
+      } else if (clamped_dist >= 2.0f - std::numeric_limits<float>::epsilon()) {
+        clamped_dist = std::nextafter(2.0f, 3.0f);
+      }
+    }
+    if (clamped_dist > radius) {
+      continue;
+    }
+    auto key = GetKeyDuringSearch(label);
+    if (!key.ok()) {
+      continue;
+    }
+    neighbors.emplace_back(*key, clamped_dist);
+  }
+  return neighbors;
+}
+
+template <typename T>
 void VectorHNSW<T>::ToProtoImpl(
-    data_model::VectorIndex *vector_index_proto) const {
+    data_model::VectorIndex* vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
@@ -379,7 +455,7 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_((T *)query.data(), algo_->getDataByInternalId(*id),
+      algo_->fstdistfunc_((T*)query.data(), algo_->getDataByInternalId(*id),
                           algo_->dist_func_param_),
       internal_id};
 }
@@ -389,7 +465,7 @@ template <typename T>
 uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
   std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
   uint64_t max_label = 0;
-  for (const auto &[label, _] : algo_->label_lookup_) {
+  for (const auto& [label, _] : algo_->label_lookup_) {
     max_label = std::max(max_label, static_cast<uint64_t>(label));
   }
   return max_label;

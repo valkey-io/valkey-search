@@ -213,6 +213,10 @@ struct SearchParameters {
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
+  // Number of VectorRangePredicate nodes found during filter parsing. Each
+  // predicate has been assigned a unique score_slot in [0, num_vr_predicates).
+  // Neighbor::vr_scores is sized to this value for VR searches.
+  size_t num_vr_predicates{0};
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
@@ -252,8 +256,13 @@ struct SearchParameters {
   // be able to return correct results. An example of this is when sorting on a
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
+  // VR queries also require complete results because:
+  // 1. Non-negated VR: results are sorted by distance, but per-shard trimming
+  //    could lose globally-correct results
+  // 2. Negated VR: all results have distance=0, so secondary sort by key
+  //    requires all results before trimming
   virtual bool RequiresCompleteResults() const {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || num_vr_predicates > 0;
   }
 
   virtual absl::Status PreParseQueryString();
@@ -337,6 +346,11 @@ size_t EvaluateFilterAsPrimary(
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase* vector_index, const SearchParameters& parameters);
 
+// Standalone Vector Range query: scans all keys, evaluates distance against
+// radius, collects matching keys with distances, sorts by ascending distance.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters& parameters);
+
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
@@ -344,6 +358,23 @@ CalcBestMatchingPrefilteredKeys(
     indexes::VectorBase* vector_index, size_t qualified_entries);
 
 bool QueryHasTextPredicate(const SearchParameters& parameters);
+
+// Walk the predicate tree, assign each VectorRangePredicate a unique
+// score_slot, and return the total count of VR predicates found.
+size_t AssignVectorRangeScoreSlots(Predicate* predicate);
+
+// Returns the score field names for all VR predicates in score_slot order.
+// Entry i is the name for score_slot i:
+//   - the explicit $yield_distance_as alias if set, otherwise
+//   - the default "__<alias>_score" string.
+// Returns an empty vector when num_vr_predicates == 0.
+std::vector<std::string> CollectVrScoreFields(
+    const SearchParameters& parameters);
+
+// Return the distance score field name for the first (slot-0) VR predicate in
+// the query (i.e. the yield_distance_as alias or "__<alias>_score" default).
+// Returns empty string if there are no VR predicates.
+std::string GetVrScoreFieldName(const SearchParameters& parameters);
 
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters& parameters);

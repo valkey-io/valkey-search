@@ -10,9 +10,11 @@
 #include <deque>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/status/status.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/expr/expr.h"
 #include "src/expr/value.h"
+#include "src/indexes/vector_base.h"
 
 namespace valkey_search {
 namespace aggregate {
@@ -98,6 +100,12 @@ inline std::ostream& operator<<(std::ostream& os, const Record* r) {
 inline std::ostream& operator<<(std::ostream& os, std::unique_ptr<Record> r) {
   return os << r.get();
 }
+
+// Exposed for testing: populate Records from a neighbor list using the
+// registered record attributes in parameters.
+absl::Status CreateRecordsFromNeighbors(
+    std::vector<indexes::Neighbor>& neighbors, AggregateParameters& parameters,
+    size_t key_index, size_t scores_index, RecordSet& records);
 
 }  // namespace aggregate
 }  // namespace valkey_search

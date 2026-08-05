@@ -144,7 +144,7 @@ typedef size_t labeltype;
 class BaseFilterFunctor {
  public:
   virtual bool operator()(hnswlib::labeltype id) { return true; }
-  virtual ~BaseFilterFunctor() {};
+  virtual ~BaseFilterFunctor(){};
 };
 
 // VALKEYSEARCH BEGIN
@@ -154,7 +154,7 @@ class BaseFilterFunctor {
 class BaseCancellationFunctor {
  public:
   virtual bool isCancelled() { return false; }
-  virtual ~BaseCancellationFunctor() {};
+  virtual ~BaseCancellationFunctor(){};
 };
 // VALKEYSEARCH END
 
@@ -197,7 +197,10 @@ static void readBinaryPOD(std::istream &in, T &podRef) {
 }
 
 template <typename MTYPE>
-using DISTFUNC = MTYPE (*)(const void *, const void *, const void *);
+using DISTFUNC = MTYPE (*)(const void *, const void *, const void *,
+                           MTYPE magnitude);
+template <typename MTYPE>
+using ProductFUNC = MTYPE (*)(const void *, const void *, const void *);
 
 template <typename MTYPE>
 class SpaceInterface {

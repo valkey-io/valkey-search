@@ -457,7 +457,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // For proper sequencing and thread-safety, we separate reads/writes into
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
-  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
 
   struct BackfillJob {
     BackfillJob() = delete;

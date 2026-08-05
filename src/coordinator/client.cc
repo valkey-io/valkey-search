@@ -69,7 +69,7 @@ static auto query_connection_timeout =
         kCoordinatorQueryMinTimeout, kCoordinatorQueryMaxTimeout)
         .Build();
 
-grpc::ChannelArguments& GetChannelArgs() {
+grpc::ChannelArguments &GetChannelArgs() {
   static absl::once_flag once;
   static grpc::ChannelArguments channel_args;
   absl::call_once(once, []() {
@@ -143,7 +143,7 @@ void ClientImpl::SearchIndexPartition(
     ::grpc::ClientContext context;
     std::unique_ptr<SearchIndexPartitionRequest> request;
     google::protobuf::Arena arena;
-    SearchIndexPartitionResponse* response;
+    SearchIndexPartitionResponse *response;
     SearchIndexPartitionCallback callback;
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
   };

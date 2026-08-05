@@ -41,11 +41,13 @@ while [ $# -gt 0 ]; do
   --asan)
     shift || true
     SAN_SUFFIX="-asan"
+    export SAN_BUILD="address"
     LOG_INFO "Assuming ASan build"
     ;;
   --tsan)
     shift || true
     SAN_SUFFIX="-tsan"
+    export SAN_BUILD="thread"
     LOG_INFO "Assuming TSan build"
     ;;
   --capture)

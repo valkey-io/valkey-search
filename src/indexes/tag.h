@@ -48,15 +48,15 @@ class Tag : public IndexBase {
   explicit Tag(const data_model::TagIndex& tag_index_proto);
   ~Tag() override;
 
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view data) override
+  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+                                         absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<bool> RemoveRecord(
       const InternedStringPtr& key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view data) override
+  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr& key,
+                                            absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

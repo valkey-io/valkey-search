@@ -76,6 +76,9 @@ absl::Status Reset();
 /// Default option of delivering partial results when timeout occurs
 const config::Boolean& GetPreferPartialResults();
 
+/// Maximum query queue depth before rejecting new queries (0 = unlimited)
+config::Number& GetMaxQueryQueueDepth();
+
 /// Default option of delivering consistent results when timeout occurs
 const config::Boolean& GetPreferConsistentResults();
 

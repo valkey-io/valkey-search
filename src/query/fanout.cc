@@ -317,6 +317,8 @@ absl::Status PerformSearchFanoutAsync(
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
+  // Queue depth admission check is in commands.cc (before BlockedClient
+  // creation) so that returning an error doesn't crash the blocked client.
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   uint64_t index_size = parameters->index_schema->GetDbKeyInfoSize();
   uint32_t min_index_size =

@@ -225,6 +225,16 @@ constexpr absl::string_view kEnableConsistentResults{
 static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
 
+/// Maximum reader thread pool queue depth before rejecting new queries.
+/// When the queue exceeds this threshold, FT.SEARCH is rejected before fan-out
+/// to prevent cascading timeouts. 0 = unlimited (disabled).
+constexpr absl::string_view kMaxQueryQueueDepth{"max-query-queue-depth"};
+constexpr int kDefaultMaxQueryQueueDepth{100000};
+static auto max_query_queue_depth =
+    config::NumberBuilder(kMaxQueryQueueDepth, kDefaultMaxQueryQueueDepth, 0,
+                          INT_MAX)
+        .Build();
+
 /// Enable search result background cleanup
 /// If set to true, search result cleanup will be scheduled on background thread
 constexpr absl::string_view kSearchResultBackgroundCleanup{
@@ -585,6 +595,10 @@ const vmsdk::config::Boolean& GetPreferPartialResults() {
 
 const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+}
+
+vmsdk::config::Number& GetMaxQueryQueueDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_query_queue_depth);
 }
 
 const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {

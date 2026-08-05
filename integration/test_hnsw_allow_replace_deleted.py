@@ -297,8 +297,8 @@ class TestHNSWDuplicateLabelRace(ValkeySearchTestCaseDebugMode):
         # Deleting the survivor must actually remove it, proving label_lookup_
         # resolves the label to the live slot rather than a tombstone.
         client.delete("doc:1")
-        hnsw_index.info(client).num_docs == 0
-        int(client.info("SEARCH").get(
+        assert hnsw_index.info(client).num_docs == 0
+        assert int(client.info("SEARCH").get(
             "search_hnsw_remove_exceptions_count", 0)) == 0
         search_result = client.execute_command(
             "FT.SEARCH", "idx",

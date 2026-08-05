@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "absl/base/thread_annotations.h"
-#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -23,30 +22,47 @@
 #include "src/indexes/vector_base.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
 
+class InputVector {
+ public:
+  explicit InputVector(absl::string_view vector, Allocator *allocator = nullptr)
+      : raw_vector_(vector), vector_allocator_(allocator) {}
+
+  inline const char *GetRawVector() const { return raw_vector_.data(); }
+  VectorRecord ToVectorRecord() const {
+    return VectorRecord(
+        StringInternStore::Intern(raw_vector_, vector_allocator_));
+  }
+
+ private:
+  absl::string_view raw_vector_;
+  Allocator *vector_allocator_;
+};
+
 template <typename T>
 class VectorHNSW : public VectorBase {
  public:
+  using HNSWIndex = hnswlib::HierarchicalNSW<T, InputVector, VectorRecord>;
+
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
-      const data_model::VectorIndex& vector_index_proto,
+      const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
-      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
-      const data_model::VectorIndex& vector_index_proto,
+      ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
+      const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
-      SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      SupplementalContentChunkIter &&iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
-  const hnswlib::SpaceInterface<float>* GetSpace() const {
+  const hnswlib::SpaceInterface<float> *GetSpace() const {
     return space_.get();
   }
 
@@ -67,7 +83,7 @@ class VectorHNSW : public VectorBase {
 
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
-      cancel::Token& cancellation_token,
+      cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<size_t> ef_runtime = std::nullopt,
       bool enable_partial_results = false) ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -83,37 +99,31 @@ class VectorHNSW : public VectorBase {
   absl::Status ModifyRecordImpl(uint64_t internal_id,
                                 absl::string_view record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  void ToProtoImpl(data_model::VectorIndex* vector_index_proto) const override;
-  int RespondWithInfoImpl(ValkeyModuleCtx* ctx) const override;
+  void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
+  int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
   absl::Status SaveIndexImpl(RDBChunkOutputStream chunked_out) const override;
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecordImpl(uint64_t internal_id, absl::string_view query)
       const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  char* GetValueImpl(uint64_t internal_id) const override
+  const char *GetValueImpl(uint64_t internal_id) const override
       ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    return algo_->getPoint(internal_id);
+    return algo_->getPoint(internal_id)->GetRawVector();
   }
-  bool IsVectorMatch(uint64_t internal_id,
-                     const InternedStringPtr& vector) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  void TrackVector(uint64_t internal_id,
-                   const InternedStringPtr& vector) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
-  void UnTrackVector(uint64_t internal_id) override
-      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
+  bool IsVectorMatch(uint64_t internal_id, absl::string_view vector) override;
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
              data_model::AttributeDataType attribute_data_type);
-  std::unique_ptr<hnswlib::HierarchicalNSW<T>> algo_
-      ABSL_GUARDED_BY(resize_mutex_);
+  static std::optional<hnswlib::tableint> GetInternalIdLockFree(
+      const HNSWIndex *algo, uint64_t internal_id);
+  static std::optional<hnswlib::tableint> GetInternalId(const HNSWIndex *algo,
+                                                        uint64_t internal_id);
+
+  std::unique_ptr<HNSWIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   mutable absl::Mutex resize_mutex_;
-  mutable absl::Mutex tracked_vectors_mutex_;
-  absl::flat_hash_map<uint64_t, InternedStringPtr> tracked_vectors_
-      ABSL_GUARDED_BY(tracked_vectors_mutex_);
 };
 
 }  // namespace valkey_search::indexes

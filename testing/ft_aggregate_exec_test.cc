@@ -93,7 +93,7 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     EXPECT_TRUE(result.ok()) << " Status is: " << result << "\n";
 
     // Free the allocated ValkeyModuleStrings to avoid memory leaks
-    for (auto* str : argv) {
+    for (auto *str : argv) {
       ValkeyModule_FreeString(nullptr, str);
     }
     return params;
@@ -104,13 +104,13 @@ TEST_F(AggregateExecTest, LimitTest) {
   std::cerr << "LimitTest\n";
   auto param = MakeStages("LIMIT 1 2");
   auto records = MakeData(4);
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 2);
   std::cerr << "Results:\n";
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_EQ(*records[0], *RecordNOfM(1, 4));
@@ -121,13 +121,13 @@ TEST_F(AggregateExecTest, FilterTest) {
   std::cerr << "FilterTest\n";
   auto param = MakeStages("FILTER @n1==1");
   auto records = MakeData(4);
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   std::cerr << "Results:\n";
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_EQ(*records[0], *RecordNOfM(1, 4));
@@ -137,13 +137,13 @@ TEST_F(AggregateExecTest, ApplyTest) {
   std::cerr << "ApplyTest\n";
   auto param = MakeStages("APPLY @n1+1 as fred");
   auto records = MakeData(2);
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 2);
   std::cerr << "Results:\n";
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   auto r0 = RecordNOfM(0, 2);
@@ -179,7 +179,7 @@ TEST_F(AggregateExecTest, SortTest) {
 
   };
   for (auto do_max : {false, true}) {
-    for (auto& tc : testcases) {
+    for (auto &tc : testcases) {
       std::string text = tc.text_;
       size_t input_count = tc.order_.size();
       auto order = tc.order_;
@@ -192,13 +192,13 @@ TEST_F(AggregateExecTest, SortTest) {
       std::cerr << "SortTest: " << text << "\n";
       auto param = MakeStages(text);
       auto records = MakeData(input_count);
-      for (auto& r : records) {
+      for (auto &r : records) {
         std::cerr << *r << "\n";
       }
       EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
       EXPECT_EQ(records.size(), order.size());
       std::cerr << "Results:\n";
-      for (auto& r : records) {
+      for (auto &r : records) {
         std::cerr << *r << "\n";
       }
       if (!do_max || tc.ordered) {
@@ -221,17 +221,17 @@ TEST_F(AggregateExecTest, GroupTest) {
       {"groupby 2 @n1 @n2", 2, 2},
       {"groupby 1 @n2", 2, 1},
   };
-  for (auto& tc : testcases) {
+  for (auto &tc : testcases) {
     std::cerr << "GroupTest: " << tc.text_ << "\n";
     auto param = MakeStages(tc.text_);
     auto records = MakeData(tc.m);
-    for (auto& r : records) {
+    for (auto &r : records) {
       std::cerr << *r << "\n";
     }
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
     EXPECT_EQ(records.size(), tc.num_groups);
     std::cerr << "Results:\n";
-    for (auto& r : records) {
+    for (auto &r : records) {
       std::cerr << *r << "\n";
     }
   }
@@ -252,11 +252,11 @@ TEST_F(AggregateExecTest, ReducerTest) {
       {"groupby 1 @n2 reduce stddev 1 @n1", 4, {1.2909944487358056}},
       {"groupby 1 @n2 reduce count_distinct 1 @n1", 4, {4}},
       {"groupby 1 @n2 reduce avg 1 @n1", 4, {1.5}}};
-  for (auto& tc : testcases) {
+  for (auto &tc : testcases) {
     std::cerr << "GroupTest: " << tc.text_ << "\n";
     auto param = MakeStages(tc.text_);
     auto records = MakeData(tc.m);
-    for (auto& r : records) {
+    for (auto &r : records) {
       std::cerr << *r << "\n";
     }
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
@@ -277,7 +277,7 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
     EXPECT_EQ(records.size(), 1);
     auto record = records.pop_front();
-    auto& result = record->fields_.at(2);
+    auto &result = record->fields_.at(2);
     EXPECT_TRUE(result.IsArray());
     EXPECT_EQ(result.ArraySize(), 4);
   }
@@ -298,7 +298,7 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     // Only one group (all records share n1=0)
     EXPECT_EQ(records.size(), 1);
     auto record = records.pop_front();
-    auto& result = record->fields_.at(2);
+    auto &result = record->fields_.at(2);
     EXPECT_TRUE(result.IsArray());
     // Duplicates (1 and 2) collapsed → 3 distinct values
     EXPECT_EQ(result.ArraySize(), 3);
@@ -327,7 +327,7 @@ TEST_F(AggregateExecTest, ToListReducerTest) {
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
     EXPECT_EQ(records.size(), 1);
     auto record = records.pop_front();
-    auto& result = record->fields_.at(2);
+    auto &result = record->fields_.at(2);
     EXPECT_TRUE(result.IsArray());
     // Elements: 10, 20 (from first record) + 30 (new from second; 20 deduped)
     EXPECT_EQ(result.ArraySize(), 3);

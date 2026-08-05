@@ -67,8 +67,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
-      auto indexer_type = indexer->GetIndexerType();
-      if (indexer->IsVectorIndex()) {
+      if (indexes::IsVectorIndex(indexer)) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Loading of vector fields is not supported (field `", load, "`)"));
       }
@@ -78,7 +77,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
             .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(*schema_identifier, load, indexer_type);
+        params.AddRecordAttribute(*schema_identifier, load,
+                                  indexer->GetIndexerType());
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(load),

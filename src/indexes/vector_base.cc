@@ -65,9 +65,8 @@ std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
         distance_metric ==
             valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_IP) {
       return std::make_unique<hnswlib::InnerProductSpace>(dimensions);
-    } else {
-      return std::make_unique<hnswlib::L2Space>(dimensions);
     }
+    return std::make_unique<hnswlib::L2Space>(dimensions);
   }
   DCHECK(false) << "no matching spacer";
   return std::make_unique<hnswlib::L2Space>(dimensions);
@@ -93,7 +92,7 @@ std::vector<char> NormalizeVector(absl::string_view record,
   size_t dimensions = record.size() / sizeof(float);
   float *src = (float *)record.data();
   std::vector<char> ret(record.size());
-  float *dst = (float *)&ret[0];
+  float *dst = reinterpret_cast<float *>(ret.data());
   for (size_t i = 0; i < dimensions; i++) {
     dst[i] = reciprocal_magnitude * src[i];
   }
@@ -129,7 +128,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
-  auto value = predicate.GetIndex()->GetValue(*key_);
+  const auto *value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
 }
 
@@ -369,7 +368,7 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
           absl::StrCat("Embedding id not found: ", key->Str()));
     }
     it->second.magnitude = magnitude;
-    auto &stored_ptr = GetVectorLockFree(it->second.internal_id);
+    auto &stored_ptr = GetVector(it->second.internal_id);
     if (!stored_ptr) {
       return true;  // No stored record, so vectors are definitely not matching
     }
@@ -392,7 +391,9 @@ int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
   ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
   ValkeyModule_ReplyWithSimpleString(
-      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
+      ctx,
+      std::string(LookupKeyByValue(*kDistanceMetricByStr, distance_metric_))
+          .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   {
     absl::MutexLock lock(&key_to_metadata_mutex_);
@@ -504,8 +505,8 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
 }
 
 bool VectorBase::AddPrefilteredKey(
-    absl::string_view query, float query_magnitude, uint64_t count,
-    const InternedStringPtr &key,
+    absl::string_view query, float query_magnitude,
+    const InternedStringPtr &key, uint64_t count,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
     absl::flat_hash_set<const char *> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query, query_magnitude);

@@ -49,7 +49,7 @@ template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type, uint32_t db_num) {
+    data_model::AttributeDataType attribute_data_type, int db_num) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
@@ -84,7 +84,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier, SupplementalContentChunkIter &&iter,
-    uint32_t db_num) {
+    int db_num) {
   try {
     auto index = std::shared_ptr<VectorFlat<T>>(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
@@ -122,7 +122,7 @@ template <typename T>
 VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
-    data_model::AttributeDataType attribute_data_type, uint32_t db_num)
+    data_model::AttributeDataType attribute_data_type, int db_num)
     : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
                  attribute_identifier, db_num),
       block_size_(block_size) {}
@@ -177,7 +177,7 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(
     uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
   std::shared_ptr<const VectorRecord> *stored_record =
-      algo_->getPoint(internal_id);
+      algo_->GetPoint(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
@@ -282,9 +282,10 @@ int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
         ctx,
-        LookupKeyByValue(*kVectorDataTypeByStr,
-                         data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
-            .data());
+        std::string(LookupKeyByValue(
+                        *kVectorDataTypeByStr,
+                        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32))
+            .c_str());
   } else {
     ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
   }
@@ -293,9 +294,10 @@ int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
       ctx,
-      LookupKeyByValue(*kVectorAlgoByStr,
-                       data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm)
-          .data());
+      std::string(LookupKeyByValue(
+                      *kVectorAlgoByStr,
+                      data_model::VectorIndex::AlgorithmCase::kFlatAlgorithm))
+          .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "block_size");
   ValkeyModule_ReplyWithLongLong(ctx, block_size_);
 
@@ -321,7 +323,13 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
 template <typename T>
 std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVectorLockFree(
     uint64_t internal_id) const {
-  return *algo_->getPoint(internal_id);
+  return *algo_->GetPointLockFree(internal_id);
+}
+
+template <typename T>
+std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVector(
+    uint64_t internal_id) const {
+  return *algo_->GetPoint(internal_id);
 }
 
 template class VectorFlat<float>;

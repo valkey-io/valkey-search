@@ -250,11 +250,14 @@ class MockIndexSchema : public IndexSchema {
       ValkeyModuleCtx *ctx, absl::string_view key,
       const std::vector<absl::string_view> &subscribed_key_prefixes,
       std::unique_ptr<AttributeDataType> attribute_data_type,
-      vmsdk::ThreadPool *mutations_thread_pool,
+      vmsdk::ThreadPool *mutations_thread_pool = nullptr,
       data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
       std::string punctuation = ".", bool with_offsets = true,
       const std::vector<std::string> &stop_words = {}, float score = 1.0,
       const std::string &score_field = "") {
+    if (mutations_thread_pool == nullptr) {
+      mutations_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+    }
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
@@ -278,16 +281,22 @@ class MockIndexSchema : public IndexSchema {
   MockIndexSchema(ValkeyModuleCtx *ctx,
                   const data_model::IndexSchema &index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  vmsdk::ThreadPool *mutations_thread_pool, bool reload = false)
+                  vmsdk::ThreadPool *mutations_thread_pool = nullptr,
+                  bool reload = false)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    mutations_thread_pool, reload) {
+                    mutations_thread_pool
+                        ? mutations_thread_pool
+                        : ValkeySearch::Instance().GetWriterThreadPool(),
+                    reload) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
         .WillByDefault([this](ValkeyModuleCtx *ctx) {
-          return IndexSchema::OnLoadingEnded(ctx);
+          IndexSchema::OnLoadingEnded(ctx);
+          return;
         });
     ON_CALL(*this, OnSwapDB(testing::_))
         .WillByDefault([this](ValkeyModuleSwapDbInfo *swap_db_info) {
-          return IndexSchema::OnSwapDB(swap_db_info);
+          IndexSchema::OnSwapDB(swap_db_info);
+          return;
         });
     ON_CALL(*this, RDBSave(testing::_)).WillByDefault([this](SafeRDB *rdb) {
       return IndexSchema::RDBSave(rdb);
@@ -312,13 +321,6 @@ class TestableValkeySearch : public ValkeySearch {
   void InitThreadPools(std::optional<size_t> readers,
                        std::optional<size_t> writers,
                        std::optional<size_t> utility);
-
-  vmsdk::ThreadPool *GetWriterThreadPool() const {
-    return writer_thread_pool_.get();
-  }
-  vmsdk::ThreadPool *GetReaderThreadPool() const {
-    return reader_thread_pool_.get();
-  }
 };
 
 class TestableSchemaManager : public SchemaManager {
@@ -378,6 +380,8 @@ class MockThreadPool : public vmsdk::ThreadPool {
               (absl::AnyInvocable<void()> task, Priority priority), (override));
 };
 
+void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &mutations_thread_pool);
+
 class ValkeySearchTest : public vmsdk::ValkeyTest {
  protected:
   ValkeyModuleCtx fake_ctx_;
@@ -389,11 +393,13 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
     VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeyTest::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
+    InitThreadPools(/*readers=*/std::nullopt, /*writers=*/1,
+                    /*utility=*/std::nullopt);
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
-        false));
+        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); },
+        ValkeySearch::Instance().GetWriterThreadPool(), false));
     ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
@@ -401,6 +407,14 @@ class ValkeySearchTest : public vmsdk::ValkeyTest {
     VectorRegistry::Construct(&registry_ctx_);
   }
   void TearDown() override {
+    if (ValkeySearch::HasInstance()) {
+      if (auto *pool = ValkeySearch::Instance().GetWriterThreadPool()) {
+        if (pool->IsSuspended()) {
+          (void)pool->ResumeWorkers();
+        }
+        WaitWorkerTasksAreCompleted(*pool);
+      }
+    }
     kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
@@ -428,7 +442,7 @@ struct NeighborTest {
   float distance;
   std::optional<std::unordered_map<std::string, std::string>>
       attribute_contents;
-  inline bool operator==(const NeighborTest &other) const {
+  bool operator==(const NeighborTest &other) const {
     return external_id == other.external_id && distance == other.distance &&
            attribute_contents == other.attribute_contents;
   }
@@ -455,11 +469,13 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
   void SetUp() override {
     vmsdk::ValkeyTestWithParam<T>::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
+    InitThreadPools(/*readers=*/std::nullopt, /*writers=*/1,
+                    /*utility=*/std::nullopt);
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
-        false));
+        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); },
+        ValkeySearch::Instance().GetWriterThreadPool(), false));
     ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
         .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
@@ -467,6 +483,14 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
     VectorRegistry::Construct(&registry_ctx_);
   }
   void TearDown() override {
+    if (ValkeySearch::HasInstance()) {
+      if (auto *pool = ValkeySearch::Instance().GetWriterThreadPool()) {
+        if (pool->IsSuspended()) {
+          (void)pool->ResumeWorkers();
+        }
+        WaitWorkerTasksAreCompleted(*pool);
+      }
+    }
     kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
@@ -493,7 +517,6 @@ struct RespReply {
 };
 
 RespReply ParseRespReply(absl::string_view input);
-void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &mutations_thread_pool);
 
 inline auto VectorToStr = [](const std::vector<float> &v) {
   return absl::string_view((char *)v.data(), v.size() * sizeof(float));

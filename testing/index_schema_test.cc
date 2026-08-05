@@ -57,8 +57,6 @@
 namespace valkey_search {
 
 using testing::An;
-using testing::Bool;
-using testing::Combine;
 using testing::Return;
 using testing::StrEq;
 using testing::TestParamInfo;
@@ -129,199 +127,187 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   uint64_t initial_field_tag{metrics.ingest_field_tag};
   uint64_t initial_hash_keys{metrics.ingest_hash_keys};
   uint64_t initial_total_failures{metrics.ingest_total_failures};
-  for (bool use_thread_pool : {true, false}) {
-    ValkeyModuleCtx fake_ctx;
-    std::vector<absl::string_view> key_prefixes = {"prefix:"};
-    std::string index_schema_name_str("index_schema_name");
-    auto index_schema = MockIndexSchema::Create(
-                            &fake_ctx, index_schema_name_str, key_prefixes,
-                            std::make_unique<HashAttributeDataType>(),
-                            use_thread_pool ? &mutations_thread_pool : nullptr)
-                            .value();
-    EXPECT_TRUE(
-        KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
-    auto mock_index = std::make_shared<MockIndex>(test_case.index_type);
-    VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name",
-                                           test_case.hash_field, mock_index));
+  ValkeyModuleCtx fake_ctx;
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  std::string index_schema_name_str("index_schema_name");
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
+  EXPECT_TRUE(
+      KeyspaceEventManager::Instance().HasSubscription(index_schema.get()));
+  auto mock_index = std::make_shared<MockIndex>(test_case.index_type);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("attribute_name", test_case.hash_field,
+                                         mock_index));
 
-    auto key = StringInternStore::Intern("key");
-    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
-    EXPECT_CALL(*mock_index, IsTracked(key))
-        .WillRepeatedly(Return(test_case.is_tracked));
-    if (test_case.expect_index_add_w_result.has_value()) {
-      EXPECT_CALL(
-          *mock_index,
-          AddRecord(key, absl::string_view(test_case.expected_vector_buffer)))
-          .WillOnce(Return(test_case.expect_index_add_w_result.value()));
-    } else if (test_case.expect_index_modify_w_result.has_value()) {
-      EXPECT_CALL(*mock_index,
-                  ModifyRecord(
-                      key, absl::string_view(test_case.expected_vector_buffer)))
-          .WillOnce(Return(test_case.expect_index_modify_w_result.value()));
-    } else if (test_case.expect_index_remove_w_result.has_value()) {
-      if (test_case.expect_index_remove_w_result.value().ok() &&
-          test_case.expect_index_remove_w_result.value().value() == true) {
-        EXPECT_CALL(*mock_index,
-                    RemoveRecord(key, test_case.expected_deletion_type))
-            .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
-      }
-    }
-    if (test_case.open_key_fail) {
-      // Keep the default behavior still for other keys (e.g. IndexSchema key).
-      EXPECT_CALL(*kMockValkeyModule,
-                  OpenKey(&fake_ctx, testing::_, testing::_))
-          .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
-      EXPECT_CALL(*kMockValkeyModule,
-                  OpenKey(&fake_ctx, key_valkey_str.get(),
-                          VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
-          .WillOnce(Return(nullptr));
-    } else {
-      EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
-          .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
-      EXPECT_CALL(*kMockValkeyModule,
-                  KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
-          .WillRepeatedly(Return(test_case.open_key_type));
-    }
+  auto key = StringInternStore::Intern("key");
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
+  EXPECT_CALL(*mock_index, IsTracked(key))
+      .WillRepeatedly(Return(test_case.is_tracked));
+  if (test_case.expect_index_add_w_result.has_value()) {
+    EXPECT_CALL(
+        *mock_index,
+        AddRecord(key, absl::string_view(test_case.expected_vector_buffer)))
+        .WillOnce(Return(test_case.expect_index_add_w_result.value()));
+  } else if (test_case.expect_index_modify_w_result.has_value()) {
+    EXPECT_CALL(
+        *mock_index,
+        ModifyRecord(key, absl::string_view(test_case.expected_vector_buffer)))
+        .WillOnce(Return(test_case.expect_index_modify_w_result.value()));
+  } else if ((test_case.expect_index_remove_w_result.has_value()) &&
+             (test_case.expect_index_remove_w_result.value().ok() &&
+              test_case.expect_index_remove_w_result.value().value())) {
+    EXPECT_CALL(*mock_index,
+                RemoveRecord(key, test_case.expected_deletion_type))
+        .WillOnce(Return(test_case.expect_index_remove_w_result.value()));
+  }
 
-    if (test_case.valkey_hash_data.has_value()) {
-      const char *field = test_case.valkey_hash_data.value().first.c_str();
-      const char *value = test_case.valkey_hash_data.value().second.c_str();
-      ValkeyModuleString *value_valkey_str =
-          TestValkeyModule_CreateStringPrintf(nullptr, "%s", value);
+  if (test_case.open_key_fail) {
+    // Keep the default behavior still for other keys (e.g. IndexSchema key).
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(&fake_ctx, testing::_, testing::_))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    EXPECT_CALL(*kMockValkeyModule,
+                OpenKey(&fake_ctx, key_valkey_str.get(),
+                        VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ))
+        .WillOnce(Return(nullptr));
+  } else {
+    EXPECT_CALL(*kMockValkeyModule, KeyType(testing::_))
+        .WillRepeatedly(TestValkeyModule_KeyTypeDefaultImpl);
+    EXPECT_CALL(*kMockValkeyModule,
+                KeyType(vmsdk::ValkeyModuleKeyIsForString(key->Str())))
+        .WillRepeatedly(Return(test_case.open_key_type));
+  }
 
-      EXPECT_CALL(
-          *kMockValkeyModule,
-          HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
-                  VALKEYMODULE_HASH_CFIELDS, StrEq(field),
-                  An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
-          .WillOnce([value_valkey_str](ValkeyModuleKey *key, int flags,
-                                       const char *field,
-                                       ValkeyModuleString **value_out,
-                                       void *terminating_null) {
-            *value_out = value_valkey_str;
-            return VALKEYMODULE_OK;
-          });
-    } else if (!test_case.open_key_fail && !test_case.expect_wrong_type) {
-      EXPECT_CALL(
-          *kMockValkeyModule,
-          HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
-                  VALKEYMODULE_HASH_CFIELDS, StrEq(test_case.hash_field),
-                  An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
-          .WillOnce([](ValkeyModuleKey *key, int flags, const char *field,
-                       ValkeyModuleString **value_out, void *terminating_null) {
-            *value_out = nullptr;
-            return VALKEYMODULE_OK;
-          });
-    }
+  if (test_case.valkey_hash_data.has_value()) {
+    const char *field = test_case.valkey_hash_data.value().first.c_str();
+    const char *value = test_case.valkey_hash_data.value().second.c_str();
+    ValkeyModuleString *value_valkey_str =
+        TestValkeyModule_CreateStringPrintf(nullptr, "%s", value);
 
-    IndexSchema::Stats::ResultCnt<uint64_t> add_cnt = {
-        .failure_cnt = index_schema->GetStats().subscription_add.failure_cnt,
-        .success_cnt = index_schema->GetStats().subscription_add.success_cnt,
-        .skipped_cnt = index_schema->GetStats().subscription_add.skipped_cnt};
-    IndexSchema::Stats::ResultCnt<uint64_t> remove_cnt = {
-        .failure_cnt = index_schema->GetStats().subscription_remove.failure_cnt,
-        .success_cnt = index_schema->GetStats().subscription_remove.success_cnt,
-        .skipped_cnt =
-            index_schema->GetStats().subscription_remove.skipped_cnt};
-    IndexSchema::Stats::ResultCnt<uint64_t> modify_cnt = {
-        .failure_cnt = index_schema->GetStats().subscription_modify.failure_cnt,
-        .success_cnt = index_schema->GetStats().subscription_modify.success_cnt,
-        .skipped_cnt =
-            index_schema->GetStats().subscription_modify.skipped_cnt};
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                        VALKEYMODULE_HASH_CFIELDS, StrEq(field),
+                        An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+        .WillOnce([value_valkey_str](
+                      ValkeyModuleKey *key, int flags, const char *field,
+                      ValkeyModuleString **value_out, void *terminating_null) {
+          *value_out = value_valkey_str;
+          return VALKEYMODULE_OK;
+        });
+  } else if (!test_case.open_key_fail && !test_case.expect_wrong_type) {
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(vmsdk::ValkeyModuleKeyIsForString(key->Str()),
+                        VALKEYMODULE_HASH_CFIELDS, StrEq(test_case.hash_field),
+                        An<ValkeyModuleString **>(), TypedEq<void *>(nullptr)))
+        .WillOnce([](ValkeyModuleKey *key, int flags, const char *field,
+                     ValkeyModuleString **value_out, void *terminating_null) {
+          *value_out = nullptr;
+          return VALKEYMODULE_OK;
+        });
+  }
 
-    // Capture initial Time Slice Mutex metrics
-    auto &global_stats = Metrics::GetStats();
-    uint64_t initial_upserts = global_stats.time_slice_upserts;
-    uint64_t initial_deletes = global_stats.time_slice_deletes;
+  IndexSchema::Stats::ResultCnt<uint64_t> add_cnt = {
+      .failure_cnt = index_schema->GetStats().subscription_add.failure_cnt,
+      .success_cnt = index_schema->GetStats().subscription_add.success_cnt,
+      .skipped_cnt = index_schema->GetStats().subscription_add.skipped_cnt};
+  IndexSchema::Stats::ResultCnt<uint64_t> remove_cnt = {
+      .failure_cnt = index_schema->GetStats().subscription_remove.failure_cnt,
+      .success_cnt = index_schema->GetStats().subscription_remove.success_cnt,
+      .skipped_cnt = index_schema->GetStats().subscription_remove.skipped_cnt};
+  IndexSchema::Stats::ResultCnt<uint64_t> modify_cnt = {
+      .failure_cnt = index_schema->GetStats().subscription_modify.failure_cnt,
+      .success_cnt = index_schema->GetStats().subscription_modify.success_cnt,
+      .skipped_cnt = index_schema->GetStats().subscription_modify.skipped_cnt};
 
-    index_schema->OnKeyspaceNotification(&fake_ctx, VALKEYMODULE_NOTIFY_HASH,
-                                         "event", key_valkey_str.get());
-    if (use_thread_pool) {
-      WaitWorkerTasksAreCompleted(mutations_thread_pool);
-    }
-    for (const auto &tuple :
-         {std::make_tuple(add_cnt, &index_schema->GetStats().subscription_add,
-                          &test_case.expected_add_cnt_delta),
-          std::make_tuple(remove_cnt,
-                          &index_schema->GetStats().subscription_remove,
-                          &test_case.expected_remove_cnt_delta),
-          std::make_tuple(modify_cnt,
-                          &index_schema->GetStats().subscription_modify,
-                          &test_case.expected_modify_cnt_delta)}) {
+  // Capture initial Time Slice Mutex metrics
+  auto &global_stats = Metrics::GetStats();
+  uint64_t initial_upserts = global_stats.time_slice_upserts;
+  uint64_t initial_deletes = global_stats.time_slice_deletes;
+
+  index_schema->OnKeyspaceNotification(&fake_ctx, VALKEYMODULE_NOTIFY_HASH,
+                                       "event", key_valkey_str.get());
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
+  for (const auto &tuple :
+       {std::make_tuple(add_cnt, &index_schema->GetStats().subscription_add,
+                        &test_case.expected_add_cnt_delta),
+        std::make_tuple(remove_cnt,
+                        &index_schema->GetStats().subscription_remove,
+                        &test_case.expected_remove_cnt_delta),
+        std::make_tuple(modify_cnt,
+                        &index_schema->GetStats().subscription_modify,
+                        &test_case.expected_modify_cnt_delta)}) {
+    EXPECT_EQ(std::get<1>(tuple)->success_cnt - std::get<0>(tuple).success_cnt,
+              std::get<2>(tuple)->success_cnt);
+    EXPECT_EQ(std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
+              std::get<2>(tuple)->skipped_cnt);
+    if (!test_case.expect_index_remove_w_result.has_value() ||
+        !test_case.expect_index_remove_w_result.value().ok() ||
+        test_case.expect_index_remove_w_result.value().value()) {
       EXPECT_EQ(
-          std::get<1>(tuple)->success_cnt - std::get<0>(tuple).success_cnt,
-          std::get<2>(tuple)->success_cnt);
-      EXPECT_EQ(
-          std::get<1>(tuple)->skipped_cnt - std::get<0>(tuple).skipped_cnt,
-          std::get<2>(tuple)->skipped_cnt);
-      if (!test_case.expect_index_remove_w_result.has_value() ||
-          !test_case.expect_index_remove_w_result.value().ok() ||
-          test_case.expect_index_remove_w_result.value().value() == true) {
-        EXPECT_EQ(
-            std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
-            std::get<2>(tuple)->failure_cnt);
-      }
+          std::get<1>(tuple)->failure_cnt - std::get<0>(tuple).failure_cnt,
+          std::get<2>(tuple)->failure_cnt);
     }
+  }
 
-    // Determine operation success/failure states using helper functions
-    bool successful_add =
-        IsOperationSuccessful(test_case.expect_index_add_w_result);
-    bool successful_modify =
-        IsOperationSuccessful(test_case.expect_index_modify_w_result);
-    bool successful_remove =
-        IsOperationSuccessful(test_case.expect_index_remove_w_result);
+  // Determine operation success/failure states using helper functions
+  bool successful_add =
+      IsOperationSuccessful(test_case.expect_index_add_w_result);
+  bool successful_modify =
+      IsOperationSuccessful(test_case.expect_index_modify_w_result);
+  bool successful_remove =
+      IsOperationSuccessful(test_case.expect_index_remove_w_result);
 
-    bool failed_operation =
-        IsOperationFailed(test_case.expect_index_add_w_result) ||
-        IsOperationFailed(test_case.expect_index_modify_w_result) ||
-        IsOperationFailed(test_case.expect_index_remove_w_result);
+  bool failed_operation =
+      IsOperationFailed(test_case.expect_index_add_w_result) ||
+      IsOperationFailed(test_case.expect_index_modify_w_result) ||
+      IsOperationFailed(test_case.expect_index_remove_w_result);
 
-    bool successful_upsert = successful_add || successful_modify;
-    bool is_hash_operation =
-        !test_case.open_key_fail &&
-        test_case.open_key_type == VALKEYMODULE_KEYTYPE_HASH &&
-        test_case.valkey_hash_data.has_value();
+  bool successful_upsert = successful_add || successful_modify;
+  bool is_hash_operation =
+      !test_case.open_key_fail &&
+      test_case.open_key_type == VALKEYMODULE_KEYTYPE_HASH &&
+      test_case.valkey_hash_data.has_value();
 
-    // Check field type metrics for successful operations with document count
-    // increase
-    if (successful_upsert && test_case.expected_document_cnt_delta > 0) {
-      switch (test_case.index_type) {
-        case indexes::IndexerType::kVector:
-          EXPECT_GT(metrics.ingest_field_vector, initial_field_vector);
-          break;
-        case indexes::IndexerType::kNumeric:
-          EXPECT_GT(metrics.ingest_field_numeric, initial_field_numeric);
-          break;
-        case indexes::IndexerType::kTag:
-          EXPECT_GT(metrics.ingest_field_tag, initial_field_tag);
-          break;
-        default:
-          break;
-      }
+  // Check field type metrics for successful operations with document count
+  // increase
+  if (successful_upsert && test_case.expected_document_cnt_delta > 0) {
+    switch (test_case.index_type) {
+      case indexes::IndexerType::kVector:
+        EXPECT_GT(metrics.ingest_field_vector, initial_field_vector);
+        break;
+      case indexes::IndexerType::kNumeric:
+        EXPECT_GT(metrics.ingest_field_numeric, initial_field_numeric);
+        break;
+      case indexes::IndexerType::kTag:
+        EXPECT_GT(metrics.ingest_field_tag, initial_field_tag);
+        break;
+      default:
+        break;
     }
+  }
 
-    // Check failure metrics
-    if (failed_operation) {
-      EXPECT_GT(metrics.ingest_total_failures, initial_total_failures);
-    }
+  // Check failure metrics
+  if (failed_operation) {
+    EXPECT_GT(metrics.ingest_total_failures, initial_total_failures);
+  }
 
-    // Check hash keys metrics
-    if (is_hash_operation) {
-      EXPECT_GT(metrics.ingest_hash_keys, initial_hash_keys);
-    }
+  // Check hash keys metrics
+  if (is_hash_operation) {
+    EXPECT_GT(metrics.ingest_hash_keys, initial_hash_keys);
+  }
 
-    // Verify Time Slice Mutex metrics
-    if (successful_upsert) {
-      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts + 1);
-      EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
-    } else if (successful_remove) {
-      EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes + 1);
-      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
-    } else {
-      // No successful operation expected
-      EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
-      EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
-    }
+  // Verify Time Slice Mutex metrics
+  if (successful_upsert) {
+    EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts + 1);
+    EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
+  } else if (successful_remove) {
+    EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes + 1);
+    EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
+  } else {
+    // No successful operation expected
+    EXPECT_EQ(global_stats.time_slice_upserts, initial_upserts);
+    EXPECT_EQ(global_stats.time_slice_deletes, initial_deletes);
   }
 }
 
@@ -605,10 +591,9 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-class IndexSchemaSubscriptionSimpleTest
-    : public ValkeySearchTestWithParam<bool> {};
+class IndexSchemaSubscriptionSimpleTest : public ValkeySearchTest {};
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
   // This test covers verifies that Unblockclient is called when an index schema
   // is dropped prematurely while there are pending mutations in the worker
   // thread pool
@@ -630,7 +615,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
         index_schema->AddIndex("attribute_name", "vector", mock_index));
 
     auto key = StringInternStore::Intern("key");
-    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
     EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
 
     EXPECT_CALL(*mock_index, AddRecord(key, testing::_)).Times(0);
@@ -682,66 +667,61 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
             0);
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  auto use_thread_pool = GetParam();
-
   mutations_thread_pool.StartWorkers();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(), UnorderedElementsAreArray({""}));
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, DuplicateKeyPrefixesTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, DuplicateKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
 
   std::vector<absl::string_view> key_prefixes = {"pre", "pre"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               UnorderedElementsAreArray({"pre"}));
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, PrefixIsPrefixedByAnotherTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, PrefixIsPrefixedByAnotherTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
   std::vector<absl::string_view> key_prefixes = {"pre", "prefix"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               UnorderedElementsAreArray({"pre"}));
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
@@ -753,23 +733,20 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
   index_schema->OnKeyspaceNotification(&different_db_ctx,
                                        VALKEYMODULE_NOTIFY_HASH, "event",
                                        key_valkey_str.get());
-  if (use_thread_pool) {
-    WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  }
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest,
+TEST_F(IndexSchemaSubscriptionSimpleTest,
        DBHasMatchingKeyWithWrongModuleTypeTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
@@ -785,22 +762,19 @@ TEST_P(IndexSchemaSubscriptionSimpleTest,
   index_schema->OnKeyspaceNotification(&different_db_ctx,
                                        VALKEYMODULE_NOTIFY_HASH, "event",
                                        key_valkey_str.get());
-  if (use_thread_pool) {
-    WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  }
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute_name", "test_identifier", mock_index));
@@ -808,51 +782,40 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
       .Times(0);
   index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
                                        "event", nullptr);
-  if (use_thread_pool) {
-    WaitWorkerTasksAreCompleted(mutations_thread_pool);
-  }
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, GetKeyPrefixesTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, GetKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
   std::vector<absl::string_view> key_prefixes = {
       "prefix:", "prefix1:", "prefix2:"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
   EXPECT_THAT(index_schema->GetKeyPrefixes(),
               UnorderedElementsAreArray(key_prefixes));
 }
 
-TEST_P(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
+TEST_F(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  auto use_thread_pool = GetParam();
   std::vector<absl::string_view> key_prefixes = {"unused"};
   std::string index_schema_name_str("index_schema_name");
-  auto index_schema = MockIndexSchema::Create(
-                          &fake_ctx_, index_schema_name_str, key_prefixes,
-                          std::make_unique<HashAttributeDataType>(),
-                          use_thread_pool ? &mutations_thread_pool : nullptr)
-                          .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
   EXPECT_EQ(index_schema->GetAttributeDataType().GetValkeyEventTypes(),
             VALKEYMODULE_NOTIFY_HASH | VALKEYMODULE_NOTIFY_GENERIC |
                 VALKEYMODULE_NOTIFY_EXPIRED | VALKEYMODULE_NOTIFY_EVICTED);
 }
-
-INSTANTIATE_TEST_SUITE_P(IndexSchemaSubscriptionSimpleTests,
-                         IndexSchemaSubscriptionSimpleTest,
-                         ::testing::Values(false, true),
-                         [](const testing::TestParamInfo<bool> &info) {
-                           return std::to_string(info.param);
-                         });
 
 struct IndexSchemaBackfillTestCase {
   std::string test_name;
@@ -869,21 +832,18 @@ struct IndexSchemaBackfillTestCase {
 };
 
 class IndexSchemaBackfillTest
-    : public ValkeySearchTestWithParam<
-          ::testing::tuple<bool, IndexSchemaBackfillTestCase>> {};
+    : public ValkeySearchTestWithParam<IndexSchemaBackfillTestCase> {};
 
 TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
-  auto &params = GetParam();
-  bool use_thread_pool = std::get<0>(params);
-  const IndexSchemaBackfillTestCase &test_case = std::get<1>(params);
+  const auto &test_case = GetParam();
   MockThreadPool thread_pool("writer-thread-pool-", 5);
   thread_pool.StartWorkers();
   std::vector<absl::string_view> key_prefixes;
-  std::transform(test_case.key_prefixes.begin(), test_case.key_prefixes.end(),
-                 std::back_inserter(key_prefixes),
-                 [](const std::string &key_prefix) {
-                   return absl::string_view(key_prefix);
-                 });
+  std::ranges::transform(test_case.key_prefixes,
+                         std::back_inserter(key_prefixes),
+                         [](const std::string &key_prefix) {
+                           return absl::string_view(key_prefix);
+                         });
   std::string index_schema_name_str("index_schema_name");
   EXPECT_CALL(*kMockValkeyModule, DbSize(testing::_))
       .WillRepeatedly(Return(test_case.db_size));
@@ -899,7 +859,7 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
   auto index_schema =
       MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
                               std::make_unique<HashAttributeDataType>(),
-                              use_thread_pool ? &thread_pool : nullptr)
+                              &thread_pool)
           .value();
   auto mock_index = std::make_shared<MockIndex>();
   VMSDK_EXPECT_OK(
@@ -947,18 +907,15 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
                                                   testing::StrEq(key_str)),
                                 testing::_))
               .WillOnce(testing::Return(indexes::RecordResult::kAdded));
-          if (use_thread_pool) {
-            EXPECT_CALL(thread_pool,
-                        Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
-                .Times(1);
-            EXPECT_CALL(*kMockValkeyModule,
-                        BlockClient(testing::_, testing::_, testing::_,
-                                    testing::_, testing::_))
-                .Times(0);
-            EXPECT_CALL(*kMockValkeyModule,
-                        UnblockClient(testing::_, testing::_))
-                .Times(0);
-          }
+          EXPECT_CALL(thread_pool,
+                      Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
+              .Times(1);
+          EXPECT_CALL(*kMockValkeyModule,
+                      BlockClient(testing::_, testing::_, testing::_,
+                                  testing::_, testing::_))
+              .Times(0);
+          EXPECT_CALL(*kMockValkeyModule, UnblockClient(testing::_, testing::_))
+              .Times(0);
         }
         if (test_case.return_wrong_types) {
           EXPECT_CALL(*kMockValkeyModule,
@@ -970,29 +927,24 @@ TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
               .WillRepeatedly(Return(VALKEYMODULE_KEYTYPE_HASH));
         }
         fn(ctx, key_r_str.get(), &key, privdata);
-        if (use_thread_pool) {
-          EXPECT_CALL(thread_pool,
-                      Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
-              .Times(thread_pool.Size());
-          WaitWorkerTasksAreCompleted(thread_pool);
-        }
+        EXPECT_CALL(thread_pool,
+                    Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
+            .Times(static_cast<int>(thread_pool.Size()));
+        WaitWorkerTasksAreCompleted(thread_pool);
         return (++i < test_case.keys_to_return_in_scan.size()) ? 1 : 0;
       });
   EXPECT_EQ(
       index_schema->PerformBackfill(&parent_ctx, test_case.scan_batch_size),
       test_case.expected_keys_scanned);
-  if (!use_thread_pool) {
-    EXPECT_EQ(index_schema->IsBackfillInProgress(),
-              test_case.expected_backfill_percent != 1.0);
-    EXPECT_EQ(index_schema->GetBackfillPercent(),
-              test_case.expected_backfill_percent);
-    EXPECT_EQ(index_schema->GetStateForInfo(), test_case.expected_state);
-  } else {
-    EXPECT_CALL(thread_pool,
-                Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
-        .Times(thread_pool.Size());
-    WaitWorkerTasksAreCompleted(thread_pool);
-  }
+  EXPECT_CALL(thread_pool,
+              Schedule(testing::_, vmsdk::ThreadPool::Priority::kLow))
+      .Times(static_cast<int>(thread_pool.Size()));
+  WaitWorkerTasksAreCompleted(thread_pool);
+  EXPECT_EQ(index_schema->IsBackfillInProgress(),
+            test_case.expected_backfill_percent != 1.0);
+  EXPECT_EQ(index_schema->GetBackfillPercent(),
+            test_case.expected_backfill_percent);
+  EXPECT_EQ(index_schema->GetStateForInfo(), test_case.expected_state);
 }
 
 TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
@@ -1000,28 +952,26 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
   std::string index_schema_name_str("index_schema_name");
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  for (bool use_thread_pool : {true, false}) {
-    ValkeyModuleCtx parent_ctx;
-    ValkeyModuleCtx scan_ctx;
-    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
-        .WillRepeatedly(Return(&scan_ctx));
-    auto index_schema = MockIndexSchema::Create(
-                            &parent_ctx, index_schema_name_str, key_prefixes,
-                            std::make_unique<HashAttributeDataType>(),
-                            use_thread_pool ? &mutations_thread_pool : nullptr)
-                            .value();
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+      .WillRepeatedly(Return(&scan_ctx));
+  auto index_schema =
+      MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
-    // We only expect it to do the scan the first iteration.
-    EXPECT_CALL(*kMockValkeyModule,
-                Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
-                     testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
-        .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
-                      ValkeyModuleScanCB fn,
-                      void *privdata) -> int { return 0; });
+  // We only expect it to do the scan the first iteration.
+  EXPECT_CALL(*kMockValkeyModule,
+              Scan(&scan_ctx, testing::An<ValkeyModuleScanCursor *>(),
+                   testing::An<ValkeyModuleScanCB>(), testing::An<void *>()))
+      .WillOnce([&](ValkeyModuleCtx *ctx, ValkeyModuleScanCursor *cursor,
+                    ValkeyModuleScanCB fn,
+                    void *privdata) -> int { return 0; });
 
-    for (size_t i = 0; i < 100; ++i) {
-      EXPECT_EQ(index_schema->PerformBackfill(&parent_ctx, 1024), 0);
-    }
+  for (size_t i = 0; i < 100; ++i) {
+    EXPECT_EQ(index_schema->PerformBackfill(&parent_ctx, 1024), 0);
   }
 }
 
@@ -1030,155 +980,150 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
   std::string index_schema_name_str("index_schema_name");
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  for (bool use_thread_pool : {true, false}) {
-    int starting_db = 0;
-    int db_to_swap = 1;
-    ValkeyModuleCtx parent_ctx;
-    ValkeyModuleCtx scan_ctx;
-    EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
-        .WillRepeatedly(Return(&scan_ctx));
-    EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&parent_ctx))
-        .WillRepeatedly(Return(starting_db));
-    EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, starting_db))
-        .WillRepeatedly(Return(VALKEYMODULE_OK));
-    auto index_schema = MockIndexSchema::Create(
-                            &parent_ctx, index_schema_name_str, key_prefixes,
-                            std::make_unique<HashAttributeDataType>(),
-                            use_thread_pool ? &mutations_thread_pool : nullptr)
-                            .value();
+  int starting_db = 0;
+  int db_to_swap = 1;
+  ValkeyModuleCtx parent_ctx;
+  ValkeyModuleCtx scan_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
+      .WillRepeatedly(Return(&scan_ctx));
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&parent_ctx))
+      .WillRepeatedly(Return(starting_db));
+  EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, starting_db))
+      .WillRepeatedly(Return(VALKEYMODULE_OK));
+  auto index_schema =
+      MockIndexSchema::Create(&parent_ctx, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
-    // Validate swapping changes the db in the context
-    ValkeyModuleSwapDbInfo swap_db_info = {
-        .dbnum_first = starting_db,
-        .dbnum_second = db_to_swap,
-    };
-    EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, db_to_swap))
-        .WillOnce(Return(VALKEYMODULE_OK));
-    index_schema->OnSwapDB(&swap_db_info);
+  // Validate swapping changes the db in the context
+  ValkeyModuleSwapDbInfo swap_db_info = {
+      .dbnum_first = starting_db,
+      .dbnum_second = db_to_swap,
+  };
+  EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, db_to_swap))
+      .WillOnce(Return(VALKEYMODULE_OK));
+  index_schema->OnSwapDB(&swap_db_info);
 
-    // Validate swapping again brings the db back to the original
-    EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, starting_db))
-        .WillOnce(Return(VALKEYMODULE_OK));
-    index_schema->OnSwapDB(&swap_db_info);
-  }
+  // Validate swapping again brings the db back to the original
+  EXPECT_CALL(*kMockValkeyModule, SelectDb(&scan_ctx, starting_db))
+      .WillOnce(Return(VALKEYMODULE_OK));
+  index_schema->OnSwapDB(&swap_db_info);
 }
 
 INSTANTIATE_TEST_SUITE_P(
     IndexSchemaBackfillTests, IndexSchemaBackfillTest,
-    Combine(Bool(),
-            ValuesIn<IndexSchemaBackfillTestCase>({
-                {
-                    .test_name = "batch_size_5",
-                    .scan_batch_size = 5,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 5,
-                    .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
-                                               "prefix1:key3", "prefix1:key4",
-                                               "prefix1:key5"},
-                    .expected_keys_scanned = 5,
-                    .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
-                                                "prefix1:key3", "prefix1:key4",
-                                                "prefix1:key5"},
-                    .expected_backfill_percent = 1.0,
-                    .expected_state = "ready",
-                },
-                {
-                    .test_name = "not_all_match",
-                    .scan_batch_size = 5,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 5,
-                    .keys_to_return_in_scan = {"prefix1:key1", "prefix2:key2",
-                                               "prefix1:key3", "prefix2:key4",
-                                               "prefix1:key5"},
-                    .expected_keys_scanned = 5,
-                    .expected_keys_processed = {"prefix1:key1", "prefix1:key3",
-                                                "prefix1:key5"},
-                    .expected_backfill_percent = 1.0,
-                    .expected_state = "ready",
-                },
-                {
-                    .test_name = "smaller_scan_batch_size_than_available",
-                    .scan_batch_size = 3,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 5,
-                    .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
-                                               "prefix1:key3", "prefix1:key4",
-                                               "prefix1:key5"},
-                    .expected_keys_scanned = 3,
-                    .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
-                                                "prefix1:key3"},
-                    .expected_backfill_percent = 0.6,
-                    .expected_state = "backfill_in_progress",
-                },
-                {
-                    .test_name = "bigger_scan_batch_size_than_available",
-                    .scan_batch_size = 7,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 5,
-                    .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
-                                               "prefix1:key3", "prefix1:key4",
-                                               "prefix1:key5"},
-                    .expected_keys_scanned = 5,
-                    .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
-                                                "prefix1:key3", "prefix1:key4",
-                                                "prefix1:key5"},
-                    .expected_backfill_percent = 1.0,
-                    .expected_state = "ready",
-                },
-                {
-                    .test_name = "no_backfill",
-                    .scan_batch_size = 5,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 0,
-                    .keys_to_return_in_scan = {},
-                    .expected_keys_scanned = 0,
-                    .expected_keys_processed = {},
-                    .expected_backfill_percent = 1.0,
-                    .expected_state = "ready",
-                },
-                {
-                    .test_name = "wrong_types_not_added",
-                    .scan_batch_size = 5,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 1,
-                    .keys_to_return_in_scan = {"prefix1:key1"},
-                    .return_wrong_types = true,
-                    .expected_keys_scanned = 1,
-                    .expected_keys_processed = {},
-                    .expected_backfill_percent = 1.0,
-                    .expected_state = "ready",
-                },
-                {
-                    .test_name = "dbsize_shrunk",
-                    .scan_batch_size = 3,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 1,
-                    .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
-                                               "prefix1:key3", "prefix1:key4",
-                                               "prefix1:key5"},
-                    .expected_keys_scanned = 3,
-                    .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
-                                                "prefix1:key3"},
-                    .expected_backfill_percent = 0.99,
-                    .expected_state = "backfill_in_progress",
-                },
-                {
-                    .test_name = "oom",
-                    .scan_batch_size = 100,
-                    .key_prefixes = {"prefix1:"},
-                    .db_size = 100,
-                    .keys_to_return_in_scan = {},
-                    .context_flags = VALKEYMODULE_CTX_FLAGS_OOM,
-                    .expected_keys_scanned = 0,
-                    .expected_keys_processed = {},
-                    .expected_backfill_percent = 0.0,
-                    .expected_state = "backfill_paused_by_oom",
-                },
-            })),
-    [](const TestParamInfo<::testing::tuple<bool, IndexSchemaBackfillTestCase>>
-           &info) {
-      return std::get<1>(info.param).test_name + "_" +
-             (std::get<0>(info.param) ? "WithThreadPool" : "WithoutThreadPool");
+    ValuesIn<IndexSchemaBackfillTestCase>({
+        {
+            .test_name = "batch_size_5",
+            .scan_batch_size = 5,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 5,
+            .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
+                                       "prefix1:key3", "prefix1:key4",
+                                       "prefix1:key5"},
+            .expected_keys_scanned = 5,
+            .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
+                                        "prefix1:key3", "prefix1:key4",
+                                        "prefix1:key5"},
+            .expected_backfill_percent = 1.0,
+            .expected_state = "ready",
+        },
+        {
+            .test_name = "not_all_match",
+            .scan_batch_size = 5,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 5,
+            .keys_to_return_in_scan = {"prefix1:key1", "prefix2:key2",
+                                       "prefix1:key3", "prefix2:key4",
+                                       "prefix1:key5"},
+            .expected_keys_scanned = 5,
+            .expected_keys_processed = {"prefix1:key1", "prefix1:key3",
+                                        "prefix1:key5"},
+            .expected_backfill_percent = 1.0,
+            .expected_state = "ready",
+        },
+        {
+            .test_name = "smaller_scan_batch_size_than_available",
+            .scan_batch_size = 3,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 5,
+            .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
+                                       "prefix1:key3", "prefix1:key4",
+                                       "prefix1:key5"},
+            .expected_keys_scanned = 3,
+            .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
+                                        "prefix1:key3"},
+            .expected_backfill_percent = 0.6,
+            .expected_state = "backfill_in_progress",
+        },
+        {
+            .test_name = "bigger_scan_batch_size_than_available",
+            .scan_batch_size = 7,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 5,
+            .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
+                                       "prefix1:key3", "prefix1:key4",
+                                       "prefix1:key5"},
+            .expected_keys_scanned = 5,
+            .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
+                                        "prefix1:key3", "prefix1:key4",
+                                        "prefix1:key5"},
+            .expected_backfill_percent = 1.0,
+            .expected_state = "ready",
+        },
+        {
+            .test_name = "no_backfill",
+            .scan_batch_size = 5,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 0,
+            .keys_to_return_in_scan = {},
+            .expected_keys_scanned = 0,
+            .expected_keys_processed = {},
+            .expected_backfill_percent = 1.0,
+            .expected_state = "ready",
+        },
+        {
+            .test_name = "wrong_types_not_added",
+            .scan_batch_size = 5,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 1,
+            .keys_to_return_in_scan = {"prefix1:key1"},
+            .return_wrong_types = true,
+            .expected_keys_scanned = 1,
+            .expected_keys_processed = {},
+            .expected_backfill_percent = 1.0,
+            .expected_state = "ready",
+        },
+        {
+            .test_name = "dbsize_shrunk",
+            .scan_batch_size = 3,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 1,
+            .keys_to_return_in_scan = {"prefix1:key1", "prefix1:key2",
+                                       "prefix1:key3", "prefix1:key4",
+                                       "prefix1:key5"},
+            .expected_keys_scanned = 3,
+            .expected_keys_processed = {"prefix1:key1", "prefix1:key2",
+                                        "prefix1:key3"},
+            .expected_backfill_percent = 0.99,
+            .expected_state = "backfill_in_progress",
+        },
+        {
+            .test_name = "oom",
+            .scan_batch_size = 100,
+            .key_prefixes = {"prefix1:"},
+            .db_size = 100,
+            .keys_to_return_in_scan = {},
+            .context_flags = VALKEYMODULE_CTX_FLAGS_OOM,
+            .expected_keys_scanned = 0,
+            .expected_keys_processed = {},
+            .expected_backfill_percent = 0.0,
+            .expected_state = "backfill_paused_by_oom",
+        },
+    }),
+    [](const TestParamInfo<IndexSchemaBackfillTestCase> &info) {
+      return info.param.test_name;
     });
 
 class IndexSchemaRDBTest : public ValkeySearchTest {
@@ -1339,7 +1284,9 @@ TEST_F(IndexSchemaRDBTest, SaveAndLoad) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   std::vector<ValkeyModuleString *> records(num_vectors);
   for (size_t i = 0; i < vectors.size(); ++i) {
     records[i] = new ValkeyModuleString{
-        std::string((char *)&vectors[i][0], dimensions * sizeof(float))};
+        .data = std::string(reinterpret_cast<char *>(vectors[i].data()),
+                            dimensions * sizeof(float)),
+    };
   }
   EXPECT_CALL(*kMockValkeyModule,
               HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
@@ -1560,67 +1507,62 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
   mutations_thread_pool.StartWorkers();
-  for (bool use_thread_pool : {true, false}) {
-    auto mock_index = std::make_shared<MockIndex>();
-    absl::flat_hash_map<std::string, uint64_t> keys_in_index = {
-        {"key1", 1}, {"key2", 2}, {"key3", 3}};
-    EXPECT_CALL(*mock_index, ForEachTrackedKey(testing::_))
-        .WillOnce(
-            [&keys_in_index](
-                absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
-                -> absl::Status {
-              for (const auto &[key, internal_id] : keys_in_index) {
-                InternedStringPtr interned_key = StringInternStore::Intern(key);
-                VMSDK_RETURN_IF_ERROR(fn(interned_key));
-              }
-              return absl::OkStatus();
-            });
+  auto mock_index = std::make_shared<MockIndex>();
+  absl::flat_hash_map<std::string, uint64_t> keys_in_index = {
+      {"key1", 1}, {"key2", 2}, {"key3", 3}};
+  EXPECT_CALL(*mock_index, ForEachTrackedKey(testing::_))
+      .WillOnce(
+          [&keys_in_index](
+              absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
+              -> absl::Status {
+            for (const auto &[key, internal_id] : keys_in_index) {
+              InternedStringPtr interned_key = StringInternStore::Intern(key);
+              VMSDK_RETURN_IF_ERROR(fn(interned_key));
+            }
+            return absl::OkStatus();
+          });
 
-    std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
-    std::string index_schema_name_str("index_schema_name");
+  std::vector<absl::string_view> key_prefixes = {"prefix1", "prefix2"};
+  std::string index_schema_name_str("index_schema_name");
 
-    auto index_schema = MockIndexSchema::Create(
-                            &fake_ctx_, index_schema_name_str, key_prefixes,
-                            std::make_unique<HashAttributeDataType>(),
-                            use_thread_pool ? &mutations_thread_pool : nullptr)
-                            .value();
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, index_schema_name_str, key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              &mutations_thread_pool)
+          .value();
 
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex("attribute", "identifier", mock_index));
-    EXPECT_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
-        .WillRepeatedly(Return(1));  // So backfill job can be created.
-    EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 0))
-        .WillOnce(Return(1));
-    EXPECT_CALL(*kMockValkeyModule,
-                KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key1")))
-        .WillRepeatedly(Return(0));
-    EXPECT_CALL(*kMockValkeyModule,
-                KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key2")))
-        .WillRepeatedly(Return(0));
-    EXPECT_CALL(*kMockValkeyModule,
-                KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key3")))
-        .WillRepeatedly(Return(1));
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("attribute", "identifier", mock_index));
+  EXPECT_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
+      .WillRepeatedly(Return(1));  // So backfill job can be created.
+  EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 0)).WillOnce(Return(1));
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key1")))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key2")))
+      .WillRepeatedly(Return(0));
+  EXPECT_CALL(*kMockValkeyModule,
+              KeyExists(&fake_ctx_, vmsdk::ValkeyModuleStringValueEq("key3")))
+      .WillRepeatedly(Return(1));
 
-    EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
-                                               testing::StrEq("key1")),
-                             indexes::DeletionType::kRecord))
-        .WillOnce(Return(true));
-    EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
-                                               testing::StrEq("key2")),
-                             indexes::DeletionType::kRecord))
-        .WillOnce(Return(true));
-    EXPECT_CALL(*mock_index,
-                RemoveRecord(testing::Property(&InternedStringPtr::operator*,
-                                               testing::StrEq("key3")),
-                             indexes::DeletionType::kRecord))
-        .Times(0);
-    index_schema->OnLoadingEnded(&fake_ctx_);
-    if (use_thread_pool) {
-      WaitWorkerTasksAreCompleted(mutations_thread_pool);
-    }
-  }
+  EXPECT_CALL(*mock_index,
+              RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                             testing::StrEq("key1")),
+                           indexes::DeletionType::kRecord))
+      .WillOnce(Return(true));
+  EXPECT_CALL(*mock_index,
+              RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                             testing::StrEq("key2")),
+                           indexes::DeletionType::kRecord))
+      .WillOnce(Return(true));
+  EXPECT_CALL(*mock_index,
+              RemoveRecord(testing::Property(&InternedStringPtr::operator*,
+                                             testing::StrEq("key3")),
+                           indexes::DeletionType::kRecord))
+      .Times(0);
+  index_schema->OnLoadingEnded(&fake_ctx_);
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
 }
 
 class IndexSchemaFriendTest : public ValkeySearchTest {
@@ -2836,7 +2778,7 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
   VMSDK_EXPECT_OK(index_schema->AddIndex("name", "name", mock_index));
 
   auto key = StringInternStore::Intern("product:1");
-  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Widget")))
@@ -2904,7 +2846,7 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
   VMSDK_EXPECT_OK(index_schema->AddIndex("name", "name", mock_index));
 
   auto key = StringInternStore::Intern("product:2");
-  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Gadget")))
@@ -2969,7 +2911,7 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   VMSDK_EXPECT_OK(index_schema->AddIndex("embedding", "emb_id", hnsw_index));
 
   auto key = StringInternStore::Intern("prefix:key");
-  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
 
   // 1. Manually add to registry to simulate an existing vector
   std::string vec_data(dimensions * sizeof(float), 'a');

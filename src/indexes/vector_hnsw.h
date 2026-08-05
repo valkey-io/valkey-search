@@ -32,17 +32,13 @@ class QueryVector {
  public:
   QueryVector(const std::shared_ptr<const VectorRecord> &vector_record,
               size_t vector_record_size, bool normalize);
-  inline const char *GetRawVector() const {
-    return vector_record_->GetRawVector();
-  }
-  inline float GetReciprocalMagnitude() const {
+  const char *GetRawVector() const { return vector_record_->GetRawVector(); }
+  float GetReciprocalMagnitude() const {
     return vector_record_->GetReciprocalMagnitude();
   }
-  inline const char *GetNormalizedVector() const {
-    return normalized_vector_.data();
-  }
+  const char *GetNormalizedVector() const { return normalized_vector_.data(); }
 
-  inline std::shared_ptr<const VectorRecord> GetVectorRecord() const {
+  std::shared_ptr<const VectorRecord> GetVectorRecord() const {
     return vector_record_;
   }
 
@@ -62,13 +58,13 @@ class VectorHNSW : public VectorBase {
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
       data_model::AttributeDataType attribute_data_type,
-      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> LoadFromRDB(
       ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
       const data_model::VectorIndex &vector_index_proto,
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter &&iter,
-      uint32_t db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
   size_t GetDataTypeSize() const override { return sizeof(T); }
 
@@ -125,7 +121,14 @@ class VectorHNSW : public VectorBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
-    auto *ptr = algo_->getPoint(internal_id);
+    auto *ptr = algo_->GetPointLockFree(internal_id);
+    CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
+                          << internal_id;
+    return *ptr;
+  }
+  std::shared_ptr<const VectorRecord> &GetVector(
+      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    auto *ptr = algo_->GetPoint(internal_id);
     CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
                           << internal_id;
     return *ptr;
@@ -140,8 +143,7 @@ class VectorHNSW : public VectorBase {
 
  private:
   VectorHNSW(int dimensions, absl::string_view attribute_identifier,
-             data_model::AttributeDataType attribute_data_type,
-             uint32_t db_num);
+             data_model::AttributeDataType attribute_data_type, int db_num);
   absl::Status AlgoDeleteRecord(uint64_t label)
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
 

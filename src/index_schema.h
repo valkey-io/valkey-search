@@ -53,7 +53,7 @@ namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
 
-inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+inline absl::Status GenerateIndexNotFoundError(int db_num,
                                                absl::string_view name) {
   return absl::NotFoundError(absl::StrFormat(
       "Index with name '%s' not found in database %d", name, db_num));
@@ -174,7 +174,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
 
   inline const std::string &GetName() const { return name_; }
-  inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline int GetDBNum() const { return db_num_; }
   inline const std::optional<uint16_t> &GetSingleSlotNumber() const {
     return single_slot_number_;
   }
@@ -419,7 +419,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::vector<std::string> subscribed_key_prefixes_;
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
-  uint32_t db_num_{0};
+  int db_num_{0};
   std::optional<uint16_t> single_slot_number_;
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
   std::string punctuation_;
@@ -515,6 +515,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
+  // Checks if a key is known to the schema: in db_key_info_, in-flight in the
+  // mutation tracker, or tracked/untracked by any underlying index.
+  // REQUIRES: Valkey Main Thread.
+  bool IsKeyTracked(const Key &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   bool InTrackedMutationRecords(const Key &key,
                                 const std::string &identifier) const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,

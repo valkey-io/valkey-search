@@ -242,6 +242,9 @@ void ValkeySearch::Info(RedisModuleInfoCtx *ctx, bool for_crash_report) const {
   RedisModule_InfoAddFieldLongLong(
       ctx, "hnsw_create_exceptions_count",
       Metrics::GetStats().hnsw_create_exceptions_cnt);
+  RedisModule_InfoAddFieldLongLong(
+      ctx, "hnsw_duplicate_label_on_load_count",
+      Metrics::GetStats().hnsw_duplicate_label_on_load_cnt);
 
   RedisModule_InfoAddSection(ctx, "latency");
   AddLatencyStat(ctx, "hnsw_vector_index_search_latency_usec",

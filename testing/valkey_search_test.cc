@@ -419,6 +419,7 @@ TEST_F(ValkeySearchTest, Info) {
   stats.hnsw_modify_exceptions_cnt = 5;
   stats.hnsw_search_exceptions_cnt = 6;
   stats.hnsw_create_exceptions_cnt = 7;
+  stats.hnsw_duplicate_label_on_load_cnt = 29;
   stats.flat_add_exceptions_cnt = 8;
   stats.flat_remove_exceptions_cnt = 9;
   stats.flat_modify_exceptions_cnt = 10;
@@ -474,7 +475,8 @@ TEST_F(ValkeySearchTest, Info) {
       "3\nhnswlib\nhnsw_add_exceptions_count: 3\nhnsw_remove_exceptions_count: "
       "4\nhnsw_modify_exceptions_count: 5\nhnsw_search_exceptions_count: "
       "6\nhnsw_create_exceptions_count: "
-      "7\nlatency\nhnsw_vector_index_search_latency_usec: "
+      "7\nhnsw_duplicate_label_on_load_count: "
+      "29\nlatency\nhnsw_vector_index_search_latency_usec: "
       "'p50=100139.007,p99=200278.015,p99.9=200278.015'"
       "\ncoordinator\ncoordinator_server_get_global_metadata_success_count: "
       "26\ncoordinator_server_get_global_metadata_failure_count: "

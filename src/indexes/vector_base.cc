@@ -337,6 +337,23 @@ char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
   return (char *)interned_vector->Str().data();
 }
 
+char *VectorBase::StageVector(uint64_t slot, char *vector, size_t len) {
+  auto interned_vector = StringInternStore::Intern(
+      absl::string_view(vector, len), vector_allocator_.get());
+  char *data = (char *)interned_vector->Str().data();
+  staged_vectors_[slot] = std::move(interned_vector);
+  return data;
+}
+
+void VectorBase::CommitStagedVector(uint64_t slot, uint64_t label) {
+  auto it = staged_vectors_.find(slot);
+  CHECK(it != staged_vectors_.end());
+  TrackVector(label, it->second);
+  staged_vectors_.erase(it);
+}
+
+void VectorBase::ClearStagedVectors() { staged_vectors_.clear(); }
+
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
                                               float magnitude,
                                               const InternedStringPtr &vector) {

@@ -987,6 +987,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
+    // Stage each slot's vector keyed by slot (not label) so duplicate labels
+    // don't overwrite and free each other; final labels are committed below.
+    labeltype max_label = 0;
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       loadCheck(chunk->size() ==
@@ -996,8 +999,9 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       labeltype id;
       memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
+      max_label = std::max(max_label, id);
       *(char **)((*data_level0_memory_)[i] + offsetData_) =
-          vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
+          vector_tracker->StageVector(i, chunk->data() + size_links_level0_,
                                       vector_size_);
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
@@ -1055,6 +1059,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
           dup_it->second = i;
         }
       }
+
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
       loadCheck(size_chunk->size() == sizeof(size_t),
@@ -1090,6 +1095,22 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
       }
     }
+
+    // Commit staged vectors under final labels. The keeper of each label (its
+    // live slot, else the first tombstone) keeps that label; any other slot
+    // sharing it is a duplicate and gets a fresh synthetic label so every slot
+    // ends up with a unique label and its own tracked-vector entry.
+    for (size_t i = 0; i < cur_element_count_; i++) {
+      labeltype label = getExternalLabel(i);
+      auto it = label_lookup_.find(label);
+      if (it == label_lookup_.end() || it->second != i) {
+        label = ++max_label;
+        setExternalLabel(i, label);
+        label_lookup_[label] = i;
+      }
+      vector_tracker->CommitStagedVector(i, label);
+    }
+    vector_tracker->ClearStagedVectors();
 
     // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
     // The entry point must be one of the tallest nodes (proven invariant:

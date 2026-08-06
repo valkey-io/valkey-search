@@ -181,6 +181,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   virtual size_t GetDataTypeSize() const = 0;
   int GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
+  char* StageVector(uint64_t slot, char* vector, size_t len) override;
+  void CommitStagedVector(uint64_t slot, uint64_t label) override;
+  void ClearStagedVectors() override;
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }
@@ -279,6 +282,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   ComputeDistanceFromRecord(const InternedStringPtr& key,
                             absl::string_view query) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
+  // Owning refs for duplicate-label slots held across the two-phase load; keyed
+  // by slot. Populated by StageVector, drained by CommitStagedVector.
+  absl::flat_hash_map<uint64_t, InternedStringPtr> staged_vectors_;
 };
 
 class PrefilterEvaluator : public query::Evaluator {

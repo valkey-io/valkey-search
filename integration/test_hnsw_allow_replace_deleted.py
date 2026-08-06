@@ -210,7 +210,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
     SURVIVOR_VEC = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
 
     # TODO: Make functionality common once https://github.com/valkey-io/valkey-search/pull/1172 is merged
-    def _start_server(self, test_name, search_module_args=""):
+    def _start_server(self, test_name, search_module_args="", extra_lines=None):
         server_path = os.getenv("VALKEY_SERVER_PATH")
         testdir = f"{LOGS_DIR}/{test_name}"
         port = self.get_bind_port()
@@ -228,7 +228,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
             f"port {port}",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"loadmodule {os.getenv('MODULE_PATH')} {search_module_args}",
-        ]
+        ] + (extra_lines or [])
         conf_file = os.path.join(testdir, f"valkey_{port}.conf")
         with open(conf_file, "w") as f:
             f.write("\n".join(lines) + "\n")
@@ -294,3 +294,50 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         )
         assert search_result[0] == 0, \
             f"Expected doc:1 to be deleted, got {search_result[0]} results"
+
+    def test_reuse_dup_tombstone_then_delete_survivor(self):
+        # With allow-replace-deleted on, a fresh insert pops the dup tombstone
+        # from deleted_elements. Its synthetic label makes the reuse branch's
+        # erase a self-reference, so the survivor's mapping stays intact and it
+        # remains deletable (no ghost doc).
+        server, client, logfile = self._start_server(
+            "hnsw_dup_label_reuse", search_module_args="--debug-mode yes",
+            extra_lines=["search.hnsw-allow-replace-deleted yes"])
+        client.config_set("search.info-developer-visible", "yes")
+
+        hnsw_index = Index(
+            "idx",
+            [Vector("vector", 4, type="HNSW", distance="L2")],
+            prefixes=["doc:"]
+        )
+        waiters.wait_for_true(
+            lambda: hnsw_index.backfill_complete(client), timeout=10
+        )
+
+        # Confirm the fixture actually carried a duplicate label into this load.
+        assert int(client.info("SEARCH").get(
+            "search_hnsw_duplicate_label_on_load_count", 0)) == 1
+
+        # Fresh key reuses the dup tombstone's slot.
+        new_vec = struct.pack('<4f', 1.0, 2.0, 3.0, 4.0)
+        client.hset("doc:2", mapping={"vector": new_vec})
+        waiters.wait_for_equal(lambda: hnsw_index.info(client).num_docs, 2)
+
+        # The survivor's RETURN bytes must still be its own, not freed heap.
+        search_result = client.execute_command(
+            "FT.SEARCH", "idx",
+            "*=>[KNN 1 @vector $q]",
+            "PARAMS", "2", "q", self.SURVIVOR_VEC,
+            "RETURN", "1", "vector",
+        )
+        returned_fields = search_result[2]
+        vector_value = returned_fields[returned_fields.index(b"vector") + 1]
+        assert vector_value == self.SURVIVOR_VEC, \
+            f"Expected survivor to carry its vector, got {vector_value!r}"
+
+        # Both docs delete cleanly with no remove exceptions.
+        client.delete("doc:1")
+        client.delete("doc:2")
+        waiters.wait_for_equal(lambda: hnsw_index.info(client).num_docs, 0)
+        assert int(client.info("SEARCH").get(
+            "search_hnsw_remove_exceptions_count", 0)) == 0

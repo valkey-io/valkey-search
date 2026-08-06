@@ -831,16 +831,35 @@ class ChunkStream : public hnswlib::InputStream, public hnswlib::OutputStream {
 };
 
 // VectorTracker that copies each vector into stable storage and hands back a
-// pointer to it (LoadIndex stores that pointer in the level-0 record).
+// pointer to it (LoadIndex stores that pointer in the level-0 record). Mirrors
+// VectorBase's two-phase load: StageVector holds bytes by slot, then
+// CommitStagedVector records them under the final label for by-label lookup.
 class BufTracker : public hnswlib::VectorTracker {
  public:
   char *TrackVector(uint64_t /*id*/, char *vector, size_t len) override {
     storage_.emplace_back(vector, len);
     return storage_.back().data();
   }
+  char *StageVector(uint64_t slot, char *vector, size_t len) override {
+    storage_.emplace_back(vector, len);
+    staged_[slot] = &storage_.back();
+    return storage_.back().data();
+  }
+  void CommitStagedVector(uint64_t slot, uint64_t label) override {
+    by_label_[label] = staged_.at(slot);
+  }
+  void ClearStagedVectors() override { staged_.clear(); }
+
+  // Bytes committed under `label`, or nullptr if none.
+  const std::string *GetByLabel(uint64_t label) const {
+    auto it = by_label_.find(label);
+    return it == by_label_.end() ? nullptr : it->second;
+  }
 
  private:
   std::deque<std::string> storage_;
+  absl::flat_hash_map<uint64_t, std::string *> staged_;
+  absl::flat_hash_map<uint64_t, std::string *> by_label_;
 };
 
 // On-disk geometry for kM / kDimensions, used to locate bytes for mutation.
@@ -997,6 +1016,69 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   EXPECT_EQ(algo.label_lookup_[1], 1u);
   EXPECT_TRUE(algo.isMarkedDeleted(0));
   EXPECT_FALSE(algo.isMarkedDeleted(1));
+}
+
+namespace {
+// Build a 2-slot golden where a live slot and a tombstoned slot share a label,
+// as legacy RDBs can. `tombstone_slot` is marked deleted; its stored label is
+// then overwritten to collide with the other (live) slot's label.
+ChunkStream DuplicateLabelGolden(size_t tombstone_slot) {
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space, kGoldenMax, kM, kEFConstruction,
+                                       /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/true);
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  algo.addPoint(vectors[0].data(), /*label=*/0);
+  algo.addPoint(vectors[1].data(), /*label=*/1);
+  algo.markDelete(tombstone_slot);
+  ChunkStream golden;
+  EXPECT_TRUE(algo.SaveIndex(golden).ok());
+  size_t live_slot = 1 - tombstone_slot;
+  PokeAt<hnswlib::labeltype>(&golden.chunks[1 + tombstone_slot], kLabelOff,
+                             /*live label=*/live_slot);
+  return golden;
+}
+}  // namespace
+
+// Loading a dup-label RDB must yield a 1:1 mapping: the live slot keeps the real
+// label, the tombstone is quarantined under a fresh synthetic label, and each
+// slot's tracked bytes are independent (no intern-race free). Covers both slot
+// orderings (tombstone before/after its live twin).
+TEST_F(VectorIndexTest, LoadDuplicateLabelQuarantinesTombstone) {
+  for (size_t tombstone_slot : {size_t{0}, size_t{1}}) {
+    size_t live_slot = 1 - tombstone_slot;
+    auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+    auto golden = DuplicateLabelGolden(tombstone_slot);
+
+    hnswlib::L2Space space{kDimensions};
+    hnswlib::HierarchicalNSW<float> algo(&space);
+    algo.allow_replace_deleted_ = true;
+    BufTracker tracker;
+    golden.Rewind();
+    VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, &tracker, kM,
+                                   /*validate=*/true));
+
+    // Real label stays on the live slot; the tombstone gets a distinct label.
+    EXPECT_EQ(algo.label_lookup_.size(), 2u);
+    EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
+    hnswlib::labeltype synthetic = algo.getExternalLabel(tombstone_slot);
+    // Synthetic labels come from above every real label so they can't collide.
+    EXPECT_GT(synthetic, static_cast<hnswlib::labeltype>(1));
+    EXPECT_EQ(algo.label_lookup_[synthetic], tombstone_slot);
+
+    // Each slot's bytes are tracked independently and match what was written.
+    const std::string *live_bytes = tracker.GetByLabel(live_slot);
+    const std::string *tomb_bytes = tracker.GetByLabel(synthetic);
+    ASSERT_NE(live_bytes, nullptr);
+    ASSERT_NE(tomb_bytes, nullptr);
+    EXPECT_EQ(*live_bytes, VectorToStr(vectors[live_slot]));
+    EXPECT_EQ(*tomb_bytes, VectorToStr(vectors[tombstone_slot]));
+
+    // Reusing the tombstone for a fresh insert must not disturb the live entry.
+    algo.addPoint(vectors[0].data(), /*label=*/99, /*replace_deleted=*/true);
+    EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
+    EXPECT_FALSE(algo.isMarkedDeleted(live_slot));
+  }
 }
 
 // ---- Happy path ----------------------------------------------------------

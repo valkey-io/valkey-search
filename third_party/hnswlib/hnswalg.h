@@ -1100,17 +1100,19 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     // live slot, else the first tombstone) keeps that label; any other slot
     // sharing it is a duplicate and gets a fresh synthetic label so every slot
     // ends up with a unique label and its own tracked-vector entry.
-    for (size_t i = 0; i < cur_element_count_; i++) {
-      labeltype label = getExternalLabel(i);
-      auto it = label_lookup_.find(label);
-      if (it == label_lookup_.end() || it->second != i) {
-        label = ++max_label;
-        setExternalLabel(i, label);
-        label_lookup_[label] = i;
+    if (cur_element_count_ > 0) {
+      for (size_t i = 0; i < cur_element_count_; i++) {
+        labeltype label = getExternalLabel(i);
+        auto it = label_lookup_.find(label);
+        if (it == label_lookup_.end() || it->second != i) {
+          label = ++max_label;
+          setExternalLabel(i, label);
+          label_lookup_[label] = i;
+        }
+        vector_tracker->CommitStagedVector(i, label);
       }
-      vector_tracker->CommitStagedVector(i, label);
+      vector_tracker->ClearStagedVectors();
     }
-    vector_tracker->ClearStagedVectors();
 
     // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
     // The entry point must be one of the tallest nodes (proven invariant:

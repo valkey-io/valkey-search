@@ -52,8 +52,8 @@ tested** — that is the remaining work.
   overwrites on normal modifies — so a "not already present" assert would be
   wrong. The once-per-label invariant is already structural (see the commit
   loop + existing `CHECK(it != staged_.end())`).
-- The unit test asserts `synthetic > 1` because the golden's max real label is 1;
-  if the fixture changes, update that bound to "> max real label".
+- The unit test asserts `synthetic > live_slot` (the golden's only real label);
+  keep this bound as "> max real label" if the fixture changes.
 - `default` for `search.hnsw-allow-replace-deleted` is **false**. The original
   `TestHNSWDuplicateLabelRDBLoad` never enables it, so Issue 2 is only actually
   triggered by the new test, which sets it to `yes` and forces a tombstone pop.

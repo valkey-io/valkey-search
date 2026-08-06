@@ -1062,8 +1062,9 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelQuarantinesTombstone) {
     EXPECT_EQ(algo.label_lookup_.size(), 2u);
     EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
     hnswlib::labeltype synthetic = algo.getExternalLabel(tombstone_slot);
-    // Synthetic labels come from above every real label so they can't collide.
-    EXPECT_GT(synthetic, static_cast<hnswlib::labeltype>(1));
+    // Synthetic labels come from above every real label (here the only real
+    // label is live_slot) so they can't collide.
+    EXPECT_GT(synthetic, static_cast<hnswlib::labeltype>(live_slot));
     EXPECT_EQ(algo.label_lookup_[synthetic], tombstone_slot);
 
     // Each slot's bytes are tracked independently and match what was written.

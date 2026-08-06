@@ -6,6 +6,58 @@ loadable and prevents new duplicates from being created on modifies. This
 document covers the two issues that remain once such an RDB is loaded and the
 fix that resolves both.
 
+## Implementation status (2026-08-06)
+
+The fix described below is **implemented and committed**, but **not yet built or
+tested** — that is the remaining work.
+
+- **Branch:** `brennan-hnsw-dup-label-load-follow-up`, pushed to the fork
+  `bcathcart` remote (`https://github.com/BCathcart/valkey-search`). Commit
+  `d35d2ee` ("Fix HNSW duplicate-label state at load time"), signed off.
+- **Files changed (7):**
+  - `third_party/hnswlib/iostream.h` — added `StageVector` /
+    `CommitStagedVector` / `ClearStagedVectors` to `VectorTracker`.
+  - `third_party/hnswlib/hnswalg.h` — `LoadIndex`: phase-1 streaming now calls
+    `StageVector` and accumulates `max_label`; new phase-2 commit loop after
+    #1283's (untouched) keeper-selection loop.
+  - `src/indexes/vector_base.{h,cc}` — implemented the three methods; added
+    `staged_vectors_` (`absl::flat_hash_map<uint64_t, InternedStringPtr>`).
+  - `testing/vector_test.cc` — `BufTracker` updated for the new interface;
+    added `LoadDuplicateLabelQuarantinesTombstone` (both slot orderings).
+  - `integration/test_hnsw_allow_replace_deleted.py` — added
+    `test_reuse_dup_tombstone_then_delete_survivor`; `_start_server` gained an
+    `extra_lines` param.
+  - `docs/hnsw-duplicate-label-follow-up.md` — this doc.
+- **Not committed:** a pre-existing, unrelated `.vscode/settings.json` change is
+  left unstaged in the working tree on purpose.
+
+### Remaining work
+
+1. **Build.** The `.build-release` dir is mid-reconfigure — an earlier
+   `./build.sh` wiped `build.ninja` and re-fetched the grpc submodule. Use
+   `./build.sh --configure` (network needed for grpc fetch), not a bare rebuild.
+2. **Run the C++ unit test:**
+   `./build.sh --run-tests=vector_test` (or the whole suite). New case:
+   `VectorIndexTest.LoadDuplicateLabelQuarantinesTombstone`.
+3. **Run the integration test:**
+   `./build.sh --run-integration-tests=test_hnsw_allow_replace_deleted`. New
+   case: `TestHNSWDuplicateLabelRDBLoad::test_reuse_dup_tombstone_then_delete_survivor`.
+4. Fix any compile/test fallout, then open a PR against `valkey-io/valkey-search`.
+
+### Watch-outs when resuming
+
+- **DCHECK in `CommitStagedVector` was intentionally skipped.** It lives on
+  `VectorBase` but `tracked_vectors_` is private to `VectorHNSW`/`VectorFlat`,
+  and it commits through the virtual `TrackVector(label, ptr)` which legitimately
+  overwrites on normal modifies — so a "not already present" assert would be
+  wrong. The once-per-label invariant is already structural (see the commit
+  loop + existing `CHECK(it != staged_.end())`).
+- The unit test asserts `synthetic > 1` because the golden's max real label is 1;
+  if the fixture changes, update that bound to "> max real label".
+- `default` for `search.hnsw-allow-replace-deleted` is **false**. The original
+  `TestHNSWDuplicateLabelRDBLoad` never enables it, so Issue 2 is only actually
+  triggered by the new test, which sets it to `yes` and forces a tombstone pop.
+
 ## Background
 
 `allow-replace-deleted` lets HNSW recycle tombstoned slots on insert. Prior to
@@ -251,25 +303,35 @@ tombstones to reclaim space; not required for correctness.)
 
 ## Test coverage
 
-Extend `integration/test_hnsw_allow_replace_deleted.py`:
+Both tests below are **written and committed** (see status section); they still
+need to be built and run.
+
+`integration/test_hnsw_allow_replace_deleted.py` —
+`TestHNSWDuplicateLabelRDBLoad::test_reuse_dup_tombstone_then_delete_survivor`
+(with `search.hnsw-allow-replace-deleted yes`, the setting that actually
+triggers Issue 2):
 
 1. Load the existing `hnsw_duplicate_label.rdb` fixture.
-2. `HSET doc:2 vector <bytes>` (fresh key, forces `deleted_elements` reuse).
-3. Assert `hnsw_remove_exceptions_count == 0` after `DEL doc:1`.
-4. Assert `FT.SEARCH ... RETURN vector` on the live doc returns the same bytes
-   originally written (byte-for-byte equality against the source vector).
-5. Assert `num_docs` drops to 0 after `DEL doc:1` and `DEL doc:2`.
+2. Assert `hnsw_duplicate_label_on_load_count == 1` (fixture really carried a
+   dup into this load).
+3. `HSET doc:2 vector <bytes>` (fresh key, forces `deleted_elements` reuse of
+   the dup tombstone).
+4. Assert `FT.SEARCH ... RETURN vector` on the survivor returns its own bytes
+   (not freed heap).
+5. Assert `num_docs` drops to 0 and `hnsw_remove_exceptions_count == 0` after
+   `DEL doc:1` and `DEL doc:2`.
 
-Add a C++ unit test in `testing/vector_test.cc` covering the `LoadIndex` path
-directly:
+`testing/vector_test.cc` —
+`VectorIndexTest.LoadDuplicateLabelQuarantinesTombstone`, exercising `LoadIndex`
+directly for **both** slot orderings (tombstone-before-live and
+live-before-tombstone):
 
-- Build a golden `ChunkStream` with two slots carrying the same label
-  (one tombstoned) and **distinct** bytes.
+- Build a golden `ChunkStream` (`DuplicateLabelGolden`) with two slots carrying
+  the same label (one tombstoned) and **distinct** bytes.
 - Load with `allow_replace_deleted = true`.
-- Verify: `label_lookup_.size() == 2`, both entries have distinct keys, the live
-  entry maps to the live slot, the dup entry maps to the tombstoned slot with a
-  synthetic label, and each slot's `data_ptr` reads back its own original bytes
-  (no cross-contamination, no freed read).
+- Verify: `label_lookup_.size() == 2`, distinct keys, the live entry maps to the
+  live slot, the dup entry maps to the tombstoned slot with a synthetic label
+  (`> 1`), and each slot's tracked bytes match what was written (no
+  cross-contamination, no freed read).
 - Call `addPoint` for a fresh label with `replace_deleted=true`; verify the live
-  entry's `label_lookup_` mapping is intact and its data pointer still reads back
-  the original bytes.
+  entry's `label_lookup_` mapping is intact.

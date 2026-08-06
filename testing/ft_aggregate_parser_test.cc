@@ -425,7 +425,7 @@ TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
 // Helper: build a 3-float (12-byte) blob string for dimension-3 vector indexes.
 static std::string MakeBlob3() {
   std::vector<float> v = {0.1f, 0.2f, 0.3f};
-  return std::string(reinterpret_cast<const char*>(v.data()),
+  return std::string(reinterpret_cast<const char *>(v.data()),
                      v.size() * sizeof(float));
 }
 
@@ -448,17 +448,16 @@ class ParseCommandRegistrationTest : public ValkeySearchTest {
     auto flat = std::make_unique<data_model::FlatAlgorithm>();
     flat->set_block_size(100);
     proto.set_allocated_flat_algorithm(flat.release());
-    auto idx =
-        indexes::VectorFlat<float>::Create(
-            proto, std::string(vec_alias) + "_id",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
-            .value();
+    auto idx = indexes::VectorFlat<float>::Create(
+                   proto, std::string(vec_alias) + "_id",
+                   data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                   .value();
     VMSDK_EXPECT_OK(schema->AddIndex(vec_alias, vec_alias, idx));
     return schema;
   }
 
   // Runs ParseCommand on `params` and returns whether it succeeded.
-  bool RunParseCommand(AggregateParameters& params) {
+  bool RunParseCommand(AggregateParameters &params) {
     vmsdk::ArgsIterator itr(nullptr, 0);
     auto status = params.ParseCommand(itr);
     if (!status.ok()) {

@@ -1389,9 +1389,8 @@ static UnitTestSearchParameters MakeParamsWithVrPredicates(
     std::unique_ptr<query::Predicate> root) {
   UnitTestSearchParameters params;
   params.filter_parse_results.root_predicate = std::move(root);
-  params.num_vr_predicates =
-      query::AssignVectorRangeScoreSlots(
-          params.filter_parse_results.root_predicate.get());
+  params.num_vr_predicates = query::AssignVectorRangeScoreSlots(
+      params.filter_parse_results.root_predicate.get());
   return params;
 }
 
@@ -1419,8 +1418,8 @@ TEST_F(CollectVrScoreFieldsTest, OneVrPredicateNoExplicitAlias) {
 // One VR predicate with explicit alias → ["my_dist"].
 TEST_F(CollectVrScoreFieldsTest, OneVrPredicateWithExplicitAlias) {
   auto vr = std::make_unique<query::VectorRangePredicate>(
-      "vec1", "vec1_id", 1.0, "blob",
-      std::optional<std::string>("my_dist"), std::nullopt);
+      "vec1", "vec1_id", 1.0, "blob", std::optional<std::string>("my_dist"),
+      std::nullopt);
   auto params = MakeParamsWithVrPredicates(std::move(vr));
 
   auto fields = query::CollectVrScoreFields(params);
@@ -1431,11 +1430,11 @@ TEST_F(CollectVrScoreFieldsTest, OneVrPredicateWithExplicitAlias) {
 // Two VR predicates with explicit aliases in slot order → ["d0", "d1"].
 TEST_F(CollectVrScoreFieldsTest, TwoVrPredicatesWithExplicitAliases) {
   auto vr0 = std::make_unique<query::VectorRangePredicate>(
-      "vec0", "vec0_id", 1.0, "blob0",
-      std::optional<std::string>("d0"), std::nullopt);
+      "vec0", "vec0_id", 1.0, "blob0", std::optional<std::string>("d0"),
+      std::nullopt);
   auto vr1 = std::make_unique<query::VectorRangePredicate>(
-      "vec1", "vec1_id", 2.0, "blob1",
-      std::optional<std::string>("d1"), std::nullopt);
+      "vec1", "vec1_id", 2.0, "blob1", std::optional<std::string>("d1"),
+      std::nullopt);
 
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(vr0));
@@ -1458,8 +1457,8 @@ TEST_F(CollectVrScoreFieldsTest, TwoVrPredicatesMixedAliases) {
   auto vr0 = std::make_unique<query::VectorRangePredicate>(
       "vec1", "vec1_id", 1.0, "blob1", std::nullopt, std::nullopt);
   auto vr1 = std::make_unique<query::VectorRangePredicate>(
-      "vec2", "vec2_id", 2.0, "blob2",
-      std::optional<std::string>("d1"), std::nullopt);
+      "vec2", "vec2_id", 2.0, "blob2", std::optional<std::string>("d1"),
+      std::nullopt);
 
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(vr0));

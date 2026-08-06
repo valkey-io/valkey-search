@@ -377,8 +377,7 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
   // Build an AggregateParameters with __key at 0, score_as at 1, and the
   // given vr field names registered starting at index 2.
   std::unique_ptr<AggregateParameters> MakeParams(
-      absl::string_view score_name,
-      const std::vector<std::string>& vr_names) {
+      absl::string_view score_name, const std::vector<std::string>& vr_names) {
     auto params = std::make_unique<AggregateParameters>(0);
 
     auto schema = CreateIndexSchema("test_schema", &fake_ctx_).value();

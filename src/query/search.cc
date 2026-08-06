@@ -307,7 +307,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
 }
 
 size_t EvaluateFilterAsPrimary(
-    const SearchParameters& parameters, const Predicate *predicate,
+    const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate) {
   const QueryOperations query_operations =
@@ -490,7 +490,7 @@ CalcBestMatchingPrefilteredKeys(
   auto results_appender =
       [&results, &parameters, vector_index, query](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char*> &top_keys) -> bool {
+          absl::flat_hash_set<const char *> &top_keys) -> bool {
     return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
                                            top_keys);
   };
@@ -626,8 +626,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
 }
 
 // Forward declaration — defined after ForEachVectorRangePredicate below.
-static void PopulateVrScoresForNeighbors(std::vector<indexes::Neighbor>&,
-                                         const SearchParameters&);
+static void PopulateVrScoresForNeighbors(std::vector<indexes::Neighbor> &,
+                                         const SearchParameters &);
 
 // Handle standalone Vector Range queries (no KNN). For the common case of a
 // single VectorRange predicate with no other filters, delegates to the vector
@@ -636,7 +636,7 @@ static void PopulateVrScoresForNeighbors(std::vector<indexes::Neighbor>&,
 // queries (AND/OR of multiple predicates that include a VR predicate), falls
 // back to the universal-scan path so that the full predicate tree is evaluated.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
-    const SearchParameters& parameters) {
+    const SearchParameters &parameters) {
   // Fast path: single standalone VectorRange predicate with no other filters.
   // This lets the HNSW index do graph-traversal stopping at the epsilon
   // boundary instead of scanning every key.
@@ -644,12 +644,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       parameters.filter_parse_results.root_predicate != nullptr &&
       parameters.filter_parse_results.root_predicate->GetType() ==
           PredicateType::kVectorRange) {
-    const auto* vr_pred = static_cast<const VectorRangePredicate*>(
+    const auto *vr_pred = static_cast<const VectorRangePredicate *>(
         parameters.filter_parse_results.root_predicate.get());
     auto index_result = parameters.index_schema->GetIndex(vr_pred->GetAlias());
     if (index_result.ok()) {
-      auto* vector_index =
-          dynamic_cast<indexes::VectorBase*>(index_result.value().get());
+      auto *vector_index =
+          dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (vector_index != nullptr) {
         // Default epsilon of 0.01 matches Redis behavior.
         constexpr double kDefaultVectorRangeEpsilon = 0.01;
@@ -663,7 +663,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         // Populate vr_scores[slot] so serialization reads from the same
         // location as the fallback scan path.
         const size_t slot = vr_pred->GetScoreSlot();
-        for (auto& n : raw_neighbors) {
+        for (auto &n : raw_neighbors) {
           n.vr_scores.assign(parameters.num_vr_predicates, 0.0f);
           if (slot < n.vr_scores.size()) {
             n.vr_scores[slot] = n.distance;
@@ -671,7 +671,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         }
         // Sort by ascending distance, with key as stable secondary.
         std::sort(raw_neighbors.begin(), raw_neighbors.end(),
-                  [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+                  [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
                     if (a.distance != b.distance)
                       return a.distance < b.distance;
                     return a.external_id->Str() < b.external_id->Str();
@@ -706,10 +706,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // Deduplication setup
   bool needs_dedup =
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
-  absl::flat_hash_set<const char*> result_keys;
+  absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
-    result_keys.reserve(
-        std::min(qualified_entries, static_cast<size_t>(5000)));
+    result_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
   }
 
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
@@ -721,12 +720,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     entries_fetchers.pop();
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
-      const auto& key = **iterator;
+      const auto &key = **iterator;
       if (needs_dedup && result_keys.contains(key->Str().data())) {
         iterator->Next();
         continue;
       }
-      const valkey_search::indexes::text::TextIndex* text_index =
+      const valkey_search::indexes::text::TextIndex *text_index =
           text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
                             : nullptr;
       indexes::PrefilterEvaluator key_evaluator(
@@ -775,7 +774,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     // Re-sort using slot-0 distance (primary sort key) now that vr_scores
     // has been fully populated.
     std::sort(neighbors.begin(), neighbors.end(),
-              [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+              [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
                 float da = a.vr_scores.empty() ? a.distance : a.vr_scores[0];
                 float db = b.vr_scores.empty() ? b.distance : b.vr_scores[0];
                 if (da != db) return da < db;
@@ -788,7 +787,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // with equal distance (e.g. negate queries where all items have distance 0)
   // are returned in lexicographic key order — matching Redis default ordering.
   std::sort(neighbors.begin(), neighbors.end(),
-            [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+            [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
               if (a.distance != b.distance) return a.distance < b.distance;
               return a.external_id->Str() < b.external_id->Str();
             });
@@ -821,7 +820,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   auto results_appender =
       [&borrowed, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char*> &top_keys) -> bool {
+          absl::flat_hash_set<const char *> &top_keys) -> bool {
     if (borrowed.size() >= max_keys) {
       fetch_limited = true;
       return false;
@@ -952,7 +951,7 @@ SearchResult::SearchResult(size_t total_count,
 
 SearchResult::SearchResult(size_t total_count,
                            std::vector<indexes::BorrowedNeighbor> borrowed,
-                           const SearchParameters& parameters,
+                           const SearchParameters &parameters,
                            bool trim_offset_in_background)
     : total_count(total_count),
       is_limited_with_buffer(false),
@@ -1147,25 +1146,25 @@ void IncrementQueryOperationMetrics(QueryOperations query_operations) {
 // index (0, 1, 2...) in DFS order, and return the total count of VR predicates
 // found. Slot assignment is local to the predicate, eliminating the need for
 // any side-channel to retrieve the distance after evaluation.
-static void AssignVrSlotsImpl(Predicate* predicate, size_t& next_slot) {
+static void AssignVrSlotsImpl(Predicate *predicate, size_t &next_slot) {
   if (!predicate) return;
   switch (predicate->GetType()) {
     case PredicateType::kVectorRange: {
-      auto* vr = static_cast<VectorRangePredicate*>(predicate);
+      auto *vr = static_cast<VectorRangePredicate *>(predicate);
       vr->SetScoreSlot(next_slot++);
       break;
     }
     case PredicateType::kComposedAnd:
     case PredicateType::kComposedOr: {
-      auto* composed = static_cast<ComposedPredicate*>(predicate);
-      for (const auto& child : composed->GetChildren()) {
+      auto *composed = static_cast<ComposedPredicate *>(predicate);
+      for (const auto &child : composed->GetChildren()) {
         AssignVrSlotsImpl(child.get(), next_slot);
       }
       break;
     }
     case PredicateType::kNegate: {
-      auto* negate = static_cast<NegatePredicate*>(predicate);
-      AssignVrSlotsImpl(const_cast<Predicate*>(negate->GetPredicate()),
+      auto *negate = static_cast<NegatePredicate *>(predicate);
+      AssignVrSlotsImpl(const_cast<Predicate *>(negate->GetPredicate()),
                         next_slot);
       break;
     }
@@ -1176,7 +1175,7 @@ static void AssignVrSlotsImpl(Predicate* predicate, size_t& next_slot) {
 
 // Assign score slots to all VectorRangePredicate nodes in the tree and return
 // the total number of VR predicates (= required vr_scores vector size).
-size_t AssignVectorRangeScoreSlots(Predicate* predicate) {
+size_t AssignVectorRangeScoreSlots(Predicate *predicate) {
   size_t next_slot = 0;
   AssignVrSlotsImpl(predicate, next_slot);
   return next_slot;
@@ -1185,7 +1184,7 @@ size_t AssignVectorRangeScoreSlots(Predicate* predicate) {
 // Apply fn to every VectorRangePredicate node in the predicate tree (DFS).
 // Returns the first non-OK status from fn, or OkStatus.
 static absl::Status ForEachVectorRangePredicate(
-    Predicate* predicate,
+    Predicate *predicate,
     absl::FunctionRef<absl::Status(VectorRangePredicate *)> fn) {
   if (!predicate) return absl::OkStatus();
   switch (predicate->GetType()) {
@@ -1193,16 +1192,16 @@ static absl::Status ForEachVectorRangePredicate(
       return fn(static_cast<VectorRangePredicate *>(predicate));
     case PredicateType::kComposedAnd:
     case PredicateType::kComposedOr: {
-      auto* composed = static_cast<ComposedPredicate *>(predicate);
-      for (const auto& child : composed->GetChildren()) {
+      auto *composed = static_cast<ComposedPredicate *>(predicate);
+      for (const auto &child : composed->GetChildren()) {
         VMSDK_RETURN_IF_ERROR(ForEachVectorRangePredicate(child.get(), fn));
       }
       return absl::OkStatus();
     }
     case PredicateType::kNegate: {
-      auto* negate = static_cast<NegatePredicate *>(predicate);
+      auto *negate = static_cast<NegatePredicate *>(predicate);
       return ForEachVectorRangePredicate(
-          const_cast<Predicate*>(negate->GetPredicate()), fn);
+          const_cast<Predicate *>(negate->GetPredicate()), fn);
     }
     default:
       return absl::OkStatus();
@@ -1245,18 +1244,18 @@ std::string GetVrScoreFieldName(const SearchParameters &parameters) {
 // Used as a post-pass when the main eval path cannot propagate multiple VR
 // distances (e.g. AND of two VR predicates, or KNN+VR filter).
 static void PopulateVrScoresForNeighbors(
-    std::vector<indexes::Neighbor>& neighbors,
-    const SearchParameters& parameters) {
+    std::vector<indexes::Neighbor> &neighbors,
+    const SearchParameters &parameters) {
   if (parameters.num_vr_predicates == 0 ||
       !parameters.filter_parse_results.root_predicate) {
     return;
   }
   // Collect all VR predicates in slot order.
-  std::vector<VectorRangePredicate*> vr_preds(parameters.num_vr_predicates,
-                                              nullptr);
+  std::vector<VectorRangePredicate *> vr_preds(parameters.num_vr_predicates,
+                                               nullptr);
   ForEachVectorRangePredicate(
       parameters.filter_parse_results.root_predicate.get(),
-      [&](VectorRangePredicate* vr) -> absl::Status {
+      [&](VectorRangePredicate *vr) -> absl::Status {
         size_t slot = vr->GetScoreSlot();
         if (slot < vr_preds.size()) {
           vr_preds[slot] = vr;
@@ -1267,21 +1266,20 @@ static void PopulateVrScoresForNeighbors(
 
   // For each neighbor, compute the distance from each VR predicate's query
   // vector to the neighbor's stored vector and store in vr_scores[slot].
-  for (auto& n : neighbors) {
+  for (auto &n : neighbors) {
     if (n.vr_scores.size() < parameters.num_vr_predicates) {
       n.vr_scores.assign(parameters.num_vr_predicates, 0.0f);
     }
     for (size_t slot = 0; slot < vr_preds.size(); ++slot) {
-      VectorRangePredicate* vr = vr_preds[slot];
+      VectorRangePredicate *vr = vr_preds[slot];
       if (!vr) continue;
       auto index_result = parameters.index_schema->GetIndex(vr->GetAlias());
       if (!index_result.ok()) continue;
-      auto* vector_index =
-          dynamic_cast<indexes::VectorBase*>(index_result.value().get());
+      auto *vector_index =
+          dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (!vector_index) continue;
-      auto dist_result =
-          vector_index->ComputeDistanceFromRecord(n.external_id,
-                                                  vr->GetQueryVector());
+      auto dist_result = vector_index->ComputeDistanceFromRecord(
+          n.external_id, vr->GetQueryVector());
       if (!dist_result.ok()) continue;
       n.vr_scores[slot] = dist_result->first;
     }
@@ -1537,7 +1535,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
     if (num_vr_predicates > 0) {
       auto validate = ForEachVectorRangePredicate(
           filter_parse_results.root_predicate.get(),
-          [&](VectorRangePredicate* vr_pred) -> absl::Status {
+          [&](VectorRangePredicate *vr_pred) -> absl::Status {
             VMSDK_ASSIGN_OR_RETURN(
                 auto index, index_schema->GetIndex(vr_pred->GetAlias()),
                 _.SetPrepend() << "Vector range field validation failed: ");
@@ -1596,10 +1594,10 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
 }
 
 absl::Status PostParseVectorRangeParameters(
-    query::SearchParameters& parameters) {
+    query::SearchParameters &parameters) {
   return ForEachVectorRangePredicate(
       parameters.filter_parse_results.root_predicate.get(),
-      [&](VectorRangePredicate* vr_pred) -> absl::Status {
+      [&](VectorRangePredicate *vr_pred) -> absl::Status {
         // Resolve the radius $param if the radius was specified as a parameter.
         if (!vr_pred->GetRadiusParamName().empty()) {
           auto radius_param_key =
@@ -1630,7 +1628,7 @@ absl::Status PostParseVectorRangeParameters(
         // Validate vector blob dimensions match the index.
         VMSDK_ASSIGN_OR_RETURN(
             auto index, parameters.index_schema->GetIndex(vr_pred->GetAlias()));
-        auto* vector_index = dynamic_cast<indexes::VectorBase*>(index.get());
+        auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
         if (static_cast<int>(resolved_blob.size()) !=
             vector_index->GetVectorDataSize()) {
           return absl::InvalidArgumentError(

@@ -73,10 +73,10 @@ static auto max_search_result_fields_count =
         .Build();
 
 vmsdk::config::Number &GetMaxSearchResultRecordSize() {
-  return dynamic_cast<vmsdk::config::Number&>(*max_search_result_record_size);
+  return dynamic_cast<vmsdk::config::Number &>(*max_search_result_record_size);
 }
 vmsdk::config::Number &GetMaxSearchResultFieldsCount() {
-  return dynamic_cast<vmsdk::config::Number&>(*max_search_result_fields_count);
+  return dynamic_cast<vmsdk::config::Number &>(*max_search_result_fields_count);
 }
 
 }  // namespace valkey_search::options
@@ -93,7 +93,7 @@ class PredicateEvaluator : public query::Evaluator {
         text_index_(nullptr),
         index_schema_(index_schema) {}
 
-  PredicateEvaluator(const RecordsMap& records,
+  PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,
                      InternedStringPtr target_key,
                      QueryOperations query_operations,
@@ -151,7 +151,7 @@ class PredicateEvaluator : public query::Evaluator {
   }
 
   EvaluationResult EvaluateVectorRange(
-      const query::VectorRangePredicate& predicate) override {
+      const query::VectorRangePredicate &predicate) override {
     if (!index_schema_) {
       // No index schema available — cannot re-verify; pass through.
       return EvaluationResult(true);
@@ -164,7 +164,7 @@ class PredicateEvaluator : public query::Evaluator {
     if (!index.ok()) {
       return EvaluationResult(false);
     }
-    auto* vector_index = dynamic_cast<indexes::VectorBase*>(index->get());
+    auto *vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
     if (!vector_index) {
       return EvaluationResult(false);
     }
@@ -452,7 +452,7 @@ void ProcessNeighborsForReply(
       continue;
     }
 
-    for (const auto& item : content.value()) {
+    for (const auto &item : content.value()) {
       total_size += item.first.size();
       total_size += vmsdk::ToStringView(item.second.value.get()).size();
       if (total_size > max_content_size) {
@@ -475,7 +475,7 @@ void ProcessNeighborsForReply(
   // TODO: incorporate a retry in case of removal.
   neighbors.erase(
       std::remove_if(neighbors.begin(), neighbors.end(),
-                     [](const indexes::Neighbor& neighbor) {
+                     [](const indexes::Neighbor &neighbor) {
                        return !neighbor.attribute_contents.has_value();
                      }),
       neighbors.end());

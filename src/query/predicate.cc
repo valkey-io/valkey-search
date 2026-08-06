@@ -351,12 +351,12 @@ TagPredicate::TagPredicate(const indexes::Tag* index, absl::string_view alias,
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
       raw_tag_string_(raw_tag_string) {
   // Unescape each tag (e.g., \| -> |, \\ -> \)
-  for (const auto &tag : tags) {
+  for (const auto& tag : tags) {
     tags_.insert(indexes::Tag::UnescapeTag(tag));
   }
 }
 
-EvaluationResult TagPredicate::Evaluate(Evaluator &evaluator) const {
+EvaluationResult TagPredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateTags(*this);
 }
 
@@ -374,7 +374,7 @@ VectorRangePredicate::VectorRangePredicate(absl::string_view attribute_alias,
       score_as_(std::move(score_as)),
       epsilon_(epsilon) {}
 
-EvaluationResult VectorRangePredicate::Evaluate(Evaluator &evaluator) const {
+EvaluationResult VectorRangePredicate::Evaluate(Evaluator& evaluator) const {
   return evaluator.EvaluateVectorRange(*this);
 }
 
@@ -383,14 +383,14 @@ void VectorRangePredicate::SetQueryVector(std::string query) {
 }
 
 EvaluationResult TagPredicate::Evaluate(
-    const absl::flat_hash_set<absl::string_view> *in_tags,
+    const absl::flat_hash_set<absl::string_view>* in_tags,
     bool case_sensitive) const {
   if (!in_tags) {
     return EvaluationResult(false);
   }
 
-  for (const auto &in_tag : *in_tags) {
-    for (const auto &tag : tags_) {
+  for (const auto& in_tag : *in_tags) {
+    for (const auto& tag : tags_) {
       absl::string_view left_hand_side = in_tag;
       absl::string_view right_hand_side = tag;
       if (right_hand_side.back() == '*') {
@@ -430,16 +430,16 @@ void ComposedPredicate::AddChild(std::unique_ptr<Predicate> child) {
   children_.push_back(std::move(child));
 }
 // Helper to evaluate text predicates with conditional position requirements
-EvaluationResult EvaluatePredicate(const Predicate *predicate,
-                                   Evaluator &evaluator, bool require_positions,
+EvaluationResult EvaluatePredicate(const Predicate* predicate,
+                                   Evaluator& evaluator, bool require_positions,
                                    bool from_or = false) {
   if (predicate->GetType() == PredicateType::kText) {
-    return evaluator.EvaluateText(
-        *static_cast<const TextPredicate *>(predicate), require_positions);
+    return evaluator.EvaluateText(*static_cast<const TextPredicate*>(predicate),
+                                  require_positions);
   }
   if (predicate->GetType() == PredicateType::kComposedAnd) {
     // Pass down the from_or flag to nested AND
-    return static_cast<const ComposedPredicate *>(predicate)
+    return static_cast<const ComposedPredicate*>(predicate)
         ->EvaluateWithContext(evaluator, from_or);
   }
   return predicate->Evaluate(evaluator);
@@ -449,11 +449,11 @@ EvaluationResult EvaluatePredicate(const Predicate *predicate,
 // For text predicates with proximity constraints (slop/inorder), creates
 // ProximityIterator to validate term positions meet distance and order
 // requirements.
-EvaluationResult ComposedPredicate::Evaluate(Evaluator &evaluator) const {
+EvaluationResult ComposedPredicate::Evaluate(Evaluator& evaluator) const {
   return EvaluateWithContext(evaluator, false);
 }
 
-EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
+EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator& evaluator,
                                                         bool from_or) const {
   // Determine if children need to return positions for proximity checks.
   bool require_positions = slop_.has_value() || inorder_;
@@ -464,7 +464,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
-    for (const auto &child : children_) {
+    for (const auto& child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
       // already. The only cases where this is not true are:
@@ -511,7 +511,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         return EvaluationResult(false);
       }
       // Validate against original target key from evaluator
-      const auto &target_key = evaluator.GetTargetKey();
+      const auto& target_key = evaluator.GetTargetKey();
       if (target_key && proximity_iterator->CurrentKey() != target_key) {
         return EvaluationResult(false);
       }
@@ -529,7 +529,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
   auto filter_iterators =
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>();
-  for (const auto &child : children_) {
+  for (const auto& child : children_) {
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions, true);
     // Short-circuit if any matches and positions not required.

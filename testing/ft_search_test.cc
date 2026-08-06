@@ -102,10 +102,10 @@ void SendReplyTest::DoSendReplyTest(
   EXPECT_CALL(*kMockValkeyModule,
               HashGet(An<ValkeyModuleKey *>(),
                       VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
-                      An<const char*>(), An<int*>(), An<void*>()))
-      .WillRepeatedly([&](ValkeyModuleKey* module_key, int flags,
-                          const char* field, int* exists,
-                          void* terminating_null) {
+                      An<const char *>(), An<int *>(), An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
+                          const char *field, int *exists,
+                          void *terminating_null) {
         *exists = 1;
         EXPECT_EQ(attribute_id, field);
         std::string key_str{module_key->key};
@@ -483,37 +483,37 @@ struct VectorRangeSendReplyTestCase {
 class VectorRangeSendReplyTest
     : public ValkeySearchTestWithParam<VectorRangeSendReplyTestCase> {
  public:
-  void DoTest(const VectorRangeSendReplyTestInput& input, bool no_content,
-              const RespReply& expected_output,
-              const std::set<std::string>& open_key_exclude_ids,
-              vmsdk::ThreadPool* mutations_thread_pool);
+  void DoTest(const VectorRangeSendReplyTestInput &input, bool no_content,
+              const RespReply &expected_output,
+              const std::set<std::string> &open_key_exclude_ids,
+              vmsdk::ThreadPool *mutations_thread_pool);
 };
 
 void VectorRangeSendReplyTest::DoTest(
-    const VectorRangeSendReplyTestInput& input, bool no_content,
-    const RespReply& expected_output,
-    const std::set<std::string>& open_key_exclude_ids,
-    vmsdk::ThreadPool* mutations_thread_pool) {
+    const VectorRangeSendReplyTestInput &input, bool no_content,
+    const RespReply &expected_output,
+    const std::set<std::string> &open_key_exclude_ids,
+    vmsdk::ThreadPool *mutations_thread_pool) {
   ValkeyModuleCtx fake_ctx;
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
       &fake_ctx, []() {}, mutations_thread_pool, false));
 
   EXPECT_CALL(*kMockValkeyModule,
-              HashGet(An<ValkeyModuleKey*>(),
+              HashGet(An<ValkeyModuleKey *>(),
                       VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
-                      An<const char*>(), An<int*>(), An<void*>()))
-      .WillRepeatedly([&](ValkeyModuleKey* module_key, int flags,
-                          const char* field, int* exists,
-                          void* terminating_null) {
+                      An<const char *>(), An<int *>(), An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
+                          const char *field, int *exists,
+                          void *terminating_null) {
         *exists = 1;
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule,
-              ScanKey(An<ValkeyModuleKey*>(), An<ValkeyModuleScanCursor*>(),
-                      An<ValkeyModuleScanKeyCB>(), An<void*>()))
-      .WillRepeatedly([&](ValkeyModuleKey* key,
-                          ValkeyModuleScanCursor* scan_cursor,
-                          ValkeyModuleScanKeyCB fn, void* privdata) {
+              ScanKey(An<ValkeyModuleKey *>(), An<ValkeyModuleScanCursor *>(),
+                      An<ValkeyModuleScanKeyCB>(), An<void *>()))
+      .WillRepeatedly([&](ValkeyModuleKey *key,
+                          ValkeyModuleScanCursor *scan_cursor,
+                          ValkeyModuleScanKeyCB fn, void *privdata) {
         ++scan_cursor->cursor;
         if ((scan_cursor->cursor % 3) == 0) {
           return 0;
@@ -530,15 +530,15 @@ void VectorRangeSendReplyTest::DoTest(
         return 1;
       });
   EXPECT_CALL(*kMockValkeyModule,
-              OpenKey(&fake_ctx, An<ValkeyModuleString*>(), testing::_))
+              OpenKey(&fake_ctx, An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
-  for (const auto& key : open_key_exclude_ids) {
+  for (const auto &key : open_key_exclude_ids) {
     EXPECT_CALL(
         *kMockValkeyModule,
         OpenKey(&fake_ctx, vmsdk::ValkeyModuleStringValueEq(key), testing::_))
         .WillRepeatedly(testing::Return(nullptr));
   }
-  EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey*>()))
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey *>()))
       .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
 
   auto test_index_schema = CreateVectorHNSWSchema("index_schema_key", &fake_ctx,
@@ -546,7 +546,7 @@ void VectorRangeSendReplyTest::DoTest(
                                .value();
 
   std::vector<indexes::Neighbor> neighbors;
-  for (const auto& neighbor : input.neighbors) {
+  for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
 
@@ -567,10 +567,10 @@ void VectorRangeSendReplyTest::DoTest(
   parameters->num_vr_predicates = 1;
   parameters->filter_parse_results.root_predicate = std::move(vr_pred_owned);
   // Populate vr_scores on each neighbor so serialization reads from vr_scores.
-  for (auto& n : neighbors) {
+  for (auto &n : neighbors) {
     n.vr_scores.assign(1, n.distance);
   }
-  for (const auto& return_attribute : input.return_attributes) {
+  for (const auto &return_attribute : input.return_attributes) {
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
   }
@@ -586,7 +586,7 @@ void VectorRangeSendReplyTest::DoTest(
 }
 
 TEST_P(VectorRangeSendReplyTest, SendReply) {
-  const VectorRangeSendReplyTestCase& test_case = GetParam();
+  const VectorRangeSendReplyTestCase &test_case = GetParam();
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
   for (bool use_thread_pool : {true, false}) {
     DoTest(test_case.input, false, ParseRespReply(test_case.expected_output),
@@ -722,7 +722,7 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_output_no_content = "*2\r\n:1\r\n$2\r\nk1\r\n",
         },
     }),
-    [](const TestParamInfo<VectorRangeSendReplyTestCase>& info) {
+    [](const TestParamInfo<VectorRangeSendReplyTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -747,25 +747,24 @@ class MultiVrSendReplyTest : public ValkeySearchTest {
   // Build a SearchCommand with two VR predicates composed via AND and exercise
   // SendReply. Uses fake_ctx_ from the base class.
   TestResult RunTest(
-      const std::string& slot0_field, std::optional<std::string> slot0_alias,
-      const std::string& slot1_field, std::optional<std::string> slot1_alias,
-      const std::vector<NeighborSpec>& neighbor_specs, bool no_content,
-      const std::vector<TestReturnAttribute>& return_attributes = {}) {
+      const std::string &slot0_field, std::optional<std::string> slot0_alias,
+      const std::string &slot1_field, std::optional<std::string> slot1_alias,
+      const std::vector<NeighborSpec> &neighbor_specs, bool no_content,
+      const std::vector<TestReturnAttribute> &return_attributes = {}) {
     EXPECT_CALL(*kMockValkeyModule,
-                HashGet(An<ValkeyModuleKey*>(),
+                HashGet(An<ValkeyModuleKey *>(),
                         VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
-                        An<const char*>(), An<int*>(), An<void*>()))
-        .WillRepeatedly([](ValkeyModuleKey*, int, const char*, int* exists,
-                           void*) {
-          *exists = 1;
-          return VALKEYMODULE_OK;
-        });
+                        An<const char *>(), An<int *>(), An<void *>()))
+        .WillRepeatedly(
+            [](ValkeyModuleKey *, int, const char *, int *exists, void *) {
+              *exists = 1;
+              return VALKEYMODULE_OK;
+            });
     EXPECT_CALL(*kMockValkeyModule,
-                ScanKey(An<ValkeyModuleKey*>(), An<ValkeyModuleScanCursor*>(),
-                        An<ValkeyModuleScanKeyCB>(), An<void*>()))
-        .WillRepeatedly([](ValkeyModuleKey* key,
-                           ValkeyModuleScanCursor* cursor,
-                           ValkeyModuleScanKeyCB fn, void* privdata) {
+                ScanKey(An<ValkeyModuleKey *>(), An<ValkeyModuleScanCursor *>(),
+                        An<ValkeyModuleScanKeyCB>(), An<void *>()))
+        .WillRepeatedly([](ValkeyModuleKey *key, ValkeyModuleScanCursor *cursor,
+                           ValkeyModuleScanKeyCB fn, void *privdata) {
           // Return one field "tag1"="val1", then end.
           ++cursor->cursor;
           if ((cursor->cursor % 2) == 1) {
@@ -780,9 +779,9 @@ class MultiVrSendReplyTest : public ValkeySearchTest {
           return 0;
         });
     EXPECT_CALL(*kMockValkeyModule,
-                OpenKey(&fake_ctx_, An<ValkeyModuleString*>(), testing::_))
+                OpenKey(&fake_ctx_, An<ValkeyModuleString *>(), testing::_))
         .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
-    EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey*>()))
+    EXPECT_CALL(*kMockValkeyModule, GetExpire(An<ValkeyModuleKey *>()))
         .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
 
     auto test_index_schema =
@@ -807,7 +806,7 @@ class MultiVrSendReplyTest : public ValkeySearchTest {
 
     // Build neighbors.
     std::vector<indexes::Neighbor> neighbors;
-    for (const auto& spec : neighbor_specs) {
+    for (const auto &spec : neighbor_specs) {
       indexes::Neighbor n;
       n.external_id = StringInternStore::Intern(spec.external_id);
       n.distance = spec.dist0;
@@ -823,7 +822,7 @@ class MultiVrSendReplyTest : public ValkeySearchTest {
     parameters->no_content = no_content;
     parameters->num_vr_predicates = 2;
     parameters->filter_parse_results.root_predicate = std::move(root);
-    for (const auto& ra : return_attributes) {
+    for (const auto &ra : return_attributes) {
       parameters->return_attributes.push_back(ToReturnAttribute(ra));
     }
 
@@ -839,10 +838,9 @@ class MultiVrSendReplyTest : public ValkeySearchTest {
 
 // Two VR predicates with explicit aliases: reply contains both distance pairs.
 TEST_F(MultiVrSendReplyTest, TwoVrPredicatesBothAliases) {
-  auto result = RunTest(
-      "vec1", "d1", "vec2", "d2",
-      {{"k1", 0.1f, 0.2f}, {"k2", 0.3f, 0.4f}},
-      /*no_content=*/false);
+  auto result = RunTest("vec1", "d1", "vec2", "d2",
+                        {{"k1", 0.1f, 0.2f}, {"k2", 0.3f, 0.4f}},
+                        /*no_content=*/false);
 
   auto parsed = ParseRespReply(result.reply);
   // Per key: [d1, dist0, d2, dist1, tag1, val1]
@@ -861,10 +859,9 @@ TEST_F(MultiVrSendReplyTest, TwoVrPredicatesBothAliases) {
 
 // Two VR predicates, NOCONTENT: only key names, no score fields.
 TEST_F(MultiVrSendReplyTest, TwoVrPredicatesNoContent) {
-  auto result = RunTest(
-      "vec1", "d1", "vec2", "d2",
-      {{"k1", 0.1f, 0.2f}, {"k2", 0.3f, 0.4f}},
-      /*no_content=*/true);
+  auto result = RunTest("vec1", "d1", "vec2", "d2",
+                        {{"k1", 0.1f, 0.2f}, {"k2", 0.3f, 0.4f}},
+                        /*no_content=*/true);
 
   auto parsed = ParseRespReply(result.reply);
   auto expected = ParseRespReply("*3\r\n:2\r\n$2\r\nk1\r\n$2\r\nk2\r\n");
@@ -873,13 +870,11 @@ TEST_F(MultiVrSendReplyTest, TwoVrPredicatesNoContent) {
 
 // Two VR predicates with RETURN: requested fields plus both distance pairs.
 TEST_F(MultiVrSendReplyTest, TwoVrPredicatesWithReturn) {
-  auto result = RunTest(
-      "vec1", "d1", "vec2", "d2",
-      {{"k1", 0.5f, 0.6f}},
-      /*no_content=*/false,
-      {{.identifier = "d1", .alias = "d1"},
-       {.identifier = "tag1", .alias = "tag1"},
-       {.identifier = "d2", .alias = "d2"}});
+  auto result = RunTest("vec1", "d1", "vec2", "d2", {{"k1", 0.5f, 0.6f}},
+                        /*no_content=*/false,
+                        {{.identifier = "d1", .alias = "d1"},
+                         {.identifier = "tag1", .alias = "tag1"},
+                         {.identifier = "d2", .alias = "d2"}});
 
   auto parsed = ParseRespReply(result.reply);
   // Return: d1 (score), tag1 (content), d2 (score) — in RETURN order.
@@ -894,10 +889,9 @@ TEST_F(MultiVrSendReplyTest, TwoVrPredicatesWithReturn) {
 
 // Two VR predicates with default (no alias) names.
 TEST_F(MultiVrSendReplyTest, TwoVrPredicatesDefaultNames) {
-  auto result = RunTest(
-      "myvec1", std::nullopt, "myvec2", std::nullopt,
-      {{"k1", 0.1f, 0.9f}},
-      /*no_content=*/false);
+  auto result = RunTest("myvec1", std::nullopt, "myvec2", std::nullopt,
+                        {{"k1", 0.1f, 0.9f}},
+                        /*no_content=*/false);
 
   auto parsed = ParseRespReply(result.reply);
   // Default names: __myvec1_score (14 chars), __myvec2_score (14 chars).
@@ -931,7 +925,7 @@ class FTSearchTest : public ValkeySearchTestWithParam<
     VMSDK_EXPECT_OK(index);
     for (size_t i = 0; i < vectors.size(); ++i) {
       auto key = std::to_string(i);
-      std::string vector = std::string((char*)vectors[i].data(),
+      std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
       std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
@@ -1031,7 +1025,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
   EXPECT_CALL(*kMockValkeyModule,
               HashGet(An<ValkeyModuleKey *>(),
                       VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
-                      An<const char*>(), An<int *>(), An<void *>()))
+                      An<const char *>(), An<int *>(), An<void *>()))
       .WillRepeatedly([&](ValkeyModuleKey *module_key, int flags,
                           const char *field, int *exists,
                           void *terminating_null) {

@@ -425,7 +425,6 @@ class ToList : public GroupBy::ReducerInstance {
   }
 };
 
-
 class Quantile : public GroupBy::ReducerInstance {
   struct Sample {
     double value;

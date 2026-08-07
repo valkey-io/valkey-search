@@ -307,6 +307,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
         }
         return absl::OkStatus();
       });
+  // Cancellation is expected (the inner lambda returns CancelledError to
+  // exit the iteration loop early); only propagate real errors.
   if (!status.ok() && !absl::IsCancelled(status)) {
     return status;
   }

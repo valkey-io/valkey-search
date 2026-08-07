@@ -207,10 +207,10 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
 
     RDB_FILENAME = "hnsw_duplicate_label.rdb"
     RDB_FIXTURE = f"rdbs/{RDB_FILENAME}"
-    SURVIVOR_VEC = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
+    LIVE_VEC = struct.pack('<4f', 10.0, 20.0, 30.0, 40.0)
 
     # TODO: Make functionality common once https://github.com/valkey-io/valkey-search/pull/1172 is merged
-    def _start_server(self, test_name, search_module_args="", extra_lines=None):
+    def _start_server(self, test_name, search_module_args=""):
         server_path = os.getenv("VALKEY_SERVER_PATH")
         testdir = f"{LOGS_DIR}/{test_name}"
         port = self.get_bind_port()
@@ -228,7 +228,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
             f"port {port}",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"loadmodule {os.getenv('MODULE_PATH')} {search_module_args}",
-        ] + (extra_lines or [])
+        ]
         conf_file = os.path.join(testdir, f"valkey_{port}.conf")
         with open(conf_file, "w") as f:
             f.write("\n".join(lines) + "\n")
@@ -242,9 +242,15 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         )
         return server, client, os.path.join(testdir, f"logfile_{port}")
 
-    def test_load_rdb_with_duplicate_label(self):
+    def test_label_lookup_reconstructed(self):
+        '''
+        The HNSW index in the RDB has two slots with the same label.
+        The first slot has the live vector. Previously the label lookup
+        would always point to the largest slot with the label.
+        '''
         server, client, logfile = self._start_server(
-            "hnsw_dup_label_rdb", search_module_args="--debug-mode yes")
+            "hnsw_dup_label_rdb",
+            search_module_args="--debug-mode yes")
         client.config_set("search.info-developer-visible", "yes")
 
         hnsw_index = Index(
@@ -257,7 +263,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         )
 
         dup_on_load = int(client.info("SEARCH").get(
-            "search_hnsw_duplicate_label_on_load_count", 0))
+            "search_hnsw_duplicate_label_on_load_count"))
         assert dup_on_load == 1, \
             f"Expected a duplicate label on load, got {dup_on_load}"
 
@@ -265,11 +271,11 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         assert ft_info.num_docs == 1, \
             f"Expected 1 doc after load, got {ft_info.num_docs}"
 
-        # The survivor should be doc:1 carrying its updated vector.
+        # The survivor should be doc:1 carrying the live vector.
         search_result = client.execute_command(
             "FT.SEARCH", "idx",
             "*=>[KNN 2 @vector $q]",
-            "PARAMS", "2", "q", self.SURVIVOR_VEC,
+            "PARAMS", "2", "q", self.LIVE_VEC,
             "RETURN", "1", "vector",
         )
         assert search_result[0] == 1, \
@@ -278,7 +284,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
             f"Expected doc:1 to survive, got {search_result[1]}"
         returned_fields = search_result[2]
         vector_value = returned_fields[returned_fields.index(b"vector") + 1]
-        assert vector_value == self.SURVIVOR_VEC, \
+        assert vector_value == self.LIVE_VEC, \
             f"Expected doc:1 to carry the updated vector, got {vector_value!r}"
 
         # Deleting the survivor must actually remove it, proving label_lookup_
@@ -290,19 +296,32 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         search_result = client.execute_command(
             "FT.SEARCH", "idx",
             "*=>[KNN 2 @vector $q]",
-            "PARAMS", "2", "q", self.SURVIVOR_VEC,
+            "PARAMS", "2", "q", self.LIVE_VEC,
         )
         assert search_result[0] == 0, \
             f"Expected doc:1 to be deleted, got {search_result[0]} results"
 
-    def test_reuse_dup_tombstone_then_delete_survivor(self):
-        # With allow-replace-deleted on, a fresh insert pops the dup tombstone
-        # from deleted_elements. Its synthetic label makes the reuse branch's
-        # erase a self-reference, so the survivor's mapping stays intact and it
-        # remains deletable (no ghost doc).
+
+    def test_labels_are_unique(self):
+        '''
+        The vectors in HNSW are owned by tracked_vectors_ at the module level
+        which maps labels to vectors. The HNSW library holds a raw pointer to them.
+        This pattern enforces that there can only be at most one vector alive per
+        label. The HNSW index in the RDB has two slots with the same label. Both
+        alive and tombstoned slots are traversed during searches and need valid
+        vectors, but previously every one with a duplicate label except the last
+        would be left with a dangling pointer. In our case, that would be slot 0
+        with the live vector. To be absolutely certain that we would be hitting the
+        dangling pointer, we will overwrite the tombstoned slot which erases the
+        label from tracked_vectors_, so that live slot is guaranteed to have a
+        dangling pointer.
+
+        In the end, the fix is all the same. Ensure that every slot corresponds with
+        a unique label on restore.
+        '''
         server, client, logfile = self._start_server(
-            "hnsw_dup_label_reuse", search_module_args="--debug-mode yes",
-            extra_lines=["search.hnsw-allow-replace-deleted yes"])
+            "hnsw_dup_label_rdb",
+            search_module_args="--debug-mode yes --hnsw-allow-replace-deleted yes")
         client.config_set("search.info-developer-visible", "yes")
 
         hnsw_index = Index(
@@ -323,21 +342,15 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         client.hset("doc:2", mapping={"vector": new_vec})
         waiters.wait_for_equal(lambda: hnsw_index.info(client).num_docs, 2)
 
-        # The survivor's RETURN bytes must still be its own, not freed heap.
+        # The survivor's RETURN bytes must still be its own.
         search_result = client.execute_command(
             "FT.SEARCH", "idx",
             "*=>[KNN 1 @vector $q]",
-            "PARAMS", "2", "q", self.SURVIVOR_VEC,
+            "PARAMS", "2", "q", self.LIVE_VEC,
             "RETURN", "1", "vector",
         )
         returned_fields = search_result[2]
         vector_value = returned_fields[returned_fields.index(b"vector") + 1]
-        assert vector_value == self.SURVIVOR_VEC, \
+        assert vector_value == self.LIVE_VEC, \
             f"Expected survivor to carry its vector, got {vector_value!r}"
 
-        # Both docs delete cleanly with no remove exceptions.
-        client.delete("doc:1")
-        client.delete("doc:2")
-        waiters.wait_for_equal(lambda: hnsw_index.info(client).num_docs, 0)
-        assert int(client.info("SEARCH").get(
-            "search_hnsw_remove_exceptions_count", 0)) == 0

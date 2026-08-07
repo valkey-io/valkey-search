@@ -70,6 +70,12 @@ std::atomic<int64_t> &SearchParametersInFlightCounter() {
   static std::atomic<int64_t> counter{0};
   return counter;
 }
+
+// Initial reserve size for neighbor/key vectors when an exact count is
+// unavailable or very large. Acts as a cap to avoid over-allocating on wide
+// queries while still reducing re-allocations for typical result sets.
+constexpr size_t kInitialNeighborReserveSize = 5000;
+
 }  // namespace
 
 int64_t GetSearchParametersInFlight() {
@@ -700,7 +706,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   const size_t max_keys = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::Neighbor> neighbors;
-  neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  neighbors.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
   bool fetch_limited = false;
 
   // Deduplication setup
@@ -708,7 +714,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
-    result_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+    result_keys.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
   }
 
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
@@ -815,7 +821,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   const size_t max_keys = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
   std::vector<indexes::BorrowedNeighbor> borrowed;
-  borrowed.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+  borrowed.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
   bool fetch_limited = false;
   auto results_appender =
       [&borrowed, &parameters, max_keys, &fetch_limited](
@@ -837,7 +843,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
-      seen_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
+      seen_keys.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
     }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());

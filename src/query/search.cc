@@ -1148,6 +1148,29 @@ void IncrementQueryOperationMetrics(QueryOperations query_operations) {
   }
 }
 
+// --------------------------------------------------------------------------
+// VR Score Slot Mechanism
+// --------------------------------------------------------------------------
+// When a query contains one or more VECTOR_RANGE predicates, each predicate
+// needs its own storage location for the computed distance so that:
+//   1. Each predicate's distance can be independently returned to the client
+//      via its $yield_distance_as alias (e.g. "AS d1", "AS d2").
+//   2. SORTBY can reference any VR predicate's distance field.
+//   3. Multi-VR AND/OR queries can track per-predicate match status.
+//
+// The "slot" is a simple index (0, 1, 2, ...) assigned to each
+// VectorRangePredicate node in DFS traversal order. The total slot count
+// becomes `SearchParameters::num_vr_predicates`, and every `Neighbor` produced
+// by a VR search has its `vr_scores` vector sized to this count:
+//
+//   Neighbor::vr_scores[slot] = distance for that VR predicate
+//
+// Slot assignment happens once during query parsing (PreParseQueryString)
+// via AssignVectorRangeScoreSlots(). The mapping from slot index to the
+// user-visible field name (the yield_distance_as alias or default
+// "__<field>_score") is available via CollectVrScoreFields().
+// --------------------------------------------------------------------------
+
 // Walk the predicate tree, assign each VectorRangePredicate a unique score_slot
 // index (0, 1, 2...) in DFS order, and return the total count of VR predicates
 // found. Slot assignment is local to the predicate, eliminating the need for

@@ -144,6 +144,40 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   QueryOperations query_operations_;
   const IndexSchema *index_schema_;
 };
+
+// Adapter that wraps a pre-computed vector of Neighbor keys into the
+// EntriesFetcherBase interface. Used when EvaluateFilterAsPrimary resolves a
+// VectorRange predicate via the vector index's SearchRange method instead of
+// falling back to a universal set scan.
+class VectorRangeFetcher : public indexes::EntriesFetcherBase {
+ public:
+  explicit VectorRangeFetcher(std::vector<indexes::Neighbor> neighbors)
+      : neighbors_(std::move(neighbors)) {}
+
+  size_t Size() const override { return neighbors_.size(); }
+  std::unique_ptr<indexes::EntriesFetcherIteratorBase> Begin() override {
+    return std::make_unique<Iterator>(neighbors_);
+  }
+
+ private:
+  class Iterator : public indexes::EntriesFetcherIteratorBase {
+   public:
+    explicit Iterator(const std::vector<indexes::Neighbor> &neighbors)
+        : neighbors_(neighbors), idx_(0) {}
+    bool Done() const override { return idx_ >= neighbors_.size(); }
+    void Next() override { ++idx_; }
+    const InternedStringPtr &operator*() const override {
+      return neighbors_[idx_].external_id;
+    }
+
+   private:
+    const std::vector<indexes::Neighbor> &neighbors_;
+    size_t idx_;
+  };
+
+  std::vector<indexes::Neighbor> neighbors_;
+};
+
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
@@ -410,10 +444,42 @@ size_t EvaluateFilterAsPrimary(
     // compound query (AND/OR with other predicates). The single-VR fast path
     // in SearchVectorRangeQuery() bypasses EvaluateFilterAsPrimary entirely,
     // so this code only executes for multi-predicate queries.
-    // Vector range predicates require scanning all keys and evaluating
-    // distances, so use a universal set fetcher as the primary source.
+    //
+    // When NOT negated: resolve the VR predicate directly via the vector
+    // index's SearchRange method. This returns only keys within the radius,
+    // giving the query planner a tighter candidate set for AND/OR.
+    //
+    // When negated: we need keys OUTSIDE the radius, which requires scanning
+    // all keys and checking distance > radius. Use the universal set and let
+    // the predicate evaluator handle the negation semantics.
+    auto *vr_pred =
+        dynamic_cast<const VectorRangePredicate *>(predicate);
+    CHECK(vr_pred != nullptr);
     CHECK(parameters.index_schema != nullptr)
         << "IndexSchema required for vector range";
+    if (!negate) {
+      auto index_result =
+          parameters.index_schema->GetIndex(vr_pred->GetAlias());
+      if (index_result.ok()) {
+        auto *vector_index =
+            dynamic_cast<indexes::VectorBase *>(index_result.value().get());
+        if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
+          auto range_result = vector_index->SearchRange(
+              vr_pred->GetQueryVector(),
+              static_cast<float>(vr_pred->GetRadius()),
+              parameters.cancellation_token);
+          if (range_result.ok()) {
+            auto fetcher = std::make_unique<VectorRangeFetcher>(
+                std::move(*range_result));
+            size_t size = fetcher->Size();
+            entries_fetchers.push(std::move(fetcher));
+            return size;
+          }
+        }
+      }
+    }
+    // Fallback: negation, or if index lookup / SearchRange fails.
+    // Use universal set so the predicate evaluator checks every key.
     auto universal_fetcher = std::make_unique<indexes::UniversalSetFetcher>(
         parameters.index_schema.get());
     size_t size = universal_fetcher->Size();

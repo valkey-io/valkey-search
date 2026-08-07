@@ -1009,7 +1009,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       // We ensure that the live slot wins the label in a duplicate label situation,
       // and any duplicate tombstone slots get re-labeled to a new unique label.
       if (!isMarkedDeleted(static_cast<tableint>(i))) {
-        loadCheck(label_lookup_.find(id) != label_lookup_.end(),
+        loadCheck(label_lookup_.find(id) == label_lookup_.end(),
                   "duplicate live label in index");
         // Track the vector
         *(char **)((*data_level0_memory_)[i] + offsetData_) =
@@ -1035,7 +1035,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         tombstoned_label_lookup_[id] = i;
         }
       }
-      valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt += dup_label_slots.size();
 
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
@@ -1054,6 +1053,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         loadCheck(l0_neighbors[j] != i, "level-0 self-loop");
       }
     }
+    valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
+        dup_label_slots.size();
 
     std::vector<std::mutex>(max_elements).swap(link_list_locks_);
     std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);

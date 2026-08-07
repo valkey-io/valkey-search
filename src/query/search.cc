@@ -786,13 +786,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // to populate every vr_scores slot correctly.
   if (parameters.num_vr_predicates > 1) {
     PopulateVrScoresForNeighbors(neighbors, parameters);
-    // Re-sort using slot-0 distance (primary sort key) now that vr_scores
-    // has been fully populated.
+    // Multi-VR default sort: lexicographic key order (not distance).
+    // When multiple VR predicates are present, there is no single "best"
+    // distance to sort by, so the default is key order — consistent with
+    // Redis behavior for multi-predicate queries. Users can override this
+    // with an explicit SORTBY on a specific VR yield field.
     std::sort(neighbors.begin(), neighbors.end(),
               [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-                float da = a.vr_scores.empty() ? a.distance : a.vr_scores[0];
-                float db = b.vr_scores.empty() ? b.distance : b.vr_scores[0];
-                if (da != db) return da < db;
                 return a.external_id->Str() < b.external_id->Str();
               });
     return neighbors;

@@ -823,7 +823,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         float distance =
             eval_result.HasVrScore() ? eval_result.vr_distance : 0.0f;
         indexes::Neighbor n(key, distance);
-        n.vr_scores.assign(parameters.num_vr_predicates, 0.0f);
+        n.vr_scores.assign(parameters.num_vr_predicates,
+                           indexes::Neighbor::kVrScoreNotMatched);
         if (eval_result.HasVrScore() &&
             eval_result.score_slot < n.vr_scores.size()) {
           n.vr_scores[eval_result.score_slot] = eval_result.vr_distance;
@@ -1370,10 +1371,14 @@ static void PopulateVrScoresForNeighbors(
 
   // For each neighbor, compute the distance from each VR predicate's query
   // vector to the neighbor's stored vector and store in vr_scores[slot].
+  // If the distance exceeds the predicate's radius, store the sentinel
+  // kVrScoreNotMatched so serialization can suppress non-matching fields.
   for (auto &n : neighbors) {
-    if (n.vr_scores.size() < parameters.num_vr_predicates) {
-      n.vr_scores.assign(parameters.num_vr_predicates, 0.0f);
-    }
+    // Always reinitialize with sentinel — the initial population in
+    // DoSearchNonVector only sets the single slot that matched via
+    // EvaluateFull, leaving other slots at 0.0f which would leak as "0".
+    n.vr_scores.assign(parameters.num_vr_predicates,
+                       indexes::Neighbor::kVrScoreNotMatched);
     for (size_t slot = 0; slot < vr_preds.size(); ++slot) {
       VectorRangePredicate *vr = vr_preds[slot];
       if (!vr) continue;
@@ -1385,7 +1390,12 @@ static void PopulateVrScoresForNeighbors(
       auto dist_result = vector_index->ComputeDistanceFromRecord(
           n.external_id, vr->GetQueryVector());
       if (!dist_result.ok()) continue;
-      n.vr_scores[slot] = dist_result->first;
+      float dist = dist_result->first;
+      // Only store the distance if within the predicate's radius;
+      // otherwise leave the sentinel to indicate "did not match".
+      if (dist <= static_cast<float>(vr->GetRadius())) {
+        n.vr_scores[slot] = dist;
+      }
     }
   }
 }

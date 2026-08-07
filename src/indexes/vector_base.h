@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -58,6 +59,12 @@ static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");
 
 struct Neighbor {
+  // Sentinel value indicating a VR predicate did not match this neighbor
+  // (distance exceeds radius). Serialization layers skip emitting the field
+  // when vr_scores[slot] equals this value.
+  static constexpr float kVrScoreNotMatched =
+      std::numeric_limits<float>::max();
+
   InternedStringPtr external_id;
   float distance;
   uint64_t sequence_number;

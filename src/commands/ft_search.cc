@@ -94,7 +94,9 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
       // Count populated VR score slots for this neighbor.
       size_t populated_vr = 0;
       for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
-        if (!vr_fields[slot].empty() && slot < neighbors[i].vr_scores.size()) {
+        if (!vr_fields[slot].empty() && slot < neighbors[i].vr_scores.size() &&
+            neighbors[i].vr_scores[slot] !=
+                indexes::Neighbor::kVrScoreNotMatched) {
           ++populated_vr;
         }
       }
@@ -104,7 +106,9 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
       ReplyScore(ctx, *parameters.score_as, neighbors[i]);
       // Emit VR distance fields after the KNN score.
       for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
-        if (vr_fields[slot].empty() || slot >= neighbors[i].vr_scores.size()) {
+        if (vr_fields[slot].empty() || slot >= neighbors[i].vr_scores.size() ||
+            neighbors[i].vr_scores[slot] ==
+                indexes::Neighbor::kVrScoreNotMatched) {
           continue;
         }
         ValkeyModule_ReplyWithString(
@@ -134,7 +138,9 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
         bool handled = false;
         for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
           if (!vr_fields[slot].empty() && ret_id == vr_fields[slot]) {
-            if (slot < neighbors[i].vr_scores.size()) {
+            if (slot < neighbors[i].vr_scores.size() &&
+                neighbors[i].vr_scores[slot] !=
+                    indexes::Neighbor::kVrScoreNotMatched) {
               ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
               auto score_value =
                   absl::StrFormat("%.12g", neighbors[i].vr_scores[slot]);
@@ -215,7 +221,9 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
     // Count how many VR score slots are actually populated for this neighbor.
     size_t populated_vr_slots = 0;
     for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
-      if (!vr_fields[slot].empty() && slot < neighbors[i].vr_scores.size()) {
+      if (!vr_fields[slot].empty() && slot < neighbors[i].vr_scores.size() &&
+          neighbors[i].vr_scores[slot] !=
+              indexes::Neighbor::kVrScoreNotMatched) {
         ++populated_vr_slots;
       }
     }
@@ -226,7 +234,9 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
       ValkeyModule_ReplyWithArray(ctx, array_size);
       // Emit one (field_name, distance) pair per populated VR score slot.
       for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
-        if (vr_fields[slot].empty() || slot >= neighbors[i].vr_scores.size()) {
+        if (vr_fields[slot].empty() || slot >= neighbors[i].vr_scores.size() ||
+            neighbors[i].vr_scores[slot] ==
+                indexes::Neighbor::kVrScoreNotMatched) {
           continue;
         }
         ValkeyModule_ReplyWithString(
@@ -253,7 +263,9 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
         bool handled = false;
         for (size_t slot = 0; slot < vr_fields.size(); ++slot) {
           if (!vr_fields[slot].empty() && ret_id == vr_fields[slot]) {
-            if (slot < neighbors[i].vr_scores.size()) {
+            if (slot < neighbors[i].vr_scores.size() &&
+                neighbors[i].vr_scores[slot] !=
+                    indexes::Neighbor::kVrScoreNotMatched) {
               ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
               auto score_value =
                   absl::StrFormat("%.12g", neighbors[i].vr_scores[slot]);

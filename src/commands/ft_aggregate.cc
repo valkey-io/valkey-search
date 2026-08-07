@@ -332,6 +332,7 @@ absl::Status CreateRecordsFromNeighbors(
       const auto& name = parameters.vr_score_field_names_[slot];
       if (name.empty()) continue;
       if (slot >= n.vr_scores.size()) continue;  // slot not populated → omit
+      if (n.vr_scores[slot] == indexes::Neighbor::kVrScoreNotMatched) continue;
       auto it = parameters.record_indexes_by_alias_.find(name);
       if (it == parameters.record_indexes_by_alias_.end()) continue;
       rec->fields_.at(it->second) = expr::Value(n.vr_scores[slot]);

@@ -285,6 +285,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
   }
 
   std::vector<Neighbor> neighbors;
+  // Pre-allocate to reduce re-allocations during the linear scan.
+  // The actual match count is unknown ahead of time, so use a modest initial
+  // capacity that covers typical result sets without over-allocating.
+  neighbors.reserve(128);
   auto status =
       ForEachTrackedKey([&](const InternedStringPtr& key) -> absl::Status {
         if (cancellation_token->IsCancelled()) {

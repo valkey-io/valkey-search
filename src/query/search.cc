@@ -650,6 +650,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // Fast path: single standalone VectorRange predicate with no other filters.
   // This lets the HNSW index do graph-traversal stopping at the epsilon
   // boundary instead of scanning every key.
+  // NOTE: The root_predicate type check below is NOT redundant with
+  // num_vr_predicates == 1. A negated VR query (-@v:[VECTOR_RANGE ...]) has
+  // num_vr_predicates == 1 but root->GetType() == kNegate, so the extra
+  // guard prevents the fast path from firing for negation queries.
   if (parameters.num_vr_predicates == 1 &&
       parameters.filter_parse_results.root_predicate != nullptr &&
       parameters.filter_parse_results.root_predicate->GetType() ==

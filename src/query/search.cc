@@ -797,7 +797,7 @@ struct ScoreContext {
 
 std::optional<float> ScoreNode(const Predicate *predicate,
                                BorrowedInternedStringPtr key,
-                               const ScoreContext &ctx) {
+                               const ScoreContext &score_ctx) {
   CHECK(predicate != nullptr);
 
   switch (predicate->GetType()) {
@@ -805,7 +805,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       auto composed = static_cast<const ComposedPredicate *>(predicate);
       float sum = 0.0f;
       for (const auto &child : composed->GetChildren()) {
-        auto child_score = ScoreNode(child.get(), key, ctx);
+        auto child_score = ScoreNode(child.get(), key, score_ctx);
         // AND: every child must match, otherwise the document does not match
         // this group and contributes nothing from it.
         if (!child_score) return std::nullopt;
@@ -818,7 +818,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       float sum = 0.0f;
       bool matched = false;
       for (const auto &child : composed->GetChildren()) {
-        auto child_score = ScoreNode(child.get(), key, ctx);
+        auto child_score = ScoreNode(child.get(), key, score_ctx);
         // OR: any matching child contributes; non-matching children are
         // skipped.
         if (child_score) {
@@ -835,8 +835,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // miss here is a non-scored text predicate (prefix/suffix/fuzzy): not
       // scored, but the document still matched, so treat as a zero contribution
       // rather than a non-match. This avoids a per-candidate dynamic_cast.
-      auto it = ctx.resolved.find(predicate);
-      if (it == ctx.resolved.end()) return 0.0f;
+      auto it = score_ctx.resolved.find(predicate);
+      if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
       if (leaf.postings.empty()) return std::nullopt;
 
@@ -856,13 +856,13 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // the scorer treats as a degenerate corpus and scores 0.
       float avg_doc_len = 0.0f;
       uint32_t doc_len = 0;
-      if (ctx.needs_doc_len && ctx.total_docs > 0) {
-        avg_doc_len = static_cast<float>(ctx.total_doc_len) /
-                      static_cast<float>(ctx.total_docs);
-        doc_len = ctx.index_schema.GetDocumentLength(key);
+      if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
+        avg_doc_len = static_cast<float>(score_ctx.total_doc_len) /
+                      static_cast<float>(score_ctx.total_docs);
+        doc_len = score_ctx.index_schema.GetDocumentLength(key);
       }
-      return ctx.scorer->ScoreLeaf(leaf.term_weight, tf, doc_len, avg_doc_len,
-                                   predicate->GetWeight());
+      return score_ctx.scorer->ScoreLeaf(leaf.term_weight, tf, doc_len,
+                                         avg_doc_len, predicate->GetWeight());
     }
     // A numeric range match is a filter, never a ranker: it carries no IDF, no
     // term frequency, and no doc-length component, so under BM25STD it
@@ -879,11 +879,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
     // come from the index's TEXT field; on a text-less index avg_doc_len is 0
     // and ScoreLeaf returns 0 (a well-defined score, not Redis's nan).
     case PredicateType::kTag: {
-      auto it = ctx.resolved.find(predicate);
+      auto it = score_ctx.resolved.find(predicate);
       // A tag leaf is always resolved (unlike non-scored text predicates), but
       // guard defensively: an unresolved or index-less leaf contributes 0
       // without rejecting the already-admitted candidate.
-      if (it == ctx.resolved.end()) return 0.0f;
+      if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
       if (leaf.tag_index == nullptr || leaf.tag_values.empty()) return 0.0f;
 
@@ -894,10 +894,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       float avg_doc_len = 0.0f;
       uint32_t doc_len = 0;
-      if (ctx.needs_doc_len && ctx.total_docs > 0) {
-        avg_doc_len = static_cast<float>(ctx.total_doc_len) /
-                      static_cast<float>(ctx.total_docs);
-        doc_len = ctx.index_schema.GetDocumentLength(key);
+      if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
+        avg_doc_len = static_cast<float>(score_ctx.total_doc_len) /
+                      static_cast<float>(score_ctx.total_docs);
+        doc_len = score_ctx.index_schema.GetDocumentLength(key);
       }
 
       // Sum the BM25 term (F ≡ 1) for each resolved value the document carries.
@@ -914,8 +914,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
           }
         }
         if (!present) continue;
-        sum += ctx.scorer->ScoreLeaf(idf, /*term_frequency=*/1, doc_len,
-                                     avg_doc_len, predicate->GetWeight());
+        sum += score_ctx.scorer->ScoreLeaf(idf, /*term_frequency=*/1, doc_len,
+                                           avg_doc_len, predicate->GetWeight());
       }
       return sum;
     }
@@ -949,29 +949,30 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 
   const bool needs_doc_len =
       scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
-  ScoreContext ctx{index_schema,
-                   scorer,
-                   resolved,
-                   total_docs,
-                   needs_doc_len ? index_schema.GetTotalDocumentLength() : 0,
-                   needs_doc_len,
-                   index_schema.HasScoreField(),
-                   index_schema.GetScore()};
+  ScoreContext score_ctx{
+      index_schema,
+      scorer,
+      resolved,
+      total_docs,
+      needs_doc_len ? index_schema.GetTotalDocumentLength() : 0,
+      needs_doc_len,
+      index_schema.HasScoreField(),
+      index_schema.GetScore()};
 
   std::vector<indexes::BorrowedNeighbor> scored;
   scored.reserve(candidates.size());
-  for (const auto &c : candidates) {
+  for (const auto &candidate : candidates) {
     // Non-owning view: scoring runs under the shared index lock, so the
     // InternedString outlives the loop and no ref-count churn is needed.
-    const BorrowedInternedStringPtr &key = c.key;
-    auto score = ScoreNode(root_predicate, key, ctx);
+    const BorrowedInternedStringPtr &key = candidate.key;
+    auto score = ScoreNode(root_predicate, key, score_ctx);
     if (!score) continue;
-    const float document_score = ctx.has_score_field
+    const float document_score = score_ctx.has_score_field
                                      ? index_schema.GetDocumentScore(key)
-                                     : ctx.default_document_score;
+                                     : score_ctx.default_document_score;
     const float final_score =
         scorer->ComposeDocumentScore(*score, document_score);
-    scored.push_back({c.key, 0.0f, final_score});
+    scored.push_back({candidate.key, 0.0f, final_score});
   }
 
   candidates = std::move(scored);
@@ -1054,20 +1055,22 @@ std::optional<float> SingleDocumentScorer::Score(
   vmsdk::ReaderMutexLock lock(
       &const_cast<IndexSchema &>(state_->index_schema).GetTimeSlicedMutex());
 
-  ScoreContext ctx{state_->index_schema,    state_->scorer,
-                   state_->resolved,        state_->total_docs,
-                   state_->total_doc_len,   state_->needs_doc_len,
-                   state_->has_score_field, state_->default_document_score};
+  ScoreContext score_ctx{
+      state_->index_schema,    state_->scorer,
+      state_->resolved,        state_->total_docs,
+      state_->total_doc_len,   state_->needs_doc_len,
+      state_->has_score_field, state_->default_document_score};
   const BorrowedInternedStringPtr borrowed_key(key);
   // Single source of scoring math: the same ScoreNode walk ScoreTextQuery runs
   // per candidate. nullopt means ScoreNode re-derived a non-match (e.g. a term
   // absent from the global postings for this key); the caller scores 0 rather
   // than dropping the already-admitted document.
-  auto sum = ScoreNode(state_->root_predicate, borrowed_key, ctx);
+  auto sum = ScoreNode(state_->root_predicate, borrowed_key, score_ctx);
   if (!sum) return std::nullopt;
   const float document_score =
-      ctx.has_score_field ? state_->index_schema.GetDocumentScore(borrowed_key)
-                          : ctx.default_document_score;
+      score_ctx.has_score_field
+          ? state_->index_schema.GetDocumentScore(borrowed_key)
+          : score_ctx.default_document_score;
   return state_->scorer->ComposeDocumentScore(*sum, document_score);
 }
 

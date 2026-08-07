@@ -193,7 +193,7 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
 
 class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
     """
-    Regression test for loading an RDB that carries a duplicate label.
+    Regression tests for loading an RDB that carries a duplicate label.
 
     Previously ModifyRecordImpl first called markDelete() on the record to
     tombstone the existing slot with the label and then called addPoint() to add
@@ -300,7 +300,6 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         )
         assert search_result[0] == 0, \
             f"Expected doc:1 to be deleted, got {search_result[0]} results"
-
 
     def test_labels_are_unique(self):
         '''

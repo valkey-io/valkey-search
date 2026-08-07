@@ -1011,20 +1011,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       if (!isMarkedDeleted(static_cast<tableint>(i))) {
         loadCheck(label_lookup_.find(id) == label_lookup_.end(),
                   "duplicate live label in index");
+
+        // Mark any tombstones slots with the same label for duplicate handling
+        auto tomb_dup_it = tombstoned_label_lookup_.find(id);
+        if (tomb_dup_it != tombstoned_label_lookup_.end()) {
+          dup_label_slots[tomb_dup_it->second] = std::string(
+              getDataByInternalId(tomb_dup_it->second), vector_size_);
+          tombstoned_label_lookup_.erase(tomb_dup_it);
+        }
+
         // Track the vector
         *(char **)((*data_level0_memory_)[i] + offsetData_) =
           vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
                                       vector_size_);
         label_lookup_[id] = i;
-
-        // Mark any tombstones slots with the same label for duplicate handling
-        auto tomb_dup_it = tombstoned_label_lookup_.find(id);
-        if (tomb_dup_it != tombstoned_label_lookup_.end()) {
-          dup_label_slots[tomb_dup_it->second] = std::string(chunk->data() + size_links_level0_, vector_size_);
-          tombstoned_label_lookup_.erase(tomb_dup_it);
-        }
       } else {
-        if (tombstoned_label_lookup_.find(id) != tombstoned_label_lookup_.end()) {
+        if (tombstoned_label_lookup_.find(id) != tombstoned_label_lookup_.end()
+            || label_lookup_.find(id) != label_lookup_.end()) {
           // Allow the first tombstone with the label to maintain ownership
           dup_label_slots[i] = std::string(chunk->data() + size_links_level0_, vector_size_);
         } else {

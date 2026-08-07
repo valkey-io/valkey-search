@@ -387,7 +387,7 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       internal_id};
 }
 
-// Max label stamped on any slot at load time (live, tombstoned, or re-labeled).
+// Max label stamped on any slot at load time.
 template <typename T>
 uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
   return static_cast<uint64_t>(algo_->max_loaded_label_);

@@ -717,8 +717,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (int t = 0; t < kThreads; ++t) {
     threads.emplace_back([&algo, t]() {
       for (int i = 0; i < kIters; ++i) {
-        algo.markDelete(t);    // += vector_size_
-        algo.unmarkDelete(t);  // -= vector_size_  (net per cycle: 0)
+        // Labels and slot numbers should match, so we can use "internal" API.
+        algo.markDeletedInternal(t);    // += vector_size_
+        algo.unmarkDeletedInternal(t);  // -= vector_size_  (net per cycle: 0)
       }
     });
   }

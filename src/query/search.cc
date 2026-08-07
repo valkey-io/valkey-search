@@ -405,6 +405,10 @@ size_t EvaluateFilterAsPrimary(
     return result;
   }
   if (predicate->GetType() == PredicateType::kVectorRange) {
+    // This path is reached when a VR predicate appears as a leaf inside a
+    // compound query (AND/OR with other predicates). The single-VR fast path
+    // in SearchVectorRangeQuery() bypasses EvaluateFilterAsPrimary entirely,
+    // so this code only executes for multi-predicate queries.
     // Vector range predicates require scanning all keys and evaluating
     // distances, so use a universal set fetcher as the primary source.
     CHECK(parameters.index_schema != nullptr)

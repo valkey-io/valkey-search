@@ -51,6 +51,8 @@ class VectorHNSW : public VectorBase {
   }
 
   int GetDimensions() const { return dimensions_; }
+  size_t GetTrackedVectorCount() const
+      ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   size_t GetCapacity() const override
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
     return algo_->max_elements_;
@@ -102,6 +104,7 @@ class VectorHNSW : public VectorBase {
   void UnTrackVector(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(tracked_vectors_mutex_);
   uint64_t GetMaxInternalLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  uint64_t GetMaxLoadedLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetLabelCount() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:

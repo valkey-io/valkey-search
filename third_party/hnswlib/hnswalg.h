@@ -90,8 +90,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   void *dist_func_param_{nullptr};
 
   mutable std::mutex label_lookup_lock;  // lock for label_lookup_
-  std::unordered_map<labeltype, tableint> label_lookup_; // Only contains live slots
-  
+  std::unordered_map<labeltype, tableint>
+      label_lookup_;  // only contains live slots
   labeltype max_loaded_label_{0};  // max label stamped on any slot at load time
 
   std::default_random_engine level_generator_;
@@ -1029,13 +1029,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         if (tombstoned_label_lookup_.find(id) != tombstoned_label_lookup_.end()
             || label_lookup_.find(id) != label_lookup_.end()) {
           // Allow the first tombstone with the label to maintain ownership
-          dup_label_slots[i] = std::string(chunk->data() + size_links_level0_, vector_size_);
+          dup_label_slots[i] =
+              std::string(chunk->data() + size_links_level0_, vector_size_);
         } else {
-        // Track the vector
-        *(char **)((*data_level0_memory_)[i] + offsetData_) =
-          vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
-                                      vector_size_);
-        tombstoned_label_lookup_[id] = i;
+          // Track the vector
+          *(char **)((*data_level0_memory_)[i] + offsetData_) =
+              vector_tracker->TrackVector(id, chunk->data() + size_links_level0_,
+                                          vector_size_);
+          tombstoned_label_lookup_[id] = i;
         }
       }
 

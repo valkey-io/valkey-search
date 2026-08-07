@@ -387,9 +387,20 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       internal_id};
 }
 
-// Max label stamped on any slot at load time.
 template <typename T>
 uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
+  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
+  uint64_t max_label = 0;
+  for (const auto &[label, _] : algo_->label_lookup_) {
+    max_label = std::max(max_label, static_cast<uint64_t>(label));
+  }
+  return max_label;
+}
+
+// Max label stamped on any slot at load time (includes re-labeled tombstones,
+// which are absent from label_lookup_). Used to seed inc_id_ on load.
+template <typename T>
+uint64_t VectorHNSW<T>::GetMaxLoadedLabel() const {
   return static_cast<uint64_t>(algo_->max_loaded_label_);
 }
 
@@ -397,6 +408,12 @@ template <typename T>
 size_t VectorHNSW<T>::GetLabelCount() const {
   std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
   return algo_->label_lookup_.size();
+}
+
+template <typename T>
+size_t VectorHNSW<T>::GetTrackedVectorCount() const {
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
+  return tracked_vectors_.size();
 }
 
 template class VectorHNSW<float>;

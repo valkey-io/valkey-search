@@ -847,8 +847,8 @@ class BufTracker : public hnswlib::VectorTracker {
   }
   void CommitStagedVector(uint64_t slot, uint64_t label) override {
     by_label_[label] = staged_.at(slot);
+    staged_.erase(slot);
   }
-  void ClearStagedVectors() override { staged_.clear(); }
 
   // Bytes committed under `label`, or nullptr if none.
   const std::string *GetByLabel(uint64_t label) const {

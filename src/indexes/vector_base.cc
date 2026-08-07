@@ -352,8 +352,6 @@ void VectorBase::CommitStagedVector(uint64_t slot, uint64_t label) {
   staged_vectors_.erase(it);
 }
 
-void VectorBase::ClearStagedVectors() { staged_vectors_.clear(); }
-
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
                                               float magnitude,
                                               const InternedStringPtr &vector) {

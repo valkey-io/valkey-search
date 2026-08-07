@@ -989,7 +989,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     // Stage each slot's vector keyed by slot (not label) so duplicate labels
     // don't overwrite and free each other; final labels are committed below.
+    // Slots that lose a label collision are recorded here (not re-derived from
+    // label_lookup_ later) so this stays correct if tombstones are dropped from
+    // label_lookup_.
     labeltype max_label = 0;
+    std::vector<tableint> slots_needing_new_label;
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       loadCheck(chunk->size() ==
@@ -1000,6 +1004,30 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       memcpy((char *)&id, chunk->data() + size_links_level0_ + vector_size_,
              sizeof(labeltype));
       max_label = std::max(max_label, id);
+
+      // A label can appear on multiple slots in RDBs written by older versions.
+      // Keep the live slot (if any) as the label's keeper; record every other
+      // slot sharing the label so it can be given a fresh label below. We record
+      // the slot here rather than re-deriving duplicates from label_lookup_ later
+      // so this stays correct once tombstones are dropped from label_lookup_.
+      auto dup_it = label_lookup_.find(id);
+      if (dup_it == label_lookup_.end()) {
+        label_lookup_[id] = i;
+      } else {
+        valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
+            1;
+        if (!isMarkedDeleted(static_cast<tableint>(i))) {
+          loadCheck(isMarkedDeleted(dup_it->second),
+                    "duplicate live label in index");
+          // Live slot wins; the previously mapped slot loses the label.
+          slots_needing_new_label.push_back(dup_it->second);
+          dup_it->second = i;
+        } else {
+          // Tombstoned duplicate loses the label.
+          slots_needing_new_label.push_back(static_cast<tableint>(i));
+        }
+      }
+
       *(char **)((*data_level0_memory_)[i] + offsetData_) =
           vector_tracker->StageVector(i, chunk->data() + size_links_level0_,
                                       vector_size_);
@@ -1040,26 +1068,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       element_levels_[i] = 0;
       *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
 
-      labeltype ext_label = getExternalLabel(i);
-
-      // A label can appear on multiple slots in RDBs written by older versions.
-      // There can be one live slot and any number of tombstoned slots all
-      // carrying the same label. We just need to rebuild the label lookup to
-      // point the label at the live slot if there is one.
-      auto dup_it = label_lookup_.find(ext_label);
-      if (dup_it == label_lookup_.end()) {
-        label_lookup_[ext_label] = i;
-      } else {
-        valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
-            1;
-        if (!isMarkedDeleted(static_cast<tableint>(i))) {
-          loadCheck(isMarkedDeleted(dup_it->second),
-                    "duplicate live label in index");
-          // Overwrite mapping to tombstoned slot with the live one.
-          dup_it->second = i;
-        }
-      }
-
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
       loadCheck(size_chunk->size() == sizeof(size_t),
@@ -1096,22 +1104,18 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       }
     }
 
-    // Commit staged vectors under final labels. The keeper of each label (its
-    // live slot, else the first tombstone) keeps that label; any other slot
-    // sharing it is a duplicate and gets a fresh synthetic label so every slot
-    // ends up with a unique label and its own tracked-vector entry.
-    if (cur_element_count_ > 0) {
-      for (size_t i = 0; i < cur_element_count_; i++) {
-        labeltype label = getExternalLabel(i);
-        auto it = label_lookup_.find(label);
-        if (it == label_lookup_.end() || it->second != i) {
-          label = ++max_label;
-          setExternalLabel(i, label);
-          label_lookup_[label] = i;
-        }
-        vector_tracker->CommitStagedVector(i, label);
-      }
-      vector_tracker->ClearStagedVectors();
+    // Give each slot that lost a label collision a fresh unique label (drawn
+    // above every real label so it can't collide), keeping labels 1:1 with
+    // slots. Synthetics go into label_lookup_ so GetMaxInternalLabel seeds
+    // inc_id_ past them and future inserts can't reuse them.
+    for (tableint slot : slots_needing_new_label) {
+      labeltype label = ++max_label;
+      setExternalLabel(slot, label);
+      label_lookup_[label] = slot;
+    }
+    // Commit every slot's staged vector under its now-final label.
+    for (size_t slot = 0; slot < cur_element_count_; slot++) {
+      vector_tracker->CommitStagedVector(slot, getExternalLabel(slot));
     }
 
     // --- Global graph-invariant pass (requires all element_levels_ loaded) ---

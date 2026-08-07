@@ -28,12 +28,11 @@ class VectorTracker {
   // Two-phase tracking for the HNSW load path, where a legacy RDB may carry the
   // same label on several slots. StageVector interns the bytes and holds an
   // owning ref keyed by slot (returning the data pointer) so a later duplicate
-  // can't overwrite and free an earlier slot. CommitStagedVector moves that ref
-  // into the by-label map under the slot's final label once live/tombstone
-  // slots are distinguished.
+  // can't overwrite and free an earlier slot. CommitStagedVector then moves that
+  // ref into the by-label map under the slot's final label (and drops it from
+  // staging) once live/tombstone slots are distinguished.
   virtual char *StageVector(uint64_t slot, char *vector, size_t len) = 0;
   virtual void CommitStagedVector(uint64_t slot, uint64_t label) = 0;
-  virtual void ClearStagedVectors() = 0;
 };
 
 class InputStream {

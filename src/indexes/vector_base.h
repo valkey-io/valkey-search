@@ -183,7 +183,6 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   char* TrackVector(uint64_t internal_id, char* vector, size_t len) override;
   char* StageVector(uint64_t slot, char* vector, size_t len) override;
   void CommitStagedVector(uint64_t slot, uint64_t label) override;
-  void ClearStagedVectors() override;
   InternedStringPtr InternVector(absl::string_view record,
                                  std::optional<float>& magnitude);
   virtual uint64_t GetMaxInternalLabel() const { return 0; }

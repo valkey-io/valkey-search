@@ -283,10 +283,9 @@ def compare_row(l, r, key_type):
                 print("RL: ", r)
                 print("VK: ", l)
                 return False
-        elif lks[i].startswith("v") and key_type == "json":
-            # Vector compare fields
-            assert isinstance(l_filtered[lks[i]], list)
-            assert isinstance(r_filtered[rks[i]], list)
+        elif lks[i].startswith("v") and key_type == "json" and \
+                isinstance(l_filtered[lks[i]], list) and isinstance(r_filtered[rks[i]], list):
+            # Vector compare fields (only when values are actually lists)
             if len(l_filtered[lks[i]]) != len(r_filtered[rks[i]]):
                 print("mismatch vector field length: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
                 return False

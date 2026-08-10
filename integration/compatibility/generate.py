@@ -687,6 +687,12 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.search {key_type}_idx1 * NOCONTENT",
                 radius=r, negate=True,
             )
+        # Without NOCONTENT — verifies field behaviour on negated VR
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 *",
+            radius=5, negate=True,
+        )
 
     def test_vector_range_sortby(self, key_type, dialect):
         """VECTOR_RANGE with SORTBY overrides default distance ordering."""
@@ -736,6 +742,135 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.search {key_type}_idx1 * NOCONTENT",
             radius=50, query_vector=[0] * VECTOR_DIM,
             query_attrs="{$epsilon: 0.5}",
+        )
+
+    def _multi_vr_search(self, key_type, dialect, query_expr, radii,
+                         extra_args=None, blob=None):
+        """Build and execute a multi-VR search with parameterized radii."""
+        if blob is None:
+            blob = struct.pack(f"<{VECTOR_DIM}f", 0.0, 0.0, 0.0)
+        r1, r2 = radii
+        cmd = [
+            "ft.search", f"{key_type}_idx1", query_expr,
+            "PARAMS", "8",
+            "B1", blob, "R1", str(r1),
+            "B2", blob, "R2", str(r2),
+        ]
+        if extra_args:
+            cmd += extra_args
+        cmd += ["DIALECT", str(dialect)]
+        self.execute_command(cmd)
+
+    def test_vector_range_withsortkeys(self, key_type, dialect):
+        """VECTOR_RANGE with WITHSORTKEYS captures sort key format."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * SORTBY n1 ASC WITHSORTKEYS",
+            radius=50,
+        )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * SORTBY n1 DESC WITHSORTKEYS",
+            radius=50,
+        )
+
+    def test_vector_range_return_without_score(self, key_type, dialect):
+        """VECTOR_RANGE with RETURN excluding the score field."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * RETURN 1 n1",
+            radius=50,
+        )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * RETURN 0",
+            radius=50,
+        )
+
+    def test_vector_range_multi_vr_and(self, key_type, dialect):
+        """Two VR predicates on different fields combined with AND."""
+        self.setup_data("two vectors", key_type)
+        expr_named = "(@v1:[VECTOR_RANGE $R1 $B1]=>{$yield_distance_as: d1} @v2:[VECTOR_RANGE $R2 $B2]=>{$yield_distance_as: d2})"
+        expr_bare = "(@v1:[VECTOR_RANGE $R1 $B1] @v2:[VECTOR_RANGE $R2 $B2])"
+        self._multi_vr_search(key_type, dialect, expr_named, (5, 5))
+        self._multi_vr_search(key_type, dialect, expr_bare, (5, 5),
+                              extra_args=["NOCONTENT"])
+        self._multi_vr_search(key_type, dialect, expr_named, (50, 50))
+
+    def test_vector_range_multi_vr_or(self, key_type, dialect):
+        """Two VR predicates on different fields combined with OR."""
+        self.setup_data("two vectors", key_type)
+        expr_named = "(@v1:[VECTOR_RANGE $R1 $B1]=>{$yield_distance_as: d1} | @v2:[VECTOR_RANGE $R2 $B2]=>{$yield_distance_as: d2})"
+        expr_bare = "(@v1:[VECTOR_RANGE $R1 $B1] | @v2:[VECTOR_RANGE $R2 $B2])"
+        self._multi_vr_search(key_type, dialect, expr_named, (2, 2))
+        self._multi_vr_search(key_type, dialect, expr_bare, (2, 2),
+                              extra_args=["NOCONTENT"])
+        self._multi_vr_search(key_type, dialect, expr_named, (50, 2))
+
+    def test_vector_range_multi_vr_same_field(self, key_type, dialect):
+        """Two VR predicates on the same field with different radii (AND)."""
+        self.setup_data("two vectors", key_type)
+        expr = "(@v1:[VECTOR_RANGE $R1 $B1]=>{$yield_distance_as: d_tight} @v1:[VECTOR_RANGE $R2 $B2]=>{$yield_distance_as: d_wide})"
+        self._multi_vr_search(key_type, dialect, expr, (2, 50))
+
+    def test_vector_range_multi_vr_sortby(self, key_type, dialect):
+        """Two VR predicates with SORTBY on a named score field."""
+        self.setup_data("two vectors", key_type)
+        expr = "(@v1:[VECTOR_RANGE $R1 $B1]=>{$yield_distance_as: d1} @v2:[VECTOR_RANGE $R2 $B2]=>{$yield_distance_as: d2})"
+        self._multi_vr_search(key_type, dialect, expr, (200, 200),
+                              extra_args=["SORTBY", "d2", "ASC"])
+        self._multi_vr_search(key_type, dialect, expr, (200, 200),
+                              extra_args=["SORTBY", "d1", "DESC"])
+
+    def test_vector_range_knn_hybrid_with_scores(self, key_type, dialect):
+        """VR pre-filter + KNN with both score aliases."""
+        self.setup_data("two vectors", key_type)
+        blob = struct.pack(f"<{VECTOR_DIM}f", 0.0, 0.0, 0.0)
+        for query, extra, radius in [
+            ("@v1:[VECTOR_RANGE $RADIUS $VRBLOB]=>{$yield_distance_as: vr_dist}=>[KNN 3 @v2 $KBLOB AS knn_dist]", [], "10"),
+            ("@v1:[VECTOR_RANGE $RADIUS $VRBLOB]=>[KNN 3 @v2 $KBLOB]", ["NOCONTENT"], "10"),
+            ("@v1:[VECTOR_RANGE $RADIUS $VRBLOB]=>{$yield_distance_as: vr_dist}=>[KNN 100 @v2 $KBLOB AS knn_dist]", [], "5"),
+        ]:
+            cmd = [
+                "ft.search", f"{key_type}_idx1", query,
+                "PARAMS", "6",
+                "VRBLOB", blob, "RADIUS", radius,
+                "KBLOB", blob,
+            ] + extra + ["DIALECT", str(dialect)]
+            self.execute_command(cmd)
+
+    def test_vector_range_aggregate_multi_vr(self, key_type, dialect):
+        """Two VR predicates via FT.AGGREGATE with LOAD of both scores."""
+        self.setup_data("two vectors", key_type)
+        blob = struct.pack(f"<{VECTOR_DIM}f", 0.0, 0.0, 0.0)
+        expr = "(@v1:[VECTOR_RANGE $R1 $B1]=>{$yield_distance_as: d1} @v2:[VECTOR_RANGE $R2 $B2]=>{$yield_distance_as: d2})"
+        base = [
+            "ft.aggregate", f"{key_type}_idx1", expr,
+            "PARAMS", "8",
+            "B1", blob, "R1", "50",
+            "B2", blob, "R2", "50",
+            "LOAD", "3", "@__key", "@d1", "@d2",
+        ]
+        self.execute_command(base + ["DIALECT", str(dialect)])
+        self.execute_command(base + ["SORTBY", "2", "@d2", "ASC",
+                                     "DIALECT", str(dialect)])
+
+    def test_vector_range_yield_distance_as_sortby(self, key_type, dialect):
+        """SORTBY on a custom $yield_distance_as name."""
+        self.setup_data("sortable numbers", key_type)
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * SORTBY my_dist ASC",
+            radius=50,
+            query_attrs="{$yield_distance_as: my_dist}",
+        )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * SORTBY my_dist DESC",
+            radius=50,
+            query_attrs="{$yield_distance_as: my_dist}",
         )
 
     def test_tag_escaped_special_chars(self, key_type, dialect):

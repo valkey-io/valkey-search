@@ -496,6 +496,9 @@ class IndexSchema : public KeyspaceEventSubscription,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const Key &key);
+  // Drains the multi/exec queue on the calling thread, for when the mutations
+  // thread pool is suspended.
+  void ProcessMultiQueueInline();
   void DrainMutationQueue(ValkeyModuleCtx *ctx) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 

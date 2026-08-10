@@ -320,12 +320,12 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     std::optional<size_t> ef_runtime, bool enable_partial_results) {
   auto perform_search = [this, count, &filter, enable_partial_results,
                          &ef_runtime,
-                         &cancellation_token](absl::string_view query)
+                         &cancellation_token](absl::string_view query_view)
                             ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      auto res = algo_->searchKnn((T*)query.data(), count, ef_runtime,
+      auto res = algo_->searchKnn((T*)query_view.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);
       if (!enable_partial_results && cancellation_token->IsCancelled()) {
         return absl::CancelledError(
@@ -338,15 +338,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
       return absl::InternalError(e.what());
     }
   };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        auto search_result,
-        perform_search(absl::string_view((const char*)norm_record.data(),
-                                         norm_record.size())));
-    return CreateReply(search_result);
-  }
-  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
+  auto nq = NormalizeQueryIfNeeded(query);
+  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(nq.view));
   return CreateReply(search_result);
 }
 
@@ -369,8 +362,6 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      // Use ef_runtime = max_candidates so the search explores broadly
-      // enough to find all in-range neighbors.
       auto res = algo_->searchKnn((T*)query_view.data(), max_candidates,
                                   std::optional<size_t>(max_candidates),
                                   filter.get(), &cancel_condition);
@@ -382,20 +373,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     }
   };
 
-  std::priority_queue<std::pair<T, hnswlib::labeltype>> raw_results;
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        raw_results, perform_search(absl::string_view(
-                         (const char*)norm_record.data(), norm_record.size())));
-  } else {
-    VMSDK_ASSIGN_OR_RETURN(raw_results, perform_search(query));
-  }
+  auto nq = NormalizeQueryIfNeeded(query);
+  VMSDK_ASSIGN_OR_RETURN(auto raw_results, perform_search(nq.view));
 
-  // Filter results to only those within the strict radius.  For normalized
-  // (cosine) indexes, apply the same clamping that ComputeDistanceFromRecord
-  // uses so that tiny floating-point noise near 0 does not cause exact-match
-  // vectors to be excluded when radius is 0.
+  // Filter results to only those within the strict radius, applying cosine
+  // clamping so floating-point noise doesn't exclude exact matches.
   std::vector<Neighbor> neighbors;
   neighbors.reserve(raw_results.size());
   while (!raw_results.empty()) {
@@ -404,14 +386,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     if (cancellation_token->IsCancelled()) {
       break;
     }
-    float clamped_dist = static_cast<float>(dist);
-    if (normalize_) {
-      if (clamped_dist <= std::numeric_limits<float>::epsilon()) {
-        clamped_dist = 0.0f;
-      } else if (clamped_dist >= 2.0f - std::numeric_limits<float>::epsilon()) {
-        clamped_dist = std::nextafter(2.0f, 3.0f);
-      }
-    }
+    float clamped_dist = ClampCosineDistance(static_cast<float>(dist));
     if (clamped_dist > radius) {
       continue;
     }

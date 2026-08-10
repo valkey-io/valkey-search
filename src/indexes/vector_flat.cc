@@ -241,15 +241,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
       return absl::InternalError(e.what());
     }
   };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        auto search_result,
-        perform_search(absl::string_view((const char*)norm_record.data(),
-                                         norm_record.size())));
-    return CreateReply(search_result);
-  }
-  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
+  auto nq = NormalizeQueryIfNeeded(query);
+  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(nq.view));
   return CreateReply(search_result);
 }
 
@@ -276,13 +269,7 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token& cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
-  std::vector<char> normalized_vec;
-  absl::string_view query_view = query;
-  if (normalize_) {
-    normalized_vec = NormalizeEmbedding(query, GetDataTypeSize());
-    query_view = absl::string_view((const char*)normalized_vec.data(),
-                                   normalized_vec.size());
-  }
+  auto nq = NormalizeQueryIfNeeded(query);
 
   std::vector<Neighbor> neighbors;
   // Pre-allocate to reduce re-allocations during the linear scan.
@@ -294,16 +281,16 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
         if (cancellation_token->IsCancelled()) {
           return absl::CancelledError("SearchRange cancelled");
         }
-        // Apply optional inline filter by internal-id label.
-        auto dist_result = ComputeDistanceFromRecord(key, query_view);
+        auto dist_result = ComputeDistanceFromRecord(key, nq.view);
         if (!dist_result.ok()) {
           return absl::OkStatus();
         }
         if (filter && !(*filter)(dist_result->second)) {
           return absl::OkStatus();
         }
-        if (dist_result->first <= radius) {
-          neighbors.emplace_back(key, dist_result->first);
+        float clamped_dist = ClampCosineDistance(dist_result->first);
+        if (clamped_dist <= radius) {
+          neighbors.emplace_back(key, clamped_dist);
         }
         return absl::OkStatus();
       });

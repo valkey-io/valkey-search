@@ -8,6 +8,7 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -254,6 +255,35 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
     int32_t dim = record.size() / GetDataTypeSize();
     return dim == dimensions_ && (record.size() % data_type_size == 0);
   }
+
+  // Holds an optionally-normalized query vector. `view` is always valid and
+  // points either into `storage` (if normalization was applied) or into the
+  // original caller-owned buffer.
+  struct NormalizedQuery {
+    std::vector<char> storage;  // owns normalized data when normalize_ is true
+    absl::string_view view;     // always usable as the query input
+  };
+
+  // Returns a normalized copy of `query` when the index uses cosine distance,
+  // or a zero-copy view into the original buffer otherwise.
+  NormalizedQuery NormalizeQueryIfNeeded(absl::string_view query) const {
+    if (normalize_) {
+      auto norm = NormalizeEmbedding(query, GetDataTypeSize());
+      absl::string_view v(reinterpret_cast<const char*>(norm.data()),
+                          norm.size());
+      return {std::move(norm), v};
+    }
+    return {{}, query};
+  }
+
+  float ClampCosineDistance(float dist) const {
+    if (!normalize_) return dist;
+    if (dist <= std::numeric_limits<float>::epsilon()) return 0.0f;
+    if (dist >= 2.0f - std::numeric_limits<float>::epsilon())
+      return std::nextafter(2.0f, 3.0f);
+    return dist;
+  }
+
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   template <typename T>
   void Init(int dimensions, data_model::DistanceMetric distance_metric,

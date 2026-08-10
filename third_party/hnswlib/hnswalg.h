@@ -1283,10 +1283,8 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
   /*
    * Adds point. Updates the point if it is already in the index.
-   * If replacement of deleted elements is enabled: replaces previously deleted
-   * point if any, updating it with new point. If the label already exists in a
-   * slot, the same slot will be used. If it's a different label, the old label
-   * is returned.
+   * If replacement of deleted elements is enabled, a tombstoned slot is reused
+   * if there are any available, and the old label of the slot is returned.
    */
   std::optional<labeltype> addPoint(const void *data_point, labeltype label,
                 bool replace_deleted = false) {
@@ -1297,29 +1295,23 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 
     // lock all operations with element by label
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
-    if (!replace_deleted) {
-      addPoint(data_point, label, -1);
-      return std::nullopt;
-    }
 
     // If the label already exists, reuse the same slot.
+    // WARN: Labels are not to be reused unless updating a live slot.
     {
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
       auto search = label_lookup_.find(label);
       if (search != label_lookup_.end()) {
         tableint existing = search->second;
         lock_table.unlock();
-        if (isMarkedDeleted(existing)) {
-          {
-            std::unique_lock<std::mutex> lock_deleted_elements(
-                deleted_elements_lock);
-            deleted_elements.erase(existing);
-          }
-          unmarkDeletedInternal(existing);
-        }
         updatePoint(data_point, existing, 1.0);
         return std::nullopt;
       }
+    }
+
+    if (!replace_deleted) {
+      addPoint(data_point, label, -1);
+      return std::nullopt;
     }
 
     // Otherwise, reuse a vacant tombstoned slot if any.
@@ -1351,7 +1343,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       updatePoint(data_point, internal_id_replaced, 1.0);
       return std::optional<labeltype>(label_replaced);
     }
-      return std::nullopt;
+    return std::nullopt;
   }
 
   void updatePoint(const void *dataPoint, tableint internalId,
@@ -1536,36 +1528,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
   }
 
   tableint addPoint(const void *data_point, labeltype label, int level) {
+    if (cur_element_count_ >= max_elements_) {
+      throw std::runtime_error(
+          "The number of elements exceeds the specified limit");
+    }
+  
     tableint cur_c = 0;
     {
-      // Checking if the element with the same label already exists
-      // if so, updating it *instead* of creating a new element.
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
-      auto search = label_lookup_.find(label);
-      if (search != label_lookup_.end()) {
-        tableint existingInternalId = search->second;
-        if (allow_replace_deleted_) {
-          if (isMarkedDeleted(existingInternalId)) {
-            throw std::runtime_error(
-                "Can't use addPoint to update deleted elements if replacement "
-                "of deleted elements is enabled.");
-          }
-        }
-        lock_table.unlock();
-
-        if (isMarkedDeleted(existingInternalId)) {
-          unmarkDeletedInternal(existingInternalId);
-        }
-        updatePoint(data_point, existingInternalId, 1.0);
-
-        return existingInternalId;
-      }
-
-      if (cur_element_count_ >= max_elements_) {
-        throw std::runtime_error(
-            "The number of elements exceeds the specified limit");
-      }
-
       cur_c = cur_element_count_;
       cur_element_count_++;
       label_lookup_[label] = cur_c;

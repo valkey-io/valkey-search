@@ -348,6 +348,8 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
             "PARAMS", "2", "q", self.LIVE_VEC,
             "RETURN", "1", "vector",
         )
+        assert search_result[0] == 1, \
+            f"Expected 1 search result, got {search_result[0]}"
         returned_fields = search_result[2]
         vector_value = returned_fields[returned_fields.index(b"vector") + 1]
         assert vector_value == self.LIVE_VEC, \

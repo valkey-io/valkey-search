@@ -612,7 +612,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   // Verifies we reused tombstoned hnsw nodes
   EXPECT_EQ(base->GetLabelCount(), 13u);
 
-  // VERY IMPORTANT. Previosuly we weren't actually freeing
+  // VERY IMPORTANT. Previously we weren't actually freeing
   // vectors of reused slots.
   EXPECT_EQ((*index)->GetTrackedVectorCount(), 13u);
   

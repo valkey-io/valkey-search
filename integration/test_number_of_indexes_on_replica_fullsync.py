@@ -33,16 +33,17 @@ class TestNumberOfIndexesOnReplicaFullSync(ValkeySearchTestCaseBase):
             lambda: replica_num_indexes(replica_client), 1, timeout=30
         )
 
-        # Detach, flush, then re-attach to force a fresh full sync.
+        # Detach then re-attach to force a fresh full sync.
         sync_full_before = primary_client.info("stats")["sync_full"]
         replica_client.execute_command("REPLICAOF", "NO", "ONE")
-        replica_client.execute_command("FLUSHALL")
         self.rg.setup_replications_cmd()
 
         assert primary_client.info("stats")["sync_full"] == sync_full_before + 1
 
-        # After the full sync completes, the replica must report exactly
-        # the same number of indexes as the primary.
-        waiters.wait_for_equal(
-            lambda: replica_num_indexes(replica_client), 1, timeout=30
+        # Wait for the RDB load to finish before reading the index count.
+        waiters.wait_for_true(
+            lambda: replica_client.info("replication")["master_link_status"]
+            == "up",
+            timeout=30,
         )
+        assert replica_num_indexes(replica_client) == 1

@@ -615,7 +615,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   // VERY IMPORTANT. Previously we weren't actually freeing
   // vectors of reused slots.
   EXPECT_EQ((*index)->GetTrackedVectorCount(), 13u);
-  
+
   absl::string_view query = VectorToStr(new_vectors[0]);
   auto search_result = (*index)->Search(query, 13, CancelNever());
   VMSDK_EXPECT_OK(search_result);
@@ -1016,9 +1016,10 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
 }
 
 namespace {
-// Build a golden of `num_slots` slots that all share the live slot's label, as a
-// legacy dup-label RDB does. Every slot in `tombstone_slots` is deleted; the one
-// live slot keeps the shared label. Each slot still holds its own distinct bytes.
+// Build a golden of `num_slots` slots that all share the live slot's label, as
+// a legacy dup-label RDB does. Every slot in `tombstone_slots` is deleted; the
+// one live slot keeps the shared label. Each slot still holds its own distinct
+// bytes.
 ChunkStream DuplicateLabelGolden(size_t num_slots,
                                  const std::vector<size_t> &tombstone_slots) {
   hnswlib::L2Space space{kDimensions};
@@ -1050,16 +1051,15 @@ ChunkStream DuplicateLabelGolden(size_t num_slots,
 }  // namespace
 
 // Loading a dup-label RDB must give every slot a unique label and leave each
-// slot's own vector intact. The live slot keeps the shared label; each tombstone
-// is re-labeled uniquely. label_lookup_ holds live labels only. Covers both
-// 2-slot orderings and a 3-slot group (two tombstones, one live).
+// slot's own vector intact. The live slot keeps the shared label; each
+// tombstone is re-labeled uniquely. label_lookup_ holds live labels only.
+// Covers both 2-slot orderings and a 3-slot group (two tombstones, one live).
 TEST_F(VectorIndexTest, LoadDuplicateLabelReassignsUniqueLabels) {
   struct Case {
     size_t num_slots;
     std::vector<size_t> tombstones;
   };
-  for (const Case &c : std::vector<Case>{
-           {2, {1}}, {2, {0}}, {3, {0, 2}}}) {
+  for (const Case &c : std::vector<Case>{{2, {1}}, {2, {0}}, {3, {0, 2}}}) {
     size_t live_slot = c.num_slots;  // set below
     for (size_t i = 0; i < c.num_slots; i++) {
       if (std::find(c.tombstones.begin(), c.tombstones.end(), i) ==
@@ -1067,8 +1067,8 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelReassignsUniqueLabels) {
         live_slot = i;
       }
     }
-    auto vectors = DeterministicallyGenerateVectors(c.num_slots, kDimensions,
-                                                    10.0);
+    auto vectors =
+        DeterministicallyGenerateVectors(c.num_slots, kDimensions, 10.0);
     auto golden = DuplicateLabelGolden(c.num_slots, c.tombstones);
 
     hnswlib::L2Space space{kDimensions};
@@ -1088,7 +1088,8 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelReassignsUniqueLabels) {
     std::set<hnswlib::labeltype> labels;
     for (size_t i = 0; i < c.num_slots; i++) {
       hnswlib::labeltype label = algo.getExternalLabel(i);
-      EXPECT_TRUE(labels.insert(label).second) << "duplicate label on slot " << i;
+      EXPECT_TRUE(labels.insert(label).second)
+          << "duplicate label on slot " << i;
       EXPECT_LE(label, algo.max_loaded_label_);
       EXPECT_EQ(std::string(algo.getDataByInternalId(i), kVecBytes),
                 VectorToStr(vectors[i]));

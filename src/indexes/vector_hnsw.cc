@@ -282,9 +282,8 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     // addPoint() routes an existing label to an in-place update.
     auto evicted = algo_->addPoint((T *)record.data(), internal_id,
                                    algo_->allow_replace_deleted_);
-    CHECK(!evicted.has_value())
-        << "modify of live label " << internal_id << " unexpectedly displaced "
-        << *evicted;
+    CHECK(!evicted.has_value()) << "modify of live label " << internal_id
+                                << " unexpectedly displaced " << *evicted;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(

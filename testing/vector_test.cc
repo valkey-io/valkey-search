@@ -594,11 +594,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
   }
   VectorBase *base = index->get();
-  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
+  VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(7), DeletionType::kNone));
   VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(8), DeletionType::kNone));
-  VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(9), DeletionType::kNone));
-  // Deletes drop labels 8,9 from the live-only label_lookup_.
-  EXPECT_EQ(base->GetMaxInternalLabel(), 7u);
+  // Deletes drop those labels from the live-only label_lookup_.
   EXPECT_EQ(base->GetLabelCount(), 8u);
   EXPECT_EQ(base->GetTrackedKeyCount(), 8u);
   EXPECT_EQ((*index)->GetTrackedVectorCount(), 10u);
@@ -839,16 +837,26 @@ class ChunkStream : public hnswlib::InputStream, public hnswlib::OutputStream {
 };
 
 // VectorTracker that copies each vector into stable storage and hands back a
-// pointer to it (LoadIndex stores that pointer in the level-0 record).
+// pointer to it (LoadIndex stores that pointer in the level-0 record). Records
+// bytes by label, mirroring how the real tracker keys tracked_vectors_.
 class BufTracker : public hnswlib::VectorTracker {
  public:
-  char *TrackVector(uint64_t /*id*/, char *vector, size_t len) override {
+  char *TrackVector(uint64_t id, char *vector, size_t len) override {
     storage_.emplace_back(vector, len);
+    by_label_[id] = &storage_.back();
     return storage_.back().data();
   }
 
+  const std::string *GetByLabel(uint64_t label) const {
+    auto it = by_label_.find(label);
+    return it == by_label_.end() ? nullptr : it->second;
+  }
+
+  size_t LabelCount() const { return by_label_.size(); }
+
  private:
   std::deque<std::string> storage_;
+  absl::flat_hash_map<uint64_t, std::string *> by_label_;
 };
 
 // On-disk geometry for kM / kDimensions, used to locate bytes for mutation.
@@ -1084,7 +1092,13 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelReassignsUniqueLabels) {
       EXPECT_LE(label, algo.max_loaded_label_);
       EXPECT_EQ(std::string(algo.getDataByInternalId(i), kVecBytes),
                 VectorToStr(vectors[i]));
+      // The vector is tracked under the slot's final label, not a stale one.
+      const std::string *tracked = tracker.GetByLabel(label);
+      ASSERT_NE(tracked, nullptr) << "no tracked vector for slot " << i;
+      EXPECT_EQ(*tracked, VectorToStr(vectors[i]));
     }
+    // One tracked entry per slot: no stale duplicate-label entry left behind.
+    EXPECT_EQ(tracker.LabelCount(), c.num_slots);
 
     // Reusing a tombstone returns its displaced (synthetic) label so the caller
     // can drop it from tracked_vectors_, and must not disturb the live slot.

@@ -301,7 +301,7 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         assert search_result[0] == 0, \
             f"Expected doc:1 to be deleted, got {search_result[0]} results"
 
-    def test_labels_are_unique(self):
+    def test_label_uniqueness_restored(self):
         '''
         The vectors in HNSW are owned by tracked_vectors_ at the module level
         which maps labels to vectors. The HNSW library holds a raw pointer to them.

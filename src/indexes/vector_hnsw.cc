@@ -282,7 +282,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
     // addPoint() routes an existing label to an in-place update.
     auto evicted = algo_->addPoint((T *)record.data(), internal_id,
                                    algo_->allow_replace_deleted_);
-    CHECK(!evicted.has_value());
+    CHECK(!evicted.has_value()) << "The slot should be re-used";
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -385,16 +385,6 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       algo_->fstdistfunc_((T *)query.data(), algo_->getDataByInternalId(*id),
                           algo_->dist_func_param_),
       internal_id};
-}
-
-template <typename T>
-uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
-  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
-  uint64_t max_label = 0;
-  for (const auto &[label, _] : algo_->label_lookup_) {
-    max_label = std::max(max_label, static_cast<uint64_t>(label));
-  }
-  return max_label;
 }
 
 // Max label stamped on any slot at load time (includes re-labeled tombstones,

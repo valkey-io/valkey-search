@@ -509,6 +509,24 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
           lambda: self._check_info_sum(name),
           sum_value
         )
+
+    def check_cancel_sum(self, sum_value: int):
+        """Total cancellations across the cluster, regardless of how each shard
+        observed the cancellation.
+
+        With cooperative fan-out cancellation (issue #1284), when the
+        coordinator aborts an unrecoverable ALLSHARDS query it calls
+        TryCancel() on the outstanding remote RPCs. A remote shard that sees
+        its gRPC context cancelled before its own ForceTimeout poll fires
+        records the cancellation as gRPCCancels rather than ForceCancels.
+        Which counter a shard increments is therefore a race, but exactly one
+        of them moves per shard, so their sum is deterministic.
+        """
+        waiters.wait_for_equal(
+            lambda: self._check_info_sum("search_test-counter-ForceCancels")
+            + self._check_info_sum("search_test-counter-gRPCCancels"),
+            sum_value,
+        )
     
     def sum_docs(self, index: Index) -> int:
         return sum([index.info(self.client_for_primary(i)).num_docs for i in range(len(self.replication_groups))])
@@ -551,13 +569,13 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         # Normal HNSW path
         #
         hnsw_result = search(client, "hnsw", True, None, enable_partial_results=False)
-        self.check_info_sum("search_test-counter-ForceCancels", 3)
+        self.check_cancel_sum(3)
 
         #
         # Pre-filtering FLAT path (flat always uses pre-filtering)
         #
         flat_result = search(client, "flat", True, 10, enable_partial_results=False)
-        self.check_info_sum("search_test-counter-ForceCancels", 6)
+        self.check_cancel_sum(6)
         self.check_info_sum("search_prefiltering_requests_count", 3)
 
         #
@@ -567,7 +585,7 @@ class TestCancelCME(ValkeySearchClusterTestCaseDebugMode):
         self.config_set("search.prefiltering-threshold-ratio", "0.5")
         hnsw_result = search(client, "hnsw", True, 10, enable_partial_results=False)
         self.check_info_sum("search_prefiltering_requests_count", 6)
-        self.check_info_sum("search_test-counter-ForceCancels", 9)
+        self.check_cancel_sum(9)
 
     @wait_for_background_tasks()
     def test_aggregate_timeout_cluster(self):

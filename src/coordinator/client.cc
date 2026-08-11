@@ -9,7 +9,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -141,7 +143,7 @@ void ClientImpl::GetGlobalMetadata(GetGlobalMetadataCallback done) {
 
 void ClientImpl::SearchIndexPartition(
     std::unique_ptr<SearchIndexPartitionRequest> request,
-    SearchIndexPartitionCallback done) {
+    std::stop_token stop_token, SearchIndexPartitionCallback done) {
   struct SearchIndexPartitionArgs {
     ::grpc::ClientContext context;
     std::unique_ptr<SearchIndexPartitionRequest> request;
@@ -149,8 +151,10 @@ void ClientImpl::SearchIndexPartition(
     SearchIndexPartitionResponse *response;
     SearchIndexPartitionCallback callback;
     std::unique_ptr<vmsdk::StopWatch> latency_sample;
+    std::optional<std::stop_callback<std::function<void()>>> stop_callback;
   };
   auto args = std::make_unique<SearchIndexPartitionArgs>();
+  auto args_raw = args.get();
   args->response =
       google::protobuf::Arena::Create<SearchIndexPartitionResponse>(
           &args->arena);
@@ -159,7 +163,9 @@ void ClientImpl::SearchIndexPartition(
   args->callback = std::move(done);
   args->request = std::move(request);
   args->latency_sample = SAMPLE_EVERY_N(100);
-  auto *args_raw = args.release();
+  args->stop_callback.emplace(stop_token,
+                              [args_raw] { args_raw->context.TryCancel(); });
+  args.release();
   Metrics::GetStats().coordinator_bytes_out.fetch_add(
       args_raw->request->ByteSizeLong(), std::memory_order_relaxed);
   stub_->async()->SearchIndexPartition(
@@ -179,6 +185,13 @@ void ClientImpl::SearchIndexPartition(
               .SubmitSample(std::move(args->latency_sample));
           Metrics::GetStats().coordinator_bytes_in.fetch_add(
               response_bytes, std::memory_order_relaxed);
+        } else if (s.error_code() == grpc::StatusCode::CANCELLED) {
+          // A CANCELLED status is the result of the fanout proactively
+          // aborting this RPC (e.g. a sibling shard failed, or the query
+          // timed out), not an RPC failure. Count it separately so it does
+          // not pollute the failure counter or failure latency.
+          Metrics::GetStats()
+              .coordinator_client_search_index_partition_cancelled_cnt++;
         } else {
           Metrics::GetStats()
               .coordinator_client_search_index_partition_failure_cnt++;

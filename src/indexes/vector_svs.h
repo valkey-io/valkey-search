@@ -179,6 +179,9 @@ class VectorSVS : public VectorBase {
   };
   std::vector<PendingInsert> pending_buffer_ ABSL_GUARDED_BY(index_mutex_);
   bool buffer_flushing_ ABSL_GUARDED_BY(index_mutex_){false};
+  size_t last_reported_svs_memory_ ABSL_GUARDED_BY(index_mutex_){0};
+
+  void UpdateReportedMemory() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
 };
 
 }  // namespace valkey_search::indexes

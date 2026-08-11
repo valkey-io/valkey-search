@@ -38,6 +38,7 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -144,6 +145,10 @@ VectorSVS<T>::~VectorSVS() {
     auto status = svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
     if (!status.ok()) {
       VMSDK_LOG(WARNING, nullptr) << "SVS destroy failed: " << status.message();
+    }
+    if (last_reported_svs_memory_ > 0) {
+      vmsdk::ReportFreeMemorySize(last_reported_svs_memory_);
+      last_reported_svs_memory_ = 0;
     }
     svs_index_ = nullptr;
   }
@@ -384,6 +389,7 @@ absl::Status VectorSVS<T>::FlushBuffer() {
     VMSDK_LOG(NOTICE, nullptr)
         << "Flush complete. SVS graph now has " << num_elements_ << " vectors.";
 
+    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     buffer_flushing_ = false;
@@ -493,6 +499,7 @@ absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
     VMSDK_LOG(NOTICE, nullptr)
         << "LeanVec index ready. Trained on " << n << " vectors, ingested " << n
         << " vectors. State=ready.";
+    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     buffer_flushing_ = false;
@@ -531,6 +538,7 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
     if (num_elements_ > 0) {
       --num_elements_;
     }
+    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     return absl::InternalError(
@@ -572,6 +580,7 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
           absl::StrCat("SVS add (modify) failed: ", add_status.message()));
     }
 
+    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     return absl::InternalError(
@@ -994,6 +1003,18 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   return absl::UnimplementedError(
       "SVS index RDB persistence is not yet implemented");
+}
+
+template <typename T>
+void VectorSVS<T>::UpdateReportedMemory() {
+  if (svs_index_ == nullptr) return;
+  size_t new_memory = svs_index_->get_memory_usage();
+  if (new_memory > last_reported_svs_memory_) {
+    vmsdk::ReportAllocMemorySize(new_memory - last_reported_svs_memory_);
+  } else if (new_memory < last_reported_svs_memory_) {
+    vmsdk::ReportFreeMemorySize(last_reported_svs_memory_ - new_memory);
+  }
+  last_reported_svs_memory_ = new_memory;
 }
 
 // Explicit template instantiation

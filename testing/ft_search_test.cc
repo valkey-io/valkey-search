@@ -561,10 +561,12 @@ TEST_P(FTSearchTest, FTSearchTests) {
             *mock_client_pool_raw,
             GetClient(testing::StrEq(absl::StrCat("127.0.0.1:", coord_port))))
             .WillRepeatedly(testing::Return(mock_client));
-        EXPECT_CALL(*mock_client, SearchIndexPartition(testing::_, testing::_))
+        EXPECT_CALL(*mock_client,
+                    SearchIndexPartition(testing::_, testing::_, testing::_))
             .WillRepeatedly(
                 [&](std::unique_ptr<coordinator::SearchIndexPartitionRequest>
                         request,
+                    std::stop_token,
                     coordinator::SearchIndexPartitionCallback done) {
                   // For this test, we just have the remote nodes return
                   // nothing.

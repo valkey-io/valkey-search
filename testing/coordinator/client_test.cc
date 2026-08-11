@@ -7,12 +7,19 @@
 
 #include "src/coordinator/client.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <utility>
 
+#include "absl/synchronization/notification.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
+#include "grpcpp/grpcpp.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/metrics.h"
@@ -206,7 +213,7 @@ TEST_F(ClientByteCountingTest, CountsResponseBytesBeforeCallbackMutation) {
 
   bool callback_called = false;
   client.SearchIndexPartition(
-      std::move(request),
+      std::move(request), {},
       [&](grpc::Status status, SearchIndexPartitionResponse &resp) {
         EXPECT_TRUE(status.ok());
         callback_called = true;
@@ -275,7 +282,7 @@ TEST_F(ClientByteCountingTest, CountsCorrectBytesOnSuccess) {
 
   bool callback_called = false;
   client.SearchIndexPartition(
-      std::move(request),
+      std::move(request), {},
       [&callback_called](grpc::Status status,
                          SearchIndexPartitionResponse &resp) {
         EXPECT_TRUE(status.ok());
@@ -326,7 +333,7 @@ TEST_F(ClientByteCountingTest, DoesNotCountResponseBytesOnError) {
 
   bool callback_called = false;
   client.SearchIndexPartition(
-      std::move(request),
+      std::move(request), {},
       [&callback_called](grpc::Status status,
                          SearchIndexPartitionResponse &resp) {
         EXPECT_FALSE(status.ok());
@@ -383,6 +390,147 @@ TEST_F(ClientByteCountingTest, CountsInfoResponseBytesBeforeCallbackMutation) {
             actual_request_size);
   EXPECT_EQ(Metrics::GetStats().coordinator_bytes_in.load(),
             actual_response_size);
+}
+
+// Tests stop_token cancellation in client.cc.
+class ClientCancellationTest : public vmsdk::ValkeyTest {};
+
+namespace {
+
+// Test service that waits for cancellation or a deadline.
+// It checks TryCancel on a live RPC.
+class BlockingCoordinatorService : public Coordinator::CallbackService {
+ public:
+  grpc::ServerUnaryReactor *SearchIndexPartition(
+      grpc::CallbackServerContext *context, const SearchIndexPartitionRequest *,
+      SearchIndexPartitionResponse *) override {
+    handler_entered_.Notify();
+    const absl::Time deadline = absl::Now() + absl::Seconds(10);
+    while (!context->IsCancelled() && absl::Now() < deadline) {
+      absl::SleepFor(absl::Milliseconds(1));
+    }
+    observed_cancel_.store(context->IsCancelled());
+    handler_done_.Notify();
+    auto *reactor = context->DefaultReactor();
+    reactor->Finish(grpc::Status::OK);
+    return reactor;
+  }
+
+  absl::Notification handler_entered_;
+  absl::Notification handler_done_;
+  std::atomic_bool observed_cancel_{false};
+};
+
+}  // namespace
+
+// request_stop() must cancel the RPC and deliver CANCELLED.
+TEST_F(ClientCancellationTest, StopRequestTryCancelsInFlightRpc) {
+  BlockingCoordinatorService service;
+  grpc::ServerBuilder builder;
+  builder.RegisterService(&service);
+  auto server = builder.BuildAndStart();
+  ASSERT_NE(server, nullptr);
+  grpc::ChannelArguments channel_args;
+  ClientImpl client(
+      nullptr, "in-process",
+      Coordinator::NewStub(server->InProcessChannel(channel_args)));
+
+  std::stop_source stop_source;
+  absl::Notification done;
+  grpc::StatusCode observed_code = grpc::StatusCode::OK;
+  const uint64_t failures_before =
+      Metrics::GetStats()
+          .coordinator_client_search_index_partition_failure_cnt.load();
+  const uint64_t cancels_before =
+      Metrics::GetStats()
+          .coordinator_client_search_index_partition_cancelled_cnt.load();
+  client.SearchIndexPartition(
+      std::make_unique<SearchIndexPartitionRequest>(), stop_source.get_token(),
+      [&](grpc::Status status, SearchIndexPartitionResponse &) {
+        observed_code = status.error_code();
+        done.Notify();
+      });
+
+  ASSERT_TRUE(service.handler_entered_.WaitForNotificationWithTimeout(
+      absl::Seconds(10)));
+  stop_source.request_stop();
+
+  ASSERT_TRUE(done.WaitForNotificationWithTimeout(absl::Seconds(10)));
+  ASSERT_TRUE(
+      service.handler_done_.WaitForNotificationWithTimeout(absl::Seconds(10)));
+  EXPECT_TRUE(service.observed_cancel_.load());
+  EXPECT_EQ(observed_code, grpc::StatusCode::CANCELLED);
+  // A cancelled RPC is counted as cancelled, not as a failure.
+  EXPECT_EQ(Metrics::GetStats()
+                .coordinator_client_search_index_partition_failure_cnt.load(),
+            failures_before);
+  EXPECT_EQ(Metrics::GetStats()
+                .coordinator_client_search_index_partition_cancelled_cnt.load(),
+            cancels_before + 1);
+  server->Shutdown();
+}
+
+// The RPC ends before stop is requested. This must be safe.
+TEST_F(ClientCancellationTest, StopAfterCompletionIsSafe) {
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  std::stop_source stop_source;
+  bool callback_called = false;
+  client.SearchIndexPartition(
+      std::make_unique<SearchIndexPartitionRequest>(), stop_source.get_token(),
+      [&](grpc::Status status, SearchIndexPartitionResponse &) {
+        EXPECT_TRUE(status.ok());
+        callback_called = true;
+      });
+  ASSERT_TRUE(callback_called);
+
+  // The fake completes the RPC at once.
+  stop_source.request_stop();
+}
+
+// A stopped token must still deliver one completion callback.
+TEST_F(ClientCancellationTest, AlreadyStoppedTokenStillDeliversCallback) {
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  std::stop_source stop_source;
+  stop_source.request_stop();
+
+  int callback_count = 0;
+  client.SearchIndexPartition(
+      std::make_unique<SearchIndexPartitionRequest>(), stop_source.get_token(),
+      [&](grpc::Status, SearchIndexPartitionResponse &) { ++callback_count; });
+  EXPECT_EQ(callback_count, 1);
+}
+
+// Race request_stop() with RPC completion.
+// Run with TSan or ASan to check lifetime safety.
+TEST_F(ClientCancellationTest, ConcurrentStopAndCompletionStress) {
+  auto stub = std::make_unique<FakeCoordinatorStub>();
+  ClientImpl client(nullptr, "test_address", std::move(stub));
+
+  constexpr int kIterations = 100;
+  for (int i = 0; i < kIterations; ++i) {
+    std::stop_source stop_source;
+    std::atomic_bool go{false};
+    std::thread stopper([&] {
+      while (!go.load(std::memory_order_acquire)) {
+      }
+      stop_source.request_stop();
+    });
+
+    bool callback_called = false;
+    go.store(true, std::memory_order_release);
+    client.SearchIndexPartition(
+        std::make_unique<SearchIndexPartitionRequest>(),
+        stop_source.get_token(),
+        [&](grpc::Status, SearchIndexPartitionResponse &) {
+          callback_called = true;
+        });
+    stopper.join();
+    EXPECT_TRUE(callback_called);
+  }
 }
 
 }  // namespace valkey_search::coordinator

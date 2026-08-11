@@ -233,7 +233,6 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     uint32_t token_freq = 0;
     for (const auto &[_, field_mask] : pos_map) {
       uint32_t fields_count = field_mask.CountSetFields();
-      metadata_.total_term_frequency += fields_count;
       token_freq += fields_count;
       doc_len += fields_count;
     }
@@ -297,6 +296,7 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     per_key_text_indexes_.emplace(key, std::move(key_index));
     per_key_scoring_info_[key] = {doc_len, norm};
     metadata_.total_doc_len += doc_len;
+    metadata_.total_term_frequency += doc_len;
   }
 
   return {doc_len, norm};

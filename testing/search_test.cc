@@ -1463,9 +1463,10 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
 // Every case has the same shape: score `filter` against `key`, compare to a
 // linear combination of baseline single-filter scores on the same key.
 // `expected` receives the baseline scores in the order they appear in
-// `baselines`. Optional `no_match_keys` asserts the filter returns nullopt for
-// keys that must not match. Docs are (key, text, color); pass "" for either
-// field a case does not use.
+// `baselines`. Optional `zero_score_keys` asserts the filter retains those
+// keys (already admitted by the pre-filter, but re-deriving a non-match here)
+// with a zero score rather than dropping them. Docs are (key, text, color);
+// pass "" for either field a case does not use.
 struct ScoreCase {
   std::string test_name;
   std::vector<std::tuple<std::string, std::string, std::string>> docs;
@@ -1473,7 +1474,7 @@ struct ScoreCase {
   std::vector<std::string> baselines;
   std::string filter;
   std::function<float(const std::vector<float> &)> expected;
-  std::vector<std::string> no_match_keys{};
+  std::vector<std::string> zero_score_keys{};
 };
 
 class ScoreTextQueryTest : public ScoreTextQueryTestBase,
@@ -1491,9 +1492,11 @@ TEST_P(ScoreTextQueryTest, ScoreMatchesFormula) {
   auto got = Score(*schema, c.filter, c.key);
   ASSERT_TRUE(got.has_value()) << "filter did not match: " << c.filter;
   EXPECT_NEAR(*got, c.expected(bases), 1e-4f);
-  for (const auto &k : c.no_match_keys) {
-    EXPECT_FALSE(Score(*schema, c.filter, k).has_value())
-        << "unexpectedly matched key: " << k;
+  for (const auto &k : c.zero_score_keys) {
+    auto s = Score(*schema, c.filter, k);
+    ASSERT_TRUE(s.has_value())
+        << "candidate dropped instead of retained: " << k;
+    EXPECT_EQ(*s, 0.0f) << "expected zero score for non-matching key: " << k;
   }
 }
 
@@ -1514,15 +1517,17 @@ INSTANTIATE_TEST_SUITE_P(
          .baselines = {"@text:hello"},
          .filter = "(@text:hello) => { $weight: 100; }",
          .expected = [](const auto &b) { return 100.0f * b[0]; }},
-        // AND with default weight sums matching children; a missing child
-        // rejects the doc entirely.
+        // AND with default weight sums matching children; a doc missing a child
+        // term re-derives a non-match here, but stays admitted with a zero
+        // score
+        // rather than being dropped.
         {.test_name = "AndPredicateScoreSumsChildWeights",
          .docs = {{"key1", "hello world", ""}, {"key2", "hello there", ""}},
          .key = "key1",
          .baselines = {"@text:hello", "@text:world"},
          .filter = "@text:hello @text:world",
          .expected = [](const auto &b) { return b[0] + b[1]; },
-         .no_match_keys = {"key2"}},
+         .zero_score_keys = {"key2"}},
         {.test_name = "AndPredicateOwnWeightMultipliesSum",
          .docs = {{"key1", "hello world", ""}},
          .key = "key1",

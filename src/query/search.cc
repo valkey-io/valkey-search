@@ -788,6 +788,7 @@ struct ScoreContext {
   const ResolvedLeaves &resolved;
   uint32_t total_docs = 0;
   uint64_t total_doc_len = 0;
+  float avg_doc_len = 0.0f;
   bool needs_doc_len = false;
   // When the index has no SCORE field, every document carries the same constant
   // document score, so the per-candidate GetDocumentScore lookup is skipped.
@@ -851,18 +852,17 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       if (tf == 0) return std::nullopt;
 
-      // avg_doc_len is corpus-wide; only doc_len varies per document. Both are
-      // 0 when the scorer doesn't need length normalization (e.g. TFIDF), which
-      // the scorer treats as a degenerate corpus and scores 0.
-      float avg_doc_len = 0.0f;
+      // avg_doc_len is corpus-wide (precomputed in ScoreContext); only doc_len
+      // varies per document. Both are 0 when the scorer doesn't need length
+      // normalization (e.g. TFIDF), which the scorer treats as a degenerate
+      // corpus and scores 0.
       uint32_t doc_len = 0;
       if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
-        avg_doc_len = static_cast<float>(score_ctx.total_doc_len) /
-                      static_cast<float>(score_ctx.total_docs);
         doc_len = score_ctx.index_schema.GetDocumentLength(key);
       }
       return score_ctx.scorer->ScoreLeaf(leaf.term_weight, tf, doc_len,
-                                         avg_doc_len, predicate->GetWeight());
+                                         score_ctx.avg_doc_len,
+                                         predicate->GetWeight());
     }
     // A numeric range match is a filter, never a ranker: it carries no IDF, no
     // term frequency, and no doc-length component, so under BM25STD it
@@ -887,35 +887,22 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       const ResolvedLeaf &leaf = it->second;
       if (leaf.tag_index == nullptr || leaf.tag_values.empty()) return 0.0f;
 
-      bool case_sensitive = true;
-      auto doc_tags =
-          leaf.tag_index->GetValue(key.AsInternedRef(), case_sensitive);
-      if (!doc_tags) return 0.0f;
-
-      float avg_doc_len = 0.0f;
       uint32_t doc_len = 0;
       if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
-        avg_doc_len = static_cast<float>(score_ctx.total_doc_len) /
-                      static_cast<float>(score_ctx.total_docs);
         doc_len = score_ctx.index_schema.GetDocumentLength(key);
       }
 
       // Sum the BM25 term (F ≡ 1) for each resolved value the document carries.
-      // Matching mirrors TagPredicate::Evaluate: case-insensitive unless the
-      // index is case-sensitive.
+      // ContainsKey normalizes per the index's case rules and tests membership
+      // via the value's posting bag, avoiding a per-candidate parse of the
+      // document's full tag set. An untracked key matches no value and scores
+      // 0.
       float sum = 0.0f;
       for (const auto &[value, idf] : leaf.tag_values) {
-        bool present = false;
-        for (const auto &doc_tag : *doc_tags) {
-          if (case_sensitive ? (doc_tag == value)
-                             : absl::EqualsIgnoreCase(doc_tag, value)) {
-            present = true;
-            break;
-          }
-        }
-        if (!present) continue;
+        if (!leaf.tag_index->ContainsKey(value, key.AsInternedRef())) continue;
         sum += score_ctx.scorer->ScoreLeaf(idf, /*term_frequency=*/1, doc_len,
-                                           avg_doc_len, predicate->GetWeight());
+                                           score_ctx.avg_doc_len,
+                                           predicate->GetWeight());
       }
       return sum;
     }
@@ -949,15 +936,21 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 
   const bool needs_doc_len =
       scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
-  ScoreContext score_ctx{
-      index_schema,
-      scorer,
-      resolved,
-      total_docs,
-      needs_doc_len ? index_schema.GetTotalDocumentLength() : 0,
-      needs_doc_len,
-      index_schema.HasScoreField(),
-      index_schema.GetScore()};
+  const uint64_t total_doc_len =
+      needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
+  const float avg_doc_len =
+      (needs_doc_len && total_docs > 0)
+          ? static_cast<float>(total_doc_len) / static_cast<float>(total_docs)
+          : 0.0f;
+  ScoreContext score_ctx{index_schema,
+                         scorer,
+                         resolved,
+                         total_docs,
+                         total_doc_len,
+                         avg_doc_len,
+                         needs_doc_len,
+                         index_schema.HasScoreField(),
+                         index_schema.GetScore()};
 
   std::vector<indexes::BorrowedNeighbor> scored;
   scored.reserve(candidates.size());
@@ -966,12 +959,13 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     // InternedString outlives the loop and no ref-count churn is needed.
     const BorrowedInternedStringPtr &key = candidate.key;
     auto score = ScoreNode(root_predicate, key, score_ctx);
-    if (!score) continue;
+    // no term contribute to score; return 0 rather than drop the doc
+    const float resolved_score = score.value_or(0.0f);
     const float document_score = score_ctx.has_score_field
                                      ? index_schema.GetDocumentScore(key)
                                      : score_ctx.default_document_score;
     const float final_score =
-        scorer->ComposeDocumentScore(*score, document_score);
+        scorer->ComposeDocumentScore(resolved_score, document_score);
     scored.push_back({candidate.key, 0.0f, final_score});
   }
 
@@ -988,6 +982,7 @@ struct SingleDocumentScorer::State {
   ResolvedLeaves resolved;
   uint32_t total_docs = 0;
   uint64_t total_doc_len = 0;
+  float avg_doc_len = 0.0f;
   bool needs_doc_len = false;
   bool has_score_field = false;
   float default_document_score = 1.0f;
@@ -1036,6 +1031,10 @@ SingleDocumentScorer::SingleDocumentScorer(
       scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
   state_->total_doc_len =
       state_->needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
+  state_->avg_doc_len = (state_->needs_doc_len && state_->total_docs > 0)
+                            ? static_cast<float>(state_->total_doc_len) /
+                                  static_cast<float>(state_->total_docs)
+                            : 0.0f;
   state_->has_score_field = index_schema.HasScoreField();
   state_->default_document_score = index_schema.GetScore();
 }
@@ -1055,11 +1054,15 @@ std::optional<float> SingleDocumentScorer::Score(
   vmsdk::ReaderMutexLock lock(
       &const_cast<IndexSchema &>(state_->index_schema).GetTimeSlicedMutex());
 
-  ScoreContext score_ctx{
-      state_->index_schema,    state_->scorer,
-      state_->resolved,        state_->total_docs,
-      state_->total_doc_len,   state_->needs_doc_len,
-      state_->has_score_field, state_->default_document_score};
+  ScoreContext score_ctx{state_->index_schema,
+                         state_->scorer,
+                         state_->resolved,
+                         state_->total_docs,
+                         state_->total_doc_len,
+                         state_->avg_doc_len,
+                         state_->needs_doc_len,
+                         state_->has_score_field,
+                         state_->default_document_score};
   const BorrowedInternedStringPtr borrowed_key(key);
   // Single source of scoring math: the same ScoreNode walk ScoreTextQuery runs
   // per candidate. nullopt means ScoreNode re-derived a non-match (e.g. a term

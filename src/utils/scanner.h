@@ -183,7 +183,7 @@ class Scanner {
 
   // True iff `text` is well-formed UTF-8 (no overlong, surrogate,
   // out-of-range, or truncated sequences). Used as the ingestion gate in
-  // LanguageProcessor::Tokenize implementations.
+  // Language::Tokenize implementations.
   static bool IsValidUtf8(absl::string_view text) {
     Scanner s(text);
     Char cp;

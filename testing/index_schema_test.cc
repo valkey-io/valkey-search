@@ -36,6 +36,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -1409,7 +1410,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     // Create text index with both proto and schema
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        language, punctuation, with_offsets, stop_words, min_stem_size);
+        indexes::text::CreateLanguage(language, punctuation, stop_words),
+        with_offsets, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(with_suffix_trie, no_stem, 1.0),
         text_index_schema);
@@ -2391,9 +2393,11 @@ TEST_F(IndexSchemaRDBTest, ComprehensiveSkipLoadTest) {
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(true, false, 1.0),
         std::make_shared<indexes::text::TextIndexSchema>(
-            data_model::LANGUAGE_ENGLISH,
-            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", true,
-            std::vector<std::string>{}, 6));
+            indexes::text::CreateLanguage(
+                data_model::LANGUAGE_ENGLISH,
+                " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+                std::vector<std::string>{}),
+            true, 6));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 
@@ -2878,7 +2882,7 @@ INSTANTIATE_TEST_SUITE_P(GetMinVersionTests, GetMinVersionTest,
                                  .language = data_model::LANGUAGE_FRENCH,
                                  .attribute_type = IndexAttributeType::kText,
                                  .db_num = 0,
-                                 .expected_version = kRelease14,
+                                 .expected_version = kRelease13,
                              },
                              {
                                  .test_name = "VectorOnlyIndex",
@@ -2910,7 +2914,7 @@ INSTANTIATE_TEST_SUITE_P(GetMinVersionTests, GetMinVersionTest,
                                  .language = data_model::LANGUAGE_FRENCH,
                                  .attribute_type = IndexAttributeType::kText,
                                  .db_num = 3,
-                                 .expected_version = kRelease14,
+                                 .expected_version = kRelease13,
                              },
                          }),
                          [](const TestParamInfo<GetMinVersionTestCase> &info) {

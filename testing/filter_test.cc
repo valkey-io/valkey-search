@@ -1898,7 +1898,7 @@ class FilterMalformedUtf8CompatTest : public ValkeySearchTest {
 };
 
 TEST_F(FilterMalformedUtf8CompatTest, RejectsWhenEmulatingCurrentRelease) {
-  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease14));
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease13));
   auto schema = MakeTextSchema();
   std::string filter = "hello \xC3";  // truncated 2-byte lead
   TextParsingOptions options{};

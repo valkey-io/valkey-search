@@ -19,8 +19,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/indexes/text/punctuation.h"
-#include "src/indexes/text/stop_words.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -49,11 +48,11 @@ class TextTest : public ::testing::Test {
     // Create default text index schema for testing
     std::vector<std::string> empty_stop_words;
     text_index_schema_ = std::make_shared<text::TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",  // Default punctuation
-        false,                                        // with_offsets
-        empty_stop_words,
-        4);  // min_stem_size
+        text::CreateLanguage(data_model::LANGUAGE_ENGLISH,
+                             " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+                             empty_stop_words),
+        false,  // with_offsets
+        4);     // min_stem_size
 
     // Create default TextIndex prototype
     text_index_proto_ = std::make_unique<data_model::TextIndex>();
@@ -76,7 +75,8 @@ class TextTest : public ::testing::Test {
                             ? " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
                             : punctuation;
     return std::make_shared<text::TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH, punct, with_offsets, stop_words, 4);
+        text::CreateLanguage(data_model::LANGUAGE_ENGLISH, punct, stop_words),
+        with_offsets, 4);
   }
 
   // Helper to check if a token exists in the prefix tree
@@ -271,8 +271,7 @@ INSTANTIATE_TEST_SUITE_P(
             "Case sensitivity in tokenization"},
         TextIndexTestCase{
             "Hello мир 世界 test",
-            {"hello",
-             "test"},  // Unicode handling may vary by LanguageProcessor
+            {"hello", "test"},  // Unicode handling may vary by Language
             {{"hello", 1}, {"test", 1}},  // positional
             {{"hello", 1}, {"test", 1}},  // boolean
             1,
@@ -372,10 +371,11 @@ TEST_F(TextTest, StemmingBehavior) {
   // Create schema with stemming enabled
   std::vector<std::string> empty_stop_words;
   auto stemming_schema = std::make_shared<text::TextIndexSchema>(
-      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+      text::CreateLanguage(data_model::LANGUAGE_ENGLISH,
+                           " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+                           empty_stop_words),
       false,  // with_offsets
-      empty_stop_words,
-      4);  // min_stem_size
+      4);     // min_stem_size
 
   data_model::TextIndex stem_proto;
   stem_proto.set_no_stem(false);  // Enable stemming
@@ -608,9 +608,11 @@ class TextMultiLanguageTest : public ::testing::Test {
  protected:
   std::shared_ptr<text::TextIndexSchema> CreateSchema(
       data_model::Language language) {
+    auto lang = text::LanguageRegistry::Instance().Get(language);
     return std::make_shared<text::TextIndexSchema>(
-        language, text::GetDefaultPunctuation(language), false,
-        text::GetDefaultStopWords(language), 4);
+        text::CreateLanguage(language, lang->GetDefaultPunctuation(),
+                             lang->GetDefaultStopWords()),
+        false, 4);
   }
 
   std::unique_ptr<Text> CreateTextIndex(

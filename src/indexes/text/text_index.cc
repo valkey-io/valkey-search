@@ -135,13 +135,10 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 
 /*** TextIndexSchema ***/
 
-TextIndexSchema::TextIndexSchema(data_model::Language language,
-                                 const std::string &punctuation,
-                                 bool with_offsets,
-                                 const std::vector<std::string> &stop_words,
-                                 uint32_t min_stem_size)
+TextIndexSchema::TextIndexSchema(std::shared_ptr<const Language> language,
+                                 bool with_offsets, uint32_t min_stem_size)
     : with_offsets_(with_offsets),
-      processor_(LanguageProcessor::Create(language, punctuation, stop_words)),
+      language_(std::move(language)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -149,23 +146,22 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  // Tokenize via the processor pipeline (segment + filter)
-  auto tokens = processor_->Process(data);
+  absl::StatusOr<std::vector<std::string>> tokens;
+
+  if (stem) {
+    // Single-pass: tokenize + build stem map together
+    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+    tokens = language_->TokenizeWithStemMap(data, min_stem_size_,
+                                            in_progress_stem_mappings_[key]);
+  } else {
+    tokens = language_->Tokenize(data);
+  }
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
       return false;  // UTF-8 errors → hash_indexing_failures
     }
     return tokens.status();
-  }
-
-  // Build stem mappings if stemming is enabled (ingestion-specific)
-  if (stem) {
-    if (auto *stem_filter = processor_->GetStemmer()) {
-      std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-      stem_filter->BuildStemMap(*tokens, min_stem_size_,
-                                in_progress_stem_mappings_[key]);
-    }
   }
 
   // Map tokens -> positions -> field-masks
@@ -337,7 +333,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   }
 
   if (!empty_words.empty() && stem_text_field_mask_) {
-    auto *stem_filter = processor_->GetStemmer();
+    auto *stem_filter = language_->GetStemmer();
     if (stem_filter) {
       absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
       for (const auto &word : empty_words) {
@@ -385,7 +381,7 @@ std::string TextIndexSchema::GetAllStemVariants(
     uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term
   std::string stemmed(search_term);
-  if (auto *stem_filter = processor_->GetStemmer()) {
+  if (auto *stem_filter = language_->GetStemmer()) {
     stemmed = stem_filter->GetStemRoot(search_term);
   }
 

@@ -19,9 +19,8 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/text/punctuation.h"
-#include "src/indexes/text/stop_words.h"
-#include "src/multi_language.h"
+#include "src/indexes/text/languages/french.h"
+#include "src/indexes/text/languages/german.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 

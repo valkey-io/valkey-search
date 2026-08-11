@@ -3,7 +3,7 @@ RDB cross-version compatibility tests.
 
 The module dynamically stamps each RDB with the minimum version required to load
 it, based on the features used (e.g. English text → kRelease12, non-English text
-→ kRelease14).  These tests verify that older module versions correctly reject
+→ kRelease13).  These tests verify that older module versions correctly reject
 RDB files whose version stamp exceeds their own (forward-compatibility rejection), 
 and that older RDB files can be loaded by the current module (backward compatibility).
 
@@ -160,7 +160,7 @@ class TestCurrentRDBOnOldModule_CME(ValkeySearchClusterTestCase):
 class TestOldRDBLoadsOnLatest(ValkeySearchTestCaseBase):
     """
     An RDB produced by the 1.2 module (English text index, version stamp 1.2.0)
-    should load successfully on the current module (1.4+).
+    should load successfully on the current module (1.3+).
     """
 
     def test_old_rdb_loads_on_latest(self):

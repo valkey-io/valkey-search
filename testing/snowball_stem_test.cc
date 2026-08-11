@@ -7,25 +7,30 @@
 
 #include "src/indexes/text/snowball_stem.h"
 
-#include <memory>
 #include <string>
 #include <vector>
 
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
-#include "src/indexes/text/language_processor.h"
-#include "src/indexes/text/punctuation.h"
-#include "src/indexes/text/snowball_stem.h"
-#include "src/indexes/text/stop_words.h"
+#include "src/indexes/text/language.h"
+#include "src/indexes/text/language_registry.h"
+#include "src/indexes/text/snowball_language.h"
 
 namespace valkey_search::indexes::text {
 
-// Helper: create a processor with language defaults
-inline std::shared_ptr<LanguageProcessor> CreateProcessor(
-    data_model::Language language) {
-  return LanguageProcessor::Create(language, GetDefaultPunctuation(language),
-                                   GetDefaultStopWords(language));
+namespace {
+
+/// Helper to construct a SnowballStemFilter from a language enum using the
+/// registry. Tests use the same interface as production: (enum,
+/// algorithm_name).
+SnowballStemFilter MakeStemFilter(data_model::Language language) {
+  auto lang = LanguageRegistry::Instance().Get(language);
+  return SnowballStemFilter(
+      language,
+      static_cast<const SnowballLanguage *>(lang.get())->GetStemmerAlgorithm());
 }
+
+}  // namespace
 
 // =============================================================================
 // Parameterized test: Per-language Stemming Correctness
@@ -106,12 +111,8 @@ class SnowballStemmingTest : public ::testing::TestWithParam<StemmingTestCase> {
 
 TEST_P(SnowballStemmingTest, ProducesExpectedStem) {
   const auto &tc = GetParam();
-  auto processor = CreateProcessor(tc.language);
-  ASSERT_NE(processor, nullptr);
-
-  auto *stem_filter = processor->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  std::string result = stem_filter->GetStemRoot(tc.input, 3);
+  auto stemmer = MakeStemFilter(tc.language);
+  std::string result = stemmer.GetStemRoot(tc.input, 3);
   EXPECT_EQ(result, tc.expected_stem);
 }
 
@@ -210,13 +211,9 @@ class SnowballStemMapTest : public ::testing::TestWithParam<StemMapTestCase> {};
 
 TEST_P(SnowballStemMapTest, VariantsConvergeToSameStem) {
   const auto &tc = GetParam();
-  auto processor = CreateProcessor(tc.language);
-  ASSERT_NE(processor, nullptr);
-
-  auto *stem_filter = processor->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
+  auto stemmer = MakeStemFilter(tc.language);
   InProgressStemMap stem_mappings;
-  stem_filter->BuildStemMap(tc.tokens, 3, stem_mappings);
+  stemmer.BuildStemMap(tc.tokens, 3, stem_mappings);
 
   EXPECT_TRUE(stem_mappings.contains(tc.expected_stem));
   EXPECT_EQ(stem_mappings[tc.expected_stem].size(), tc.expected_count);
@@ -229,73 +226,28 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // =============================================================================
-// Factory tests — verify Create() works for all 12 languages + edge cases
-// =============================================================================
-
-class SnowballProcessorFactoryTest
-    : public ::testing::TestWithParam<data_model::Language> {
- protected:
-  void SetUp() override {
-    processor_ = CreateProcessor(GetParam());
-    ASSERT_NE(processor_, nullptr);
-  }
-  std::shared_ptr<LanguageProcessor> processor_;
-};
-
-TEST_P(SnowballProcessorFactoryTest, ReturnsNonNull) {
-  EXPECT_NE(processor_, nullptr);
-}
-
-TEST_P(SnowballProcessorFactoryTest, SupportsStemming) {
-  EXPECT_NE(processor_->GetStemmer(), nullptr);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    AllLanguages, SnowballProcessorFactoryTest,
-    ::testing::Values(
-        data_model::LANGUAGE_ENGLISH, data_model::LANGUAGE_FRENCH,
-        data_model::LANGUAGE_GERMAN, data_model::LANGUAGE_SPANISH,
-        data_model::LANGUAGE_ITALIAN, data_model::LANGUAGE_PORTUGUESE,
-        data_model::LANGUAGE_RUSSIAN, data_model::LANGUAGE_SWEDISH,
-        data_model::LANGUAGE_TURKISH, data_model::LANGUAGE_DUTCH,
-        data_model::LANGUAGE_INDONESIAN, data_model::LANGUAGE_ARABIC));
-
-TEST(SnowballProcessorFactoryEdgeTest, UnspecifiedLanguageReturnsNonNull) {
-  auto processor = CreateProcessor(data_model::LANGUAGE_UNSPECIFIED);
-  EXPECT_NE(processor, nullptr);
-}
-
-// =============================================================================
 // Shared-mechanism tests (language-agnostic code paths, tested once w/ English)
 // =============================================================================
 
 class SnowballStemSharedTest : public ::testing::Test {
  protected:
-  std::shared_ptr<LanguageProcessor> processor_ =
-      CreateProcessor(data_model::LANGUAGE_ENGLISH);
+  SnowballStemFilter stemmer_{data_model::LANGUAGE_ENGLISH, "english"};
 };
 
-// min_stem_size guard: word with fewer codepoints than threshold is not stemmed
 TEST_F(SnowballStemSharedTest, GetStemRoot_MinStemSizePrevents) {
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  std::string result = stem_filter->GetStemRoot("running", 10);
+  std::string result = stemmer_.GetStemRoot("running", 10);
   EXPECT_EQ(result, "running");
 }
 
 // Idempotency: a word already at its stem form is left unchanged
 TEST_F(SnowballStemSharedTest, GetStemRoot_AlreadyStemmed) {
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  std::string result = stem_filter->GetStemRoot("run", 3);
+  std::string result = stemmer_.GetStemRoot("run", 3);
   EXPECT_EQ(result, "run");
 }
 
 // Empty string: should not crash, returned unchanged
 TEST_F(SnowballStemSharedTest, GetStemRoot_EmptyString) {
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  std::string result = stem_filter->GetStemRoot("", 3);
+  std::string result = stemmer_.GetStemRoot("", 3);
   EXPECT_EQ(result, "");
 }
 
@@ -303,11 +255,7 @@ TEST_F(SnowballStemSharedTest, GetStemRoot_EmptyString) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_MinStemSizePreventsAll) {
   std::vector<std::string> tokens = {"running", "jumps", "happily"};
   InProgressStemMap stem_mappings;
-
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  stem_filter->BuildStemMap(tokens, 100, stem_mappings);
-
+  stemmer_.BuildStemMap(tokens, 100, stem_mappings);
   EXPECT_TRUE(stem_mappings.empty());
 }
 
@@ -315,11 +263,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_MinStemSizePreventsAll) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_SelfStemExcluded) {
   std::vector<std::string> tokens = {"run"};
   InProgressStemMap stem_mappings;
-
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  stem_filter->BuildStemMap(tokens, 3, stem_mappings);
-
+  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
   EXPECT_TRUE(stem_mappings.empty());
 }
 
@@ -327,11 +271,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_SelfStemExcluded) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_DuplicateTokensDeduped) {
   std::vector<std::string> tokens = {"running", "running", "running"};
   InProgressStemMap stem_mappings;
-
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  stem_filter->BuildStemMap(tokens, 3, stem_mappings);
-
+  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
   EXPECT_TRUE(stem_mappings.contains("run"));
   EXPECT_EQ(stem_mappings["run"].size(), 1);
 }
@@ -340,11 +280,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_DuplicateTokensDeduped) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleWordsToSameStem) {
   std::vector<std::string> tokens = {"running", "runs"};
   InProgressStemMap stem_mappings;
-
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  stem_filter->BuildStemMap(tokens, 3, stem_mappings);
-
+  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
   EXPECT_EQ(stem_mappings.size(), 1);
   EXPECT_TRUE(stem_mappings.contains("run"));
   EXPECT_EQ(stem_mappings["run"].size(), 2);
@@ -354,11 +290,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleWordsToSameStem) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleDistinctStems) {
   std::vector<std::string> tokens = {"running", "jumps", "happily"};
   InProgressStemMap stem_mappings;
-
-  auto *stem_filter = processor_->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  stem_filter->BuildStemMap(tokens, 3, stem_mappings);
-
+  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
   EXPECT_EQ(stem_mappings.size(), 3);
   EXPECT_TRUE(stem_mappings.contains("run"));
   EXPECT_TRUE(stem_mappings.contains("jump"));
@@ -373,48 +305,41 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleDistinctStems) {
 // =============================================================================
 
 TEST(SnowballStemMultiByteTest, FrenchCodePointCounting) {
-  auto processor = CreateProcessor(data_model::LANGUAGE_FRENCH);
+  SnowballStemFilter stemmer(data_model::LANGUAGE_FRENCH, "french");
   // "né" = 'n' (1 byte) + 'é' (2 bytes) = 2 codepoints, 3 bytes
-  auto *stem_filter = processor->GetStemmer();
-  ASSERT_NE(stem_filter, nullptr);
-  std::string result = stem_filter->GetStemRoot("n\xc3\xa9", 3);
+  std::string result = stemmer.GetStemRoot("n\xc3\xa9", 3);
   EXPECT_EQ(result, "n\xc3\xa9");
 }
 
 // =============================================================================
-// SnowballStemFilter::Apply — always returns true (never drops tokens)
+// SnowballStemFilter::GetStemRoot — basic stemming behavior
 // =============================================================================
 
-TEST(SnowballStemApplyTest, EmptyString) {
-  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
-  std::string token;
-  EXPECT_TRUE(filter.Apply(token));
+TEST(SnowballStemGetStemRootTest, EmptyString) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH, "english");
+  EXPECT_EQ(filter.GetStemRoot(""), "");
 }
 
-TEST(SnowballStemApplyTest, SingleChar) {
-  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
-  std::string token = "a";
-  EXPECT_TRUE(filter.Apply(token));
+TEST(SnowballStemGetStemRootTest, SingleChar) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH, "english");
+  EXPECT_EQ(filter.GetStemRoot("a"), "a");
 }
 
-TEST(SnowballStemApplyTest, AlreadyStemmed) {
-  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
-  std::string token = "run";
-  EXPECT_TRUE(filter.Apply(token));
+TEST(SnowballStemGetStemRootTest, AlreadyStemmed) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH, "english");
+  EXPECT_EQ(filter.GetStemRoot("run"), "run");
 }
 
-TEST(SnowballStemApplyTest, LongWord) {
-  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
+TEST(SnowballStemGetStemRootTest, LongWord) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH, "english");
   std::string token(1000, 'a');
-  EXPECT_TRUE(filter.Apply(token));
+  // Long repetitive strings may or may not stem — just verify no crash.
+  filter.GetStemRoot(token);
 }
 
-TEST(SnowballStemApplyTest, MutatesButKeeps) {
-  // "running" should be stemmed to "run" but Apply still returns true.
-  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH);
-  std::string token = "running";
-  EXPECT_TRUE(filter.Apply(token));
-  EXPECT_EQ(token, "run");
+TEST(SnowballStemGetStemRootTest, ProducesStem) {
+  SnowballStemFilter filter(data_model::LANGUAGE_ENGLISH, "english");
+  EXPECT_EQ(filter.GetStemRoot("running"), "run");
 }
 
 }  // namespace valkey_search::indexes::text

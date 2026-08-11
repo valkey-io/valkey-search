@@ -146,8 +146,8 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
   } else if (subcommand == "LEXER") {
     std::string text;
     VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, text));
-    const auto& processor = index_schema->GetTextIndexSchema()->GetProcessor();
-    VMSDK_ASSIGN_OR_RETURN(auto result, processor->Process(text));
+    const auto& language = index_schema->GetTextIndexSchema()->GetLanguage();
+    VMSDK_ASSIGN_OR_RETURN(auto result, language.Tokenize(text));
     ValkeyModule_ReplyWithArray(ctx, result.size());
     for (auto& token : result) {
       ValkeyModule_ReplyWithStringBuffer(ctx, token.data(), token.size());

@@ -31,6 +31,7 @@
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
@@ -196,7 +197,8 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
-        language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
+        indexes::text::CreateLanguage(language_, punctuation_, stop_words_),
+        with_offsets_, min_stem_size_);
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;

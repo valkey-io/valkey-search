@@ -165,5 +165,76 @@ TEST(CaseFoldInPlaceTest, TurkishDottedAndDotlessILocaleIndependent) {
   EXPECT_EQ(dotless_small, "\xC4\xB1");  // unchanged
 }
 
+// =============================================================================
+// NormalizeCaseFoldFilter — direct unit tests for the standalone class.
+// Exercises NormalizeInPlace() and Apply() across edge cases.
+// =============================================================================
+
+TEST(NormalizeCaseFoldFilterTest, EmptyString) {
+  NormalizeCaseFoldFilter filter;
+  std::string token;
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "");
+}
+
+TEST(NormalizeCaseFoldFilterTest, ApplyReturnsTrueAlways) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "hello";
+  EXPECT_TRUE(filter.Apply(token));
+  EXPECT_EQ(token, "hello");
+
+  std::string empty;
+  EXPECT_TRUE(filter.Apply(empty));
+}
+
+TEST(NormalizeCaseFoldFilterTest, AsciiLowering) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "HELLO World";
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "hello world");
+}
+
+TEST(NormalizeCaseFoldFilterTest, WhitespaceOnly) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "   \t";
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "   \t");
+}
+
+TEST(NormalizeCaseFoldFilterTest, HighCodepointEmoji) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "\xf0\x9f\x99\x82";  // 🙂
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "\xf0\x9f\x99\x82");
+}
+
+TEST(NormalizeCaseFoldFilterTest, NfcComposition) {
+  NormalizeCaseFoldFilter filter(NormalizationForm::NFC);
+  std::string token = "CAFE\xcc\x81";  // CAFE + combining acute
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "caf\xc3\xa9");  // café precomposed, lowered
+}
+
+TEST(NormalizeCaseFoldFilterTest, NfkcDecomposesLigature) {
+  NormalizeCaseFoldFilter filter(NormalizationForm::NFKC);
+  std::string token = "\xef\xac\x81";  // ﬁ ligature
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "fi");
+}
+
+TEST(NormalizeCaseFoldFilterTest, TurkishLocale) {
+  NormalizeCaseFoldFilter filter(NormalizationForm::NFC, "tr");
+  std::string token = "I";
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "\xc4\xb1");  // ı (dotless i)
+}
+
+TEST(NormalizeCaseFoldFilterTest, GermanSzet) {
+  NormalizeCaseFoldFilter filter;
+  std::string token = "\xc3\x9f";  // ß
+  filter.NormalizeInPlace(token);
+  EXPECT_EQ(token, "ss");
+}
+
 }  // namespace
 }  // namespace valkey_search::indexes::text

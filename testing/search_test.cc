@@ -1409,8 +1409,8 @@ class GRPCPredicateUtf8Test
   void SetUp() override {
     ValkeySearchTestWithParam<GRPCPredicateUtf8Case>::SetUp();
     saved_emulate_release_ = options::GetEmulateRelease().GetValue();
-    // The gate rejects only at >= 1.4.0; pin it so the assertions are stable.
-    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease14));
+    // The gate rejects only at >= 1.3.0; pin it so the assertions are stable.
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(kRelease13));
   }
   void TearDown() override {
     VMSDK_EXPECT_OK(

@@ -24,7 +24,7 @@ from utils import IndexingTestHelper
 
 
 class MultiLanguageTestCase(ValkeySearchTestCaseDebugMode):
-    """Base class for multi-language tests (version >= 1.4 enables support)."""
+    """Base class for multi-language tests (version >= 1.3 enables support)."""
     pass
 
 

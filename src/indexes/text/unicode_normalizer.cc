@@ -4,7 +4,9 @@
 #include <limits>
 #include <string>
 
+#include "absl/algorithm/container.h"
 #include "absl/log/check.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
 #include "unicode/bytestream.h"
 #include "unicode/casemap.h"
@@ -118,6 +120,31 @@ std::string UnicodeNormalizer::LocaleAwareCaseFold(absl::string_view text,
   CHECK(U_SUCCESS(ec)) << "ICU utf8ToLower failed for locale '" << locale
                        << "': " << u_errorName(ec);
   return out;
+}
+
+// ============================================================================
+// NormalizeCaseFoldFilter
+// ============================================================================
+
+NormalizeCaseFoldFilter::NormalizeCaseFoldFilter(NormalizationForm form,
+                                                 const std::string &locale)
+    : norm_form_(form), locale_(locale) {}
+
+bool NormalizeCaseFoldFilter::Apply(std::string &token) const {
+  NormalizeInPlace(token);
+  return true;
+}
+
+void NormalizeCaseFoldFilter::NormalizeInPlace(std::string &token) const {
+  if (!locale_.empty()) {
+    token = UnicodeNormalizer::Normalize(token, norm_form_);
+    token = UnicodeNormalizer::LocaleAwareCaseFold(token, locale_);
+  } else if (absl::c_all_of(token, absl::ascii_isascii)) {
+    absl::AsciiStrToLower(&token);
+  } else {
+    token = UnicodeNormalizer::Normalize(token, norm_form_);
+    UnicodeNormalizer::CaseFoldInPlace(token);
+  }
 }
 
 }  // namespace valkey_search::indexes::text

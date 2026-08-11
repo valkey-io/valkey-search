@@ -115,15 +115,23 @@ void SetPredicateTextContent(Predicate& predicate, std::string content) {
 absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
     absl::flat_hash_set<std::string>& attribute_identifiers) {
-  // Inter-node predicates are built straight from the protobuf, skipping
-  // FilterParser::Parse's UTF-8 gate; FuzzySearch::Search CHECK-fails on
-  // malformed input. This recursive chokepoint validates each node (composites
-  // carry no content and recurse). Compat-gated (see COMPATIBILITY.md):
-  //   >= 1.4.0: reject malformed text AND tag.
-  //   <  1.4.0: 1.2 behavior — substitute U+FFFD into text; leave tag raw.
+  // UTF-8 validation at the coordinator (receiver) side.
+  //
+  // Why validate here when the originating node already validates in
+  // FilterParser::Parse? Belt-and-suspenders: inter-node gRPC predicates
+  // bypass FilterParser entirely, so the coordinator must validate
+  // independently to prevent CHECK-failures in downstream code (e.g.,
+  // FuzzySearch::Search CHECK-fails on malformed UTF-8). Additionally, for
+  // backward compatibility with versions < 1.3, the legacy path substitutes
+  // U+FFFD into malformed text predicates (so they match nothing) rather than
+  // rejecting outright.
+  //
+  // Compat-gated behavior (see COMPATIBILITY.md):
+  //   >= 1.3.0: reject malformed text AND tag.
+  //   <  1.3.0: 1.2 behavior — substitute U+FFFD into text; leave tag raw.
   absl::string_view text = GetPredicateText(predicate);
   if (!text.empty() && !utils::Scanner::IsValidUtf8(text)) {
-    if (options::EnabledInVersion(kRelease14)) {
+    if (options::EnabledInVersion(kRelease13)) {
       return absl::InvalidArgumentError("Invalid UTF-8 in query predicate");
     }
     // Legacy: count every malformed-UTF-8 predicate for visibility. Registered

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -30,48 +31,18 @@ thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 }  // namespace
 
 SnowballStemFilter::SnowballStemFilter(data_model::Language language,
+                                       absl::string_view algorithm_name,
                                        uint32_t default_min_stem_size)
-    : language_(language), default_min_stem_size_(default_min_stem_size) {}
-
-const char* SnowballStemFilter::GetLanguageString(
-    data_model::Language language) {
-  switch (language) {
-    case data_model::LANGUAGE_ENGLISH:
-      return "english";
-    case data_model::LANGUAGE_FRENCH:
-      return "french";
-    case data_model::LANGUAGE_GERMAN:
-      return "german";
-    case data_model::LANGUAGE_SPANISH:
-      return "spanish";
-    case data_model::LANGUAGE_ITALIAN:
-      return "italian";
-    case data_model::LANGUAGE_PORTUGUESE:
-      return "portuguese";
-    case data_model::LANGUAGE_RUSSIAN:
-      return "russian";
-    case data_model::LANGUAGE_SWEDISH:
-      return "swedish";
-    case data_model::LANGUAGE_TURKISH:
-      return "turkish";
-    case data_model::LANGUAGE_DUTCH:
-      return "dutch";
-    case data_model::LANGUAGE_INDONESIAN:
-      return "indonesian";
-    case data_model::LANGUAGE_ARABIC:
-      return "arabic";
-    default:
-      CHECK(false) << "Unexpected language for SnowballStemFilter";
-      __builtin_unreachable();
-  }
-}
+    : language_(language),
+      algorithm_name_(algorithm_name),
+      default_min_stem_size_(default_min_stem_size) {}
 
 sb_stemmer* SnowballStemFilter::GetStemmer() const {
   auto it = stemmers_.find(language_);
   if (it == stemmers_.end()) {
-    StemmerPtr stemmer(sb_stemmer_new(GetLanguageString(language_), "UTF_8"));
-    CHECK(stemmer) << "Failed to create stemmer for language: "
-                   << GetLanguageString(language_);
+    StemmerPtr stemmer(sb_stemmer_new(algorithm_name_.c_str(), "UTF_8"));
+    CHECK(stemmer) << "Failed to create stemmer for algorithm: "
+                   << algorithm_name_;
     sb_stemmer* raw_ptr = stemmer.get();
     stemmers_[language_] = std::move(stemmer);
     return raw_ptr;
@@ -100,15 +71,6 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
   }
   return {reinterpret_cast<const char*>(stemmed),
           static_cast<std::string_view::size_type>(stemmed_length)};
-}
-
-bool SnowballStemFilter::Apply(std::string& token) const {
-  sb_stemmer* stemmer = GetStemmer();
-  std::string_view stemmed = DoStemming(token, stemmer, default_min_stem_size_);
-  if (stemmed.data() != token.data() || stemmed.size() != token.size()) {
-    token.assign(stemmed.data(), stemmed.size());
-  }
-  return true;
 }
 
 std::string SnowballStemFilter::GetStemRoot(absl::string_view token,

@@ -15,7 +15,7 @@
 
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
-#include "src/indexes/text/language_processor.h"
+#include "src/indexes/text/language.h"
 
 struct sb_stemmer;
 
@@ -27,12 +27,12 @@ namespace valkey_search::indexes::text {
 ///           Russian, Swedish, Turkish, Dutch, Indonesian, Arabic.
 class SnowballStemFilter : public Stemmer {
  public:
-  explicit SnowballStemFilter(data_model::Language language,
-                              uint32_t default_min_stem_size = 0);
-
-  /// TokenFilter interface — applies stemming as part of the pipeline.
-  /// Mutates the token to its stemmed form. Always returns true (keeps token).
-  bool Apply(std::string& token) const override;
+  /// Construct with language enum and algorithm name string.
+  /// The enum is used as the thread-local cache key (O(1) integer hash).
+  /// The algorithm name is passed to libstemmer's sb_stemmer_new().
+  SnowballStemFilter(data_model::Language language,
+                     absl::string_view algorithm_name,
+                     uint32_t default_min_stem_size = 0);
 
   /// Stemmer interface
   std::string GetStemRoot(absl::string_view token,
@@ -42,17 +42,17 @@ class SnowballStemFilter : public Stemmer {
                     uint32_t min_stem_size,
                     InProgressStemMap& stem_mappings) const override;
 
-  /// Get the language this filter was configured for.
-  data_model::Language GetLanguage() const { return language_; }
+  /// Get the algorithm name this filter was configured with.
+  const std::string& GetAlgorithmName() const { return algorithm_name_; }
 
  private:
   data_model::Language language_;
+  std::string algorithm_name_;
   uint32_t default_min_stem_size_;
 
   sb_stemmer* GetStemmer() const;
   std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
                               uint32_t min_stem_size) const;
-  static const char* GetLanguageString(data_model::Language language);
 };
 
 }  // namespace valkey_search::indexes::text

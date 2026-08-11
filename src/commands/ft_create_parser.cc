@@ -27,10 +27,9 @@
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
-#include "src/indexes/text/punctuation.h"
-#include "src/indexes/text/stop_words.h"
+#include "src/indexes/text/language.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/vector_base.h"
-#include "src/multi_language.h"
 #include "src/valkey_search_options.h"
 #include "src/version.h"
 #include "vmsdk/src/command_parser.h"
@@ -224,7 +223,7 @@ const absl::NoDestructor<
     kLanguageByStr([] {
       absl::flat_hash_map<absl::string_view, data_model::Language> m{
           {"ENGLISH", data_model::LANGUAGE_ENGLISH}};
-      if constexpr (kModuleVersion >= valkey_search::kRelease14) {
+      if constexpr (kModuleVersion >= valkey_search::kRelease13) {
         m.insert({{"FRENCH", data_model::LANGUAGE_FRENCH},
                   {"GERMAN", data_model::LANGUAGE_GERMAN},
                   {"SPANISH", data_model::LANGUAGE_SPANISH},
@@ -304,7 +303,9 @@ absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
         NotSupportedParamErrorMsg(kLanguageFieldParam));
   }
 
-  if (!IsLanguageSupported(language)) {
+  if (!indexes::text::LanguageRegistry::Instance()
+           .Get(language)
+           ->IsSupported()) {
     return absl::InvalidArgumentError(absl::StrCat(
         data_model::Language_Name(language),
         " is not supported in module version ", kModuleVersion.ToString()));
@@ -741,7 +742,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   // Apply punctuation: use user-provided value or per-language defaults
   if (!schema_text_defaults.punctuation.has_value()) {
     index_schema_proto.set_punctuation(
-        indexes::text::GetDefaultPunctuation(schema_text_defaults.language));
+        indexes::text::LanguageRegistry::Instance()
+            .Get(schema_text_defaults.language)
+            ->GetDefaultPunctuation());
   } else {
     index_schema_proto.set_punctuation(*schema_text_defaults.punctuation);
   }
@@ -752,8 +755,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
   // Add stop words to the schema
   if (!schema_text_defaults.stop_words.has_value()) {
-    for (const auto &w :
-         indexes::text::GetDefaultStopWords(index_schema_proto.language())) {
+    for (const auto &w : indexes::text::LanguageRegistry::Instance()
+                             .Get(index_schema_proto.language())
+                             ->GetDefaultStopWords()) {
       index_schema_proto.add_stop_words(w);
     }
   } else {

@@ -114,6 +114,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_client_get_global_metadata_failure_latency_usec",
             "coordinator_client_get_global_metadata_success_count",
             "coordinator_client_get_global_metadata_success_latency_usec",
+            "coordinator_client_search_index_partition_cancelled_count",
             "coordinator_client_search_index_partition_failure_count",
             "coordinator_client_search_index_partition_failure_latency_usec",
             "coordinator_client_search_index_partition_success_count",

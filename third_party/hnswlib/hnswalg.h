@@ -989,10 +989,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
-    // Stage each slot's vector keyed by slot (not label) so duplicate labels
-    // don't overwrite and free each other; final labels are committed below.
     labeltype max_label = 0;
+    // Tracks tombstoned slots by label to detect duplicates during load.
     std::unordered_map<labeltype, tableint> tombstoned_label_lookup_;
+    // Slots whose duplicate label must be reassigned, mapped to their vector.
     std::unordered_map<tableint, std::string> dup_label_slots;
     for (size_t i = 0; i < cur_element_count_; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
@@ -1532,7 +1532,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
       throw std::runtime_error(
           "The number of elements exceeds the specified limit");
     }
-  
+
     tableint cur_c = 0;
     {
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);

@@ -239,6 +239,7 @@ const absl::NoDestructor<
         {"LEANVEC4X4", data_model::SVS_COMPRESSION_LEANVEC4X4},
         {"LEANVEC4X8", data_model::SVS_COMPRESSION_LEANVEC4X8},
         {"LEANVEC8X8", data_model::SVS_COMPRESSION_LEANVEC8X8},
+        {"SQ8", data_model::SVS_COMPRESSION_SQ8},
     });
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::RawVectorStorage>>
@@ -385,9 +386,8 @@ vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
                                              *indexes::kDistanceMetricByStr));
   parser.AddParamParser(kInitialCapParam,
                         GENERATE_VALUE_PARSER(SVSParameters, initial_cap));
-  parser.AddParamParser(
-      kGraphMaxDegreeParam,
-      GENERATE_VALUE_PARSER(SVSParameters, graph_max_degree));
+  parser.AddParamParser(kGraphMaxDegreeParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, graph_max_degree));
   parser.AddParamParser(
       kConstructionWindowSizeParam,
       GENERATE_VALUE_PARSER(SVSParameters, construction_window_size));
@@ -396,18 +396,17 @@ vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
       GENERATE_VALUE_PARSER(SVSParameters, search_window_size));
   parser.AddParamParser(kAlphaParam,
                         GENERATE_VALUE_PARSER(SVSParameters, alpha));
-  parser.AddParamParser(kCompressionParam,
-                        GENERATE_ENUM_PARSER(SVSParameters, compression,
-                                             *kSVSCompressionByStr));
+  parser.AddParamParser(
+      kCompressionParam,
+      GENERATE_ENUM_PARSER(SVSParameters, compression, *kSVSCompressionByStr));
   parser.AddParamParser(kLeanVecDimsParam,
                         GENERATE_VALUE_PARSER(SVSParameters, leanvec_dims));
   parser.AddParamParser(
       kLeanVecTrainingThresholdParam,
       GENERATE_VALUE_PARSER(SVSParameters, leanvec_training_threshold));
-  parser.AddParamParser(
-      kRawVectorStorageParam,
-      GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
-                           *kRawVectorStorageByStr));
+  parser.AddParamParser(kRawVectorStorageParam,
+                        GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
+                                             *kRawVectorStorageByStr));
   return parser;
 }
 absl::Status ParseVector(vmsdk::ArgsIterator &itr,
@@ -921,32 +920,28 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
 absl::Status SVSParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
   if (graph_max_degree < 2) {
-    return absl::InvalidArgumentError(
-        "GRAPH_MAX_DEGREE must be at least 2.");
+    return absl::InvalidArgumentError("GRAPH_MAX_DEGREE must be at least 2.");
   }
   if (construction_window_size < 1) {
     return absl::InvalidArgumentError(
         "CONSTRUCTION_WINDOW_SIZE must be at least 1.");
   }
   if (search_window_size < 1) {
-    return absl::InvalidArgumentError(
-        "SEARCH_WINDOW_SIZE must be at least 1.");
+    return absl::InvalidArgumentError("SEARCH_WINDOW_SIZE must be at least 1.");
   }
   if (alpha <= 0.0f) {
     return absl::InvalidArgumentError("ALPHA must be positive.");
   }
-  bool is_leanvec =
-      (compression == data_model::SVS_COMPRESSION_LEANVEC4X4 ||
-       compression == data_model::SVS_COMPRESSION_LEANVEC4X8 ||
-       compression == data_model::SVS_COMPRESSION_LEANVEC8X8);
+  bool is_leanvec = (compression == data_model::SVS_COMPRESSION_LEANVEC4X4 ||
+                     compression == data_model::SVS_COMPRESSION_LEANVEC4X8 ||
+                     compression == data_model::SVS_COMPRESSION_LEANVEC8X8);
   if (is_leanvec) {
     if (leanvec_dims <= 0) {
       return absl::InvalidArgumentError(
           "LEANVEC_DIMS is required (>0) when COMPRESSION is LEANVEC*.");
     }
     if (static_cast<uint32_t>(leanvec_dims) >= dimensions) {
-      return absl::InvalidArgumentError(
-          "LEANVEC_DIMS must be less than DIM.");
+      return absl::InvalidArgumentError("LEANVEC_DIMS must be less than DIM.");
     }
     if (leanvec_training_threshold < 1) {
       return absl::InvalidArgumentError(
@@ -960,8 +955,7 @@ absl::Status SVSParameters::Verify() const {
 }
 std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
   auto vector_index_proto = FTCreateVectorParameters::ToProto();
-  auto svs_algorithm_proto =
-      std::make_unique<data_model::SVSVamanaAlgorithm>();
+  auto svs_algorithm_proto = std::make_unique<data_model::SVSVamanaAlgorithm>();
   svs_algorithm_proto->set_graph_max_degree(graph_max_degree);
   svs_algorithm_proto->set_construction_window_size(construction_window_size);
   svs_algorithm_proto->set_search_window_size(search_window_size);

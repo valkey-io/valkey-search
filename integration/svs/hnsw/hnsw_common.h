@@ -7,8 +7,8 @@
 #include <memory>
 
 // Vendored upstream hnswlib 0.8.0. Header-only.
-#include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/hnswalg.h"
+#include "third_party/hnswlib/hnswlib.h"
 #include "third_party/hnswlib/space_l2.h"
 
 namespace svstest::hnsw {
@@ -22,8 +22,8 @@ struct HnswIndex {
 // the defaults the VectorHNSW wrapper seeds from the proto). We pick a
 // modest initial_cap so tests stay light; resize-if-full isn't exercised
 // here because the asks are about threading/API, not capacity.
-inline HnswIndex make_hnsw(size_t dim, size_t initial_cap,
-                           size_t M = 16, size_t ef_construction = 200,
+inline HnswIndex make_hnsw(size_t dim, size_t initial_cap, size_t M = 16,
+                           size_t ef_construction = 200,
                            size_t ef_runtime = 50) {
   HnswIndex idx;
   idx.space = std::make_unique<hnswlib::L2Space>(dim);

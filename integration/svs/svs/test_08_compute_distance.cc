@@ -22,8 +22,9 @@
 // Reproduction:
 //   ./build_test.sh svs/test_08_compute_distance
 //   # On current SVS 0.2.0:
-//   #   undefined reference to svs::runtime::v0::DynamicVamanaIndex::compute_distance
-//   # On the new SVS runtime:
+//   #   undefined reference to
+//   svs::runtime::v0::DynamicVamanaIndex::compute_distance # On the new SVS
+//   runtime:
 //   ./svs/test_08_compute_distance
 //
 // Expected output (new runtime): |direct - search| below 1e-4 for FP32;
@@ -42,41 +43,55 @@
 
 // Forward declaration of the desired API. Absent from 0.2.0; will link
 // once the SVS team adds it.
-namespace svs { namespace runtime { namespace v0 {
+namespace svs {
+namespace runtime {
+namespace v0 {
 Status dynamic_vamana_compute_distance(const DynamicVamanaIndex* idx,
-                                       size_t label,
-                                       const float* query,
+                                       size_t label, const float* query,
                                        float* out) noexcept;
-}}}
+}
+}  // namespace runtime
+}  // namespace svs
 
 using namespace svstest;
 using svstest::svs_::DVamana;
 
 constexpr size_t kDim = 64;
-constexpr size_t kN   = 200;
+constexpr size_t kN = 200;
 
 int main() {
   std::printf("svs/test_08_compute_distance: dim=%zu N=%zu\n", kDim, kN);
 
   DVamana* idx = nullptr;
   auto st = svs_::build_svs(&idx, kDim);
-  if (!st.ok()) { fail("build", st.message()); return 1; }
+  if (!st.ok()) {
+    fail("build", st.message());
+    return 1;
+  }
 
   rng(1);
   auto data = random_vecs(kN, kDim);
   std::vector<size_t> labels(kN);
   for (size_t i = 0; i < kN; ++i) labels[i] = i;
   st = idx->add(kN, labels.data(), data.data());
-  if (!st.ok()) { fail("add", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("add", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
 
   auto q = random_vec(kDim);
 
   // Indirect: full-N search to get distance for every label.
   std::vector<float> sdists(kN);
   std::vector<size_t> slabels(kN);
-  st = idx->search(1, q.data(), kN, sdists.data(), slabels.data(),
-                   nullptr, nullptr);
-  if (!st.ok()) { fail("search", st.message()); DVamana::destroy(idx); return 1; }
+  st = idx->search(1, q.data(), kN, sdists.data(), slabels.data(), nullptr,
+                   nullptr);
+  if (!st.ok()) {
+    fail("search", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
   std::vector<float> dist_from_search(kN, 0.0f);
   for (size_t i = 0; i < kN; ++i)
     if (slabels[i] != SIZE_MAX) dist_from_search[slabels[i]] = sdists[i];
@@ -89,8 +104,7 @@ int main() {
     auto s = ::svs::runtime::v0::dynamic_vamana_compute_distance(
         idx, /*label*/ i, q.data(), &d_direct);
     if (!s.ok()) {
-      fail("compute_distance",
-           "i=" + std::to_string(i) + ": " + s.message());
+      fail("compute_distance", "i=" + std::to_string(i) + ": " + s.message());
       DVamana::destroy(idx);
       return 1;
     }
@@ -98,11 +112,14 @@ int main() {
     if (diff > 1e-4) ++mismatches;
     if (diff > max_abs_err) max_abs_err = diff;
   }
-  std::printf("  max |direct - search| = %g (mismatches=%zu)\n",
-              max_abs_err, mismatches);
+  std::printf("  max |direct - search| = %g (mismatches=%zu)\n", max_abs_err,
+              mismatches);
 
   DVamana::destroy(idx);
-  if (mismatches == 0) { pass("svs/test_08_compute_distance"); return 0; }
+  if (mismatches == 0) {
+    pass("svs/test_08_compute_distance");
+    return 0;
+  }
   fail("svs/test_08_compute_distance",
        "mismatches: " + std::to_string(mismatches));
   return 1;

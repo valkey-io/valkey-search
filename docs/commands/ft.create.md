@@ -97,7 +97,7 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `CONSTRUCTION_WINDOW_SIZE <number>` (optional): Search window size used during index construction. Higher values improve recall at the cost of slower builds. Default is 128.
   - `SEARCH_WINDOW_SIZE <number>` (optional): Search window size used at query time. Higher values improve recall at the cost of slower queries. Can also be overridden per-query. Default is 10.
   - `ALPHA <float>` (optional): Graph pruning parameter. Values slightly above 1.0 (default 1.2) produce well-connected graphs.
-  - `COMPRESSION [NONE | FP16 | LVQ4 | LVQ8 | LVQ4X4 | LVQ4X8 | LEANVEC4X4 | LEANVEC4X8 | LEANVEC8X8]` (optional): Vector compression mode. Default is `NONE` (full FP32). See [SVS compression](#svs-compression) below.
+  - `COMPRESSION [NONE | FP16 | LVQ4 | LVQ8 | LVQ4X4 | LVQ4X8 | LEANVEC4X4 | LEANVEC4X8 | LEANVEC8X8 | SQ8]` (optional): Vector compression mode. Default is `NONE` (full FP32). See [SVS compression](#svs-compression) below.
 
 #### SVS compression
 
@@ -114,6 +114,7 @@ SVS supports several compression modes that reduce memory footprint at the cost 
 | `LEANVEC4X4` | LeanVec: learned projection + 4-bit primary, 4-bit secondary. |
 | `LEANVEC4X8` | LeanVec: learned projection + 4-bit primary, 8-bit secondary. |
 | `LEANVEC8X8` | LeanVec: learned projection + 8-bit primary, 8-bit secondary. |
+| `SQ8` | Scalar quantization (1 byte/dimension). ~4× memory reduction vs FP32, no training phase required. |
 
 LeanVec learns a low-dimensional projection (PCA-style) from a training sample, which can yield better recall-per-memory than LVQ for high-dimensional embeddings (≥ 768 dimensions). LeanVec requires two additional parameters:
 
@@ -207,6 +208,18 @@ OK
 
 ```
 FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR SVS 8 TYPE FLOAT32 DIM 128 DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 64 SEARCH_WINDOW_SIZE 10 COMPRESSION LVQ8
+```
+
+Result:
+
+```
+OK
+```
+
+### SVS example with SQ8 compression:
+
+```
+FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR SVS 8 TYPE FLOAT32 DIM 128 DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 64 SEARCH_WINDOW_SIZE 10 COMPRESSION SQ8
 ```
 
 Result:

@@ -33,7 +33,7 @@
 using namespace svstest;
 
 constexpr size_t kDim = 64;
-constexpr size_t kN   = 500;
+constexpr size_t kN = 500;
 
 int main() {
   std::printf("hnsw/test_08_compute_distance: dim=%zu N=%zu\n", kDim, kN);
@@ -41,8 +41,7 @@ int main() {
   auto idx = hnsw::make_hnsw(kDim, kN + 100);
   rng(1);
   auto data = random_vecs(kN, kDim);
-  for (size_t i = 0; i < kN; ++i)
-    idx.algo->addPoint(data.data() + i * kDim, i);
+  for (size_t i = 0; i < kN; ++i) idx.algo->addPoint(data.data() + i * kDim, i);
 
   auto q = random_vec(kDim);
 
@@ -59,17 +58,20 @@ int main() {
   double max_abs_err = 0.0;
   for (size_t i = 0; i < kN; ++i) {
     char* stored = idx.algo->getDataByInternalId(idx.algo->label_lookup_[i]);
-    float d_direct = idx.algo->fstdistfunc_(q.data(), stored,
-                                            idx.algo->dist_func_param_);
+    float d_direct =
+        idx.algo->fstdistfunc_(q.data(), stored, idx.algo->dist_func_param_);
     float d_search = dist_from_search[i];
     double diff = std::fabs(d_direct - d_search);
     if (diff > 1e-4) ++mismatches;
     if (diff > max_abs_err) max_abs_err = diff;
   }
-  std::printf("  max |direct - search| = %g (mismatches=%zu)\n",
-              max_abs_err, mismatches);
+  std::printf("  max |direct - search| = %g (mismatches=%zu)\n", max_abs_err,
+              mismatches);
 
-  if (mismatches == 0) { pass("hnsw/test_08_compute_distance"); return 0; }
+  if (mismatches == 0) {
+    pass("hnsw/test_08_compute_distance");
+    return 0;
+  }
   fail("hnsw/test_08_compute_distance",
        "mismatches: " + std::to_string(mismatches));
   return 1;

@@ -8,6 +8,10 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_SVS_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_SVS_H_
 
+#include <svs/runtime/api_defs.h>
+#include <svs/runtime/dynamic_vamana_index.h>
+#include <svs/runtime/training.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -29,10 +33,6 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-#include <svs/runtime/api_defs.h>
-#include <svs/runtime/dynamic_vamana_index.h>
-#include <svs/runtime/training.h>
-
 namespace valkey_search::indexes {
 
 // Lifecycle of a VectorSVS index. Most compression kinds are kReady from
@@ -47,8 +47,7 @@ struct SVSBuildConfig {
   size_t construction_window_size = 128;
   float alpha = 1.2f;
   size_t search_window_size = 10;
-  data_model::SVSCompressionType compression =
-      data_model::SVS_COMPRESSION_NONE;
+  data_model::SVSCompressionType compression = data_model::SVS_COMPRESSION_NONE;
   // LeanVec-only: target reduced dimensionality for the projection. 0 means
   // unset (only valid when compression is non-LeanVec).
   size_t leanvec_dims = 0;

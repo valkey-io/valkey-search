@@ -38,9 +38,9 @@
 
 using namespace svstest;
 
-constexpr size_t kDim     = 128;
-constexpr size_t kN       = 20000;
-constexpr size_t kAddN    = 5000;
+constexpr size_t kDim = 128;
+constexpr size_t kN = 20000;
+constexpr size_t kAddN = 5000;
 constexpr double kRunSecs = 3.0;
 
 struct SearchStats {
@@ -73,35 +73,33 @@ static SearchStats run_searches(hnswlib::HierarchicalNSW<float>* algo,
 }
 
 int main() {
-  std::printf("hnsw/test_04_search_during_add: dim=%zu N=%zu addN=%zu\n",
-              kDim, kN, kAddN);
+  std::printf("hnsw/test_04_search_during_add: dim=%zu N=%zu addN=%zu\n", kDim,
+              kN, kAddN);
 
   auto idx = hnsw::make_hnsw(kDim, kN + kAddN + 1000);
   rng(1);
   auto data = random_vecs(kN, kDim);
-  for (size_t i = 0; i < kN; ++i)
-    idx.algo->addPoint(data.data() + i * kDim, i);
+  for (size_t i = 0; i < kN; ++i) idx.algo->addPoint(data.data() + i * kDim, i);
 
   // Phase 1: baseline — searches only.
   section("baseline (no concurrent adds)");
   {
     std::atomic<bool> stop{false};
-    auto fut = std::async(std::launch::async, run_searches,
-                          idx.algo.get(), std::ref(stop), 500);
-    std::this_thread::sleep_for(
-        std::chrono::duration<double>(kRunSecs));
+    auto fut = std::async(std::launch::async, run_searches, idx.algo.get(),
+                          std::ref(stop), 500);
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRunSecs));
     stop.store(true);
     auto s = fut.get();
-    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n",
-                (unsigned long)s.count, s.p50, s.p99);
+    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n", (unsigned long)s.count,
+                s.p50, s.p99);
   }
 
   // Phase 2: searches + concurrent adds.
   section("during concurrent adds");
   {
     std::atomic<bool> stop{false};
-    auto fut = std::async(std::launch::async, run_searches,
-                          idx.algo.get(), std::ref(stop), 501);
+    auto fut = std::async(std::launch::async, run_searches, idx.algo.get(),
+                          std::ref(stop), 501);
     std::thread writer([&]() {
       std::mt19937 r(999);
       std::uniform_real_distribution<float> d(-1.0f, 1.0f);
@@ -111,13 +109,12 @@ int main() {
         idx.algo->addPoint(v.data(), kN + i);
       }
     });
-    std::this_thread::sleep_for(
-        std::chrono::duration<double>(kRunSecs));
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRunSecs));
     stop.store(true);
     writer.join();
     auto s = fut.get();
-    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n",
-                (unsigned long)s.count, s.p50, s.p99);
+    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n", (unsigned long)s.count,
+                s.p50, s.p99);
   }
 
   pass("hnsw/test_04_search_during_add");

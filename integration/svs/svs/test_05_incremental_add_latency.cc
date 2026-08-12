@@ -42,17 +42,20 @@
 using namespace svstest;
 using svstest::svs_::DVamana;
 
-constexpr size_t kDim      = 128;
-constexpr size_t kTotalN   = 5000;  // smaller than HNSW because SVS is slow
-constexpr size_t kBucketN  = 500;
+constexpr size_t kDim = 128;
+constexpr size_t kTotalN = 5000;  // smaller than HNSW because SVS is slow
+constexpr size_t kBucketN = 500;
 
 int main() {
-  std::printf("svs/test_05_incremental_add_latency: dim=%zu total=%zu\n",
-              kDim, kTotalN);
+  std::printf("svs/test_05_incremental_add_latency: dim=%zu total=%zu\n", kDim,
+              kTotalN);
 
   DVamana* idx = nullptr;
   auto st = svs_::build_svs(&idx, kDim);
-  if (!st.ok()) { fail("build", st.message()); return 1; }
+  if (!st.ok()) {
+    fail("build", st.message());
+    return 1;
+  }
 
   rng(1);
   auto data = random_vecs(kTotalN, kDim);
@@ -60,26 +63,26 @@ int main() {
   section("per-vector add latency");
   std::vector<double> bucket;
   bucket.reserve(kBucketN);
-  std::printf("  %-8s %-10s %-10s %-10s\n",
-              "after", "avg_us", "p50_us", "p99_us");
+  std::printf("  %-8s %-10s %-10s %-10s\n", "after", "avg_us", "p50_us",
+              "p99_us");
   for (size_t i = 0; i < kTotalN; ++i) {
     size_t label = i;
     auto t0 = clock_t_::now();
     auto s = idx->add(1, &label, data.data() + i * kDim);
     if (!s.ok()) {
-      fail("add",
-           "i=" + std::to_string(i) + ": " + s.message());
-      DVamana::destroy(idx); return 1;
+      fail("add", "i=" + std::to_string(i) + ": " + s.message());
+      DVamana::destroy(idx);
+      return 1;
     }
     bucket.push_back(ms_since(t0) * 1000.0);
     if ((i + 1) % kBucketN == 0) {
       std::sort(bucket.begin(), bucket.end());
-      double sum = 0; for (double x : bucket) sum += x;
+      double sum = 0;
+      for (double x : bucket) sum += x;
       double avg = sum / bucket.size();
       double p50 = bucket[bucket.size() / 2];
       double p99 = bucket[(size_t)(bucket.size() * 0.99)];
-      std::printf("  %-8zu %-10.1f %-10.1f %-10.1f\n",
-                  i + 1, avg, p50, p99);
+      std::printf("  %-8zu %-10.1f %-10.1f %-10.1f\n", i + 1, avg, p50, p99);
       bucket.clear();
     }
   }

@@ -694,6 +694,106 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             radius=5, negate=True,
         )
 
+    def test_vector_range_or_compound(self, key_type, dialect):
+        """VECTOR_RANGE OR with tag, numeric, and varying radii."""
+        self.setup_data("sortable numbers", key_type)
+        # VR OR tag (full-match and subset tags)
+        for r in [1.0, 5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @t3:{{all_the_same_value}} NOCONTENT",
+                radius=r,
+            )
+        for r in [1.0, 5.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @t1:{{one.one0}} NOCONTENT",
+                radius=r,
+            )
+        # VR OR numeric with varying radii
+        for r in [0.0, 0.5, 1.0, 5.0, 50.0, 100.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
+                radius=r,
+            )
+        # VR OR empty numeric — result is purely VR matches
+        for r in [1.0, 5.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @n1:[999 1000] NOCONTENT",
+                radius=r,
+            )
+        # VR OR negated numeric
+        for r in [1.0, 5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | -@n1:[0 +inf] NOCONTENT",
+                radius=r,
+            )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * | -@n1:[999 1000] NOCONTENT",
+            radius=5.0,
+        )
+
+    def test_vector_range_negate_and(self, key_type, dialect):
+        """Negated VECTOR_RANGE AND numeric/tag filters."""
+        self.setup_data("sortable numbers", key_type)
+        # Negated VR AND numeric
+        for r in [1.0, 5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * @n1:[0 +inf] NOCONTENT",
+                radius=r, negate=True,
+            )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * @n1:[3 5] NOCONTENT",
+            radius=5.0, negate=True,
+        )
+        # Negated VR AND tag
+        for r in [1.0, 5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * @t3:{{all_the_same_value}} NOCONTENT",
+                radius=r, negate=True,
+            )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * @t1:{{one.one0}} NOCONTENT",
+            radius=5.0, negate=True,
+        )
+
+    def test_vector_range_negate_or(self, key_type, dialect):
+        """Negated VECTOR_RANGE OR numeric/tag filters."""
+        self.setup_data("sortable numbers", key_type)
+        # Negated VR OR numeric
+        for r in [1.0, 5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @n1:[0 +inf] NOCONTENT",
+                radius=r, negate=True,
+            )
+        for r in [1.0, 5.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @n1:[999 1000] NOCONTENT",
+                radius=r, negate=True,
+            )
+        # Negated VR OR tag
+        for r in [1.0, 5.0, 50.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 * | @t3:{{all_the_same_value}} NOCONTENT",
+                radius=r, negate=True,
+            )
+        self.checkrange(
+            dialect,
+            f"ft.search {key_type}_idx1 * | @t1:{{one.one0}} NOCONTENT",
+            radius=5.0, negate=True,
+        )
+
     def test_vector_range_sortby(self, key_type, dialect):
         """VECTOR_RANGE with SORTBY overrides default distance ordering."""
         self.setup_data("sortable numbers", key_type)

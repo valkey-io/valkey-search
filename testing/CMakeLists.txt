@@ -4,7 +4,7 @@ set(SRCS_COMMON common.cc common.h)
 if (VALKEY_VENDORED_DEPS)
     # when using vendored (static deps) mode, tests are not linked against the intermediate search_dso object
     # (which itself is also not built), because we end up with the same static deps being linked in twice.
-    # I asked Claude to manually enumerate the dependencies of the _dso variants instead.
+    # The dependencies of the _dso variants are manually enumerated instead.
     include(object_library_helper)
     add_library(testing_common_objs OBJECT ${SRCS_COMMON})
     target_link_libraries(testing_common_objs PUBLIC search_base)

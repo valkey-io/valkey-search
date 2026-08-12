@@ -1,5 +1,4 @@
 #!/bin/bash -e
-# Generated with Claude Code (https://claude.com/claude-code)
 
 CI_DIR=$(readlink -f $(dirname $0))
 ROOT_DIR=$(readlink -f ${CI_DIR}/..)

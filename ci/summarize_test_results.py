@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# generated with Claude Code
 """Render CTest's JUnit XML output into the GitHub Actions job summary.
 
 CTest's own JUnit writer (`ctest --output-junit`, wired up in run_unit_tests()

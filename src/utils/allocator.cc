@@ -139,10 +139,21 @@ static char *TryAllocateFromChunk(AllocatorChunk *chunk) {
   if (!chunk || chunk->retired.load(std::memory_order_acquire)) {
     return nullptr;
   }
+  // Speculatively increment allocated_count to establish liveness and prevent
+  // concurrent Free() from observing a zero count and retiring the chunk.
+  uint32_t prev_count =
+      chunk->allocated_count.fetch_add(1, std::memory_order_acq_rel);
+  if (prev_count >= chunk->entries_in_chunk ||
+      chunk->retired.load(std::memory_order_acquire)) {
+    chunk->allocated_count.fetch_sub(1, std::memory_order_relaxed);
+    return nullptr;
+  }
+
   size_t start_word = chunk->scan_hint.load(std::memory_order_relaxed) %
                       chunk->num_bitmap_words;
   for (size_t i = 0; i < chunk->num_bitmap_words; ++i) {
     if (chunk->retired.load(std::memory_order_acquire)) {
+      chunk->allocated_count.fetch_sub(1, std::memory_order_relaxed);
       return nullptr;
     }
     size_t word_index = (start_word + i) % chunk->num_bitmap_words;
@@ -150,6 +161,7 @@ static char *TryAllocateFromChunk(AllocatorChunk *chunk) {
         chunk->bitmap[word_index].load(std::memory_order_relaxed);
     while (old_val != ~0ULL) {
       if (chunk->retired.load(std::memory_order_acquire)) {
+        chunk->allocated_count.fetch_sub(1, std::memory_order_relaxed);
         return nullptr;
       }
       int bit_index = std::countr_zero(~old_val);
@@ -162,15 +174,17 @@ static char *TryAllocateFromChunk(AllocatorChunk *chunk) {
           uint64_t rollback_mask = ~(1ULL << bit_index);
           chunk->bitmap[word_index].fetch_and(rollback_mask,
                                               std::memory_order_relaxed);
+          chunk->allocated_count.fetch_sub(1, std::memory_order_relaxed);
           return nullptr;
         }
-        chunk->allocated_count.fetch_add(1, std::memory_order_relaxed);
         chunk->scan_hint.store((word_index + 1) % chunk->num_bitmap_words,
                                std::memory_order_relaxed);
         return chunk->data.get() + entry_idx * chunk->entry_size;
       }
     }
   }
+  // No free slot found in this chunk; revert speculative count increment.
+  chunk->allocated_count.fetch_sub(1, std::memory_order_relaxed);
   return nullptr;
 }
 

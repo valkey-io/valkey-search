@@ -31,6 +31,10 @@ class TextIndexSchema;
 class TextIndex;
 }  // namespace valkey_search::indexes::text
 
+namespace valkey_search::indexes::scoring {
+class Scorer;
+}  // namespace valkey_search::indexes::scoring
+
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
 }  // namespace valkey_search
@@ -205,6 +209,18 @@ class TextPredicate : public Predicate {
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions) const = 0;
   virtual size_t EstimateSize(bool is_vec_query) const = 0;
+
+  // Query-selected scorer, stamped on during planning so the scored
+  // TermIterator built by BuildTextIterator uses it instead of a hardcoded
+  // scorer. Null => unscored (constant stub). Mutable/const: it is a
+  // query-scoped selection set while walking an otherwise-const predicate tree.
+  void SetScorer(const indexes::scoring::Scorer* scorer) const {
+    scorer_ = scorer;
+  }
+  const indexes::scoring::Scorer* GetScorer() const { return scorer_; }
+
+ private:
+  mutable const indexes::scoring::Scorer* scorer_ = nullptr;
 };
 
 class TermPredicate : public TextPredicate {

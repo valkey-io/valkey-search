@@ -234,7 +234,8 @@ inline bool NeedsDeduplication(QueryOperations query_operations) {
 // estimated size.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
-                  bool require_positions, bool is_vec_query) {
+                  bool require_positions, bool is_vec_query,
+                  const indexes::scoring::Scorer *scorer) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
     auto composed_predicate =
@@ -251,7 +252,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       size_t min_size = SIZE_MAX;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] = BuildTextIterator(
-            child.get(), negate, child_require_positions, is_vec_query);
+            child.get(), negate, child_require_positions, is_vec_query, scorer);
         if (iter) {
           iterators.push_back(std::move(iter));
           min_size = std::min(min_size, size);
@@ -274,7 +275,7 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       bool has_non_text = false;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] = BuildTextIterator(
-            child.get(), negate, child_require_positions, is_vec_query);
+            child.get(), negate, child_require_positions, is_vec_query, scorer);
         if (iter) {
           iterators.push_back(std::move(iter));
           total_size += size;
@@ -295,6 +296,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     auto text_index = text_predicate->GetTextIndexSchema()->GetTextIndex();
     auto field_mask = text_predicate->GetFieldMask();
     size_t size = text_predicate->EstimateSize(is_vec_query);
+    // Stamp the query-selected scorer so TermPredicate::BuildTextIterator can
+    // build a scored TermIterator without a hardcoded scorer.
+    text_predicate->SetScorer(scorer);
     auto result = text_predicate->BuildTextIterator(text_index, field_mask,
                                                     require_positions);
     return {std::move(result), size};
@@ -335,7 +339,8 @@ size_t EvaluateFilterAsPrimary(
         EvaluateAsComposedPredicate(composed_predicate, negate);
     if (predicate_type == PredicateType::kComposedAnd) {
       auto [text_iter, size] =
-          BuildTextIterator(composed_predicate, negate, false, is_vec_query);
+          BuildTextIterator(composed_predicate, negate, false, is_vec_query,
+                            indexes::scoring::GetScorer(parameters.scorer));
       if (text_iter) {
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
@@ -361,7 +366,8 @@ size_t EvaluateFilterAsPrimary(
       // weight applies). Falls back to per-child fetchers when the OR mixes in
       // non-text predicates.
       auto [text_iter, size] =
-          BuildTextIterator(composed_predicate, negate, false, is_vec_query);
+          BuildTextIterator(composed_predicate, negate, false, is_vec_query,
+                            indexes::scoring::GetScorer(parameters.scorer));
       if (text_iter) {
         entries_fetchers.push(
             std::make_unique<indexes::text::TextIteratorFetcher>(
@@ -401,6 +407,9 @@ size_t EvaluateFilterAsPrimary(
         size, text_predicate->GetTextIndexSchema()->GetTextIndex(),
         text_predicate->GetFieldMask(), false);
     fetcher->predicate_ = text_predicate;
+    // Stamp the query-selected scorer so the TermIterator built lazily in
+    // EntriesFetcher::Begin() is scored (not the unscored stub).
+    text_predicate->SetScorer(indexes::scoring::GetScorer(parameters.scorer));
     entries_fetchers.push(std::move(fetcher));
     return size;
   }
@@ -735,7 +744,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       leaf.num_doc_contain_term =
           std::min(leaf.num_doc_contain_term, total_docs);
       leaf.term_weight =
-          scorer->PrecomputeIDF(total_docs, leaf.num_doc_contain_term);
+          scorer->PrecomputeIDF({total_docs, leaf.num_doc_contain_term});
       resolved.emplace(term_pred, std::move(leaf));
       break;
     }
@@ -770,7 +779,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         // simple sum over present values.
         if (dt == 0) continue;
         leaf.tag_values.emplace_back(value,
-                                     scorer->PrecomputeIDF(total_docs, dt));
+                                     scorer->PrecomputeIDF({total_docs, dt}));
       }
       resolved.emplace(tag_pred, std::move(leaf));
       break;
@@ -860,9 +869,9 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
         doc_len = score_ctx.index_schema.GetDocumentLength(key);
       }
-      return score_ctx.scorer->ScoreLeaf(leaf.term_weight, tf, doc_len,
-                                         score_ctx.avg_doc_len,
-                                         predicate->GetWeight());
+      return score_ctx.scorer->ScoreLeaf({leaf.term_weight, tf, doc_len,
+                                          score_ctx.avg_doc_len,
+                                          predicate->GetWeight()});
     }
     // A numeric range match is a filter, never a ranker: it carries no IDF, no
     // term frequency, and no doc-length component, so under BM25STD it
@@ -900,9 +909,9 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       float sum = 0.0f;
       for (const auto &[value, idf] : leaf.tag_values) {
         if (!leaf.tag_index->ContainsKey(value, key.AsInternedRef())) continue;
-        sum += score_ctx.scorer->ScoreLeaf(idf, /*term_frequency=*/1, doc_len,
-                                           score_ctx.avg_doc_len,
-                                           predicate->GetWeight());
+        sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1, doc_len,
+                                            score_ctx.avg_doc_len,
+                                            predicate->GetWeight()});
       }
       return sum;
     }
@@ -934,8 +943,7 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   ResolvedLeaves resolved;
   ResolveLeaves(root_predicate, total_docs, scorer, resolved);
 
-  const bool needs_doc_len =
-      scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
+  const bool needs_doc_len = scorer->NeedsDocumentLength();
   const uint64_t total_doc_len =
       needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
   const float avg_doc_len =
@@ -1027,8 +1035,7 @@ SingleDocumentScorer::SingleDocumentScorer(
   // corpus, so degrade to "Score() returns nullopt" instead of aborting.
   if (state_->total_docs == 0) return;
   ResolveLeaves(root_predicate, state_->total_docs, scorer, state_->resolved);
-  state_->needs_doc_len =
-      scorer->Type() == indexes::scoring::ScorerType::kBm25Std;
+  state_->needs_doc_len = scorer->NeedsDocumentLength();
   state_->total_doc_len =
       state_->needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
   state_->avg_doc_len = (state_->needs_doc_len && state_->total_docs > 0)
@@ -1083,8 +1090,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   const auto text_index_schema =
       index_schema ? index_schema->GetTextIndexSchema() : nullptr;
 
-  const auto *bm25_scorer =
-      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
 
   // In-iterator scoring captures only the text iterator's score/weight, so it
   // is valid solely for genuinely pure-text queries. Any query that also
@@ -1170,7 +1176,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         if (iterator_scoring_enabled) {
           if (auto *text_iter = iterator->GetTextIterator()) {
             float raw = text_iter->GetScore() * text_iter->GetWeight();
-            borrowed.back().score = bm25_scorer->ComposeDocumentScore(
+            borrowed.back().score = scorer->ComposeDocumentScore(
                 raw,
                 index_schema->GetDocumentScore(BorrowedInternedStringPtr(key)));
           }
@@ -1200,7 +1206,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   // only used by combined (text + numeric/tag/negate) queries
   if (!iterator_scoring_enabled && !borrowed.empty() &&
       !parameters.filter_parse_results.is_match_all) {
-    const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
                    borrowed);

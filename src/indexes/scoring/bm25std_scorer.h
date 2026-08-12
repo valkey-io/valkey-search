@@ -31,15 +31,16 @@ class Bm25StdScorer : public Scorer {
   std::string_view Name() const override { return kName; }
   ScorerType Type() const override { return ScorerType::kBm25Std; }
 
+  // BM25 normalizes by document length (doc_len / avg_doc_len).
+  bool NeedsDocumentLength() const override { return true; }
+
   // IDF = ln(1 + (N - dt + 0.5) / (dt + 0.5)).
-  float PrecomputeIDF(uint32_t total_docs,
-                      uint32_t num_doc_contain_term) const override;
+  float PrecomputeIDF(const IdfInput& input) const override;
 
   // Scores one leaf given a precomputed IDF. Returns 0 for a degenerate corpus
   // (avg_doc_len <= 0). Used by both the post-filter walk (search.cc) and the
   // in-iterator hot path (term.cc).
-  float ScoreLeaf(float idf, uint32_t term_frequency, uint32_t doc_len,
-                  float avg_doc_len, float leaf_weight) const override;
+  float ScoreLeaf(const LeafScoreInput& input) const override;
 
   float ComposeDocumentScore(float sum_of_terms,
                              float document_score) const override;

@@ -50,7 +50,8 @@ class TermIterator : public TextIterator {
       const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
       float leaf_weight = 1.0f, uint32_t num_doc_contain_term = 0,
-      const TextIndexSchema* text_index_schema = nullptr);
+      const TextIndexSchema* text_index_schema = nullptr,
+      const scoring::Scorer* scorer = nullptr);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -103,11 +104,12 @@ class TermIterator : public TextIterator {
   const uint32_t num_doc_contain_term_;
   const TextIndexSchema* const text_index_schema_;
 
-  // Typed scorer and the query-invariant BM25 inputs cached at construction:
-  // idf_ (per-term) and avg_doc_len_ (corpus-wide). GetScore() combines them
-  // with the per-document term frequency and doc_len via ScoreLeaf().
-  // Null bm25_scorer_ means scoring is disabled (constant-stub fallback).
-  const scoring::Scorer* bm25_scorer_{nullptr};
+  // Query-selected scorer and the query-invariant inputs cached at
+  // construction: idf_ (per-term) and avg_doc_len_ (corpus-wide). GetScore()
+  // combines them with the per-document term frequency and doc_len via
+  // ScoreLeaf(). Null scorer_ means scoring is disabled (constant-stub
+  // fallback).
+  const scoring::Scorer* scorer_{nullptr};
   float idf_{0.0f};
   float avg_doc_len_{0.0f};
 

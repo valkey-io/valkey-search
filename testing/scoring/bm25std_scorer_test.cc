@@ -39,13 +39,13 @@ LeafData MakeLeaf(uint32_t total_docs, uint64_t total_doc_len,
 float ScoreLeaf(const Bm25StdScorer& scorer, const LeafData& leaf,
                 float leaf_weight) {
   const float idf =
-      scorer.PrecomputeIDF(leaf.total_docs, leaf.num_doc_contain_term);
+      scorer.PrecomputeIDF({leaf.total_docs, leaf.num_doc_contain_term});
   const float avg_doc_len = leaf.total_docs > 0
                                 ? static_cast<float>(leaf.total_doc_len) /
                                       static_cast<float>(leaf.total_docs)
                                 : 0.0f;
-  return scorer.ScoreLeaf(idf, leaf.term_frequency, leaf.doc_len, avg_doc_len,
-                          leaf_weight);
+  return scorer.ScoreLeaf(
+      {idf, leaf.term_frequency, leaf.doc_len, avg_doc_len, leaf_weight});
 }
 
 // --- Direct scorer math ---

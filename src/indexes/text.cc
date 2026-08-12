@@ -223,7 +223,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions, stem_field_mask,
       found_original, GetWeight(), num_doc_contain_term,
-      GetTextIndexSchema().get());
+      GetTextIndexSchema().get(), GetScorer());
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

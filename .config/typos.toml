@@ -18,6 +18,7 @@ extend-ignore-re = [
     ".*unning"
 ]
 [default.extend-words]
+countr = "countr"
 Fo = "Fo"
 InFo = "InFo"
 SeArCh = "SeArCh" 
@@ -30,6 +31,7 @@ Clangd = "Clangd"
 
 [type.cpp]
 extend-ignore-re = [
+    "std::[a-zA-Z0-9_]+",
     "baNAna",
     "eXIst",
     "Hel",

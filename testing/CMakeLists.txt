@@ -180,3 +180,17 @@ finalize_test_flags(text_index_test)
 
 # 8. Expr Test Suite
 add_subdirectory(expr)
+
+string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
+if("${SAN_BUILD_LOWER}" STREQUAL "no")
+    set(SRCS_ALLOCATOR_BENCH ${CMAKE_CURRENT_LIST_DIR}/utils/allocator_benchmark.cc)
+    add_executable(allocator_benchmark ${SRCS_ALLOCATOR_BENCH})
+    target_include_directories(allocator_benchmark PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+    target_include_directories(allocator_benchmark PUBLIC ${CMAKE_CURRENT_LIST_DIR}/utils)
+    target_link_libraries(allocator_benchmark PRIVATE testing_common_base)
+    target_link_libraries(allocator_benchmark PRIVATE allocator)
+    target_link_libraries(allocator_benchmark PRIVATE benchmark::benchmark)
+    target_link_libraries(allocator_benchmark PRIVATE benchmark::benchmark_main)
+    finalize_test_flags(allocator_benchmark)
+endif()
+

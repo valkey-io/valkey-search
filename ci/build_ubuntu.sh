@@ -80,8 +80,13 @@ function get_deb_suffix() {
 
 function download_deb() {
     local deb_package=$1
+    mkdir -p "${ROOT_DIR}/debs"
     LOG_INFO "Downloading ${HOSTADDR}/${deb_package}"
-    ${WGET} ${HOSTADDR}/${deb_package} -O ${ROOT_DIR}/debs/${deb_package}
+    if command -v curl >/dev/null 2>&1; then
+        curl -fSL --retry 5 --retry-delay 3 --retry-all-errors "${HOSTADDR}/${deb_package}" -o "${ROOT_DIR}/debs/${deb_package}"
+    else
+        ${WGET} --tries=5 --waitretry=3 "${HOSTADDR}/${deb_package}" -O "${ROOT_DIR}/debs/${deb_package}"
+    fi
 }
 
 # Prepare the environment before getting started

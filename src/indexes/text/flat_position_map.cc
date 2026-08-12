@@ -223,6 +223,9 @@ size_t FlatPositionMap::GetTotalAllocSize() const {
   size_t partition_map_size = num_partitions * kPartitionDeltaBytes * 2;
   const char *curr = data() + header_size + partition_map_size;
   while (U8(*curr) != kTerminatorByte) {
+    while (U8(*curr) & kContinueBit) {
+      curr++;
+    }
     curr++;
   }
   curr++;  // include terminator byte

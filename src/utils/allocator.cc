@@ -8,6 +8,8 @@
 #include "src/utils/allocator.h"
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <map>
@@ -31,18 +33,20 @@ class ChunkTracker {
     absl::MutexLock lock(&mutex_);
     chunks_by_data_.insert(std::make_pair(chunk->data.get(), chunk));
   }
-  const AllocatorChunk *FindChunk(char *ptr) const ABSL_LOCKS_EXCLUDED(mutex_) {
+  AllocatorChunk *FindAndRetainChunk(char *ptr) const
+      ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock(&mutex_);
 
     auto it = chunks_by_data_.upper_bound(ptr);
     if (it != chunks_by_data_.begin()) {
       --it;
-      if (it->second->data.get() <= ptr) {
-        DCHECK_GT(it->second->data.get() +
-                      BufferSize(it->second->entries_in_chunk,
-                                 it->second->allocator->ChunkSize()),
-                  ptr);
-        return it->second;
+      if (ptr >= it->second->data.get() &&
+          ptr <
+              it->second->data.get() + BufferSize(it->second->entries_in_chunk,
+                                                  it->second->entry_size)) {
+        auto chunk = const_cast<AllocatorChunk *>(it->second);
+        chunk->Retain();
+        return chunk;
       }
     }
     return nullptr;
@@ -60,17 +64,46 @@ class ChunkTracker {
 
 ChunkTracker chunk_tracker;
 
-size_t CalcChunkFreeGroup(size_t free_cnt) {
+int CalcChunkFreeGroup(size_t free_cnt) {
   if (free_cnt == 0) {
     return -1;
   }
   auto log2 = static_cast<size_t>(std::ceil(std::log2(free_cnt)));
-  return std::min(log2, kFreeEntriesPerChunkGroupSize - 1);
+  return static_cast<int>(std::min(log2, kFreeEntriesPerChunkGroupSize - 1));
 }
 
 int UpperBoundToMultipleOf8(int num) { return (num + 7) & ~7; }
 
-// TODO: allow deletion of chunks when they are empty
+size_t GetPageSize() { return static_cast<size_t>(sysconf(_SC_PAGESIZE)); }
+
+size_t EntriesFitInChunk(size_t size, size_t num_pages) {
+  static const size_t page_size = GetPageSize();
+  size_t total_bytes = num_pages * page_size;
+  return std::max<size_t>(kChunkBufferMinEntriesPerChunk, total_bytes / size);
+}
+
+AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
+    : entries_in_chunk(EntriesFitInChunk(size, kChunkBufferPages)),
+      entry_size(size),
+      data(std::unique_ptr<char[]>(
+          new char[BufferSize(entries_in_chunk, size)])),
+      num_bitmap_words((entries_in_chunk + kEntriesPerBitmapWord - 1) /
+                       kEntriesPerBitmapWord),
+      bitmap(std::make_unique<std::atomic<uint64_t>[]>(num_bitmap_words)),
+      allocator(allocator) {
+  for (size_t word_index = 0; word_index < num_bitmap_words; ++word_index) {
+    bitmap[word_index].store(0, std::memory_order_relaxed);
+  }
+  size_t valid_bits_in_last_word = entries_in_chunk % kEntriesPerBitmapWord;
+  if (valid_bits_in_last_word != 0) {
+    uint64_t unused_mask = ~((1ULL << valid_bits_in_last_word) - 1);
+    bitmap[num_bitmap_words - 1].store(unused_mask, std::memory_order_relaxed);
+  }
+  chunk_tracker.Track(this);
+}
+
+AllocatorChunk::~AllocatorChunk() { chunk_tracker.Untrack(this); }
+
 FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
     : size_(size), require_ptr_alignment_(require_ptr_alignment) {
   if (require_ptr_alignment_) {
@@ -79,9 +112,17 @@ FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
 }
 
 FixedSizeAllocator::~FixedSizeAllocator() {
-  CHECK(fully_used_chunks_.Empty());
+  auto clear_list = [](IntrusiveList<AllocatorChunk> &list) {
+    while (!list.Empty()) {
+      auto chunk = list.Front();
+      list.Remove(chunk);
+      chunk_tracker.Untrack(chunk);
+      chunk->Release();
+    }
+  };
+  clear_list(fully_used_chunks_);
   for (auto &chunk_group : chunks_grouped_by_free_entries_) {
-    CHECK(chunk_group.Empty());
+    clear_list(chunk_group);
   }
 }
 
@@ -94,6 +135,45 @@ size_t FixedSizeAllocator::ChunkCount() const {
   return size;
 }
 
+static char *TryAllocateFromChunk(AllocatorChunk *chunk) {
+  if (!chunk || chunk->retired.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
+  size_t start_word = chunk->scan_hint.load(std::memory_order_relaxed) %
+                      chunk->num_bitmap_words;
+  for (size_t i = 0; i < chunk->num_bitmap_words; ++i) {
+    if (chunk->retired.load(std::memory_order_acquire)) {
+      return nullptr;
+    }
+    size_t word_index = (start_word + i) % chunk->num_bitmap_words;
+    uint64_t old_val =
+        chunk->bitmap[word_index].load(std::memory_order_relaxed);
+    while (old_val != ~0ULL) {
+      if (chunk->retired.load(std::memory_order_acquire)) {
+        return nullptr;
+      }
+      int bit_index = std::countr_zero(~old_val);
+      size_t entry_idx = word_index * kEntriesPerBitmapWord + bit_index;
+      uint64_t new_val = old_val | (1ULL << bit_index);
+      if (chunk->bitmap[word_index].compare_exchange_weak(
+              old_val, new_val, std::memory_order_acquire,
+              std::memory_order_relaxed)) {
+        if (chunk->retired.load(std::memory_order_acquire)) {
+          uint64_t rollback_mask = ~(1ULL << bit_index);
+          chunk->bitmap[word_index].fetch_and(rollback_mask,
+                                              std::memory_order_relaxed);
+          return nullptr;
+        }
+        chunk->allocated_count.fetch_add(1, std::memory_order_relaxed);
+        chunk->scan_hint.store((word_index + 1) % chunk->num_bitmap_words,
+                               std::memory_order_relaxed);
+        return chunk->data.get() + entry_idx * chunk->entry_size;
+      }
+    }
+  }
+  return nullptr;
+}
+
 char *FixedSizeAllocator::Allocate(size_t size) {
   if (require_ptr_alignment_) {
     size = UpperBoundToMultipleOf8(size);
@@ -103,117 +183,160 @@ char *FixedSizeAllocator::Allocate(size_t size) {
 }
 
 char *FixedSizeAllocator::Allocate() {
-  absl::MutexLock lock(&mutex_);
-  if (current_chunk_ == nullptr) {
-    AllocateChunk();
+  AllocatorChunk *curr = current_chunk_.load(std::memory_order_acquire);
+  if (curr && curr->TryRetain()) {
+    char *ptr = TryAllocateFromChunk(curr);
+    if (curr->allocated_count.load(std::memory_order_relaxed) >=
+        curr->entries_in_chunk) {
+      AllocatorChunk *expected = curr;
+      current_chunk_.compare_exchange_strong(expected, nullptr,
+                                             std::memory_order_release,
+                                             std::memory_order_relaxed);
+    }
+    curr->Release();
+    if (ptr) {
+      active_allocations_.fetch_add(1, std::memory_order_relaxed);
+      IncrementRef();
+      return ptr;
+    }
   }
-  int old_free_group = CalcChunkFreeGroup(current_chunk_->free_list.size());
-  CHECK_GT(old_free_group, -1);
-  auto ptr = current_chunk_->free_list.top();
-  current_chunk_->free_list.pop();
-  ++active_allocations_;
 
-  HandleChunkEntryUsageChange(current_chunk_, old_free_group);
-  if (!current_chunk_) {
-    SelectCurrentChunk();
+  absl::MutexLock lock(&mutex_);
+  curr = current_chunk_.load(std::memory_order_acquire);
+  if (curr) {
+    char *ptr = TryAllocateFromChunk(curr);
+    if (ptr) {
+      if (curr->allocated_count.load(std::memory_order_relaxed) >=
+          curr->entries_in_chunk) {
+        UpdateChunkGroup(curr);
+        current_chunk_.store(nullptr, std::memory_order_relaxed);
+      }
+      active_allocations_.fetch_add(1, std::memory_order_relaxed);
+      IncrementRef();
+      return ptr;
+    }
+    UpdateChunkGroup(curr);
+    current_chunk_.store(nullptr, std::memory_order_relaxed);
   }
+
+  for (auto &chunk_group : chunks_grouped_by_free_entries_) {
+    while (!chunk_group.Empty()) {
+      auto chunk = chunk_group.Front();
+      char *ptr = TryAllocateFromChunk(chunk);
+      if (ptr) {
+        if (chunk->allocated_count.load(std::memory_order_relaxed) <
+            chunk->entries_in_chunk) {
+          current_chunk_.store(chunk, std::memory_order_release);
+        } else {
+          UpdateChunkGroup(chunk);
+          current_chunk_.store(nullptr, std::memory_order_relaxed);
+        }
+        active_allocations_.fetch_add(1, std::memory_order_relaxed);
+        IncrementRef();
+        return ptr;
+      }
+      UpdateChunkGroup(chunk);
+    }
+  }
+
+  AllocateChunk();
+  curr = current_chunk_.load(std::memory_order_acquire);
+  char *ptr = TryAllocateFromChunk(curr);
+  CHECK_NE(ptr, nullptr);
+  if (curr->allocated_count.load(std::memory_order_relaxed) >=
+      curr->entries_in_chunk) {
+    UpdateChunkGroup(curr);
+    current_chunk_.store(nullptr, std::memory_order_relaxed);
+  }
+  active_allocations_.fetch_add(1, std::memory_order_relaxed);
   IncrementRef();
   return ptr;
 }
 
-void FixedSizeAllocator::HandleChunkEntryUsageChange(AllocatorChunk *chunk,
-                                                     int old_free_group) {
-  if (old_free_group == -1) {
-    fully_used_chunks_.Remove(chunk);
-    int new_free_group = CalcChunkFreeGroup(chunk->free_list.size());
-    chunks_grouped_by_free_entries_[new_free_group].PushBack(chunk);
-    return;
-  }
-  if (chunk->free_list.empty()) {
-    chunks_grouped_by_free_entries_[old_free_group].Remove(chunk);
-    if (chunk == current_chunk_) {
-      current_chunk_ = nullptr;
-    }
-    fully_used_chunks_.PushBack(chunk);
-    return;
-  }
-  int new_free_group = CalcChunkFreeGroup(chunk->free_list.size());
-  CHECK_GT(new_free_group, -1);
-  if (new_free_group != old_free_group) {
-    chunks_grouped_by_free_entries_[old_free_group].Remove(chunk);
-    chunks_grouped_by_free_entries_[new_free_group].PushBack(chunk);
-  }
-}
-
-void FixedSizeAllocator::SelectCurrentChunk() {
-  auto current_chunk_group =
-      current_chunk_ ? CalcChunkFreeGroup(current_chunk_->free_list.size())
-                     : kFreeEntriesPerChunkGroupSize;
-  for (size_t i = 0; i < current_chunk_group; ++i) {
-    if (!chunks_grouped_by_free_entries_[i].Empty()) {
-      current_chunk_ = chunks_grouped_by_free_entries_[i].Front();
-      break;
-    }
-  }
-}
-
-void FixedSizeAllocator::AllocateChunk() {
-  current_chunk_ = new AllocatorChunk(this, size_);
-  chunks_grouped_by_free_entries_[CalcChunkFreeGroup(
-                                      current_chunk_->entries_in_chunk)]
-      .PushBack(current_chunk_);
-}
-
 void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
-  {
-    absl::MutexLock lock(&mutex_);
-    --active_allocations_;
+  size_t offset = ptr - chunk->data.get();
+  size_t entry_idx = offset / chunk->entry_size;
+  size_t word_index = entry_idx / kEntriesPerBitmapWord;
+  size_t bit_index = entry_idx % kEntriesPerBitmapWord;
 
-    int free_group = CalcChunkFreeGroup(chunk->free_list.size());
-    chunk->free_list.push(ptr);
-    HandleChunkEntryUsageChange(chunk, free_group);
-    if (chunk->free_list.size() == chunk->entries_in_chunk) {
-      chunks_grouped_by_free_entries_[CalcChunkFreeGroup(
-                                          chunk->free_list.size())]
-          .Remove(chunk);
-      if (chunk == current_chunk_) {
-        current_chunk_ = nullptr;
-      }
-      delete chunk;
+  uint64_t mask = ~(1ULL << bit_index);
+  chunk->bitmap[word_index].fetch_and(mask, std::memory_order_release);
+
+  uint32_t prev_allocations =
+      chunk->allocated_count.fetch_sub(1, std::memory_order_acq_rel);
+  active_allocations_.fetch_sub(1, std::memory_order_relaxed);
+
+  uint32_t curr_allocations = prev_allocations - 1;
+
+  int prev_group =
+      CalcChunkFreeGroup(chunk->entries_in_chunk - prev_allocations);
+  int curr_group =
+      CalcChunkFreeGroup(chunk->entries_in_chunk - curr_allocations);
+
+  if (prev_group != curr_group || curr_allocations == 0) {
+    absl::MutexLock lock(&mutex_);
+    if (chunk->current_group == -2) {
+      DecrementRef();
+      return;
     }
-    SelectCurrentChunk();
+    if (curr_allocations == 0 &&
+        chunk->allocated_count.load(std::memory_order_acquire) == 0) {
+      if (chunk->current_group >= 0) {
+        chunks_grouped_by_free_entries_[chunk->current_group].Remove(chunk);
+      } else if (chunk->current_group == -1) {
+        fully_used_chunks_.Remove(chunk);
+      }
+      if (current_chunk_.load(std::memory_order_relaxed) == chunk) {
+        current_chunk_.store(nullptr, std::memory_order_release);
+      }
+      chunk->current_group = -2;
+      chunk->retired.store(true, std::memory_order_release);
+      chunk_tracker.Untrack(chunk);
+      chunk->Release();
+    } else {
+      UpdateChunkGroup(chunk);
+    }
   }
   DecrementRef();
 }
 
-size_t GetPageSize() { return static_cast<size_t>(sysconf(_SC_PAGESIZE)); }
-
-size_t EntriesFitInChunk(size_t size, size_t num_pages) {
-  static const size_t page_size = GetPageSize();
-  size_t total_bytes = num_pages * page_size;
-  return std::max<size_t>(kChunkBufferMinEntriesPerChunk, total_bytes / size);
-}
-
-AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
-    : entries_in_chunk(EntriesFitInChunk(size, kChunkBufferPages)),
-      // Note: Using new[] to avoid calling constructor of char[].
-      data(std::unique_ptr<char[]>(
-          new char[BufferSize(entries_in_chunk, size)])),
-      allocator(allocator) {
-  for (size_t i = 0; i < entries_in_chunk; ++i) {
-    free_list.push(data.get() + i * size);
+void FixedSizeAllocator::UpdateChunkGroup(AllocatorChunk *chunk) {
+  if (chunk->current_group == -1) {
+    fully_used_chunks_.Remove(chunk);
+  } else if (chunk->current_group >= 0) {
+    chunks_grouped_by_free_entries_[chunk->current_group].Remove(chunk);
   }
-  chunk_tracker.Track(this);
+
+  size_t free_cnt = chunk->entries_in_chunk -
+                    chunk->allocated_count.load(std::memory_order_relaxed);
+  if (free_cnt == 0) {
+    fully_used_chunks_.PushBack(chunk);
+    chunk->current_group = -1;
+    if (current_chunk_.load(std::memory_order_relaxed) == chunk) {
+      current_chunk_.store(nullptr, std::memory_order_relaxed);
+    }
+  } else {
+    int new_group = CalcChunkFreeGroup(free_cnt);
+    chunks_grouped_by_free_entries_[new_group].PushBack(chunk);
+    chunk->current_group = new_group;
+  }
 }
 
-AllocatorChunk::~AllocatorChunk() { chunk_tracker.Untrack(this); }
+void FixedSizeAllocator::AllocateChunk() {
+  auto new_chunk = new AllocatorChunk(this, size_);
+  size_t free_group = CalcChunkFreeGroup(new_chunk->entries_in_chunk);
+  chunks_grouped_by_free_entries_[free_group].PushBack(new_chunk);
+  new_chunk->current_group = free_group;
+  current_chunk_.store(new_chunk, std::memory_order_release);
+}
 
 bool Allocator::Free(char *ptr) {
-  auto chunk = chunk_tracker.FindChunk(ptr);
+  auto chunk = chunk_tracker.FindAndRetainChunk(ptr);
   if (!chunk) {
     return false;
   }
-  chunk->allocator->Free(const_cast<AllocatorChunk *>(chunk), ptr);
+  chunk->allocator->Free(chunk, ptr);
+  chunk->Release();
   return true;
 }
 

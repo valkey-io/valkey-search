@@ -46,22 +46,27 @@ void IntrusiveList<T>::PushBack(T *node) {
 
 template <typename T>
 void IntrusiveList<T>::Remove(T *node) {
+  if (!node) {
+    return;
+  }
   if (node->next == nullptr && node->prev == nullptr && tail_ != node &&
       head_ != node) {
     return;
   }
   if (node->prev) {
     node->prev->next = node->next;
-  } else {
+  } else if (head_ == node) {
     head_ = node->next;
   }
   if (node->next) {
     node->next->prev = node->prev;
-  } else {
+  } else if (tail_ == node) {
     tail_ = node->prev;
   }
   node->next = node->prev = nullptr;
-  --size_;
+  if (size_ > 0) {
+    --size_;
+  }
 }
 
 }  // namespace valkey_search

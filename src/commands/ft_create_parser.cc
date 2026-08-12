@@ -406,10 +406,9 @@ vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
   parser.AddParamParser(
       kLeanVecTrainingThresholdParam,
       GENERATE_VALUE_PARSER(SVSParameters, leanvec_training_threshold));
-  parser.AddParamParser(
-      kRawVectorStorageParam,
-      GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
-                           *kRawVectorStorageByStr));
+  parser.AddParamParser(kRawVectorStorageParam,
+                        GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
+                                             *kRawVectorStorageByStr));
   parser.AddParamParser(
       kDistanceMatchEpsilonParam,
       GENERATE_VALUE_PARSER(SVSParameters, distance_match_epsilon_per_dim));
@@ -956,6 +955,12 @@ absl::Status SVSParameters::Verify() const {
   } else if (leanvec_dims > 0) {
     return absl::InvalidArgumentError(
         "LEANVEC_DIMS is only valid with LEANVEC* COMPRESSION.");
+  }
+  if (distance_match_epsilon_per_dim < 0.0f &&
+      distance_match_epsilon_per_dim != -1.0f) {
+    return absl::InvalidArgumentError(
+        "DISTANCE_MATCH_EPSILON must be >= 0. Omit the parameter to use "
+        "the compiled default.");
   }
   return absl::OkStatus();
 }

@@ -195,8 +195,10 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
         data_model::RAW_VECTOR_STORAGE_DROP) {
       config.drop_intern_store = true;
     }
-    config.distance_match_epsilon_per_dim =
-        svs_params.distance_match_epsilon_per_dim();
+    if (svs_params.distance_match_epsilon_per_dim() >= 0.0f) {
+      config.distance_match_epsilon_per_dim =
+          svs_params.distance_match_epsilon_per_dim();
+    }
   }
 
   // SVS requires alpha <= 1.0 for MIP/Cosine distance metrics.
@@ -784,8 +786,7 @@ bool VectorSVS<T>::IsVectorMatch(uint64_t internal_id,
     // IP/COSINE: self-distance is the dot product of the stored vector with
     // itself (≈ ||v||² for L2-normed vectors, ≈ 1.0 for COSINE-normalized).
     // Compare against the query's squared magnitude.
-    const float* qdata =
-        reinterpret_cast<const float*>(vector->Str().data());
+    const float* qdata = reinterpret_cast<const float*>(vector->Str().data());
     float query_sq_mag = 0.0f;
     for (int i = 0; i < dimensions_; ++i) {
       query_sq_mag += qdata[i] * qdata[i];

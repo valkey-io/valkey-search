@@ -81,8 +81,8 @@ struct Postings {
 #if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
     std::pmr::memory_resource *res = valkey_search::utils::t_rax_res;
     size_t total = sizeof(PostingsHeader) + size;
-    void *raw =
-        res ? res->allocate(total, alignof(Postings)) : ::operator new(total);
+    void *raw = res ? res->allocate(total, alignof(std::max_align_t))
+                    : ::operator new(total);
     reinterpret_cast<PostingsHeader *>(raw)->res = res;
     return static_cast<char *>(raw) + sizeof(PostingsHeader);
 #else
@@ -91,12 +91,14 @@ struct Postings {
   }
   static void operator delete(void *ptr, size_t size) {
 #if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-    if (!ptr) return;
+    if (!ptr) {
+      return;
+    }
     PostingsHeader *hdr = reinterpret_cast<PostingsHeader *>(
         static_cast<char *>(ptr) - sizeof(PostingsHeader));
     if (hdr->res) {
       hdr->res->deallocate(hdr, sizeof(PostingsHeader) + size,
-                           alignof(Postings));
+                           alignof(std::max_align_t));
       return;
     }
     ::operator delete(hdr);

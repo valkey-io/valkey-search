@@ -9,17 +9,57 @@
 #define VALKEY_SEARCH_INDEXES_TEXT_INVASIVE_PTR_H_
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <utility>
+
+#include "src/utils/pmr_allocator.h"
 
 namespace valkey_search::indexes::text {
 
 namespace detail {
+
+struct InvasivePtrHeader {
+  std::pmr::memory_resource *res = nullptr;
+};
+
 template <typename T>
-struct InvasivePtrStorage {
+struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
   template <typename... Args>
-  explicit InvasivePtrStorage(Args&&... args)
+  explicit InvasivePtrStorage(Args &&...args)
       : data_(std::forward<Args>(args)...) {}
+
+  static void *operator new(size_t size) {
+#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
+    std::pmr::memory_resource *res = valkey_search::utils::t_rax_res;
+    size_t total = sizeof(InvasivePtrHeader) + size;
+    void *raw = res ? res->allocate(total, alignof(std::max_align_t))
+                    : ::operator new(total);
+    reinterpret_cast<InvasivePtrHeader *>(raw)->res = res;
+    return static_cast<char *>(raw) + sizeof(InvasivePtrHeader);
+#else
+    return ::operator new(size);
+#endif
+  }
+
+  static void operator delete(void *ptr, size_t size) {
+#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
+    if (!ptr) {
+      return;
+    }
+    InvasivePtrHeader *hdr = reinterpret_cast<InvasivePtrHeader *>(
+        static_cast<char *>(ptr) - sizeof(InvasivePtrHeader));
+    if (hdr->res) {
+      hdr->res->deallocate(hdr, sizeof(InvasivePtrHeader) + size,
+                           alignof(std::max_align_t));
+      return;
+    }
+    ::operator delete(hdr);
+#else
+    ::operator delete(ptr);
+#endif
+  }
 
   std::atomic<uint32_t> refcount_ = 1;
   T data_;
@@ -28,7 +68,7 @@ struct InvasivePtrStorage {
 
 // Raw invasive pointer opaque alias
 template <typename T>
-using InvasivePtrRaw = detail::InvasivePtrStorage<T>*;
+using InvasivePtrRaw = detail::InvasivePtrStorage<T> *;
 
 /**
  * @brief A memory-efficient shared pointer.
@@ -57,7 +97,7 @@ class InvasivePtr {
 
   // Factory constructor
   template <typename... Args>
-  static InvasivePtr Make(Args&&... args) {
+  static InvasivePtr Make(Args &&...args) {
     InvasivePtr result;
     result.ptr_ =
         new detail::InvasivePtrStorage<T>(std::forward<Args>(args)...);
@@ -67,9 +107,9 @@ class InvasivePtr {
   ~InvasivePtr() { ReleaseRef(); }
 
   // Copy semantics
-  InvasivePtr(const InvasivePtr& other) : ptr_(other.ptr_) { AddRef(); }
+  InvasivePtr(const InvasivePtr &other) : ptr_(other.ptr_) { AddRef(); }
 
-  InvasivePtr& operator=(const InvasivePtr& other) {
+  InvasivePtr &operator=(const InvasivePtr &other) {
     if (this != &other) {
       ReleaseRef();
       ptr_ = other.ptr_;
@@ -78,17 +118,17 @@ class InvasivePtr {
     return *this;
   }
 
-  InvasivePtr& operator=(std::nullptr_t) noexcept {
+  InvasivePtr &operator=(std::nullptr_t) noexcept {
     Clear();
     return *this;
   }
 
   // Move semantics
-  InvasivePtr(InvasivePtr&& other) noexcept : ptr_(other.ptr_) {
+  InvasivePtr(InvasivePtr &&other) noexcept : ptr_(other.ptr_) {
     other.ptr_ = nullptr;
   }
 
-  InvasivePtr& operator=(InvasivePtr&& other) noexcept {
+  InvasivePtr &operator=(InvasivePtr &&other) noexcept {
     if (this != &other) {
       ReleaseRef();
       ptr_ = other.ptr_;
@@ -129,14 +169,14 @@ class InvasivePtr {
   }
 
   // Access operators
-  T& operator*() const { return ptr_->data_; }
-  T* operator->() const { return &ptr_->data_; }
+  T &operator*() const { return ptr_->data_; }
+  T *operator->() const { return &ptr_->data_; }
 
   // Boolean conversion
   explicit operator bool() const { return ptr_ != nullptr; }
 
   // Comparison operators
-  auto operator<=>(const InvasivePtr&) const = default;
+  auto operator<=>(const InvasivePtr &) const = default;
 
   // Resets to the default nullptr state
   void Clear() {
@@ -159,7 +199,7 @@ class InvasivePtr {
     }
   }
 
-  detail::InvasivePtrStorage<T>* ptr_ = nullptr;
+  detail::InvasivePtrStorage<T> *ptr_ = nullptr;
 };
 
 }  // namespace valkey_search::indexes::text

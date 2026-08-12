@@ -269,6 +269,16 @@ HELLO4_OR_RARE2_OUTER3_SCORES = {
 # Unweighted BM25 total for body "hello world" (the boost=1.0 case).
 BASE_SCORE = 0.148215949535
 
+# --- Group 13: match-all (idxA) ---
+# A wildcard `*` scores every doc as a single BM25 leaf with a constant IDF (1.0)
+# and term frequency (1), normalized by the doc's text length (N=8,
+# avg_doc_len=5.25). Only doc_len varies, so the shortest docs score highest.
+MATCH_ALL_A_SCORES = {
+    "docA:8": 1.495146, "docA:5": 1.107914, "docA:6": 1.107914,
+    "docA:1": 1.019868, "docA:2": 0.944785, "docA:7": 0.944785,
+    "docA:3": 0.880000, "docA:4": 0.773869,
+}
+
 
 class TestTextScoring(ValkeySearchTestCaseBase):
 
@@ -791,3 +801,19 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         assert len(keys) == 5
         for score in scores.values():
             assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+    # Group 13: match-all (wildcard) scoring --------------------------------
+
+    # 13.1: `*` admits every doc and scores it as a constant BM25 leaf (IDF 1.0,
+    # F 1) normalized by text length, so the ranking is purely shortest-first.
+    def test_match_all_scores_by_doc_length(self):
+        client = self.server.get_new_client()
+        INDEX_A.load(client)
+        keys, scores = INDEX_A.search(client, "*")
+
+        # all 8 docs, score desc then key asc (docA:5 before docA:6; docA:2
+        # before docA:7 on ties).
+        assert keys == ["docA:8", "docA:5", "docA:6", "docA:1", "docA:2",
+                        "docA:7", "docA:3", "docA:4"]
+        for key, expected in MATCH_ALL_A_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)

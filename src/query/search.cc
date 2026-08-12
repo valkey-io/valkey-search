@@ -928,7 +928,6 @@ void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
                     std::vector<indexes::BorrowedNeighbor> &candidates) {
-  CHECK(root_predicate != nullptr);
   CHECK(scorer != nullptr);
   if (candidates.empty()) return;
 
@@ -939,9 +938,14 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   if (total_docs == 0) return;
 
   // Resolve each term leaf's posting list and per-term weight once; the
-  // per-document walk below then only does the cheap per-key lookup.
+  // per-document walk below then only does the cheap per-key lookup. A
+  // match-all
+  // (`*`) query has no predicate: there are no leaves to resolve and the loop
+  // below scores every document with the constant wildcard leaf instead.
   ResolvedLeaves resolved;
-  ResolveLeaves(root_predicate, total_docs, scorer, resolved);
+  if (root_predicate != nullptr) {
+    ResolveLeaves(root_predicate, total_docs, scorer, resolved);
+  }
 
   const bool needs_doc_len = scorer->NeedsDocumentLength();
   const uint64_t total_doc_len =
@@ -966,7 +970,19 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     // Non-owning view: scoring runs under the shared index lock, so the
     // InternedString outlives the loop and no ref-count churn is needed.
     const BorrowedInternedStringPtr &key = candidate.key;
-    auto score = ScoreNode(root_predicate, key, score_ctx);
+    std::optional<float> score;
+    if (root_predicate != nullptr) {
+      score = ScoreNode(root_predicate, key, score_ctx);
+    } else {
+      // Match-all (`*`): Redis scores the wildcard as a single BM25 leaf with a
+      // constant IDF (1.0) and term frequency (1), normalized by the document's
+      // text length. On a text-less index avg_doc_len is 0 and ScoreLeaf
+      // returns a well-defined 0.
+      const uint32_t doc_len =
+          score_ctx.needs_doc_len ? index_schema.GetDocumentLength(key) : 0;
+      score = scorer->ScoreLeaf({/*idf=*/1.0f, /*term_frequency=*/1, doc_len,
+                                 score_ctx.avg_doc_len, /*leaf_weight=*/1.0f});
+    }
     // no term contribute to score; return 0 rather than drop the doc
     const float resolved_score = score.value_or(0.0f);
     const float document_score = score_ctx.has_score_field
@@ -1191,10 +1207,13 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
   }
-  // extra step scoring logic: score all the candidates after prefilter
-  // only used by combined (text + numeric/tag/negate) queries
-  if (!iterator_scoring_enabled && !borrowed.empty() &&
-      !parameters.filter_parse_results.is_match_all) {
+  // extra step scoring logic: score all the candidates after prefilter. Used by
+  // combined (text + numeric/tag/negate) queries and by match-all (`*`): its
+  // universal-set scan carries no TextIterator, so in-iterator scoring is inert
+  // for it (iterator_scoring_enabled may still be true) and it must be scored
+  // here via the null-predicate wildcard branch in ScoreTextQuery.
+  if (!borrowed.empty() && (parameters.filter_parse_results.is_match_all ||
+                            !iterator_scoring_enabled)) {
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
                    borrowed);

@@ -88,9 +88,16 @@ bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
 
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
-  bool case_sensitive = true;
-  auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
+  const auto *tag_index = predicate.GetIndex();
+  if (tag_index == nullptr) {
+    return query::EvaluationResult(false);
+  }
+  auto raw_tags = tag_index->GetRawTagString(*key_);
+  if (!raw_tags.has_value()) {
+    return query::EvaluationResult(false);
+  }
+  return predicate.Evaluate(*raw_tags, tag_index->GetSeparator(),
+                            tag_index->IsCaseSensitive());
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(

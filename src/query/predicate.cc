@@ -13,7 +13,9 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/filter_parser.h"
 #include "src/indexes/numeric.h"
@@ -359,6 +361,31 @@ EvaluationResult TagPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateTags(*this);
 }
 
+bool TagPredicate::MatchesSingleTag(absl::string_view in_tag,
+                                    bool case_sensitive) const {
+  for (const auto &tag : tags_) {
+    absl::string_view left_hand_side = in_tag;
+    absl::string_view right_hand_side = tag;
+    if (!right_hand_side.empty() && right_hand_side.back() == '*') {
+      if (left_hand_side.length() < right_hand_side.length() - 1) {
+        continue;
+      }
+      left_hand_side = left_hand_side.substr(0, right_hand_side.length() - 1);
+      right_hand_side = right_hand_side.substr(0, right_hand_side.length() - 1);
+    }
+    if (case_sensitive) {
+      if (left_hand_side == right_hand_side) {
+        return true;
+      }
+    } else {
+      if (absl::EqualsIgnoreCase(left_hand_side, right_hand_side)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 EvaluationResult TagPredicate::Evaluate(
     const absl::flat_hash_set<absl::string_view> *in_tags,
     bool case_sensitive) const {
@@ -367,26 +394,20 @@ EvaluationResult TagPredicate::Evaluate(
   }
 
   for (const auto &in_tag : *in_tags) {
-    for (const auto &tag : tags_) {
-      absl::string_view left_hand_side = in_tag;
-      absl::string_view right_hand_side = tag;
-      if (right_hand_side.back() == '*') {
-        if (left_hand_side.length() < right_hand_side.length() - 1) {
-          continue;
-        }
-        left_hand_side = left_hand_side.substr(0, right_hand_side.length() - 1);
-        right_hand_side =
-            right_hand_side.substr(0, right_hand_side.length() - 1);
-      }
-      if (case_sensitive) {
-        if (left_hand_side == right_hand_side) {
-          return EvaluationResult(true);
-        }
-      } else {
-        if (absl::EqualsIgnoreCase(left_hand_side, right_hand_side)) {
-          return EvaluationResult(true);
-        }
-      }
+    if (MatchesSingleTag(in_tag, case_sensitive)) {
+      return EvaluationResult(true);
+    }
+  }
+  return EvaluationResult(false);
+}
+
+EvaluationResult TagPredicate::Evaluate(absl::string_view raw_tag_string,
+                                        char separator,
+                                        bool case_sensitive) const {
+  for (const auto &part : absl::StrSplit(raw_tag_string, separator)) {
+    absl::string_view in_tag = absl::StripAsciiWhitespace(part);
+    if (!in_tag.empty() && MatchesSingleTag(in_tag, case_sensitive)) {
+      return EvaluationResult(true);
     }
   }
   return EvaluationResult(false);

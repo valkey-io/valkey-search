@@ -385,10 +385,12 @@ void ScoreTextQuery(const IndexSchema& index_schema,
 // needs a recompute and reuse for the rest of the reply.
 //
 // The constructor and Score() each acquire the index reader lock internally,
-// so callers must NOT already hold it (enforced by a CHECK; the lock is
-// non-reentrant). Used by the main-thread content-fetch revalidation path
-// (response_generator.cc VerifyFilter) where a document mutated between
-// scoring and fetch needs a fresh, scale-consistent score. Score() returns
+// so callers must NOT already hold it: TimeSlicedMRMWMutex is non-reentrant
+// and a nested acquire can deadlock in SwitchWithWait() when the inverse mode
+// is waiting and the time quota is exceeded. Used by the main-thread
+// content-fetch revalidation path (response_generator.cc VerifyFilter) where a
+// document mutated between scoring and fetch needs a fresh, scale-consistent
+// score. Score() returns
 // nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
 // ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
 // never a drop.

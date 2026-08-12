@@ -21,8 +21,6 @@ namespace vmsdk {
 // Define the global statistics variable
 TimeSlicedMRMWStats global_stats;
 
-thread_local uint32_t time_sliced_mutex_held_depth = 0;
-
 void ReaderMutexLock::SetMayProlong() {
   if (may_prolong_) {
     return;

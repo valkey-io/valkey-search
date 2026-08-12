@@ -1002,15 +1002,6 @@ SingleDocumentScorer::SingleDocumentScorer(
     : state_(new State{index_schema, root_predicate, scorer}) {
   CHECK(root_predicate != nullptr);
   CHECK(scorer != nullptr);
-  // TimeSlicedMRMWMutex is NOT reentrant: a nested acquire on a thread that
-  // already holds a time-sliced lock can deadlock in SwitchWithWait() when the
-  // inverse mode is waiting and the time quota is exceeded. Enforce the
-  // "callers must NOT already hold the lock" contract instead of relying on a
-  // header comment.
-  CHECK(!vmsdk::IsTimeSlicedMutexHeldByCurrentThread())
-      << "SingleDocumentScorer acquires the index reader lock internally and "
-         "must not be constructed while a TimeSlicedMRMWMutex is already held "
-         "on this thread (non-reentrant; risk of mode-switch deadlock)";
 
   // Runs on the main thread during content fetch, outside the background
   // search's reader lock, so acquire our own to read index_key_info_ /
@@ -1051,10 +1042,8 @@ SingleDocumentScorer::~SingleDocumentScorer() = default;
 std::optional<float> SingleDocumentScorer::Score(
     const InternedStringPtr &key) const {
   if (state_->total_docs == 0) return std::nullopt;
-  CHECK(!vmsdk::IsTimeSlicedMutexHeldByCurrentThread())
-      << "SingleDocumentScorer::Score acquires the index reader lock "
-         "internally and must not be called while a TimeSlicedMRMWMutex is "
-         "already held on this thread";
+  // Contract: the caller must NOT already hold the time-sliced mutex (see
+  // class comment in search.h); the reader lock is acquired below.
   // Per-key reads (LookupTermFrequency, GetDocumentLength, GetDocumentScore)
   // touch index structures, so take the reader lock for the walk. The
   // document-independent inputs were captured at construction.

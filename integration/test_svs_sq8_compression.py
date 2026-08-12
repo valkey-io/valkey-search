@@ -27,9 +27,17 @@ K = 10
 GRAPH_MAX_DEGREE = 32
 
 
-def random_vectors(n, dim, seed=42):
+def random_vectors(n, dim, seed):
     rng = np.random.default_rng(seed)
     return rng.random((n, dim), dtype=np.float32)
+
+
+def gaussian_cluster_vectors(n, dim, seed, n_clusters=20):
+    rng = np.random.default_rng(seed)
+    centers = rng.standard_normal((n_clusters, dim)).astype(np.float32)
+    assignments = rng.integers(0, n_clusters, size=n)
+    noise = rng.standard_normal((n, dim)).astype(np.float32) * 0.1
+    return centers[assignments] + noise
 
 
 def float_vector_to_bytes(vec):
@@ -51,20 +59,22 @@ class TestSVSSQ8Compression(ValkeySearchTestCaseBase):
         lines.append("save \"\"")
         return lines
 
-    def create_svs_index(self, client, index_name, compression="NONE"):
-        """Create an SVS index with specified compression."""
-        num_args = 6 + 2 + 2
+    def create_svs_index(self, client, index_name, compression="NONE", distance_metric="L2"):
+        """Create an SVS index with specified compression and distance metric."""
+        svs_args = [
+            "TYPE", "FLOAT32",
+            "DIM", str(DIM),
+            "DISTANCE_METRIC", distance_metric,
+            "GRAPH_MAX_DEGREE", str(GRAPH_MAX_DEGREE),
+            "COMPRESSION", compression,
+        ]
         cmd = [
             "FT.CREATE", index_name,
             "ON", "HASH",
             "PREFIX", "1", f"{index_name}:",
             "SCHEMA",
-            "v", "VECTOR", "SVS", str(num_args),
-            "TYPE", "FLOAT32",
-            "DIM", str(DIM),
-            "DISTANCE_METRIC", "L2",
-            "GRAPH_MAX_DEGREE", str(GRAPH_MAX_DEGREE),
-            "COMPRESSION", compression,
+            "v", "VECTOR", "SVS", str(len(svs_args)),
+            *svs_args,
         ]
         try:
             client.execute_command(*cmd)
@@ -143,7 +153,7 @@ class TestSVSSQ8Compression(ValkeySearchTestCaseBase):
         Loads vectors BEFORE creating the index so backfill handles
         ingestion (avoids the blocked-client write path).
         """
-        vectors = random_vectors(NUM_VECTORS, DIM, seed=123)
+        vectors = gaussian_cluster_vectors(NUM_VECTORS, DIM, seed=123)
         index_name = "svs_sq8_recall"
 
         # Load vectors first (prefix must match the index PREFIX)
@@ -198,6 +208,53 @@ class TestSVSSQ8Compression(ValkeySearchTestCaseBase):
         assert len(sq8_results) == K, (
             f"SQ8 returned {len(sq8_results)} results, expected {K}")
 
-        # Both should find the query vector itself (index 0) as nearest neighbor
+        # Both should find the query vector itself (index 0) as nearest neighbor.
+        # For SQ8+L2, quantization error is small enough that the exact query
+        # vector remains the nearest neighbor to its own stored quantized form.
         assert 0 in fp32_results, "FP32 didn't find the query vector itself"
         assert 0 in sq8_results, "SQ8 didn't find the query vector itself"
+
+    def test_sq8_rejects_leanvec_dims(self):
+        """
+        Verify that specifying LEANVEC_DIMS with SQ8 compression is rejected.
+
+        LEANVEC_DIMS is only valid with LeanVec compression; combining it with
+        SQ8 must produce a ResponseError.
+        """
+        index_name = "svs_sq8_invalid"
+        svs_args = [
+            "TYPE", "FLOAT32",
+            "DIM", str(DIM),
+            "DISTANCE_METRIC", "L2",
+            "GRAPH_MAX_DEGREE", str(GRAPH_MAX_DEGREE),
+            "COMPRESSION", "SQ8",
+            "LEANVEC_DIMS", "64",
+        ]
+        cmd = [
+            "FT.CREATE", index_name, "ON", "HASH",
+            "PREFIX", "1", f"{index_name}:",
+            "SCHEMA", "v", "VECTOR", "SVS", str(len(svs_args)),
+            *svs_args,
+        ]
+        with pytest.raises(ResponseError) as exc_info:
+            self.client.execute_command(*cmd)
+        err = str(exc_info.value)
+        if "Unsupported algorithm" in err:
+            pytest.skip("SVS not available (module built without ENABLE_SVS)")
+
+    def test_sq8_with_ip_metric_returns_results(self):
+        """
+        Verify SQ8 compressed index with Inner Product distance returns results.
+        """
+        vectors = gaussian_cluster_vectors(NUM_VECTORS, DIM, seed=789)
+        index_name = "svs_sq8_ip"
+
+        self.load_vectors(self.client, index_name, vectors)
+        self.create_svs_index(
+            self.client, index_name, compression="SQ8", distance_metric="IP")
+        self.wait_for_docs_indexed(self.client, index_name, NUM_VECTORS)
+
+        results = self.knn_search(self.client, index_name, vectors[0], K)
+        assert len(results) == K, (
+            f"IP+SQ8 returned {len(results)} results, expected {K}"
+        )

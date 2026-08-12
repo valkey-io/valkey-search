@@ -30,6 +30,7 @@
 // Override the weak symbol empty_usable_size (defined in
 // memory_allocation_overrides.cc) with actual memory tracking for
 // RaxMallocMemoryTracking.
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern "C" size_t empty_usable_size(void *ptr) noexcept {
   return malloc_usable_size(ptr);
 }
@@ -53,12 +54,16 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void AddWords(const std::vector<std::pair<std::string, int>> &words,
-                item_count_op op = NONE) {
-    for (const auto &[word, value] : words) {
+                item_count_op op = kNone) {
+    for (const auto &entry : words) {
+      const auto &word = entry.first;
+      int value = entry.second;
       rax_.MutateTarget(
           word,
           [value](void *old) {
-            if (old) delete static_cast<TestTarget *>(old);
+            if (old) {
+              delete static_cast<TestTarget *>(old);
+            }
             return static_cast<void *>(new TestTarget(value));
           },
           op);
@@ -66,12 +71,14 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void DeleteWords(const std::vector<std::string> &words,
-                   item_count_op op = NONE) {
+                   item_count_op op = kNone) {
     for (const auto &word : words) {
       rax_.MutateTarget(
           word,
           [](void *old) {
-            if (old) delete static_cast<TestTarget *>(old);
+            if (old) {
+              delete static_cast<TestTarget *>(old);
+            }
             return static_cast<void *>(nullptr);
           },
           op);
@@ -79,7 +86,9 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void VerifyWords(const std::vector<std::pair<std::string, int>> &expected) {
-    for (const auto &[word, value] : expected) {
+    for (const auto &entry : expected) {
+      const auto &word = entry.first;
+      int value = entry.second;
       rax_.MutateTarget(word, [value, &word](void *existing) {
         EXPECT_NE(existing, nullptr) << "Word '" << word << "' should exist";
         if (existing) {
@@ -468,7 +477,9 @@ TEST_F(RaxTest, WordIteratorLargeScale) {
   std::set<std::string> words_to_delete(words.begin(), words.begin() + 100);
   for (const auto &w : words_to_delete) {
     rax_.MutateTarget(w, [](void *old) {
-      if (old) delete static_cast<TestTarget *>(old);
+      if (old) {
+        delete static_cast<TestTarget *>(old);
+      }
       return static_cast<void *>(nullptr);
     });
     word_counts.erase(w);
@@ -480,7 +491,9 @@ TEST_F(RaxTest, WordIteratorLargeScale) {
   // Delete all words
   for (const auto &w : words) {
     rax_.MutateTarget(w, [](void *old) {
-      if (old) delete static_cast<TestTarget *>(old);
+      if (old) {
+        delete static_cast<TestTarget *>(old);
+      }
       return static_cast<void *>(nullptr);
     });
   }
@@ -538,7 +551,7 @@ TEST_F(RaxTest, SubtreeKeyCount) {
             {"can", 4},
             {"dog", 5},
             {"card", 6}},
-           ADD);
+           kAdd);
 
   VerifySubtreeKeyCount("", 7);
   VerifySubtreeKeyCount("c", 6);
@@ -549,21 +562,21 @@ TEST_F(RaxTest, SubtreeKeyCount) {
   VerifySubtreeKeyCount("z", 0);
 
   // Remove "car" — "car" prefix still has card(x2)
-  DeleteWords({"car"}, SUBTRACT);
+  DeleteWords({"car"}, kSubtract);
   VerifySubtreeKeyCount("", 6);
   VerifySubtreeKeyCount("ca", 4);
   VerifySubtreeKeyCount("car", 2);
   VerifySubtreeKeyCount("card", 2);
 
   // Decrement "card" without changing tree structure
-  rax_.MutateTarget("card", [](void *old) { return old; }, SUBTRACT);
+  rax_.MutateTarget("card", [](void *old) { return old; }, kSubtract);
   VerifySubtreeKeyCount("", 5);
   VerifySubtreeKeyCount("ca", 3);
   VerifySubtreeKeyCount("car", 1);
   VerifySubtreeKeyCount("card", 1);
 
   // Remove "card"
-  DeleteWords({"card"}, SUBTRACT);
+  DeleteWords({"card"}, kSubtract);
   VerifySubtreeKeyCount("", 4);
   VerifySubtreeKeyCount("ca", 2);
   VerifySubtreeKeyCount("car", 0);

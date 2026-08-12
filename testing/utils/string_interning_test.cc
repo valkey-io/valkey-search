@@ -33,15 +33,25 @@ namespace {
 
 class MockAllocator : public Allocator {
  public:
-  explicit MockAllocator() : chunk_(this, 1024) {}
+  explicit MockAllocator() : chunk_(this, 1024) {
+    for (size_t i = 0; i < chunk_.entries_in_chunk; ++i) {
+      free_list_.push_back(chunk_.data.get() + i * 1024);
+    }
+  }
 
   ~MockAllocator() override = default;
 
   char *Allocate(size_t size) override {
     // simulate the memory allocation in the current tracking scope
     vmsdk::ReportAllocMemorySize(size);
-    allocated_size_ = size;
-    return chunk_.data.get();
+
+    if (!free_list_.empty()) {
+      auto ptr = free_list_.back();
+      free_list_.pop_back();
+      allocated_size_ = size;
+      return ptr;
+    }
+    return nullptr;  // Out of memory
   }
 
   size_t ChunkSize() const override { return 1024; }
@@ -50,10 +60,13 @@ class MockAllocator : public Allocator {
   void Free(AllocatorChunk *chunk, char *ptr) override {
     // Report memory deallocation to balance the allocation
     vmsdk::ReportFreeMemorySize(allocated_size_);
+
+    free_list_.push_back(ptr);
   }
 
  private:
   AllocatorChunk chunk_;
+  std::vector<char *> free_list_;
   size_t allocated_size_ = 0;
 };
 
@@ -315,6 +328,7 @@ TEST_F(BagOfInternedStringPtrsTest, PromoteSingleToMulti) {
 
 TEST_F(BagOfInternedStringPtrsTest, MultiInsertEraseFindContains) {
   std::vector<InternedStringPtr> keys;
+  keys.reserve(8);
   for (int i = 0; i < 8; ++i) {
     keys.push_back(StringInternStore::Intern("multi_" + std::to_string(i)));
   }
@@ -456,6 +470,7 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAndAssign) {
     src.insert(a);
     EXPECT_EQ(a.RefCount(), 2);
     BagOfInternedStringPtrs dst(std::move(src));
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(src.empty());
     EXPECT_EQ(dst.size(), 1u);
     EXPECT_EQ(a.RefCount(), 2);  // no churn
@@ -469,6 +484,7 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAndAssign) {
     dst.insert(a);
     EXPECT_EQ(a.RefCount(), 3);
     dst = std::move(src);
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(src.empty());
     EXPECT_EQ(dst.size(), 2u);
     EXPECT_EQ(a.RefCount(), 2);  // dst dropped its own ref before adopting
@@ -490,6 +506,7 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAndAssign) {
 TEST_F(BagOfInternedStringPtrsTest, IterationVisitsEverythingExactlyOnce) {
   auto check_iteration = [](const std::vector<std::string> &strings) {
     std::vector<InternedStringPtr> keys;
+    keys.reserve(strings.size());
     for (const auto &s : strings) {
       keys.push_back(StringInternStore::Intern(s));
     }
@@ -769,7 +786,9 @@ TEST_F(BagOfInternedStringPtrsTest, ArrayPacksToFrontAfterMidErase) {
   // Array4: erase middle.
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 4; ++i) bag.insert(keys[i]);
+    for (int i = 0; i < 4; ++i) {
+      bag.insert(keys[i]);
+    }
     bag.erase(keys[1]);
     EXPECT_EQ(bag.size(), 3u);
     EXPECT_TRUE(bag.contains(keys[0]));
@@ -788,7 +807,9 @@ TEST_F(BagOfInternedStringPtrsTest, ArrayPacksToFrontAfterMidErase) {
   // Array8: erase from middle.
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 7; ++i) bag.insert(keys[i]);
+    for (int i = 0; i < 7; ++i) {
+      bag.insert(keys[i]);
+    }
     bag.erase(keys[3]);
     EXPECT_EQ(bag.size(), 6u);
     EXPECT_FALSE(bag.contains(keys[3]));
@@ -807,7 +828,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseLastElementOfArray) {
 
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 4; ++i) bag.insert(keys[i]);
+    for (int i = 0; i < 4; ++i) {
+      bag.insert(keys[i]);
+    }
     bag.erase(keys[3]);
     EXPECT_EQ(bag.size(), 3u);
     EXPECT_FALSE(bag.contains(keys[3]));
@@ -815,7 +838,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseLastElementOfArray) {
   }
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 6; ++i) bag.insert(keys[i]);
+    for (int i = 0; i < 6; ++i) {
+      bag.insert(keys[i]);
+    }
     bag.erase(keys[5]);
     EXPECT_EQ(bag.size(), 5u);
     EXPECT_FALSE(bag.contains(keys[5]));
@@ -869,8 +894,11 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAcrossEveryMode) {
   auto keys = MakeKeys(10, "mv_");
   for (size_t n : {0, 1, 2, 5, 9}) {
     BagOfInternedStringPtrs src;
-    for (size_t i = 0; i < n; ++i) src.insert(keys[i]);
+    for (size_t i = 0; i < n; ++i) {
+      src.insert(keys[i]);
+    }
     BagOfInternedStringPtrs dst(std::move(src));
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(src.empty()) << "n=" << n;
     EXPECT_EQ(dst.size(), n) << "n=" << n;
     for (size_t i = 0; i < n; ++i) {
@@ -892,7 +920,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
   {
     auto keys = MakeKeys(3, "eia4_");
     BagOfInternedStringPtrs bag;
-    for (const auto &k : keys) bag.insert(k);  // Array4 with 3
+    for (const auto &k : keys) {
+      bag.insert(k);  // Array4 with 3
+    }
     auto it = bag.find(keys[1]);
     ASSERT_NE(it, bag.end());
     bag.erase(it);
@@ -903,7 +933,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
   {
     auto keys = MakeKeys(6, "eia8_");
     BagOfInternedStringPtrs bag;
-    for (const auto &k : keys) bag.insert(k);  // Array8 with 6
+    for (const auto &k : keys) {
+      bag.insert(k);  // Array8 with 6
+    }
     auto it = bag.find(keys[2]);
     ASSERT_NE(it, bag.end());
     bag.erase(it);
@@ -914,7 +946,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
   {
     auto keys = MakeKeys(10, "eiaset_");
     BagOfInternedStringPtrs bag;
-    for (const auto &k : keys) bag.insert(k);  // Set with 10
+    for (const auto &k : keys) {
+      bag.insert(k);  // Set with 10
+    }
     auto it = bag.find(keys[4]);
     ASSERT_NE(it, bag.end());
     bag.erase(it);
@@ -1006,7 +1040,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseNonexistentInEveryMode) {
   // Array4 mode.
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 3; ++i) bag.insert(present[i]);
+    for (int i = 0; i < 3; ++i) {
+      bag.insert(present[i]);
+    }
     EXPECT_EQ(bag.erase(missing), 0u);
     EXPECT_EQ(bag.size(), 3u);
     EXPECT_EQ(bag.TestModeForTesting(),
@@ -1015,7 +1051,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseNonexistentInEveryMode) {
   // Array8 mode.
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 6; ++i) bag.insert(present[i]);
+    for (int i = 0; i < 6; ++i) {
+      bag.insert(present[i]);
+    }
     EXPECT_EQ(bag.erase(missing), 0u);
     EXPECT_EQ(bag.size(), 6u);
     EXPECT_EQ(bag.TestModeForTesting(),
@@ -1024,7 +1062,9 @@ TEST_F(BagOfInternedStringPtrsTest, EraseNonexistentInEveryMode) {
   // Set mode.
   {
     BagOfInternedStringPtrs bag;
-    for (int i = 0; i < 10; ++i) bag.insert(present[i]);
+    for (int i = 0; i < 10; ++i) {
+      bag.insert(present[i]);
+    }
     EXPECT_EQ(bag.erase(missing), 0u);
     EXPECT_EQ(bag.size(), 10u);
     EXPECT_EQ(bag.TestModeForTesting(),
@@ -1070,7 +1110,9 @@ TEST_F(BagOfInternedStringPtrsTest, ReserveIsNoopOnNonEmptyBag) {
   // reserve() should not corrupt a bag that already has elements.
   auto keys = MakeKeys(3, "rsvne_");
   BagOfInternedStringPtrs bag;
-  for (const auto &k : keys) bag.insert(k);
+  for (const auto &k : keys) {
+    bag.insert(k);
+  }
   auto mode_before = bag.TestModeForTesting();
   bag.reserve(100);  // would promote to Set if we honored this; we don't.
   EXPECT_EQ(bag.TestModeForTesting(), mode_before);
@@ -1086,10 +1128,12 @@ TEST_F(BagOfInternedStringPtrsTest, ChurnAcrossAllModes) {
   auto keys = MakeKeys(10, "fchurn_");
   for (int rep = 0; rep < 25; ++rep) {
     BagOfInternedStringPtrs bag;
-    for (const auto &k : keys) bag.insert(k);  // grow through all modes
+    for (const auto &k : keys) {
+      bag.insert(k);  // grow through all modes
+    }
     EXPECT_EQ(bag.size(), 10u);
-    for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
-      bag.erase(*it);  // shrink through all modes
+    for (size_t i = keys.size(); i > 0; --i) {
+      bag.erase(keys[i - 1]);  // shrink through all modes
     }
     EXPECT_TRUE(bag.empty());
   }

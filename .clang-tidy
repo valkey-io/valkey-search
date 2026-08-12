@@ -87,7 +87,7 @@ CheckOptions:
 - key: readability-identifier-naming.FunctionIgnoredRegexp
   # To have the regex chomped correctly fence all items with `|` (other than first/last)
   value: >-
-    (^FRIEND_TEST$)
+    (^FRIEND_TEST$|^BM_.*|^BM$|^BENCHMARK.*)
 
 
 HeaderFilterRegex: '^./(src|testing)\/.*\.(cc|h)$|^./vmsdk/src/[a-zA-Z0-9_]+(\.cc|\.h)$|^./vmsdk/testing/.*'

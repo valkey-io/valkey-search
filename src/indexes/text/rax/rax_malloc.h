@@ -30,17 +30,27 @@
 
 #ifndef RAX_ALLOC_H
 #define RAX_ALLOC_H
-#include <stddef.h>
+#include <stddef.h>  // NOLINT(modernize-deprecated-headers)
 
-/* Override with the wrappers provided by VMSDK. */
-extern void* __wrap_malloc(size_t size);
-extern void __wrap_free(void* ptr);
-extern void* __wrap_realloc(void* ptr, size_t size);
-extern int __wrap_malloc_usable_size(void* ptr);
+/* Override with the wrappers provided by VMSDK / PMR allocator. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern void *RaxPmrMalloc(size_t size);
+extern void RaxPmrFree(void *ptr);
+extern void *RaxPmrRealloc(void *ptr, size_t size);
+extern int RaxPmrUsableSize(void *ptr);
+#ifdef __cplusplus
+}
+#endif
 
-#define rax_malloc __wrap_malloc
-#define rax_realloc __wrap_realloc
-#define rax_free __wrap_free
-#define rax_ptr_alloc_size(ptr) ((size_t)__wrap_malloc_usable_size(ptr))
+// NOLINTNEXTLINE(readability-identifier-naming)
+#define rax_malloc RaxPmrMalloc
+// NOLINTNEXTLINE(readability-identifier-naming)
+#define rax_realloc RaxPmrRealloc
+// NOLINTNEXTLINE(readability-identifier-naming)
+#define rax_free RaxPmrFree
+// NOLINTNEXTLINE(readability-identifier-naming)
+#define rax_ptr_alloc_size(ptr) ((size_t)RaxPmrUsableSize(ptr))
 
 #endif

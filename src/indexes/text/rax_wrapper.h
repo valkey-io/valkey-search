@@ -5,8 +5,8 @@
  *
  */
 
-#ifndef _VALKEY_SEARCH_INDEXES_TEXT_RAX_WRAPPER_H
-#define _VALKEY_SEARCH_INDEXES_TEXT_RAX_WRAPPER_H
+#ifndef VALKEY_SEARCH_INDEXES_TEXT_RAX_WRAPPER_H
+#define VALKEY_SEARCH_INDEXES_TEXT_RAX_WRAPPER_H
 
 /*
 
@@ -26,22 +26,7 @@ of keys in a text index's subtree.
 
 */
 
-#include <concepts>
-#include <cstdint>
-#include <deque>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <optional>
-#include <span>
-#include <sstream>
-#include <tuple>
-#include <type_traits>
-#include <variant>
-
-#include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
-#include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 #include "posting.h"
 #include "rax/rax.h"
@@ -87,7 +72,7 @@ class Rax {
   //
   void MutateTarget(absl::string_view word,
                     absl::FunctionRef<void *(void *)> mutate,
-                    item_count_op op = NONE);
+                    item_count_op op = kNone);
 
   // Searches for word and returns its target, or nullptr if not found.
   void *FindTarget(absl::string_view word) const;
@@ -128,8 +113,8 @@ class Rax {
   void DebugPrintTree(const std::string &label = "") const;
 
  private:
-  rax *rax_;  // Note: We can embed it directly to save the pointer memory if
-              // the per-key text index overhead is still an issue
+  RaxTree rax_;
+  vs_rax *GetRawRax() const { return rax_.GetRax(); }
   void (*free_callback_)(void *);  // Optional callback for freeing targets
 
  public:
@@ -141,7 +126,7 @@ class Rax {
   class WordIterator {
    public:
     // Constructor - seeks to prefix
-    explicit WordIterator(rax *rax, absl::string_view prefix);
+    explicit WordIterator(vs_rax *rax, absl::string_view prefix);
 
     // Destructor - cleans up iterator
     ~WordIterator();
@@ -179,7 +164,7 @@ class Rax {
    private:
     friend class Rax;
 
-    raxIterator iter_;
+    vs_raxIterator iter_;
     std::string prefix_;
     bool done_ = false;
   };
@@ -193,7 +178,7 @@ class Rax {
   class PathIterator {
    public:
     // Constructor - navigates to prefix
-    PathIterator(rax *rax, absl::string_view prefix);
+    PathIterator(vs_rax *rax, absl::string_view prefix);
 
     // Destructor
     ~PathIterator();
@@ -244,10 +229,10 @@ class Rax {
     friend class Rax;
 
     // Private constructor for DescendNew - directly positions at a node
-    PathIterator(rax *rax, raxNode *node, std::string path);
+    PathIterator(vs_rax *rax, vs_raxNode *node, std::string path);
 
-    rax *rax_;                // Reference to the rax tree
-    raxNode *node_;           // Current node we're at
+    vs_rax *rax_;             // Reference to the rax tree
+    vs_raxNode *node_;        // Current node we're at
     std::string path_;        // Path to current node
     size_t child_index_;      // Current child index (for branching nodes)
     bool exhausted_;          // True when all children visited

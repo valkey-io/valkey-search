@@ -440,20 +440,11 @@ size_t EvaluateFilterAsPrimary(
     return result;
   }
   if (predicate->GetType() == PredicateType::kVectorRange) {
-    // This path is reached when a VR predicate appears as a leaf inside a
-    // compound query (AND/OR with other predicates). The single-VR fast path
-    // in SearchVectorRangeQuery() bypasses EvaluateFilterAsPrimary entirely,
-    // so this code only executes for multi-predicate queries.
-    //
-    // When NOT negated: resolve the VR predicate directly via the vector
-    // index's SearchRange method. This returns only keys within the radius,
-    // giving the query planner a tighter candidate set for AND/OR.
-    //
-    // When negated: we need keys OUTSIDE the radius, which requires scanning
-    // all keys and checking distance > radius. Use the universal set and let
-    // the predicate evaluator handle the negation semantics.
-    auto *vr_pred =
-        dynamic_cast<const VectorRangePredicate *>(predicate);
+    // Only reached for compound queries, the single-VR fast path in
+    // SearchVectorRangeQuery() bypasses EvaluateFilterAsPrimary entirely.
+    // Non-negated: use SearchRange for a tight candidate set.
+    // Negated: fall through to universal set (need keys outside the radius).
+    auto *vr_pred = dynamic_cast<const VectorRangePredicate *>(predicate);
     CHECK(vr_pred != nullptr);
     CHECK(parameters.index_schema != nullptr)
         << "IndexSchema required for vector range";
@@ -469,8 +460,8 @@ size_t EvaluateFilterAsPrimary(
               static_cast<float>(vr_pred->GetRadius()),
               parameters.cancellation_token);
           if (range_result.ok()) {
-            auto fetcher = std::make_unique<VectorRangeFetcher>(
-                std::move(*range_result));
+            auto fetcher =
+                std::make_unique<VectorRangeFetcher>(std::move(*range_result));
             size_t size = fetcher->Size();
             entries_fetchers.push(std::move(fetcher));
             return size;
@@ -717,10 +708,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
   // Fast path: single standalone VectorRange predicate with no other filters.
   // This lets the HNSW index do graph-traversal stopping at the epsilon
   // boundary instead of scanning every key.
-  // NOTE: The root_predicate type check below is NOT redundant with
-  // num_vr_predicates == 1. A negated VR query (-@v:[VECTOR_RANGE ...]) has
-  // num_vr_predicates == 1 but root->GetType() == kNegate, so the extra
-  // guard prevents the fast path from firing for negation queries.
+  // The type check is not redundant with num_vr_predicates == 1: a negated VR
+  // query has num_vr_predicates == 1 but root->GetType() == kNegate.
   if (parameters.num_vr_predicates == 1 &&
       parameters.filter_parse_results.root_predicate != nullptr &&
       parameters.filter_parse_results.root_predicate->GetType() ==
@@ -789,7 +778,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
   if (needs_dedup) {
-    result_keys.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
+    result_keys.reserve(
+        std::min(qualified_entries, kInitialNeighborReserveSize));
   }
 
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
@@ -919,7 +909,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
     absl::flat_hash_set<const char *> seen_keys;
     if (needs_dedup) {
-      seen_keys.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
+      seen_keys.reserve(
+          std::min(qualified_entries, kInitialNeighborReserveSize));
     }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());
@@ -1224,33 +1215,10 @@ void IncrementQueryOperationMetrics(QueryOperations query_operations) {
   }
 }
 
-// --------------------------------------------------------------------------
-// VR Score Slot Mechanism
-// --------------------------------------------------------------------------
-// When a query contains one or more VECTOR_RANGE predicates, each predicate
-// needs its own storage location for the computed distance so that:
-//   1. Each predicate's distance can be independently returned to the client
-//      via its $yield_distance_as alias (e.g. "AS d1", "AS d2").
-//   2. SORTBY can reference any VR predicate's distance field.
-//   3. Multi-VR AND/OR queries can track per-predicate match status.
-//
-// The "slot" is a simple index (0, 1, 2, ...) assigned to each
-// VectorRangePredicate node in DFS traversal order. The total slot count
-// becomes `SearchParameters::num_vr_predicates`, and every `Neighbor` produced
-// by a VR search has its `vr_scores` vector sized to this count:
-//
-//   Neighbor::vr_scores[slot] = distance for that VR predicate
-//
-// Slot assignment happens once during query parsing (PreParseQueryString)
-// via AssignVectorRangeScoreSlots(). The mapping from slot index to the
-// user-visible field name (the yield_distance_as alias or default
-// "__<field>_score") is available via CollectVrScoreFields().
-// --------------------------------------------------------------------------
-
-// Walk the predicate tree, assign each VectorRangePredicate a unique score_slot
-// index (0, 1, 2...) in DFS order, and return the total count of VR predicates
-// found. Slot assignment is local to the predicate, eliminating the need for
-// any side-channel to retrieve the distance after evaluation.
+// Assign each VectorRangePredicate a unique score_slot index (0, 1, 2...) in
+// DFS order. Each slot maps to Neighbor::vr_scores[slot], giving every VR
+// predicate independent distance storage for yield_distance_as / SORTBY.
+// Called once during query parsing via AssignVectorRangeScoreSlots().
 static void AssignVrSlotsImpl(Predicate *predicate, size_t &next_slot) {
   if (!predicate) return;
   switch (predicate->GetType()) {

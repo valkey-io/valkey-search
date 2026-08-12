@@ -63,8 +63,7 @@ struct Neighbor {
   // Sentinel value indicating a VR predicate did not match this neighbor
   // (distance exceeds radius). Serialization layers skip emitting the field
   // when vr_scores[slot] equals this value.
-  static constexpr float kVrScoreNotMatched =
-      std::numeric_limits<float>::max();
+  static constexpr float kVrScoreNotMatched = std::numeric_limits<float>::max();
 
   InternedStringPtr external_id;
   float distance;

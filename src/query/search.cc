@@ -170,10 +170,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
 #ifdef ENABLE_SVS
   if (vector_index->GetIndexerType() == indexes::IndexerType::kSVS) {
     auto vector_svs = dynamic_cast<indexes::VectorSVS<float> *>(vector_index);
-    return vector_svs->Search(parameters.query, parameters.k,
-                              parameters.cancellation_token,
-                              std::move(inline_filter),
-                              parameters.search_window_size);
+    return vector_svs->Search(
+        parameters.query, parameters.k, parameters.cancellation_token,
+        std::move(inline_filter), parameters.search_window_size);
   }
 #endif
   CHECK(false) << "Unsupported indexer type: "

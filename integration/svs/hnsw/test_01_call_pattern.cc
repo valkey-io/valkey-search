@@ -36,7 +36,7 @@
 using namespace svstest;
 
 constexpr size_t kDim = 64;
-constexpr size_t kN   = 200;
+constexpr size_t kN = 200;
 
 int main() {
   std::printf("hnsw/test_01_call_pattern: dim=%zu N=%zu\n", kDim, kN);
@@ -60,7 +60,10 @@ int main() {
   auto t1 = clock_t_::now();
   auto res = idx.algo->searchKnn(q.data(), 10);
   std::printf("  search: %.3f ms, %zu neighbors\n", ms_since(t1), res.size());
-  if (res.size() != 10) { fail("search", "expected 10"); return 1; }
+  if (res.size() != 10) {
+    fail("search", "expected 10");
+    return 1;
+  }
 
   // --- modify (markDelete + addPoint) ---
   section("modify");

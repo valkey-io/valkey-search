@@ -25,7 +25,14 @@
 
 namespace valkey_search::indexes {
 enum class IndexerType {
-  kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText, kSVS
+  kHNSW,
+  kFlat,
+  kNumeric,
+  kTag,
+  kVector,
+  kNone,
+  kText,
+  kSVS
 };
 
 // Helper to check if an IndexerType is a vector index type.

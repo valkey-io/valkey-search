@@ -37,21 +37,20 @@
 
 using namespace svstest;
 
-constexpr size_t kDim     = 128;
-constexpr size_t kN       = 20000;
+constexpr size_t kDim = 128;
+constexpr size_t kN = 20000;
 constexpr double kRunSecs = 3.0;
 
 int main() {
-  std::printf("hnsw/test_02_concurrent_search: dim=%zu N=%zu run=%.0fs\n",
-              kDim, kN, kRunSecs);
+  std::printf("hnsw/test_02_concurrent_search: dim=%zu N=%zu run=%.0fs\n", kDim,
+              kN, kRunSecs);
 
   auto idx = hnsw::make_hnsw(kDim, /*initial_cap*/ kN + 1000);
 
   // Build the index.
   rng(1);
   auto data = random_vecs(kN, kDim);
-  for (size_t i = 0; i < kN; ++i)
-    idx.algo->addPoint(data.data() + i * kDim, i);
+  for (size_t i = 0; i < kN; ++i) idx.algo->addPoint(data.data() + i * kDim, i);
 
   section("concurrent search");
   double baseline_qps = 0.0;
@@ -75,16 +74,15 @@ int main() {
         total.fetch_add(local, std::memory_order_relaxed);
       });
     }
-    std::this_thread::sleep_for(
-        std::chrono::duration<double>(kRunSecs));
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRunSecs));
     stop.store(true);
     for (auto& th : threads) th.join();
     double elapsed = ms_since(t0) / 1000.0;
     double qps = total.load() / elapsed;
     if (n_threads == 1) baseline_qps = qps;
     double scale = qps / baseline_qps;
-    std::printf("  n=%zu: %.0f qps  (scale %.2fx vs n=1)\n",
-                n_threads, qps, scale);
+    std::printf("  n=%zu: %.0f qps  (scale %.2fx vs n=1)\n", n_threads, qps,
+                scale);
   }
 
   pass("hnsw/test_02_concurrent_search");

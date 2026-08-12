@@ -46,19 +46,22 @@
 using namespace svstest;
 using svstest::svs_::DVamana;
 
-constexpr size_t kDim           = 128;
+constexpr size_t kDim = 128;
 constexpr size_t kVectorsPerThd = 500;
 
 int main() {
-  std::printf("svs/test_03_concurrent_add: dim=%zu per-thread=%zu\n",
-              kDim, kVectorsPerThd);
+  std::printf("svs/test_03_concurrent_add: dim=%zu per-thread=%zu\n", kDim,
+              kVectorsPerThd);
 
   section("concurrent add");
   double baseline_rate = 0.0;
   for (size_t n_threads : {1u, 2u, 4u, 8u}) {
     DVamana* idx = nullptr;
     auto st = svs_::build_svs(&idx, kDim);
-    if (!st.ok()) { fail("build", st.message()); return 1; }
+    if (!st.ok()) {
+      fail("build", st.message());
+      return 1;
+    }
 
     std::atomic<bool> any_err{false};
     std::vector<std::thread> threads;
@@ -86,8 +89,8 @@ int main() {
     double rate = (n_threads * kVectorsPerThd) / elapsed;
     if (n_threads == 1) baseline_rate = rate;
     const char* err_tag = any_err.load() ? "  [ERRORS]" : "";
-    std::printf("  n=%zu: %.0f vec/s  (scale %.2fx vs n=1)%s\n",
-                n_threads, rate, rate / baseline_rate, err_tag);
+    std::printf("  n=%zu: %.0f vec/s  (scale %.2fx vs n=1)%s\n", n_threads,
+                rate, rate / baseline_rate, err_tag);
     DVamana::destroy(idx);
   }
 

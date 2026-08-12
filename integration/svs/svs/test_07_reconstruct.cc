@@ -22,8 +22,8 @@
 // Reproduction:
 //   ./build_test.sh svs/test_07_reconstruct
 //   # On current SVS 0.2.0, expect linker error:
-//   #   undefined reference to svs::runtime::v0::DynamicVamanaIndex::reconstruct
-//   # That error IS the ask.
+//   #   undefined reference to
+//   svs::runtime::v0::DynamicVamanaIndex::reconstruct # That error IS the ask.
 //   # On the new SVS runtime:
 //   ./svs/test_07_reconstruct
 //
@@ -50,41 +50,51 @@
 // The forward decl must match the proposed signature:
 //     virtual Status reconstruct(size_t label, float* out) const noexcept;
 // We access it via an extern "C"-free local wrapper.
-namespace svs { namespace runtime { namespace v0 {
+namespace svs {
+namespace runtime {
+namespace v0 {
 // Defined by the new SVS runtime; not present in 0.2.0.
-Status dynamic_vamana_reconstruct(const DynamicVamanaIndex* idx,
-                                  size_t label, float* out) noexcept;
-}}}
+Status dynamic_vamana_reconstruct(const DynamicVamanaIndex* idx, size_t label,
+                                  float* out) noexcept;
+}  // namespace v0
+}  // namespace runtime
+}  // namespace svs
 
 using namespace svstest;
 using svstest::svs_::DVamana;
 
 constexpr size_t kDim = 64;
-constexpr size_t kN   = 50;
+constexpr size_t kN = 50;
 
 int main() {
   std::printf("svs/test_07_reconstruct: dim=%zu N=%zu\n", kDim, kN);
 
   DVamana* idx = nullptr;
   auto st = svs_::build_svs(&idx, kDim);
-  if (!st.ok()) { fail("build", st.message()); return 1; }
+  if (!st.ok()) {
+    fail("build", st.message());
+    return 1;
+  }
 
   rng(1);
   auto data = random_vecs(kN, kDim);
   std::vector<size_t> labels(kN);
   for (size_t i = 0; i < kN; ++i) labels[i] = i;
   st = idx->add(kN, labels.data(), data.data());
-  if (!st.ok()) { fail("add", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("add", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
 
   section("reconstruct");
   std::vector<float> out(kDim);
   double max_err_l2 = 0.0;
   for (size_t i = 0; i < kN; ++i) {
-    auto s = ::svs::runtime::v0::dynamic_vamana_reconstruct(
-        idx, /*label*/ i, out.data());
+    auto s = ::svs::runtime::v0::dynamic_vamana_reconstruct(idx, /*label*/ i,
+                                                            out.data());
     if (!s.ok()) {
-      fail("reconstruct",
-           "i=" + std::to_string(i) + ": " + s.message());
+      fail("reconstruct", "i=" + std::to_string(i) + ": " + s.message());
       DVamana::destroy(idx);
       return 1;
     }

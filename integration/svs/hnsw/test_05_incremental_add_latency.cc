@@ -32,13 +32,13 @@
 
 using namespace svstest;
 
-constexpr size_t kDim      = 128;
-constexpr size_t kTotalN   = 20000;
-constexpr size_t kBucketN  = 1000;
+constexpr size_t kDim = 128;
+constexpr size_t kTotalN = 20000;
+constexpr size_t kBucketN = 1000;
 
 int main() {
-  std::printf("hnsw/test_05_incremental_add_latency: dim=%zu total=%zu\n",
-              kDim, kTotalN);
+  std::printf("hnsw/test_05_incremental_add_latency: dim=%zu total=%zu\n", kDim,
+              kTotalN);
 
   auto idx = hnsw::make_hnsw(kDim, kTotalN + 1000);
   rng(1);
@@ -47,7 +47,8 @@ int main() {
   section("per-vector add latency");
   std::vector<double> bucket;
   bucket.reserve(kBucketN);
-  std::printf("  %-8s %-10s %-10s %-10s\n", "after", "avg_us", "p50_us", "p99_us");
+  std::printf("  %-8s %-10s %-10s %-10s\n", "after", "avg_us", "p50_us",
+              "p99_us");
   for (size_t i = 0; i < kTotalN; ++i) {
     auto t0 = clock_t_::now();
     idx.algo->addPoint(data.data() + i * kDim, i);
@@ -59,8 +60,7 @@ int main() {
       double avg = sum / bucket.size();
       double p50 = bucket[bucket.size() / 2];
       double p99 = bucket[(size_t)(bucket.size() * 0.99)];
-      std::printf("  %-8zu %-10.1f %-10.1f %-10.1f\n",
-                  i + 1, avg, p50, p99);
+      std::printf("  %-8zu %-10.1f %-10.1f %-10.1f\n", i + 1, avg, p50, p99);
       bucket.clear();
     }
   }

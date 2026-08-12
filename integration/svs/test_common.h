@@ -47,9 +47,7 @@ inline std::vector<float> random_vecs(size_t n, size_t dim) {
   return out;
 }
 
-inline void section(const char* name) {
-  std::printf("\n--- %s ---\n", name);
-}
+inline void section(const char* name) { std::printf("\n--- %s ---\n", name); }
 
 inline void pass(const char* name, const std::string& detail = {}) {
   if (detail.empty())

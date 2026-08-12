@@ -43,12 +43,15 @@
 using namespace svstest;
 using svstest::svs_::DVamana;
 
-constexpr size_t kDim     = 128;
-constexpr size_t kN       = 20000;
-constexpr size_t kAddN    = 5000;
+constexpr size_t kDim = 128;
+constexpr size_t kN = 20000;
+constexpr size_t kAddN = 5000;
 constexpr double kRunSecs = 3.0;
 
-struct SearchStats { double p50 = 0, p99 = 0; uint64_t count = 0; };
+struct SearchStats {
+  double p50 = 0, p99 = 0;
+  uint64_t count = 0;
+};
 
 static SearchStats run_searches(DVamana* idx, std::atomic<bool>& stop,
                                 int seed) {
@@ -62,8 +65,7 @@ static SearchStats run_searches(DVamana* idx, std::atomic<bool>& stop,
   while (!stop.load(std::memory_order_relaxed)) {
     for (auto& x : q) x = d(r);
     auto t0 = clock_t_::now();
-    idx->search(1, q.data(), 10, dists.data(), labels.data(),
-                nullptr, nullptr);
+    idx->search(1, q.data(), 10, dists.data(), labels.data(), nullptr, nullptr);
     latencies.push_back(ms_since(t0));
   }
   std::sort(latencies.begin(), latencies.end());
@@ -78,38 +80,44 @@ static SearchStats run_searches(DVamana* idx, std::atomic<bool>& stop,
 }
 
 int main() {
-  std::printf("svs/test_04_search_during_add: dim=%zu N=%zu addN=%zu\n",
-              kDim, kN, kAddN);
+  std::printf("svs/test_04_search_during_add: dim=%zu N=%zu addN=%zu\n", kDim,
+              kN, kAddN);
 
   DVamana* idx = nullptr;
   auto st = svs_::build_svs(&idx, kDim);
-  if (!st.ok()) { fail("build", st.message()); return 1; }
+  if (!st.ok()) {
+    fail("build", st.message());
+    return 1;
+  }
 
   rng(1);
   auto data = random_vecs(kN, kDim);
   std::vector<size_t> labels(kN);
   for (size_t i = 0; i < kN; ++i) labels[i] = i;
   st = idx->add(kN, labels.data(), data.data());
-  if (!st.ok()) { fail("initial add", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("initial add", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
 
   section("baseline (no concurrent adds)");
   {
     std::atomic<bool> stop{false};
-    auto fut = std::async(std::launch::async, run_searches,
-                          idx, std::ref(stop), 500);
-    std::this_thread::sleep_for(
-        std::chrono::duration<double>(kRunSecs));
+    auto fut =
+        std::async(std::launch::async, run_searches, idx, std::ref(stop), 500);
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRunSecs));
     stop.store(true);
     auto s = fut.get();
-    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n",
-                (unsigned long)s.count, s.p50, s.p99);
+    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n", (unsigned long)s.count,
+                s.p50, s.p99);
   }
 
   section("during concurrent adds");
   {
     std::atomic<bool> stop{false};
-    auto fut = std::async(std::launch::async, run_searches,
-                          idx, std::ref(stop), 501);
+    auto fut =
+        std::async(std::launch::async, run_searches, idx, std::ref(stop), 501);
     std::thread writer([&]() {
       std::mt19937 r(999);
       std::uniform_real_distribution<float> d(-1.0f, 1.0f);
@@ -120,13 +128,12 @@ int main() {
         idx->add(1, &label, v.data());
       }
     });
-    std::this_thread::sleep_for(
-        std::chrono::duration<double>(kRunSecs));
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRunSecs));
     stop.store(true);
     writer.join();
     auto s = fut.get();
-    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n",
-                (unsigned long)s.count, s.p50, s.p99);
+    std::printf("  count=%lu p50=%.3f ms p99=%.3f ms\n", (unsigned long)s.count,
+                s.p50, s.p99);
   }
 
   DVamana::destroy(idx);

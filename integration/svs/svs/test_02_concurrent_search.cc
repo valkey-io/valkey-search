@@ -31,11 +31,12 @@
 //   Scaling stays near-linear regardless of internal thread setting,
 //   or the oversubscription knob no longer needs to exist.
 
+#include <omp.h>
+
 #include <atomic>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
-#include <omp.h>
 #include <thread>
 #include <vector>
 
@@ -45,8 +46,8 @@
 using namespace svstest;
 using svstest::svs_::DVamana;
 
-constexpr size_t kDim     = 128;
-constexpr size_t kN       = 20000;
+constexpr size_t kDim = 128;
+constexpr size_t kN = 20000;
 constexpr double kRunSecs = 3.0;
 
 static void run_at_omp(DVamana* idx, int omp_threads) {
@@ -70,33 +71,35 @@ static void run_at_omp(DVamana* idx, int omp_threads) {
         uint64_t local = 0;
         while (!stop.load(std::memory_order_relaxed)) {
           for (auto& x : q) x = d(r);
-          idx->search(1, q.data(), 10, dists.data(), labels.data(),
-                      nullptr, nullptr);
+          idx->search(1, q.data(), 10, dists.data(), labels.data(), nullptr,
+                      nullptr);
           ++local;
         }
         total.fetch_add(local, std::memory_order_relaxed);
       });
     }
-    std::this_thread::sleep_for(
-        std::chrono::duration<double>(kRunSecs));
+    std::this_thread::sleep_for(std::chrono::duration<double>(kRunSecs));
     stop.store(true);
     for (auto& th : threads) th.join();
     double elapsed = ms_since(t0) / 1000.0;
     double qps = total.load() / elapsed;
     if (n_threads == 1) baseline_qps = qps;
     double scale = qps / baseline_qps;
-    std::printf("  n=%zu: %.0f qps  (scale %.2fx vs n=1)\n",
-                n_threads, qps, scale);
+    std::printf("  n=%zu: %.0f qps  (scale %.2fx vs n=1)\n", n_threads, qps,
+                scale);
   }
 }
 
 int main() {
-  std::printf("svs/test_02_concurrent_search: dim=%zu N=%zu run=%.0fs\n",
-              kDim, kN, kRunSecs);
+  std::printf("svs/test_02_concurrent_search: dim=%zu N=%zu run=%.0fs\n", kDim,
+              kN, kRunSecs);
 
   DVamana* idx = nullptr;
   auto st = svs_::build_svs(&idx, kDim);
-  if (!st.ok()) { fail("build", st.message()); return 1; }
+  if (!st.ok()) {
+    fail("build", st.message());
+    return 1;
+  }
 
   // Build the index.
   rng(1);
@@ -104,7 +107,11 @@ int main() {
   std::vector<size_t> labels(kN);
   for (size_t i = 0; i < kN; ++i) labels[i] = i;
   st = idx->add(kN, labels.data(), data.data());
-  if (!st.ok()) { fail("add", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("add", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
 
   section("concurrent search");
   run_at_omp(idx, 1);

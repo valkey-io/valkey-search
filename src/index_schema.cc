@@ -1317,7 +1317,6 @@ bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
   return indexes::IsVectorIndexType(index->GetIndexerType());
 }
 
-
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   index_schema_proto->set_name(this->name_);

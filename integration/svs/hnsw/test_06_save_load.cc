@@ -23,11 +23,12 @@
 // Expected output:
 //   100% match on top-10 search results before and after reload.
 
+#include <unistd.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 #include "hnsw_common.h"
@@ -36,7 +37,7 @@
 using namespace svstest;
 
 constexpr size_t kDim = 128;
-constexpr size_t kN   = 5000;
+constexpr size_t kN = 5000;
 
 int main() {
   std::printf("hnsw/test_06_save_load: dim=%zu N=%zu\n", kDim, kN);
@@ -46,7 +47,7 @@ int main() {
 
   rng(1);
   auto data = random_vecs(kN, kDim);
-  auto q    = random_vec(kDim);
+  auto q = random_vec(kDim);
 
   // Build + save.
   std::vector<hnswlib::labeltype> pre_labels(10);
@@ -85,8 +86,10 @@ int main() {
   std::printf("  top-10 match after reload: %zu/10\n", matches);
 
   std::remove(path.c_str());
-  if (matches == 10) { pass("hnsw/test_06_save_load"); return 0; }
-  fail("hnsw/test_06_save_load",
-       "top-10 mismatch: " + std::to_string(matches));
+  if (matches == 10) {
+    pass("hnsw/test_06_save_load");
+    return 0;
+  }
+  fail("hnsw/test_06_save_load", "top-10 mismatch: " + std::to_string(matches));
   return 1;
 }

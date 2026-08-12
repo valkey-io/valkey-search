@@ -45,14 +45,17 @@ using namespace svstest;
 using svstest::svs_::DVamana;
 
 constexpr size_t kDim = 64;
-constexpr size_t kN   = 200;
+constexpr size_t kN = 200;
 
 int main() {
   std::printf("svs/test_01_call_pattern: dim=%zu N=%zu\n", kDim, kN);
 
   DVamana* idx = nullptr;
   auto st = svs_::build_svs(&idx, kDim);
-  if (!st.ok()) { fail("build", st.message()); return 1; }
+  if (!st.ok()) {
+    fail("build", st.message());
+    return 1;
+  }
 
   // --- add ---
   section("add");
@@ -64,7 +67,8 @@ int main() {
     st = idx->add(1, &label, data.data() + i * kDim);
     if (!st.ok()) {
       fail("add", "i=" + std::to_string(i) + ": " + st.message());
-      DVamana::destroy(idx); return 1;
+      DVamana::destroy(idx);
+      return 1;
     }
   }
   double add_ms = ms_since(t0);
@@ -76,13 +80,22 @@ int main() {
   std::vector<float> dists(10);
   std::vector<size_t> labels(10, SIZE_MAX);
   auto t1 = clock_t_::now();
-  st = idx->search(1, q.data(), 10, dists.data(), labels.data(),
-                   nullptr, nullptr);
-  if (!st.ok()) { fail("search", st.message()); DVamana::destroy(idx); return 1; }
+  st = idx->search(1, q.data(), 10, dists.data(), labels.data(), nullptr,
+                   nullptr);
+  if (!st.ok()) {
+    fail("search", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
   size_t found = 0;
-  for (auto l : labels) if (l != SIZE_MAX) ++found;
+  for (auto l : labels)
+    if (l != SIZE_MAX) ++found;
   std::printf("  search: %.3f ms, %zu neighbors\n", ms_since(t1), found);
-  if (found != 10) { fail("search", "expected 10"); DVamana::destroy(idx); return 1; }
+  if (found != 10) {
+    fail("search", "expected 10");
+    DVamana::destroy(idx);
+    return 1;
+  }
 
   // --- modify (remove+add) ---
   section("modify");
@@ -90,9 +103,17 @@ int main() {
   auto newv = random_vec(kDim);
   auto t2 = clock_t_::now();
   st = idx->remove(1, &label0);
-  if (!st.ok()) { fail("modify/remove", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("modify/remove", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
   st = idx->add(1, &label0, newv.data());
-  if (!st.ok()) { fail("modify/add", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("modify/add", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
   std::printf("  modify: %.3f ms\n", ms_since(t2));
 
   // --- remove ---
@@ -100,16 +121,25 @@ int main() {
   size_t label1 = 1;
   auto t3 = clock_t_::now();
   st = idx->remove(1, &label1);
-  if (!st.ok()) { fail("remove", st.message()); DVamana::destroy(idx); return 1; }
+  if (!st.ok()) {
+    fail("remove", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
   std::printf("  remove: %.3f ms\n", ms_since(t3));
 
   // --- search-after-modify ---
   section("search-after-modify");
-  st = idx->search(1, q.data(), 10, dists.data(), labels.data(),
-                   nullptr, nullptr);
-  if (!st.ok()) { fail("search-after-modify", st.message()); DVamana::destroy(idx); return 1; }
+  st = idx->search(1, q.data(), 10, dists.data(), labels.data(), nullptr,
+                   nullptr);
+  if (!st.ok()) {
+    fail("search-after-modify", st.message());
+    DVamana::destroy(idx);
+    return 1;
+  }
   found = 0;
-  for (auto l : labels) if (l != SIZE_MAX) ++found;
+  for (auto l : labels)
+    if (l != SIZE_MAX) ++found;
   std::printf("  %zu neighbors\n", found);
 
   DVamana::destroy(idx);

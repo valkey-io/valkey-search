@@ -211,7 +211,7 @@ bool VerifyFilter(const query::SearchParameters &parameters,
     EvaluationResult result = predicate->Evaluate(evaluator);
     return result.matches;
   }
-  PredicateEvaluator evaluator(records,
+  PredicateEvaluator evaluator(records, /*text_index=*/nullptr, n.external_id,
                                parameters.filter_parse_results.query_operations,
                                parameters.index_schema.get());
   EvaluationResult result = predicate->Evaluate(evaluator);

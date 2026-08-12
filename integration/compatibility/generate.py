@@ -789,6 +789,23 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             radius=50,
         )
 
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+    def test_vector_range_default_score_field(self, key_type, dialect, algo, metric):
+        """VECTOR_RANGE without NOCONTENT or yield_distance_as returns default __<field>_score.
+
+        Verifies that the default distance field (__v1_score) is emitted
+        with correct values when no $yield_distance_as is specified and
+        content is included in the response (no NOCONTENT).
+        """
+        self.setup_data(f"vector data {metric} {algo}", key_type)
+        for r in [0.5, 5.0, 100.0]:
+            self.checkrange(
+                dialect,
+                f"ft.search {key_type}_idx1 *",
+                radius=r, query_vector=[0.75, 0.75, 0.75],
+            )
+
     def test_vector_range_multi_vr_and(self, key_type, dialect):
         """Two VR predicates on different fields combined with AND."""
         self.setup_data("two vectors", key_type)

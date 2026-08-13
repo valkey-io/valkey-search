@@ -5,8 +5,9 @@ Evaluates Ingestion Speed, Mutation/Update Churn Throughput, Search QPS, Latency
 and Memory Footprint across thread counts comparing optimized_rax vs main.
 
 Supports multiple benchmark setups:
-1. mutation_prefix (Current setup): Ingestion -> Mutation Churn (50% doc updates) -> Pure Prefix Search (*).
-2. standard (Previous setup): Linear 1-pass Ingestion -> Immediate Memory Measurement -> Mixed Search (Exact, Tag, Prefix).
+1. text_only (Original Text-Only Setup): Pure TEXT index (title + body) -> Linear Ingestion -> Post-Ingestion Memory -> Text Searches.
+2. standard (Standard Mixed Setup): TEXT + TAG index -> Linear Ingestion -> Post-Ingestion Memory -> Mixed Searches (Exact, Tag, Prefix).
+3. mutation_prefix (Mutation Churn + Prefix Setup): TEXT + TAG index -> Ingestion -> Mutation Churn (50% doc updates) -> Memory -> Pure Prefix Searches (prefix*).
 """
 
 import os
@@ -129,7 +130,7 @@ def load_queries(queries_file):
         queries = [line.strip() for line in f if line.strip()]
     return queries
 
-def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads, setup="mutation_prefix", port=None):
+def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads, setup="standard", port=None):
     if port is None:
         port = find_free_port()
     print(f"\n========================================================")
@@ -138,12 +139,19 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     
     client, conf_path = start_server(server_bin, module_bin, num_threads, num_threads, port)
     
-    # 1. Create Index with both TEXT and TAG fields
-    print("Creating text & tag index 'bench_idx'...")
-    client.execute_command(
-        "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
-        "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
-    )
+    # 1. Create Index based on setup
+    if setup == "text_only":
+        print("Creating pure TEXT index 'bench_idx'...")
+        client.execute_command(
+            "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
+            "SCHEMA", "title", "TEXT", "body", "TEXT"
+        )
+    else:
+        print("Creating TEXT & TAG index 'bench_idx'...")
+        client.execute_command(
+            "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
+            "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
+        )
     
     # 2. Ingestion Phase
     num_docs = len(docs)
@@ -157,7 +165,10 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         local_lats = []
         for key, title, tags, body in doc_subset:
             t0 = time.perf_counter()
-            thread_client.hset(key, mapping={"title": title, "tags": tags, "body": body})
+            if setup == "text_only":
+                thread_client.hset(key, mapping={"title": title, "body": body})
+            else:
+                thread_client.hset(key, mapping={"title": title, "tags": tags, "body": body})
             t1 = time.perf_counter()
             local_lats.append((t1 - t0) * 1000.0)  # ms
         with lat_lock:
@@ -261,13 +272,16 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
 
     # 5. Search Benchmark Phase
-    # In mutation_prefix: filter pure prefix wildcard queries (term*)
-    # In standard: use full query mix (exact, tag, prefix)
     if setup == "mutation_prefix":
         active_queries = [q for q in queries if q.endswith("*")]
         if not active_queries:
             active_queries = queries
         print(f"Phase 3: Running Pure Prefix Searches ({len(active_queries)} distinct prefix* queries)...")
+    elif setup == "text_only":
+        active_queries = [q for q in queries if not q.startswith("@tags:")]
+        if not active_queries:
+            active_queries = queries
+        print(f"Phase 2: Running Pure Text Searches ({len(active_queries)} distinct queries)...")
     else:
         active_queries = queries
         print(f"Phase 2: Running Mixed Searches ({len(active_queries)} distinct queries)...")
@@ -368,8 +382,8 @@ def write_stats_csv(csv_path, all_results, append=False):
     other_branches = [b for b in branches if b != opt_branch]
     base_branch = "main" if "main" in other_branches else (other_branches[0] if other_branches else None)
 
-    opt_by_key = {(r.get("setup", "mutation_prefix"), int(r["threads"])): r for r in raw_rows if r["branch"] == opt_branch}
-    base_by_key = {(r.get("setup", "mutation_prefix"), int(r["threads"])): r for r in raw_rows if r["branch"] == base_branch} if base_branch else {}
+    opt_by_key = {(r.get("setup", "standard"), int(r["threads"])): r for r in raw_rows if r["branch"] == opt_branch}
+    base_by_key = {(r.get("setup", "standard"), int(r["threads"])): r for r in raw_rows if r["branch"] == base_branch} if base_branch else {}
 
     benefit_rows = []
     for (s_name, t) in sorted(opt_by_key.keys(), key=lambda x: (x[0], x[1])):
@@ -456,7 +470,7 @@ def main():
     parser.add_argument("--module", default=DEFAULT_MODULE, help="Path to libsearch.so")
     parser.add_argument("--csv", default=DEFAULT_CSV, help="Output CSV file path")
     parser.add_argument("--threads", nargs="+", type=int, default=[1, 4, 8, 16], help="Thread counts to test")
-    parser.add_argument("--setups", nargs="+", choices=["mutation_prefix", "standard", "all"], default=["all"], help="Benchmark setups to run")
+    parser.add_argument("--setups", nargs="+", choices=["text_only", "standard", "mutation_prefix", "all"], default=["all"], help="Benchmark setups to run")
     parser.add_argument("--append", action="store_true", help="Append results to existing CSV instead of overwriting")
     args = parser.parse_args()
 
@@ -468,7 +482,7 @@ def main():
     docs = load_dataset(DATASET_DIR)
     queries = load_queries(QUERIES_FILE)
 
-    chosen_setups = ["standard", "mutation_prefix"] if "all" in args.setups else args.setups
+    chosen_setups = ["text_only", "standard", "mutation_prefix"] if "all" in args.setups else args.setups
 
     all_results = []
     for s in chosen_setups:

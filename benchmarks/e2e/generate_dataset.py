@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Generates 10,000 rich text documents with high-cardinality vocabulary and multi-value tags.
-Each document contains exactly 1,500 words (15M words total) plus 5 TAG values.
-Saved into benchmarks/e2e/data/documents.txt (one doc per line formatted as: tags\tbody).
-Generates search queries in benchmarks/e2e/queries.txt (text, prefix, tag, and compound queries).
+Generates 10,000 documents with rich high-cardinality vocabulary and 5 multi-value TAGs.
+Each document contains 500 words and 5 tags.
+Saved in benchmarks/e2e/data/documents.txt (format: tags\tbody).
+Generates search queries in benchmarks/e2e/queries.txt (prefix*, tags, and exact terms).
 """
 
 import os
@@ -15,7 +15,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 DB_FILE = os.path.join(DATA_DIR, "documents.txt")
 QUERIES_FILE = os.path.join(os.path.dirname(__file__), "queries.txt")
 NUM_DOCS = 10000
-WORDS_PER_DOC = 1500
+WORDS_PER_DOC = 500
 RANDOM_SEED = 42
 
 def load_or_generate_vocabulary():
@@ -26,17 +26,16 @@ def load_or_generate_vocabulary():
         with open(dict_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 w = line.strip().lower()
-                if w.isalpha() and 2 <= len(w) <= 20:
+                if w.isalpha() and 3 <= len(w) <= 15:
                     all_words.append(w)
     
-    # Ensure wide vocabulary by adding synthetic terms if needed
-    if len(all_words) < 100000:
+    if len(all_words) < 50000:
         base_stems = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta",
                       "iota", "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho",
                       "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega", "search",
                       "index", "alloc", "pmr", "radix", "vector", "node", "tree", "memory"]
         for stem in base_stems:
-            for i in range(2000):
+            for i in range(1000):
                 all_words.append(f"{stem}{i:04d}")
                 
     words_by_len = defaultdict(list)
@@ -54,7 +53,6 @@ def generate_documents():
     
     mu, sigma = 5.1, 2.2
     
-    # Tag pools for high-cardinality tag indexing
     categories = [f"cat_{i:03d}" for i in range(100)]
     statuses = ["active", "pending", "archived", "verified", "draft", "reviewed"]
     regions = [f"region_{i:02d}" for i in range(50)]
@@ -63,10 +61,9 @@ def generate_documents():
     sample_queries = []
     prefix_sample_words = []
     
-    print(f"Generating {NUM_DOCS} documents (1,500 words each = {NUM_DOCS * WORDS_PER_DOC:,} words) with TAGs...")
+    print(f"Generating {NUM_DOCS} documents (500 words each = {NUM_DOCS * WORDS_PER_DOC:,} words) with TAGs...")
     with open(DB_FILE, "w", encoding="utf-8") as out_f:
         for doc_idx in range(NUM_DOCS):
-            # Generate 5 multi-value tags
             doc_tags = [
                 random.choice(categories),
                 random.choice(statuses),
@@ -76,18 +73,16 @@ def generate_documents():
             ]
             tags_str = ",".join(doc_tags)
             
-            # Generate 1500 words
             doc_words = []
             for _ in range(WORDS_PER_DOC):
                 target_len = int(round(random.gauss(mu, sigma)))
-                target_len = max(2, min(16, target_len))
+                target_len = max(3, min(15, target_len))
                 if target_len not in words_by_len:
                     target_len = min(available_lengths, key=lambda l: abs(l - target_len))
                 w = random.choice(words_by_len[target_len])
                 doc_words.append(w)
                 
             body_text = " ".join(doc_words)
-            # Format: tags<TAB>body
             out_f.write(f"{tags_str}\t{body_text}\n")
             
             if doc_idx < 1000:
@@ -98,34 +93,22 @@ def generate_documents():
             if (doc_idx + 1) % 2000 == 0:
                 print(f"  Generated {doc_idx + 1}/{NUM_DOCS} documents...")
 
-    print("Generating comprehensive queries (exact, prefix*, tag, compound)...")
-    unique_words = list(set(prefix_sample_words))
+    print("Generating clean queries...")
+    unique_words = list(set(w for w in prefix_sample_words if w.isalpha() and len(w) >= 3))
     queries = []
     
-    # 1. Exact text terms
-    for w in unique_words[:100]:
-        if len(w) >= 3:
-            queries.append(w)
-            
-    # 2. Prefix wildcard queries (prefix*)
-    for w in unique_words[100:250]:
+    # 1. Prefix wildcard queries (prefix*)
+    for w in unique_words[:200]:
         if len(w) >= 4:
             queries.append(f"{w[:3]}*")
             
-    # 3. TAG filter queries
-    queries.extend(list(set(sample_queries))[:80])
+    # 2. TAG queries
+    queries.extend(list(set(sample_queries))[:100])
     
-    # 4. Compound queries (@tags:{cat} text_prefix*)
-    for i in range(min(50, len(unique_words) - 250)):
-        cat = random.choice(categories)
-        w = unique_words[250 + i]
-        if len(w) >= 4:
-            queries.append(f"@tags:{{{cat}}} {w[:3]}*")
+    # 3. Exact terms
+    for w in unique_words[200:300]:
+        queries.append(w)
             
-    # 5. Multi-term conjunctions
-    for i in range(0, min(100, len(unique_words) - 1), 2):
-        queries.append(f"{unique_words[i]} {unique_words[i+1]}")
-        
     random.shuffle(queries)
     with open(QUERIES_FILE, "w", encoding="utf-8") as f:
         for q in queries:

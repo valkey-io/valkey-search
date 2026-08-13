@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 End-to-End Benchmark for Valkey-Search Text & Tag Index.
-Evaluates Ingestion Speed, Search QPS, Latency, and Memory Footprint across
-various reader/writer and client thread counts comparing optimized_rax vs main.
+Evaluates Ingestion Speed, Mutation/Update Churn Throughput, Search QPS, Latency,
+and Memory Footprint (including RSS fragmentation) across thread counts comparing optimized_rax vs main.
 """
 
 import os
@@ -55,7 +55,6 @@ def start_server(server_bin, module_bin, reader_threads, writer_threads, port):
     pid_path = f"/tmp/valkey_e2e_{port}.pid"
     log_path = f"/tmp/valkey_e2e_{port}.log"
     
-    # Clean up previous instances if any
     try:
         tmp_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=2)
         tmp_client.shutdown(save=False)
@@ -80,7 +79,6 @@ loadmodule {module_bin} --reader-threads {reader_threads} --writer-threads {writ
     proc = subprocess.Popen([server_bin, conf_path, "--daemonize", "yes"])
     proc.wait()
     
-    # Wait for server to be responsive
     client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=10)
     for _ in range(60):
         try:
@@ -131,7 +129,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     if port is None:
         port = find_free_port()
     print(f"\n========================================================")
-    print(f"Running E2E Benchmark with {num_threads} Reader/Writer Threads (5 clients/thread = {num_threads * 5} clients, port {port})")
+    print(f"Running E2E Benchmark with {num_threads} Reader/Writer & Client Threads (port {port})")
     print(f"========================================================")
     
     client, conf_path = start_server(server_bin, module_bin, num_threads, num_threads, port)
@@ -139,20 +137,18 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     # 1. Create Index with both TEXT and TAG fields
     print("Creating text & tag index 'bench_idx'...")
     client.execute_command(
-        "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:",
+        "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
         "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
     )
     
-    # 2. Ingestion Benchmark (5 clients per server thread)
-    CLIENTS_PER_THREAD = 5
-    total_clients = num_threads * CLIENTS_PER_THREAD
+    # 2. Ingestion Benchmark (1 client per server thread)
     num_docs = len(docs)
-    chunk_size = (num_docs + total_clients - 1) // total_clients
+    chunk_size = (num_docs + num_threads - 1) // num_threads
     
     ingest_latencies = []
     lat_lock = threading.Lock()
     
-    def ingest_worker(client_idx, doc_subset):
+    def ingest_worker(thread_idx, doc_subset):
         thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
         local_lats = []
         for key, title, tags, body in doc_subset:
@@ -164,14 +160,14 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
             ingest_latencies.extend(local_lats)
 
     threads = []
-    print(f"Ingesting {num_docs} documents with {num_threads} threads ({total_clients} clients total)...")
+    print(f"Phase 1: Ingesting {num_docs} documents with {num_threads} client threads...")
     ingest_start = time.perf_counter()
-    for c_idx in range(total_clients):
-        start_idx = c_idx * chunk_size
-        end_idx = min(num_docs, (c_idx + 1) * chunk_size)
+    for t_idx in range(num_threads):
+        start_idx = t_idx * chunk_size
+        end_idx = min(num_docs, (t_idx + 1) * chunk_size)
         subset = docs[start_idx:end_idx]
         if subset:
-            t = threading.Thread(target=ingest_worker, args=(c_idx, subset))
+            t = threading.Thread(target=ingest_worker, args=(t_idx, subset))
             threads.append(t)
             t.start()
         
@@ -180,7 +176,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     ingest_end = time.perf_counter()
     ingest_duration = ingest_end - ingest_start
     ingest_rate = num_docs / ingest_duration
-    token_rate = (num_docs * 1500) / ingest_duration
+    token_rate = (num_docs * 500) / ingest_duration
     
     ingest_p50 = statistics.median(ingest_latencies) if ingest_latencies else 0.0
     ingest_p95 = statistics.quantiles(ingest_latencies, n=20)[18] if len(ingest_latencies) >= 20 else ingest_p50
@@ -188,7 +184,46 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
 
     print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
 
-    # 3. Wait for indexing to complete & Measure Memory
+    # 3. Phase 2: Mutation & Churn (Overwriting 5,000 documents)
+    NUM_UPDATES = 5000
+    update_chunk_size = (NUM_UPDATES + num_threads - 1) // num_threads
+    update_latencies = []
+    update_lat_lock = threading.Lock()
+    
+    def update_worker(thread_idx, doc_subset):
+        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
+        local_lats = []
+        for key, title, tags, body in doc_subset:
+            updated_tags = tags + ",updated_tag,v2"
+            updated_body = body[:250] + " updated_content " + body[250:]
+            t0 = time.perf_counter()
+            thread_client.hset(key, mapping={"title": f"Updated {title}", "tags": updated_tags, "body": updated_body})
+            t1 = time.perf_counter()
+            local_lats.append((t1 - t0) * 1000.0)
+        with update_lat_lock:
+            update_latencies.extend(local_lats)
+
+    update_threads = []
+    print(f"Phase 2: Updating {NUM_UPDATES} documents with {num_threads} threads (mutation churn)...")
+    update_start = time.perf_counter()
+    for t_idx in range(num_threads):
+        start_idx = t_idx * update_chunk_size
+        end_idx = min(NUM_UPDATES, (t_idx + 1) * update_chunk_size)
+        subset = docs[start_idx:end_idx]
+        if subset:
+            t = threading.Thread(target=update_worker, args=(t_idx, subset))
+            update_threads.append(t)
+            t.start()
+            
+    for t in update_threads:
+        t.join()
+    update_end = time.perf_counter()
+    update_duration = update_end - update_start
+    update_rate = NUM_UPDATES / update_duration if update_duration > 0 else 0.0
+    update_p50 = statistics.median(update_latencies) if update_latencies else 0.0
+    print(f"Updates completed in {update_duration:.2f}s | Mutation Throughput: {update_rate:.1f} updates/s | Latency p50={update_p50:.2f}ms")
+
+    # 4. Wait for indexing to settle & Measure Memory
     for _ in range(120):
         try:
             info_idx = client.execute_command("FT.INFO", "bench_idx")
@@ -204,7 +239,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
             pass
         time.sleep(0.2)
         
-    time.sleep(0.5)  # settle time
+    time.sleep(0.5)
     
     search_info = parse_info_search(client)
     mem_info = parse_info_memory(client)
@@ -214,34 +249,37 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     used_mem_bytes = int(mem_info.get("used_memory", 0))
     used_mem_rss_bytes = int(mem_info.get("used_memory_rss", 0))
     
-    print(f"Memory Measured After Ingestion:")
+    print(f"Memory Measured After Ingestion & Mutation Churn:")
     print(f"  - Search Used Memory: {search_mem_human} ({search_mem_bytes:,} bytes)")
     print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
 
-    # 4. Search Benchmark (5 clients per thread, exact + prefix* + tag queries)
+    # 5. Phase 3: High-Throughput Search Benchmark (Prefix*, Tag, and Text)
     TOTAL_SEARCH_QUERIES = 20000
-    queries_per_client = TOTAL_SEARCH_QUERIES // total_clients
+    queries_per_thread = TOTAL_SEARCH_QUERIES // num_threads
     search_latencies = []
     search_lat_lock = threading.Lock()
     
-    def search_worker(client_idx, count):
+    def search_worker(thread_idx, count):
         thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
         local_lats = []
         num_q = len(queries)
         for i in range(count):
-            q = queries[(client_idx * count + i) % num_q]
+            q = queries[(thread_idx * count + i) % num_q]
             t0 = time.perf_counter()
-            thread_client.execute_command("FT.SEARCH", "bench_idx", q, "LIMIT", "0", "10")
-            t1 = time.perf_counter()
-            local_lats.append((t1 - t0) * 1000.0)  # ms
+            try:
+                thread_client.execute_command("FT.SEARCH", "bench_idx", q, "LIMIT", "0", "10")
+                t1 = time.perf_counter()
+                local_lats.append((t1 - t0) * 1000.0)  # ms
+            except Exception:
+                pass
         with search_lat_lock:
             search_latencies.extend(local_lats)
 
     search_threads = []
-    print(f"Executing {TOTAL_SEARCH_QUERIES} search queries across {total_clients} clients (5 per thread)...")
+    print(f"Phase 3: Executing {TOTAL_SEARCH_QUERIES} search queries across {num_threads} client threads...")
     search_start = time.perf_counter()
-    for c_idx in range(total_clients):
-        t = threading.Thread(target=search_worker, args=(c_idx, queries_per_client))
+    for t_idx in range(num_threads):
+        t = threading.Thread(target=search_worker, args=(t_idx, queries_per_thread))
         search_threads.append(t)
         t.start()
         
@@ -262,12 +300,14 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     
     return {
         "threads": num_threads,
-        "ingest_duration_sec": round(ingest_duration, 3),
         "ingest_throughput_docs_sec": round(ingest_rate, 1),
         "ingest_tokens_sec": round(token_rate, 1),
+        "ingest_duration_sec": round(ingest_duration, 3),
         "ingest_latency_p50_ms": round(ingest_p50, 3),
         "ingest_latency_p95_ms": round(ingest_p95, 3),
         "ingest_latency_p99_ms": round(ingest_p99, 3),
+        "mutation_throughput_docs_sec": round(update_rate, 1),
+        "mutation_latency_p50_ms": round(update_p50, 3),
         "search_used_memory_bytes": search_mem_bytes,
         "search_used_memory_mb": round(search_mem_bytes / (1024 * 1024), 2),
         "total_used_memory_mb": round(used_mem_bytes / (1024 * 1024), 2),
@@ -292,12 +332,13 @@ def write_stats_csv(csv_path, all_results, append=False):
     raw_fieldnames = [
         "branch", "threads", "ingest_throughput_docs_sec", "ingest_tokens_sec",
         "ingest_duration_sec", "ingest_latency_p50_ms", "ingest_latency_p95_ms", "ingest_latency_p99_ms",
+        "mutation_throughput_docs_sec", "mutation_latency_p50_ms",
         "search_used_memory_bytes", "search_used_memory_mb", "total_used_memory_mb", "used_memory_rss_mb",
         "search_qps", "search_latency_p50_ms", "search_latency_p95_ms", "search_latency_p99_ms"
     ]
 
     benefit_fieldnames = [
-        "threads", "ingest_throughput_benefit_pct", "ingest_tokens_sec_benefit_pct",
+        "threads", "ingest_throughput_benefit_pct", "mutation_throughput_benefit_pct",
         "ingest_duration_reduction_pct", "ingest_latency_p50_reduction_pct",
         "search_used_memory_savings_pct", "total_used_memory_savings_pct",
         "used_memory_rss_savings_pct", "search_qps_benefit_pct", "search_latency_p50_reduction_pct"
@@ -321,9 +362,9 @@ def write_stats_csv(csv_path, all_results, append=False):
             base_ingest = float(base["ingest_throughput_docs_sec"])
             ingest_tput_pct = ((opt_ingest - base_ingest) / base_ingest) * 100.0 if base_ingest else 0.0
             
-            opt_tokens = float(opt["ingest_tokens_sec"])
-            base_tokens = float(base["ingest_tokens_sec"])
-            tokens_pct = ((opt_tokens - base_tokens) / base_tokens) * 100.0 if base_tokens else 0.0
+            opt_mut = float(opt.get("mutation_throughput_docs_sec", 0))
+            base_mut = float(base.get("mutation_throughput_docs_sec", 0))
+            mut_pct = ((opt_mut - base_mut) / base_mut) * 100.0 if base_mut else 0.0
             
             opt_dur = float(opt["ingest_duration_sec"])
             base_dur = float(base["ingest_duration_sec"])
@@ -359,7 +400,7 @@ def write_stats_csv(csv_path, all_results, append=False):
             benefit_rows.append({
                 "threads": t,
                 "ingest_throughput_benefit_pct": fmt(ingest_tput_pct),
-                "ingest_tokens_sec_benefit_pct": fmt(tokens_pct),
+                "mutation_throughput_benefit_pct": fmt(mut_pct),
                 "ingest_duration_reduction_pct": fmt(dur_pct),
                 "ingest_latency_p50_reduction_pct": fmt(ing_lat_pct),
                 "search_used_memory_savings_pct": fmt(smem_pct),

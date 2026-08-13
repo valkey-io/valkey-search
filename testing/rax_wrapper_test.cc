@@ -8,6 +8,8 @@
 
 #include "src/indexes/text/rax_wrapper.h"
 
+#include "src/utils/pmr_allocator.h"
+
 #ifdef __APPLE__
 #include <malloc/malloc.h>
 #define malloc_usable_size malloc_size
@@ -618,9 +620,29 @@ TEST_F(RaxTest, RaxMallocMemoryTracking) {
         << "Creating Rax should increase the tracked allocated memory";
     EXPECT_EQ(empty_rax.GetAllocSize(), after_create_memory - initial_memory);
   }
-  // The memory should return to zero after falling out of scope.
   EXPECT_EQ(initial_memory, vmsdk::GetUsedMemoryCnt())
       << "Destroying Rax should free all rax allocations";
+}
+
+TEST_F(RaxTest, RaxPmrFallbackLifecycleWithoutPmrResource) {
+  // Test RaxPmr allocation lifecycle when t_rax_res is null
+  void *ptr = valkey_search::utils::RaxPmrMalloc(64);
+  ASSERT_NE(ptr, nullptr);
+  EXPECT_GE(valkey_search::utils::RaxPmrUsableSize(ptr), 64);
+
+  // Write pattern to verify memory validity
+  std::memset(ptr, 0xAB, 64);
+
+  // Realloc to larger size
+  void *realloc_ptr = valkey_search::utils::RaxPmrRealloc(ptr, 128);
+  ASSERT_NE(realloc_ptr, nullptr);
+  EXPECT_GE(valkey_search::utils::RaxPmrUsableSize(realloc_ptr), 128);
+  for (size_t i = 0; i < 64; ++i) {
+    EXPECT_EQ(static_cast<uint8_t *>(realloc_ptr)[i], 0xAB);
+  }
+
+  // Free
+  valkey_search::utils::RaxPmrFree(realloc_ptr);
 }
 
 }  // namespace

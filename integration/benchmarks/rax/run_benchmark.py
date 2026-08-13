@@ -4,10 +4,8 @@ End-to-End Benchmark for Valkey-Search Text & Tag Index.
 Evaluates Ingestion Speed, Mutation/Update Churn Throughput, Search QPS, Latency,
 and Memory Footprint across thread counts comparing optimized_rax vs main.
 
-Supports multiple benchmark setups:
-1. text_only (Original Text-Only Setup): Pure TEXT index (title + body) -> Linear Ingestion -> Post-Ingestion Memory -> Text Searches.
-2. standard (Standard Mixed Setup): TEXT + TAG index -> Linear Ingestion -> Post-Ingestion Memory -> Mixed Searches (Exact, Tag, Prefix).
-3. mutation_prefix (Mutation Churn + Prefix Setup): TEXT + TAG index -> Ingestion -> Mutation Churn (50% doc updates) -> Memory -> Pure Prefix Searches (prefix*).
+Emits structured CSV results to /tmp/e2e_rax_bench_stats.csv and prints
+human-friendly formatted tables to stdout with detailed setup summaries.
 """
 
 import os
@@ -30,7 +28,34 @@ QUERIES_FILE = os.path.join(DATASET_DIR, "queries.txt")
 DEFAULT_SERVER = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-server")
 DEFAULT_MODULE = os.path.join(PROJECT_ROOT, ".build-release/libsearch.so")
 DEFAULT_CLI = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-cli")
-DEFAULT_CSV = os.path.join(PROJECT_ROOT, "e2e_rax_bench_stats.csv")
+DEFAULT_CSV = "/tmp/e2e_rax_bench_stats.csv"
+
+SETUPS = {
+    "text_only": {
+        "name": "TextOnly_LinearIngest",
+        "title": "Setup 1: Pure TEXT Index (Linear Ingestion -> Pure Text Searches)",
+        "summary": "Evaluates pure TEXT indexing without TAG fields. Performs single-pass document ingestion, measures post-ingestion memory footprint, and runs pure text search queries.",
+        "schema_type": "text_only",
+        "has_mutation": False,
+        "search_mode": "text_only",
+    },
+    "text_tag_mixed": {
+        "name": "TextTag_MixedWorkload",
+        "title": "Setup 2: TEXT + TAG Index (Standard Mixed Workload)",
+        "summary": "Evaluates combined TEXT and TAG indexing. Ingests full documents with multi-value tags, measures post-ingestion memory, and executes mixed search queries (Exact terms, TAG filters, and Prefix wildcards).",
+        "schema_type": "text_tag",
+        "has_mutation": False,
+        "search_mode": "mixed",
+    },
+    "text_tag_churn_prefix": {
+        "name": "TextTag_MutationChurn_Prefix",
+        "title": "Setup 3: TEXT + TAG Index (Mutation Churn + Pure Prefix Subtree Traversal)",
+        "summary": "Evaluates memory churn and radix tree subtree traversal. Ingests full documents, overwrites/mutates 50% of the documents with updated content, measures post-mutation memory fragmentation, and executes pure prefix wildcard searches (term*).",
+        "schema_type": "text_tag",
+        "has_mutation": True,
+        "search_mode": "prefix_only",
+    },
+}
 
 def parse_info_search(client):
     info = client.execute_command("INFO", "SEARCH")
@@ -130,24 +155,30 @@ def load_queries(queries_file):
         queries = [line.strip() for line in f if line.strip()]
     return queries
 
-def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads, setup="standard", port=None):
+def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads, setup_key="text_tag_mixed", port=None):
+    setup_info = SETUPS[setup_key]
+    setup_name = setup_info["name"]
+    
     if port is None:
         port = find_free_port()
-    print(f"\n========================================================")
-    print(f"Running Benchmark | Setup: [{setup}] | {num_threads} Server & Client Threads (port {port})")
-    print(f"========================================================")
+        
+    print(f"\n" + "=" * 80)
+    print(f"{setup_info['title']}")
+    print(f"Summary : {setup_info['summary']}")
+    print(f"Threads : {num_threads} Server Worker Threads | {num_threads} Client Worker Threads (port {port})")
+    print("=" * 80)
     
     client, conf_path = start_server(server_bin, module_bin, num_threads, num_threads, port)
     
     # 1. Create Index based on setup
-    if setup == "text_only":
+    if setup_info["schema_type"] == "text_only":
         print("Creating pure TEXT index 'bench_idx'...")
         client.execute_command(
             "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
             "SCHEMA", "title", "TEXT", "body", "TEXT"
         )
     else:
-        print("Creating TEXT & TAG index 'bench_idx'...")
+        print("Creating TEXT + TAG index 'bench_idx'...")
         client.execute_command(
             "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
             "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
@@ -165,7 +196,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         local_lats = []
         for key, title, tags, body in doc_subset:
             t0 = time.perf_counter()
-            if setup == "text_only":
+            if setup_info["schema_type"] == "text_only":
                 thread_client.hset(key, mapping={"title": title, "body": body})
             else:
                 thread_client.hset(key, mapping={"title": title, "tags": tags, "body": body})
@@ -197,12 +228,12 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     ingest_p95 = statistics.quantiles(ingest_latencies, n=20)[18] if len(ingest_latencies) >= 20 else ingest_p50
     ingest_p99 = statistics.quantiles(ingest_latencies, n=100)[98] if len(ingest_latencies) >= 100 else ingest_p95
 
-    print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
+    print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:,.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
 
-    # 3. Mutation Phase (only in mutation_prefix setup)
+    # 3. Mutation Phase (only in text_tag_churn_prefix setup)
     update_rate = 0.0
     update_p50 = 0.0
-    if setup == "mutation_prefix":
+    if setup_info["has_mutation"]:
         NUM_UPDATES = num_docs // 2
         update_chunk_size = (NUM_UPDATES + num_threads - 1) // num_threads
         update_latencies = []
@@ -239,7 +270,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         update_duration = update_end - update_start
         update_rate = NUM_UPDATES / update_duration if update_duration > 0 else 0.0
         update_p50 = statistics.median(update_latencies) if update_latencies else 0.0
-        print(f"Updates completed in {update_duration:.2f}s | Mutation Throughput: {update_rate:.1f} updates/s | Latency p50={update_p50:.2f}ms")
+        print(f"Updates completed in {update_duration:.2f}s | Mutation Throughput: {update_rate:,.1f} updates/s | Latency p50={update_p50:.2f}ms")
 
     # 4. Wait for indexing to settle & Measure Memory
     for _ in range(120):
@@ -272,12 +303,12 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
 
     # 5. Search Benchmark Phase
-    if setup == "mutation_prefix":
+    if setup_info["search_mode"] == "prefix_only":
         active_queries = [q for q in queries if q.endswith("*")]
         if not active_queries:
             active_queries = queries
         print(f"Phase 3: Running Pure Prefix Searches ({len(active_queries)} distinct prefix* queries)...")
-    elif setup == "text_only":
+    elif setup_info["search_mode"] == "text_only":
         active_queries = [q for q in queries if not q.startswith("@tags:")]
         if not active_queries:
             active_queries = queries
@@ -331,7 +362,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     stop_server(client, conf_path)
     
     return {
-        "setup": setup,
+        "setup": setup_name,
         "threads": num_threads,
         "ingest_throughput_docs_sec": round(ingest_rate, 1),
         "ingest_tokens_sec": round(token_rate, 1),
@@ -339,8 +370,8 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         "ingest_latency_p50_ms": round(ingest_p50, 3),
         "ingest_latency_p95_ms": round(ingest_p95, 3),
         "ingest_latency_p99_ms": round(ingest_p99, 3),
-        "mutation_throughput_docs_sec": round(update_rate, 1) if setup == "mutation_prefix" else "N/A",
-        "mutation_latency_p50_ms": round(update_p50, 3) if setup == "mutation_prefix" else "N/A",
+        "mutation_throughput_docs_sec": round(update_rate, 1) if setup_info["has_mutation"] else "N/A",
+        "mutation_latency_p50_ms": round(update_p50, 3) if setup_info["has_mutation"] else "N/A",
         "search_used_memory_bytes": search_mem_bytes,
         "search_used_memory_mb": round(search_mem_bytes / (1024 * 1024), 2),
         "total_used_memory_mb": round(used_mem_bytes / (1024 * 1024), 2),
@@ -351,7 +382,21 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         "search_latency_p99_ms": round(search_p99, 3),
     }
 
-def write_stats_csv(csv_path, all_results, append=False):
+def format_table(headers, rows):
+    col_widths = [len(h) for h in headers]
+    for row in rows:
+        for i, val in enumerate(row):
+            col_widths[i] = max(col_widths[i], len(str(val)))
+            
+    header_line = " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers))
+    separator_line = "-+-".join("-" * col_widths[i] for i in range(len(headers)))
+    
+    table_lines = [header_line, separator_line]
+    for row in rows:
+        table_lines.append(" | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row)))
+    return "\n".join(table_lines)
+
+def write_and_print_stats(csv_path, all_results, append=False):
     raw_rows = []
     if os.path.exists(csv_path) and append:
         with open(csv_path, "r", encoding="utf-8") as f:
@@ -382,8 +427,8 @@ def write_stats_csv(csv_path, all_results, append=False):
     other_branches = [b for b in branches if b != opt_branch]
     base_branch = "main" if "main" in other_branches else (other_branches[0] if other_branches else None)
 
-    opt_by_key = {(r.get("setup", "standard"), int(r["threads"])): r for r in raw_rows if r["branch"] == opt_branch}
-    base_by_key = {(r.get("setup", "standard"), int(r["threads"])): r for r in raw_rows if r["branch"] == base_branch} if base_branch else {}
+    opt_by_key = {(r.get("setup", "TextTag_MixedWorkload"), int(r["threads"])): r for r in raw_rows if r["branch"] == opt_branch}
+    base_by_key = {(r.get("setup", "TextTag_MixedWorkload"), int(r["threads"])): r for r in raw_rows if r["branch"] == base_branch} if base_branch else {}
 
     benefit_rows = []
     for (s_name, t) in sorted(opt_by_key.keys(), key=lambda x: (x[0], x[1])):
@@ -450,6 +495,8 @@ def write_stats_csv(csv_path, all_results, append=False):
                 "search_latency_p50_reduction_pct": fmt(srch_lat_pct),
             })
 
+    # 1. Write CSV File
+    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=raw_fieldnames)
         writer.writeheader()
@@ -463,14 +510,56 @@ def write_stats_csv(csv_path, all_results, append=False):
             for br in benefit_rows:
                 bwriter.writerow(br)
 
+    # 2. Print Human-Friendly Formatted Version to stdout
+    print("\n" + "=" * 110)
+    print(f"BENCHMARK RESULTS SUMMARY (Saved to: {csv_path})")
+    print("=" * 110)
+    
+    raw_headers = ["Branch", "Setup", "Threads", "Ingest (docs/s)", "Ingest p50", "Mutations/s", "Search QPS", "Search p50", "Search RAM (MB)", "Process RSS (MB)"]
+    raw_display_rows = []
+    for r in raw_rows:
+        raw_display_rows.append([
+            r["branch"],
+            r["setup"],
+            r["threads"],
+            f"{float(r['ingest_throughput_docs_sec']):,.1f}",
+            f"{float(r['ingest_latency_p50_ms']):.2f}ms",
+            f"{float(r['mutation_throughput_docs_sec']):,.1f}" if r["mutation_throughput_docs_sec"] != "N/A" else "N/A",
+            f"{float(r['search_qps']):,.1f}",
+            f"{float(r['search_latency_p50_ms']):.2f}ms",
+            f"{float(r['search_used_memory_mb']):,.1f}",
+            f"{float(r['used_memory_rss_mb']):,.1f}",
+        ])
+    print(format_table(raw_headers, raw_display_rows))
+    
+    if benefit_rows:
+        print("\n" + "=" * 110)
+        print(f"CALCULATED PERCENTAGE BENEFITS ({opt_branch} vs {base_branch})")
+        print("=" * 110)
+        b_headers = ["Setup", "Threads", "Ingest Throughput", "Mutation Rate", "Search QPS", "Search p50 Latency", "Search RAM Savings", "RSS Savings"]
+        b_display_rows = []
+        for br in benefit_rows:
+            b_display_rows.append([
+                br["setup"],
+                br["threads"],
+                br["ingest_throughput_benefit_pct"],
+                br["mutation_throughput_benefit_pct"],
+                br["search_qps_benefit_pct"],
+                br["search_latency_p50_reduction_pct"],
+                br["search_used_memory_savings_pct"],
+                br["used_memory_rss_savings_pct"],
+            ])
+        print(format_table(b_headers, b_display_rows))
+    print("=" * 110 + "\n")
+
 def main():
     parser = argparse.ArgumentParser(description="Valkey-Search E2E Text & Tag Index Benchmark")
     parser.add_argument("--branch-name", default="current", help="Branch or label identifier for results")
     parser.add_argument("--server", default=DEFAULT_SERVER, help="Path to valkey-server binary")
     parser.add_argument("--module", default=DEFAULT_MODULE, help="Path to libsearch.so")
-    parser.add_argument("--csv", default=DEFAULT_CSV, help="Output CSV file path")
+    parser.add_argument("--csv", default=DEFAULT_CSV, help="Output CSV file path (default: /tmp/e2e_rax_bench_stats.csv)")
     parser.add_argument("--threads", nargs="+", type=int, default=[1, 4, 8, 16], help="Thread counts to test")
-    parser.add_argument("--setups", nargs="+", choices=["text_only", "standard", "mutation_prefix", "all"], default=["all"], help="Benchmark setups to run")
+    parser.add_argument("--setups", nargs="+", choices=["text_only", "text_tag_mixed", "text_tag_churn_prefix", "all"], default=["all"], help="Benchmark setups to run")
     parser.add_argument("--append", action="store_true", help="Append results to existing CSV instead of overwriting")
     args = parser.parse_args()
 
@@ -482,17 +571,17 @@ def main():
     docs = load_dataset(DATASET_DIR)
     queries = load_queries(QUERIES_FILE)
 
-    chosen_setups = ["text_only", "standard", "mutation_prefix"] if "all" in args.setups else args.setups
+    chosen_setups = ["text_only", "text_tag_mixed", "text_tag_churn_prefix"] if "all" in args.setups else args.setups
 
     all_results = []
-    for s in chosen_setups:
+    for s_key in chosen_setups:
         for t in args.threads:
-            res = run_benchmark_for_threads(args.server, args.module, docs, queries, t, setup=s)
+            res = run_benchmark_for_threads(args.server, args.module, docs, queries, t, setup_key=s_key)
             res["branch"] = args.branch_name
             all_results.append(res)
 
-    write_stats_csv(args.csv, all_results, append=args.append)
-    print(f"\nBenchmark results successfully written to {args.csv}")
+    write_and_print_stats(args.csv, all_results, append=args.append)
+    print(f"Benchmark results successfully recorded in {args.csv}")
 
 if __name__ == "__main__":
     main()

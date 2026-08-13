@@ -1,5 +1,16 @@
-branch,threads,ingest_throughput_docs_sec,ingest_tokens_sec,ingest_duration_sec,ingest_latency_p50_ms,ingest_latency_p95_ms,ingest_latency_p99_ms,mutation_throughput_docs_sec,mutation_latency_p50_ms,search_used_memory_bytes,search_used_memory_mb,total_used_memory_mb,used_memory_rss_mb,search_qps,search_latency_p50_ms,search_latency_p95_ms,search_latency_p99_ms
-optimized_rax,1,658.0,328994.3,15.198,1.502,1.747,2.111,489.9,2.006,619917576,591.2,629.39,679.89,658.4,0.49,6.098,10.393
-optimized_rax,4,2236.4,1118196.9,4.471,1.695,2.321,3.322,1660.8,2.336,620630376,591.88,630.17,701.39,2570.3,0.576,6.109,10.112
-optimized_rax,8,3261.7,1630852.3,3.066,2.159,3.909,6.669,2489.6,3.113,620747208,591.99,630.29,700.84,4476.5,0.838,6.39,10.148
-optimized_rax,16,3370.5,1685274.4,2.967,4.053,8.653,15.637,2799.3,5.445,621052936,592.28,630.65,697.9,4224.5,2.969,9.132,13.208
+branch,threads,ingest_throughput_docs_sec,ingest_tokens_sec,ingest_duration_sec,ingest_latency_p50_ms,ingest_latency_p95_ms,ingest_latency_p99_ms,search_used_memory_bytes,search_used_memory_mb,total_used_memory_mb,used_memory_rss_mb,search_qps,search_latency_p50_ms,search_latency_p95_ms,search_latency_p99_ms
+optimized_rax,1,290.3,435384.0,34.452,17.405,18.72,20.347,1637393576,1561.54,1663.32,1740.35,295.9,15.225,40.206,51.881
+optimized_rax,4,949.6,1424455.0,10.53,20.138,25.353,40.44,1641650184,1565.6,1667.38,1754.23,1230.6,14.9,30.998,37.993
+optimized_rax,8,1364.9,2047299.9,7.327,26.062,45.087,84.062,1645661992,1569.43,1671.2,1763.8,2477.5,14.535,29.377,35.465
+optimized_rax,16,1791.0,2686534.0,5.583,34.26,94.713,205.409,1647369256,1571.05,1672.83,1776.67,3488.1,19.365,48.0,64.034
+main,1,284.7,426977.4,35.131,17.659,19.278,21.302,1635778728,1560.0,1661.78,1740.71,292.0,15.262,40.23,52.212
+main,4,949.0,1423478.5,10.538,20.235,25.27,39.461,1644047112,1567.89,1669.66,1755.33,1215.6,15.149,31.221,38.347
+main,8,1327.7,1991546.6,7.532,26.975,45.113,91.073,1645403048,1569.18,1670.95,1763.77,2422.6,15.021,30.191,36.057
+main,16,1768.1,2652167.0,5.656,35.073,92.483,204.832,1647294888,1570.98,1672.76,1775.96,3464.2,19.311,48.173,63.998
+
+# Calculated Percentage Benefits (optimized_rax vs main)
+threads,ingest_throughput_benefit_pct,ingest_tokens_sec_benefit_pct,ingest_duration_reduction_pct,ingest_latency_p50_reduction_pct,search_used_memory_savings_pct,total_used_memory_savings_pct,used_memory_rss_savings_pct,search_qps_benefit_pct,search_latency_p50_reduction_pct
+1,+1.97%,+1.97%,+1.93%,+1.44%,-0.10%,-0.09%,+0.02%,+1.34%,+0.24%
+4,+0.06%,+0.07%,+0.08%,+0.48%,+0.15%,+0.14%,+0.06%,+1.23%,+1.64%
+8,+2.80%,+2.80%,+2.72%,+3.38%,-0.02%,-0.01%,-0.00%,+2.27%,+3.24%
+16,+1.30%,+1.30%,+1.29%,+2.32%,-0.00%,-0.00%,-0.04%,+0.69%,-0.28%

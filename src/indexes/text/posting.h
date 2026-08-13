@@ -33,9 +33,6 @@ Key.
 */
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
 #include "absl/container/btree_map.h"
 #include "src/indexes/text/flat_position_map.h"

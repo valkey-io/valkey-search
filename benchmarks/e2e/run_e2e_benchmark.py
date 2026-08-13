@@ -88,15 +88,18 @@ def stop_server(client, conf_path):
         os.remove(conf_path)
 
 def load_dataset(data_dir):
-    doc_files = sorted(glob.glob(os.path.join(data_dir, "doc_*.txt")))
-    if not doc_files:
-        raise RuntimeError(f"No documents found in {data_dir}. Run generate_dataset.py first.")
+    db_file = os.path.join(data_dir, "documents.txt")
+    if not os.path.exists(db_file):
+        raise RuntimeError(f"Database file not found: {db_file}. Run generate_dataset.py first.")
     
-    print(f"Loading {len(doc_files)} documents into memory...")
+    print(f"Loading documents from {db_file} into memory...")
     docs = []
-    for i, path in enumerate(doc_files):
-        with open(path, "r", encoding="utf-8") as f:
-            docs.append((f"doc:{i:05d}", f"Document Title {i:05d}", f.read()))
+    with open(db_file, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            text = line.strip()
+            if text:
+                docs.append((f"doc:{i:05d}", f"Document Title {i:05d}", text))
+    print(f"Loaded {len(docs)} documents.")
     return docs
 
 def load_queries(queries_file):

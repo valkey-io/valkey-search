@@ -2,7 +2,8 @@
 """
 Generates 10,000 text documents where each document contains exactly 500 words,
 with word lengths following a normal distribution of English words (mean ~5.1, std ~2.2).
-Documents are saved in benchmarks/e2e/data/doc_XXXXX.txt.
+All documents are saved in a single database file: benchmarks/e2e/data/documents.txt
+where each line represents a separate document.
 Also generates representative search queries in benchmarks/e2e/queries.txt.
 """
 
@@ -12,6 +13,7 @@ import math
 from collections import defaultdict
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DB_FILE = os.path.join(DATA_DIR, "documents.txt")
 QUERIES_FILE = os.path.join(os.path.dirname(__file__), "queries.txt")
 NUM_DOCS = 10000
 WORDS_PER_DOC = 500
@@ -51,29 +53,28 @@ def generate_documents():
     
     all_selected_words = []
     
-    print(f"Generating {NUM_DOCS} documents in {DATA_DIR}...")
-    for doc_idx in range(NUM_DOCS):
-        doc_words = []
-        for _ in range(WORDS_PER_DOC):
-            target_len = int(round(random.gauss(mu, sigma)))
-            target_len = max(1, min(16, target_len))
+    print(f"Generating {NUM_DOCS} documents into single file {DB_FILE}...")
+    with open(DB_FILE, "w", encoding="utf-8") as out_f:
+        for doc_idx in range(NUM_DOCS):
+            doc_words = []
+            for _ in range(WORDS_PER_DOC):
+                target_len = int(round(random.gauss(mu, sigma)))
+                target_len = max(1, min(16, target_len))
+                
+                if target_len not in words_by_len:
+                    target_len = min(available_lengths, key=lambda l: abs(l - target_len))
+                
+                w = random.choice(words_by_len[target_len])
+                doc_words.append(w)
+                
+            doc_text = " ".join(doc_words)
+            out_f.write(doc_text + "\n")
             
-            if target_len not in words_by_len:
-                target_len = min(available_lengths, key=lambda l: abs(l - target_len))
-            
-            w = random.choice(words_by_len[target_len])
-            doc_words.append(w)
-            
-        doc_text = " ".join(doc_words)
-        file_path = os.path.join(DATA_DIR, f"doc_{doc_idx:05d}.txt")
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(doc_text)
-            
-        if doc_idx < 500:
-            all_selected_words.extend(doc_words[:10])
-            
-        if (doc_idx + 1) % 2000 == 0:
-            print(f"  Generated {doc_idx + 1}/{NUM_DOCS} documents...")
+            if doc_idx < 500:
+                all_selected_words.extend(doc_words[:10])
+                
+            if (doc_idx + 1) % 2000 == 0:
+                print(f"  Generated {doc_idx + 1}/{NUM_DOCS} documents...")
 
     print("Generating queries...")
     unique_words = list(set(all_selected_words))
@@ -97,7 +98,7 @@ def generate_documents():
         for q in queries:
             f.write(q + "\n")
             
-    print(f"Dataset generated successfully! {NUM_DOCS} docs in {DATA_DIR}, {len(queries)} queries in {QUERIES_FILE}")
+    print(f"Dataset generated successfully! {NUM_DOCS} docs in {DB_FILE}, {len(queries)} queries in {QUERIES_FILE}")
 
 if __name__ == "__main__":
     generate_documents()

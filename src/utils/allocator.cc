@@ -377,9 +377,9 @@ size_t Allocator::GetAllocatedSize(char *ptr) {
 
 SegregatedFixedSizeAllocator::SegregatedFixedSizeAllocator() {
   allocators_.reserve(kNumClasses);
-  for (size_t i = 0; i < kNumClasses; ++i) {
+  for (unsigned long kSizeClasse : kSizeClasses) {
     allocators_.push_back(
-        CREATE_UNIQUE_PTR(FixedSizeAllocator, kSizeClasses[i], false));
+        CREATE_UNIQUE_PTR(FixedSizeAllocator, kSizeClasse, false));
   }
 }
 

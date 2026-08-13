@@ -20,11 +20,11 @@ inline ::svs::runtime::v0::Status build_svs(
     ::svs::runtime::v0::StorageKind storage =
         ::svs::runtime::v0::StorageKind::FP32,
     size_t graph_max_degree = 32, size_t construction_window_size = 128,
-    size_t search_window_size = 50) {
+    size_t search_window_size = 50, float alpha = 1.2f) {
   ::svs::runtime::v0::VamanaIndex::BuildParams build{};
   build.graph_max_degree = graph_max_degree;
   build.construction_window_size = construction_window_size;
-  build.alpha = 1.2f;
+  build.alpha = alpha;
   ::svs::runtime::v0::VamanaIndex::SearchParams search{};
   search.search_window_size = search_window_size;
   return DVamana::build(out, dim, metric, storage, build, search);

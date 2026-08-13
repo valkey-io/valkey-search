@@ -152,5 +152,11 @@ message SVSVamanaAlgorithm {
   // KEEP (default): retain intern store for exact vector retrieval.
   // DROP: skip intern store, use SVS native reconstruct/get_distance APIs.
   RawVectorStorage raw_vector_storage = 8;
+  // Per-dimension epsilon for distance-based vector matching (dedup).
+  // Effective threshold = this value * dimension_count.
+  // Negative values (parser default is -1.0) mean use the compiled default
+  // (kDefaultDistanceMatchEpsilonPerDim). 0 means explicit exact-match
+  // (only appropriate for lossless FP32/SQI8 with L2).
+  float distance_match_epsilon_per_dim = 9;
 }
 

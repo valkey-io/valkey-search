@@ -53,6 +53,8 @@ constexpr absl::string_view kLeanVecDimsParam{"LEANVEC_DIMS"};
 constexpr absl::string_view kLeanVecTrainingThresholdParam{
     "LEANVEC_TRAINING_THRESHOLD"};
 constexpr absl::string_view kRawVectorStorageParam{"RAW_VECTOR_STORAGE"};
+constexpr absl::string_view kDistanceMatchEpsilonParam{
+    "DISTANCE_MATCH_EPSILON"};
 constexpr absl::string_view kDimensionsParam{"DIM"};
 constexpr absl::string_view kDistanceMetricParam{"DISTANCE_METRIC"};
 constexpr absl::string_view kDataTypeParam{"TYPE"};
@@ -407,6 +409,9 @@ vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
   parser.AddParamParser(kRawVectorStorageParam,
                         GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
                                              *kRawVectorStorageByStr));
+  parser.AddParamParser(
+      kDistanceMatchEpsilonParam,
+      GENERATE_VALUE_PARSER(SVSParameters, distance_match_epsilon_per_dim));
   return parser;
 }
 absl::Status ParseVector(vmsdk::ArgsIterator &itr,
@@ -951,6 +956,12 @@ absl::Status SVSParameters::Verify() const {
     return absl::InvalidArgumentError(
         "LEANVEC_DIMS is only valid with LEANVEC* COMPRESSION.");
   }
+  if (distance_match_epsilon_per_dim < 0.0f &&
+      distance_match_epsilon_per_dim != -1.0f) {
+    return absl::InvalidArgumentError(
+        "DISTANCE_MATCH_EPSILON must be >= 0. Omit the parameter to use "
+        "the compiled default.");
+  }
   return absl::OkStatus();
 }
 std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
@@ -965,6 +976,8 @@ std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
   svs_algorithm_proto->set_leanvec_training_threshold(
       leanvec_training_threshold);
   svs_algorithm_proto->set_raw_vector_storage(raw_vector_storage);
+  svs_algorithm_proto->set_distance_match_epsilon_per_dim(
+      distance_match_epsilon_per_dim);
   vector_index_proto->set_allocated_svs_vamana_algorithm(
       svs_algorithm_proto.release());
   return vector_index_proto;

@@ -521,6 +521,16 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "as_test",
         },
         {
+            // The KNN `AS` alias collides with a declared schema attribute, so
+            // SORTBY / WITHSORTKEYS on that name would ambiguously map to the
+            // vector distance. Reject at parse time (matches Redis).
+            .test_name = "score_as_collides_with_schema_field",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB As vec]",
+            .expected_error_message = "Property `vec` already exists in schema",
+        },
+        {
             .test_name = "empty_hash_field",
             .success = false,
             .params_str = " PARAMS 4 EF 190",

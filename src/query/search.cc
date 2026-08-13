@@ -996,6 +996,31 @@ void ScoreTextQuery(const IndexSchema &index_schema,
   candidates = std::move(scored);
 }
 
+// Applies text relevance scoring to KNN neighbors when the vector query also
+// carries a text predicate (a hybrid `text=>[KNN]` query). Reuses
+// ScoreTextQuery via a thin BorrowedNeighbor adapter: KNN preserves neighbor
+// order, so the scores map back by index. Neighbor.distance is left untouched
+// (still reported via the score_as field); only Neighbor.score is set to the
+// text relevance, mirroring Redis WITHSCORES. Pure vector queries and vector
+// queries filtered only by numeric/tag predicates keep the KNN distance as
+// their score.
+void ApplyHybridTextScore(const SearchParameters &parameters,
+                          std::vector<indexes::Neighbor> &neighbors) {
+  if (!QueryHasTextPredicate(parameters) || neighbors.empty()) return;
+  std::vector<indexes::BorrowedNeighbor> borrowed;
+  borrowed.reserve(neighbors.size());
+  for (const auto &neighbor : neighbors) {
+    borrowed.push_back(
+        {BorrowedInternedStringPtr(neighbor.external_id), 0.0f, 0.0f});
+  }
+  ScoreTextQuery(*parameters.index_schema,
+                 parameters.filter_parse_results.root_predicate.get(),
+                 indexes::scoring::GetScorer(parameters.scorer), borrowed);
+  for (size_t i = 0; i < neighbors.size(); ++i) {
+    neighbors[i].score = borrowed[i].score;
+  }
+}
+
 // State captured once at construction: everything ScoreTextQuery derives
 // before its per-candidate loop. ResolvedLeaf holds ref-counted Postings
 // pointers, so the resolved snapshot stays valid across lock releases.
@@ -1252,11 +1277,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
         CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
                                         vector_index, qualified_entries);
 
-    return vector_index->CreateReply(results);
+    VMSDK_ASSIGN_OR_RETURN(auto neighbors, vector_index->CreateReply(results));
+    ApplyHybridTextScore(parameters, neighbors);
+    return neighbors;
   }
   ++Metrics::GetStats().query_inline_filtering_requests_cnt;
   lock.SetMayProlong();
-  return PerformVectorSearch(vector_index, parameters);
+  VMSDK_ASSIGN_OR_RETURN(auto neighbors,
+                         PerformVectorSearch(vector_index, parameters));
+  ApplyHybridTextScore(parameters, neighbors);
+  return neighbors;
 }
 
 // Check if no results should be returned based on query parameters.
@@ -1332,13 +1362,18 @@ void SearchResult::TrimResults(std::vector<T> &vec,
     } else {
       std::sort(vec.begin(), vec.end(), cmp);
     }
-  } else if (parameters.IsNonVectorQuery()) {
-    // Cluster-merge non-vector path: the merged Neighbor vector is drained from
-    // the fanout heap ascending and never sorted, so sort by score descending
-    // here (before the offset trim below). Content resolution later drops some
-    // neighbors, but drops preserve relative order, so this ordering survives.
-    // KNN (vector) results already arrive ascending by distance and must not be
-    // reordered here.
+  } else if (parameters.IsNonVectorQuery() ||
+             QueryHasTextPredicate(parameters)) {
+    // Two cases sort by score descending here:
+    //   - Cluster-merge non-vector path: the merged Neighbor vector is drained
+    //     from the fanout heap ascending and never sorted.
+    //   - Hybrid `text=>[KNN]`: KNN produces neighbors ordered by distance, but
+    //     the query score is the text relevance (set by ApplyHybridTextScore),
+    //     so re-rank by it to match Redis. The vector distance is preserved on
+    //     Neighbor.distance and still reported via the score_as field.
+    // Content resolution later drops some neighbors, but drops preserve
+    // relative order, so this ordering survives. Pure vector queries (no text
+    // predicate) fall through and keep their distance-ascending order.
     std::stable_sort(
         vec.begin(), vec.end(),
         [](const indexes::Neighbor &a, const indexes::Neighbor &b) {

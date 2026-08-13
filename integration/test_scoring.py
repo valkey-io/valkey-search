@@ -1,9 +1,16 @@
+import struct
+
 import pytest
 from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
+
+
+def _vec(*floats):
+    """Packs floats into a FLOAT32 little-endian blob for a VECTOR field."""
+    return struct.pack(f"{len(floats)}f", *floats)
 
 """
 End-to-end tests for BM25STD scoring through FT.SEARCH ... WITHSCORES.
@@ -211,6 +218,27 @@ INDEX_NUM_TAG = ScoringIndex(
         "nt:5": {"rank": 5, "cat": "blue"},
     },
 )
+
+# idxHV: text `body` + a 2-D FLOAT32 vector `vec` (L2), for hybrid text=>[KNN]
+# scoring. Both docs contain "cat"; "hv:short" is a one-word body (high BM25) far
+# from the query vector, while "hv:long" buries "cat" in a long body (low BM25)
+# but sits exactly on the query vector [1,1] (distance 0). Ranked by text score
+# "hv:short" wins; ranked by vector distance "hv:long" would win.
+INDEX_HV = ScoringIndex(
+    "idxHV",
+    ["FT.CREATE", "idxHV", "ON", "HASH", "PREFIX", "1", "hv:",
+     "SCHEMA", "body", "TEXT", "NOSTEM",
+     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+     "DISTANCE_METRIC", "L2"],
+    {
+        "hv:short": {"body": "cat", "vec": _vec(5.0, 5.0)},
+        "hv:long": {"body": "cat dog bird fish tree stone river cloud",
+                    "vec": _vec(1.0, 1.0)},
+    },
+)
+# Hybrid text scores (verified against Redis 8.6). __vec_score (distance): 32 for
+# hv:short, 0 for hv:long.
+HV_HYBRID_SCORES = {"hv:short": 0.267405, "hv:long": 0.138313}
 
 # =====================================================================
 # Expected scores (verified against Redis 8.6; idxA unless noted)
@@ -817,3 +845,57 @@ class TestTextScoring(ValkeySearchTestCaseBase):
                         "docA:7", "docA:3", "docA:4"]
         for key, expected in MATCH_ALL_A_SCORES.items():
             assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+    # Group 14: hybrid text + vector ---------------------------------------
+
+    # 14.1: a hybrid `text=>[KNN]` query ranks by the text (BM25) score, not by
+    # vector distance. hv:short (short body, high BM25) outranks hv:long (long
+    # body, low BM25) even though hv:short is FARther in vector space
+    # (__vec_score 32 vs 0). Scores match the Redis 8.6 oracle.
+    def test_hybrid_ranks_by_text_score_not_vector_distance(self):
+        client = self.server.get_new_client()
+        INDEX_HV.load(client)
+        keys, scores = INDEX_HV.search(
+            client, "cat=>[KNN 2 @vec $q]",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+
+        # ranked by text score (short before long), NOT by distance.
+        assert keys == ["hv:short", "hv:long"]
+        for key, expected in HV_HYBRID_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        assert scores["hv:short"] > scores["hv:long"]
+
+    # 14.2: SORTBY __vec_score orders a hybrid query by vector distance (nearest
+    # first), overriding the default text-score ranking. hv:long (distance 0)
+    # now precedes hv:short (distance 32). WITHSCORES still reports the text
+    # scores, unchanged by SORTBY.
+    def test_hybrid_sortby_vector_distance(self):
+        client = self.server.get_new_client()
+        INDEX_HV.load(client)
+        keys, scores = INDEX_HV.search(
+            client, "cat=>[KNN 2 @vec $q]",
+            "SORTBY", "__vec_score",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+
+        # ranked by vector distance ascending (nearest first), NOT text score.
+        assert keys == ["hv:long", "hv:short"]
+        # scores are still the text (BM25) scores, unchanged by SORTBY.
+        for key, expected in HV_HYBRID_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+    # 14.3: WITHSORTKEYS on a hybrid `text=>[KNN]` sorted by __vec_score emits
+    # each result's sort key (the vector distance) prefixed with '#', since
+    # __vec_score is a synthesized field, not a stored attribute. Reply layout
+    # (no WITHSCORES) is [count, key, sortkey, attrs, ...].
+    def test_hybrid_sortby_vector_distance_withsortkeys(self):
+        client = self.server.get_new_client()
+        INDEX_HV.load(client)
+        res = client.execute_command(
+            "FT.SEARCH", "idxHV", "cat=>[KNN 2 @vec $q]",
+            "SORTBY", "__vec_score", "WITHSORTKEYS",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+
+        assert res[0] == 2
+        # nearest first: hv:long (distance 0) then hv:short (distance 32).
+        assert res[1] == b"hv:long" and res[2] == b"#0"
+        assert res[4] == b"hv:short" and res[5] == b"#32"

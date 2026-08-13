@@ -7,7 +7,8 @@ from utils import IndexingTestHelper
 
 # Reuse the exact indexes, documents, and queries from the standalone suite.
 from test_scoring import (
-    INDEX_A, INDEX_A7, INDEX_B, INDEX_BDEF, INDEX_C, parse_withscores,
+    INDEX_A, INDEX_A7, INDEX_B, INDEX_BDEF, INDEX_C, ScoringIndex,
+    parse_withscores, _vec,
 )
 
 """
@@ -37,6 +38,75 @@ CL_HELLO_WORLD = {
 }
 CL_HELLO_WORLD_ORDER = ["docA:2", "docA:4", "docA:1", "docA:3", "docA:7"]
 
+# idxHVCL: hybrid text `body` + 2-D FLOAT32 vector `vec` (L2) for cluster-mode
+# `text=>[KNN]`. Three docs, each alone on its own shard (hv:2 shard0, hv:3
+# shard1, hv:1 shard2), so every body is a single-doc corpus. The KNN k=2
+# selects the two NEAREST by vector distance; the decoy hv:1 is farthest so it
+# is evicted -- even though its text score is the SMALLEST. This exercises the
+# cross-shard coordinator eviction: keying that merge on text score instead of
+# distance would wrongly keep the decoy. Verified against Redis 8.6 cluster.
+INDEX_HV_CL = ScoringIndex(
+    "idxHVCL",
+    ["FT.CREATE", "idxHVCL", "ON", "HASH", "PREFIX", "1", "hv:",
+     "SCHEMA", "body", "TEXT", "NOSTEM",
+     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+     "DISTANCE_METRIC", "L2"],
+    {
+        "hv:2": {"body": "cat cat", "vec": _vec(1.0, 1.0)},      # dist 0
+        "hv:3": {"body": "cat cat cat", "vec": _vec(2.0, 2.0)},  # dist 2
+        "hv:1": {"body": "cat", "vec": _vec(5.0, 5.0)},          # dist 32, decoy
+    },
+)
+# Text (BM25) scores of the two kept docs; __vec_score (distance): 0 for hv:2,
+# 2 for hv:3, 32 for the evicted hv:1.
+CL_HV_SCORES = {"hv:3": 0.452072, "hv:2": 0.395563}
+
+# idxHVK: hybrid index where one shard holds MORE than k matching docs, so both
+# shard-local and coordinator eviction run. The {SA} hashtag co-locates three
+# docs on one shard; {SB} places the fourth on another. Query vector is (1,1);
+# L2 distance is squared-euclidean. KNN k=2:
+#   hv:{SA}1 vec(1,1) dist 0,  body "cat"           low text  -> kept
+#   hv:{SA}2 vec(2,2) dist 2,  body "cat cat cat"   text 0.19 -> coordinator evicts
+#   hv:{SA}3 vec(8,8) dist 98, body "cat cat"       text 0.18 -> shard-local evicts
+#   hv:{SB}1 vec(1,2) dist 1,  body "cat cat cat cat" high text -> kept
+# The decoy {SA}2 is nearer in text than {SB}1, so keying the merge on text
+# (the old bug) would keep {SA}1,{SA}2 and drop {SB}1. Verified vs Redis 8.6.
+INDEX_HVK = ScoringIndex(
+    "idxHVK",
+    ["FT.CREATE", "idxHVK", "ON", "HASH", "PREFIX", "1", "hv:",
+     "SCHEMA", "body", "TEXT", "NOSTEM",
+     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+     "DISTANCE_METRIC", "L2"],
+    {
+        "hv:{SA}1": {"body": "cat", "vec": _vec(1.0, 1.0)},
+        "hv:{SA}2": {"body": "cat cat cat", "vec": _vec(2.0, 2.0)},
+        "hv:{SA}3": {"body": "cat cat", "vec": _vec(8.0, 8.0)},
+        "hv:{SB}1": {"body": "cat cat cat cat", "vec": _vec(1.0, 2.0)},
+    },
+)
+CL_HVK_SCORES = {"hv:{SB}1": 0.486847, "hv:{SA}1": 0.167868}
+
+# idxVN: numeric-filtered vector query (no text predicate), spread across three
+# shards via hashtags. Query vector (1,1), filter @n:[0 100], KNN k=2:
+#   vn:{SA}1 n=10  vec(1,1) dist 0  -> kept
+#   vn:{SC}2 n=20  vec(1,2) dist 1  -> kept
+#   vn:{SB}3 n=30  vec(3,3) dist 8  -> in range but evicted by KNN
+#   vn:{SA}4 n=500 vec(1,1) dist 0  -> nearest, but filtered out by @n
+INDEX_VN = ScoringIndex(
+    "idxVN",
+    ["FT.CREATE", "idxVN", "ON", "HASH", "PREFIX", "1", "vn:",
+     "SCHEMA", "n", "NUMERIC",
+     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+     "DISTANCE_METRIC", "L2"],
+    {
+        "vn:{SA}1": {"n": 10, "vec": _vec(1.0, 1.0)},
+        "vn:{SC}2": {"n": 20, "vec": _vec(1.0, 2.0)},
+        "vn:{SB}3": {"n": 30, "vec": _vec(3.0, 3.0)},
+        "vn:{SA}4": {"n": 500, "vec": _vec(1.0, 1.0)},
+    },
+)
+CL_VN_DIST = {"vn:{SA}1": 0.0, "vn:{SC}2": 1.0}
+
 
 class TestTextScoringCluster(ValkeySearchClusterTestCase):
 
@@ -65,6 +135,36 @@ class TestTextScoringCluster(ValkeySearchClusterTestCase):
             assert key in scores, f"{key} missing from {scores}"
             assert scores[key] == pytest.approx(exp, abs=SCORE_ABS_TOL), \
                 f"{key}: {scores[key]} != {exp}"
+
+    def _search_page(self, index, *query):
+        """Like _search but tolerates LIMIT: the reply's leading count is the
+        total match count, which can exceed the returned page size. Returns
+        (total_count, ordered keys, {key: score})."""
+        client: Valkey = self.new_client_for_primary(0)
+        res = client.execute_command(
+            "FT.SEARCH", index.index, *query, "WITHSCORES")
+        pairs = [(res[i].decode() if isinstance(res[i], bytes) else res[i],
+                  float(res[i + 1])) for i in range(1, len(res), 3)]
+        return res[0], [k for k, _ in pairs], dict(pairs)
+
+    def _search_vec(self, index, *query):
+        """Run FT.SEARCH (no WITHSCORES) for a non-text vector query, which has
+        no top-level score. Returns (ordered keys, {key: __vec_score})."""
+        client: Valkey = self.new_client_for_primary(0)
+        res = client.execute_command("FT.SEARCH", index.index, *query)
+        keys, scores = [], {}
+        for i in range(1, len(res), 2):
+            key = res[i].decode() if isinstance(res[i], bytes) else res[i]
+            attrs = res[i + 1]
+            vs = None
+            for j in range(0, len(attrs), 2):
+                name = attrs[j].decode() if isinstance(attrs[j], bytes) \
+                    else attrs[j]
+                if name == "__vec_score":
+                    vs = float(attrs[j + 1])
+            keys.append(key)
+            scores[key] = vs
+        return keys, scores
 
     # --- Group 1: single-term ---------------------------------------------
 
@@ -186,3 +286,70 @@ class TestTextScoringCluster(ValkeySearchClusterTestCase):
         assert keys == ["docA:1", "docA:2", "docA:3", "docA:4", "docA:5", "docA:7"]
         # Scores are the per-shard cluster values, not the standalone ones.
         self._assert_scores(scores, CL_HELLO)
+
+    # --- Group 14: hybrid text + vector (cross-shard) ----------------------
+
+    def test_hybrid_cluster_ranks_by_text_score(self):
+        # A hybrid text=>[KNN] query fanned across shards ranks by the text
+        # (BM25) score, not by vector distance. KNN k=2 keeps the two nearest
+        # (hv:2 dist 0, hv:3 dist 2) and evicts the decoy hv:1 (dist 32); the
+        # survivors are then ordered by text score descending.
+        self._load(INDEX_HV_CL)
+        keys, scores = self._search(
+            INDEX_HV_CL, "cat=>[KNN 2 @vec $q]",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+        assert keys == ["hv:3", "hv:2"]
+        assert "hv:1" not in scores
+        self._assert_scores(scores, CL_HV_SCORES)
+
+    def test_hybrid_cluster_sortby_vector_distance(self):
+        # SORTBY __vec_score orders the merged fanout by vector distance ascending
+        # (hv:2 dist 0 before hv:3 dist 2), overriding the text-score ranking. The
+        # decoy hv:1 is still evicted by KNN, and WITHSCORES reports text scores.
+        self._load(INDEX_HV_CL)
+        keys, scores = self._search(
+            INDEX_HV_CL, "cat=>[KNN 2 @vec $q]", "SORTBY", "__vec_score",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+        assert keys == ["hv:2", "hv:3"]
+        assert "hv:1" not in scores
+        self._assert_scores(scores, CL_HV_SCORES)
+
+    # --- Group 15: cross-shard pagination / eviction / non-text ------------
+
+    def test_pagination_limit_offset(self):
+        # LIMIT offset+count applies to the GLOBAL cross-shard ranking: the
+        # coordinator merges every shard, orders by score, then trims to the
+        # requested page. total_count still reports all matches.
+        self._load(INDEX_A)
+        total, keys, scores = self._search_page(
+            INDEX_A, "hello", "LIMIT", "2", "2")
+        assert total == 6
+        assert keys == ["docA:4", "docA:1"]
+        self._assert_scores(scores, {"docA:4": 0.560068, "docA:1": 0.349157})
+
+    def test_hybrid_cluster_shard_local_and_coordinator_eviction(self):
+        # A shard holding more than k matches evicts locally (hv:{SA}3, dist 98)
+        # AND at the coordinator (hv:{SA}2, dist 2), leaving the two globally
+        # nearest re-ranked by text score. Keying the merge on text instead of
+        # distance would keep hv:{SA}2 and drop hv:{SB}1.
+        self._load(INDEX_HVK)
+        keys, scores = self._search(
+            INDEX_HVK, "cat=>[KNN 2 @vec $q]",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+        assert keys == ["hv:{SB}1", "hv:{SA}1"]
+        assert "hv:{SA}2" not in scores and "hv:{SA}3" not in scores
+        self._assert_scores(scores, CL_HVK_SCORES)
+
+    def test_numeric_filtered_vector_orders_by_distance(self):
+        # A vector query filtered by numeric (no text predicate) fans out, then
+        # the coordinator orders by vector distance ascending. The numeric filter
+        # excludes vn:{SA}4 even though it is the nearest (dist 0), and vn:{SB}3
+        # (in range, dist 8) is evicted by KNN k=2.
+        self._load(INDEX_VN)
+        keys, scores = self._search_vec(
+            INDEX_VN, "@n:[0 100]=>[KNN 2 @vec $q]",
+            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+        assert keys == ["vn:{SA}1", "vn:{SC}2"]
+        assert "vn:{SA}4" not in scores and "vn:{SB}3" not in scores
+        for key, dist in CL_VN_DIST.items():
+            assert scores[key] == pytest.approx(dist, abs=SCORE_ABS_TOL)

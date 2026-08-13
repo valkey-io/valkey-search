@@ -678,6 +678,76 @@ INSTANTIATE_TEST_SUITE_P(
              std::get<1>(info.param).test_name;
     });
 
+// A hybrid `text=>[KNN]` query must rank by the text relevance score, not by
+// the vector distance. Both docs contain "cat": "short" is a one-word document
+// (high BM25) but far from the query vector; "long" buries "cat" in a long
+// document (low BM25) yet sits exactly on the query vector (distance 0). By KNN
+// distance alone "long" would rank first; by text score "short" wins. The
+// result order must follow the text score.
+TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+
+  auto vector_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 1000, 250),
+          "vector_attribute_identifier",
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+
+  schema->CreateTextIndexSchema();
+  auto text_schema = schema->GetTextIndexSchema();
+  auto text = std::make_shared<indexes::Text>(
+      CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+      text_schema);
+  VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
+
+  auto add_doc = [&](const std::string &key, const std::string &content,
+                     float vec_value) {
+    auto interned = StringInternStore::Intern(key);
+    std::vector<float> vec(kVectorDimensions, vec_value);
+    VMSDK_EXPECT_OK(vector_index->AddRecord(
+        interned, std::string((char *)vec.data(), vec.size() * sizeof(float))));
+    VMSDK_EXPECT_OK(text->AddRecord(interned, content));
+    text_schema->CommitKeyData(interned);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+  };
+  // "short": short doc (high BM25 for "cat"), far from the query vector.
+  add_doc("short", "cat", 5.0f);
+  // "long": long doc (low BM25 for "cat"), exactly on the query vector.
+  add_doc("long", "cat dog bird fish tree stone river cloud", 1.0f);
+
+  UnitTestSearchParameters params;
+  params.index_schema_name = kIndexSchemaName;
+  params.index_schema = schema;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 2;
+  params.ef = kEfRuntime;
+  std::vector<float> query_vector(kVectorDimensions, 1.0f);
+  params.query = VectorToStr(query_vector);
+  TextParsingOptions options{};
+  FilterParser parser(*schema, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  VMSDK_EXPECT_OK(Search(params, valkey_search::query::SearchMode::kLocal));
+
+  const auto &neighbors = params.search_result.neighbors;
+  ASSERT_EQ(neighbors.size(), 2u);
+  // Ranked by text score: "short" (higher BM25) before "long".
+  EXPECT_EQ(neighbors[0].external_id->Str(), "short");
+  EXPECT_EQ(neighbors[1].external_id->Str(), "long");
+  // The winner has the higher text score but the LARGER vector distance,
+  // confirming distance is not the ranking key.
+  EXPECT_GT(neighbors[0].score, neighbors[1].score);
+  EXPECT_GT(neighbors[0].distance, neighbors[1].distance);
+}
+
 struct FetchFilteredKeysTestCase {
   std::string test_name;
   std::string filter;

@@ -237,7 +237,7 @@ static std::vector<TestStage> TestStages{
     {"GROUPBY 1 @n1 REDUCE QUANTILE 1 @n2", nullptr},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2", nullptr},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5",
-     "GROUPBY @n1 QUANTILE(@n2) => QUANTILE(@n2),0.5"},
+     "GROUPBY @n1 QUANTILE(@n2) => QUANTILE(@n2,0.5)"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.5 AS median",
      "GROUPBY @n1 QUANTILE(@n2) => median"},
     {"GROUPBY 1 @n1 REDUCE QUANTILE 2 @n2 0.0 AS min",

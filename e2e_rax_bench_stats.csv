@@ -7,3 +7,10 @@ fixed_size_allocator_opt,1,663.8,331875.3,15.066,1.506,1.704,1.929,590360488,563
 fixed_size_allocator_opt,4,2301.2,1150613.1,4.346,1.639,2.236,3.473,590098440,562.76,597.9,646.41,2722.6,0.454,6.893,9.078
 fixed_size_allocator_opt,8,3431.4,1715682.7,2.914,2.062,3.528,6.537,590900968,563.53,598.66,651.22,4721.7,0.694,7.137,10.321
 fixed_size_allocator_opt,16,4187.9,2093934.7,2.388,3.034,7.368,16.017,592794536,565.33,600.52,655.3,5068.3,2.098,8.488,11.502
+
+# Calculated Percentage Benefits (optimized_rax vs fixed_size_allocator_opt)
+threads,ingest_throughput_benefit_pct,ingest_tokens_sec_benefit_pct,ingest_duration_reduction_pct,ingest_latency_p50_reduction_pct,search_used_memory_savings_pct,total_used_memory_savings_pct,used_memory_rss_savings_pct,search_qps_benefit_pct,search_latency_p50_reduction_pct
+1,+1.79%,+1.80%,+1.77%,+2.72%,+0.11%,+0.11%,+0.19%,+2.64%,+10.74%
+4,-1.97%,-1.97%,-2.00%,-2.26%,-0.08%,-0.08%,-0.24%,+0.36%,+1.98%
+8,-0.65%,-0.65%,-0.65%,+0.58%,-0.05%,-0.05%,+0.16%,-0.47%,-4.18%
+16,+0.95%,+0.95%,+0.96%,+1.71%,+0.00%,0.00%,-0.41%,-1.02%,-0.48%

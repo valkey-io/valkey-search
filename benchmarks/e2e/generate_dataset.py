@@ -16,7 +16,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 DB_FILE = os.path.join(DATA_DIR, "documents.txt")
 QUERIES_FILE = os.path.join(os.path.dirname(__file__), "queries.txt")
 NUM_DOCS = 10000
-WORDS_PER_DOC = 500
+WORDS_PER_DOC = 1500
 RANDOM_SEED = 42
 
 def load_or_generate_vocabulary():

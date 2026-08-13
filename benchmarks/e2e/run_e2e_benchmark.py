@@ -184,8 +184,8 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
 
     print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
 
-    # 3. Phase 2: Mutation & Churn (Overwriting 5,000 documents)
-    NUM_UPDATES = 5000
+    # 3. Phase 2: Mutation & Churn (Overwriting half of documents)
+    NUM_UPDATES = num_docs // 2
     update_chunk_size = (NUM_UPDATES + num_threads - 1) // num_threads
     update_latencies = []
     update_lat_lock = threading.Lock()

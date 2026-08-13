@@ -1,0 +1,19 @@
+{
+  "_comment": "Reviewer rotation for auto-assignment on new PRs. Every entry must have collaborator access, otherwise a review cannot be requested from them. Edit this file to change the rotation; no workflow change is needed.",
+  "firstPass": [
+    "mnunberg1",
+    "Aksha1812",
+    "boda26",
+    "Frank-Gu-81",
+    "mohanrajendran",
+    "VoletiRam",
+    "neerajr0",
+    "zackcam"
+  ],
+  "maintainers": [
+    "allenss-amazon",
+    "BCathcart",
+    "yairgott",
+    "KarthikSubbarao"
+  ]
+}

@@ -1,11 +1,15 @@
 name: Slash Commands
 
 # Supported comment commands (available to all users):
-#   /label <label-name>        — add a label from the allowlist
-#   /reviewer <github-login>   — request a review from a specific user
+#   /label <names>             — add one or more labels from the allowlist
+#   /remove-label <names>      — remove one or more labels
+#   /reviewer <logins>         — request a review from one or more users
+#   /remove-reviewer <logins>  — withdraw a review request from one or more users
 #   /resolves <issue-number>   — append "Resolves #N" to the PR body
 #   /rerun                     — re-run all failed CI jobs for this PR
 #   /duplicates                — find potential duplicate issues/PRs
+#
+# The label and reviewer commands accept a comma-separated list, e.g. `/label bug, docs`.
 
 on:
   issues:
@@ -13,7 +17,7 @@ on:
   issue_comment:
     types: [created]
   pull_request_target:
-    types: [opened]
+    types: [opened, ready_for_review]
 
 permissions:
   actions: write
@@ -24,16 +28,126 @@ permissions:
 jobs:
   # Auto-assign the PR author as the PR assignee when a PR is opened
   auto-assign:
-    if: github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
     runs-on: ubuntu-latest
     steps:
       - uses: toshimaru/auto-author-assign@v3.0.1
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+  # Round-robin a first-pass reviewer and a maintainer onto each new PR
+  auto-assign-reviewers:
+    if: |
+      github.event_name == 'pull_request_target' &&
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.draft) return;
+
+            const { owner, repo } = context.repo;
+
+            let pools;
+            try {
+              const { data } = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path: '.github/reviewer-pools.json',
+                ref: context.payload.repository.default_branch,
+              });
+              pools = JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
+            } catch (e) {
+              core.warning('Could not read .github/reviewer-pools.json: ' + e.message);
+              return;
+            }
+
+            const firstPassPool = (pools.firstPass || []).filter(Boolean);
+            const maintainerPool = (pools.maintainers || []).filter(Boolean);
+            if (firstPassPool.length === 0 || maintainerPool.length === 0) {
+              core.warning('Reviewer pools are empty — nothing to assign.');
+              return;
+            }
+
+            // Skip if a rotation member is already on the PR, so re-opening or
+            // flipping draft state does not reassign.
+            const existing = new Set((pr.requested_reviewers || []).map(r => r.login));
+            const inRotation = [...firstPassPool, ...maintainerPool];
+            if (inRotation.some(login => existing.has(login))) return;
+
+            // Rotate on the PR number so the choice is deterministic and needs no
+            // stored state. Skips the author, who cannot review their own PR.
+            const pick = (pool, disallowed) => {
+              for (let step = 0; step < pool.length; step++) {
+                const candidate = pool[(pr.number + step) % pool.length];
+                if (!disallowed.has(candidate)) return candidate;
+              }
+              return null;
+            };
+
+            const author = pr.user.login;
+            const firstPass = pick(firstPassPool, new Set([author]));
+            const maintainer = pick(maintainerPool, new Set([author, firstPass]));
+            if (!firstPass || !maintainer) {
+              core.warning('No eligible reviewer for #' + pr.number);
+              return;
+            }
+
+            const assigned = [];
+            for (const login of [firstPass, maintainer]) {
+              try {
+                const { data } = await github.rest.pulls.requestReviewers({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                  reviewers: [login],
+                });
+                // A login that is not a collaborator is ignored rather than rejected,
+                // so confirm it actually landed.
+                if ((data.requested_reviewers || []).some(r => r.login === login)) {
+                  assigned.push(login);
+                } else {
+                  core.warning('Review request for ' + login + ' did not take effect.');
+                }
+              } catch (e) {
+                core.warning('Could not request review from ' + login + ': ' + e.message);
+              }
+            }
+            if (assigned.length === 0) return;
+
+            const lines = ['**Reviewers for this PR**', ''];
+            if (assigned.includes(firstPass)) {
+              lines.push(
+                '- **First Pass Reviewer: @' + firstPass + '** — Please do your best to do a ' +
+                'detailed review on the PR and get a response on your feedback. Once the first ' +
+                'pass is done, notify the maintainer assigned to this PR to follow up on the ' +
+                'final review and getting the PR merged. You can reach out to the people owning ' +
+                'the relevant code paths for more help on the review.'
+              );
+            }
+            if (assigned.includes(maintainer)) {
+              lines.push(
+                '- **Maintainer Reviewer: @' + maintainer + '** — Once the first review is done, ' +
+                'please follow up with a final review and help to merge the change in.'
+              );
+            }
+            lines.push('', '<sub>Assigned automatically from the reviewer rotation in ' +
+                       '`.github/reviewer-pools.json`. Use `/reviewer` or `/remove-reviewer` to adjust.</sub>');
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body: lines.join('\n'),
+            });
+
   # Auto-check for duplicates when an issue or PR is opened
   check-duplicates:
-    if: github.event_name == 'issues' || github.event_name == 'pull_request_target'
+    if: |
+      github.event_name == 'issues' ||
+      (github.event_name == 'pull_request_target' && github.event.action == 'opened')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
@@ -245,7 +359,29 @@ jobs:
             const body = context.payload.comment.body.trim();
             const commenter = context.payload.comment.user.login;
 
-            if (!/^\/(label|reviewer|resolves|rerun|duplicates)\b/.test(body)) return;
+            if (!/^\/(label|remove-label|reviewer|remove-reviewer|resolves|rerun|duplicates)\b/.test(body)) return;
+
+            // Split a comma-separated command argument into unique, non-empty items.
+            const parseItems = (raw, stripAt) => {
+              const seen = new Set();
+              return raw.split(',')
+                .map(s => s.trim())
+                .map(s => (stripAt ? s.replace(/^@/, '') : s))
+                .filter(s => s.length > 0 && !seen.has(s) && seen.add(s));
+            };
+
+            const reply = (text) => github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: text,
+            });
+
+            const requirePR = async (command) => {
+              if (context.payload.issue.pull_request) return true;
+              await reply(`\`${command}\` can only be used on pull requests.`);
+              return false;
+            };
 
             // ── /duplicates ────────────────────────────────────────────────
             if (/^\/duplicates\b/.test(body)) {
@@ -462,82 +598,151 @@ jobs:
             const ALLOWED_LABELS = new Set(repoLabels.map(l => l.name));
 
             const labelMatch = body.match(/^\/label\s+(.+)$/m);
-            if (labelMatch) {
-              const requested = labelMatch[1].trim();
-              if (!ALLOWED_LABELS.has(requested)) {
-                const list = [...ALLOWED_LABELS].map(l => `\`${l}\``).join(', ');
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `\`${requested}\` is not a recognised label. Allowed labels: ${list}`,
-                });
+            const removeLabelMatch = body.match(/^\/remove-label\s+(.+)$/m);
+            if (labelMatch || removeLabelMatch) {
+              const removing = !labelMatch;
+              const command = removing ? '/remove-label' : '/label';
+              const requested = parseItems((labelMatch || removeLabelMatch)[1], false);
+              if (requested.length === 0) {
+                await reply(`\`${command}\` needs at least one label name.`);
                 return;
               }
+
               const { data: issue } = await github.rest.issues.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number,
               });
-              if (issue.labels.map(l => l.name).includes(requested)) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `Label \`${requested}\` is already applied.`,
-                });
-                return;
+              const current = new Set(issue.labels.map(l => l.name));
+
+              const changed = [], noop = [], unknown = [], failed = [];
+              for (const name of requested) {
+                if (removing) {
+                  if (!current.has(name)) { noop.push(name); continue; }
+                } else {
+                  if (!ALLOWED_LABELS.has(name)) { unknown.push(name); continue; }
+                  if (current.has(name)) { noop.push(name); continue; }
+                }
+                changed.push(name);
               }
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                labels: [requested],
-              });
+
+              if (removing) {
+                for (const name of changed) {
+                  try {
+                    await github.rest.issues.removeLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: context.issue.number,
+                      name,
+                    });
+                  } catch (e) {
+                    failed.push(name);
+                  }
+                }
+              } else if (changed.length > 0) {
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.issue.number,
+                    labels: changed,
+                  });
+                } catch (e) {
+                  // addLabels applies the whole set or none of it.
+                  failed.push(...changed);
+                  changed.length = 0;
+                }
+              }
+
+              const fmt = (names) => names.map(n => `\`${n}\``).join(', ');
+              const notes = [];
+              if (changed.length) notes.push(`${removing ? 'Removed' : 'Applied'}: ${fmt(changed)}.`);
+              if (noop.length) notes.push(`${removing ? 'Not applied' : 'Already applied'}: ${fmt(noop)}.`);
+              if (failed.length) notes.push(`Failed: ${fmt(failed)}.`);
+              if (unknown.length) {
+                notes.push(
+                  `Not a recognised label: ${fmt(unknown)}. Allowed labels: ${fmt([...ALLOWED_LABELS])}.`
+                );
+              }
+              // Stay silent when the only outcome is a successful change.
+              if (notes.length > 1 || noop.length || failed.length || unknown.length) {
+                await reply(notes.join(' '));
+              }
               return;
             }
 
-            // ── /reviewer <login> ──────────────────────────────────────────
-            const reviewerMatch = body.match(/^\/reviewer\s+@?(\S+)$/m);
-            if (reviewerMatch) {
-              if (!context.payload.issue.pull_request) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `/reviewer can only be used on pull requests.`,
-                });
+            // ── /reviewer <logins> and /remove-reviewer <logins> ───────────
+            const reviewerMatch = body.match(/^\/reviewer\s+(.+)$/m);
+            const removeReviewerMatch = body.match(/^\/remove-reviewer\s+(.+)$/m);
+            if (reviewerMatch || removeReviewerMatch) {
+              const removing = !reviewerMatch;
+              const command = removing ? '/remove-reviewer' : '/reviewer';
+              if (!await requirePR(command)) return;
+
+              const requested = parseItems((reviewerMatch || removeReviewerMatch)[1], true);
+              if (requested.length === 0) {
+                await reply(`\`${command}\` needs at least one GitHub username.`);
                 return;
               }
-              const reviewer = reviewerMatch[1];
+
               const { data: pr } = await github.rest.pulls.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 pull_number: context.issue.number,
               });
-              if (reviewer === pr.user.login) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `@${reviewer} is the PR author and cannot be requested as a reviewer.`,
-                });
-                return;
+              const onPR = new Set((pr.requested_reviewers || []).map(r => r.login));
+
+              const target = [], noop = [], authors = [];
+              for (const login of requested) {
+                if (!removing && login === pr.user.login) { authors.push(login); continue; }
+                if (removing ? !onPR.has(login) : onPR.has(login)) { noop.push(login); continue; }
+                target.push(login);
               }
-              try {
-                await github.rest.pulls.requestReviewers({
+
+              // One request per login: a batch containing a single non-collaborator
+              // is rejected outright, which would silently drop the valid ones.
+              const done = [], failed = [];
+              for (const login of target) {
+                const args = {
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   pull_number: context.issue.number,
-                  reviewers: [reviewer],
-                });
-              } catch (e) {
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.issue.number,
-                  body: `Could not request review from \`${reviewer}\` — they may not be a collaborator on this repository.`,
-                });
+                  reviewers: [login],
+                };
+                try {
+                  const { data } = removing
+                    ? await github.rest.pulls.removeRequestedReviewers(args)
+                    : await github.rest.pulls.requestReviewers(args);
+                  // An unknown login is ignored rather than rejected, so confirm
+                  // the change actually landed.
+                  const now = new Set((data.requested_reviewers || []).map(r => r.login));
+                  if (removing ? !now.has(login) : now.has(login)) done.push(login);
+                  else failed.push(login);
+                } catch (e) {
+                  failed.push(login);
+                }
+              }
+
+              const fmt = (names) => names.map(n => `\`${n}\``).join(', ');
+              const notes = [];
+              if (done.length) {
+                notes.push(`${removing ? 'Withdrew review request from' : 'Requested review from'}: ${fmt(done)}.`);
+              }
+              if (noop.length) {
+                notes.push(`${removing ? 'Was not a requested reviewer' : 'Already a requested reviewer'}: ${fmt(noop)}.`);
+              }
+              if (authors.length) {
+                notes.push(`${fmt(authors)} is the PR author and cannot be requested as a reviewer.`);
+              }
+              if (failed.length) {
+                notes.push(
+                  `Could not ${removing ? 'remove' : 'request review from'}: ${fmt(failed)} — ` +
+                  `they may not be a collaborator on this repository.`
+                );
+              }
+              // Stay silent when the only outcome is a successful change.
+              if (notes.length > 1 || noop.length || authors.length || failed.length) {
+                await reply(notes.join(' '));
               }
               return;
             }

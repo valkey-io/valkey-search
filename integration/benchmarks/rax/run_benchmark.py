@@ -4,8 +4,9 @@ End-to-End Benchmark for Valkey-Search Text & Tag Index.
 Evaluates Ingestion Speed, Mutation/Update Churn Throughput, Search QPS, Latency,
 and Memory Footprint across thread counts comparing optimized_rax vs main.
 
-Emits structured CSV results to /tmp/e2e_rax_bench_stats.csv and prints
+Emits structured CSV results with timestamps and prints
 human-friendly formatted tables to stdout with detailed setup summaries.
+Incrementally persists results to disk after each benchmark run.
 """
 
 import os
@@ -19,6 +20,7 @@ import statistics
 import csv
 import redis
 import json
+from datetime import datetime
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../.."))
@@ -28,7 +30,25 @@ QUERIES_FILE = os.path.join(DATASET_DIR, "queries.txt")
 DEFAULT_SERVER = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-server")
 DEFAULT_MODULE = os.path.join(PROJECT_ROOT, ".build-release/libsearch.so")
 DEFAULT_CLI = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-cli")
-DEFAULT_CSV = "/tmp/e2e_rax_bench_stats.csv"
+
+def get_default_csv_path():
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    return f"/tmp/e2e_rax_bench_stats_{timestamp}.csv"
+
+RAW_FIELDNAMES = [
+    "branch", "setup", "threads", "ingest_throughput_docs_sec", "ingest_tokens_sec",
+    "ingest_duration_sec", "ingest_latency_p50_ms", "ingest_latency_p95_ms", "ingest_latency_p99_ms",
+    "mutation_throughput_docs_sec", "mutation_latency_p50_ms",
+    "search_used_memory_bytes", "search_used_memory_mb", "total_used_memory_mb", "used_memory_rss_mb",
+    "search_qps", "search_latency_p50_ms", "search_latency_p95_ms", "search_latency_p99_ms"
+]
+
+BENEFIT_FIELDNAMES = [
+    "setup", "threads", "ingest_throughput_benefit_pct", "mutation_throughput_benefit_pct",
+    "ingest_duration_reduction_pct", "ingest_latency_p50_reduction_pct",
+    "search_used_memory_savings_pct", "total_used_memory_savings_pct",
+    "used_memory_rss_savings_pct", "search_qps_benefit_pct", "search_latency_p50_reduction_pct"
+]
 
 SETUPS = {
     "text_only": {
@@ -154,6 +174,25 @@ def load_queries(queries_file):
     with open(queries_file, "r", encoding="utf-8") as f:
         queries = [line.strip() for line in f if line.strip()]
     return queries
+
+def init_stats_file(csv_path, append=False):
+    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
+    if append and os.path.exists(csv_path):
+        print(f"\n[Benchmark Stats File Attached (Append Mode)]: {os.path.abspath(csv_path)}")
+        return
+        
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=RAW_FIELDNAMES)
+        writer.writeheader()
+        f.flush()
+    print(f"\n[Benchmark Stats File Initialized]: {os.path.abspath(csv_path)}")
+
+def append_single_result(csv_path, result_dict):
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=RAW_FIELDNAMES)
+        writer.writerow(result_dict)
+        f.flush()
+    print(f"  -> Persisted incremental stats for [{result_dict.get('setup')}] ({result_dict.get('threads')} threads) to {csv_path}")
 
 def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads, setup_key="text_tag_mixed", port=None):
     setup_info = SETUPS[setup_key]
@@ -396,31 +435,14 @@ def format_table(headers, rows):
         table_lines.append(" | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row)))
     return "\n".join(table_lines)
 
-def write_and_print_stats(csv_path, all_results, append=False):
+def finalize_and_print_stats(csv_path):
     raw_rows = []
-    if os.path.exists(csv_path) and append:
+    if os.path.exists(csv_path):
         with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if row.get("branch") and not row["branch"].startswith("#"):
                     raw_rows.append(row)
-
-    raw_rows.extend(all_results)
-
-    raw_fieldnames = [
-        "branch", "setup", "threads", "ingest_throughput_docs_sec", "ingest_tokens_sec",
-        "ingest_duration_sec", "ingest_latency_p50_ms", "ingest_latency_p95_ms", "ingest_latency_p99_ms",
-        "mutation_throughput_docs_sec", "mutation_latency_p50_ms",
-        "search_used_memory_bytes", "search_used_memory_mb", "total_used_memory_mb", "used_memory_rss_mb",
-        "search_qps", "search_latency_p50_ms", "search_latency_p95_ms", "search_latency_p99_ms"
-    ]
-
-    benefit_fieldnames = [
-        "setup", "threads", "ingest_throughput_benefit_pct", "mutation_throughput_benefit_pct",
-        "ingest_duration_reduction_pct", "ingest_latency_p50_reduction_pct",
-        "search_used_memory_savings_pct", "total_used_memory_savings_pct",
-        "used_memory_rss_savings_pct", "search_qps_benefit_pct", "search_latency_p50_reduction_pct"
-    ]
 
     branches = list(dict.fromkeys([r["branch"] for r in raw_rows]))
     opt_branch = "optimized_rax" if "optimized_rax" in branches else (branches[0] if branches else "optimized_rax")
@@ -495,24 +517,23 @@ def write_and_print_stats(csv_path, all_results, append=False):
                 "search_latency_p50_reduction_pct": fmt(srch_lat_pct),
             })
 
-    # 1. Write CSV File
-    os.makedirs(os.path.dirname(os.path.abspath(csv_path)), exist_ok=True)
+    # Re-write the complete finalized file
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=raw_fieldnames)
+        writer = csv.DictWriter(f, fieldnames=RAW_FIELDNAMES)
         writer.writeheader()
         for r in raw_rows:
             writer.writerow(r)
             
         if benefit_rows:
             f.write(f"\n# Calculated Percentage Benefits ({opt_branch} vs {base_branch})\n")
-            bwriter = csv.DictWriter(f, fieldnames=benefit_fieldnames)
+            bwriter = csv.DictWriter(f, fieldnames=BENEFIT_FIELDNAMES)
             bwriter.writeheader()
             for br in benefit_rows:
                 bwriter.writerow(br)
 
-    # 2. Print Human-Friendly Formatted Version to stdout
+    # Print Human-Friendly Formatted Version to stdout
     print("\n" + "=" * 110)
-    print(f"BENCHMARK RESULTS SUMMARY (Saved to: {csv_path})")
+    print(f"BENCHMARK RESULTS SUMMARY (Saved to: {os.path.abspath(csv_path)})")
     print("=" * 110)
     
     raw_headers = ["Branch", "Setup", "Threads", "Ingest (docs/s)", "Ingest p50", "Mutations/s", "Search QPS", "Search p50", "Search RAM (MB)", "Process RSS (MB)"]
@@ -557,7 +578,7 @@ def main():
     parser.add_argument("--branch-name", default="current", help="Branch or label identifier for results")
     parser.add_argument("--server", default=DEFAULT_SERVER, help="Path to valkey-server binary")
     parser.add_argument("--module", default=DEFAULT_MODULE, help="Path to libsearch.so")
-    parser.add_argument("--csv", default=DEFAULT_CSV, help="Output CSV file path (default: /tmp/e2e_rax_bench_stats.csv)")
+    parser.add_argument("--csv", default=None, help="Output CSV file path (default: /tmp/e2e_rax_bench_stats_<TIMESTAMP>.csv)")
     parser.add_argument("--threads", nargs="+", type=int, default=[1, 4, 8, 16], help="Thread counts to test")
     parser.add_argument("--setups", nargs="+", choices=["text_only", "text_tag_mixed", "text_tag_churn_prefix", "all"], default=["all"], help="Benchmark setups to run")
     parser.add_argument("--append", action="store_true", help="Append results to existing CSV instead of overwriting")
@@ -568,20 +589,26 @@ def main():
     if not os.path.exists(args.module):
         raise FileNotFoundError(f"libsearch.so not found at {args.module}")
 
+    csv_path = os.path.abspath(args.csv if args.csv else get_default_csv_path())
+    
+    # 1. Initialize stats file at the beginning of execution and emit path
+    init_stats_file(csv_path, append=args.append)
+
     docs = load_dataset(DATASET_DIR)
     queries = load_queries(QUERIES_FILE)
 
     chosen_setups = ["text_only", "text_tag_mixed", "text_tag_churn_prefix"] if "all" in args.setups else args.setups
 
-    all_results = []
+    # 2. Incrementally execute setups and update file after each run
     for s_key in chosen_setups:
         for t in args.threads:
             res = run_benchmark_for_threads(args.server, args.module, docs, queries, t, setup_key=s_key)
             res["branch"] = args.branch_name
-            all_results.append(res)
+            append_single_result(csv_path, res)
 
-    write_and_print_stats(args.csv, all_results, append=args.append)
-    print(f"Benchmark results successfully recorded in {args.csv}")
+    # 3. Finalize summary and print human-friendly tables
+    finalize_and_print_stats(csv_path)
+    print(f"[Generated Stats File Full Path]: {csv_path}\n")
 
 if __name__ == "__main__":
     main()

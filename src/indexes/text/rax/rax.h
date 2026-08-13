@@ -268,9 +268,11 @@ namespace valkey_search {
 // (`FreeWithCallback`) during tree
 //   teardown to safely clean up associated leaf set structures in a single
 //   pass.
+class Allocator;
+
 class RaxTree {
  public:
-  explicit RaxTree(std::pmr::memory_resource *res = nullptr);
+  explicit RaxTree(Allocator *allocator = nullptr);
   ~RaxTree();
 
   RaxTree(const RaxTree &) = delete;
@@ -296,15 +298,9 @@ class RaxTree {
   void FreeNode(void *ptr);
   int UsableSize(void *ptr);
 
-  static constexpr int kNumBuckets = 8;
-  static size_t GetBucketIndex(size_t size);
-  static size_t GetBucketSize(size_t bucket_idx);
-
  private:
   vs_rax *rax_{nullptr};
-  std::pmr::memory_resource *res_{nullptr};
-  void *free_lists_[kNumBuckets]{nullptr};
-  uint8_t free_counts_[kNumBuckets]{0};
+  Allocator *allocator_{nullptr};
 };
 
 }  // namespace valkey_search

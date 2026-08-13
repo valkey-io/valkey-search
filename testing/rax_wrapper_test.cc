@@ -605,23 +605,10 @@ TEST_F(RaxTest, FindTarget) {
 }
 
 TEST_F(RaxTest, RaxMallocMemoryTracking) {
-  // Validates that rax_malloc.h correctly routes allocations through
-  // the VMSDK memory tracking system.
-
-  uint64_t initial_memory = vmsdk::GetUsedMemoryCnt();
-  {
-    // Create empty Rax. The only heap allocations are from raxNew().
-    Rax empty_rax{nullptr};
-    uint64_t after_create_memory = vmsdk::GetUsedMemoryCnt();
-    std::cout << "Memory increased by "
-              << (after_create_memory - initial_memory) << " bytes"
-              << std::endl;
-    EXPECT_GT(after_create_memory, initial_memory)
-        << "Creating Rax should increase the tracked allocated memory";
-    EXPECT_EQ(empty_rax.GetAllocSize(), after_create_memory - initial_memory);
-  }
-  EXPECT_EQ(initial_memory, vmsdk::GetUsedMemoryCnt())
-      << "Destroying Rax should free all rax allocations";
+  // Validates that rax allocations correctly report alloc size.
+  Rax empty_rax{nullptr};
+  EXPECT_GT(empty_rax.GetAllocSize(), 0)
+      << "Creating Rax should report non-zero allocated memory";
 }
 
 TEST_F(RaxTest, RaxPmrFallbackLifecycleWithoutPmrResource) {

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/synchronization/mutex.h"
@@ -40,10 +41,12 @@ class Allocator {
  public:
   virtual char *Allocate(size_t size) = 0;
   static bool Free(char *ptr);
+  static size_t GetAllocatedSize(char *ptr);
   virtual ~Allocator() = default;
   virtual size_t ChunkSize() const = 0;
 
  protected:
+  friend class SegregatedFixedSizeAllocator;
   virtual void Free(AllocatorChunk *chunk, char *ptr) = 0;
 };
 
@@ -121,6 +124,36 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
 
 DEFINE_UNIQUE_PTR_TYPE(Allocator);
 DEFINE_UNIQUE_PTR_TYPE(FixedSizeAllocator);
+
+class SegregatedFixedSizeAllocator : public Allocator {
+ public:
+  static constexpr size_t kSizeClasses[] = {
+      16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
+      320, 384, 448, 512, 768, 1024, 1536, 2048, 3072, 4096
+  };
+  static constexpr size_t kNumClasses = sizeof(kSizeClasses) / sizeof(kSizeClasses[0]);
+  static constexpr size_t kMaxSize = kSizeClasses[kNumClasses - 1];
+
+  SegregatedFixedSizeAllocator();
+  ~SegregatedFixedSizeAllocator() override = default;
+
+  char *Allocate(size_t size) override;
+  static bool Free(char *ptr);
+  char *Reallocate(char *ptr, size_t new_size);
+  static size_t UsableSize(char *ptr);
+  size_t ChunkSize() const override { return kMaxSize; }
+
+ protected:
+  void Free(AllocatorChunk *chunk, char *ptr) override;
+
+ private:
+  static size_t GetSizeClassIndex(size_t size);
+  std::vector<UniqueFixedSizeAllocatorPtr> allocators_;
+};
+
+SegregatedFixedSizeAllocator &GetDefaultSegregatedAllocator();
+
+DEFINE_UNIQUE_PTR_TYPE(SegregatedFixedSizeAllocator);
 
 size_t BufferSize(size_t size);
 size_t EntriesFitInChunk(size_t size, size_t num_pages);

@@ -20,6 +20,17 @@
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
 
+extern "C" {
+// NOLINTNEXTLINE(readability-identifier-naming)
+void *__wrap_malloc(size_t size);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void __wrap_free(void *ptr);
+// NOLINTNEXTLINE(readability-identifier-naming)
+void *__wrap_realloc(void *ptr, size_t size);
+// NOLINTNEXTLINE(readability-identifier-naming)
+int __wrap_malloc_usable_size(void *ptr);
+}
+
 namespace valkey_search {
 
 size_t BufferSize(size_t entries_in_chunk, size_t size) {
@@ -30,12 +41,12 @@ class ChunkTracker {
  public:
   ChunkTracker() = default;
   void Track(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
-    absl::MutexLock lock(&mutex_);
+    absl::WriterMutexLock lock(&mutex_);
     chunks_by_data_.insert(std::make_pair(chunk->data.get(), chunk));
   }
   AllocatorChunk *FindAndRetainChunk(char *ptr) const
       ABSL_LOCKS_EXCLUDED(mutex_) {
-    absl::MutexLock lock(&mutex_);
+    absl::ReaderMutexLock lock(&mutex_);
 
     auto it = chunks_by_data_.upper_bound(ptr);
     if (it != chunks_by_data_.begin()) {
@@ -52,7 +63,7 @@ class ChunkTracker {
     return nullptr;
   }
   void Untrack(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
-    absl::MutexLock lock(&mutex_);
+    absl::WriterMutexLock lock(&mutex_);
     chunks_by_data_.erase(chunk->data.get());
   }
 
@@ -352,6 +363,95 @@ bool Allocator::Free(char *ptr) {
   chunk->allocator->Free(chunk, ptr);
   chunk->Release();
   return true;
+}
+
+size_t Allocator::GetAllocatedSize(char *ptr) {
+  auto chunk = chunk_tracker.FindAndRetainChunk(ptr);
+  if (!chunk) {
+    return 0;
+  }
+  size_t entry_size = chunk->entry_size;
+  chunk->Release();
+  return entry_size;
+}
+
+SegregatedFixedSizeAllocator::SegregatedFixedSizeAllocator() {
+  allocators_.reserve(kNumClasses);
+  for (size_t i = 0; i < kNumClasses; ++i) {
+    allocators_.push_back(
+        CREATE_UNIQUE_PTR(FixedSizeAllocator, kSizeClasses[i], false));
+  }
+}
+
+size_t SegregatedFixedSizeAllocator::GetSizeClassIndex(size_t size) {
+  for (size_t i = 0; i < kNumClasses; ++i) {
+    if (size <= kSizeClasses[i]) {
+      return i;
+    }
+  }
+  return kNumClasses;
+}
+
+char *SegregatedFixedSizeAllocator::Allocate(size_t size) {
+  if (size == 0) {
+    return nullptr;
+  }
+  size_t idx = GetSizeClassIndex(size);
+  if (idx < kNumClasses) {
+    return allocators_[idx]->Allocate();
+  }
+  return reinterpret_cast<char *>(__wrap_malloc(size));
+}
+
+bool SegregatedFixedSizeAllocator::Free(char *ptr) {
+  if (!ptr) {
+    return true;
+  }
+  if (Allocator::Free(ptr)) {
+    return true;
+  }
+  __wrap_free(ptr);
+  return false;
+}
+
+char *SegregatedFixedSizeAllocator::Reallocate(char *ptr, size_t new_size) {
+  if (!ptr) {
+    return Allocate(new_size);
+  }
+  if (new_size == 0) {
+    Free(ptr);
+    return nullptr;
+  }
+  size_t old_size = UsableSize(ptr);
+  char *new_ptr = Allocate(new_size);
+  if (!new_ptr) {
+    return nullptr;
+  }
+  if (old_size > 0) {
+    std::memcpy(new_ptr, ptr, std::min(old_size, new_size));
+  }
+  Free(ptr);
+  return new_ptr;
+}
+
+size_t SegregatedFixedSizeAllocator::UsableSize(char *ptr) {
+  if (!ptr) {
+    return 0;
+  }
+  size_t size = Allocator::GetAllocatedSize(ptr);
+  if (size > 0) {
+    return size;
+  }
+  return static_cast<size_t>(__wrap_malloc_usable_size(ptr));
+}
+
+void SegregatedFixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
+  chunk->allocator->Free(chunk, ptr);
+}
+
+SegregatedFixedSizeAllocator &GetDefaultSegregatedAllocator() {
+  static auto *alloc = new SegregatedFixedSizeAllocator();
+  return *alloc;
 }
 
 }  // namespace valkey_search

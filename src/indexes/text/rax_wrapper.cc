@@ -28,8 +28,7 @@ extern "C" void *MutateCallbackWrapper(void *current, void *caller_context) {
 }  // namespace
 
 // Constructor
-Rax::Rax(void (*free_callback)(void *))
-    : rax_(valkey_search::utils::t_rax_res), free_callback_(free_callback) {}
+Rax::Rax(void (*free_callback)(void *)) : free_callback_(free_callback) {}
 
 // Destructor
 Rax::~Rax() { rax_.FreeWithCallback(free_callback_); }

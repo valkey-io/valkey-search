@@ -58,11 +58,12 @@ void *RaxPmrMalloc(size_t size) {
 #if !defined(USE_CUSTOM_RAX_ALLOCATOR) || !USE_CUSTOM_RAX_ALLOCATOR
   return __wrap_malloc(size);
 #else
-  if (!t_rax_res) {
-    return __wrap_malloc(size);
-  }
   size_t total_size = size + sizeof(PmrHeader);
-  void *mem = t_rax_res->allocate(total_size, alignof(PmrHeader));
+  void *mem = t_rax_res ? t_rax_res->allocate(total_size, alignof(PmrHeader))
+                        : __wrap_malloc(total_size);
+  if (!mem) {
+    return nullptr;
+  }
   PmrHeader *hdr = reinterpret_cast<PmrHeader *>(mem);
   hdr->magic = kPmrMagic;
   hdr->res = t_rax_res;
@@ -83,8 +84,12 @@ void RaxPmrFree(void *ptr) {
   PmrHeader *hdr = reinterpret_cast<PmrHeader *>(reinterpret_cast<char *>(ptr) -
                                                  sizeof(PmrHeader));
   if (hdr->magic == kPmrMagic) {
-    hdr->res->deallocate(hdr, hdr->size + sizeof(PmrHeader),
-                         alignof(PmrHeader));
+    if (hdr->res) {
+      hdr->res->deallocate(hdr, hdr->size + sizeof(PmrHeader),
+                           alignof(PmrHeader));
+    } else {
+      __wrap_free(hdr);
+    }
     return;
   }
 #endif
@@ -107,6 +112,9 @@ void *RaxPmrRealloc(void *ptr, size_t size) {
       return nullptr;
     }
     void *new_ptr = RaxPmrMalloc(size);
+    if (!new_ptr) {
+      return nullptr;
+    }
     size_t copy_size = std::min(hdr->size, size);
     std::memcpy(new_ptr, ptr, copy_size);
     RaxPmrFree(ptr);

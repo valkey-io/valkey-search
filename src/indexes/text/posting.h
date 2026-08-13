@@ -70,7 +70,7 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
-struct PostingsHeader {
+struct alignas(alignof(std::max_align_t)) PostingsHeader {
   std::pmr::memory_resource *res;
 };
 

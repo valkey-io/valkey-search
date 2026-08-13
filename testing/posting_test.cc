@@ -412,6 +412,9 @@ TEST_F(PostingTest, InvasivePtrPostingsPmrAllocation) {
   {
     RAX_PMR_GUARD(&resource);
     auto postings = InvasivePtr<Postings>::Make();
+    EXPECT_EQ(
+        reinterpret_cast<uintptr_t>(&(*postings)) % alignof(std::max_align_t),
+        0);
     EXPECT_EQ(resource.alloc_count, 1);
     EXPECT_EQ(resource.dealloc_count, 0);
   }

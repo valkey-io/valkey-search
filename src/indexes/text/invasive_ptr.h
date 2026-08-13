@@ -20,7 +20,7 @@ namespace valkey_search::indexes::text {
 
 namespace detail {
 
-struct InvasivePtrHeader {
+struct alignas(alignof(std::max_align_t)) InvasivePtrHeader {
   std::pmr::memory_resource *res = nullptr;
 };
 
@@ -61,8 +61,8 @@ struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
 #endif
   }
 
-  std::atomic<uint32_t> refcount_ = 1;
-  T data_;
+  alignas(alignof(std::max_align_t)) std::atomic<uint32_t> refcount_ = 1;
+  alignas(alignof(std::max_align_t)) T data_;
 };
 }  // namespace detail
 

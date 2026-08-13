@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <vector>
@@ -172,6 +173,7 @@ class Tag : public IndexBase {
   InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
   KeySet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
+  std::unique_ptr<std::pmr::memory_resource> rax_memory_resource_;
   const char separator_;
   const bool case_sensitive_;
   vs_rax *tree_ ABSL_GUARDED_BY(index_mutex_);

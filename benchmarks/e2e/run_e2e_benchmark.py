@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-End-to-End Benchmark for Valkey-Search Text Index.
-Benchmarks Ingestion Speed, Search QPS, Latency, and Memory Footprint across
-various reader/writer and client thread counts.
+End-to-End Benchmark for Valkey-Search Text & Tag Index.
+Evaluates Ingestion Speed, Search QPS, Latency, and Memory Footprint across
+various reader/writer and client thread counts comparing optimized_rax vs main.
 """
 
 import os
@@ -15,6 +15,7 @@ import glob
 import statistics
 import csv
 import redis
+import json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
@@ -43,7 +44,13 @@ def parse_info_memory(client):
     info = client.info("memory")
     return info
 
-def start_server(server_bin, module_bin, reader_threads, writer_threads, port=6399):
+def find_free_port():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+def start_server(server_bin, module_bin, reader_threads, writer_threads, port):
     conf_path = f"/tmp/valkey_e2e_{port}.conf"
     pid_path = f"/tmp/valkey_e2e_{port}.pid"
     log_path = f"/tmp/valkey_e2e_{port}.log"
@@ -52,12 +59,12 @@ def start_server(server_bin, module_bin, reader_threads, writer_threads, port=63
     try:
         tmp_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=2)
         tmp_client.shutdown(save=False)
-        time.sleep(0.5)
+        time.sleep(0.3)
     except Exception:
         pass
     try:
         subprocess.run(["pkill", "-9", "-f", f"valkey_e2e_{port}.conf"], check=False)
-        time.sleep(0.5)
+        time.sleep(0.3)
     except Exception:
         pass
 
@@ -75,7 +82,7 @@ loadmodule {module_bin} --reader-threads {reader_threads} --writer-threads {writ
     
     # Wait for server to be responsive
     client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=10)
-    for _ in range(50):
+    for _ in range(60):
         try:
             if client.ping():
                 return client, conf_path
@@ -102,9 +109,14 @@ def load_dataset(data_dir):
     docs = []
     with open(db_file, "r", encoding="utf-8") as f:
         for i, line in enumerate(f):
-            text = line.strip()
-            if text:
-                docs.append((f"doc:{i:05d}", f"Document Title {i:05d}", text))
+            line = line.strip()
+            if not line:
+                continue
+            if "\t" in line:
+                tags, body = line.split("\t", 1)
+            else:
+                tags, body = "default_tag", line
+            docs.append((f"doc:{i:05d}", f"Document Title {i:05d}", tags, body))
     print(f"Loaded {len(docs)} documents.")
     return docs
 
@@ -115,26 +127,23 @@ def load_queries(queries_file):
         queries = [line.strip() for line in f if line.strip()]
     return queries
 
-def find_free_port():
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
 def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads, port=None):
     if port is None:
         port = find_free_port()
     print(f"\n========================================================")
-    print(f"Running E2E Benchmark with {num_threads} Reader/Writer & Client Threads (port {port})")
+    print(f"Running E2E Benchmark with {num_threads} Reader/Writer Threads (5 clients/thread = {num_threads * 5} clients, port {port})")
     print(f"========================================================")
     
     client, conf_path = start_server(server_bin, module_bin, num_threads, num_threads, port)
     
-    # 1. Create Index
-    print("Creating text index 'bench_idx'...")
-    client.execute_command("FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "SCHEMA", "title", "TEXT", "body", "TEXT")
+    # 1. Create Index with both TEXT and TAG fields
+    print("Creating text & tag index 'bench_idx'...")
+    client.execute_command(
+        "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:",
+        "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
+    )
     
-    # 2. Ingestion Benchmark
+    # 2. Ingestion Benchmark (5 clients per server thread)
     CLIENTS_PER_THREAD = 5
     total_clients = num_threads * CLIENTS_PER_THREAD
     num_docs = len(docs)
@@ -146,16 +155,16 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     def ingest_worker(client_idx, doc_subset):
         thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
         local_lats = []
-        for key, title, body in doc_subset:
+        for key, title, tags, body in doc_subset:
             t0 = time.perf_counter()
-            thread_client.hset(key, mapping={"title": title, "body": body})
+            thread_client.hset(key, mapping={"title": title, "tags": tags, "body": body})
             t1 = time.perf_counter()
             local_lats.append((t1 - t0) * 1000.0)  # ms
         with lat_lock:
             ingest_latencies.extend(local_lats)
 
     threads = []
-    print(f"Ingesting {num_docs} documents with {num_threads} threads ({total_clients} clients total, 5 per thread)...")
+    print(f"Ingesting {num_docs} documents with {num_threads} threads ({total_clients} clients total)...")
     ingest_start = time.perf_counter()
     for c_idx in range(total_clients):
         start_idx = c_idx * chunk_size
@@ -180,8 +189,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
 
     # 3. Wait for indexing to complete & Measure Memory
-    # Wait until FT.INFO reports num_docs == 10000
-    for _ in range(100):
+    for _ in range(120):
         try:
             info_idx = client.execute_command("FT.INFO", "bench_idx")
             info_dict = {}
@@ -196,7 +204,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
             pass
         time.sleep(0.2)
         
-    time.sleep(0.5)  # brief settle time
+    time.sleep(0.5)  # settle time
     
     search_info = parse_info_search(client)
     mem_info = parse_info_memory(client)
@@ -210,52 +218,45 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     print(f"  - Search Used Memory: {search_mem_human} ({search_mem_bytes:,} bytes)")
     print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
 
-    # 4. Search Benchmark
+    # 4. Search Benchmark (5 clients per thread, exact + prefix* + tag queries)
     TOTAL_SEARCH_QUERIES = 20000
-    memtier_res = run_memtier_search(port, num_threads, queries, total_requests=TOTAL_SEARCH_QUERIES)
-    if memtier_res is not None:
-        search_qps, search_p50, search_p99 = memtier_res
-        search_p95 = (search_p50 + search_p99) / 2.0  # approximate p95
-        print(f"Memtier Search completed | QPS: {search_qps:,.1f} queries/s | Latency p50={search_p50:.3f}ms, p99={search_p99:.3f}ms")
-    else:
-        # Fallback to Python client
-        queries_per_client = TOTAL_SEARCH_QUERIES // total_clients
-        search_latencies = []
-        search_lat_lock = threading.Lock()
-        
-        def search_worker(client_idx, count):
-            thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
-            local_lats = []
-            num_q = len(queries)
-            for i in range(count):
-                q = queries[(client_idx * count + i) % num_q]
-                t0 = time.perf_counter()
-                thread_client.execute_command("FT.SEARCH", "bench_idx", q, "LIMIT", "0", "10")
-                t1 = time.perf_counter()
-                local_lats.append((t1 - t0) * 1000.0)  # ms
-            with search_lat_lock:
-                search_latencies.extend(local_lats)
+    queries_per_client = TOTAL_SEARCH_QUERIES // total_clients
+    search_latencies = []
+    search_lat_lock = threading.Lock()
+    
+    def search_worker(client_idx, count):
+        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
+        local_lats = []
+        num_q = len(queries)
+        for i in range(count):
+            q = queries[(client_idx * count + i) % num_q]
+            t0 = time.perf_counter()
+            thread_client.execute_command("FT.SEARCH", "bench_idx", q, "LIMIT", "0", "10")
+            t1 = time.perf_counter()
+            local_lats.append((t1 - t0) * 1000.0)  # ms
+        with search_lat_lock:
+            search_latencies.extend(local_lats)
 
-        search_threads = []
-        print(f"Executing {TOTAL_SEARCH_QUERIES} search queries across {total_clients} clients (5 per thread)...")
-        search_start = time.perf_counter()
-        for c_idx in range(total_clients):
-            t = threading.Thread(target=search_worker, args=(c_idx, queries_per_client))
-            search_threads.append(t)
-            t.start()
-            
-        for t in search_threads:
-            t.join()
-        search_end = time.perf_counter()
-        search_duration = search_end - search_start
-        total_searches_done = len(search_latencies)
-        search_qps = total_searches_done / search_duration if search_duration > 0 else 0.0
+    search_threads = []
+    print(f"Executing {TOTAL_SEARCH_QUERIES} search queries across {total_clients} clients (5 per thread)...")
+    search_start = time.perf_counter()
+    for c_idx in range(total_clients):
+        t = threading.Thread(target=search_worker, args=(c_idx, queries_per_client))
+        search_threads.append(t)
+        t.start()
         
-        search_p50 = statistics.median(search_latencies) if search_latencies else 0.0
-        search_p95 = statistics.quantiles(search_latencies, n=20)[18] if len(search_latencies) >= 20 else search_p50
-        search_p99 = statistics.quantiles(search_latencies, n=100)[98] if len(search_latencies) >= 100 else search_p95
+    for t in search_threads:
+        t.join()
+    search_end = time.perf_counter()
+    search_duration = search_end - search_start
+    total_searches_done = len(search_latencies)
+    search_qps = total_searches_done / search_duration if search_duration > 0 else 0.0
+    
+    search_p50 = statistics.median(search_latencies) if search_latencies else 0.0
+    search_p95 = statistics.quantiles(search_latencies, n=20)[18] if len(search_latencies) >= 20 else search_p50
+    search_p99 = statistics.quantiles(search_latencies, n=100)[98] if len(search_latencies) >= 100 else search_p95
 
-        print(f"Search completed in {search_duration:.2f}s | QPS: {search_qps:,.1f} queries/s | Latency p50={search_p50:.2f}ms, p95={search_p95:.2f}ms, p99={search_p99:.2f}ms")
+    print(f"Search completed in {search_duration:.2f}s | QPS: {search_qps:,.1f} queries/s | Latency p50={search_p50:.2f}ms, p95={search_p95:.2f}ms, p99={search_p99:.2f}ms")
 
     stop_server(client, conf_path)
     
@@ -277,57 +278,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         "search_latency_p99_ms": round(search_p99, 3),
     }
 
-def run_memtier_search(port, num_threads, queries, total_requests=20000):
-    json_path = os.path.join(PROJECT_ROOT, f"memtier_search_{port}.json")
-    if os.path.exists(json_path):
-        try:
-            os.remove(json_path)
-        except Exception:
-            pass
-
-    memtier_bin = "/usr/bin/memtier_benchmark"
-    if os.path.exists(memtier_bin):
-        runner_prefix = [memtier_bin]
-    else:
-        runner_prefix = [os.path.join(PROJECT_ROOT, ".devcontainer/run_in_docker.sh"), memtier_bin]
-
-    selected_queries = queries[:30]
-    requests_per_client = max(200, total_requests // (num_threads * 5))
-    cmd_args = runner_prefix + [
-        "-s", "127.0.0.1",
-        "-p", str(port),
-        f"--threads={num_threads}",
-        "--clients=5",
-        f"--requests={requests_per_client}",
-        f"--json-out-file={json_path}",
-        "--hide-histogram",
-    ]
-    for q in selected_queries:
-        cmd_args.append(f'--command=FT.SEARCH bench_idx "{q}" LIMIT 0 10')
-
-    print(f"Executing memtier search load ({num_threads} threads, 5 clients/thread = {num_threads * 5} clients, {requests_per_client} reqs/client)...")
-    res = subprocess.run(cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if res.returncode != 0:
-        print(f"Warning: memtier failed with code {res.returncode}: {res.stderr}")
-        return None
-
-    try:
-        import json
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if os.path.exists(json_path):
-            os.remove(json_path)
-        totals = data["ALL STATS"]["Totals"]
-        qps = float(totals["Ops/sec"])
-        p50 = float(totals["p50 Latency"])
-        p99 = float(totals["p99 Latency"])
-        return qps, p50, p99
-    except Exception as e:
-        print(f"Failed to parse memtier json: {e}")
-        return None
-
 def write_stats_csv(csv_path, all_results, append=False):
-    import json
     raw_rows = []
     if os.path.exists(csv_path) and append:
         with open(csv_path, "r", encoding="utf-8") as f:
@@ -432,7 +383,7 @@ def write_stats_csv(csv_path, all_results, append=False):
                 bwriter.writerow(br)
 
 def main():
-    parser = argparse.ArgumentParser(description="Valkey-Search E2E Text Index Benchmark")
+    parser = argparse.ArgumentParser(description="Valkey-Search E2E Text & Tag Index Benchmark")
     parser.add_argument("--branch-name", default="current", help="Branch or label identifier for results")
     parser.add_argument("--server", default=DEFAULT_SERVER, help="Path to valkey-server binary")
     parser.add_argument("--module", default=DEFAULT_MODULE, help="Path to libsearch.so")

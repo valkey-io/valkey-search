@@ -1,16 +1,5 @@
 branch,threads,ingest_throughput_docs_sec,ingest_tokens_sec,ingest_duration_sec,ingest_latency_p50_ms,ingest_latency_p95_ms,ingest_latency_p99_ms,search_used_memory_bytes,search_used_memory_mb,total_used_memory_mb,used_memory_rss_mb,search_qps,search_latency_p50_ms,search_latency_p95_ms,search_latency_p99_ms
-optimized_rax,1,675.7,337860.4,14.799,1.465,1.694,2.174,589708072,562.39,597.42,646.69,757.6,0.349,7.068,9.285
-optimized_rax,4,2255.9,1127941.9,4.433,1.676,2.293,3.437,590572552,563.21,598.35,647.94,2732.4,0.445,6.945,9.13
-optimized_rax,8,3409.0,1704497.4,2.933,2.05,3.85,6.847,591187176,563.8,598.94,650.16,4699.6,0.723,7.052,9.6
-optimized_rax,16,4227.6,2113818.8,2.365,2.982,7.738,16.007,592789416,565.33,600.52,657.96,5016.8,2.108,8.597,11.842
-fixed_size_allocator_opt,1,663.8,331875.3,15.066,1.506,1.704,1.929,590360488,563.01,598.05,647.92,738.1,0.391,7.094,9.322
-fixed_size_allocator_opt,4,2301.2,1150613.1,4.346,1.639,2.236,3.473,590098440,562.76,597.9,646.41,2722.6,0.454,6.893,9.078
-fixed_size_allocator_opt,8,3431.4,1715682.7,2.914,2.062,3.528,6.537,590900968,563.53,598.66,651.22,4721.7,0.694,7.137,10.321
-fixed_size_allocator_opt,16,4187.9,2093934.7,2.388,3.034,7.368,16.017,592794536,565.33,600.52,655.3,5068.3,2.098,8.488,11.502
-
-# Calculated Percentage Benefits (optimized_rax vs fixed_size_allocator_opt)
-threads,ingest_throughput_benefit_pct,ingest_tokens_sec_benefit_pct,ingest_duration_reduction_pct,ingest_latency_p50_reduction_pct,search_used_memory_savings_pct,total_used_memory_savings_pct,used_memory_rss_savings_pct,search_qps_benefit_pct,search_latency_p50_reduction_pct
-1,+1.79%,+1.80%,+1.77%,+2.72%,+0.11%,+0.11%,+0.19%,+2.64%,+10.74%
-4,-1.97%,-1.97%,-2.00%,-2.26%,-0.08%,-0.08%,-0.24%,+0.36%,+1.98%
-8,-0.65%,-0.65%,-0.65%,+0.58%,-0.05%,-0.05%,+0.16%,-0.47%,-4.18%
-16,+0.95%,+0.95%,+0.96%,+1.71%,+0.00%,0.00%,-0.41%,-1.02%,-0.48%
+optimized_rax,1,290.3,435384.0,34.452,17.405,18.72,20.347,1637393576,1561.54,1663.32,1740.35,295.9,15.225,40.206,51.881
+optimized_rax,4,949.6,1424455.0,10.53,20.138,25.353,40.44,1641650184,1565.6,1667.38,1754.23,1230.6,14.9,30.998,37.993
+optimized_rax,8,1364.9,2047299.9,7.327,26.062,45.087,84.062,1645661992,1569.43,1671.2,1763.8,2477.5,14.535,29.377,35.465
+optimized_rax,16,1791.0,2686534.0,5.583,34.26,94.713,205.409,1647369256,1571.05,1672.83,1776.67,3488.1,19.365,48.0,64.034

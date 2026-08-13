@@ -11,9 +11,9 @@ import random
 import math
 from collections import defaultdict
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-DB_FILE = os.path.join(DATA_DIR, "documents.txt")
-QUERIES_FILE = os.path.join(os.path.dirname(__file__), "queries.txt")
+DATASET_DIR = os.path.join(os.path.dirname(__file__), "dataset")
+DB_FILE = os.path.join(DATASET_DIR, "documents.txt")
+QUERIES_FILE = os.path.join(DATASET_DIR, "queries.txt")
 NUM_DOCS = 30000
 WORDS_PER_DOC = 500
 RANDOM_SEED = 42

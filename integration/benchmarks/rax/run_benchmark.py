@@ -19,8 +19,8 @@ import json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../.."))
-DATA_DIR = os.path.join(SCRIPT_DIR, "data")
-QUERIES_FILE = os.path.join(SCRIPT_DIR, "queries.txt")
+DATASET_DIR = os.path.join(SCRIPT_DIR, "dataset")
+QUERIES_FILE = os.path.join(DATASET_DIR, "queries.txt")
 
 DEFAULT_SERVER = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-server")
 DEFAULT_MODULE = os.path.join(PROJECT_ROOT, ".build-release/libsearch.so")
@@ -438,7 +438,7 @@ def main():
     if not os.path.exists(args.module):
         raise FileNotFoundError(f"libsearch.so not found at {args.module}")
 
-    docs = load_dataset(DATA_DIR)
+    docs = load_dataset(DATASET_DIR)
     queries = load_queries(QUERIES_FILE)
 
     all_results = []

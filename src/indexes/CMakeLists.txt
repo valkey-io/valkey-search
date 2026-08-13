@@ -80,6 +80,19 @@ target_link_libraries(tag PUBLIC vmsdklib)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
 target_link_libraries(tag PUBLIC rax_lib)
 
+set(SRCS_GEOSHAPE ${CMAKE_CURRENT_LIST_DIR}/geoshape.cc
+                  ${CMAKE_CURRENT_LIST_DIR}/geoshape.h
+                  ${CMAKE_CURRENT_LIST_DIR}/geoshape_rtree.cc
+                  ${CMAKE_CURRENT_LIST_DIR}/geoshape_rtree.h)
+
+valkey_search_add_static_library(geoshape "${SRCS_GEOSHAPE}")
+target_include_directories(geoshape PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(geoshape PUBLIC index_base)
+target_link_libraries(geoshape PUBLIC rdb_serialization)
+target_link_libraries(geoshape PUBLIC string_interning)
+target_link_libraries(geoshape PUBLIC valkey_module)
+target_link_libraries(geoshape PUBLIC vmsdklib)
+
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)
 

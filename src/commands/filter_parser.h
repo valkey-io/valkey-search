@@ -43,6 +43,7 @@ enum class QueryOperations : uint64_t {
   kContainsTextPrefix = 1 << 9,
   kContainsTextSuffix = 1 << 10,
   kContainsTextFuzzy = 1 << 11,
+  kContainsGeoShape = 1 << 12,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -66,8 +67,11 @@ struct FilterParseResults {
 };
 class FilterParser {
  public:
+  using ParamsMap =
+      absl::flat_hash_map<absl::string_view, std::pair<int, absl::string_view>>;
+
   FilterParser(const IndexSchema& index_schema, absl::string_view expression,
-               const TextParsingOptions& options);
+               const TextParsingOptions& options, ParamsMap* params = nullptr);
 
   absl::StatusOr<FilterParseResults> Parse();
 
@@ -82,6 +86,7 @@ class FilterParser {
   absl::string_view expression_;
   size_t pos_{0};
   size_t node_count_{0};
+  ParamsMap* params_{nullptr};
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 
@@ -120,6 +125,8 @@ class FilterParser {
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
+  absl::StatusOr<std::unique_ptr<query::GeoShapePredicate>>
+  ParseGeoShapePredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(
       const std::string& field_name);
   void SkipWhitespace();

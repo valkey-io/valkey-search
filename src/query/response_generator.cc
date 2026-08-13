@@ -20,6 +20,7 @@
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_search_parser.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
@@ -142,6 +143,43 @@ class PredicateEvaluator : public query::Evaluator {
       return EvaluationResult(false);
     }
     return predicate.Evaluate(*text_index_, target_key_, require_positions);
+  }
+
+  EvaluationResult EvaluateGeoShape(
+      const query::GeoShapePredicate &predicate) override {
+    auto identifier = predicate.GetRetainedIdentifier();
+    auto it = records_.find(vmsdk::ToStringView(identifier.get()));
+    if (it == records_.end()) {
+      return EvaluationResult(false);
+    }
+    // Parse the stored WKT and evaluate the spatial predicate
+    auto geom = indexes::ParseWKT(vmsdk::ToStringView(it->second.value.get()));
+    if (!geom.ok()) {
+      return EvaluationResult(false);
+    }
+    indexes::Geometry query_geom;
+    const auto &qs = predicate.GetQueryShape();
+    if (std::holds_alternative<indexes::GeoPoint>(qs)) {
+      query_geom = std::get<indexes::GeoPoint>(qs);
+    } else {
+      query_geom = std::get<indexes::GeoPolygon>(qs);
+    }
+    bool matches = false;
+    switch (predicate.GetOp()) {
+      case indexes::SpatialOp::kWithin:
+        matches = indexes::GeometryWithin(*geom, query_geom);
+        break;
+      case indexes::SpatialOp::kContains:
+        matches = indexes::GeometryContains(*geom, query_geom);
+        break;
+      case indexes::SpatialOp::kIntersects:
+        matches = indexes::GeometryIntersects(*geom, query_geom);
+        break;
+      case indexes::SpatialOp::kDisjoint:
+        matches = !indexes::GeometryIntersects(*geom, query_geom);
+        break;
+    }
+    return EvaluationResult(matches);
   }
 
  private:

@@ -5,6 +5,7 @@ valkey_search_add_static_library(predicate "${SRCS_PREDICATE}")
 target_include_directories(predicate PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate PUBLIC numeric)
 target_link_libraries(predicate PUBLIC tag)
+target_link_libraries(predicate PUBLIC geoshape)
 target_link_libraries(predicate PUBLIC vmsdklib)
 
 set(SRCS_PREDICATE_HEADER ${CMAKE_CURRENT_LIST_DIR}/predicate.h)

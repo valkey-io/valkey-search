@@ -120,6 +120,7 @@ target_link_libraries(index_schema PUBLIC vector_externalizer)
 target_link_libraries(index_schema PUBLIC index_base)
 target_link_libraries(index_schema PUBLIC numeric)
 target_link_libraries(index_schema PUBLIC tag)
+target_link_libraries(index_schema PUBLIC geoshape)
 target_link_libraries(index_schema PUBLIC text)
 
 target_link_libraries(index_schema PUBLIC vector_base)

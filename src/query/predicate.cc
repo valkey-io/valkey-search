@@ -16,6 +16,7 @@
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/filter_parser.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -538,6 +539,21 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
   }
   // Return the OR proximity iterator for potential nested scenarios.
   return {true, std::move(or_proximity_iterator)};
+}
+
+GeoShapePredicate::GeoShapePredicate(
+    const indexes::GeoShape *index, absl::string_view alias,
+    absl::string_view identifier, indexes::SpatialOp op,
+    std::variant<indexes::GeoPoint, indexes::GeoPolygon> query_shape)
+    : Predicate(PredicateType::kGeoShape),
+      index_(index),
+      alias_(alias),
+      identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
+      op_(op),
+      query_shape_(std::move(query_shape)) {}
+
+EvaluationResult GeoShapePredicate::Evaluate(Evaluator &evaluator) const {
+  return evaluator.EvaluateGeoShape(*this);
 }
 
 }  // namespace valkey_search::query

@@ -23,6 +23,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -189,10 +190,11 @@ std::string PrintPredicateTree(const query::Predicate* predicate, int indent) {
 
 FilterParser::FilterParser(const IndexSchema& index_schema,
                            absl::string_view expression,
-                           const TextParsingOptions& options)
+                           const TextParsingOptions& options, ParamsMap* params)
     : index_schema_(index_schema),
       expression_(absl::StripAsciiWhitespace(expression)),
       options_(options),
+      params_(params),
       query_operations_{QueryOperations::kNone} {}
 
 bool FilterParser::Match(char expected, bool skip_whitespace) {
@@ -373,6 +375,88 @@ FilterParser::ParseTagPredicate(const std::string& attribute_alias) {
   query_operations_ |= QueryOperations::kContainsTag;
   return std::make_unique<query::TagPredicate>(
       tag_index, attribute_alias, identifier, tag_string, parsed_tags);
+}
+
+absl::StatusOr<std::unique_ptr<query::GeoShapePredicate>>
+FilterParser::ParseGeoShapePredicate(const std::string& attribute_alias) {
+  auto index = index_schema_.GetIndex(attribute_alias);
+  if (!index.ok() ||
+      index.value()->GetIndexerType() != indexes::IndexerType::kGeoShape) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "`", attribute_alias, "` is not indexed as a GEOSHAPE field"));
+  }
+  auto identifier = index_schema_.GetIdentifier(attribute_alias).value();
+  filter_identifiers_.insert(identifier);
+
+  // Parse spatial operator
+  SkipWhitespace();
+  indexes::SpatialOp op;
+  if (MatchInsensitive("WITHIN")) {
+    op = indexes::SpatialOp::kWithin;
+  } else if (MatchInsensitive("CONTAINS")) {
+    op = indexes::SpatialOp::kContains;
+  } else if (MatchInsensitive("INTERSECTS")) {
+    op = indexes::SpatialOp::kIntersects;
+  } else if (MatchInsensitive("DISJOINT")) {
+    op = indexes::SpatialOp::kDisjoint;
+  } else {
+    return absl::InvalidArgumentError(
+        "Expected spatial operator (WITHIN, CONTAINS, INTERSECTS, DISJOINT)");
+  }
+
+  SkipWhitespace();
+  // Parse the WKT shape - must be a $param reference
+  std::string wkt_str;
+  if (!IsEnd() && Peek() == '$') {
+    pos_++;  // skip $
+    size_t start = pos_;
+    while (!IsEnd() && Peek() != ']' && Peek() != ' ') {
+      pos_++;
+    }
+    auto param_name = expression_.substr(start, pos_ - start);
+    if (!params_) {
+      return absl::InvalidArgumentError(
+          "GEOSHAPE query requires PARAMS for shape value");
+    }
+    auto it = params_->find(param_name);
+    if (it == params_->end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Parameter `", param_name, "` not found"));
+    }
+    it->second.first++;  // bump ref count
+    wkt_str = std::string(it->second.second);
+  } else {
+    return absl::InvalidArgumentError(
+        "GEOSHAPE query requires a $parameter reference for the shape value");
+  }
+
+  SkipWhitespace();
+  if (!Match(']')) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Expected ']' in GEOSHAPE query. Position: ", pos_));
+  }
+
+  // Parse the WKT
+  auto geom = indexes::ParseWKT(wkt_str);
+  if (!geom.ok()) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid WKT in GEOSHAPE query: ", geom.status().message()));
+  }
+
+  auto geoshape_index =
+      dynamic_cast<const indexes::GeoShape*>(index.value().get());
+  query_operations_ |= QueryOperations::kContainsGeoShape;
+
+  // Convert Geometry variant to the predicate's variant type
+  std::variant<indexes::GeoPoint, indexes::GeoPolygon> query_shape;
+  if (std::holds_alternative<indexes::GeoPoint>(*geom)) {
+    query_shape = std::get<indexes::GeoPoint>(*geom);
+  } else {
+    query_shape = std::get<indexes::GeoPolygon>(*geom);
+  }
+
+  return std::make_unique<query::GeoShapePredicate>(
+      geoshape_index, attribute_alias, identifier, op, std::move(query_shape));
 }
 
 absl::Status UnexpectedChar(absl::string_view expression, size_t pos) {
@@ -1013,7 +1097,27 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         field_name = parsed_field;
         if (Match('[')) {
           node_count_++;
-          VMSDK_ASSIGN_OR_RETURN(predicate, ParseNumericPredicate(*field_name));
+          // Determine if this is a GEOSHAPE or NUMERIC predicate
+          // GEOSHAPE predicates start with a spatial operator keyword
+          SkipWhitespace();
+          size_t saved_pos = pos_;
+          bool is_geoshape = false;
+          if (!IsEnd()) {
+            // Check if the content starts with a spatial operator
+            if (MatchInsensitive("WITHIN") || MatchInsensitive("CONTAINS") ||
+                MatchInsensitive("INTERSECTS") ||
+                MatchInsensitive("DISJOINT")) {
+              is_geoshape = true;
+            }
+          }
+          pos_ = saved_pos;  // Reset position for the actual parser
+          if (is_geoshape) {
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseGeoShapePredicate(*field_name));
+          } else {
+            VMSDK_ASSIGN_OR_RETURN(predicate,
+                                   ParseNumericPredicate(*field_name));
+          }
           non_text = true;
         } else if (Match('{')) {
           node_count_++;

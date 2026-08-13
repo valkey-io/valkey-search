@@ -36,6 +36,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/geoshape.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -107,6 +108,21 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
     return query::EvaluationResult(false);
   }
   return predicate.Evaluate(*text_index_, *key_, require_positions);
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateGeoShape(
+    const query::GeoShapePredicate &predicate) {
+  CHECK(key_);
+  indexes::Geometry query_geom;
+  const auto &qs = predicate.GetQueryShape();
+  if (std::holds_alternative<indexes::GeoPoint>(qs)) {
+    query_geom = std::get<indexes::GeoPoint>(qs);
+  } else {
+    query_geom = std::get<indexes::GeoPolygon>(qs);
+  }
+  bool matches = predicate.GetIndex()->EvaluatePredicate(
+      *key_, predicate.GetOp(), query_geom);
+  return query::EvaluationResult(matches);
 }
 
 template <typename T>

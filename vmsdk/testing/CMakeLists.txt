@@ -1,3 +1,5 @@
+include(object_library_helper)
+
 add_library(testing_common INTERFACE)
 target_link_libraries(testing_common INTERFACE vmsdk_testing)
 if (VALKEY_VENDORED_DEPS)
@@ -91,6 +93,15 @@ add_executable(cluster_map_test ${SRCS_CLUSTER_MAP_TEST})
 target_include_directories(cluster_map_test PUBLIC .)
 target_link_libraries(cluster_map_test PUBLIC testing_common)
 gtest_discover_tests(cluster_map_test)
+
+set(SRCS_LATENCY_SAMPLER_TEST latency_sampler_test.cc)
+add_executable(latency_sampler_test ${SRCS_LATENCY_SAMPLER_TEST})
+target_include_directories(latency_sampler_test PUBLIC .)
+target_link_libraries(latency_sampler_test PUBLIC testing_common)
+if (VALKEY_VENDORED_DEPS)
+    target_link_libraries(latency_sampler_test PUBLIC hdrhistogram_c)
+endif ()
+gtest_discover_tests(latency_sampler_test)
 
 if(NOT SAN_BUILD)
     set(SRCS_SHARDED_ATOMIC_BENCH sharded_atomic_benchmark.cc)

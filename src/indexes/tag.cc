@@ -77,9 +77,7 @@ Tag::Tag(const data_model::TagIndex &tag_index_proto)
   tree_ = RaxNew();
 }
 
-Tag::~Tag() {
-  RaxFreeWithCallback(tree_, &TagFreeCallback);
-}
+Tag::~Tag() { RaxFreeWithCallback(tree_, &TagFreeCallback); }
 
 std::string Tag::Normalize(absl::string_view tag) const {
   if (case_sensitive_) {
@@ -95,16 +93,16 @@ std::string Tag::Normalize(absl::string_view tag) const {
 void Tag::IndexTagForKey(absl::string_view tag, const InternedStringPtr &key) {
   std::string norm = Normalize(tag);
   MutateCtx ctx{&key, /*insert=*/true};
-  RaxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()),
-               norm.size(), &TagMutateTrampoline, &ctx, kAdd);
+  RaxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()), norm.size(),
+            &TagMutateTrampoline, &ctx, kAdd);
 }
 
 void Tag::DeindexTagForKey(absl::string_view tag,
                            const InternedStringPtr &key) {
   std::string norm = Normalize(tag);
   MutateCtx ctx{&key, /*insert=*/false};
-  RaxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()),
-               norm.size(), &TagMutateTrampoline, &ctx, kSubtract);
+  RaxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()), norm.size(),
+            &TagMutateTrampoline, &ctx, kSubtract);
 }
 
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,

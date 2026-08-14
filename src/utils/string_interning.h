@@ -110,36 +110,25 @@ class InternedStringPtr {
  public:
   InternedStringPtr() = default;
 
-  static InternedStringPtr MakeSSO(absl::string_view str) {
-    CHECK_LE(str.size(), 7u);
-    InternedStringPtr sso_ptr;
-    sso_ptr.sso_.tag_and_len = static_cast<uint8_t>((str.size() << 1) | 1);
-    std::memcpy(sso_ptr.sso_.data, str.data(), str.size());
-    std::memset(sso_ptr.sso_.data + str.size(), 0, 7 - str.size());
-    return sso_ptr;
-  }
+  InternedString *Impl() const { return impl_; }
 
-  bool IsSSO() const { return (sso_.tag_and_len & 1) != 0; }
-
-  InternedString *Impl() const { return IsSSO() ? nullptr : impl_; }
-
-  InternedStringPtr(const InternedStringPtr &other) : repr_(other.repr_) {
-    if (!IsSSO() && impl_) {
+  InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
+    if (impl_) {
       impl_->IncrementRefCount();
     }
   }
 
-  InternedStringPtr(InternedStringPtr &&other) noexcept : repr_(other.repr_) {
+  InternedStringPtr(InternedStringPtr &&other) noexcept : impl_(other.impl_) {
     other.impl_ = nullptr;
   }
 
   InternedStringPtr &operator=(const InternedStringPtr &other) {
     if (this != &other) {
-      if (!IsSSO() && impl_) {
+      if (impl_) {
         impl_->DecrementRefCount();
       }
-      repr_ = other.repr_;
-      if (!IsSSO() && impl_) {
+      impl_ = other.impl_;
+      if (impl_) {
         impl_->IncrementRefCount();
       }
     }
@@ -148,10 +137,10 @@ class InternedStringPtr {
 
   InternedStringPtr &operator=(InternedStringPtr &&other) noexcept {
     if (this != &other) {
-      if (!IsSSO() && impl_) {
+      if (impl_) {
         impl_->DecrementRefCount();
       }
-      repr_ = other.repr_;
+      impl_ = other.impl_;
       other.impl_ = nullptr;
     }
     return *this;
@@ -159,7 +148,7 @@ class InternedStringPtr {
 
   InternedStringPtr &operator=(void *other) noexcept {
     CHECK(!other);  // Only nullptr is allowed
-    if (!IsSSO() && impl_) {
+    if (impl_) {
       impl_->DecrementRefCount();
     }
     impl_ = nullptr;
@@ -167,17 +156,13 @@ class InternedStringPtr {
   }
 
   ~InternedStringPtr() {
-    if (!IsSSO() && impl_) {
+    if (impl_) {
       impl_->DecrementRefCount();
     }
     impl_ = nullptr;
   }
 
   absl::string_view Str() const {
-    if (IsSSO()) {
-      size_t len = static_cast<size_t>((sso_.tag_and_len >> 1) & 0x0F);
-      return {sso_.data, len};
-    }
     if (impl_) {
       return impl_->Str();
     }
@@ -188,42 +173,32 @@ class InternedStringPtr {
 
   const InternedStringPtr *operator->() const { return this; }
   const InternedStringPtr &operator*() const { return *this; }
-  operator bool() const { return IsSSO() || impl_ != nullptr; }
+  operator bool() const { return impl_ != nullptr; }
 
   size_t RefCount() const {
-    if (IsSSO()) {
-      return 1;
-    }
     return impl_ ? impl_->RefCount() : 0;
   }
 
-  const InternedString *RawPtr() const { return Impl(); }
+  const InternedString *RawPtr() const { return impl_; }
 
   size_t Hash() const { return absl::HashOf(Str()); }
 
   bool operator==(const InternedStringPtr &other) const {
-    if (repr_ == other.repr_) {
+    if (impl_ == other.impl_) {
       return true;
     }
     return Str() == other.Str();
   }
 
   auto operator<=>(const InternedStringPtr &other) const {
-    if (repr_ == other.repr_) {
+    if (impl_ == other.impl_) {
       return std::strong_ordering::equal;
     }
     return Str() <=> other.Str();
   }
 
  private:
-  union {
-    InternedString *impl_{nullptr};
-    struct {
-      uint8_t tag_and_len;  // bit 0 = 1 (inline flag), bits 1..4 = len (0..7)
-      char data[7];
-    } sso_;
-    uint64_t repr_;
-  };
+  InternedString *impl_{nullptr};
 
   explicit InternedStringPtr(InternedString *impl) : impl_(impl) {}
 
@@ -234,9 +209,8 @@ class InternedStringPtr {
 class BorrowedInternedStringPtr {
  public:
   BorrowedInternedStringPtr() = default;
-  explicit BorrowedInternedStringPtr(const InternedStringPtr &owned) {
-    std::memcpy(&repr_, &owned, sizeof(uint64_t));
-  }
+  explicit BorrowedInternedStringPtr(const InternedStringPtr &owned)
+      : impl_(owned.RawPtr()) {}
 
   BorrowedInternedStringPtr(const BorrowedInternedStringPtr &) = default;
   BorrowedInternedStringPtr &operator=(const BorrowedInternedStringPtr &) =
@@ -244,32 +218,32 @@ class BorrowedInternedStringPtr {
   ~BorrowedInternedStringPtr() = default;
 
   const InternedStringPtr &AsOwned() const {
-    return *reinterpret_cast<const InternedStringPtr *>(&repr_);
+    return *reinterpret_cast<const InternedStringPtr *>(this);
   }
 
-  absl::string_view Str() const { return AsOwned().Str(); }
+  absl::string_view Str() const { return impl_ ? impl_->Str() : absl::string_view(); }
   const BorrowedInternedStringPtr *operator->() const { return this; }
   const BorrowedInternedStringPtr &operator*() const { return *this; }
-  explicit operator bool() const { return static_cast<bool>(AsOwned()); }
+  explicit operator bool() const { return impl_ != nullptr; }
 
-  InternedStringPtr Materialize() const {
-    InternedStringPtr result = AsOwned();
-    if (!result.IsSSO() && result.RawPtr()) {
-      const_cast<InternedString *>(result.RawPtr())->IncrementRefCount();
-    }
-    return result;
-  }
+  InternedStringPtr Materialize() const { return AsOwned(); }
 
   auto operator<=>(const BorrowedInternedStringPtr &other) const {
-    return AsOwned() <=> other.AsOwned();
+    if (impl_ == other.impl_) {
+      return std::strong_ordering::equal;
+    }
+    return Str() <=> other.Str();
   }
   bool operator==(const BorrowedInternedStringPtr &other) const {
-    return AsOwned() == other.AsOwned();
+    if (impl_ == other.impl_) {
+      return true;
+    }
+    return Str() == other.Str();
   }
-  size_t Hash() const { return AsOwned().Hash(); }
+  size_t Hash() const { return absl::HashOf(Str()); }
 
  private:
-  uint64_t repr_{0};
+  const InternedString *impl_{nullptr};
   friend class InternedStringPtr;
 };
 
@@ -496,7 +470,7 @@ class BagOfInternedStringPtrs {
       case kSetTag:
         return GetSet()->size();
     }
-    return 0;
+    return storage_ == 0 ? 0 : 1;
   }
   bool empty() const { return storage_ == 0; }
 
@@ -539,7 +513,7 @@ class BagOfInternedStringPtrs {
     switch (storage_ & kTagMask) {
       case kSingleTag:
         if (storage_ != 0 && SingleRef() == key) {
-          return const_iterator(const_iterator::Tag::kSingle, this);
+          return {const_iterator::Tag::kSingle, this};
         }
         return end();
       case kArray4Tag: {
@@ -645,7 +619,7 @@ class BagOfInternedStringPtrs {
         if (cnt == 0) {
           return end();
         }
-        return const_iterator(this, arr->data(), cnt, 0);
+        return {this, arr->data(), cnt, 0};
       }
       case kArray8Tag: {
         auto *arr = GetArray8();
@@ -653,18 +627,18 @@ class BagOfInternedStringPtrs {
         if (cnt == 0) {
           return end();
         }
-        return const_iterator(this, arr->data(), cnt, 0);
+        return {this, arr->data(), cnt, 0};
       }
       case kSetTag:
-        return const_iterator(this, GetSet()->begin());
+        return {this, GetSet()->begin()};
     }
     return end();
   }
   const_iterator end() const {
     if (IsSet()) {
-      return const_iterator(this, GetSet()->end());
+      return {this, GetSet()->end()};
     }
-    return const_iterator();
+    return {};
   }
   const_iterator cbegin() const { return begin(); }
   const_iterator cend() const { return end(); }
@@ -1014,7 +988,6 @@ class StringInternStore {
     };
     absl::btree_map<int, BucketStats> by_ref_stats_;
     absl::btree_map<int, BucketStats> by_size_stats_;
-    BucketStats sso_total_stats_;
     BucketStats out_of_line_total_stats_;
   };
   Stats GetStats() const;

@@ -3,13 +3,12 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
- * Benchmark Results: Default Allocator vs Custom PMR Allocator
- * (TreePmrAllocator)
+ * Benchmark Results: Default Allocator vs SegregatedFixedSizeAllocator
  *
  * Single-Thread Performance:
  * --------------------------------------------------------------------------------------------------
- * Operation           Default Allocator (malloc)   Custom PMR Allocator Speedup
- * Latency Reduction
+ * Operation           Default Allocator (malloc)   SegregatedFixedSizeAllocator
+ * Speedup Latency Reduction
  * --------------------------------------------------------------------------------------------------
  * RaxInsert           12.70 ms                     9.76 ms                1.30x
  * -23.2% RaxTreeInsert       12.36 ms                     9.04 ms 1.37x -26.9%
@@ -23,23 +22,23 @@
  * Multi-Threaded Performance (8 Threads - Elimination of Global Heap
  * Contention):
  * --------------------------------------------------------------------------------------------------
- * Operation           Default Allocator (malloc)   Custom PMR Allocator Speedup
- * Latency Reduction
+ * Operation           Default Allocator (malloc)   SegregatedFixedSizeAllocator
+ * Speedup Latency Reduction
  * --------------------------------------------------------------------------------------------------
  * RaxInsert           209.61 ms                    2.83 ms               74.1x
  * -98.6% RaxTreeInsert       215.81 ms                    1.57 ms 137.6x -99.3%
  * RaxSearch             3.47 ms                    1.54 ms                2.25x
  * -55.6% RaxTreeSearch         3.41 ms                    1.65 ms 2.07x -51.6%
  * RaxDelete             4.80 ms                    1.79 ms                2.68x
- * -62.7% RaxTreeDelete         4.73 ms                    1.74 ms 2.72x -63.2%
+ * -64.8% RaxTreeDelete         4.73 ms                    1.74 ms 2.72x -63.2%
  * RaxUpdate            53.74 ms                    2.03 ms               26.5x
  * -96.2% RaxTreeUpdate        47.62 ms                    2.07
  * ms               23.0x      -95.7%
  *
  * Memory Utilization & Structural Efficiency:
  * --------------------------------------------------------------------------------------------------
- * Metric                              Default Allocator        Custom PMR
- * Allocator     Savings (%)
+ * Metric                              Default Allocator
+ * SegregatedFixedSizeAllocator Savings (%)
  * --------------------------------------------------------------------------------------------------
  * Per-Node Metadata Overhead          8-16 bytes / chunk       < 0.2 bytes (1
  * bit/slot) ~98% reduction Allocation Tax on Small Nodes       25% - 50%
@@ -58,22 +57,30 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "src/indexes/text/rax/rax.h"
-#include "testing/utils/allocator_benchmark_common.h"
 
 namespace valkey_search::utils {
 namespace {
 
-using RaxSetType = absl::flat_hash_set<size_t>;
-absl::flat_hash_set < size_t, absl::Hash<size_t>, std::equal_to<size_t>,
+constexpr int kNumInstances = 3;
+constexpr int kInitialEntries = 1000000;
+constexpr int kNumOperations = 100000;
 
-    inline void RaxAddValue(Rax *tree, const std::string &key, size_t val, ) {
+enum class AllocatorType {
+  kDefault,
+};
+
+inline std::string GetKey(int id) { return "key_" + std::to_string(id); }
+
+using RaxSetType = absl::flat_hash_set<size_t>;
+
+inline void RaxAddValue(Rax *tree, const std::string &key, size_t val) {
   void *existing = nullptr;
   if (RaxFind(tree,
               reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
               key.size(), &existing)) {
     static_cast<RaxSetType *>(existing)->insert(val);
   } else {
-    auto *set = new (sizeof(RaxSetType)) RaxSetType();
+    auto *set = new RaxSetType();
     set->insert(val);
     RaxInsert(tree,
               reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
@@ -96,7 +103,7 @@ inline void RaxTreeAddValue(RaxTree *tree, const std::string &key, size_t val) {
   if (existing) {
     static_cast<RaxSetType *>(existing)->insert(val);
   } else {
-    auto *set = new (sizeof(RaxSetType)) RaxSetType();
+    auto *set = new RaxSetType();
     set->insert(val);
     tree->Insert(key, set);
   }

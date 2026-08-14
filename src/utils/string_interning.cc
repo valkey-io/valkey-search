@@ -204,10 +204,6 @@ StringInternStore& StringInternStore::Instance() {
 
 InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
                                                 Allocator* allocator) {
-  if (str.size() <= 7 && allocator == nullptr) {
-    return InternedStringPtr::MakeSSO(str);
-  }
-
   IsolatedMemoryScope scope{memory_pool_};
 
   OutOfLineInternedString fake(str.data(), str.size());
@@ -237,29 +233,17 @@ StringInternStore::Stats StringInternStore::GetStats() const {
     absl::MutexLock lock(&shard.mutex);
     for (const auto& str : shard.str_to_interned) {
       auto size = str->Str().size();
-      auto allocated = str.IsSSO() ? 0 : str.RawPtr()->Allocated();
+      auto allocated = str.RawPtr()->Allocated();
       auto refcount = str.RefCount();
-      if (!str.IsSSO() && str.RawPtr()->IsInline()) {
-        stats.sso_total_stats_.count_++;
-        stats.sso_total_stats_.bytes_ += size;
-        stats.sso_total_stats_.allocated_ += allocated;
-        stats.by_ref_stats_[refcount].count_++;
-        stats.by_ref_stats_[refcount].bytes_ += size;
-        stats.by_ref_stats_[refcount].allocated_ += allocated;
-        stats.by_size_stats_[size].count_++;
-        stats.by_size_stats_[size].bytes_ += size;
-        stats.by_size_stats_[size].allocated_ += allocated;
-      } else {
-        stats.out_of_line_total_stats_.count_++;
-        stats.out_of_line_total_stats_.bytes_ += size;
-        stats.out_of_line_total_stats_.allocated_ += allocated;
-        stats.by_ref_stats_[-refcount].count_++;
-        stats.by_ref_stats_[-refcount].bytes_ += size;
-        stats.by_ref_stats_[-refcount].allocated_ += allocated;
-        stats.by_size_stats_[-size].count_++;
-        stats.by_size_stats_[-size].bytes_ += size;
-        stats.by_size_stats_[-size].allocated_ += allocated;
-      }
+      stats.out_of_line_total_stats_.count_++;
+      stats.out_of_line_total_stats_.bytes_ += size;
+      stats.out_of_line_total_stats_.allocated_ += allocated;
+      stats.by_ref_stats_[refcount].count_++;
+      stats.by_ref_stats_[refcount].bytes_ += size;
+      stats.by_ref_stats_[refcount].allocated_ += allocated;
+      stats.by_size_stats_[size].count_++;
+      stats.by_size_stats_[size].bytes_ += size;
+      stats.by_size_stats_[size].allocated_ += allocated;
     }
   }
   return stats;

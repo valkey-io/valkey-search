@@ -181,7 +181,7 @@ static inline void raxStackFree(raxStack *ts) {
  * 'nodesize'. The padding is needed to store the child pointers to aligned
  * addresses. Note that we add 4 to the node size because the node has a four
  * bytes header. */
-#define raxPadding(nodesize) ((sizeof(void *) - (((nodesize) + 4) % sizeof(void *))) & (sizeof(void *) - 1))
+#define raxPadding(nodesize) ((sizeof(void *) - ((nodesize) % sizeof(void *))) & (sizeof(void *) - 1))
 
 /* Return the pointer to the last child pointer in a node. For the compressed
  * nodes this is the only child pointer. */
@@ -1058,7 +1058,7 @@ raxNode *raxRemoveChild(raxNode *parent, raxNode *child) {
      * We just check if in the old version of the node there was at the
      * end just a single byte and all padding: in that case removing one char
      * will remove a whole sizeof(void*) word. */
-    size_t shift = ((parent->size + 4) % sizeof(void *)) == 1 ? sizeof(void *) : 0;
+    size_t shift = (parent->size % sizeof(void *)) == 1 ? sizeof(void *) : 0;
 
     /* Move the children pointers before the deletion point. */
     if (shift) memmove(((char *)cp) - shift, cp, (parent->size - taillen - 1) * sizeof(raxNode **));

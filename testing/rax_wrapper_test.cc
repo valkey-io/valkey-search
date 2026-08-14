@@ -7,8 +7,8 @@
 // NOTE: This is based off the original RadixTree tests
 
 #include "src/indexes/text/rax_wrapper.h"
-#include "src/indexes/text/rax/rax_malloc.h"
 
+#include "src/indexes/text/rax/rax_malloc.h"
 
 #ifdef __APPLE__
 #include <malloc/malloc.h>
@@ -611,8 +611,8 @@ TEST_F(RaxTest, RaxMemMallocMemoryTracking) {
       << "Creating Rax should report non-zero allocated memory";
 }
 
-TEST_F(RaxTest, RaxPmrFallbackLifecycleWithoutPmrResource) {
-  // Test RaxPmr allocation lifecycle when t_rax_res is null
+TEST_F(RaxTest, RaxSegregatedAllocatorLifecycle) {
+  // Test Rax memory allocation lifecycle via SegregatedFixedSizeAllocator
   void *ptr = RaxMemMalloc(64);
   ASSERT_NE(ptr, nullptr);
   EXPECT_GE(RaxMemUsableSize(ptr), 64);

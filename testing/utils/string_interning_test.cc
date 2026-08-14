@@ -1142,38 +1142,6 @@ TEST_F(BagOfInternedStringPtrsTest, ChurnAcrossAllModes) {
   }
 }
 
-TEST(StringInternSSOTest, InlineAndOutOfLineBehaviors) {
-  // Test short strings <= 7 chars are inlined
-  auto short_string_ptr = StringInternStore::Intern("short");
-  EXPECT_TRUE(short_string_ptr.IsSSO());
-  EXPECT_EQ(short_string_ptr.Str(), "short");
-  EXPECT_EQ(short_string_ptr->Str(), "short");
-  EXPECT_EQ(short_string_ptr.RefCount(), 1u);
-  EXPECT_EQ(short_string_ptr.RawPtr(), nullptr);
-
-  auto empty_string_ptr = StringInternStore::Intern("");
-  EXPECT_TRUE(empty_string_ptr.IsSSO());
-  EXPECT_EQ(empty_string_ptr.Str(), "");
-  EXPECT_EQ(empty_string_ptr.RefCount(), 1u);
-
-  auto max_inline_string_ptr = StringInternStore::Intern("1234567");
-  EXPECT_TRUE(max_inline_string_ptr.IsSSO());
-  EXPECT_EQ(max_inline_string_ptr.Str(), "1234567");
-
-  // Test long strings > 7 chars are out of line (heap allocated)
-  auto long_string_ptr = StringInternStore::Intern("12345678");
-  EXPECT_FALSE(long_string_ptr.IsSSO());
-  EXPECT_EQ(long_string_ptr.Str(), "12345678");
-  EXPECT_NE(long_string_ptr.RawPtr(), nullptr);
-
-  // Copying inline strings
-  auto short_string_ptr_copy =
-      short_string_ptr;  // NOLINT(performance-unnecessary-copy-initialization)
-  EXPECT_TRUE(short_string_ptr_copy.IsSSO());
-  EXPECT_EQ(short_string_ptr_copy.Str(), "short");
-  EXPECT_EQ(short_string_ptr.Str(), "short");
-}
-
 }  // namespace
 
 }  // namespace valkey_search

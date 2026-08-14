@@ -14,7 +14,6 @@
 #include <utility>
 
 #include "src/utils/allocator.h"
-#include "src/valkey_search.h"
 
 namespace valkey_search::indexes::text {
 
@@ -27,9 +26,8 @@ struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
       : data_(std::forward<Args>(args)...) {}
 
   static void *operator new(size_t size) {
-    void *ptr = ::valkey_search::ValkeySearch::Instance()
-                    .GetSegregatedAllocator()
-                    .Allocate(size);
+    void *ptr =
+        valkey_search::GetThreadLocalSegregatedAllocator().Allocate(size);
     return ptr ? ptr : ::operator new(size);
   }
 

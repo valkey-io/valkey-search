@@ -13,7 +13,7 @@
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/posting.h"
-#include "src/valkey_search.h"
+#include "src/utils/allocator.h"
 
 namespace {
 
@@ -170,7 +170,7 @@ FlatPositionMap *FlatPositionMap::Create(
   // Allocate single block: [FlatPositionMapHeader (optional) | FlatPositionMap
   // | data...]
   void *mem =
-      ValkeySearch::Instance().GetSegregatedAllocator().Allocate(total_size);
+      valkey_search::GetThreadLocalSegregatedAllocator().Allocate(total_size);
   if (!mem) {
     mem = operator new(total_size);
   }

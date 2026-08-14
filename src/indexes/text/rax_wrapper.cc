@@ -131,11 +131,11 @@ bool Rax::WordIterator::SeekForward(absl::string_view word) {
   }
 
   // Seek to the word
-  CHECK(!RaxSeekSubTree(
-      &iter_,
-      const_cast<unsigned char *>(
-          reinterpret_cast<const unsigned char *>(word.data())),
-      word.size()));
+  CHECK(
+      !RaxSeekSubTree(&iter_,
+                      const_cast<unsigned char *>(
+                          reinterpret_cast<const unsigned char *>(word.data())),
+                      word.size()));
   RaxNext(&iter_);
   if (RaxEOF(&iter_)) {
     done_ = true;
@@ -173,14 +173,12 @@ namespace {
 
 // Helper to compute padding for rax node
 inline size_t RaxPadding(size_t nodesize) {
-  return (sizeof(void *) - ((nodesize + 4) % sizeof(void *))) &
-         (sizeof(void *) - 1);
+  return (sizeof(void *) - (nodesize % sizeof(void *))) & (sizeof(void *) - 1);
 }
 
 // Helper to get pointer to first child in a rax node
 inline RaxNode **RaxNodeFirstChildPtr(RaxNode *n) {
-  return reinterpret_cast<RaxNode **>(n->data + n->size +
-                                         RaxPadding(n->size));
+  return reinterpret_cast<RaxNode **>(n->data + n->size + RaxPadding(n->size));
 }
 
 // Helper to get data stored in a rax node
@@ -197,9 +195,7 @@ inline void *RaxNodeGetData(RaxNode *n) {
 }
 
 // Helper to check if node is a leaf (no children)
-inline bool RaxNodeIsLeaf(RaxNode *n) {
-  return n->size == 0 && !n->is_compr;
-}
+inline bool RaxNodeIsLeaf(RaxNode *n) { return n->size == 0 && !n->is_compr; }
 
 }  // namespace
 
@@ -242,7 +238,7 @@ Rax::PathIterator::PathIterator(::Rax *rax, absl::string_view prefix)
       i += h->size;
       // Descend to child
       h = *reinterpret_cast<RaxNode **>(h->data + h->size +
-                                           RaxPadding(h->size));
+                                        RaxPadding(h->size));
     } else {
       // Branching node: find child with matching byte
       unsigned char c = static_cast<unsigned char>(prefix[i]);
@@ -366,8 +362,8 @@ Rax::PathIterator Rax::PathIterator::DescendNew() const {
     // Compressed: descend through the compressed path to child
     std::string new_path = path_;
     new_path.append(reinterpret_cast<const char *>(node_->data), node_->size);
-    RaxNode *child = *reinterpret_cast<RaxNode **>(
-        node_->data + node_->size + RaxPadding(node_->size));
+    RaxNode *child = *reinterpret_cast<RaxNode **>(node_->data + node_->size +
+                                                   RaxPadding(node_->size));
     return {rax_, child, std::move(new_path)};
   }
 

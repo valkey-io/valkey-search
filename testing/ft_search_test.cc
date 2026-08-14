@@ -458,6 +458,37 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+// A hybrid text=>[KNN] query with WITHSCORES must still emit the relevance
+// score under NOCONTENT (Redis drops attributes for NOCONTENT, not the
+// WITHSCORES score). Exercises the SendReplyNoContent WITHSCORES path.
+TEST_F(ValkeySearchTest, NoContentWithScoresEmitsScore) {
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->attribute_alias = "vec";  // vector query (hybrid text=>[KNN])
+  parameters->score_as = vmsdk::MakeUniqueValkeyString("score_as");
+  parameters->k = 20;
+  parameters->limit = {.first_index = 0, .number = 10};
+  parameters->no_content = true;
+  parameters->with_scores = true;
+  // Mark the query as text-bearing so the relevance score is emitted.
+  parameters->filter_parse_results.query_operations =
+      QueryOperations::kContainsText;
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(ToIndexesNeighbor({.external_id = "abc", .score = 0.5f}));
+  neighbors.push_back(
+      ToIndexesNeighbor({.external_id = "def", .score = 0.25f}));
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx_, wrapper);
+
+  // Count header followed by (id, score) per neighbor.
+  EXPECT_EQ(ParseRespReply(fake_ctx_.reply_capture.GetReply()),
+            ParseRespReply("*5\r\n:2\r\n$3\r\nabc\r\n$3\r\n0.5\r\n$3\r\ndef\r\n"
+                           "$4\r\n0.25\r\n"));
+}
+
 using ::testing::TestParamInfo;
 using ::testing::ValuesIn;
 

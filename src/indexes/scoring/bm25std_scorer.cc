@@ -17,7 +17,12 @@
 namespace valkey_search::indexes::scoring {
 
 float Bm25StdScorer::PrecomputeIDF(const IdfInput& input) const {
-  CHECK_LE(input.num_doc_contain_term, input.total_docs);
+  // dt <= total_docs is enforced by callers via clamping (dt and total_docs are
+  // read from separate, independently-locked counters and can be transiently
+  // out of sync; summing stem-variant key counts can also double-count). A
+  // debug-only check catches genuine caller bugs without aborting production on
+  // a benign transient skew.
+  DCHECK_LE(input.num_doc_contain_term, input.total_docs);
   const float n = static_cast<float>(input.total_docs);
   const float dt = static_cast<float>(input.num_doc_contain_term);
   return std::log1pf((n - dt + 0.5f) / (dt + 0.5f));

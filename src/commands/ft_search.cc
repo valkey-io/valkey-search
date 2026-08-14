@@ -49,17 +49,26 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx,
+                        const indexes::Neighbor &neighbor);
+
 void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const query::SearchResult &search_result,
-                        const query::SearchParameters &parameters) {
+                        const SearchCommand &parameters) {
   const auto &neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(parameters);
 
-  ValkeyModule_ReplyWithArray(ctx, range.count() + 1);
+  // WITHSCORES keeps the top-level relevance score even under NOCONTENT
+  const bool emit_score =
+      parameters.with_scores && query::QueryHasTextPredicate(parameters);
+  ValkeyModule_ReplyWithArray(ctx, (emit_score ? 2 : 1) * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
   for (auto i = range.start_index; i < range.end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+    if (emit_score) {
+      ReplyScoreTopLevel(ctx, neighbors[i]);
+    }
   }
 }
 

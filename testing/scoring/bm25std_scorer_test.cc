@@ -105,11 +105,16 @@ TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
   EXPECT_GT(doc5, doc4);
 }
 
-TEST(Bm25StdScorerDeathTest, DtGreaterThanNCrashes) {
+// dt > total_docs violates the IDF precondition, but callers clamp to uphold
+// it (dt and total_docs are read from separate, independently-locked counters
+// and can be transiently out of sync). The scorer must not abort production on
+// this transient skew: the guard is debug-only (DCHECK), so it dies in debug
+// builds but is tolerated in release.
+TEST(Bm25StdScorerDeathTest, DtGreaterThanNIsDebugOnly) {
   Bm25StdScorer scorer;
   LeafData leaf = MakeLeaf(/*N=*/2, /*total_doc_len=*/20,
                            /*dt=*/3, /*F=*/1, /*doc_len=*/10);
-  EXPECT_DEATH(ScoreLeaf(scorer, leaf, 1.0f), "");
+  EXPECT_DEBUG_DEATH(ScoreLeaf(scorer, leaf, 1.0f), "");
 }
 
 TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {

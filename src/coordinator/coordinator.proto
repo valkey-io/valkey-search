@@ -151,9 +151,9 @@ message SearchIndexPartitionRequest {
 
 message NeighborEntry {
   string key = 1;
-  float score = 2;
+  float distance = 2;
   repeated AttributeContentEntry attribute_contents = 3;
-  float distance = 4;
+  float score = 4;
 }
 
 message SearchIndexPartitionResponse {

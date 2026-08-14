@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_VALKEY_SEARCH_H_
 
 #include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -21,6 +20,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/server.h"
 #include "src/index_schema.h"
+#include "src/utils/allocator.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/thread_group_cpu_monitor.h"
@@ -40,6 +40,10 @@ class ValkeySearch {
  public:
   ValkeySearch() = default;
   virtual ~ValkeySearch() = default;
+
+  SegregatedFixedSizeAllocator &GetSegregatedAllocator() const {
+    return GetThreadLocalSegregatedAllocator();
+  }
 
   bool SupportParallelQueries() const {
     return reader_thread_pool_ && reader_thread_pool_->Size() > 0;

@@ -37,8 +37,8 @@ Key.
 #include "absl/container/btree_map.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/utils/allocator.h"
-#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
+#include "src/valkey_search.h"
 
 namespace valkey_search::indexes::text {
 
@@ -72,7 +72,9 @@ struct Postings {
   struct KeyIterator;
 
   static void *operator new(size_t size) {
-    void *ptr = valkey_search::GetDefaultSegregatedAllocator().Allocate(size);
+    void *ptr = ::valkey_search::ValkeySearch::Instance()
+                    .GetSegregatedAllocator()
+                    .Allocate(size);
     return ptr ? ptr : ::operator new(size);
   }
   static void operator delete(void *ptr, size_t size) {

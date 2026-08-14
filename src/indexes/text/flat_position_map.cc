@@ -1,5 +1,4 @@
 #include "src/utils/allocator.h"
-#include "src/utils/allocator.h"
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
@@ -7,15 +6,14 @@
  *
  */
 
-#include "src/indexes/text/flat_position_map.h"
-
 #include <cstdlib>
 #include <cstring>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
-#include "absl/log/check.h"
+#include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/posting.h"
+#include "src/valkey_search.h"
 
 namespace {
 
@@ -171,7 +169,8 @@ FlatPositionMap *FlatPositionMap::Create(
 
   // Allocate single block: [FlatPositionMapHeader (optional) | FlatPositionMap
   // | data...]
-  void *mem = valkey_search::GetDefaultSegregatedAllocator().Allocate(total_size);
+  void *mem =
+      ValkeySearch::Instance().GetSegregatedAllocator().Allocate(total_size);
   if (!mem) {
     mem = operator new(total_size);
   }
@@ -227,8 +226,8 @@ void FlatPositionMap::Destroy(FlatPositionMap *map) {
   map->~FlatPositionMap();
   if (!valkey_search::Allocator::Free(reinterpret_cast<char *>(map))) {
     if (!valkey_search::Allocator::Free(reinterpret_cast<char *>(map))) {
-    operator delete(map);
-  }
+      operator delete(map);
+    }
   }
 }
 

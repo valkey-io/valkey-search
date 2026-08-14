@@ -7,11 +7,11 @@
 
 #include "src/indexes/text/rax/rax.h"
 
-#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
 #include "src/utils/allocator.h"
+#include "src/valkey_search.h"
 
 extern "C" {
 // NOLINTNEXTLINE(readability-identifier-naming)
@@ -42,7 +42,9 @@ class ActiveRaxGuard {
 }  // namespace
 
 RaxTree::RaxTree(Allocator *allocator)
-    : allocator_(allocator ? allocator : &GetDefaultSegregatedAllocator()) {
+    : allocator_(allocator
+                     ? allocator
+                     : &ValkeySearch::Instance().GetSegregatedAllocator()) {
   ActiveRaxGuard guard(this);
   rax_ = RaxNew();
 }
@@ -85,7 +87,7 @@ void *RaxTree::AllocateNode(size_t size) {
   if (allocator_) {
     return allocator_->Allocate(size);
   }
-  return GetDefaultSegregatedAllocator().Allocate(size);
+  return ValkeySearch::Instance().GetSegregatedAllocator().Allocate(size);
 }
 
 void RaxTree::FreeNode(void *ptr) {
@@ -107,8 +109,8 @@ void *RaxTree::ReallocateNode(void *ptr, size_t new_size) {
   if (seg) {
     return seg->Reallocate(static_cast<char *>(ptr), new_size);
   }
-  return GetDefaultSegregatedAllocator().Reallocate(static_cast<char *>(ptr),
-                                                   new_size);
+  return ValkeySearch::Instance().GetSegregatedAllocator().Reallocate(
+      static_cast<char *>(ptr), new_size);
 }
 
 int RaxTree::UsableSize(void *ptr) {
@@ -137,8 +139,8 @@ void *RaxTree::Find(std::string_view key) const {
   ActiveRaxGuard guard(const_cast<RaxTree *>(this));
   void *val = nullptr;
   RaxFind(rax_,
-             reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
-             key.size(), &val);
+          reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
+          key.size(), &val);
   return val;
 }
 
@@ -165,8 +167,9 @@ size_t RaxTree::GetAllocSize() const { return rax_ ? rax_->alloc_size : 0; }
 extern "C" {
 bool IsRaxActive() { return true; }
 void *RaxMemMalloc(size_t size) {
-  return t_active_rax ? t_active_rax->AllocateNode(size)
-                      : GetDefaultSegregatedAllocator().Allocate(size);
+  return t_active_rax
+             ? t_active_rax->AllocateNode(size)
+             : ValkeySearch::Instance().GetSegregatedAllocator().Allocate(size);
 }
 void RaxMemFree(void *ptr) {
   if (!ptr) {
@@ -181,7 +184,7 @@ void RaxMemFree(void *ptr) {
 void *RaxMemRealloc(void *ptr, size_t size) {
   return t_active_rax
              ? t_active_rax->ReallocateNode(ptr, size)
-             : GetDefaultSegregatedAllocator().Reallocate(
+             : ValkeySearch::Instance().GetSegregatedAllocator().Reallocate(
                    static_cast<char *>(ptr), size);
 }
 int RaxMemUsableSize(void *ptr) {

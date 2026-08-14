@@ -423,6 +423,12 @@ char *SegregatedFixedSizeAllocator::Reallocate(char *ptr, size_t new_size) {
     return nullptr;
   }
   size_t old_size = UsableSize(ptr);
+  if (old_size >= new_size && new_size > 0 && new_size <= kMaxSize) {
+    size_t size_class_index = GetSizeClassIndex(new_size);
+    if (kSizeClasses[size_class_index] == old_size) {
+      return ptr;
+    }
+  }
   char *new_ptr = Allocate(new_size);
   if (!new_ptr) {
     return nullptr;
@@ -449,9 +455,14 @@ void SegregatedFixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
   chunk->allocator->Free(chunk, ptr);
 }
 
+SegregatedFixedSizeAllocator &GetThreadLocalSegregatedAllocator() {
+  static thread_local SegregatedFixedSizeAllocator *thread_allocator =
+      new SegregatedFixedSizeAllocator();
+  return *thread_allocator;
+}
+
 SegregatedFixedSizeAllocator &GetDefaultSegregatedAllocator() {
-  static auto *alloc = new SegregatedFixedSizeAllocator();
-  return *alloc;
+  return GetThreadLocalSegregatedAllocator();
 }
 
 }  // namespace valkey_search

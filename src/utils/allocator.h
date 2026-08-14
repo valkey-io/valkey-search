@@ -128,10 +128,12 @@ DEFINE_UNIQUE_PTR_TYPE(FixedSizeAllocator);
 class SegregatedFixedSizeAllocator : public Allocator {
  public:
   static constexpr size_t kSizeClasses[] = {
-      16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
-      320, 384, 448, 512, 768, 1024, 1536, 2048, 3072, 4096
-  };
-  static constexpr size_t kNumClasses = sizeof(kSizeClasses) / sizeof(kSizeClasses[0]);
+      2,   4,   6,   8,   10,  12,   14,   16,   18,   20,  22,  24,
+      28,  32,  40,  48,  56,  64,   72,   80,   88,   96,  104, 112,
+      120, 128, 144, 160, 176, 192,  208,  224,  240,  256, 320, 384,
+      448, 512, 640, 768, 896, 1024, 1536, 2048, 3072, 4096};
+  static constexpr size_t kNumClasses =
+      sizeof(kSizeClasses) / sizeof(kSizeClasses[0]);
   static constexpr size_t kMaxSize = kSizeClasses[kNumClasses - 1];
 
   SegregatedFixedSizeAllocator();
@@ -152,6 +154,7 @@ class SegregatedFixedSizeAllocator : public Allocator {
 };
 
 SegregatedFixedSizeAllocator &GetDefaultSegregatedAllocator();
+SegregatedFixedSizeAllocator &GetThreadLocalSegregatedAllocator();
 
 DEFINE_UNIQUE_PTR_TYPE(SegregatedFixedSizeAllocator);
 

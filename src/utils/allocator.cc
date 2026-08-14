@@ -310,6 +310,14 @@ void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
   uint64_t mask = ~(1ULL << bit_index);
   chunk->bitmap[word_index].fetch_and(mask, std::memory_order_release);
 
+  size_t current_hint = chunk->scan_hint.load(std::memory_order_relaxed);
+  while (word_index < current_hint) {
+    if (chunk->scan_hint.compare_exchange_weak(current_hint, word_index,
+                                                std::memory_order_relaxed)) {
+      break;
+    }
+  }
+
   uint32_t prev_allocations =
       chunk->allocated_count.fetch_sub(1, std::memory_order_acq_rel);
   active_allocations_.fetch_sub(1, std::memory_order_relaxed);
@@ -408,11 +416,28 @@ SegregatedFixedSizeAllocator::SegregatedFixedSizeAllocator(
   }
 }
 
-size_t SegregatedFixedSizeAllocator::GetSizeClassIndex(size_t size) {
-  for (size_t i = 0; i < kNumClasses; ++i) {
-    if (size <= kSizeClasses[i]) {
-      return i;
+namespace {
+
+uint8_t g_size_to_class_index[SegregatedFixedSizeAllocator::kMaxSize + 1];
+
+struct SizeClassLUTInitializer {
+  SizeClassLUTInitializer() {
+    size_t class_idx = 0;
+    for (size_t s = 0; s <= SegregatedFixedSizeAllocator::kMaxSize; ++s) {
+      while (class_idx < SegregatedFixedSizeAllocator::kNumClasses &&
+             s > SegregatedFixedSizeAllocator::kSizeClasses[class_idx]) {
+        ++class_idx;
+      }
+      g_size_to_class_index[s] = static_cast<uint8_t>(class_idx);
     }
+  }
+} g_size_class_lut_initializer;
+
+}  // namespace
+
+size_t SegregatedFixedSizeAllocator::GetSizeClassIndex(size_t size) {
+  if (size <= kMaxSize) {
+    return g_size_to_class_index[size];
   }
   return kNumClasses;
 }
@@ -441,7 +466,7 @@ bool SegregatedFixedSizeAllocator::Free(char *ptr) {
     return true;
   }
   __wrap_free(ptr);
-  return false;
+  return true;
 }
 
 char *SegregatedFixedSizeAllocator::Reallocate(char *ptr, size_t new_size) {

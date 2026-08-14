@@ -42,7 +42,7 @@ class ChunkTracker {
   ChunkTracker() = default;
   void Track(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::WriterMutexLock lock(&mutex_);
-    chunks_by_data_.insert(std::make_pair(chunk->data.get(), chunk));
+    chunks_by_data_.insert(std::make_pair(chunk->data, chunk));
   }
   AllocatorChunk *FindAndRetainChunk(char *ptr) const
       ABSL_LOCKS_EXCLUDED(mutex_) {
@@ -51,9 +51,9 @@ class ChunkTracker {
     auto it = chunks_by_data_.upper_bound(ptr);
     if (it != chunks_by_data_.begin()) {
       --it;
-      if (ptr >= it->second->data.get() &&
+      if (ptr >= it->second->data &&
           ptr <
-              it->second->data.get() + BufferSize(it->second->entries_in_chunk,
+              it->second->data + BufferSize(it->second->entries_in_chunk,
                                                   it->second->entry_size)) {
         auto chunk = const_cast<AllocatorChunk *>(it->second);
         chunk->Retain();
@@ -64,7 +64,7 @@ class ChunkTracker {
   }
   void Untrack(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::WriterMutexLock lock(&mutex_);
-    chunks_by_data_.erase(chunk->data.get());
+    chunks_by_data_.erase(chunk->data);
   }
 
  private:
@@ -83,7 +83,23 @@ int CalcChunkFreeGroup(size_t free_cnt) {
   return static_cast<int>(std::min(log2, kFreeEntriesPerChunkGroupSize - 1));
 }
 
-int UpperBoundToMultipleOf8(int num) { return (num + 7) & ~7; }
+size_t AlignUp(size_t size, size_t alignment) {
+  if (alignment <= 1) {
+    return size;
+  }
+  return (size + alignment - 1) & ~(alignment - 1);
+}
+
+size_t NormalizeAlignment(size_t alignment) {
+  if (alignment <= 8) {
+    return 8;
+  }
+  size_t a = 8;
+  while (a < alignment) {
+    a <<= 1;
+  }
+  return a;
+}
 
 size_t GetPageSize() { return static_cast<size_t>(sysconf(_SC_PAGESIZE)); }
 
@@ -93,11 +109,18 @@ size_t EntriesFitInChunk(size_t size, size_t num_pages) {
   return std::max<size_t>(kChunkBufferMinEntriesPerChunk, total_bytes / size);
 }
 
-AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
-    : entries_in_chunk(EntriesFitInChunk(size, kChunkBufferPages)),
-      entry_size(size),
-      data(std::unique_ptr<char[]>(
-          new char[BufferSize(entries_in_chunk, size)])),
+AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size,
+                               size_t alignment)
+    : entries_in_chunk(
+          EntriesFitInChunk(AlignUp(size, alignment), kChunkBufferPages)),
+      entry_size(AlignUp(size, alignment)),
+      alignment(alignment),
+      raw_data(static_cast<char *>(::operator new[](
+                   BufferSize(entries_in_chunk, entry_size) + alignment,
+                   std::align_val_t{alignment})),
+               AlignedDeleter{alignment}),
+      data(reinterpret_cast<char *>(
+          AlignUp(reinterpret_cast<uintptr_t>(raw_data.get()), alignment))),
       num_bitmap_words((entries_in_chunk + kEntriesPerBitmapWord - 1) /
                        kEntriesPerBitmapWord),
       bitmap(std::make_unique<std::atomic<uint64_t>[]>(num_bitmap_words)),
@@ -115,12 +138,10 @@ AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
 
 AllocatorChunk::~AllocatorChunk() { chunk_tracker.Untrack(this); }
 
-FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
-    : size_(size), require_ptr_alignment_(require_ptr_alignment) {
-  if (require_ptr_alignment_) {
-    size_ = UpperBoundToMultipleOf8(size);
-  }
-}
+FixedSizeAllocator::FixedSizeAllocator(size_t size, size_t alignment)
+    : size_(alignment <= 1 ? size
+                           : AlignUp(size, NormalizeAlignment(alignment))),
+      alignment_(alignment <= 1 ? 1 : NormalizeAlignment(alignment)) {}
 
 FixedSizeAllocator::~FixedSizeAllocator() {
   auto clear_list = [](IntrusiveList<AllocatorChunk> &list) {
@@ -190,7 +211,7 @@ static char *TryAllocateFromChunk(AllocatorChunk *chunk) {
         }
         chunk->scan_hint.store((word_index + 1) % chunk->num_bitmap_words,
                                std::memory_order_relaxed);
-        return chunk->data.get() + entry_idx * chunk->entry_size;
+        return chunk->data + entry_idx * chunk->entry_size;
       }
     }
   }
@@ -200,10 +221,12 @@ static char *TryAllocateFromChunk(AllocatorChunk *chunk) {
 }
 
 char *FixedSizeAllocator::Allocate(size_t size) {
-  if (require_ptr_alignment_) {
-    size = UpperBoundToMultipleOf8(size);
-  }
-  CHECK_EQ(size, size_);
+  return Allocate(size, alignment_);
+}
+
+char *FixedSizeAllocator::Allocate(size_t size, size_t alignment) {
+  size_t aligned_size = AlignUp(size, alignment);
+  CHECK_LE(aligned_size, size_);
   return Allocate();
 }
 
@@ -279,7 +302,7 @@ char *FixedSizeAllocator::Allocate() {
 }
 
 void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
-  size_t offset = ptr - chunk->data.get();
+  size_t offset = ptr - chunk->data;
   size_t entry_idx = offset / chunk->entry_size;
   size_t word_index = entry_idx / kEntriesPerBitmapWord;
   size_t bit_index = entry_idx % kEntriesPerBitmapWord;
@@ -348,7 +371,7 @@ void FixedSizeAllocator::UpdateChunkGroup(AllocatorChunk *chunk) {
 }
 
 void FixedSizeAllocator::AllocateChunk() {
-  auto new_chunk = new AllocatorChunk(this, size_);
+  auto new_chunk = new AllocatorChunk(this, size_, alignment_);
   size_t free_group = CalcChunkFreeGroup(new_chunk->entries_in_chunk);
   chunks_grouped_by_free_entries_[free_group].PushBack(new_chunk);
   new_chunk->current_group = free_group;
@@ -375,11 +398,13 @@ size_t Allocator::GetAllocatedSize(char *ptr) {
   return entry_size;
 }
 
-SegregatedFixedSizeAllocator::SegregatedFixedSizeAllocator() {
+SegregatedFixedSizeAllocator::SegregatedFixedSizeAllocator(
+    size_t default_alignment) {
   allocators_.reserve(kNumClasses);
   for (unsigned long kSizeClasse : kSizeClasses) {
+    size_t alignment = (kSizeClasse >= 128) ? 32 : default_alignment;
     allocators_.push_back(
-        CREATE_UNIQUE_PTR(FixedSizeAllocator, kSizeClasse, false));
+        CREATE_UNIQUE_PTR(FixedSizeAllocator, kSizeClasse, alignment));
   }
 }
 
@@ -393,14 +418,19 @@ size_t SegregatedFixedSizeAllocator::GetSizeClassIndex(size_t size) {
 }
 
 char *SegregatedFixedSizeAllocator::Allocate(size_t size) {
+  return Allocate(size, 8);
+}
+
+char *SegregatedFixedSizeAllocator::Allocate(size_t size, size_t alignment) {
   if (size == 0) {
     return nullptr;
   }
-  size_t idx = GetSizeClassIndex(size);
+  size_t aligned_size = AlignUp(size, alignment);
+  size_t idx = GetSizeClassIndex(aligned_size);
   if (idx < kNumClasses) {
     return allocators_[idx]->Allocate();
   }
-  return reinterpret_cast<char *>(__wrap_malloc(size));
+  return static_cast<char *>(__wrap_malloc(aligned_size));
 }
 
 bool SegregatedFixedSizeAllocator::Free(char *ptr) {
@@ -416,20 +446,17 @@ bool SegregatedFixedSizeAllocator::Free(char *ptr) {
 
 char *SegregatedFixedSizeAllocator::Reallocate(char *ptr, size_t new_size) {
   if (!ptr) {
-    return Allocate(new_size);
+    return GetThreadLocalSegregatedAllocator().Allocate(new_size);
   }
   if (new_size == 0) {
     Free(ptr);
     return nullptr;
   }
   size_t old_size = UsableSize(ptr);
-  if (old_size >= new_size && new_size > 0 && new_size <= kMaxSize) {
-    size_t size_class_index = GetSizeClassIndex(new_size);
-    if (kSizeClasses[size_class_index] == old_size) {
-      return ptr;
-    }
+  if (old_size >= new_size) {
+    return ptr;
   }
-  char *new_ptr = Allocate(new_size);
+  char *new_ptr = GetThreadLocalSegregatedAllocator().Allocate(new_size);
   if (!new_ptr) {
     return nullptr;
   }

@@ -231,7 +231,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     lat_lock = threading.Lock()
     
     def ingest_worker(thread_idx, doc_subset):
-        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
+        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
         local_lats = []
         for key, title, tags, body in doc_subset:
             t0 = time.perf_counter()
@@ -279,7 +279,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
         update_lat_lock = threading.Lock()
         
         def update_worker(thread_idx, doc_subset):
-            thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
+            thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
             local_lats = []
             for key, title, tags, body in doc_subset:
                 updated_tags = tags + ",updated_tag,v2"
@@ -362,7 +362,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     search_lat_lock = threading.Lock()
     
     def search_worker(thread_idx, count):
-        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=30)
+        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
         local_lats = []
         num_q = len(active_queries)
         for i in range(count):
@@ -435,19 +435,36 @@ def format_table(headers, rows):
         table_lines.append(" | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row)))
     return "\n".join(table_lines)
 
-def finalize_and_print_stats(csv_path):
+def finalize_and_print_stats(csv_path, baseline_csv=None):
     raw_rows = []
+    def is_valid_row(r):
+        if not r or not r.get("branch") or r["branch"].startswith("#"):
+            return False
+        try:
+            float(r.get("ingest_throughput_docs_sec", ""))
+            return True
+        except (ValueError, TypeError):
+            return False
+
     if os.path.exists(csv_path):
         with open(csv_path, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row.get("branch") and not row["branch"].startswith("#"):
+                if is_valid_row(row):
                     raw_rows.append(row)
 
+    if baseline_csv and os.path.exists(baseline_csv):
+        with open(baseline_csv, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if is_valid_row(row):
+                    if not any(r.get("branch") == row["branch"] and r.get("setup") == row.get("setup") and str(r.get("threads")) == str(row.get("threads")) for r in raw_rows):
+                        raw_rows.append(row)
+
     branches = list(dict.fromkeys([r["branch"] for r in raw_rows]))
-    opt_branch = "optimized_rax" if "optimized_rax" in branches else (branches[0] if branches else "optimized_rax")
+    opt_branch = "current" if "current" in branches else ("optimized_rax" if "optimized_rax" in branches else (branches[0] if branches else "current"))
     other_branches = [b for b in branches if b != opt_branch]
-    base_branch = "main" if "main" in other_branches else (other_branches[0] if other_branches else None)
+    base_branch = "main" if "main" in other_branches else ("optimized_rax" if "optimized_rax" in other_branches else (other_branches[0] if other_branches else None))
 
     opt_by_key = {(r.get("setup", "TextTag_MixedWorkload"), int(r["threads"])): r for r in raw_rows if r["branch"] == opt_branch}
     base_by_key = {(r.get("setup", "TextTag_MixedWorkload"), int(r["threads"])): r for r in raw_rows if r["branch"] == base_branch} if base_branch else {}
@@ -579,6 +596,7 @@ def main():
     parser.add_argument("--server", default=DEFAULT_SERVER, help="Path to valkey-server binary")
     parser.add_argument("--module", default=DEFAULT_MODULE, help="Path to libsearch.so")
     parser.add_argument("--csv", default=None, help="Output CSV file path (default: /tmp/e2e_rax_bench_stats_<TIMESTAMP>.csv)")
+    parser.add_argument("--baseline-csv", default=None, help="Path to pre-captured baseline benchmark CSV to reuse historical results without re-running baseline benchmarks")
     parser.add_argument("--threads", nargs="+", type=int, default=[1, 4, 8, 16], help="Thread counts to test")
     parser.add_argument("--setups", nargs="+", choices=["text_only", "text_tag_mixed", "text_tag_churn_prefix", "all"], default=["all"], help="Benchmark setups to run")
     parser.add_argument("--append", action="store_true", help="Append results to existing CSV instead of overwriting")
@@ -607,7 +625,7 @@ def main():
             append_single_result(csv_path, res)
 
     # 3. Finalize summary and print human-friendly tables
-    finalize_and_print_stats(csv_path)
+    finalize_and_print_stats(csv_path, baseline_csv=args.baseline_csv)
     print(f"[Generated Stats File Full Path]: {csv_path}\n")
 
 if __name__ == "__main__":

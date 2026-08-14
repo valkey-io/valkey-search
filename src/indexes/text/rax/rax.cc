@@ -81,9 +81,6 @@ void RaxTree::FreeWithCallback(void (*free_callback)(void *)) {
 }
 
 void *RaxTree::AllocateNode(size_t size) {
-  if (allocator_) {
-    return allocator_->Allocate(size);
-  }
   return GetThreadLocalSegregatedAllocator().Allocate(size);
 }
 
@@ -101,10 +98,6 @@ void *RaxTree::ReallocateNode(void *ptr, size_t new_size) {
   if (new_size == 0) {
     FreeNode(ptr);
     return nullptr;
-  }
-  auto *seg = dynamic_cast<SegregatedFixedSizeAllocator *>(allocator_);
-  if (seg) {
-    return seg->Reallocate(static_cast<char *>(ptr), new_size);
   }
   return GetThreadLocalSegregatedAllocator().Reallocate(
       static_cast<char *>(ptr), new_size);

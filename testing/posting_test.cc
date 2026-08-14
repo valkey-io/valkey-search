@@ -7,9 +7,7 @@
 
 #include "src/indexes/text/posting.h"
 
-
 #include "gtest/gtest.h"
-#include "src/indexes/text/invasive_ptr.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 

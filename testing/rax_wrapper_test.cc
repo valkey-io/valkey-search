@@ -26,7 +26,6 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 // Override the weak symbol empty_usable_size (defined in

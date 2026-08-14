@@ -40,10 +40,14 @@ struct AllocatorChunk;
 class Allocator {
  public:
   virtual char *Allocate(size_t size) = 0;
+  virtual char *Allocate(size_t size, size_t alignment) {
+    return Allocate(size);
+  }
   static bool Free(char *ptr);
   static size_t GetAllocatedSize(char *ptr);
   virtual ~Allocator() = default;
   virtual size_t ChunkSize() const = 0;
+  virtual size_t Alignment() const { return 8; }
 
  protected:
   friend class SegregatedFixedSizeAllocator;
@@ -53,7 +57,7 @@ class Allocator {
 class FixedSizeAllocator;
 
 struct AllocatorChunk {
-  AllocatorChunk(Allocator *allocator, size_t size);
+  AllocatorChunk(Allocator *allocator, size_t size, size_t alignment = 8);
   ~AllocatorChunk();
   void Retain() { ref_count.fetch_add(1, std::memory_order_relaxed); }
   bool TryRetain() {
@@ -74,7 +78,16 @@ struct AllocatorChunk {
 
   size_t entries_in_chunk;
   size_t entry_size;
-  std::unique_ptr<char[]> data;
+  size_t alignment;
+
+  struct AlignedDeleter {
+    size_t alignment;
+    void operator()(char *ptr) const {
+      ::operator delete[](ptr, std::align_val_t{alignment});
+    }
+  };
+  std::unique_ptr<char[], AlignedDeleter> raw_data;
+  char *data{nullptr};
 
   size_t num_bitmap_words;
   // Bitvector: 0 = free, 1 = occupied
@@ -95,8 +108,9 @@ struct AllocatorChunk {
 class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
  public:
   friend class IntrusiveRefCount;
-  FixedSizeAllocator(size_t size, bool require_ptr_alignment);
+  explicit FixedSizeAllocator(size_t size, size_t alignment = 8);
   char *Allocate(size_t size) override;
+  char *Allocate(size_t size, size_t alignment) override;
   char *Allocate();
   size_t ActiveAllocations() const {
     return active_allocations_.load(std::memory_order_relaxed);
@@ -104,6 +118,7 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
   size_t ChunkCount() const ABSL_LOCKS_EXCLUDED(mutex_);
   ~FixedSizeAllocator() override;
   size_t ChunkSize() const override { return size_; }
+  size_t Alignment() const override { return alignment_; }
 
  protected:
   void Free(AllocatorChunk *chunk, char *ptr) override;
@@ -112,6 +127,7 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
   IntrusiveList<AllocatorChunk> chunks_grouped_by_free_entries_
       [kFreeEntriesPerChunkGroupSize] ABSL_GUARDED_BY(mutex_);
   size_t size_;
+  size_t alignment_{8};
   IntrusiveList<AllocatorChunk> fully_used_chunks_ ABSL_GUARDED_BY(mutex_);
   std::atomic<AllocatorChunk *> current_chunk_{nullptr};
   std::atomic<size_t> active_allocations_{0};
@@ -119,7 +135,6 @@ class FixedSizeAllocator : public IntrusiveRefCount, public Allocator {
   void UpdateChunkGroup(AllocatorChunk *chunk)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
   void AllocateChunk() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-  bool require_ptr_alignment_;
 };
 
 DEFINE_UNIQUE_PTR_TYPE(Allocator);
@@ -136,14 +151,16 @@ class SegregatedFixedSizeAllocator : public Allocator {
       sizeof(kSizeClasses) / sizeof(kSizeClasses[0]);
   static constexpr size_t kMaxSize = kSizeClasses[kNumClasses - 1];
 
-  SegregatedFixedSizeAllocator();
+  explicit SegregatedFixedSizeAllocator(size_t default_alignment = 8);
   ~SegregatedFixedSizeAllocator() override = default;
 
   char *Allocate(size_t size) override;
+  char *Allocate(size_t size, size_t alignment) override;
   static bool Free(char *ptr);
   char *Reallocate(char *ptr, size_t new_size);
   static size_t UsableSize(char *ptr);
   size_t ChunkSize() const override { return kMaxSize; }
+  size_t Alignment() const override { return 32; }
 
  protected:
   void Free(AllocatorChunk *chunk, char *ptr) override;

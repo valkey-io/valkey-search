@@ -115,6 +115,8 @@ class SystemAllocTracker {
       tracked_ptrs_snapshot_;
 };
 
+
+
 void* PerformAndTrackMalloc(size_t size, void* (*malloc_fn)(size_t),
                             size_t (*malloc_size_fn)(void*)) {
   void* ptr = malloc_fn(size);

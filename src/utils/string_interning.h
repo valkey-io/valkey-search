@@ -247,6 +247,46 @@ class BorrowedInternedStringPtr {
   friend class InternedStringPtr;
 };
 
+//
+// TermKey provides Small String Optimization (SSO) for search terms <= 15 chars
+// using std::variant<std::string, InternedStringPtr>.
+// Terms <= 15 chars are stored stack-inline in std::string (libstdc++/libc++ SSO),
+// bypassing StringInternStore allocations and lock contention.
+//
+class TermKey {
+ public:
+  static constexpr size_t kSSOThreshold = 15;
+
+  TermKey() = default;
+
+  explicit TermKey(absl::string_view str);
+
+  explicit TermKey(InternedStringPtr ptr) : value_(std::move(ptr)) {}
+
+  absl::string_view Str() const {
+    return std::visit([](const auto &item) -> absl::string_view {
+      return item;
+    }, value_);
+  }
+
+  operator absl::string_view() const { return Str(); }
+  bool operator==(const TermKey &other) const { return Str() == other.Str(); }
+  bool operator==(absl::string_view str) const { return Str() == str; }
+  auto operator<=>(const TermKey &other) const { return Str() <=> other.Str(); }
+
+  bool IsSSO() const {
+    return std::holds_alternative<std::string>(value_);
+  }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const TermKey &k) {
+    return H::combine(std::move(h), k.Str());
+  }
+
+ private:
+  std::variant<std::string, InternedStringPtr> value_;
+};
+
 static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
               "BorrowedInternedStringPtr must be trivially destructible");
 
@@ -1032,6 +1072,14 @@ class StringInternStore {
 
   FRIEND_TEST(ValkeySearchTest, Info);
 };
+
+inline TermKey::TermKey(absl::string_view str) {
+  if (str.size() <= kSSOThreshold) {
+    value_ = std::string(str);
+  } else {
+    value_ = StringInternStore::Intern(str);
+  }
+}
 
 }  // namespace valkey_search
 

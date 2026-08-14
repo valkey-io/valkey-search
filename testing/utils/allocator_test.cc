@@ -214,6 +214,39 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithFreeEntries) {
   }
 }
 
+TEST(AllocatorTest, AlignmentGuarantees) {
+  // Test 32-byte alignment for vector distance calculations
+  const size_t vector_size = 128;
+  auto vector_allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, vector_size, 32);
+  EXPECT_EQ(vector_allocator->Alignment(), 32);
+
+  std::vector<char *> ptrs;
+  for (int i = 0; i < 50; ++i) {
+    char *ptr = vector_allocator->Allocate(vector_size);
+    EXPECT_NE(ptr, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % 32, 0);
+    ptrs.push_back(ptr);
+  }
+  for (char *ptr : ptrs) {
+    Allocator::Free(ptr);
+  }
+
+  // Test SegregatedFixedSizeAllocator alignment for vector size classes
+  SegregatedFixedSizeAllocator segregated_allocator(8);
+  std::vector<char *> seg_ptrs;
+  for (size_t size : {128, 256, 512, 1024}) {
+    for (int i = 0; i < 10; ++i) {
+      char *ptr = segregated_allocator.Allocate(size);
+      EXPECT_NE(ptr, nullptr);
+      EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % 32, 0);
+      seg_ptrs.push_back(ptr);
+    }
+  }
+  for (char *ptr : seg_ptrs) {
+    SegregatedFixedSizeAllocator::Free(ptr);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(AllocatorTests, AllocatorTest,
                          ::testing::Values(true, false),
                          [](const testing::TestParamInfo<bool> &info) {

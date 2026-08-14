@@ -35,7 +35,7 @@ class MockAllocator : public Allocator {
  public:
   explicit MockAllocator() : chunk_(this, 1024) {
     for (size_t i = 0; i < chunk_.entries_in_chunk; ++i) {
-      free_list_.push_back(chunk_.data.get() + i * 1024);
+      free_list_.push_back(chunk_.data + i * 1024);
     }
   }
 
@@ -1140,6 +1140,25 @@ TEST_F(BagOfInternedStringPtrsTest, ChurnAcrossAllModes) {
   for (const auto &k : keys) {
     EXPECT_EQ(k.RefCount(), 1);
   }
+}
+
+TEST(TermKeyTest, BasicSSOAndInterning) {
+  // Test short string (<= 15 chars -> SSO)
+  TermKey short_key("short_term");
+  EXPECT_TRUE(short_key.IsSSO());
+  EXPECT_EQ(short_key.Str(), "short_term");
+  EXPECT_EQ(static_cast<absl::string_view>(short_key), "short_term");
+
+  // Test long string (> 15 chars -> StringInternStore)
+  std::string long_str = "this_is_a_very_long_search_term_exceeding_15_chars";
+  TermKey long_key(long_str);
+  EXPECT_FALSE(long_key.IsSSO());
+  EXPECT_EQ(long_key.Str(), long_str);
+
+  // Test equality and hash
+  TermKey short_key2("short_term");
+  EXPECT_EQ(short_key, short_key2);
+  EXPECT_EQ(absl::HashOf(short_key), absl::HashOf(short_key2));
 }
 
 }  // namespace

@@ -16,6 +16,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -225,10 +226,10 @@ class TermPredicate : public TextPredicate {
   bool IsExact() const { return exact_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
- private:
+  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   FieldMaskPredicate field_mask_;
-  std::string term_;
+  TermKey term_;
   bool exact_;
 };
 
@@ -257,7 +258,7 @@ class PrefixPredicate : public TextPredicate {
  private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   FieldMaskPredicate field_mask_;
-  std::string term_;
+  TermKey term_;
 };
 
 class SuffixPredicate : public TextPredicate {

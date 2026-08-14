@@ -109,32 +109,49 @@ static_assert(sizeof(InternedString) == 8,
 class InternedStringPtr {
  public:
   InternedStringPtr() = default;
-  InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
-    if (impl_) {
+
+  static InternedStringPtr MakeSSO(absl::string_view str) {
+    CHECK_LE(str.size(), 7u);
+    InternedStringPtr sso_ptr;
+    sso_ptr.sso_.tag_and_len = static_cast<uint8_t>((str.size() << 1) | 1);
+    std::memcpy(sso_ptr.sso_.data, str.data(), str.size());
+    std::memset(sso_ptr.sso_.data + str.size(), 0, 7 - str.size());
+    return sso_ptr;
+  }
+
+  bool IsSSO() const { return (sso_.tag_and_len & 1) != 0; }
+
+  InternedString *Impl() const { return IsSSO() ? nullptr : impl_; }
+
+  InternedStringPtr(const InternedStringPtr &other) : repr_(other.repr_) {
+    if (!IsSSO() && impl_) {
       impl_->IncrementRefCount();
     }
   }
-  InternedStringPtr(InternedStringPtr &&other) noexcept : impl_(other.impl_) {
+
+  InternedStringPtr(InternedStringPtr &&other) noexcept : repr_(other.repr_) {
     other.impl_ = nullptr;
   }
+
   InternedStringPtr &operator=(const InternedStringPtr &other) {
     if (this != &other) {
-      if (impl_) {
+      if (!IsSSO() && impl_) {
         impl_->DecrementRefCount();
       }
-      impl_ = other.impl_;
-      if (impl_) {
+      repr_ = other.repr_;
+      if (!IsSSO() && impl_) {
         impl_->IncrementRefCount();
       }
     }
     return *this;
   }
+
   InternedStringPtr &operator=(InternedStringPtr &&other) noexcept {
     if (this != &other) {
-      if (impl_) {
+      if (!IsSSO() && impl_) {
         impl_->DecrementRefCount();
       }
-      impl_ = other.impl_;
+      repr_ = other.repr_;
       other.impl_ = nullptr;
     }
     return *this;
@@ -142,86 +159,117 @@ class InternedStringPtr {
 
   InternedStringPtr &operator=(void *other) noexcept {
     CHECK(!other);  // Only nullptr is allowed
-    if (impl_) {
+    if (!IsSSO() && impl_) {
       impl_->DecrementRefCount();
     }
     impl_ = nullptr;
     return *this;
   }
 
-  auto operator<=>(const InternedStringPtr &other) const = default;
-
-  size_t Hash() const { return absl::HashOf(impl_); }
-
-  InternedString &operator*() { return *impl_; }
-  InternedString *operator->() { return impl_; }
-  operator bool() const { return impl_ != nullptr; }
-  const InternedString &operator*() const { return *impl_; }
-  const InternedString *operator->() const { return impl_; }
   ~InternedStringPtr() {
-    if (impl_) {
+    if (!IsSSO() && impl_) {
       impl_->DecrementRefCount();
     }
     impl_ = nullptr;
   }
 
-  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
+  absl::string_view Str() const {
+    if (IsSSO()) {
+      size_t len = static_cast<size_t>((sso_.tag_and_len >> 1) & 0x0F);
+      return {sso_.data, len};
+    }
+    if (impl_) {
+      return impl_->Str();
+    }
+    return {};
+  }
 
-  // Access the raw pointer (used by BorrowedInternedStringPtr).
-  const InternedString *RawPtr() const { return impl_; }
+  operator absl::string_view() const { return Str(); }
+
+  const InternedStringPtr *operator->() const { return this; }
+  const InternedStringPtr &operator*() const { return *this; }
+  operator bool() const { return IsSSO() || impl_ != nullptr; }
+
+  size_t RefCount() const {
+    if (IsSSO()) {
+      return 1;
+    }
+    return impl_ ? impl_->RefCount() : 0;
+  }
+
+  const InternedString *RawPtr() const { return Impl(); }
+
+  size_t Hash() const { return absl::HashOf(Str()); }
+
+  bool operator==(const InternedStringPtr &other) const {
+    if (repr_ == other.repr_) {
+      return true;
+    }
+    return Str() == other.Str();
+  }
+
+  auto operator<=>(const InternedStringPtr &other) const {
+    if (repr_ == other.repr_) {
+      return std::strong_ordering::equal;
+    }
+    return Str() <=> other.Str();
+  }
 
  private:
-  InternedStringPtr(InternedString *impl) : impl_(impl) {}
-  InternedString *impl_{nullptr};
+  union {
+    InternedString *impl_{nullptr};
+    struct {
+      uint8_t tag_and_len;  // bit 0 = 1 (inline flag), bits 1..4 = len (0..7)
+      char data[7];
+    } sso_;
+    uint64_t repr_;
+  };
+
+  explicit InternedStringPtr(InternedString *impl) : impl_(impl) {}
+
   friend class StringInternStore;
   friend class BorrowedInternedStringPtr;
 };
 
-//
-// A non-owning (borrowed) pointer to an InternedString. This class is
-// trivially destructible — destroying a vector of these is a no-op.
-//
-// Safety contract: The caller MUST guarantee that the underlying
-// InternedString outlives this pointer. Typically this means the reader lock
-// that protects the index must be held for the lifetime of all
-// BorrowedInternedStringPtr instances.
-//
-// Call Materialize() to convert to an owning InternedStringPtr (increments
-// ref count) before releasing the lock.
-//
 class BorrowedInternedStringPtr {
  public:
   BorrowedInternedStringPtr() = default;
-  explicit BorrowedInternedStringPtr(const InternedStringPtr &owned)
-      : ptr_(owned.RawPtr()) {}
+  explicit BorrowedInternedStringPtr(const InternedStringPtr &owned) {
+    std::memcpy(&repr_, &owned, sizeof(uint64_t));
+  }
 
-  // Trivially copyable, trivially destructible — no ref counting.
   BorrowedInternedStringPtr(const BorrowedInternedStringPtr &) = default;
   BorrowedInternedStringPtr &operator=(const BorrowedInternedStringPtr &) =
       default;
   ~BorrowedInternedStringPtr() = default;
 
-  absl::string_view Str() const { return ptr_->Str(); }
-  const InternedString *operator->() const { return ptr_; }
-  const InternedString &operator*() const { return *ptr_; }
-  explicit operator bool() const { return ptr_ != nullptr; }
+  const InternedStringPtr &AsOwned() const {
+    return *reinterpret_cast<const InternedStringPtr *>(&repr_);
+  }
 
-  // Convert to an owning pointer (increments ref count).
+  absl::string_view Str() const { return AsOwned().Str(); }
+  const BorrowedInternedStringPtr *operator->() const { return this; }
+  const BorrowedInternedStringPtr &operator*() const { return *this; }
+  explicit operator bool() const { return static_cast<bool>(AsOwned()); }
+
   InternedStringPtr Materialize() const {
-    if (ptr_) {
-      const_cast<InternedString *>(ptr_)->IncrementRefCount();
+    InternedStringPtr result = AsOwned();
+    if (!result.IsSSO() && result.RawPtr()) {
+      const_cast<InternedString *>(result.RawPtr())->IncrementRefCount();
     }
-    return InternedStringPtr(const_cast<InternedString *>(ptr_));
+    return result;
   }
 
   auto operator<=>(const BorrowedInternedStringPtr &other) const {
-    return ptr_ <=> other.ptr_;
+    return AsOwned() <=> other.AsOwned();
   }
-  bool operator==(const BorrowedInternedStringPtr &other) const = default;
-  size_t Hash() const { return absl::HashOf(ptr_); }
+  bool operator==(const BorrowedInternedStringPtr &other) const {
+    return AsOwned() == other.AsOwned();
+  }
+  size_t Hash() const { return AsOwned().Hash(); }
 
  private:
-  const InternedString *ptr_{nullptr};
+  uint64_t repr_{0};
   friend class InternedStringPtr;
 };
 
@@ -935,6 +983,8 @@ static_assert(alignof(InternedStringPtr) == alignof(uintptr_t),
 
 class StringInternStore {
  public:
+  static constexpr size_t kNumShards = 64;
+
   friend class InternedString;
   static StringInternStore &Instance();
   //
@@ -948,8 +998,12 @@ class StringInternStore {
   static int64_t GetMemoryUsage();
 
   size_t UniqueStrings() const {
-    absl::MutexLock lock(&mutex_);
-    return str_to_interned_.size();
+    size_t count = 0;
+    for (size_t shard_index = 0; shard_index < kNumShards; ++shard_index) {
+      absl::MutexLock lock(&shards_[shard_index].mutex);
+      count += shards_[shard_index].str_to_interned.size();
+    }
+    return count;
   }
 
   struct Stats {
@@ -960,21 +1014,15 @@ class StringInternStore {
     };
     absl::btree_map<int, BucketStats> by_ref_stats_;
     absl::btree_map<int, BucketStats> by_size_stats_;
-    BucketStats inline_total_stats_;
+    BucketStats sso_total_stats_;
     BucketStats out_of_line_total_stats_;
   };
   Stats GetStats() const;
 
  private:
-  static MemoryPool memory_pool_;
-
-  StringInternStore() = default;
-  bool Release(InternedString *str);
-  InternedStringPtr InternImpl(absl::string_view str,
-                               Allocator *allocator = nullptr);
   struct InternedStringPtrFullHash {
-    std::size_t operator()(const InternedStringPtr &sp) const {
-      return absl::HashOf(sp->Str());
+    std::size_t operator()(const InternedStringPtr &string_ptr) const {
+      return absl::HashOf(string_ptr->Str());
     }
   };
 
@@ -984,10 +1032,22 @@ class StringInternStore {
       return lhs->Str() == rhs->Str();
     }
   };
-  absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
-                      InternedStringPtrFullEqual>
-      str_to_interned_ ABSL_GUARDED_BY(mutex_);
-  mutable absl::Mutex mutex_;
+
+  struct Shard {
+    mutable absl::Mutex mutex;
+    absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
+                        InternedStringPtrFullEqual>
+        str_to_interned ABSL_GUARDED_BY(mutex);
+  };
+
+  static MemoryPool memory_pool_;
+
+  StringInternStore() = default;
+  bool Release(InternedString *str);
+  InternedStringPtr InternImpl(absl::string_view str,
+                               Allocator *allocator = nullptr);
+
+  std::array<Shard, kNumShards> shards_;
 
   // Used for testing.
   static void SetMemoryUsage(int64_t value) {

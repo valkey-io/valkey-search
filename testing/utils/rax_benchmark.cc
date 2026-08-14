@@ -64,47 +64,39 @@ namespace valkey_search::utils {
 namespace {
 
 using RaxSetType = absl::flat_hash_set<size_t>;
-    absl::flat_hash_set<size_t, absl::Hash<size_t>, std::equal_to<size_t>,
+absl::flat_hash_set < size_t, absl::Hash<size_t>, std::equal_to<size_t>,
 
-inline void RaxAddValue(Rax *tree, const std::string &key, size_t val,
-                        ) {
+    inline void RaxAddValue(Rax *tree, const std::string &key, size_t val, ) {
   void *existing = nullptr;
-  if (RaxFind(
-          tree,
-          reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
-          key.size(), &existing)) {
+  if (RaxFind(tree,
+              reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
+              key.size(), &existing)) {
     static_cast<RaxSetType *>(existing)->insert(val);
   } else {
-    auto *set =
-        new (sizeof(RaxSetType))
-            RaxSetType();
+    auto *set = new (sizeof(RaxSetType)) RaxSetType();
     set->insert(val);
-    RaxInsert(
-        tree, reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
-        key.size(), set, nullptr);
+    RaxInsert(tree,
+              reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
+              key.size(), set, nullptr);
   }
 }
 
 inline void RaxRemoveValue(Rax *tree, const std::string &key, size_t val) {
   void *existing = nullptr;
-  if (RaxFind(
-          tree,
-          reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
-          key.size(), &existing)) {
+  if (RaxFind(tree,
+              reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
+              key.size(), &existing)) {
     auto *set = static_cast<RaxSetType *>(existing);
     set->erase(val);
   }
 }
 
-inline void RaxTreeAddValue(RaxTree *tree, const std::string &key, size_t val,
-                            ) {
+inline void RaxTreeAddValue(RaxTree *tree, const std::string &key, size_t val) {
   void *existing = tree->Find(key);
   if (existing) {
     static_cast<RaxSetType *>(existing)->insert(val);
   } else {
-    auto *set =
-        new (sizeof(RaxSetType))
-            RaxSetType();
+    auto *set = new (sizeof(RaxSetType)) RaxSetType();
     set->insert(val);
     tree->Insert(key, set);
   }
@@ -130,7 +122,7 @@ inline void FreeRaxSetCallback(void *ptr) {
 // -----------------------------------------------------------------------------
 
 static void BM_RaxInsert(benchmark::State &state, AllocatorType alloc_type) {
-    std::vector<Rax *> trees(kNumInstances);
+  std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
     trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
@@ -142,8 +134,8 @@ static void BM_RaxInsert(benchmark::State &state, AllocatorType alloc_type) {
   for (auto _ : state) {
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
-      RaxAddValue(trees[idx], GetKey(op_id + i), static_cast<size_t>(op_id + i),
-                  pools[idx].get());
+      RaxAddValue(trees[idx], GetKey(op_id + i),
+                  static_cast<size_t>(op_id + i));
     }
     state.PauseTiming();
     for (int i = 0; i < kNumOperations; ++i) {
@@ -160,7 +152,7 @@ static void BM_RaxInsert(benchmark::State &state, AllocatorType alloc_type) {
 }
 
 static void BM_RaxSearch(benchmark::State &state, AllocatorType alloc_type) {
-    std::vector<Rax *> trees(kNumInstances);
+  std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
     trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
@@ -186,7 +178,7 @@ static void BM_RaxSearch(benchmark::State &state, AllocatorType alloc_type) {
 }
 
 static void BM_RaxDelete(benchmark::State &state, AllocatorType alloc_type) {
-    std::vector<Rax *> trees(kNumInstances);
+  std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
     trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
@@ -215,7 +207,7 @@ static void BM_RaxDelete(benchmark::State &state, AllocatorType alloc_type) {
 }
 
 static void BM_RaxUpdate(benchmark::State &state, AllocatorType alloc_type) {
-    std::vector<Rax *> trees(kNumInstances);
+  std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
     trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
@@ -242,111 +234,133 @@ static void BM_RaxUpdate(benchmark::State &state, AllocatorType alloc_type) {
 
 static void BM_RaxTreeInsert(benchmark::State &state,
                              AllocatorType alloc_type) {
-    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k] = std::make_unique<RaxTree>();
-    for (int i = 0; i < kInitialEntries; ++i) {
-      RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
-                      pools[k].get());
+  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index] = std::make_unique<RaxTree>();
+    for (int entry_index = 0; entry_index < kInitialEntries; ++entry_index) {
+      RaxTreeAddValue(trees[instance_index].get(), GetKey(entry_index),
+                      static_cast<size_t>(entry_index));
     }
   }
 
-  int op_id = kInitialEntries;
+  int base_operation_id = kInitialEntries;
   for (auto _ : state) {
-    for (int i = 0; i < kNumOperations; ++i) {
-      int idx = i % kNumInstances;
-      RaxTreeAddValue(trees[idx].get(), GetKey(op_id + i),
-                      static_cast<size_t>(op_id + i));
+    for (int operation_index = 0; operation_index < kNumOperations;
+         ++operation_index) {
+      int target_instance_index = operation_index % kNumInstances;
+      RaxTreeAddValue(trees[target_instance_index].get(),
+                      GetKey(base_operation_id + operation_index),
+                      static_cast<size_t>(base_operation_id + operation_index));
     }
     state.PauseTiming();
-    for (int i = 0; i < kNumOperations; ++i) {
-      int idx = i % kNumInstances;
-      RaxTreeRemoveValue(trees[idx].get(), GetKey(op_id + i),
-                         static_cast<size_t>(op_id + i));
+    for (int operation_index = 0; operation_index < kNumOperations;
+         ++operation_index) {
+      int target_instance_index = operation_index % kNumInstances;
+      RaxTreeRemoveValue(
+          trees[target_instance_index].get(),
+          GetKey(base_operation_id + operation_index),
+          static_cast<size_t>(base_operation_id + operation_index));
     }
     state.ResumeTiming();
   }
 
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k]->FreeWithCallback(FreeRaxSetCallback);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index]->FreeWithCallback(FreeRaxSetCallback);
   }
 }
 
 static void BM_RaxTreeSearch(benchmark::State &state,
                              AllocatorType alloc_type) {
-    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k] = std::make_unique<RaxTree>();
-    for (int i = 0; i < kInitialEntries; ++i) {
-      RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
-                      pools[k].get());
+  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index] = std::make_unique<RaxTree>();
+    for (int entry_index = 0; entry_index < kInitialEntries; ++entry_index) {
+      RaxTreeAddValue(trees[instance_index].get(), GetKey(entry_index),
+                      static_cast<size_t>(entry_index));
     }
   }
 
   for (auto _ : state) {
-    for (int i = 0; i < kNumOperations; ++i) {
-      int idx = i % kNumInstances;
-      benchmark::DoNotOptimize(trees[idx]->Find(GetKey(i % kInitialEntries)));
+    for (int operation_index = 0; operation_index < kNumOperations;
+         ++operation_index) {
+      int target_instance_index = operation_index % kNumInstances;
+      benchmark::DoNotOptimize(trees[target_instance_index]->Find(
+          GetKey(operation_index % kInitialEntries)));
     }
   }
 
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k]->FreeWithCallback(FreeRaxSetCallback);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index]->FreeWithCallback(FreeRaxSetCallback);
   }
 }
 
 static void BM_RaxTreeDelete(benchmark::State &state,
                              AllocatorType alloc_type) {
-    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k] = std::make_unique<RaxTree>();
-    for (int i = 0; i < kInitialEntries; ++i) {
-      RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
-                      pools[k].get());
+  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index] = std::make_unique<RaxTree>();
+    for (int entry_index = 0; entry_index < kInitialEntries; ++entry_index) {
+      RaxTreeAddValue(trees[instance_index].get(), GetKey(entry_index),
+                      static_cast<size_t>(entry_index));
     }
   }
 
   for (auto _ : state) {
-    for (int i = 0; i < kNumOperations; ++i) {
-      int idx = i % kNumInstances;
-      RaxTreeRemoveValue(trees[idx].get(), GetKey(i % kInitialEntries),
-                         static_cast<size_t>(i % kInitialEntries));
+    for (int operation_index = 0; operation_index < kNumOperations;
+         ++operation_index) {
+      int target_instance_index = operation_index % kNumInstances;
+      RaxTreeRemoveValue(
+          trees[target_instance_index].get(),
+          GetKey(operation_index % kInitialEntries),
+          static_cast<size_t>(operation_index % kInitialEntries));
     }
     state.PauseTiming();
-    for (int i = 0; i < kNumOperations; ++i) {
-      int idx = i % kNumInstances;
-      RaxTreeAddValue(trees[idx].get(), GetKey(i % kInitialEntries),
-                      static_cast<size_t>(i));
+    for (int operation_index = 0; operation_index < kNumOperations;
+         ++operation_index) {
+      int target_instance_index = operation_index % kNumInstances;
+      RaxTreeAddValue(trees[target_instance_index].get(),
+                      GetKey(operation_index % kInitialEntries),
+                      static_cast<size_t>(operation_index));
     }
     state.ResumeTiming();
   }
 
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k]->FreeWithCallback(FreeRaxSetCallback);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index]->FreeWithCallback(FreeRaxSetCallback);
   }
 }
 
 static void BM_RaxTreeUpdate(benchmark::State &state,
                              AllocatorType alloc_type) {
-    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k] = std::make_unique<RaxTree>();
-    for (int i = 0; i < kInitialEntries; ++i) {
-      RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
-                      pools[k].get());
+  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index] = std::make_unique<RaxTree>();
+    for (int entry_index = 0; entry_index < kInitialEntries; ++entry_index) {
+      RaxTreeAddValue(trees[instance_index].get(), GetKey(entry_index),
+                      static_cast<size_t>(entry_index));
     }
   }
 
   for (auto _ : state) {
-    for (int i = 0; i < kNumOperations; ++i) {
-      int idx = i % kNumInstances;
-      RaxTreeAddValue(trees[idx].get(), GetKey(i % kInitialEntries),
-                      static_cast<size_t>(i + 100));
+    for (int operation_index = 0; operation_index < kNumOperations;
+         ++operation_index) {
+      int target_instance_index = operation_index % kNumInstances;
+      RaxTreeAddValue(trees[target_instance_index].get(),
+                      GetKey(operation_index % kInitialEntries),
+                      static_cast<size_t>(operation_index + 100));
     }
   }
 
-  for (int k = 0; k < kNumInstances; ++k) {
-    trees[k]->FreeWithCallback(FreeRaxSetCallback);
+  for (int instance_index = 0; instance_index < kNumInstances;
+       ++instance_index) {
+    trees[instance_index]->FreeWithCallback(FreeRaxSetCallback);
   }
 }
 

@@ -168,35 +168,23 @@ InternedStringPtr* MakeShadowInternPtrPtr(InternedString* str, void*& storage) {
 }
 
 bool StringInternStore::Release(InternedString* str) {
-  //
-  // Need to make an InternStringPtr to look it up in the map.
-  // But we don't want to have the refcounts changed, so we create a
-  // temporary InternedStringPtr that doesn't modify the refcounts.
-  //
   OutOfLineInternedString fake(str->Str().data(), str->Str().size());
   void* storage;
   InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
-  absl::MutexLock lock(&mutex_);
-  //
-  // Now that we have the lock, try our decrement to see if we really
-  // want to destroy this entry.
-  //
+
+  size_t shard_idx = absl::HashOf(str->Str()) % kNumShards;
+  auto& shard = shards_[shard_idx];
+  absl::MutexLock lock(&shard.mutex);
+
   auto old_value = str->ref_count_.fetch_sub(1, std::memory_order_seq_cst);
   if (old_value > 1) {
-    //
-    // Still referenced.
-    //
     return false;
   }
-  //
-  // This is the true 1->0 transition. Remove from map.
-  //
-  auto it = str_to_interned_.find(*ptr_ptr);
-  CHECK(it != str_to_interned_.end()) << "Bad Map State";
+
+  auto it = shard.str_to_interned.find(*ptr_ptr);
+  CHECK(it != shard.str_to_interned.end()) << "Bad Map State";
   CHECK(str->RefCount() == 0);
-  str_to_interned_.erase(
-      it);  // Note this will also call the DecrementRefCount, but
-            // since refcount is already zero, it will be a no-op.
+  shard.str_to_interned.erase(it);
   return true;
 }
 
@@ -217,58 +205,62 @@ StringInternStore& StringInternStore::Instance() {
 
 InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
                                                 Allocator* allocator) {
+  if (str.size() <= 7 && allocator == nullptr) {
+    return InternedStringPtr::MakeSSO(str);
+  }
+
   IsolatedMemoryScope scope{memory_pool_};
-  //
-  // Construct a fake InternedStringPtr to look up in the map.
-  // Doing it carefully to avoid modifying refcounts.
-  //
+
   OutOfLineInternedString fake(str.data(), str.size());
   void* storage;
   InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
 
-  absl::MutexLock lock(&mutex_);
-  auto it = str_to_interned_.find(*ptr_ptr);
-  if (it != str_to_interned_.end()) {
+  size_t shard_idx = absl::HashOf(str) % kNumShards;
+  auto& shard = shards_[shard_idx];
+
+  absl::MutexLock lock(&shard.mutex);
+  auto it = shard.str_to_interned.find(*ptr_ptr);
+  if (it != shard.str_to_interned.end()) {
     return *it;  // will bump the refcount automatically.
   }
-  //
-  // Create a new interned string. Without bumping the refcount....
-  //
+
   InternedString* new_ptr = InternedString::Constructor(str, allocator);
-  str_to_interned_.insert(std::move(InternedStringPtr(new_ptr)));
-  return {new_ptr};
+  shard.str_to_interned.insert(InternedStringPtr(new_ptr));
+  return InternedStringPtr(new_ptr);
 }
 
 int64_t StringInternStore::GetMemoryUsage() { return memory_pool_.GetUsage(); }
 
 StringInternStore::Stats StringInternStore::GetStats() const {
   Stats stats;
-  absl::MutexLock lock(&mutex_);
-  for (const auto& str : str_to_interned_) {
-    auto size = str->Str().size();
-    auto allocated = str->Allocated();
-    auto refcount =
-        str.RefCount();  // This is volatile even while holding the lock
-    if (str->IsInline()) {
-      stats.inline_total_stats_.count_++;
-      stats.inline_total_stats_.bytes_ += size;
-      stats.inline_total_stats_.allocated_ += allocated;
-      stats.by_ref_stats_[refcount].count_++;
-      stats.by_ref_stats_[refcount].bytes_ += size;
-      stats.by_ref_stats_[refcount].allocated_ += allocated;
-      stats.by_size_stats_[size].count_++;
-      stats.by_size_stats_[size].bytes_ += size;
-      stats.by_size_stats_[size].allocated_ += allocated;
-    } else {
-      stats.out_of_line_total_stats_.count_++;
-      stats.out_of_line_total_stats_.bytes_ += size;
-      stats.out_of_line_total_stats_.allocated_ += allocated;
-      stats.by_ref_stats_[-refcount].count_++;
-      stats.by_ref_stats_[-refcount].bytes_ += size;
-      stats.by_ref_stats_[-refcount].allocated_ += allocated;
-      stats.by_size_stats_[-size].count_++;
-      stats.by_size_stats_[-size].bytes_ += size;
-      stats.by_size_stats_[-size].allocated_ += allocated;
+  for (size_t shard_index = 0; shard_index < kNumShards; ++shard_index) {
+    const auto& shard = shards_[shard_index];
+    absl::MutexLock lock(&shard.mutex);
+    for (const auto& str : shard.str_to_interned) {
+      auto size = str->Str().size();
+      auto allocated = str.IsSSO() ? 0 : str.RawPtr()->Allocated();
+      auto refcount = str.RefCount();
+      if (!str.IsSSO() && str.RawPtr()->IsInline()) {
+        stats.sso_total_stats_.count_++;
+        stats.sso_total_stats_.bytes_ += size;
+        stats.sso_total_stats_.allocated_ += allocated;
+        stats.by_ref_stats_[refcount].count_++;
+        stats.by_ref_stats_[refcount].bytes_ += size;
+        stats.by_ref_stats_[refcount].allocated_ += allocated;
+        stats.by_size_stats_[size].count_++;
+        stats.by_size_stats_[size].bytes_ += size;
+        stats.by_size_stats_[size].allocated_ += allocated;
+      } else {
+        stats.out_of_line_total_stats_.count_++;
+        stats.out_of_line_total_stats_.bytes_ += size;
+        stats.out_of_line_total_stats_.allocated_ += allocated;
+        stats.by_ref_stats_[-refcount].count_++;
+        stats.by_ref_stats_[-refcount].bytes_ += size;
+        stats.by_ref_stats_[-refcount].allocated_ += allocated;
+        stats.by_size_stats_[-size].count_++;
+        stats.by_size_stats_[-size].bytes_ += size;
+        stats.by_size_stats_[-size].allocated_ += allocated;
+      }
     }
   }
   return stats;

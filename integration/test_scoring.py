@@ -15,8 +15,9 @@ def _vec(*floats):
 """
 End-to-end tests for BM25STD scoring through FT.SEARCH ... WITHSCORES.
 
-Scores are verified against the Redis 8.6 docker baseline. All indexes use NOSTEM
-so query terms match raw tokens and the verified score table applies directly.
+Scores are verified against the Redis 8.6 docker baseline. Most indexes use NOSTEM
+so query terms match raw tokens and the verified score table applies directly;
+idxStem (Group 15) enables stemming to cover stem-family scoring.
 
 WITHSCORES reply layout: [count, key, score_str, attrs, key, score_str, ...]
 where score_str is formatted "%.12g".
@@ -239,6 +240,36 @@ INDEX_HV = ScoringIndex(
 # Hybrid text scores (verified against Redis 8.6). __vec_score (distance): 32 for
 # hv:short, 0 for hv:long.
 HV_HYBRID_SCORES = {"hv:short": 0.267405, "hv:long": 0.138313}
+
+# idxStem: one stemming index (no NOSTEM) shared by the stem-family tests. Query
+# "running" (stem root "run") exercises all three BM25 leaves:
+#   - exact word "running"    -> s:1, s:5, s:6
+#   - stem root literal "run" -> s:4, s:5   (its own leaf, own dt)
+#   - stem inflections        -> s:1/s:2/s:3/s:5/s:6 (distinct-doc dt)
+# s:5 "run running" hits all three leaves; s:6 "running runs" holds two distinct
+# inflections so the stem leaf's dt must count it once; s:7 ("swim") doesn't
+# match. N=7, avg_doc_len=1.571. Leaf dts: exact 3, root 2, stem 5 (distinct).
+_DOCS_STEM = {
+    "s:1": "running",         # exact + stem
+    "s:2": "runs",            # stem only
+    "s:3": "runs runs runs",  # stem only, TF 3
+    "s:4": "run",             # stem root literal -> its own leaf only
+    "s:5": "run running",     # root + exact + stem -> all three leaves summed
+    "s:6": "running runs",    # two inflections -> stem dt counts once
+    "s:7": "swimming",        # filler, does not match
+}
+INDEX_STEM = ScoringIndex(
+    "idxStem",
+    ["FT.CREATE", "idxStem", "ON", "HASH", "PREFIX", "1", "s:",
+     "SCHEMA", "body", "TEXT"],
+    {key: {"body": body} for key, body in _DOCS_STEM.items()},
+)
+# Each matched doc scored on the leaves it hits, summed. Verified against the
+# industry-standard reference.
+STEM_RUNNING_SCORES = {
+    "s:5": 2.127192, "s:1": 1.411321, "s:4": 1.366420,
+    "s:6": 1.222204, "s:3": 0.492803, "s:2": 0.440174,
+}
 
 # =====================================================================
 # Expected scores (verified against Redis 8.6; idxA unless noted)
@@ -899,3 +930,29 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         # nearest first: hv:long (distance 0) then hv:short (distance 32).
         assert res[1] == b"hv:long" and res[2] == b"#0"
         assert res[4] == b"hv:short" and res[5] == b"#32"
+
+    # Group 15: stemming scoring (pure text, in-iterator path) --------------
+
+    # 15.1: a stemmed query matches its whole stem family and scores each doc on
+    # the leaves it hits -- exact word, stem root literal, and stem inflections --
+    # summed. s:5 "run running" hits all three leaves; s:4 "run" only the root
+    # leaf; s:6 "running runs" counts once in the stem leaf's distinct dt. Scores
+    # verified against the industry-standard reference.
+    def test_stemmed_query_scores_three_leaves(self):
+        client = self.server.get_new_client()
+        INDEX_STEM.load(client)
+        keys, scores = INDEX_STEM.search(client, "running")
+
+        # s:7 ("swim") does not match; the six "run"-family docs do, score desc.
+        assert keys == ["s:5", "s:1", "s:4", "s:6", "s:3", "s:2"]
+        for key, expected in STEM_RUNNING_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+    # 15.2: the exact query form is scored on the exact + stem leaves, so s:1
+    # ("running", TF 1) outranks s:3 ("runs runs runs", TF 3) which carries only
+    # the stem leaf -- the exact-match boost overcomes the higher inflection TF.
+    def test_stemmed_exact_form_boosted_over_inflection(self):
+        client = self.server.get_new_client()
+        INDEX_STEM.load(client)
+        _, scores = INDEX_STEM.search(client, "running")
+        assert scores["s:1"] > scores["s:3"]

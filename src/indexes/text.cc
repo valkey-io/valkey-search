@@ -161,13 +161,39 @@ bool TryAddWordKeyIterator(
     const indexes::text::TextIndex *text_index, absl::string_view word,
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         indexes::text::kWordExpansionInlineCapacity>
-        &key_iterators) {
+        &key_iterators,
+    uint32_t *out_doc_count = nullptr) {
   auto word_iter = text_index->GetPrefix().GetWordIterator(word);
   if (!word_iter.Done() && word_iter.GetWord() == word) {
-    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
+    auto target = word_iter.GetPostingsTarget();
+    if (out_doc_count) *out_doc_count += target->GetKeyCount();
+    key_iterators.emplace_back(target->GetKeyIterator());
     return true;
   }
   return false;
+}
+
+// Distinct document count across key-sorted posting iterators, so a doc holding
+// several stem variants is counted once (the union cardinality = stem-leaf dt).
+uint32_t CountDistinctDocs(
+    absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                        indexes::text::kStemVariantsInlineCapacity>
+        iterators) {
+  uint32_t count = 0;
+  while (true) {
+    const indexes::text::Key *min_key = nullptr;
+    for (auto &it : iterators) {
+      if (it.IsValid() && (min_key == nullptr || it.GetKey() < *min_key)) {
+        min_key = &it.GetKey();
+      }
+    }
+    if (min_key == nullptr) break;
+    ++count;
+    for (auto &it : iterators) {
+      if (it.IsValid() && it.GetKey() == *min_key) it.NextKey();
+    }
+  }
+  return count;
 }
 
 }  // namespace
@@ -183,9 +209,11 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
 
-  // Document frequency (dt) for scoring is the original word's posting count;
-  // stem variants are not folded in (we skip stem-root scoring for now).
+  // dt for the exact-word (idx 0) BM25 leaf; root/stem leaf dts are set below.
   uint32_t num_doc_contain_term = 0;
+  uint32_t stem_num_doc_contain_term = 0;
+  uint32_t root_num_doc_contain_term = 0;
+  bool has_root = false;
   {
     auto word_iter = text_index->GetPrefix().GetWordIterator(text_string);
     if (!word_iter.Done() && word_iter.GetWord() == text_string) {
@@ -205,16 +233,25 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
         stem_variants;
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
         text_string, stem_variants, stem_field_mask, true);
-    // Search for the stemmed word itself - may or may not exist in corpus
+    // Stem root literal: its own BM25 leaf with its own dt (industry-standard
+    // leaf 2).
     if (stemmed != text_string) {
-      TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators);
+      has_root = TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators,
+                                       &root_num_doc_contain_term);
     }
-    // Search for stem variants - these should all exist from ingestion
+    // Stem inflection group: variants should all exist from ingestion. dt is
+    // the DISTINCT doc count across their postings, not a sum (avoids
+    // over-counting a doc that holds several inflections).
+    absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                        indexes::text::kStemVariantsInlineCapacity>
+        stem_count_iters;
     for (const auto &variant : stem_variants) {
       bool found =
           TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
+      stem_count_iters.push_back(key_iterators.back());
     }
+    stem_num_doc_contain_term = CountDistinctDocs(std::move(stem_count_iters));
   }
 
   // TermIterator will use query_field_mask when has_original is true,
@@ -223,6 +260,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions, stem_field_mask,
       found_original, GetWeight(), num_doc_contain_term,
+      stem_num_doc_contain_term, root_num_doc_contain_term, has_root,
       GetTextIndexSchema().get(), GetScorer());
 }
 

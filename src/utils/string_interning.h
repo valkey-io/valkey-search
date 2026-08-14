@@ -175,9 +175,7 @@ class InternedStringPtr {
   const InternedStringPtr &operator*() const { return *this; }
   operator bool() const { return impl_ != nullptr; }
 
-  size_t RefCount() const {
-    return impl_ ? impl_->RefCount() : 0;
-  }
+  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
 
   const InternedString *RawPtr() const { return impl_; }
 
@@ -221,7 +219,9 @@ class BorrowedInternedStringPtr {
     return *reinterpret_cast<const InternedStringPtr *>(this);
   }
 
-  absl::string_view Str() const { return impl_ ? impl_->Str() : absl::string_view(); }
+  absl::string_view Str() const {
+    return impl_ ? impl_->Str() : absl::string_view();
+  }
   const BorrowedInternedStringPtr *operator->() const { return this; }
   const BorrowedInternedStringPtr &operator*() const { return *this; }
   explicit operator bool() const { return impl_ != nullptr; }
@@ -250,8 +250,8 @@ class BorrowedInternedStringPtr {
 //
 // TermKey provides Small String Optimization (SSO) for search terms <= 15 chars
 // using std::variant<std::string, InternedStringPtr>.
-// Terms <= 15 chars are stored stack-inline in std::string (libstdc++/libc++ SSO),
-// bypassing StringInternStore allocations and lock contention.
+// Terms <= 15 chars are stored stack-inline in std::string (libstdc++/libc++
+// SSO), bypassing StringInternStore allocations and lock contention.
 //
 class TermKey {
  public:
@@ -264,9 +264,8 @@ class TermKey {
   explicit TermKey(InternedStringPtr ptr) : value_(std::move(ptr)) {}
 
   absl::string_view Str() const {
-    return std::visit([](const auto &item) -> absl::string_view {
-      return item;
-    }, value_);
+    return std::visit(
+        [](const auto &item) -> absl::string_view { return item; }, value_);
   }
 
   operator absl::string_view() const { return Str(); }
@@ -274,9 +273,7 @@ class TermKey {
   bool operator==(absl::string_view str) const { return Str() == str; }
   auto operator<=>(const TermKey &other) const { return Str() <=> other.Str(); }
 
-  bool IsSSO() const {
-    return std::holds_alternative<std::string>(value_);
-  }
+  bool IsSSO() const { return std::holds_alternative<std::string>(value_); }
 
   template <typename H>
   friend H AbslHashValue(H h, const TermKey &k) {

@@ -231,8 +231,8 @@ class Rax {
     // Private constructor for DescendNew - directly positions at a node
     PathIterator(::Rax *rax, RaxNode *node, std::string path);
 
-    ::Rax *rax_;             // Reference to the rax tree
-    RaxNode *node_;        // Current node we're at
+    ::Rax *rax_;              // Reference to the rax tree
+    RaxNode *node_;           // Current node we're at
     std::string path_;        // Path to current node
     size_t child_index_;      // Current child index (for branching nodes)
     bool exhausted_;          // True when all children visited

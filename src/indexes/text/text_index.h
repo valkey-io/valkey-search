@@ -134,7 +134,6 @@ class TextIndexSchema {
   // Each schema instance has its own metadata with memory pools
   TextIndexMetadata metadata_;
 
-
   //
   // This is the main index of all Text fields in this index schema
   //

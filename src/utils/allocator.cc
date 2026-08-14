@@ -52,9 +52,8 @@ class ChunkTracker {
     if (it != chunks_by_data_.begin()) {
       --it;
       if (ptr >= it->second->data &&
-          ptr <
-              it->second->data + BufferSize(it->second->entries_in_chunk,
-                                                  it->second->entry_size)) {
+          ptr < it->second->data + BufferSize(it->second->entries_in_chunk,
+                                              it->second->entry_size)) {
         auto chunk = const_cast<AllocatorChunk *>(it->second);
         chunk->Retain();
         return chunk;
@@ -313,7 +312,7 @@ void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
   size_t current_hint = chunk->scan_hint.load(std::memory_order_relaxed);
   while (word_index < current_hint) {
     if (chunk->scan_hint.compare_exchange_weak(current_hint, word_index,
-                                                std::memory_order_relaxed)) {
+                                               std::memory_order_relaxed)) {
       break;
     }
   }

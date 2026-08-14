@@ -217,7 +217,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithFreeEntries) {
 TEST(AllocatorTest, AlignmentGuarantees) {
   // Test 32-byte alignment for vector distance calculations
   const size_t vector_size = 128;
-  auto vector_allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, vector_size, 32);
+  auto vector_allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, vector_size, 32);
   EXPECT_EQ(vector_allocator->Alignment(), 32);
 
   std::vector<char *> ptrs;

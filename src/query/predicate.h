@@ -226,7 +226,7 @@ class TermPredicate : public TextPredicate {
   bool IsExact() const { return exact_; }
   size_t EstimateSize(bool is_vec_query) const override;
 
-  private:
+ private:
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   FieldMaskPredicate field_mask_;
   TermKey term_;

@@ -399,7 +399,7 @@ void EvaluatePrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     absl::AnyInvocable<bool(const InternedStringPtr &,
-                            absl::flat_hash_set<const char *> &)>
+                            absl::flat_hash_set<InternedStringPtr> &)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
@@ -407,7 +407,7 @@ void EvaluatePrefilteredKeys(
   // for performance.
   bool needs_dedup =
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
-  absl::flat_hash_set<const char *> result_keys;
+  absl::flat_hash_set<InternedStringPtr> result_keys;
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
@@ -421,7 +421,7 @@ void EvaluatePrefilteredKeys(
     while (!iterator->Done()) {
       const auto &key = **iterator;
       // 1. Skip if already processed (only if dedup is needed)
-      if (needs_dedup && result_keys.contains(key->Str().data())) {
+      if (needs_dedup && result_keys.contains(key)) {
         iterator->Next();
         continue;
       }
@@ -436,7 +436,7 @@ void EvaluatePrefilteredKeys(
               *parameters.filter_parse_results.root_predicate, key)) {
         bool result = appender(key, result_keys);
         if (needs_dedup && result) {
-          result_keys.insert(key->Str().data());
+          result_keys.insert(key);
         }
         // For non-vector queries that exceed the fetch limit, return early
         if (stop_on_fetch_limit && !result) {
@@ -467,7 +467,7 @@ CalcBestMatchingPrefilteredKeys(
   auto results_appender =
       [&results, &parameters, vector_index, query](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<InternedStringPtr> &top_keys) -> bool {
     return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
                                            top_keys);
   };
@@ -627,7 +627,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   auto results_appender =
       [&borrowed, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<InternedStringPtr> &top_keys) -> bool {
     if (borrowed.size() >= max_keys) {
       fetch_limited = true;
       return false;
@@ -642,7 +642,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
-    absl::flat_hash_set<const char *> seen_keys;
+    absl::flat_hash_set<InternedStringPtr> seen_keys;
     if (needs_dedup) {
       seen_keys.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
     }
@@ -654,11 +654,11 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         const auto &key = **iterator;
         BACKGROUND_PAUSEPOINT("search_entries_fetcher");
         if (needs_dedup) {
-          if (seen_keys.contains(key->Str().data())) {
+          if (seen_keys.contains(key)) {
             iterator->Next();
             continue;
           }
-          seen_keys.insert(key->Str().data());
+          seen_keys.insert(key);
         }
         // Check if we've reached the limit
         if (borrowed.size() >= max_keys) {

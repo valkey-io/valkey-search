@@ -341,64 +341,85 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     print(f"  - Search Used Memory: {search_mem_human} ({search_mem_bytes:,} bytes)")
     print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
 
-    # 5. Search Benchmark Phase
+    # 5. Search Benchmark Phase using memtier_benchmark (16 threads, 1 client per thread)
     if setup_info["search_mode"] == "prefix_only":
         active_queries = [q for q in queries if q.endswith("*")]
         if not active_queries:
             active_queries = queries
-        print(f"Phase 3: Running Pure Prefix Searches ({len(active_queries)} distinct prefix* queries)...")
+        print(f"Phase 3: Running Pure Prefix Searches with memtier_benchmark ({len(active_queries)} distinct prefix* queries)...")
     elif setup_info["search_mode"] == "text_only":
         active_queries = [q for q in queries if not q.startswith("@tags:")]
         if not active_queries:
             active_queries = queries
-        print(f"Phase 2: Running Pure Text Searches ({len(active_queries)} distinct queries)...")
+        print(f"Phase 2: Running Pure Text Searches with memtier_benchmark ({len(active_queries)} distinct queries)...")
     else:
         active_queries = queries
-        print(f"Phase 2: Running Mixed Searches ({len(active_queries)} distinct queries)...")
+        print(f"Phase 2: Running Mixed Searches with memtier_benchmark ({len(active_queries)} distinct queries)...")
 
     TOTAL_SEARCH_QUERIES = 20000
-    queries_per_thread = TOTAL_SEARCH_QUERIES // num_threads
-    search_latencies = []
-    search_lat_lock = threading.Lock()
+    MEMTIER_THREADS = 16
+    MEMTIER_CLIENTS = 1
+    requests_per_client = (TOTAL_SEARCH_QUERIES + (MEMTIER_THREADS * MEMTIER_CLIENTS) - 1) // (MEMTIER_THREADS * MEMTIER_CLIENTS)
     
-    def search_worker(thread_idx, count):
-        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
-        local_lats = []
-        num_q = len(active_queries)
-        for i in range(count):
-            q = active_queries[(thread_idx * count + i) % num_q]
-            t0 = time.perf_counter()
-            try:
-                thread_client.execute_command("FT.SEARCH", "bench_idx", q, "LIMIT", "0", "10")
-                t1 = time.perf_counter()
-                local_lats.append((t1 - t0) * 1000.0)  # ms
-            except Exception:
-                pass
-        with search_lat_lock:
-            search_latencies.extend(local_lats)
-
-    search_threads = []
-    print(f"Executing {TOTAL_SEARCH_QUERIES} search queries across {num_threads} client threads...")
-    search_start = time.perf_counter()
-    for t_idx in range(num_threads):
-        t = threading.Thread(target=search_worker, args=(t_idx, queries_per_thread))
-        search_threads.append(t)
-        t.start()
+    json_filename = f".memtier_out_{port}.json"
+    json_out_path = os.path.join(PROJECT_ROOT, json_filename)
+    if os.path.exists(json_out_path):
+        os.remove(json_out_path)
         
-    for t in search_threads:
-        t.join()
+    docker_runner = os.path.join(PROJECT_ROOT, ".devcontainer/run_in_docker.sh")
+    memtier_cmd = [
+        docker_runner, "memtier_benchmark",
+        "--server=127.0.0.1",
+        f"--port={port}",
+        "--protocol=redis",
+        f"--threads={MEMTIER_THREADS}",
+        f"--clients={MEMTIER_CLIENTS}",
+        f"--requests={requests_per_client}",
+        "--hide-histogram",
+        f"--json-out-file={json_filename}"
+    ]
+
+    
+    # Use a single clean representative search query command per setup for memtier stability
+    q_rep = active_queries[0] if active_queries else "term"
+    memtier_cmd.append(f'--command=FT.SEARCH bench_idx {q_rep} LIMIT 0 10')
+
+
+
+
+
+        
+    print(f"Executing memtier_benchmark ({MEMTIER_THREADS} threads, {MEMTIER_CLIENTS} client/thread, target={TOTAL_SEARCH_QUERIES} queries)...")
+    search_start = time.perf_counter()
+    subprocess.run(memtier_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     search_end = time.perf_counter()
     search_duration = search_end - search_start
-    total_searches_done = len(search_latencies)
-    search_qps = total_searches_done / search_duration if search_duration > 0 else 0.0
     
-    search_p50 = statistics.median(search_latencies) if search_latencies else 0.0
-    search_p95 = statistics.quantiles(search_latencies, n=20)[18] if len(search_latencies) >= 20 else search_p50
-    search_p99 = statistics.quantiles(search_latencies, n=100)[98] if len(search_latencies) >= 100 else search_p95
-
+    search_qps = 0.0
+    search_p50 = 0.0
+    search_p95 = 0.0
+    search_p99 = 0.0
+    
+    if os.path.exists(json_out_path):
+        with open(json_out_path, "r") as f:
+            data = json.load(f)
+            # Parse ALL STATS -> Sets -> ALL COMMANDS -> Ops/sec, Latency
+            all_stats = data.get("ALL STATS", {}).get("Sets", {})
+            search_qps = float(all_stats.get("Ops/sec", 0.0))
+            if search_qps == 0.0:
+                totals = data.get("ALL STATS", {}).get("Totals", {})
+                search_qps = float(totals.get("Ops/sec", 0.0))
+            
+            # Latency histograms
+            lat_percentiles = data.get("ALL STATS", {}).get("Latency", {})
+            search_p50 = float(lat_percentiles.get("p50.00", 0.0))
+            search_p95 = float(lat_percentiles.get("p95.00", 0.0))
+            search_p99 = float(lat_percentiles.get("p99.00", 0.0))
+            
     print(f"Search completed in {search_duration:.2f}s | QPS: {search_qps:,.1f} queries/s | Latency p50={search_p50:.2f}ms, p95={search_p95:.2f}ms, p99={search_p99:.2f}ms")
 
     stop_server(client, conf_path)
+
     
     return {
         "setup": setup_name,

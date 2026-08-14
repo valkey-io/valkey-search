@@ -12,9 +12,7 @@
 #include <bit>
 #include <cmath>
 #include <cstddef>
-#include <map>
 #include <memory>
-#include <utility>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
@@ -39,36 +37,75 @@ size_t BufferSize(size_t entries_in_chunk, size_t size) {
 
 class ChunkTracker {
  public:
-  ChunkTracker() = default;
+  ChunkTracker()
+      : global_array_(std::make_shared<std::vector<const AllocatorChunk *>>()) {
+  }
+
   void Track(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::WriterMutexLock lock(&mutex_);
-    chunks_by_data_.insert(std::make_pair(chunk->data, chunk));
+    auto new_array =
+        std::make_shared<std::vector<const AllocatorChunk *>>(*global_array_);
+    auto it = std::upper_bound(
+        new_array->begin(), new_array->end(), chunk->data,
+        [](char *p, const AllocatorChunk *c) { return p < c->data; });
+    new_array->insert(it, chunk);
+    global_array_ = new_array;
+    global_version_.fetch_add(1, std::memory_order_release);
   }
+
+  void Untrack(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
+    absl::WriterMutexLock lock(&mutex_);
+    auto new_array =
+        std::make_shared<std::vector<const AllocatorChunk *>>(*global_array_);
+    auto it = std::lower_bound(
+        new_array->begin(), new_array->end(), chunk->data,
+        [](const AllocatorChunk *c, char *p) { return c->data < p; });
+    if (it != new_array->end() && (*it)->data == chunk->data) {
+      new_array->erase(it);
+      global_array_ = new_array;
+      global_version_.fetch_add(1, std::memory_order_release);
+    }
+  }
+
   AllocatorChunk *FindAndRetainChunk(char *ptr) const
       ABSL_LOCKS_EXCLUDED(mutex_) {
-    absl::ReaderMutexLock lock(&mutex_);
+    thread_local std::shared_ptr<const std::vector<const AllocatorChunk *>>
+        local_array;
+    thread_local size_t local_version = 0;
 
-    auto it = chunks_by_data_.upper_bound(ptr);
-    if (it != chunks_by_data_.begin()) {
+    size_t current_version = global_version_.load(std::memory_order_acquire);
+    if (ABSL_PREDICT_FALSE(local_version != current_version)) {
+      absl::ReaderMutexLock lock(&mutex_);
+      local_array = global_array_;
+      local_version = current_version;
+    }
+
+    if (!local_array) {
+      return nullptr;
+    }
+    const auto &vec = *local_array;
+
+    auto it = std::upper_bound(
+        vec.begin(), vec.end(), ptr,
+        [](char *p, const AllocatorChunk *c) { return p < c->data; });
+
+    if (it != vec.begin()) {
       --it;
-      if (ptr >= it->second->data &&
-          ptr < it->second->data + BufferSize(it->second->entries_in_chunk,
-                                              it->second->entry_size)) {
-        auto chunk = const_cast<AllocatorChunk *>(it->second);
+      const AllocatorChunk *c = *it;
+      if (ptr >= c->data &&
+          ptr < c->data + BufferSize(c->entries_in_chunk, c->entry_size)) {
+        auto chunk = const_cast<AllocatorChunk *>(c);
         chunk->Retain();
         return chunk;
       }
     }
     return nullptr;
   }
-  void Untrack(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
-    absl::WriterMutexLock lock(&mutex_);
-    chunks_by_data_.erase(chunk->data);
-  }
 
  private:
-  std::map<char *, const AllocatorChunk *> chunks_by_data_
+  std::shared_ptr<const std::vector<const AllocatorChunk *>> global_array_
       ABSL_GUARDED_BY(mutex_);
+  std::atomic<size_t> global_version_{1};
   mutable absl::Mutex mutex_;
 };
 

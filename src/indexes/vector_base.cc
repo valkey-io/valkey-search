@@ -341,7 +341,7 @@ char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
   auto interned_vector = StringInternStore::Intern(
       absl::string_view(vector, len), vector_allocator_.get());
   TrackVector(internal_id, interned_vector);
-  return (char *)interned_vector->Str().data();
+  return const_cast<char*>(interned_vector.RawPtr()->Str().data());
 }
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
@@ -516,7 +516,7 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, uint64_t count, const InternedStringPtr &key,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<const char *> &top_keys) const {
+    absl::flat_hash_set<InternedStringPtr> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
   if (!result.ok()) {
     return false;
@@ -528,7 +528,7 @@ bool VectorBase::AddPrefilteredKey(
   if (result.value().first < results.top().first) {
     auto top = results.top();
     auto vector_key = GetKeyDuringSearch(top.second);
-    top_keys.erase(vector_key.value()->Str().data());
+    top_keys.erase(vector_key.value());
     results.pop();
     results.emplace(result.value());
     return true;

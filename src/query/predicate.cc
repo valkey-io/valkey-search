@@ -51,10 +51,10 @@ EvaluationResult BuildTextEvaluationResult(
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact)
+    FieldMaskPredicate field_mask, absl::string_view term, bool exact)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term),
+      term_(StringInternStore::Intern(term)),
       exact_(exact) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
@@ -120,7 +120,7 @@ EvaluationResult TermPredicate::Evaluate(
     std::string stemmed = text_index_schema_->GetAllStemVariants(
         term_, stem_variants, stem_field_mask, true);
     // Search for the stemmed word itself - may or may not exist in corpus
-    if (stemmed != term_) {
+    if (stemmed != term_.Str()) {
       if (TryAddWordKeyIteratorForPrefilter(text_index, stemmed, target_key,
                                             stem_field_mask, require_positions,
                                             key_iterators)) {
@@ -147,10 +147,10 @@ EvaluationResult TermPredicate::Evaluate(
 
 PrefixPredicate::PrefixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term)
+    FieldMaskPredicate field_mask, absl::string_view term)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(StringInternStore::Intern(term)) {}
 
 EvaluationResult PrefixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -196,10 +196,10 @@ EvaluationResult PrefixPredicate::Evaluate(
 
 SuffixPredicate::SuffixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term)
+    FieldMaskPredicate field_mask, absl::string_view term)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(StringInternStore::Intern(term)) {}
 
 EvaluationResult SuffixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -214,7 +214,8 @@ EvaluationResult SuffixPredicate::Evaluate(
   if (!suffix_opt.has_value()) {
     return EvaluationResult(false);
   }
-  std::string reversed_term(term_.rbegin(), term_.rend());
+  absl::string_view str = term_.Str();
+  std::string reversed_term(str.rbegin(), str.rend());
   auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -253,10 +254,10 @@ EvaluationResult SuffixPredicate::Evaluate(
 
 InfixPredicate::InfixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term)
+    FieldMaskPredicate field_mask, absl::string_view term)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(StringInternStore::Intern(term)) {}
 
 EvaluationResult InfixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -272,10 +273,10 @@ EvaluationResult InfixPredicate::Evaluate(
 
 FuzzyPredicate::FuzzyPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, uint32_t distance)
+    FieldMaskPredicate field_mask, absl::string_view term, uint32_t distance)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term),
+      term_(StringInternStore::Intern(term)),
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator &evaluator) const {

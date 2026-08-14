@@ -110,26 +110,26 @@ class InternedStringPtr {
  public:
   InternedStringPtr() = default;
 
-  InternedString *Impl() const { return impl_; }
+  InternedString *Impl() const { return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_); }
 
   InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
-    if (impl_) {
-      impl_->IncrementRefCount();
+    if (impl_ && !IsInline()) {
+      reinterpret_cast<InternedString *>(impl_)->IncrementRefCount();
     }
   }
 
   InternedStringPtr(InternedStringPtr &&other) noexcept : impl_(other.impl_) {
-    other.impl_ = nullptr;
+    other.impl_ = 0;
   }
 
   InternedStringPtr &operator=(const InternedStringPtr &other) {
     if (this != &other) {
-      if (impl_) {
-        impl_->DecrementRefCount();
+      if (impl_ && !IsInline()) {
+        reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
       }
       impl_ = other.impl_;
-      if (impl_) {
-        impl_->IncrementRefCount();
+      if (impl_ && !IsInline()) {
+        reinterpret_cast<InternedString *>(impl_)->IncrementRefCount();
       }
     }
     return *this;
@@ -137,34 +137,40 @@ class InternedStringPtr {
 
   InternedStringPtr &operator=(InternedStringPtr &&other) noexcept {
     if (this != &other) {
-      if (impl_) {
-        impl_->DecrementRefCount();
+      if (impl_ && !IsInline()) {
+        reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
       }
       impl_ = other.impl_;
-      other.impl_ = nullptr;
+      other.impl_ = 0;
     }
     return *this;
   }
 
   InternedStringPtr &operator=(void *other) noexcept {
     CHECK(!other);  // Only nullptr is allowed
-    if (impl_) {
-      impl_->DecrementRefCount();
+    if (impl_ && !IsInline()) {
+      reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
     }
-    impl_ = nullptr;
+    impl_ = 0;
     return *this;
   }
 
   ~InternedStringPtr() {
-    if (impl_) {
-      impl_->DecrementRefCount();
+    if (impl_ && !IsInline()) {
+      reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
     }
-    impl_ = nullptr;
+    impl_ = 0;
   }
 
+  bool IsInline() const { return (impl_ & kInlineMask) != 0; }
+
   absl::string_view Str() const {
+    if (IsInline()) {
+      uint8_t len = (impl_ & 0x1C) >> 2;
+      return absl::string_view(reinterpret_cast<const char*>(&impl_) + 1, len);
+    }
     if (impl_) {
-      return impl_->Str();
+      return reinterpret_cast<InternedString *>(impl_)->Str();
     }
     return {};
   }
@@ -173,20 +179,19 @@ class InternedStringPtr {
 
   const InternedStringPtr *operator->() const { return this; }
   const InternedStringPtr &operator*() const { return *this; }
-  operator bool() const { return impl_ != nullptr; }
+  operator bool() const { return impl_ != 0; }
 
-  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
+  size_t RefCount() const { return (impl_ && !IsInline()) ? reinterpret_cast<InternedString *>(impl_)->RefCount() : 1; }
 
-  const InternedString *RawPtr() const { return impl_; }
+  const InternedString *RawPtr() const { return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_); }
 
-  size_t Hash() const { return absl::HashOf(Str()); }
+  size_t Hash() const { return absl::HashOf(impl_); }
 
   bool operator==(const InternedStringPtr &other) const {
-    if (impl_ == other.impl_) {
-      return true;
-    }
-    return Str() == other.Str();
+    return impl_ == other.impl_;
   }
+  bool operator==(absl::string_view str) const { return Str() == str; }
+  bool operator!=(absl::string_view str) const { return Str() != str; }
 
   auto operator<=>(const InternedStringPtr &other) const {
     if (impl_ == other.impl_) {
@@ -195,10 +200,22 @@ class InternedStringPtr {
     return Str() <=> other.Str();
   }
 
- private:
-  InternedString *impl_{nullptr};
+  static std::optional<InternedStringPtr> MakeInline(absl::string_view str) {
+    if (str.size() > 6) return std::nullopt;
+    uintptr_t data = kInlineMask;
+    data |= (str.size() << 2);
+    if (str.size() > 0) {
+      std::memcpy(reinterpret_cast<char*>(&data) + 1, str.data(), str.size());
+    }
+    return InternedStringPtr(data);
+  }
 
-  explicit InternedStringPtr(InternedString *impl) : impl_(impl) {}
+ private:
+  uintptr_t impl_{0};
+  static constexpr uintptr_t kInlineMask = 1ULL << 63;
+
+  explicit InternedStringPtr(InternedString *impl) : impl_(reinterpret_cast<uintptr_t>(impl)) {}
+  explicit InternedStringPtr(uintptr_t inline_data) : impl_(inline_data) {}
 
   friend class StringInternStore;
   friend class BorrowedInternedStringPtr;
@@ -208,7 +225,7 @@ class BorrowedInternedStringPtr {
  public:
   BorrowedInternedStringPtr() = default;
   explicit BorrowedInternedStringPtr(const InternedStringPtr &owned)
-      : impl_(owned.RawPtr()) {}
+      : impl_(owned.impl_) {}
 
   BorrowedInternedStringPtr(const BorrowedInternedStringPtr &) = default;
   BorrowedInternedStringPtr &operator=(const BorrowedInternedStringPtr &) =
@@ -220,11 +237,11 @@ class BorrowedInternedStringPtr {
   }
 
   absl::string_view Str() const {
-    return impl_ ? impl_->Str() : absl::string_view();
+    return AsOwned().Str();
   }
   const BorrowedInternedStringPtr *operator->() const { return this; }
   const BorrowedInternedStringPtr &operator*() const { return *this; }
-  explicit operator bool() const { return impl_ != nullptr; }
+  explicit operator bool() const { return impl_ != 0; }
 
   InternedStringPtr Materialize() const { return AsOwned(); }
 
@@ -235,54 +252,16 @@ class BorrowedInternedStringPtr {
     return Str() <=> other.Str();
   }
   bool operator==(const BorrowedInternedStringPtr &other) const {
-    if (impl_ == other.impl_) {
-      return true;
-    }
-    return Str() == other.Str();
+    return impl_ == other.impl_;
   }
-  size_t Hash() const { return absl::HashOf(Str()); }
+  size_t Hash() const { return absl::HashOf(impl_); }
 
  private:
-  const InternedString *impl_{nullptr};
+  uintptr_t impl_{0};
   friend class InternedStringPtr;
 };
 
 //
-// TermKey provides Small String Optimization (SSO) for search terms <= 15 chars
-// using std::variant<std::string, InternedStringPtr>.
-// Terms <= 15 chars are stored stack-inline in std::string (libstdc++/libc++
-// SSO), bypassing StringInternStore allocations and lock contention.
-//
-class TermKey {
- public:
-  static constexpr size_t kSSOThreshold = 15;
-
-  TermKey() = default;
-
-  explicit TermKey(absl::string_view str);
-
-  explicit TermKey(InternedStringPtr ptr) : value_(std::move(ptr)) {}
-
-  absl::string_view Str() const {
-    return std::visit(
-        [](const auto &item) -> absl::string_view { return item; }, value_);
-  }
-
-  operator absl::string_view() const { return Str(); }
-  bool operator==(const TermKey &other) const { return Str() == other.Str(); }
-  bool operator==(absl::string_view str) const { return Str() == str; }
-  auto operator<=>(const TermKey &other) const { return Str() <=> other.Str(); }
-
-  bool IsSSO() const { return std::holds_alternative<std::string>(value_); }
-
-  template <typename H>
-  friend H AbslHashValue(H h, const TermKey &k) {
-    return H::combine(std::move(h), k.Str());
-  }
-
- private:
-  std::variant<std::string, InternedStringPtr> value_;
-};
 
 static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
               "BorrowedInternedStringPtr must be trivially destructible");
@@ -1070,13 +1049,6 @@ class StringInternStore {
   FRIEND_TEST(ValkeySearchTest, Info);
 };
 
-inline TermKey::TermKey(absl::string_view str) {
-  if (str.size() <= kSSOThreshold) {
-    value_ = std::string(str);
-  } else {
-    value_ = StringInternStore::Intern(str);
-  }
-}
 
 }  // namespace valkey_search
 

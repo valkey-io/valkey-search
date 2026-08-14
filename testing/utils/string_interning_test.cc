@@ -1142,21 +1142,19 @@ TEST_F(BagOfInternedStringPtrsTest, ChurnAcrossAllModes) {
   }
 }
 
-TEST(TermKeyTest, BasicSSOAndInterning) {
-  // Test short string (<= 15 chars -> SSO)
-  TermKey short_key("short_term");
-  EXPECT_TRUE(short_key.IsSSO());
-  EXPECT_EQ(short_key.Str(), "short_term");
-  EXPECT_EQ(static_cast<absl::string_view>(short_key), "short_term");
-
-  // Test long string (> 15 chars -> StringInternStore)
-  std::string long_str = "this_is_a_very_long_search_term_exceeding_15_chars";
-  TermKey long_key(long_str);
-  EXPECT_FALSE(long_key.IsSSO());
-  EXPECT_EQ(long_key.Str(), long_str);
+TEST(InternedStringPtrTest, BasicSSOAndInterning) {
+  // Test short string (<= 6 chars -> SSO)
+  auto short_key_opt = InternedStringPtr::MakeInline("short");
+  ASSERT_TRUE(short_key_opt.has_value());
+  InternedStringPtr short_key = *short_key_opt;
+  EXPECT_TRUE(short_key.IsInline());
+  EXPECT_EQ(short_key.Str(), "short");
+  EXPECT_EQ(static_cast<absl::string_view>(short_key), "short");
 
   // Test equality and hash
-  TermKey short_key2("short_term");
+  auto short_key2_opt = InternedStringPtr::MakeInline("short");
+  ASSERT_TRUE(short_key2_opt.has_value());
+  InternedStringPtr short_key2 = *short_key2_opt;
   EXPECT_EQ(short_key, short_key2);
   EXPECT_EQ(absl::HashOf(short_key), absl::HashOf(short_key2));
 }
@@ -1164,3 +1162,25 @@ TEST(TermKeyTest, BasicSSOAndInterning) {
 }  // namespace
 
 }  // namespace valkey_search
+
+TEST(InternedStringPtrTest, FlatHashSetWithSSO) {
+  absl::flat_hash_set<InternedStringPtr> set;
+
+  auto inline_key1 = *InternedStringPtr::MakeInline("key1");
+  auto inline_key2 = *InternedStringPtr::MakeInline("key2");
+  auto heap_key = StringInternStore::Intern("long_key_heap");
+
+  set.insert(inline_key1);
+  set.insert(inline_key2);
+  set.insert(heap_key);
+
+  EXPECT_EQ(set.size(), 3);
+  
+  // Verify lookup using another inline instance with the same value
+  auto inline_key1_copy = *InternedStringPtr::MakeInline("key1");
+  EXPECT_TRUE(set.contains(inline_key1_copy));
+  
+  // Verify lookup using another heap instance
+  auto heap_key_copy = StringInternStore::Intern("long_key_heap");
+  EXPECT_TRUE(set.contains(heap_key_copy));
+}

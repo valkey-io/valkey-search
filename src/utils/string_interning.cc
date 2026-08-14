@@ -189,6 +189,9 @@ bool StringInternStore::Release(InternedString* str) {
 
 InternedStringPtr StringInternStore::Intern(absl::string_view str,
                                             Allocator* allocator) {
+  if (auto inline_ptr = InternedStringPtr::MakeInline(str)) {
+    return *inline_ptr;
+  }
   return Instance().InternImpl(str, allocator);
 }
 

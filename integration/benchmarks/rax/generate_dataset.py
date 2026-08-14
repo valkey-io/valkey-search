@@ -46,7 +46,7 @@ def load_or_generate_vocabulary():
 
 def generate_documents():
     random.seed(RANDOM_SEED)
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(DATASET_DIR, exist_ok=True)
     
     all_words, words_by_len = load_or_generate_vocabulary()
     available_lengths = sorted(words_by_len.keys())

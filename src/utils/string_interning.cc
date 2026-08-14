@@ -8,7 +8,6 @@
 #include "src/utils/string_interning.h"
 
 #include <cstring>
-#include <utility>
 
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"

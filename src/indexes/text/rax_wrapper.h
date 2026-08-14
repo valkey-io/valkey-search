@@ -114,7 +114,7 @@ class Rax {
 
  private:
   RaxTree rax_;
-  vs_rax *GetRawRax() const { return rax_.GetRax(); }
+  ::Rax *GetRawRax() const { return rax_.GetRax(); }
   void (*free_callback_)(void *);  // Optional callback for freeing targets
 
  public:
@@ -126,7 +126,7 @@ class Rax {
   class WordIterator {
    public:
     // Constructor - seeks to prefix
-    explicit WordIterator(vs_rax *rax, absl::string_view prefix);
+    explicit WordIterator(::Rax *rax, absl::string_view prefix);
 
     // Destructor - cleans up iterator
     ~WordIterator();
@@ -164,7 +164,7 @@ class Rax {
    private:
     friend class Rax;
 
-    vs_raxIterator iter_;
+    RaxIterator iter_;
     std::string prefix_;
     bool done_ = false;
   };
@@ -178,7 +178,7 @@ class Rax {
   class PathIterator {
    public:
     // Constructor - navigates to prefix
-    PathIterator(vs_rax *rax, absl::string_view prefix);
+    PathIterator(::Rax *rax, absl::string_view prefix);
 
     // Destructor
     ~PathIterator();
@@ -229,10 +229,10 @@ class Rax {
     friend class Rax;
 
     // Private constructor for DescendNew - directly positions at a node
-    PathIterator(vs_rax *rax, vs_raxNode *node, std::string path);
+    PathIterator(::Rax *rax, RaxNode *node, std::string path);
 
-    vs_rax *rax_;             // Reference to the rax tree
-    vs_raxNode *node_;        // Current node we're at
+    ::Rax *rax_;             // Reference to the rax tree
+    RaxNode *node_;        // Current node we're at
     std::string path_;        // Path to current node
     size_t child_index_;      // Current child index (for branching nodes)
     bool exhausted_;          // True when all children visited

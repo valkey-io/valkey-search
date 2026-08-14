@@ -7,8 +7,8 @@
 // NOTE: This is based off the original RadixTree tests
 
 #include "src/indexes/text/rax_wrapper.h"
+#include "src/indexes/text/rax/rax_malloc.h"
 
-#include "src/utils/pmr_allocator.h"
 
 #ifdef __APPLE__
 #include <malloc/malloc.h>
@@ -31,7 +31,7 @@
 
 // Override the weak symbol empty_usable_size (defined in
 // memory_allocation_overrides.cc) with actual memory tracking for
-// RaxMallocMemoryTracking.
+// RaxMemMallocMemoryTracking.
 // NOLINTNEXTLINE(readability-identifier-naming)
 extern "C" size_t empty_usable_size(void *ptr) noexcept {
   return malloc_usable_size(ptr);
@@ -604,7 +604,7 @@ TEST_F(RaxTest, FindTarget) {
             nullptr);  // extension of existing word
 }
 
-TEST_F(RaxTest, RaxMallocMemoryTracking) {
+TEST_F(RaxTest, RaxMemMallocMemoryTracking) {
   // Validates that rax allocations correctly report alloc size.
   Rax empty_rax{nullptr};
   EXPECT_GT(empty_rax.GetAllocSize(), 0)
@@ -613,23 +613,23 @@ TEST_F(RaxTest, RaxMallocMemoryTracking) {
 
 TEST_F(RaxTest, RaxPmrFallbackLifecycleWithoutPmrResource) {
   // Test RaxPmr allocation lifecycle when t_rax_res is null
-  void *ptr = valkey_search::utils::RaxPmrMalloc(64);
+  void *ptr = RaxMemMalloc(64);
   ASSERT_NE(ptr, nullptr);
-  EXPECT_GE(valkey_search::utils::RaxPmrUsableSize(ptr), 64);
+  EXPECT_GE(RaxMemUsableSize(ptr), 64);
 
   // Write pattern to verify memory validity
   std::memset(ptr, 0xAB, 64);
 
   // Realloc to larger size
-  void *realloc_ptr = valkey_search::utils::RaxPmrRealloc(ptr, 128);
+  void *realloc_ptr = RaxMemRealloc(ptr, 128);
   ASSERT_NE(realloc_ptr, nullptr);
-  EXPECT_GE(valkey_search::utils::RaxPmrUsableSize(realloc_ptr), 128);
+  EXPECT_GE(RaxMemUsableSize(realloc_ptr), 128);
   for (size_t i = 0; i < 64; ++i) {
     EXPECT_EQ(static_cast<uint8_t *>(realloc_ptr)[i], 0xAB);
   }
 
   // Free
-  valkey_search::utils::RaxPmrFree(realloc_ptr);
+  RaxMemFree(realloc_ptr);
 }
 
 }  // namespace

@@ -195,7 +195,6 @@ if("${SAN_BUILD_LOWER}" STREQUAL "no")
 
     add_executable(rax_benchmark ${CMAKE_CURRENT_LIST_DIR}/utils/rax_benchmark.cc)
     target_include_directories(rax_benchmark PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-    target_link_libraries(rax_benchmark PRIVATE testing_common_base text pmr_allocator rax_lib benchmark::benchmark benchmark::benchmark_main)
     finalize_test_flags(rax_benchmark)
     if(VALKEY_SEARCH_RELEASE_BUILD)
       target_compile_options(rax_benchmark PRIVATE -flto)

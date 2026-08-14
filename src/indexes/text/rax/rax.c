@@ -44,37 +44,37 @@
 
 #include RAX_MALLOC_INCLUDE
 
-#define rax vs_rax
-#define raxNode vs_raxNode
-#define raxStack vs_raxStack
-#define raxIterator vs_raxIterator
-#define raxNodeCallback vs_raxNodeCallback
-#define raxMutateCallback vs_raxMutateCallback
+#define rax Rax
+#define raxNode RaxNode
+#define raxStack RaxStack
+#define raxIterator RaxIterator
+#define raxNodeCallback RaxNodeCallback
+#define raxMutateCallback RaxMutateCallback
 
-#define raxNew vs_raxNew
-#define raxInsert vs_raxInsert
-#define raxTryInsert vs_raxTryInsert
-#define raxRemove vs_raxRemove
-#define raxFind vs_raxFind
-#define raxMutate vs_raxMutate
-#define raxFree vs_raxFree
-#define raxFreeWithCallback vs_raxFreeWithCallback
-#define raxStart vs_raxStart
-#define raxSeek vs_raxSeek
-#define raxSeekSubTree vs_raxSeekSubTree
-#define raxNext vs_raxNext
-#define raxPrev vs_raxPrev
-#define raxRandomWalk vs_raxRandomWalk
-#define raxCompare vs_raxCompare
-#define raxStop vs_raxStop
-#define raxEOF vs_raxEOF
-#define raxShow vs_raxShow
-#define raxSize vs_raxSize
-#define raxAllocSize vs_raxAllocSize
-#define raxTouch vs_raxTouch
-#define raxSetDebugMsg vs_raxSetDebugMsg
-#define raxSetData vs_raxSetData
-#define raxGetSubtreeItemCount vs_raxGetSubtreeItemCount
+#define raxNew RaxNew
+#define raxInsert RaxInsert
+#define raxTryInsert RaxTryInsert
+#define raxRemove RaxRemove
+#define raxFind RaxFind
+#define raxMutate RaxMutate
+#define raxFree RaxFree
+#define raxFreeWithCallback RaxFreeWithCallback
+#define raxStart RaxStart
+#define raxSeek RaxSeek
+#define raxSeekSubTree RaxSeekSubTree
+#define raxNext RaxNext
+#define raxPrev RaxPrev
+#define raxRandomWalk RaxRandomWalk
+#define raxCompare RaxCompare
+#define raxStop RaxStop
+#define raxEOF RaxEOF
+#define raxShow RaxShow
+#define raxSize RaxSize
+#define raxAllocSize RaxAllocSize
+#define raxTouch RaxTouch
+#define raxSetDebugMsg RaxSetDebugMsg
+#define raxSetData RaxSetData
+#define raxGetSubtreeItemCount RaxGetSubtreeItemCount
 
 /* -------------------------------- Debugging ------------------------------ */
 

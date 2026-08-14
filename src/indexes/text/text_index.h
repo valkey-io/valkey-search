@@ -22,7 +22,6 @@
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
-#include "src/utils/pmr_allocator.h"
 
 struct sb_stemmer;
 
@@ -126,7 +125,6 @@ class TextIndexSchema {
   // Enable suffix trie.
   void EnableSuffix() {
     with_suffix_trie_ = true;
-    RAX_PMR_GUARD(rax_memory_resource_.get());
     text_index_ = std::make_shared<TextIndex>(true);
   }
 
@@ -136,7 +134,6 @@ class TextIndexSchema {
   // Each schema instance has its own metadata with memory pools
   TextIndexMetadata metadata_;
 
-  std::unique_ptr<std::pmr::memory_resource> rax_memory_resource_;
 
   //
   // This is the main index of all Text fields in this index schema

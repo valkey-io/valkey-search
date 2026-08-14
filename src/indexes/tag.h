@@ -31,7 +31,7 @@
 
 namespace valkey_search::indexes {
 
-// Tag index backed by an in-tree vs_rax radix tree.
+// Tag index backed by an in-tree Rax radix tree.
 //
 // Storage model:
 //   - tracked_tags_by_keys_: doc-key → interned raw tag string.
@@ -173,10 +173,9 @@ class Tag : public IndexBase {
   InternedStringHashMap<TagInfo> tracked_tags_by_keys_
       ABSL_GUARDED_BY(index_mutex_);
   KeySet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
-  std::unique_ptr<std::pmr::memory_resource> rax_memory_resource_;
   const char separator_;
   const bool case_sensitive_;
-  vs_rax *tree_ ABSL_GUARDED_BY(index_mutex_);
+  Rax *tree_ ABSL_GUARDED_BY(index_mutex_);
 };
 
 }  // namespace valkey_search::indexes

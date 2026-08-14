@@ -44,13 +44,13 @@ class ActiveRaxGuard {
 RaxTree::RaxTree(Allocator *allocator)
     : allocator_(allocator ? allocator : &GetDefaultSegregatedAllocator()) {
   ActiveRaxGuard guard(this);
-  rax_ = vs_raxNew();
+  rax_ = RaxNew();
 }
 
 RaxTree::~RaxTree() {
   if (rax_) {
     ActiveRaxGuard guard(this);
-    vs_raxFree(rax_);
+    RaxFree(rax_);
     rax_ = nullptr;
   }
 }
@@ -64,7 +64,7 @@ RaxTree &RaxTree::operator=(RaxTree &&other) noexcept {
   if (this != &other) {
     if (rax_) {
       ActiveRaxGuard guard(this);
-      vs_raxFree(rax_);
+      RaxFree(rax_);
     }
     rax_ = other.rax_;
     allocator_ = other.allocator_;
@@ -76,7 +76,7 @@ RaxTree &RaxTree::operator=(RaxTree &&other) noexcept {
 void RaxTree::FreeWithCallback(void (*free_callback)(void *)) {
   if (rax_) {
     ActiveRaxGuard guard(this);
-    vs_raxFreeWithCallback(rax_, free_callback);
+    RaxFreeWithCallback(rax_, free_callback);
     rax_ = nullptr;
   }
 }
@@ -121,14 +121,14 @@ int RaxTree::UsableSize(void *ptr) {
 
 int RaxTree::Insert(std::string_view key, void *data, void **old_data) {
   ActiveRaxGuard guard(this);
-  return vs_raxInsert(
+  return RaxInsert(
       rax_, reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
       key.size(), data, old_data);
 }
 
 int RaxTree::Remove(std::string_view key, void **old_data) {
   ActiveRaxGuard guard(this);
-  return vs_raxRemove(
+  return RaxRemove(
       rax_, reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
       key.size(), old_data);
 }
@@ -136,23 +136,23 @@ int RaxTree::Remove(std::string_view key, void **old_data) {
 void *RaxTree::Find(std::string_view key) const {
   ActiveRaxGuard guard(const_cast<RaxTree *>(this));
   void *val = nullptr;
-  vs_raxFind(rax_,
+  RaxFind(rax_,
              reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
              key.size(), &val);
   return val;
 }
 
-int RaxTree::Mutate(std::string_view key, vs_raxMutateCallback mutate,
+int RaxTree::Mutate(std::string_view key, RaxMutateCallback mutate,
                     void *caller_context, item_count_op op) {
   ActiveRaxGuard guard(this);
-  return vs_raxMutate(
+  return RaxMutate(
       rax_, reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
       key.size(), mutate, caller_context, op);
 }
 
 size_t RaxTree::GetSubtreeItemCount(std::string_view prefix) const {
   ActiveRaxGuard guard(const_cast<RaxTree *>(this));
-  return vs_raxGetSubtreeItemCount(
+  return RaxGetSubtreeItemCount(
       rax_,
       reinterpret_cast<unsigned char *>(const_cast<char *>(prefix.data())),
       prefix.size());
@@ -164,11 +164,11 @@ size_t RaxTree::GetAllocSize() const { return rax_ ? rax_->alloc_size : 0; }
 
 extern "C" {
 bool IsRaxActive() { return true; }
-void *RaxMalloc(size_t size) {
+void *RaxMemMalloc(size_t size) {
   return t_active_rax ? t_active_rax->AllocateNode(size)
                       : GetDefaultSegregatedAllocator().Allocate(size);
 }
-void RaxFree(void *ptr) {
+void RaxMemFree(void *ptr) {
   if (!ptr) {
     return;
   }
@@ -178,13 +178,13 @@ void RaxFree(void *ptr) {
   }
   SegregatedFixedSizeAllocator::Free(static_cast<char *>(ptr));
 }
-void *RaxRealloc(void *ptr, size_t size) {
+void *RaxMemRealloc(void *ptr, size_t size) {
   return t_active_rax
              ? t_active_rax->ReallocateNode(ptr, size)
              : GetDefaultSegregatedAllocator().Reallocate(
                    static_cast<char *>(ptr), size);
 }
-int RaxUsableSize(void *ptr) {
+int RaxMemUsableSize(void *ptr) {
   return t_active_rax
              ? t_active_rax->UsableSize(ptr)
              : static_cast<int>(SegregatedFixedSizeAllocator::UsableSize(

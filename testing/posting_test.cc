@@ -7,11 +7,9 @@
 
 #include "src/indexes/text/posting.h"
 
-#include <memory_resource>
 
 #include "gtest/gtest.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/utils/pmr_allocator.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 
@@ -383,43 +381,6 @@ TEST_F(PostingTest, FieldMaskImplementations) {
   }
 
   EXPECT_EQ(keys_verified, 3);
-}
-
-namespace {
-class CountingResource : public std::pmr::memory_resource {
- public:
-  size_t alloc_count{0};
-  size_t dealloc_count{0};
-
- private:
-  void *do_allocate(size_t bytes, size_t alignment) override {
-    ++alloc_count;
-    return ::operator new(bytes);
-  }
-  void do_deallocate(void *p, size_t bytes, size_t alignment) override {
-    ++dealloc_count;
-    ::operator delete(p);
-  }
-  bool do_is_equal(
-      const std::pmr::memory_resource &other) const noexcept override {
-    return this == &other;
-  }
-};
-}  // namespace
-
-TEST_F(PostingTest, InvasivePtrPostingsPmrAllocation) {
-  CountingResource resource;
-  {
-    RAX_PMR_GUARD(&resource);
-    auto postings = InvasivePtr<Postings>::Make();
-    EXPECT_EQ(
-        reinterpret_cast<uintptr_t>(&(*postings)) % alignof(std::max_align_t),
-        0);
-    EXPECT_EQ(resource.alloc_count, 1);
-    EXPECT_EQ(resource.dealloc_count, 0);
-  }
-  EXPECT_EQ(resource.alloc_count, 1);
-  EXPECT_EQ(resource.dealloc_count, 1);
 }
 
 }  // namespace valkey_search::indexes::text

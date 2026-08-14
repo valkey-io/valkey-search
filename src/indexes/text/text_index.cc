@@ -144,16 +144,12 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
     : with_offsets_(with_offsets),
       lexer_(language, punctuation, stop_words),
       min_stem_size_(min_stem_size),
-      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()),
-      rax_memory_resource_(
-          std::make_unique<valkey_search::utils::TreePmrAllocator>()) {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
+      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {
   text_index_ = std::make_shared<TextIndex>(false);
   stem_tree_ = Rax(FreeStemParentsCallback);
 }
 
 TextIndexSchema::~TextIndexSchema() {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   per_key_text_indexes_.clear();
   stem_tree_ = Rax();
   text_index_.reset();
@@ -203,7 +199,6 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -306,7 +301,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   // Extract the per-key index
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {

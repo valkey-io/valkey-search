@@ -108,7 +108,7 @@ extern "C" {
  */
 
 #define RAX_NODE_MAX_SIZE ((1 << 29) - 1)
-typedef struct vs_raxNode {
+typedef struct RaxNode {
   uint32_t is_key : 1;     /* Does this node contain a key? */
   uint32_t is_null : 1;    /* Associated value is NULL (don't store it). */
   uint32_t is_compr : 1;   /* Node is compressed. */
@@ -117,7 +117,7 @@ typedef struct vs_raxNode {
   /* Data layout is as follows:
    *
    * If node is not compressed we have 'size' bytes, one for each children
-   * character, and 'size' vs_raxNode pointers, point to each child node.
+   * character, and 'size' RaxNode pointers, point to each child node.
    * Note how the character is not stored in the children but in the
    * edge of the parents:
    *
@@ -137,36 +137,36 @@ typedef struct vs_raxNode {
    * nodes).
    *
    * If the node has an associated key (is_key=1) and is not NULL
-   * (is_null=0), then after the vs_raxNode pointers pointing to the
+   * (is_null=0), then after the RaxNode pointers pointing to the
    * children, an additional value pointer is present (as you can see
    * in the representation above as "value-ptr" field).
    */
   unsigned char data[];
-} vs_raxNode;
+} RaxNode;
 
-typedef struct vs_rax {
-  vs_raxNode *head;  /* Pointer to root node of tree */
+typedef struct Rax {
+  RaxNode *head;  /* Pointer to root node of tree */
   uint64_t numele;   /* Number of keys in the tree */
   uint64_t numnodes; /* Number of rax nodes in the tree */
   size_t alloc_size; /* Total allocation size of the tree in bytes */
-} vs_rax;
+} Rax;
 
-/* Stack data structure used by vs_raxLowWalk() in order to, optionally, return
+/* Stack data structure used by RaxLowWalk() in order to, optionally, return
  * a list of parent nodes to the caller. The nodes do not have a "parent"
  * field for space concerns, so we use the auxiliary stack when needed. */
 #define RAX_STACK_STATIC_ITEMS 32
-typedef struct vs_raxStack {
+typedef struct RaxStack {
   void **stack; /* Points to static_items or an heap allocated array. */
   size_t items, maxitems; /* Number of items contained and total space. */
   /* Up to RAX_STACK_STATIC_ITEMS items we avoid to allocate on the heap
    * and use this static array of pointers instead. */
   void *static_items[RAX_STACK_STATIC_ITEMS];
   int oom; /* True if pushing into this stack failed for OOM at some point. */
-} vs_raxStack;
+} RaxStack;
 
 /* Optional callback used for iterators and be notified on each rax node,
  * including nodes not representing keys. */
-typedef int (*vs_raxNodeCallback)(vs_raxNode **noderef);
+typedef int (*RaxNodeCallback)(RaxNode **noderef);
 
 /* Radix tree iterator state is encapsulated into this data structure. */
 #define RAX_ITER_STATIC_LEN 128
@@ -181,67 +181,67 @@ typedef int (*vs_raxNodeCallback)(vs_raxNode **noderef);
 #define RAX_ITER_SUB_TREE \
   (1 << 3) /* SEARCH - restrict iteration to sub-tree. */
 
-typedef struct vs_raxIterator {
+typedef struct RaxIterator {
   int flags;
-  vs_rax *rt;         /* Radix tree we are iterating. */
+  Rax *rt;         /* Radix tree we are iterating. */
   unsigned char *key; /* The current string. */
   void *data;         /* Data associated to this key. */
   size_t key_len;     /* Current key length. */
   size_t key_max;     /* Max key len the current key buffer can hold. */
   unsigned char key_static_string[RAX_ITER_STATIC_LEN];
-  vs_raxNode *node;  /* Current node. Only for unsafe iteration. */
-  vs_raxStack stack; /* Stack used for unsafe iteration. */
-  vs_raxNodeCallback
+  RaxNode *node;  /* Current node. Only for unsafe iteration. */
+  RaxStack stack; /* Stack used for unsafe iteration. */
+  RaxNodeCallback
       node_cb;      /* Optional node callback. Normally set to NULL. */
-  vs_raxNode *head; /* SEARCH - Used to limit iteration to a subtree */
-} vs_raxIterator;
+  RaxNode *head; /* SEARCH - Used to limit iteration to a subtree */
+} RaxIterator;
 
 /* BEGIN SEARCH */
 /* Used to modify the subtree_items count */
 typedef enum { kNone, kAdd, kSubtract } item_count_op;
 
-/* Callback type for vs_raxMutate. Receives current value (NULL if key doesn't
+/* Callback type for RaxMutate. Receives current value (NULL if key doesn't
  * exist) and the passed through caller context. Returns new value (NULL to
  * delete the key). */
-typedef void *(*vs_raxMutateCallback)(void *current_value,
+typedef void *(*RaxMutateCallback)(void *current_value,
                                       void *caller_context);
 
-uint32_t vs_raxGetSubtreeItemCount(vs_rax *rax, unsigned char *s, size_t len);
-int vs_raxSeekSubTree(vs_raxIterator *it, unsigned char *ele, size_t len);
-int vs_raxMutate(vs_rax *rax, unsigned char *s, size_t len,
-                 vs_raxMutateCallback callback, void *caller_context,
+uint32_t RaxGetSubtreeItemCount(Rax *rax, unsigned char *s, size_t len);
+int RaxSeekSubTree(RaxIterator *it, unsigned char *ele, size_t len);
+int RaxMutate(Rax *rax, unsigned char *s, size_t len,
+                 RaxMutateCallback callback, void *caller_context,
                  item_count_op op);
 /* END SEARCH */
 
 /* Exported C API. */
-vs_rax *vs_raxNew(void);
-int vs_raxInsert(vs_rax *rax, unsigned char *s, size_t len, void *data,
+Rax *RaxNew(void);
+int RaxInsert(Rax *rax, unsigned char *s, size_t len, void *data,
                  void **old);
-int vs_raxTryInsert(vs_rax *rax, unsigned char *s, size_t len, void *data,
+int RaxTryInsert(Rax *rax, unsigned char *s, size_t len, void *data,
                     void **old);
-int vs_raxRemove(vs_rax *rax, unsigned char *s, size_t len, void **old);
-int vs_raxFind(vs_rax *rax, unsigned char *s, size_t len, void **value);
-void vs_raxFree(vs_rax *rax);
-void vs_raxFreeWithCallback(vs_rax *rax, void (*free_callback)(void *));
-void vs_raxStart(vs_raxIterator *it, vs_rax *rt);
-int vs_raxSeek(vs_raxIterator *it, const char *op, unsigned char *ele,
+int RaxRemove(Rax *rax, unsigned char *s, size_t len, void **old);
+int RaxFind(Rax *rax, unsigned char *s, size_t len, void **value);
+void RaxFree(Rax *rax);
+void RaxFreeWithCallback(Rax *rax, void (*free_callback)(void *));
+void RaxStart(RaxIterator *it, Rax *rt);
+int RaxSeek(RaxIterator *it, const char *op, unsigned char *ele,
                size_t len);
-int vs_raxNext(vs_raxIterator *it);
-int vs_raxPrev(vs_raxIterator *it);
-int vs_raxRandomWalk(vs_raxIterator *it, size_t steps);
-int vs_raxCompare(vs_raxIterator *iter, const char *op, unsigned char *key,
+int RaxNext(RaxIterator *it);
+int RaxPrev(RaxIterator *it);
+int RaxRandomWalk(RaxIterator *it, size_t steps);
+int RaxCompare(RaxIterator *iter, const char *op, unsigned char *key,
                   size_t key_len);
-void vs_raxStop(vs_raxIterator *it);
-int vs_raxEOF(vs_raxIterator *it);
-void vs_raxShow(vs_rax *rax);
-uint64_t vs_raxSize(vs_rax *rax);
-size_t vs_raxAllocSize(vs_rax *rax);
-unsigned long vs_raxTouch(vs_raxNode *n);
-void vs_raxSetDebugMsg(int onoff);
+void RaxStop(RaxIterator *it);
+int RaxEOF(RaxIterator *it);
+void RaxShow(Rax *rax);
+uint64_t RaxSize(Rax *rax);
+size_t RaxAllocSize(Rax *rax);
+unsigned long RaxTouch(RaxNode *n);
+void RaxSetDebugMsg(int onoff);
 
 /* Internal API. May be used by the node callback in order to access rax nodes
  * in a low level way, so this function is exported as well. */
-void vs_raxSetData(vs_raxNode *n, void *data);
+void RaxSetData(RaxNode *n, void *data);
 
 #ifdef __cplusplus
 }
@@ -250,7 +250,7 @@ void vs_raxSetData(vs_raxNode *n, void *data);
 #ifdef __cplusplus
 namespace valkey_search {
 
-// RaxTree implements a high-performance C++ wrapper around the vs_rax radix
+// RaxTree implements a high-performance C++ wrapper around the Rax radix
 // tree with the following features:
 // * Capacity Quantization & Growth Over-allocation: Rounds node allocations up
 // to power-of-two capacity buckets
@@ -284,10 +284,10 @@ class RaxTree {
   int Insert(std::string_view key, void *data, void **old_data = nullptr);
   int Remove(std::string_view key, void **old_data = nullptr);
   void *Find(std::string_view key) const;
-  int Mutate(std::string_view key, vs_raxMutateCallback mutate,
+  int Mutate(std::string_view key, RaxMutateCallback mutate,
              void *caller_context, item_count_op op = kNone);
   size_t GetSubtreeItemCount(std::string_view prefix) const;
-  vs_rax *GetRax() const { return rax_; }
+  Rax *GetRax() const { return rax_; }
   uint64_t Size() const;
   size_t GetAllocSize() const;
   void FreeWithCallback(void (*free_callback)(void *));
@@ -299,7 +299,7 @@ class RaxTree {
   int UsableSize(void *ptr);
 
  private:
-  vs_rax *rax_{nullptr};
+  Rax *rax_{nullptr};
   Allocator *allocator_{nullptr};
 };
 

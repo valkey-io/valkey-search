@@ -36,7 +36,8 @@ Key.
 
 #include "absl/container/btree_map.h"
 #include "src/indexes/text/flat_position_map.h"
-#include "src/utils/pmr_allocator.h"
+#include "src/utils/allocator.h"
+#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
@@ -67,41 +68,21 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
-struct alignas(alignof(std::max_align_t)) PostingsHeader {
-  std::pmr::memory_resource *res;
-};
-
 struct Postings {
   struct KeyIterator;
 
   static void *operator new(size_t size) {
-#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-    std::pmr::memory_resource *res = valkey_search::utils::t_rax_res;
-    size_t total = sizeof(PostingsHeader) + size;
-    void *raw = res ? res->allocate(total, alignof(std::max_align_t))
-                    : ::operator new(total);
-    reinterpret_cast<PostingsHeader *>(raw)->res = res;
-    return static_cast<char *>(raw) + sizeof(PostingsHeader);
-#else
-    return ::operator new(size);
-#endif
+    void *ptr = valkey_search::GetDefaultSegregatedAllocator().Allocate(size);
+    return ptr ? ptr : ::operator new(size);
   }
   static void operator delete(void *ptr, size_t size) {
-#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-    if (!ptr) {
+    if (valkey_search::Allocator::Free(static_cast<char *>(ptr))) {
       return;
     }
-    PostingsHeader *hdr = reinterpret_cast<PostingsHeader *>(
-        static_cast<char *>(ptr) - sizeof(PostingsHeader));
-    if (hdr->res) {
-      hdr->res->deallocate(hdr, sizeof(PostingsHeader) + size,
-                           alignof(std::max_align_t));
+    if (valkey_search::Allocator::Free(static_cast<char *>(ptr))) {
       return;
     }
-    ::operator delete(hdr);
-#else
     ::operator delete(ptr);
-#endif
   }
 
   // Destructor: clean up all FlatPositionMaps

@@ -12,10 +12,7 @@
 
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <string>
-
-#include "src/utils/pmr_allocator.h"
 
 namespace valkey_search::utils {
 namespace {
@@ -26,17 +23,7 @@ constexpr int kNumOperations = 100000;
 
 enum class AllocatorType {
   kDefault,
-  kPmrMonotonic,
 };
-
-// Helper to create an exclusive memory pool for a single tree instance.
-inline std::unique_ptr<std::pmr::memory_resource> CreateTreePool(
-    AllocatorType alloc_type) {
-  if (alloc_type == AllocatorType::kDefault) {
-    return nullptr;
-  }
-  return std::make_unique<TreePmrAllocator>();
-}
 
 // Helper to generate key strings
 inline std::string GetKey(int id) { return "key_" + std::to_string(id); }

@@ -1,3 +1,5 @@
+#include "src/utils/allocator.h"
+#include "src/utils/allocator.h"
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
@@ -14,14 +16,8 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "src/indexes/text/posting.h"
-#include "src/utils/pmr_allocator.h"
 
 namespace {
-
-struct FlatPositionMapHeader {
-  std::pmr::memory_resource *res;
-  size_t total_alloc_size;
-};
 
 // Read fixed-length unsigned int (little-endian) helper
 inline uint32_t ReadVarUint(const char *ptr, uint8_t num_bytes) {
@@ -175,18 +171,10 @@ FlatPositionMap *FlatPositionMap::Create(
 
   // Allocate single block: [FlatPositionMapHeader (optional) | FlatPositionMap
   // | data...]
-#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-  size_t total_alloc_size = sizeof(FlatPositionMapHeader) + total_size;
-  std::pmr::memory_resource *res = valkey_search::utils::t_rax_res;
-  void *raw = res ? res->allocate(total_alloc_size, alignof(std::max_align_t))
-                  : ::operator new(total_alloc_size);
-  auto *hdr = static_cast<FlatPositionMapHeader *>(raw);
-  hdr->res = res;
-  hdr->total_alloc_size = total_alloc_size;
-  void *mem = hdr + 1;
-#else
-  void *mem = operator new(total_size);
-#endif
+  void *mem = valkey_search::GetDefaultSegregatedAllocator().Allocate(total_size);
+  if (!mem) {
+    mem = operator new(total_size);
+  }
   auto *map = new (mem) FlatPositionMap();
 
   // Initialize header fields
@@ -237,16 +225,11 @@ void FlatPositionMap::Destroy(FlatPositionMap *map) {
     return;
   }
   map->~FlatPositionMap();
-#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-  auto *hdr = reinterpret_cast<FlatPositionMapHeader *>(map) - 1;
-  if (hdr->res) {
-    hdr->res->deallocate(hdr, hdr->total_alloc_size, alignof(std::max_align_t));
-    return;
+  if (!valkey_search::Allocator::Free(reinterpret_cast<char *>(map))) {
+    if (!valkey_search::Allocator::Free(reinterpret_cast<char *>(map))) {
+    operator delete(map);
   }
-  ::operator delete(hdr);
-#else
-  operator delete(map);
-#endif
+  }
 }
 
 //=============================================================================

@@ -53,48 +53,41 @@
 #include <benchmark/benchmark.h>
 
 #include <memory>
-#include <memory_resource>
 #include <string>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "src/indexes/text/rax/rax.h"
-#include "src/utils/pmr_allocator.h"
 #include "testing/utils/allocator_benchmark_common.h"
 
 namespace valkey_search::utils {
 namespace {
 
-using RaxSetType =
+using RaxSetType = absl::flat_hash_set<size_t>;
     absl::flat_hash_set<size_t, absl::Hash<size_t>, std::equal_to<size_t>,
-                        std::pmr::polymorphic_allocator<size_t>>;
 
-inline void RaxAddValue(vs_rax *tree, const std::string &key, size_t val,
-                        std::pmr::memory_resource *res) {
-#if !defined(USE_CUSTOM_RAX_ALLOCATOR) || !USE_CUSTOM_RAX_ALLOCATOR
-  res = nullptr;
-#endif
+inline void RaxAddValue(Rax *tree, const std::string &key, size_t val,
+                        ) {
   void *existing = nullptr;
-  if (vs_raxFind(
+  if (RaxFind(
           tree,
           reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
           key.size(), &existing)) {
     static_cast<RaxSetType *>(existing)->insert(val);
   } else {
     auto *set =
-        new (res ? res->allocate(sizeof(RaxSetType), alignof(RaxSetType))
-                 : ::operator new(sizeof(RaxSetType)))
-            RaxSetType(res ? res : std::pmr::get_default_resource());
+        new (sizeof(RaxSetType))
+            RaxSetType();
     set->insert(val);
-    vs_raxInsert(
+    RaxInsert(
         tree, reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
         key.size(), set, nullptr);
   }
 }
 
-inline void RaxRemoveValue(vs_rax *tree, const std::string &key, size_t val) {
+inline void RaxRemoveValue(Rax *tree, const std::string &key, size_t val) {
   void *existing = nullptr;
-  if (vs_raxFind(
+  if (RaxFind(
           tree,
           reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
           key.size(), &existing)) {
@@ -104,18 +97,14 @@ inline void RaxRemoveValue(vs_rax *tree, const std::string &key, size_t val) {
 }
 
 inline void RaxTreeAddValue(RaxTree *tree, const std::string &key, size_t val,
-                            std::pmr::memory_resource *res) {
-#if !defined(USE_CUSTOM_RAX_ALLOCATOR) || !USE_CUSTOM_RAX_ALLOCATOR
-  res = nullptr;
-#endif
+                            ) {
   void *existing = tree->Find(key);
   if (existing) {
     static_cast<RaxSetType *>(existing)->insert(val);
   } else {
     auto *set =
-        new (res ? res->allocate(sizeof(RaxSetType), alignof(RaxSetType))
-                 : ::operator new(sizeof(RaxSetType)))
-            RaxSetType(res ? res : std::pmr::get_default_resource());
+        new (sizeof(RaxSetType))
+            RaxSetType();
     set->insert(val);
     tree->Insert(key, set);
   }
@@ -141,14 +130,11 @@ inline void FreeRaxSetCallback(void *ptr) {
 // -----------------------------------------------------------------------------
 
 static void BM_RaxInsert(benchmark::State &state, AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<vs_rax *> trees(kNumInstances);
+    std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    trees[k] = vs_raxNew();
+    trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
-      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i), pools[k].get());
+      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i));
     }
   }
 
@@ -156,14 +142,12 @@ static void BM_RaxInsert(benchmark::State &state, AllocatorType alloc_type) {
   for (auto _ : state) {
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
-      RaxPmrGuard guard(pools[idx] ? pools[idx].get() : nullptr);
       RaxAddValue(trees[idx], GetKey(op_id + i), static_cast<size_t>(op_id + i),
                   pools[idx].get());
     }
     state.PauseTiming();
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
-      RaxPmrGuard guard(pools[idx] ? pools[idx].get() : nullptr);
       RaxRemoveValue(trees[idx], GetKey(op_id + i),
                      static_cast<size_t>(op_id + i));
     }
@@ -171,20 +155,16 @@ static void BM_RaxInsert(benchmark::State &state, AllocatorType alloc_type) {
   }
 
   for (int k = 0; k < kNumInstances; ++k) {
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    vs_raxFreeWithCallback(trees[k], FreeRaxSetCallback);
+    RaxFreeWithCallback(trees[k], FreeRaxSetCallback);
   }
 }
 
 static void BM_RaxSearch(benchmark::State &state, AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<vs_rax *> trees(kNumInstances);
+    std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    trees[k] = vs_raxNew();
+    trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
-      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i), pools[k].get());
+      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i));
     }
   }
 
@@ -193,7 +173,7 @@ static void BM_RaxSearch(benchmark::State &state, AllocatorType alloc_type) {
       int idx = i % kNumInstances;
       std::string key = GetKey(i % kInitialEntries);
       void *val = nullptr;
-      benchmark::DoNotOptimize(vs_raxFind(
+      benchmark::DoNotOptimize(RaxFind(
           trees[idx],
           reinterpret_cast<unsigned char *>(const_cast<char *>(key.data())),
           key.size(), &val));
@@ -201,70 +181,58 @@ static void BM_RaxSearch(benchmark::State &state, AllocatorType alloc_type) {
   }
 
   for (int k = 0; k < kNumInstances; ++k) {
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    vs_raxFreeWithCallback(trees[k], FreeRaxSetCallback);
+    RaxFreeWithCallback(trees[k], FreeRaxSetCallback);
   }
 }
 
 static void BM_RaxDelete(benchmark::State &state, AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<vs_rax *> trees(kNumInstances);
+    std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    trees[k] = vs_raxNew();
+    trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
-      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i), pools[k].get());
+      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i));
     }
   }
 
   for (auto _ : state) {
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
-      RaxPmrGuard guard(pools[idx] ? pools[idx].get() : nullptr);
       RaxRemoveValue(trees[idx], GetKey(i % kInitialEntries),
                      static_cast<size_t>(i % kInitialEntries));
     }
     state.PauseTiming();
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
-      RaxPmrGuard guard(pools[idx] ? pools[idx].get() : nullptr);
       RaxAddValue(trees[idx], GetKey(i % kInitialEntries),
-                  static_cast<size_t>(i), pools[idx].get());
+                  static_cast<size_t>(i));
     }
     state.ResumeTiming();
   }
 
   for (int k = 0; k < kNumInstances; ++k) {
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    vs_raxFreeWithCallback(trees[k], FreeRaxSetCallback);
+    RaxFreeWithCallback(trees[k], FreeRaxSetCallback);
   }
 }
 
 static void BM_RaxUpdate(benchmark::State &state, AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<vs_rax *> trees(kNumInstances);
+    std::vector<Rax *> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    trees[k] = vs_raxNew();
+    trees[k] = RaxNew();
     for (int i = 0; i < kInitialEntries; ++i) {
-      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i), pools[k].get());
+      RaxAddValue(trees[k], GetKey(i), static_cast<size_t>(i));
     }
   }
 
   for (auto _ : state) {
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
-      RaxPmrGuard guard(pools[idx] ? pools[idx].get() : nullptr);
       RaxAddValue(trees[idx], GetKey(i % kInitialEntries),
-                  static_cast<size_t>(i + 100), pools[idx].get());
+                  static_cast<size_t>(i + 100));
     }
   }
 
   for (int k = 0; k < kNumInstances; ++k) {
-    RaxPmrGuard guard(pools[k] ? pools[k].get() : nullptr);
-    vs_raxFreeWithCallback(trees[k], FreeRaxSetCallback);
+    RaxFreeWithCallback(trees[k], FreeRaxSetCallback);
   }
 }
 
@@ -274,11 +242,9 @@ static void BM_RaxUpdate(benchmark::State &state, AllocatorType alloc_type) {
 
 static void BM_RaxTreeInsert(benchmark::State &state,
                              AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    trees[k] = std::make_unique<RaxTree>(pools[k].get());
+    trees[k] = std::make_unique<RaxTree>();
     for (int i = 0; i < kInitialEntries; ++i) {
       RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
                       pools[k].get());
@@ -290,7 +256,7 @@ static void BM_RaxTreeInsert(benchmark::State &state,
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
       RaxTreeAddValue(trees[idx].get(), GetKey(op_id + i),
-                      static_cast<size_t>(op_id + i), pools[idx].get());
+                      static_cast<size_t>(op_id + i));
     }
     state.PauseTiming();
     for (int i = 0; i < kNumOperations; ++i) {
@@ -308,11 +274,9 @@ static void BM_RaxTreeInsert(benchmark::State &state,
 
 static void BM_RaxTreeSearch(benchmark::State &state,
                              AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    trees[k] = std::make_unique<RaxTree>(pools[k].get());
+    trees[k] = std::make_unique<RaxTree>();
     for (int i = 0; i < kInitialEntries; ++i) {
       RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
                       pools[k].get());
@@ -333,11 +297,9 @@ static void BM_RaxTreeSearch(benchmark::State &state,
 
 static void BM_RaxTreeDelete(benchmark::State &state,
                              AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    trees[k] = std::make_unique<RaxTree>(pools[k].get());
+    trees[k] = std::make_unique<RaxTree>();
     for (int i = 0; i < kInitialEntries; ++i) {
       RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
                       pools[k].get());
@@ -354,7 +316,7 @@ static void BM_RaxTreeDelete(benchmark::State &state,
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
       RaxTreeAddValue(trees[idx].get(), GetKey(i % kInitialEntries),
-                      static_cast<size_t>(i), pools[idx].get());
+                      static_cast<size_t>(i));
     }
     state.ResumeTiming();
   }
@@ -366,11 +328,9 @@ static void BM_RaxTreeDelete(benchmark::State &state,
 
 static void BM_RaxTreeUpdate(benchmark::State &state,
                              AllocatorType alloc_type) {
-  std::vector<std::unique_ptr<std::pmr::memory_resource>> pools(kNumInstances);
-  std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
+    std::vector<std::unique_ptr<RaxTree>> trees(kNumInstances);
   for (int k = 0; k < kNumInstances; ++k) {
-    pools[k] = CreateTreePool(alloc_type);
-    trees[k] = std::make_unique<RaxTree>(pools[k].get());
+    trees[k] = std::make_unique<RaxTree>();
     for (int i = 0; i < kInitialEntries; ++i) {
       RaxTreeAddValue(trees[k].get(), GetKey(i), static_cast<size_t>(i),
                       pools[k].get());
@@ -381,7 +341,7 @@ static void BM_RaxTreeUpdate(benchmark::State &state,
     for (int i = 0; i < kNumOperations; ++i) {
       int idx = i % kNumInstances;
       RaxTreeAddValue(trees[idx].get(), GetKey(i % kInitialEntries),
-                      static_cast<size_t>(i + 100), pools[idx].get());
+                      static_cast<size_t>(i + 100));
     }
   }
 
@@ -393,52 +353,28 @@ static void BM_RaxTreeUpdate(benchmark::State &state,
 BENCHMARK_CAPTURE(BM_RaxInsert, DefaultAlloc, AllocatorType::kDefault)
     ->Threads(1)
     ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxInsert, CustomAlloc, AllocatorType::kPmrMonotonic)
-    ->Threads(1)
-    ->Threads(8);
 BENCHMARK_CAPTURE(BM_RaxTreeInsert, DefaultAlloc, AllocatorType::kDefault)
-    ->Threads(1)
-    ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxTreeInsert, CustomAlloc, AllocatorType::kPmrMonotonic)
     ->Threads(1)
     ->Threads(8);
 
 BENCHMARK_CAPTURE(BM_RaxSearch, DefaultAlloc, AllocatorType::kDefault)
     ->Threads(1)
     ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxSearch, CustomAlloc, AllocatorType::kPmrMonotonic)
-    ->Threads(1)
-    ->Threads(8);
 BENCHMARK_CAPTURE(BM_RaxTreeSearch, DefaultAlloc, AllocatorType::kDefault)
-    ->Threads(1)
-    ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxTreeSearch, CustomAlloc, AllocatorType::kPmrMonotonic)
     ->Threads(1)
     ->Threads(8);
 
 BENCHMARK_CAPTURE(BM_RaxDelete, DefaultAlloc, AllocatorType::kDefault)
     ->Threads(1)
     ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxDelete, CustomAlloc, AllocatorType::kPmrMonotonic)
-    ->Threads(1)
-    ->Threads(8);
 BENCHMARK_CAPTURE(BM_RaxTreeDelete, DefaultAlloc, AllocatorType::kDefault)
-    ->Threads(1)
-    ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxTreeDelete, CustomAlloc, AllocatorType::kPmrMonotonic)
     ->Threads(1)
     ->Threads(8);
 
 BENCHMARK_CAPTURE(BM_RaxUpdate, DefaultAlloc, AllocatorType::kDefault)
     ->Threads(1)
     ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxUpdate, CustomAlloc, AllocatorType::kPmrMonotonic)
-    ->Threads(1)
-    ->Threads(8);
 BENCHMARK_CAPTURE(BM_RaxTreeUpdate, DefaultAlloc, AllocatorType::kDefault)
-    ->Threads(1)
-    ->Threads(8);
-BENCHMARK_CAPTURE(BM_RaxTreeUpdate, CustomAlloc, AllocatorType::kPmrMonotonic)
     ->Threads(1)
     ->Threads(8);
 

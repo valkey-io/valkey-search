@@ -36,21 +36,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern void *RaxPmrMalloc(size_t size);
-extern void RaxPmrFree(void *ptr);
-extern void *RaxPmrRealloc(void *ptr, size_t size);
-extern int RaxPmrUsableSize(void *ptr);
+extern void *RaxMemMalloc(size_t size);
+extern void RaxMemFree(void *ptr);
+extern void *RaxMemRealloc(void *ptr, size_t size);
+extern int RaxMemUsableSize(void *ptr);
 #ifdef __cplusplus
 }
 #endif
 
 // NOLINTNEXTLINE(readability-identifier-naming)
-#define rax_malloc RaxPmrMalloc
+#define rax_malloc RaxMemMalloc
 // NOLINTNEXTLINE(readability-identifier-naming)
-#define rax_realloc RaxPmrRealloc
+#define rax_realloc RaxMemRealloc
 // NOLINTNEXTLINE(readability-identifier-naming)
-#define rax_free RaxPmrFree
+#define rax_free RaxMemFree
 // NOLINTNEXTLINE(readability-identifier-naming)
-#define rax_ptr_alloc_size(ptr) ((size_t)RaxPmrUsableSize(ptr))
+#define rax_ptr_alloc_size(ptr) ((size_t)RaxMemUsableSize(ptr))
 
 #endif

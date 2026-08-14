@@ -13,16 +13,13 @@
 #include <cstdint>
 #include <memory_resource>
 #include <utility>
+#include "src/utils/allocator.h"
+#include "src/utils/allocator.h"
 
-#include "src/utils/pmr_allocator.h"
 
 namespace valkey_search::indexes::text {
 
 namespace detail {
-
-struct alignas(alignof(std::max_align_t)) InvasivePtrHeader {
-  std::pmr::memory_resource *res = nullptr;
-};
 
 template <typename T>
 struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
@@ -31,34 +28,18 @@ struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
       : data_(std::forward<Args>(args)...) {}
 
   static void *operator new(size_t size) {
-#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-    std::pmr::memory_resource *res = valkey_search::utils::t_rax_res;
-    size_t total = sizeof(InvasivePtrHeader) + size;
-    void *raw = res ? res->allocate(total, alignof(std::max_align_t))
-                    : ::operator new(total);
-    reinterpret_cast<InvasivePtrHeader *>(raw)->res = res;
-    return static_cast<char *>(raw) + sizeof(InvasivePtrHeader);
-#else
-    return ::operator new(size);
-#endif
+    void *ptr = valkey_search::GetDefaultSegregatedAllocator().Allocate(size);
+    return ptr ? ptr : ::operator new(size);
   }
 
   static void operator delete(void *ptr, size_t size) {
-#if defined(USE_CUSTOM_RAX_ALLOCATOR) && USE_CUSTOM_RAX_ALLOCATOR
-    if (!ptr) {
+    if (valkey_search::Allocator::Free(static_cast<char *>(ptr))) {
       return;
     }
-    InvasivePtrHeader *hdr = reinterpret_cast<InvasivePtrHeader *>(
-        static_cast<char *>(ptr) - sizeof(InvasivePtrHeader));
-    if (hdr->res) {
-      hdr->res->deallocate(hdr, sizeof(InvasivePtrHeader) + size,
-                           alignof(std::max_align_t));
+    if (valkey_search::Allocator::Free(static_cast<char *>(ptr))) {
       return;
     }
-    ::operator delete(hdr);
-#else
     ::operator delete(ptr);
-#endif
   }
 
   alignas(alignof(std::max_align_t)) std::atomic<uint32_t> refcount_ = 1;

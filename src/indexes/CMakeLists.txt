@@ -68,7 +68,6 @@ set(SRCS_RAX_LIB ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c
                  ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.h)
 valkey_search_add_static_library(rax_lib "${SRCS_RAX_LIB}")
 target_include_directories(rax_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/text)
-target_link_libraries(rax_lib PUBLIC pmr_allocator)
 
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 

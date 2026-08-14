@@ -24,7 +24,6 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
-#include "src/utils/pmr_allocator.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -73,17 +72,13 @@ bool IsValidPrefix(absl::string_view str) {
 
 Tag::Tag(const data_model::TagIndex &tag_index_proto)
     : IndexBase(IndexerType::kTag),
-      rax_memory_resource_(
-          std::make_unique<valkey_search::utils::TreePmrAllocator>()),
       separator_(tag_index_proto.separator()[0]),
       case_sensitive_(tag_index_proto.case_sensitive()) {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
-  tree_ = vs_raxNew();
+  tree_ = RaxNew();
 }
 
 Tag::~Tag() {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
-  vs_raxFreeWithCallback(tree_, &TagFreeCallback);
+  RaxFreeWithCallback(tree_, &TagFreeCallback);
 }
 
 std::string Tag::Normalize(absl::string_view tag) const {
@@ -100,7 +95,7 @@ std::string Tag::Normalize(absl::string_view tag) const {
 void Tag::IndexTagForKey(absl::string_view tag, const InternedStringPtr &key) {
   std::string norm = Normalize(tag);
   MutateCtx ctx{&key, /*insert=*/true};
-  vs_raxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+  RaxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()),
                norm.size(), &TagMutateTrampoline, &ctx, kAdd);
 }
 
@@ -108,7 +103,7 @@ void Tag::DeindexTagForKey(absl::string_view tag,
                            const InternedStringPtr &key) {
   std::string norm = Normalize(tag);
   MutateCtx ctx{&key, /*insert=*/false};
-  vs_raxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+  RaxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()),
                norm.size(), &TagMutateTrampoline, &ctx, kSubtract);
 }
 
@@ -116,7 +111,6 @@ absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
                                             absl::string_view data) {
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
     // An empty tag set is a missing value, not invalid data. (Content
@@ -218,7 +212,6 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                absl::string_view data) {
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
@@ -253,7 +246,6 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
 
 absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr &key,
                                        DeletionType deletion_type) {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   absl::MutexLock lock(&index_mutex_);
   if (deletion_type == DeletionType::kRecord) {
     // If key is DELETED, remove it from untracked_keys_.
@@ -402,7 +394,6 @@ std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<EntriesFetcherBase> Tag::Search(
     const query::TagPredicate &predicate, bool negate) const {
-  RAX_PMR_GUARD(rax_memory_resource_.get());
   // Collect matched rax slots (each slot's 8 bytes encode a bag) without
   // iterating their postings; the iterator yields lazily during Begin().
   absl::flat_hash_set<void *> seen;
@@ -429,17 +420,17 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
     if (!is_prefix) {
       // exact search
       void *p = nullptr;
-      if (vs_raxFind(tree_, qbytes, norm.size(), &p) == 1) {
+      if (RaxFind(tree_, qbytes, norm.size(), &p) == 1) {
         collect_slot(p);
       }
     } else {
-      vs_raxIterator it;
-      vs_raxStart(&it, tree_);
-      vs_raxSeekSubTree(&it, qbytes, norm.size());
-      while (vs_raxNext(&it)) {
+      RaxIterator it;
+      RaxStart(&it, tree_);
+      RaxSeekSubTree(&it, qbytes, norm.size());
+      while (RaxNext(&it)) {
         collect_slot(it.data);
       }
-      vs_raxStop(&it);
+      RaxStop(&it);
     }
   }
 
@@ -450,11 +441,11 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
     // Yield every posting NOT in `seen`, plus every untracked key.
     std::vector<void *> negate_slots;
     size_t negate_total = 0;
-    vs_raxIterator it;
-    vs_raxStart(&it, tree_);
+    RaxIterator it;
+    RaxStart(&it, tree_);
     unsigned char empty = 0;
-    vs_raxSeekSubTree(&it, &empty, 0);
-    while (vs_raxNext(&it)) {
+    RaxSeekSubTree(&it, &empty, 0);
+    while (RaxNext(&it)) {
       if (it.data && !seen.contains(it.data)) {
         negate_slots.push_back(it.data);
         auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(it.data));
@@ -462,7 +453,7 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
         (void)bag.Release();
       }
     }
-    vs_raxStop(&it);
+    RaxStop(&it);
     extras.reserve(untracked_keys_.size());
     for (const auto &k : untracked_keys_) {
       extras.push_back(k);

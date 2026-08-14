@@ -32,11 +32,6 @@ else()
   target_link_libraries(allocator PUBLIC ${GRPC_LIB})
 endif()
 
-set(SRCS_PMR_ALLOCATOR
-    ${CMAKE_CURRENT_LIST_DIR}/pmr_allocator.cc
-    ${CMAKE_CURRENT_LIST_DIR}/pmr_allocator.h)
-valkey_search_add_static_library(pmr_allocator "${SRCS_PMR_ALLOCATOR}")
-target_include_directories(pmr_allocator PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
 set(SRCS_INTRUSIVE_LIST ${CMAKE_CURRENT_LIST_DIR}/intrusive_list.h)
 

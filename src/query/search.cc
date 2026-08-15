@@ -61,6 +61,7 @@
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/scoped_thread_cpu_monitor.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
@@ -1749,9 +1750,16 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   const bool scheduled = thread_pool->Schedule(
       [holder, search_mode]() mutable {
         std::unique_ptr<SearchParameters> parameters = std::move(*holder);
-        auto res = Search(*parameters, search_mode);
-        BACKGROUND_PAUSEPOINT("background_search_completing");
-        parameters->search_result.status = res;
+        {
+          vmsdk::ScopedThreadCPUMonitor remote_cpu_monitor(
+              search_mode == SearchMode::kRemote
+                  ? &Metrics::GetStats()
+                         .coordinator_server_search_index_partition_cpu_time_usec
+                  : nullptr);
+          auto res = Search(*parameters, search_mode);
+          BACKGROUND_PAUSEPOINT("background_search_completing");
+          parameters->search_result.status = res;
+        }
         switch (parameters->GetContentProcessing()) {
           case ContentProcessing::kNoContent:
             parameters->QueryCompleteBackground(std::move(parameters));

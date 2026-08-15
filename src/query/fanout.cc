@@ -280,30 +280,48 @@ class LocalResponderSearch : public query::SearchParameters {
 
 void PerformRemoteSearchRequest(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
-    const std::string &address,
+    const std::string &address, std::optional<std::string> fallback_address,
     coordinator::ClientPool *coordinator_client_pool,
     std::shared_ptr<SearchPartitionResultsTracker> tracker) {
+  std::unique_ptr<coordinator::SearchIndexPartitionRequest> fallback_request;
+  if (fallback_address.has_value()) {
+    fallback_request =
+        std::make_unique<coordinator::SearchIndexPartitionRequest>();
+    fallback_request->CopyFrom(*request);
+  }
   auto client = coordinator_client_pool->GetClient(address);
 
   client->SearchIndexPartition(
       std::move(request),
-      [tracker, address = std::string(address)](
+      [coordinator_client_pool, tracker, address = std::string(address),
+       fallback_address = std::move(fallback_address),
+       fallback_request = std::move(fallback_request)](
           grpc::Status status,
           coordinator::SearchIndexPartitionResponse &response) mutable {
+        if (fallback_address.has_value() &&
+            (status.error_code() == grpc::StatusCode::UNAVAILABLE ||
+             status.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED)) {
+          PerformRemoteSearchRequest(std::move(fallback_request),
+                                     *fallback_address, std::nullopt,
+                                     coordinator_client_pool, tracker);
+          return;
+        }
         tracker->HandleResponse(response, address, status);
       });
 }
 
 void PerformRemoteSearchRequestAsync(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
-    const std::string &address,
+    const std::string &address, std::optional<std::string> fallback_address,
     coordinator::ClientPool *coordinator_client_pool,
     std::shared_ptr<SearchPartitionResultsTracker> tracker,
     vmsdk::ThreadPool *thread_pool) {
   thread_pool->Schedule(
       [coordinator_client_pool, address = std::string(address),
+       fallback_address = std::move(fallback_address),
        request = std::move(request), tracker]() mutable {
         PerformRemoteSearchRequest(std::move(request), address,
+                                   std::move(fallback_address),
                                    coordinator_client_pool, tracker);
       },
       vmsdk::ThreadPool::Priority::kHigh);
@@ -312,6 +330,7 @@ void PerformRemoteSearchRequestAsync(
 absl::Status PerformSearchFanoutAsync(
     ValkeyModuleCtx *ctx,
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
+    bool allow_primary_fallback,
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
@@ -393,14 +412,23 @@ absl::Status PerformSearchFanoutAsync(
     std::string target_address =
         absl::StrCat(node.socket_address.primary_endpoint, ":",
                      coordinator::GetCoordinatorPort(node.socket_address.port));
+    std::optional<std::string> fallback_address;
+    if (allow_primary_fallback && !node.is_primary && node.shard != nullptr &&
+        node.shard->primary.has_value()) {
+      const auto &primary = node.shard->primary.value();
+      fallback_address = absl::StrCat(
+          primary.socket_address.primary_endpoint, ":",
+          coordinator::GetCoordinatorPort(primary.socket_address.port));
+    }
     if (search_targets.size() >=
             valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
         thread_pool->Size() > 1) {
-      PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
-                                      coordinator_client_pool, tracker,
-                                      thread_pool);
+      PerformRemoteSearchRequestAsync(
+          std::move(request_copy), target_address, std::move(fallback_address),
+          coordinator_client_pool, tracker, thread_pool);
     } else {
       PerformRemoteSearchRequest(std::move(request_copy), target_address,
+                                 std::move(fallback_address),
                                  coordinator_client_pool, tracker);
     }
   }

@@ -39,11 +39,11 @@ static constexpr highwayhash::HHKey kHashKey{
 enum class FanoutTargetMode {
   kRandom,              // Default: randomly select one node per shard
   kOneReplicaPerShard,  // Select only replicas, one per shard
-  kReplicaPreferred,    // Select one replica per shard; use the primary only
-                        // when the cluster map has no replica for the shard
-  kPrimary,             // Select all primary nodes
-  kReplicas,            // Select all replica nodes
-  kAll                  // Select all nodes (both primary and replica)
+  kReplicaPreferred,    // Select one replica per shard; fall back to primary
+                      // when no replica is mapped or the replica is unavailable
+  kPrimary,   // Select all primary nodes
+  kReplicas,  // Select all replica nodes
+  kAll        // Select all nodes (both primary and replica)
 };
 
 const size_t kNumSlots = 16384;

@@ -95,6 +95,30 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
 
+// Separates request-derived routing policy from target selection. Client mode
+// controls the eligible node roles; ClusterMap applies that policy to the
+// current topology. Additional inputs such as remote load or health belong in
+// this policy rather than in ComputeSearchTargets().
+struct SearchRoutingPolicy {
+  vmsdk::cluster_map::FanoutTargetMode target_mode;
+  bool prefer_local;
+};
+
+SearchRoutingPolicy ComputeSearchRoutingPolicy(ValkeyModuleCtx *ctx) {
+  const bool prefer_local = query::fanout::IsSystemUnderLowUtilization();
+  if (ForceReplicasOnly.GetValue()) {
+    return {.target_mode =
+                vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard,
+            .prefer_local = prefer_local};
+  }
+
+  return {.target_mode =
+              vmsdk::IsReadOnly(ctx)
+                  ? vmsdk::cluster_map::FanoutTargetMode::kReplicaPreferred
+                  : vmsdk::cluster_map::FanoutTargetMode::kPrimary,
+          .prefer_local = prefer_local};
+}
+
 bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
                                         const QueryCommand &parameters) {
   if (!parameters.index_schema) {
@@ -113,10 +137,7 @@ bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
 
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
     ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
-  auto mode = /* !vmsdk::IsReadOnly(ctx) ? query::fanout::kPrimaries ? */
-      ForceReplicasOnly.GetValue()
-          ? vmsdk::cluster_map::FanoutTargetMode::kOneReplicaPerShard
-          : vmsdk::cluster_map::FanoutTargetMode::kRandom;
+  const auto routing_policy = ComputeSearchRoutingPolicy(ctx);
 
   // refresh cluster map if needed
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
@@ -125,12 +146,12 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
       parameters.index_schema->GetSingleSlotNumber();
   if (single_slot_number.has_value()) {
     single_slot_queries.Increment();
-    return cluster_map->GetTargetsForSlot(
-        mode, query::fanout::IsSystemUnderLowUtilization(),
-        *single_slot_number);
+    return cluster_map->GetTargetsForSlot(routing_policy.target_mode,
+                                          routing_policy.prefer_local,
+                                          *single_slot_number);
   } else {
-    return cluster_map->GetTargets(
-        mode, query::fanout::IsSystemUnderLowUtilization());
+    return cluster_map->GetTargets(routing_policy.target_mode,
+                                   routing_policy.prefer_local);
   }
 }
 

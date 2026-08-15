@@ -850,6 +850,40 @@ TEST_F(ClusterMapTest, GetRandomReplicaPerShardTest) {
   EXPECT_EQ(shard_ids.size(), 3);
 }
 
+TEST_F(ClusterMapTest, ReplicaPreferredFallsBackToPrimary) {
+  std::vector<SlotRangeConfig> ranges = {
+      {.start_slot = 0,
+       .end_slot = 5460,
+       .primary = NodeConfig{"127.0.0.1", 30001, primary_ids.at(0), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30004, replica_ids.at(0), {}}}},
+      {.start_slot = 5461,
+       .end_slot = 10922,
+       .primary = NodeConfig{"127.0.0.1", 30002, primary_ids.at(1), {}},
+       .replicas = {}},
+      {.start_slot = 10923,
+       .end_slot = 16383,
+       .primary = NodeConfig{"127.0.0.1", 30003, primary_ids.at(2), {}},
+       .replicas = {NodeConfig{"127.0.0.1", 30006, replica_ids.at(2), {}}}}};
+  auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
+  ASSERT_NE(cluster_map, nullptr);
+
+  auto targets = cluster_map->GetTargets(FanoutTargetMode::kReplicaPreferred);
+  ASSERT_EQ(targets.size(), 3);
+  for (const auto& target : targets) {
+    if (target.node_id == primary_ids.at(1)) {
+      EXPECT_TRUE(target.is_primary);
+    } else {
+      EXPECT_FALSE(target.is_primary);
+    }
+  }
+
+  auto single_slot_target = cluster_map->GetTargetsForSlot(
+      FanoutTargetMode::kReplicaPreferred, false, 8192);
+  ASSERT_EQ(single_slot_target.size(), 1);
+  EXPECT_EQ(single_slot_target[0].node_id, primary_ids.at(1));
+  EXPECT_TRUE(single_slot_target[0].is_primary);
+}
+
 // ============================================================================
 // Fingerprint and Metadata Tests
 // ============================================================================

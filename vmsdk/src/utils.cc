@@ -143,6 +143,19 @@ bool IsRealUserClient(ValkeyModuleCtx *ctx) {
   return true;
 }
 
+bool IsReadOnly(ValkeyModuleCtx *ctx) {
+  const auto client_id = ValkeyModule_GetClientId(ctx);
+  if (client_id == 0) {
+    return false;
+  }
+
+  ValkeyModuleClientInfo client_info =
+      VALKEYMODULE_CLIENTINFO_INITIALIZER_V1;
+  return ValkeyModule_GetClientInfoById(&client_info, client_id) ==
+             VALKEYMODULE_OK &&
+         (client_info.flags & VALKEYMODULE_CLIENTINFO_FLAG_READONLY) != 0;
+}
+
 bool MultiOrLua(ValkeyModuleCtx *ctx) {
   return (ValkeyModule_GetContextFlags(ctx) &
           (VALKEYMODULE_CTX_FLAGS_MULTI | VALKEYMODULE_CTX_FLAGS_LUA)) != 0;

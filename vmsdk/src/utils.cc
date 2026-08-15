@@ -149,8 +149,7 @@ bool IsReadOnly(ValkeyModuleCtx *ctx) {
     return false;
   }
 
-  ValkeyModuleClientInfo client_info =
-      VALKEYMODULE_CLIENTINFO_INITIALIZER_V1;
+  ValkeyModuleClientInfo client_info = VALKEYMODULE_CLIENTINFO_INITIALIZER_V1;
   return ValkeyModule_GetClientInfoById(&client_info, client_id) ==
              VALKEYMODULE_OK &&
          (client_info.flags & VALKEYMODULE_CLIENTINFO_FLAG_READONLY) != 0;

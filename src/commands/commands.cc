@@ -136,8 +136,12 @@ bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
 }
 
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
-    ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
+    ValkeyModuleCtx *ctx, const QueryCommand &parameters,
+    bool *allow_primary_fallback) {
   const auto routing_policy = ComputeSearchRoutingPolicy(ctx);
+  *allow_primary_fallback =
+      routing_policy.target_mode ==
+      vmsdk::cluster_map::FanoutTargetMode::kReplicaPreferred;
 
   // refresh cluster map if needed
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
@@ -229,8 +233,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     }
 
     std::vector<vmsdk::cluster_map::NodeInfo> search_targets;
+    bool allow_primary_fallback = false;
     if (do_fanout) {
-      search_targets = ComputeSearchTargets(ctx, *parameters);
+      search_targets =
+          ComputeSearchTargets(ctx, *parameters, &allow_primary_fallback);
       if (search_targets.empty()) {
         return absl::InternalError("No available nodes to execute the query");
       }
@@ -268,7 +274,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       }
 
       return query::fanout::PerformSearchFanoutAsync(
-          ctx, search_targets,
+          ctx, search_targets, allow_primary_fallback,
           ValkeySearch::Instance().GetCoordinatorClientPool(),
           std::move(parameters),
           ValkeySearch::Instance().GetReaderThreadPool());

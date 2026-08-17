@@ -105,6 +105,8 @@ An array of key value pairs.
 
 SVS graph memory is included in `used_memory_bytes` (reported via `INFO SEARCH`) once vectors are flushed to the graph.
 
+> **Note:** SVS indexes are not persisted to RDB. The index is rebuilt from scratch on server restart and will be empty until vectors are re-ingested.
+
 ### Response when the PRIMARY option is specified.
 
 An array of key value pairs

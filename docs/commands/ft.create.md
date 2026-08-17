@@ -89,6 +89,8 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
 - `SVS:` *(Requires `ENABLE_SVS=ON` build)* The SVS Vamana algorithm provides approximate answers with competitive memory efficiency, supporting optional vector compression. SVS is an alternative to HNSW for workloads where memory footprint is a priority.
+
+  > **Note:** SVS indexes are not persisted to RDB. The index is rebuilt from scratch on server restart and will be empty until vectors are re-ingested.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
   - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.

@@ -602,5 +602,25 @@ TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
   }
 }
 
+TEST_F(AggregateExecTest, FirstValueReducerAscDescDistinctOutputTest) {
+  std::cerr << "FirstValueReducerAscDescDistinctOutputTest\n";
+  // Two opposite-direction reducers without AS must get distinct output slots.
+  auto param = MakeStages(
+      "groupby 1 @n2 "
+      "reduce first_value 4 @n1 BY @n1 ASC "
+      "reduce first_value 4 @n1 BY @n1 DESC");
+  auto records = MakeData(4);
+  auto status = param->stages_[0]->Execute(records);
+  EXPECT_TRUE(status.ok()) << status;
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_NEAR(*record->fields_.at(2).AsDouble(), 0.0, .001);
+  ASSERT_GE(record->fields_.size(), 4u);
+  EXPECT_TRUE(record->fields_.at(3).IsDouble());
+  EXPECT_NEAR(*record->fields_.at(3).AsDouble(), 3.0, .001);
+}
+
 }  // namespace aggregate
 }  // namespace valkey_search

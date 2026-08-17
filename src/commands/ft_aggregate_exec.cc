@@ -565,6 +565,10 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
       if (i > 0) default_name += ',';
       default_name += arg_texts[i];
     }
+    if (cnt == 4) {
+      default_name += ',';
+      default_name += r->is_desc_ ? "DESC" : "ASC";
+    }
     default_name += ')';
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));

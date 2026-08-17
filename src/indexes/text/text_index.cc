@@ -149,10 +149,15 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   absl::StatusOr<std::vector<std::string>> tokens;
 
   if (stem) {
-    // Single-pass: tokenize + build stem map together
-    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+    // Lock briefly to obtain a stable pointer — node_hash_map guarantees
+    // pointer stability, so we can write to it after releasing the mutex.
+    InProgressStemMap *stem_mappings_ptr;
+    {
+      std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+      stem_mappings_ptr = &in_progress_stem_mappings_[key];
+    }
     tokens = language_->TokenizeWithStemMap(data, min_stem_size_,
-                                            in_progress_stem_mappings_[key]);
+                                            *stem_mappings_ptr);
   } else {
     tokens = language_->Tokenize(data);
   }

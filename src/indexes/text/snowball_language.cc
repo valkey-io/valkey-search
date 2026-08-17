@@ -35,9 +35,16 @@ SnowballLanguage::SnowballLanguage(data_model::Language id,
     : id_(id),
       stemmer_algorithm_(stemmer_algorithm),
       punct_set_(BuildPunctuationSet(punctuation)),
-      stop_words_set_(BuildStopWordsSet(stop_words)),
       normalizer_(norm_form, std::string(locale)),
-      stemmer_(std::make_unique<SnowballStemFilter>(id, stemmer_algorithm)) {}
+      stemmer_(std::make_unique<SnowballStemFilter>(id, stemmer_algorithm)) {
+  // Build stop words set by normalizing each word through the same normalizer
+  // used for tokens, ensuring consistent matching.
+  for (const auto& word : stop_words) {
+    std::string normalized = word;
+    normalizer_.NormalizeInPlace(normalized);
+    stop_words_set_.insert(std::move(normalized));
+  }
+}
 
 template <typename TokenCallback>
 void SnowballLanguage::SegmentInternal(absl::string_view text,

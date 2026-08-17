@@ -577,8 +577,8 @@ bool FilterParser::IsNonAsciiDelimiter(
 
 void FilterParser::ConsumeNonAsciiByte(std::string& dest) {
   // Append the full multi-byte sequence starting at pos_. If the sequence is
-  // malformed, substitute U+FFFD (legacy < 1.4.0 tolerate behavior — the
-  // upfront rejection in Parse() only fires for >= 1.4.0).
+  // malformed, substitute U+FFFD (legacy < 1.3.0 tolerate behavior — the
+  // upfront rejection in Parse() only fires for >= 1.3.0).
   utils::Scanner s(expression_.substr(pos_));
   utils::Scanner::Char cp = s.NextUtf8();
   uint8_t len = s.LastUtf8ByteLen();

@@ -21,12 +21,11 @@
 namespace valkey_search::indexes::text {
 
 CustomizedLanguage::CustomizedLanguage(
-    std::shared_ptr<const Language> base, const std::string& punctuation,
-    const std::vector<std::string>& stop_words)
+    std::shared_ptr<const SnowballLanguage> base,
+    const std::string& punctuation, const std::vector<std::string>& stop_words)
     : SnowballLanguage(base->Id(), punctuation, stop_words,
                        base->GetNormalizationForm(), base->CaseFoldLocale(),
-                       static_cast<const SnowballLanguage*>(base.get())
-                           ->GetStemmerAlgorithm()),
+                       base->GetStemmerAlgorithm()),
       base_(std::move(base)),
       punctuation_(punctuation),
       stop_words_(stop_words) {}

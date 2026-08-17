@@ -66,7 +66,8 @@ std::shared_ptr<const Language> LanguageRegistry::Get(
 std::shared_ptr<const Language> CreateLanguage(
     data_model::Language language, const std::string& punctuation,
     const std::vector<std::string>& stop_words) {
-  auto base = LanguageRegistry::Instance().Get(language);
+  auto base = std::static_pointer_cast<const SnowballLanguage>(
+      LanguageRegistry::Instance().Get(language));
   return std::make_shared<CustomizedLanguage>(std::move(base), punctuation,
                                               stop_words);
 }

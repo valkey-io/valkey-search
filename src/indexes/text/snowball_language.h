@@ -69,8 +69,8 @@ class SnowballLanguage : public Language {
   data_model::Language id_;
   std::string stemmer_algorithm_;
   PunctuationSet punct_set_;
-  absl::flat_hash_set<std::string> stop_words_set_;
   NormalizeCaseFoldFilter normalizer_;
+  absl::flat_hash_set<std::string> stop_words_set_;
   std::unique_ptr<SnowballStemFilter> stemmer_;
 };
 

@@ -26,7 +26,7 @@ namespace valkey_search::indexes::text {
 /// stemming always delegate to the base language.
 class CustomizedLanguage final : public SnowballLanguage {
  public:
-  CustomizedLanguage(std::shared_ptr<const Language> base,
+  CustomizedLanguage(std::shared_ptr<const SnowballLanguage> base,
                      const std::string& punctuation,
                      const std::vector<std::string>& stop_words);
 
@@ -39,7 +39,7 @@ class CustomizedLanguage final : public SnowballLanguage {
   vmsdk::ValkeyVersion MinRequiredVersion() const override;
 
  private:
-  std::shared_ptr<const Language> base_;
+  std::shared_ptr<const SnowballLanguage> base_;
   std::string punctuation_;
   std::vector<std::string> stop_words_;
 };

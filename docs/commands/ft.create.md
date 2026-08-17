@@ -120,7 +120,12 @@ LeanVec learns a low-dimensional projection (PCA-style) from a training sample, 
 
   - `LEANVEC_DIMS <N>` (required when using `LEANVEC*`): Target reduced dimensionality for the primary graph traversal. Must be less than `DIM`. A typical starting point is `DIM / 4` (e.g., 192 for 768-d vectors).
   - `LEANVEC_TRAINING_THRESHOLD <N>` (optional): Number of vectors to buffer before training the projection matrices and building the index. Default is 10000. The index is unavailable for search until this threshold is reached — `FT.INFO` will show `state: training` and `FT.SEARCH` will return an error until training completes.
-  - `DISTANCE_MATCH_EPSILON <float>` (optional): Per-dimension epsilon threshold for distance-based vector-match detection when `RAW_VECTOR_STORAGE DROP` is active. The effective threshold is `DISTANCE_MATCH_EPSILON × DIM`. Default is `0.0021`, which covers worst-case quantization error for all lossy compression types (FP16, LVQ4, LVQ8, SQ8, LeanVec variants) at dimensions 64–512. Set to `0.0` to require exact distance equality — safe only for uncompressed FP32 with L2 metric.
+
+#### SVS storage and deduplication
+
+  - `RAW_VECTOR_STORAGE [KEEP | DROP]` (optional): Controls whether the original FP32 vectors are retained alongside the compressed graph. `KEEP` (default) retains them, enabling exact `GetValue` retrieval and precise deduplication. `DROP` eliminates the intern store — reducing memory by approximately `DIM × 4` bytes per vector — at the cost of using the SVS native reconstruct and `get_distance` APIs for all retrieval paths.
+
+  - `DISTANCE_MATCH_EPSILON <float>` (optional): Per-dimension epsilon threshold for distance-based vector-match detection. Applies to all lossy compression types when `RAW_VECTOR_STORAGE DROP` is active. The effective threshold is `DISTANCE_MATCH_EPSILON × DIM`. Default is `0.0021`, which covers worst-case quantization error for all supported lossy compression types (FP16, LVQ4, LVQ8, SQ8, LeanVec variants) at dimensions 64–512. Set to `0.0` to require exact distance equality — safe only for uncompressed FP32 or SQI8 with L2 metric.
 
 **Note on `SEARCH_WINDOW_SIZE` for LeanVec:** Because LeanVec uses a lower-dimensional primary representation for graph traversal, a larger `SEARCH_WINDOW_SIZE` is typically needed to achieve the same recall as LVQ. Start with values in the 200–500 range and tune to your target recall.
 

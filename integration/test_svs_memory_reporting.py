@@ -118,12 +118,20 @@ class TestSVSMemoryReporting(ValkeySearchTestCaseBase):
         memory_before_drop = self._used_memory_bytes(self.client)
         self.client.execute_command("FT.DROPINDEX", index_name)
 
+        vector_bytes = NUM_VECTORS * DIM * 4
+        edge_bytes = NUM_VECTORS * GRAPH_MAX_DEGREE * 4
+        min_freed = vector_bytes + edge_bytes
+
         waiters.wait_for_true(
-            lambda: self._used_memory_bytes(self.client) < memory_before_drop,
+            lambda: (memory_before_drop - self._used_memory_bytes(self.client))
+            >= min_freed,
             timeout=30,
         )
 
         memory_after_drop = self._used_memory_bytes(self.client)
-        assert memory_after_drop >= 0, (
-            f"used_memory_bytes underflowed to {memory_after_drop}"
+        freed = memory_before_drop - memory_after_drop
+        assert freed >= min_freed, (
+            f"DROPINDEX freed only {freed} bytes; "
+            f"expected >= {min_freed} "
+            f"(vectors={vector_bytes} + edges={edge_bytes})"
         )

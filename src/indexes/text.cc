@@ -11,6 +11,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
@@ -173,29 +174,6 @@ bool TryAddWordKeyIterator(
   return false;
 }
 
-// Distinct document count across key-sorted posting iterators, so a doc holding
-// several stem variants is counted once (the union cardinality = stem-leaf dt).
-uint32_t CountDistinctDocs(
-    absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                        indexes::text::kStemVariantsInlineCapacity>
-        iterators) {
-  uint32_t count = 0;
-  while (true) {
-    const indexes::text::Key *min_key = nullptr;
-    for (auto &it : iterators) {
-      if (it.IsValid() && (min_key == nullptr || it.GetKey() < *min_key)) {
-        min_key = &it.GetKey();
-      }
-    }
-    if (min_key == nullptr) break;
-    ++count;
-    for (auto &it : iterators) {
-      if (it.IsValid() && it.GetKey() == *min_key) it.NextKey();
-    }
-  }
-  return count;
-}
-
 }  // namespace
 
 std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
@@ -251,7 +229,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
       stem_count_iters.push_back(key_iterators.back());
     }
-    stem_num_doc_contain_term = CountDistinctDocs(std::move(stem_count_iters));
+    stem_num_doc_contain_term =
+        indexes::text::CountDistinctKeys(absl::MakeSpan(stem_count_iters));
   }
 
   // TermIterator will use query_field_mask when has_original is true,

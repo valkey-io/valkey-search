@@ -1462,14 +1462,15 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
   // (ScoreNode's numeric case returns 0 without touching the index).
   std::shared_ptr<MockIndexSchema> BuildTextTagSchema(
       const std::vector<std::tuple<std::string, std::string, std::string>>
-          &docs) {
+          &docs,
+      bool no_stem = true) {
     auto schema = CreateIndexSchema(kIndexSchemaName).value();
     EXPECT_CALL(*schema, GetIdentifier(::testing::_))
         .Times(::testing::AnyNumber());
     schema->CreateTextIndexSchema();
     auto text_schema = schema->GetTextIndexSchema();
     auto text = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        CreateTextIndexProto(/*with_suffix_trie=*/true, no_stem, 1.0),
         text_schema);
     VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
     auto tag = std::make_shared<indexes::Tag>(
@@ -1779,6 +1780,68 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
 
   // Recompute path: SingleDocumentScorer takes the lock itself, so construct
   // and call it WITHOUT the reader lock held.
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::SingleDocumentScorer document_scorer(
+      *schema, parsed.value().root_predicate.get(), scorer);
+  auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// --- Stemmed-term scoring (extra-step path), docs/redis_stemming_scoring.md
+// --- A stemmed query term expands to a UNION of independent BM25 leaves that
+// are SUMMED, each with its own IDF and F: the exact surface term, the stem
+// root literal, and the stem inflection group. Oracle values are pinned
+// identically in the in-iterator path (text_test.cc
+// StemScoringTest.ThreeLeafScores...), so this also guards that the two scoring
+// paths agree.
+TEST_F(ScoreTextQueryTestBase, StemThreeLeafScoresMatchOracle) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  auto d1 = Score(*schema, "@text:running", "d1");
+  auto d2 = Score(*schema, "@text:running", "d2");
+  auto d3 = Score(*schema, "@text:running", "d3");
+  ASSERT_TRUE(d1 && d2 && d3);
+  // d1 "running": exact leaf (idf 0.98) + stem leaf (idf 0.47, dt=2 distinct).
+  EXPECT_NEAR(*d1, 1.450833f, 1e-3f);
+  // d3 "run": scored only on the stem root literal leaf (its own idf 0.98).
+  EXPECT_NEAR(*d3, 0.980829f, 1e-3f);
+  // d2 "runs": scored only on the stem inflection leaf.
+  EXPECT_NEAR(*d2, 0.470004f, 1e-3f);
+  // Exact-form match outranks the root literal, which outranks the inflection.
+  EXPECT_GT(*d1, *d3);
+  EXPECT_GT(*d3, *d2);
+}
+
+// $weight multiplies the WHOLE expansion — every leaf of the stemmed term.
+TEST_F(ScoreTextQueryTestBase, StemWeightScalesWholeExpansion) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  auto plain = Score(*schema, "@text:running", "d1");
+  auto weighted = Score(*schema, "(@text:running) => { $weight: 2; }", "d1");
+  ASSERT_TRUE(plain && weighted);
+  EXPECT_NEAR(*weighted, 2.0f * *plain, 1e-3f);
+}
+
+// The recompute path (SingleDocumentScorer) must match the shard-side
+// extra-step path (ScoreTextQuery) on a STEMMED query too — both walk the same
+// grouped ScoreNode, so a divergence in the stem split is caught here.
+TEST_F(ScoreTextQueryTestBase, StemRecomputePathMatchesExtraStep) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@text:running";
+
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
+
   TextParsingOptions options{};
   auto parsed = FilterParser(*schema, filter, options).Parse();
   ASSERT_TRUE(parsed.ok()) << parsed.status();

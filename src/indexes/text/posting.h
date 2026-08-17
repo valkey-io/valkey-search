@@ -39,6 +39,7 @@ Key.
 #include <vector>
 
 #include "absl/container/btree_map.h"
+#include "absl/types/span.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/utils/string_interning.h"
 
@@ -159,6 +160,14 @@ struct Postings {
   // PostValue should be removed and restored if no extra-step
   absl::btree_map<Key, PostingValue> key_to_positions_;
 };
+
+// Distinct key (document) count across several key-sorted KeyIterators via a
+// k-way merge, so a key present in more than one iterator is counted once (e.g.
+// the stem-inflection leaf's df, where a doc holding several inflections must
+// count as one). Advances the iterators to exhaustion. Shared by both scoring
+// paths (in-iterator BuildTextIterator and extra-step ResolveLeaves) so they
+// compute the same df.
+uint32_t CountDistinctKeys(absl::Span<Postings::KeyIterator> iterators);
 
 }  // namespace valkey_search::indexes::text
 

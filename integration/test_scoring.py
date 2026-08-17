@@ -271,6 +271,25 @@ STEM_RUNNING_SCORES = {
     "s:6": 1.222204, "s:3": 0.492803, "s:2": 0.440174,
 }
 
+# idxStemMix: the SAME 7 stemming text docs as idxStem (same keys, so N=7,
+# avg_doc_len, and every stem-leaf dt are identical, and the stem scores match
+# STEM_RUNNING_SCORES) PLUS a numeric `rank` and tag `cat` field. A query that
+# adds a numeric or tag clause has a non-text predicate, so its scoring takes the
+# EXTRA-STEP path (ResolveLeaves/ScoreNode) rather than the pure-text in-iterator
+# path -- these tests pin the stem split on that path against idxStem.
+_STEMMIX_RANK = {"s:1": 1, "s:2": 2, "s:3": 3, "s:4": 4,
+                 "s:5": 5, "s:6": 6, "s:7": 7}
+_STEMMIX_CAT = {"s:1": "a", "s:2": "a", "s:3": "b", "s:4": "a",
+                "s:5": "b", "s:6": "a", "s:7": "b"}
+INDEX_STEM_MIX = ScoringIndex(
+    "idxStemMix",
+    ["FT.CREATE", "idxStemMix", "ON", "HASH", "PREFIX", "1", "s:",
+     "SCHEMA", "body", "TEXT", "rank", "NUMERIC", "cat", "TAG"],
+    {key: {"body": body, "rank": str(_STEMMIX_RANK[key]),
+           "cat": _STEMMIX_CAT[key]}
+     for key, body in _DOCS_STEM.items()},
+)
+
 # =====================================================================
 # Expected scores (verified against Redis 8.6; idxA unless noted)
 # =====================================================================
@@ -956,3 +975,51 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         INDEX_STEM.load(client)
         _, scores = INDEX_STEM.search(client, "running")
         assert scores["s:1"] > scores["s:3"]
+
+    # Group 16: stemming scoring on combined queries (extra-step path) ------
+    # A text term combined with a numeric/tag clause has a non-text predicate,
+    # so scoring flows through the extra-step path instead of the pure-text
+    # in-iterator path. The stem split must produce the SAME per-leaf scores on
+    # both paths (idxStemMix reuses idxStem's docs, so STEM_RUNNING_SCORES apply).
+
+    # 16.1: text + numeric AND. "@rank:[1 100]" admits every doc and contributes
+    # 0 to the score, so the run-family docs score EXACTLY as in the pure-text
+    # case -- including s:6's distinct-doc stem dt (its two inflections counted
+    # once). This pins the extra-step stem split against the in-iterator oracle.
+    def test_stemmed_query_with_numeric_filter_extra_step(self):
+        client = self.server.get_new_client()
+        INDEX_STEM_MIX.load(client)
+        keys, scores = INDEX_STEM_MIX.search(client, "running @rank:[1 100]")
+
+        assert keys == ["s:5", "s:1", "s:4", "s:6", "s:3", "s:2"]
+        for key, expected in STEM_RUNNING_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+
+    # 16.2: text OR numeric. The run-family is admitted via the text branch and
+    # scored on its stem leaves; the non-matching s:7 ("swim", rank 7) is admitted
+    # via the numeric branch and carries no text term, so it scores 0.
+    def test_stemmed_query_or_numeric_partial_scoring(self):
+        client = self.server.get_new_client()
+        INDEX_STEM_MIX.load(client)
+        keys, scores = INDEX_STEM_MIX.search(client, "running | @rank:[7 7]")
+
+        assert set(keys) == {"s:1", "s:2", "s:3", "s:4", "s:5", "s:6", "s:7"}
+        for key, expected in STEM_RUNNING_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        assert scores["s:7"] == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+
+    # 16.3: text + tag AND sums the stem expansion and the tag term. For each
+    # admitted doc the combined score equals its pure-text stem score (the
+    # in-iterator oracle value) plus its tag-only score, confirming the
+    # extra-step stem split composes additively with a tag leaf.
+    def test_stemmed_query_with_tag_sums_stem_and_tag(self):
+        client = self.server.get_new_client()
+        INDEX_STEM_MIX.load(client)
+        combined_keys, combined = INDEX_STEM_MIX.search(client, "running @cat:{a}")
+        _, tag_only = INDEX_STEM_MIX.search(client, "@cat:{a}")
+
+        # Admitted docs are the run-family docs carrying cat=a (s:1, s:2, s:4, s:6).
+        assert set(combined_keys) == {"s:1", "s:2", "s:4", "s:6"}
+        for key in combined_keys:
+            assert combined[key] == pytest.approx(
+                STEM_RUNNING_SCORES[key] + tag_only[key], abs=SCORE_ABS_TOL)

@@ -129,14 +129,16 @@ struct Postings {
    private:
     friend struct Postings;
 
-    // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, FlatPositionMap *> *key_map_;
-    absl::btree_map<Key, FlatPositionMap *>::const_iterator current_;
-    absl::btree_map<Key, FlatPositionMap *>::const_iterator end_;
+    const Postings *postings_{nullptr};
+    bool is_flat_{true};
+    size_t vec_idx_{0};
+    absl::btree_map<Key, FlatPositionMap *>::const_iterator tree_it_;
   };
 
  private:
-  absl::btree_map<Key, FlatPositionMap *> key_to_positions_;
+  static constexpr size_t kFlatThreshold = 16;
+  std::vector<std::pair<Key, FlatPositionMap *>> flat_entries_;
+  absl::btree_map<Key, FlatPositionMap *> tree_entries_;
 };
 
 }  // namespace valkey_search::indexes::text

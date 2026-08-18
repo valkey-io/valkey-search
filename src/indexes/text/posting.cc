@@ -38,54 +38,92 @@ uint64_t FieldMask::GetMask() const { return mask_; }
 
 // Destructor: clean up all FlatPositionMaps
 Postings::~Postings() {
-  for (auto& [key, flat_map] : key_to_positions_) {
+  for (auto& [key, flat_map] : flat_entries_) {
+    FlatPositionMap::Destroy(flat_map);
+  }
+  for (auto& [key, flat_map] : tree_entries_) {
     FlatPositionMap::Destroy(flat_map);
   }
 }
 
 // Check if posting list contains any documents
-bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
-
-// Count terms across all fields in a position map
-unsigned int count_num_terms(const PositionMap& pos_map) {
-  unsigned int num_terms = 0;
-  for (const auto& [_, field_mask] : pos_map) {
-    num_terms += field_mask.CountSetFields();
-  }
-  return num_terms;
+bool Postings::IsEmpty() const {
+  return flat_entries_.empty() && tree_entries_.empty();
 }
 
 void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
-  // Insert FlatPositionMap pointer into map
-  key_to_positions_.emplace(key, flat_map);
+  if (!tree_entries_.empty()) {
+    tree_entries_.emplace(key, flat_map);
+    return;
+  }
+
+  auto comp = [](const std::pair<Key, FlatPositionMap*>& item, const Key& val) {
+    return item.first < val;
+  };
+  auto it = std::lower_bound(flat_entries_.begin(), flat_entries_.end(), key, comp);
+  if (it != flat_entries_.end() && it->first == key) {
+    FlatPositionMap::Destroy(it->second);
+    it->second = flat_map;
+    return;
+  }
+  flat_entries_.insert(it, {key, flat_map});
+
+  if (flat_entries_.size() > kFlatThreshold) {
+    for (auto& entry : flat_entries_) {
+      tree_entries_.emplace(entry.first, entry.second);
+    }
+    flat_entries_.clear();
+    flat_entries_.shrink_to_fit();
+  }
 }
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
-  auto node = key_to_positions_.extract(key);
-  if (node.empty()) return;
+  FlatPositionMap* flat_map = nullptr;
 
-  FlatPositionMap* flat_map = node.mapped();
+  if (!tree_entries_.empty()) {
+    auto node = tree_entries_.extract(key);
+    if (!node.empty()) {
+      flat_map = node.mapped();
+    }
+  } else {
+    auto comp = [](const std::pair<Key, FlatPositionMap*>& item, const Key& val) {
+      return item.first < val;
+    };
+    auto it = std::lower_bound(flat_entries_.begin(), flat_entries_.end(), key, comp);
+    if (it != flat_entries_.end() && it->first == key) {
+      flat_map = it->second;
+      flat_entries_.erase(it);
+    }
+  }
 
-  // Use member functions to get counts
+  if (!flat_map) return;
+
   size_t position_count = flat_map->CountPositions();
   size_t term_frequency = flat_map->CountTermFrequency();
 
   metadata->total_positions -= position_count;
   metadata->total_term_frequency -= term_frequency;
 
-  // Destroy and remove from map
   FlatPositionMap::Destroy(flat_map);
 }
 
 // Get total number of document keys
-size_t Postings::GetKeyCount() const { return key_to_positions_.size(); }
+size_t Postings::GetKeyCount() const {
+  return tree_entries_.empty() ? flat_entries_.size() : tree_entries_.size();
+}
 
 // Get total number of position entries across all keys
 size_t Postings::GetPositionCount() const {
   size_t total = 0;
-  for (const auto& [key, flat_map] : key_to_positions_) {
-    total += flat_map->CountPositions();
+  if (!tree_entries_.empty()) {
+    for (const auto& [key, flat_map] : tree_entries_) {
+      total += flat_map->CountPositions();
+    }
+  } else {
+    for (const auto& [key, flat_map] : flat_entries_) {
+      total += flat_map->CountPositions();
+    }
   }
   return total;
 }
@@ -93,8 +131,14 @@ size_t Postings::GetPositionCount() const {
 // Get total term frequency (sum of field occurrences across all positions)
 size_t Postings::GetTotalTermFrequency() const {
   size_t total_frequency = 0;
-  for (const auto& [key, flat_map] : key_to_positions_) {
-    total_frequency += flat_map->CountTermFrequency();
+  if (!tree_entries_.empty()) {
+    for (const auto& [key, flat_map] : tree_entries_) {
+      total_frequency += flat_map->CountTermFrequency();
+    }
+  } else {
+    for (const auto& [key, flat_map] : flat_entries_) {
+      total_frequency += flat_map->CountTermFrequency();
+    }
   }
   return total_frequency;
 }
@@ -104,43 +148,45 @@ Postings* Postings::Defrag() { return this; }
 
 // Iterators Implementation
 
-// Get a Key iterator
 Postings::KeyIterator Postings::GetKeyIterator() const {
   KeyIterator iterator;
-  iterator.key_map_ = &key_to_positions_;
-  iterator.current_ = iterator.key_map_->begin();
-  iterator.end_ = iterator.key_map_->end();
+  iterator.postings_ = this;
+  if (!tree_entries_.empty()) {
+    iterator.is_flat_ = false;
+    iterator.tree_it_ = tree_entries_.begin();
+  } else {
+    iterator.is_flat_ = true;
+    iterator.vec_idx_ = 0;
+  }
   return iterator;
 }
 
-// KeyIterator implementations
 bool Postings::KeyIterator::IsValid() const {
-  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
-  return current_ != end_;
+  if (!postings_) return false;
+  if (is_flat_) {
+    return vec_idx_ < postings_->flat_entries_.size();
+  } else {
+    return tree_it_ != postings_->tree_entries_.end();
+  }
 }
 
 void Postings::KeyIterator::NextKey() {
-  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
-  if (current_ != end_) {
-    ++current_;
+  if (!IsValid()) return;
+  if (is_flat_) {
+    vec_idx_++;
+  } else {
+    ++tree_it_;
   }
 }
 
 bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
-  CHECK(key_map_ != nullptr && current_ != end_)
-      << "KeyIterator is invalid or exhausted";
+  CHECK(IsValid()) << "KeyIterator is invalid or exhausted";
 
-  CHECK(current_->second != nullptr)
-      << "Posting list contains a key with no FlatPositionMap";
+  FlatPositionMap* flat_map = is_flat_ ? postings_->flat_entries_[vec_idx_].second : tree_it_->second;
+  CHECK(flat_map != nullptr) << "Posting list contains a key with no FlatPositionMap";
 
-  // When querying all fields (~0ULL), any non-zero position mask will match,
-  // and every key in the posting list has at least one position entry.
   if (field_mask == ~0ULL) return true;
 
-  FlatPositionMap* flat_map = current_->second;
-
-  // Check all positions for this key to see if any of the requested fields are
-  // set
   PositionIterator iter(*flat_map);
   while (iter.IsValid()) {
     uint64_t position_mask = iter.GetFieldMask();
@@ -154,26 +200,29 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
-  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
+  if (!postings_) return false;
 
-  // Use lower_bound for efficient binary search since map is ordered
-  current_ = key_map_->lower_bound(key);
-
-  // Return true if we landed on exact key match
-  return (current_ != end_ && current_->first == key);
+  if (is_flat_) {
+    auto comp = [](const std::pair<Key, FlatPositionMap*>& item, const Key& val) {
+      return item.first < val;
+    };
+    auto it = std::lower_bound(postings_->flat_entries_.begin() + vec_idx_, postings_->flat_entries_.end(), key, comp);
+    vec_idx_ = std::distance(postings_->flat_entries_.begin(), it);
+    return (vec_idx_ < postings_->flat_entries_.size() && postings_->flat_entries_[vec_idx_].first == key);
+  } else {
+    tree_it_ = postings_->tree_entries_.lower_bound(key);
+    return (tree_it_ != postings_->tree_entries_.end() && tree_it_->first == key);
+  }
 }
 
 const Key& Postings::KeyIterator::GetKey() const {
-  CHECK(key_map_ != nullptr && current_ != end_)
-      << "KeyIterator is invalid or exhausted";
-  return current_->first;
+  CHECK(IsValid()) << "KeyIterator is invalid or exhausted";
+  return is_flat_ ? postings_->flat_entries_[vec_idx_].first : tree_it_->first;
 }
 
 PositionIterator Postings::KeyIterator::GetPositionIterator() const {
-  CHECK(key_map_ != nullptr && current_ != end_)
-      << "KeyIterator is invalid or exhausted";
-
-  FlatPositionMap* flat_map = current_->second;
+  CHECK(IsValid()) << "KeyIterator is invalid or exhausted";
+  FlatPositionMap* flat_map = is_flat_ ? postings_->flat_entries_[vec_idx_].second : tree_it_->second;
   return PositionIterator(*flat_map);
 }
 

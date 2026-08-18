@@ -19,8 +19,9 @@ constexpr DocId kInvalidDocId = 0;
 
 class DocIdMap {
  public:
-  static constexpr size_t kChunkSize = 4096;
-  static constexpr size_t kMaxChunks = 16384;  // Supports up to ~67 million documents
+  static constexpr size_t kChunkShift = 16;
+  static constexpr size_t kChunkSize = 1ULL << kChunkShift;                  // 65,536 elements per chunk
+  static constexpr size_t kMaxChunks = 1ULL << (32 - kChunkShift);           // 65,536 chunks (Supports up to 4.29B docs)
 
   static DocIdMap& Instance() {
     static DocIdMap instance;
@@ -53,8 +54,8 @@ class DocIdMap {
     EnsureChunkAllocated(id);
     
     // Store reverse mapping interned string in lock-free chunk
-    size_t chunk_idx = id / kChunkSize;
-    size_t offset = id % kChunkSize;
+    size_t chunk_idx = id >> kChunkShift;
+    size_t offset = id & (kChunkSize - 1);
     InternedStringPtr* chunk = chunks_[chunk_idx].load(std::memory_order_acquire);
     chunk[offset] = interned_key;
 
@@ -91,10 +92,10 @@ class DocIdMap {
     return kInvalidDocId;
   }
 
-  // Lock-free O(1) reverse lookup returning InternedStringPtr directly
+  // Lock-free O(1) reverse lookup using bitwise chunk/offset mask
   const InternedStringPtr& GetKey(DocId id) const {
-    size_t chunk_idx = id / kChunkSize;
-    size_t offset = id % kChunkSize;
+    size_t chunk_idx = id >> kChunkShift;
+    size_t offset = id & (kChunkSize - 1);
 
     if (chunk_idx < kMaxChunks) {
       InternedStringPtr* chunk = chunks_[chunk_idx].load(std::memory_order_acquire);
@@ -139,7 +140,7 @@ class DocIdMap {
   }
 
   void EnsureChunkAllocated(DocId id) {
-    size_t chunk_idx = id / kChunkSize;
+    size_t chunk_idx = id >> kChunkShift;
     if (chunk_idx >= kMaxChunks) return;
 
     if (chunks_[chunk_idx].load(std::memory_order_acquire) == nullptr) {

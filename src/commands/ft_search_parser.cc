@@ -247,10 +247,10 @@ absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
   if (sortby_parameter.has_value()) {
-    const bool sort_by_score =
+    const bool sort_by_vector_score_alias =
         IsVectorQuery() && score_as &&
         vmsdk::ToStringView(score_as.get()) == sortby_parameter->field;
-    if (sort_by_score) {
+    if (sort_by_vector_score_alias) {
       // Ascending score matches the natural KNN order; descending is not yet
       // supported.
       if (sortby_parameter->order != query::SortOrder::kAscending) {

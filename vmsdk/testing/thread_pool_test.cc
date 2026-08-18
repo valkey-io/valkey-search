@@ -777,4 +777,97 @@ TEST_F(ThreadPoolTest, QueueWaitTimeWithDifferentPriorities) {
   pool.JoinWorkers();
 }
 
+// ============================================================================
+// LOCK-FREE QUEUE TESTS
+// ============================================================================
+
+TEST(LockFreeQueueTest, BasicPushPop) {
+  LockFreeQueue<int, 16> q;
+  EXPECT_TRUE(q.IsEmpty());
+  EXPECT_EQ(q.Size(), 0);
+
+  EXPECT_TRUE(q.TryEnqueue(10));
+  EXPECT_TRUE(q.TryEnqueue(20));
+  EXPECT_FALSE(q.IsEmpty());
+  EXPECT_EQ(q.Size(), 2);
+
+  int val = 0;
+  EXPECT_TRUE(q.TryDequeue(val));
+  EXPECT_EQ(val, 10);
+
+  EXPECT_TRUE(q.TryDequeue(val));
+  EXPECT_EQ(val, 20);
+
+  EXPECT_TRUE(q.IsEmpty());
+  EXPECT_EQ(q.Size(), 0);
+  EXPECT_FALSE(q.TryDequeue(val));
+}
+
+TEST(LockFreeQueueTest, QueueCapacityBounds) {
+  LockFreeQueue<int, 4> q;
+  EXPECT_TRUE(q.TryEnqueue(1));
+  EXPECT_TRUE(q.TryEnqueue(2));
+  EXPECT_TRUE(q.TryEnqueue(3));
+  EXPECT_TRUE(q.TryEnqueue(4));
+  EXPECT_FALSE(q.TryEnqueue(5));  // Full!
+
+  int val = 0;
+  EXPECT_TRUE(q.TryDequeue(val));
+  EXPECT_EQ(val, 1);
+
+  EXPECT_TRUE(q.TryEnqueue(5));  // Now fits!
+  EXPECT_FALSE(q.TryEnqueue(6));
+}
+
+TEST(LockFreeQueueTest, ConcurrentMultiProducerMultiConsumer) {
+  constexpr size_t kQueueCap = 1024;
+  LockFreeQueue<int, kQueueCap> q;
+  constexpr int kProducers = 4;
+  constexpr int kConsumers = 4;
+  constexpr int kItemsPerProducer = 5000;
+
+  std::atomic<size_t> total_dequeued{0};
+  std::atomic<bool> producers_done{false};
+
+  std::vector<std::thread> threads;
+
+  for (int p = 0; p < kProducers; ++p) {
+    threads.emplace_back([&q, p]() {
+      for (int i = 0; i < kItemsPerProducer; ++i) {
+        int val = p * kItemsPerProducer + i + 1;
+        while (!q.TryEnqueue(std::move(val))) {
+          std::this_thread::yield();
+        }
+      }
+    });
+  }
+
+  for (int c = 0; c < kConsumers; ++c) {
+    threads.emplace_back([&q, &total_dequeued, &producers_done]() {
+      int val = 0;
+      while (!producers_done.load(std::memory_order_relaxed) || !q.IsEmpty()) {
+        if (q.TryDequeue(val)) {
+          total_dequeued.fetch_add(1, std::memory_order_relaxed);
+        } else {
+          std::this_thread::yield();
+        }
+      }
+    });
+  }
+
+  // Join producers
+  for (int i = 0; i < kProducers; ++i) {
+    threads[i].join();
+  }
+  producers_done.store(true);
+
+  // Join consumers
+  for (int i = kProducers; i < kProducers + kConsumers; ++i) {
+    threads[i].join();
+  }
+
+  EXPECT_EQ(total_dequeued.load(), kProducers * kItemsPerProducer);
+}
+
 }  // namespace vmsdk
+

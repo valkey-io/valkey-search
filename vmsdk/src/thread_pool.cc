@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <memory>
 #include <numeric>
-#include <ranges>
 #include <string>
 #include <utility>
 
@@ -27,7 +26,6 @@
 #include "absl/time/time.h"
 #include "status/status_macros.h"
 #include "vmsdk/src/log.h"
-#include "vmsdk/src/module_config.h"
 
 namespace {
 
@@ -59,7 +57,7 @@ namespace vmsdk {
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
                        size_t sample_queue_size)
     : initial_thread_count_(num_threads),
-      priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
+      priority_tasks_(static_cast<size_t>(ThreadPool::Priority::kMax) + 1),
       name_prefix_(name_prefix),
       sample_queue_size_(sample_queue_size),
       wait_time_samples_(sample_queue_size, 0.0) {}
@@ -107,7 +105,9 @@ bool ThreadPool::Schedule(absl::AnyInvocable<void()> task, Priority priority) {
     return false;
   }
   auto &tasks_queue = GetPriorityTasksQueue(priority);
-  tasks_queue.emplace(std::move(task));
+  if (!tasks_queue.TryEnqueue(TaskWithTime(std::move(task)))) {
+    return false;
+  }
   condition_.Signal();
   return true;
 }
@@ -257,7 +257,7 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
       if (stop_mode_.has_value() &&
           (stop_mode_.value() == StopMode::kAbrupt ||
            std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
-                       [](const auto &tasks) { return tasks.empty(); }))) {
+                       [](const auto &tasks) { return tasks.IsEmpty(); }))) {
         thread->MarkJoinable();
         return;
       }
@@ -278,9 +278,11 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
 
 size_t ThreadPool::QueueSize() const {
   absl::MutexLock lock(&queue_mutex_);
-  return std::accumulate(
-      priority_tasks_.begin(), priority_tasks_.end(), 0,
-      [](size_t sum, const auto &tasks) { return sum + tasks.size(); });
+  size_t count = 0;
+  for (const auto &queue : priority_tasks_) {
+    count += queue.Size();
+  }
+  return count;
 }
 
 void ThreadPool::IncrThreadCountBy(size_t count) {
@@ -421,26 +423,22 @@ void ThreadPool::ResizeSampleQueue(size_t new_size) {
 std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   // Clear samples when all queues are empty
   bool all_empty = std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
-                               [](const auto &queue) { return queue.empty(); });
+                               [](const auto &queue) { return queue.IsEmpty(); });
   if (all_empty) {
     ClearWaitTimeSamples();
     return std::nullopt;
   }
 
   // Check for kMax priority first - always takes precedence
-  if (!GetPriorityTasksQueue(Priority::kMax).empty()) {
-    auto &max_queue = GetPriorityTasksQueue(Priority::kMax);
-    auto task_with_time = std::move(max_queue.front());
-    max_queue.pop();
-
-    AddWaitTimeSample(task_with_time.enqueue_time);
-
-    return std::move(task_with_time.task);
+  TaskWithTime max_task;
+  if (GetPriorityTasksQueue(Priority::kMax).TryDequeue(max_task)) {
+    AddWaitTimeSample(max_task.enqueue_time);
+    return std::move(max_task.task);
   }
 
   // No kMax tasks - apply fairness between kHigh and kLow
-  bool high_has_tasks = !GetPriorityTasksQueue(Priority::kHigh).empty();
-  bool low_has_tasks = !GetPriorityTasksQueue(Priority::kLow).empty();
+  bool high_has_tasks = !GetPriorityTasksQueue(Priority::kHigh).IsEmpty();
+  bool low_has_tasks = !GetPriorityTasksQueue(Priority::kLow).IsEmpty();
 
   if (!high_has_tasks && !low_has_tasks) {
     ClearWaitTimeSamples();
@@ -453,7 +451,6 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   } else if (!low_has_tasks) {
     selected_priority = Priority::kHigh;
   } else {
-    // Both have tasks - use pattern-based weighted round robin
     int high_weight = high_priority_weight_.load(std::memory_order_relaxed);
 
     if (high_weight == 0) {
@@ -461,11 +458,9 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
     } else if (high_weight == 100) {
       selected_priority = Priority::kHigh;
     } else {
-      // Only increment counter when we need fairness calculation
       uint32_t counter_val =
           fairness_counter_.fetch_add(1, std::memory_order_relaxed);
 
-      // Use pre-computed pattern values for better performance
       int high_ratio = high_ratio_.load(std::memory_order_relaxed);
       int pattern_length = pattern_length_.load(std::memory_order_relaxed);
 
@@ -476,12 +471,13 @@ std::optional<absl::AnyInvocable<void()>> ThreadPool::TryGetNextTask() {
   }
 
   auto &selected_queue = GetPriorityTasksQueue(selected_priority);
-  auto task_with_time = std::move(selected_queue.front());
-  selected_queue.pop();
+  TaskWithTime selected_task;
+  if (selected_queue.TryDequeue(selected_task)) {
+    AddWaitTimeSample(selected_task.enqueue_time);
+    return std::move(selected_task.task);
+  }
 
-  AddWaitTimeSample(task_with_time.enqueue_time);
-
-  return std::move(task_with_time.task);
+  return std::nullopt;
 }
 
 }  // namespace vmsdk

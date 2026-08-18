@@ -25,6 +25,7 @@
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
+#include "vmsdk/src/lock_free_queue.h"
 #include "vmsdk/src/thread_monitoring.h"
 #include "vmsdk/src/thread_safe_vector.h"
 
@@ -35,6 +36,7 @@ struct TaskWithTime {
   absl::AnyInvocable<void()> task;
   std::chrono::steady_clock::time_point enqueue_time;
 
+  TaskWithTime() = default;
   TaskWithTime(absl::AnyInvocable<void()> t)
       : task(std::move(t)), enqueue_time(std::chrono::steady_clock::now()) {}
 };
@@ -144,22 +146,20 @@ class ThreadPool {
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
   inline bool QueueReady() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
     for (const auto& queue : priority_tasks_) {
-      if (!queue.empty()) {
+      if (!queue.IsEmpty()) {
         return true;
       }
     }
     return stop_mode_.has_value() || suspend_workers_;
   }
-  inline std::queue<TaskWithTime>& GetPriorityTasksQueue(Priority priority)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
+  inline LockFreeQueue<TaskWithTime> &GetPriorityTasksQueue(Priority priority) {
     return priority_tasks_[static_cast<int>(priority)];
   }
   size_t initial_thread_count_ = 0;
   ThreadSafeVector<std::shared_ptr<Thread>> threads_;
   mutable absl::Mutex queue_mutex_;
   absl::CondVar condition_ ABSL_GUARDED_BY(queue_mutex_);
-  std::vector<std::queue<TaskWithTime>> priority_tasks_
-      ABSL_GUARDED_BY(queue_mutex_);
+  std::vector<LockFreeQueue<TaskWithTime>> priority_tasks_;
   std::string name_prefix_;
   std::optional<StopMode> stop_mode_ ABSL_GUARDED_BY(queue_mutex_);
   bool started_{false};

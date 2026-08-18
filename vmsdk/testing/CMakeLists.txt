@@ -40,6 +40,12 @@ target_include_directories(thread_pool_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(thread_pool_test PUBLIC vmsdklib)
 finalize_test_flags(thread_pool_test)
 
+set(SRCS_THREAD_POOL_BENCHMARK ${CMAKE_CURRENT_LIST_DIR}/thread_pool_benchmark.cc)
+add_executable(thread_pool_benchmark ${SRCS_THREAD_POOL_BENCHMARK})
+target_include_directories(thread_pool_benchmark PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(thread_pool_benchmark PUBLIC vmsdklib)
+finalize_test_flags(thread_pool_benchmark)
+
 set(SRCS_TIME_SLICED_MRMW_MUTEX_TEST
     ${CMAKE_CURRENT_LIST_DIR}/mrmw_mutex_test.cc)
 add_executable(time_sliced_mrmw_mutex_test ${SRCS_TIME_SLICED_MRMW_MUTEX_TEST})

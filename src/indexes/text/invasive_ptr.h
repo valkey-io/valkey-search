@@ -9,26 +9,38 @@
 #define VALKEY_SEARCH_INDEXES_TEXT_INVASIVE_PTR_H_
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <utility>
+
+#include "src/utils/allocator.h"
 
 namespace valkey_search::indexes::text {
 
 namespace detail {
+
 template <typename T>
-struct InvasivePtrStorage {
+struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
   template <typename... Args>
-  explicit InvasivePtrStorage(Args&&... args)
+  explicit InvasivePtrStorage(Args &&...args)
       : data_(std::forward<Args>(args)...) {}
 
-  std::atomic<uint32_t> refcount_ = 1;
-  T data_;
+  static void *operator new(size_t size) {
+    return ::operator new(size);
+  }
+
+  static void operator delete(void *ptr, size_t size) {
+    ::operator delete(ptr);
+  }
+
+  alignas(alignof(std::max_align_t)) std::atomic<uint32_t> refcount_ = 1;
+  alignas(alignof(std::max_align_t)) T data_;
 };
 }  // namespace detail
 
 // Raw invasive pointer opaque alias
 template <typename T>
-using InvasivePtrRaw = detail::InvasivePtrStorage<T>*;
+using InvasivePtrRaw = detail::InvasivePtrStorage<T> *;
 
 /**
  * @brief A memory-efficient shared pointer.
@@ -57,7 +69,7 @@ class InvasivePtr {
 
   // Factory constructor
   template <typename... Args>
-  static InvasivePtr Make(Args&&... args) {
+  static InvasivePtr Make(Args &&...args) {
     InvasivePtr result;
     result.ptr_ =
         new detail::InvasivePtrStorage<T>(std::forward<Args>(args)...);
@@ -67,9 +79,9 @@ class InvasivePtr {
   ~InvasivePtr() { ReleaseRef(); }
 
   // Copy semantics
-  InvasivePtr(const InvasivePtr& other) : ptr_(other.ptr_) { AddRef(); }
+  InvasivePtr(const InvasivePtr &other) : ptr_(other.ptr_) { AddRef(); }
 
-  InvasivePtr& operator=(const InvasivePtr& other) {
+  InvasivePtr &operator=(const InvasivePtr &other) {
     if (this != &other) {
       ReleaseRef();
       ptr_ = other.ptr_;
@@ -78,17 +90,17 @@ class InvasivePtr {
     return *this;
   }
 
-  InvasivePtr& operator=(std::nullptr_t) noexcept {
+  InvasivePtr &operator=(std::nullptr_t) noexcept {
     Clear();
     return *this;
   }
 
   // Move semantics
-  InvasivePtr(InvasivePtr&& other) noexcept : ptr_(other.ptr_) {
+  InvasivePtr(InvasivePtr &&other) noexcept : ptr_(other.ptr_) {
     other.ptr_ = nullptr;
   }
 
-  InvasivePtr& operator=(InvasivePtr&& other) noexcept {
+  InvasivePtr &operator=(InvasivePtr &&other) noexcept {
     if (this != &other) {
       ReleaseRef();
       ptr_ = other.ptr_;
@@ -129,14 +141,14 @@ class InvasivePtr {
   }
 
   // Access operators
-  T& operator*() const { return ptr_->data_; }
-  T* operator->() const { return &ptr_->data_; }
+  T &operator*() const { return ptr_->data_; }
+  T *operator->() const { return &ptr_->data_; }
 
   // Boolean conversion
   explicit operator bool() const { return ptr_ != nullptr; }
 
   // Comparison operators
-  auto operator<=>(const InvasivePtr&) const = default;
+  auto operator<=>(const InvasivePtr &) const = default;
 
   // Resets to the default nullptr state
   void Clear() {
@@ -159,7 +171,7 @@ class InvasivePtr {
     }
   }
 
-  detail::InvasivePtrStorage<T>* ptr_ = nullptr;
+  detail::InvasivePtrStorage<T> *ptr_ = nullptr;
 };
 
 }  // namespace valkey_search::indexes::text

@@ -1,0 +1,79 @@
+--- src/utils/allocator.h
++++ src/utils/allocator.h
+@@ -10,6 +10,7 @@
+ #include <atomic>
+ #include <cstddef>
+ #include <memory>
++#include <thread>
+ #include <vector>
+ 
+ #include "absl/base/thread_annotations.h"
+@@ -87,11 +88,11 @@
+ 
+   size_t num_bitmap_words;
+   // Bitvector: 0 = free, 1 = occupied
+-  std::unique_ptr<std::atomic<uint64_t>[]> bitmap;
+-  std::atomic<size_t> scan_hint{0};
++  std::unique_ptr<uint64_t[]> bitmap;
++  size_t scan_hint{0};
+ 
+-  std::atomic<uint32_t> allocated_count{0};
+-  std::atomic<bool> retired{false};
++  uint32_t allocated_count{0};
++  bool retired{false};
+   std::atomic<uint32_t> ref_count{1};
+   int current_group{-1};
+   Allocator *allocator;
+@@ -112,23 +113,26 @@
+   char *Allocate();
+   size_t ActiveAllocations() const {
+-    return active_allocations_.load(std::memory_order_relaxed);
++    return active_allocations_;
+   }
+-  size_t ChunkCount() const ABSL_LOCKS_EXCLUDED(mutex_);
++  size_t ChunkCount() const;
+   ~FixedSizeAllocator() override;
+   size_t ChunkSize() const override { return size_; }
+   size_t Alignment() const override { return alignment_; }
+ 
+  protected:
+   void Free(AllocatorChunk *chunk, char *ptr) override;
+ 
+  private:
+-  IntrusiveList<AllocatorChunk> chunks_grouped_by_free_entries_
+-      [kFreeEntriesPerChunkGroupSize] ABSL_GUARDED_BY(mutex_);
++  IntrusiveList<AllocatorChunk> chunks_grouped_by_free_entries_[kFreeEntriesPerChunkGroupSize];
+   size_t size_;
+   size_t alignment_{8};
+-  IntrusiveList<AllocatorChunk> fully_used_chunks_ ABSL_GUARDED_BY(mutex_);
+-  std::atomic<AllocatorChunk *> current_chunk_{nullptr};
+-  std::atomic<size_t> active_allocations_{0};
+-  mutable absl::Mutex mutex_;
+-  void UpdateChunkGroup(AllocatorChunk *chunk)
+-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+-  void AllocateChunk() ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
++  IntrusiveList<AllocatorChunk> fully_used_chunks_;
++  AllocatorChunk *current_chunk_{nullptr};
++  size_t active_allocations_{0};
++  std::atomic<char*> remote_frees_{nullptr};
++  std::thread::id owner_thread_id_;
++
++  void UpdateChunkGroup(AllocatorChunk *chunk);
++  void AllocateChunk();
++  void SweepRemoteFrees();
++  void ProcessLocalFree(AllocatorChunk *chunk, char *ptr);
+ };
+ 
+@@ -166,6 +170,12 @@
+  private:
+   static size_t GetSizeClassIndex(size_t size);
+   std::vector<UniqueFixedSizeAllocatorPtr> allocators_;
++
++  static constexpr size_t kMaxCachedPerClass = 256;
++  struct TCache {
++    size_t count = 0;
++    char* ptrs[kMaxCachedPerClass];
++  };
++  std::vector<TCache> tcaches_;
+ };
+ 

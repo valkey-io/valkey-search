@@ -26,22 +26,7 @@ of keys in a text index's subtree.
 
 */
 
-#include <concepts>
-#include <cstdint>
-#include <deque>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <optional>
-#include <span>
-#include <sstream>
-#include <tuple>
-#include <type_traits>
-#include <variant>
-
-#include "absl/container/flat_hash_set.h"
 #include "absl/functional/function_ref.h"
-#include "absl/log/check.h"
 #include "absl/strings/string_view.h"
 #include "posting.h"
 #include "rax/rax.h"
@@ -87,7 +72,7 @@ class Rax {
   //
   void MutateTarget(absl::string_view word,
                     absl::FunctionRef<void *(void *)> mutate,
-                    item_count_op op = NONE);
+                    item_count_op op = kNone);
 
   // Searches for word and returns its target, or nullptr if not found.
   void *FindTarget(absl::string_view word) const;

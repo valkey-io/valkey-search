@@ -289,6 +289,10 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
       << " alpha=" << config.alpha
       << " search_window_size=" << config.search_window_size;
 
+  {
+    absl::MutexLock lock(&index->index_mutex_);
+    index->UpdateReportedMemory();
+  }
   return index;
 }
 

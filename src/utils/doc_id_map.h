@@ -71,10 +71,6 @@ class DocIdMap {
     return id;
   }
 
-  DocId GetOrCreateDocId(absl::string_view doc_key) {
-    return GetOrAssign(doc_key);
-  }
-
   DocId GetDocId(absl::string_view doc_key) const {
     InternedStringPtr interned_key = StringInternStore::Intern(doc_key);
     return GetDocId(interned_key);

@@ -30,9 +30,13 @@ def _vec(*floats):
 # =====================================================================
 
 # General-purpose index: two TEXT fields + NUMERIC + TAG + VECTOR.
+# WITHSUFFIXTRIE on `body` enables suffix queries. It is a lookup structure
+# only, changing neither tokenization nor scores, so the verified constants
+# throughout this file are unaffected.
 IDX_MAIN = [
     "FT.CREATE", "idxMain", "ON", "HASH", "PREFIX", "1", "doc:",
-    "SCHEMA", "body", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+    "title", "TEXT", "NOSTEM",
     "rank", "NUMERIC", "cat", "TAG",
     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
     "DISTANCE_METRIC", "L2",
@@ -636,3 +640,22 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, fuzzy = search(client, IDX_EXPANSION, "%cat%")
         assert fuzzy["doc:1"] > 0.0
         assert fuzzy["doc:1"] == pytest.approx(cat["doc:1"], abs=SCORE_ABS_TOL)
+
+    # Group 16: expansions are scored on the extra-step path too. A numeric or
+    # tag clause forces that path -- a pure-text query takes the in-iterator one
+    # (Group 15) -- so this pins that the expansion leaf still reaches the total
+    # instead of silently contributing 0.
+    def test_expansion_scoring_combined_query(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+
+        # Each expansion below single-matches "hello", so its leaf equals the
+        # exact "hello" leaf and the combined total matches "hello @cat:{a}";
+        # the numeric clause adds nothing.
+        _, baseline = search(client, IDX_MAIN, "hello @cat:{a}")
+        for query in ("hel* @cat:{a} @rank:[0 100]",
+                      "@body:*llo @cat:{a} @rank:[0 100]",
+                      "@body:%helo% @cat:{a} @rank:[0 100]"):
+            keys, scores = search(client, IDX_MAIN, query)
+            assert keys == ["doc:3", "doc:1"], query
+            assert scores == pytest.approx(baseline, abs=SCORE_ABS_TOL), query

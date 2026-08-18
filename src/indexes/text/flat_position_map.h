@@ -72,12 +72,12 @@ struct FieldMask;
 class FlatPositionMap {
  public:
   // Factory: allocates single block [FlatPositionMap | data...]
-  static FlatPositionMap *Create(
-      const absl::btree_map<Position, FieldMask> &position_map,
+  static FlatPositionMap* Create(
+      const absl::btree_map<Position, FieldMask>& position_map,
       size_t num_text_fields);
 
   // Destructor: frees the allocated memory
-  static void Destroy(FlatPositionMap *map);
+  static void Destroy(FlatPositionMap* map);
 
   // Get position count
   uint32_t CountPositions() const;
@@ -88,14 +88,11 @@ class FlatPositionMap {
   // Get total term frequency
   size_t CountTermFrequency() const;
 
-  // Get total allocated memory size
-  size_t GetTotalAllocSize() const;
-
   // Access to raw data pointer (stored immediately after this object)
-  inline char *data() { return reinterpret_cast<char *>(this + 1); }
+  inline char* data() { return reinterpret_cast<char*>(this + 1); }
 
-  inline const char *data() const {
-    return reinterpret_cast<const char *>(this + 1);
+  inline const char* data() const {
+    return reinterpret_cast<const char*>(this + 1);
   }
 
  private:
@@ -103,8 +100,8 @@ class FlatPositionMap {
 
   // Helper methods (implemented in .cc)
   static uint8_t BytesNeeded(uint32_t value);
-  std::pair<uint32_t, uint32_t> ReadCounts(const char *&p) const;
-  void WriteCounts(char *&p, uint32_t num_positions,
+  std::pair<uint32_t, uint32_t> ReadCounts(const char*& p) const;
+  void WriteCounts(char*& p, uint32_t num_positions,
                    uint32_t num_partitions) const;
 
   // Bitfield members for automatic packing/unpacking (no manual operations)
@@ -124,7 +121,7 @@ class FlatPositionMap {
 // Iterator for FlatPositionMap
 class PositionIterator {
  public:
-  PositionIterator(const FlatPositionMap &flat_map);
+  PositionIterator(const FlatPositionMap& flat_map);
 
   bool IsValid() const;
   void NextPosition();
@@ -133,9 +130,9 @@ class PositionIterator {
   uint64_t GetFieldMask() const;
 
  private:
-  const char *flat_map_;     // Pointer to start of serialized data
-  const char *current_ptr_;  // Pointer to next byte to be read
-  const char *
+  const char* flat_map_;     // Pointer to start of serialized data
+  const char* current_ptr_;  // Pointer to next byte to be read
+  const char*
       data_start_;  // Start of position/field data (after header+partition map)
   Position cumulative_position_;    // Absolute position (sum of all deltas)
   uint32_t num_partitions_;         // Number of partition boundaries
@@ -145,7 +142,7 @@ class PositionIterator {
   uint64_t current_field_mask_;     // Bit mask of fields at current position
 
   // Private static helper function for navigation
-  static uint32_t FindPartitionForTarget(const char *partition_map,
+  static uint32_t FindPartitionForTarget(const char* partition_map,
                                          uint32_t num_partitions,
                                          Position target);
 };

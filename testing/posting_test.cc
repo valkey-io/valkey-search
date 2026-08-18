@@ -10,6 +10,8 @@
 #include "gtest/gtest.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -22,7 +24,7 @@ class PostingTest : public ValkeySearchTest {
     metadata_ = std::make_unique<TextIndexMetadata>();
   }
 
-  InternedStringPtr InternKey(const std::string &key) {
+  InternedStringPtr InternKey(const std::string& key) {
     return StringInternStore::Intern(key);
   }
 
@@ -36,7 +38,7 @@ class PostingTest : public ValkeySearchTest {
           pos_fields_pairs,
       size_t num_fields = 5) {
     PositionMap pos_map;
-    for (const auto &[pos, field_indices] : pos_fields_pairs) {
+    for (const auto& [pos, field_indices] : pos_fields_pairs) {
       FieldMask field_mask(num_fields);
       for (size_t field_idx : field_indices) {
         field_mask.SetField(field_idx);
@@ -47,10 +49,10 @@ class PostingTest : public ValkeySearchTest {
   }
 
   // Helper to insert key with PositionMap, creating FlatPositionMap internally
-  void InsertKeyWithPositionMap(const InternedStringPtr &key,
-                                PositionMap &&pos_map, size_t num_fields = 5) {
+  void InsertKeyWithPositionMap(const InternedStringPtr& key,
+                                PositionMap&& pos_map, size_t num_fields = 5) {
     // Create FlatPositionMap from PositionMap
-    FlatPositionMap *flat_map = FlatPositionMap::Create(pos_map, num_fields);
+    FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_fields);
     postings_->InsertKey(key, flat_map);
   }
 };
@@ -290,9 +292,7 @@ TEST_F(PostingTest, LargeScaleOperations) {
 
     for (int i = 0; i < num_positions; ++i) {
       Position pos = std::rand() % 10000;
-      if (pos_map.count(pos)) {
-        continue;  // Skip duplicates within same doc
-      }
+      if (pos_map.count(pos)) continue;  // Skip duplicates within same doc
 
       FieldMask field_mask(5);
       int num_fields = 1 + (std::rand() % 5);  // 1-5 fields per position

@@ -95,9 +95,8 @@ class InternedString {
   // variable size for the length_ field.
   //
   std::atomic<uint32_t> ref_count_;
-  uint32_t length_ : 30;
+  uint32_t length_ : 31;
   uint32_t is_inline_ : 1;
-  uint32_t is_custom_alloc_ : 1;
   char data_[0];
 };
 
@@ -110,158 +109,121 @@ static_assert(sizeof(InternedString) == 8,
 class InternedStringPtr {
  public:
   InternedStringPtr() = default;
-
-  InternedString *Impl() const { return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_); }
-
   InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
-    if (impl_ && !IsInline()) {
-      reinterpret_cast<InternedString *>(impl_)->IncrementRefCount();
+    if (impl_) {
+      impl_->IncrementRefCount();
     }
   }
-
   InternedStringPtr(InternedStringPtr &&other) noexcept : impl_(other.impl_) {
-    other.impl_ = 0;
+    other.impl_ = nullptr;
   }
-
   InternedStringPtr &operator=(const InternedStringPtr &other) {
     if (this != &other) {
-      if (impl_ && !IsInline()) {
-        reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
+      if (impl_) {
+        impl_->DecrementRefCount();
       }
       impl_ = other.impl_;
-      if (impl_ && !IsInline()) {
-        reinterpret_cast<InternedString *>(impl_)->IncrementRefCount();
+      if (impl_) {
+        impl_->IncrementRefCount();
       }
     }
     return *this;
   }
-
   InternedStringPtr &operator=(InternedStringPtr &&other) noexcept {
     if (this != &other) {
-      if (impl_ && !IsInline()) {
-        reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
+      if (impl_) {
+        impl_->DecrementRefCount();
       }
       impl_ = other.impl_;
-      other.impl_ = 0;
+      other.impl_ = nullptr;
     }
     return *this;
   }
 
   InternedStringPtr &operator=(void *other) noexcept {
     CHECK(!other);  // Only nullptr is allowed
-    if (impl_ && !IsInline()) {
-      reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
+    if (impl_) {
+      impl_->DecrementRefCount();
     }
-    impl_ = 0;
+    impl_ = nullptr;
     return *this;
   }
 
-  ~InternedStringPtr() {
-    if (impl_ && !IsInline()) {
-      reinterpret_cast<InternedString *>(impl_)->DecrementRefCount();
-    }
-    impl_ = 0;
-  }
-
-  bool IsInline() const { return (impl_ & kInlineMask) != 0; }
-
-  absl::string_view Str() const {
-    if (IsInline()) {
-      uint8_t len = (impl_ & 0x1C) >> 2;
-      return absl::string_view(reinterpret_cast<const char*>(&impl_) + 1, len);
-    }
-    if (impl_) {
-      return reinterpret_cast<InternedString *>(impl_)->Str();
-    }
-    return {};
-  }
-
-  operator absl::string_view() const { return Str(); }
-
-  const InternedStringPtr *operator->() const { return this; }
-  const InternedStringPtr &operator*() const { return *this; }
-  operator bool() const { return impl_ != 0; }
-
-  size_t RefCount() const { return (impl_ && !IsInline()) ? reinterpret_cast<InternedString *>(impl_)->RefCount() : 1; }
-
-  const InternedString *RawPtr() const { return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_); }
+  auto operator<=>(const InternedStringPtr &other) const = default;
 
   size_t Hash() const { return absl::HashOf(impl_); }
 
-  bool operator==(const InternedStringPtr &other) const {
-    return impl_ == other.impl_;
-  }
-  bool operator==(absl::string_view str) const { return Str() == str; }
-  bool operator!=(absl::string_view str) const { return Str() != str; }
-
-  auto operator<=>(const InternedStringPtr &other) const {
-    return impl_ <=> other.impl_;
-  }
-
-  static std::optional<InternedStringPtr> MakeInline(absl::string_view str) {
-    if (str.size() > 6) {
-      return std::nullopt;
+  InternedString &operator*() { return *impl_; }
+  InternedString *operator->() { return impl_; }
+  operator bool() const { return impl_ != nullptr; }
+  const InternedString &operator*() const { return *impl_; }
+  const InternedString *operator->() const { return impl_; }
+  ~InternedStringPtr() {
+    if (impl_) {
+      impl_->DecrementRefCount();
     }
-    uintptr_t data = kInlineMask;
-    data |= (str.size() << 2);
-    if (!str.empty()) {
-      std::memcpy(reinterpret_cast<char*>(&data) + 1, str.data(), str.size());
-    }
-    return InternedStringPtr(data);
+    impl_ = nullptr;
   }
+
+  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
+
+  // Access the raw pointer (used by BorrowedInternedStringPtr).
+  const InternedString *RawPtr() const { return impl_; }
 
  private:
-  uintptr_t impl_{0};
-  static constexpr uintptr_t kInlineMask = 1ULL << 63;
-
-  explicit InternedStringPtr(InternedString *impl) : impl_(reinterpret_cast<uintptr_t>(impl)) {}
-  explicit InternedStringPtr(uintptr_t inline_data) : impl_(inline_data) {}
-
+  InternedStringPtr(InternedString *impl) : impl_(impl) {}
+  InternedString *impl_{nullptr};
   friend class StringInternStore;
   friend class BorrowedInternedStringPtr;
 };
 
+//
+// A non-owning (borrowed) pointer to an InternedString. This class is
+// trivially destructible — destroying a vector of these is a no-op.
+//
+// Safety contract: The caller MUST guarantee that the underlying
+// InternedString outlives this pointer. Typically this means the reader lock
+// that protects the index must be held for the lifetime of all
+// BorrowedInternedStringPtr instances.
+//
+// Call Materialize() to convert to an owning InternedStringPtr (increments
+// ref count) before releasing the lock.
+//
 class BorrowedInternedStringPtr {
  public:
   BorrowedInternedStringPtr() = default;
   explicit BorrowedInternedStringPtr(const InternedStringPtr &owned)
-      : impl_(owned.impl_) {}
+      : ptr_(owned.RawPtr()) {}
 
+  // Trivially copyable, trivially destructible — no ref counting.
   BorrowedInternedStringPtr(const BorrowedInternedStringPtr &) = default;
   BorrowedInternedStringPtr &operator=(const BorrowedInternedStringPtr &) =
       default;
   ~BorrowedInternedStringPtr() = default;
 
-  const InternedStringPtr &AsOwned() const {
-    return *reinterpret_cast<const InternedStringPtr *>(this);
-  }
+  absl::string_view Str() const { return ptr_->Str(); }
+  const InternedString *operator->() const { return ptr_; }
+  const InternedString &operator*() const { return *ptr_; }
+  explicit operator bool() const { return ptr_ != nullptr; }
 
-  absl::string_view Str() const {
-    return AsOwned().Str();
+  // Convert to an owning pointer (increments ref count).
+  InternedStringPtr Materialize() const {
+    if (ptr_) {
+      const_cast<InternedString *>(ptr_)->IncrementRefCount();
+    }
+    return InternedStringPtr(const_cast<InternedString *>(ptr_));
   }
-  const BorrowedInternedStringPtr *operator->() const { return this; }
-  const BorrowedInternedStringPtr &operator*() const { return *this; }
-  explicit operator bool() const { return impl_ != 0; }
-
-  InternedStringPtr Materialize() const { return AsOwned(); }
 
   auto operator<=>(const BorrowedInternedStringPtr &other) const {
-    if (impl_ == other.impl_) {
-      return std::strong_ordering::equal;
-    }
-    return Str() <=> other.Str();
+    return ptr_ <=> other.ptr_;
   }
-  bool operator==(const BorrowedInternedStringPtr &other) const {
-    return impl_ == other.impl_;
-  }
-  size_t Hash() const { return absl::HashOf(impl_); }
+  bool operator==(const BorrowedInternedStringPtr &other) const = default;
+  size_t Hash() const { return absl::HashOf(ptr_); }
 
  private:
-  uintptr_t impl_{0};
+  const InternedString *ptr_{nullptr};
   friend class InternedStringPtr;
 };
-
-//
 
 static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
               "BorrowedInternedStringPtr must be trivially destructible");
@@ -486,7 +448,7 @@ class BagOfInternedStringPtrs {
       case kSetTag:
         return GetSet()->size();
     }
-    return storage_ == 0 ? 0 : 1;
+    return 0;
   }
   bool empty() const { return storage_ == 0; }
 
@@ -529,7 +491,7 @@ class BagOfInternedStringPtrs {
     switch (storage_ & kTagMask) {
       case kSingleTag:
         if (storage_ != 0 && SingleRef() == key) {
-          return {const_iterator::Tag::kSingle, this};
+          return const_iterator(const_iterator::Tag::kSingle, this);
         }
         return end();
       case kArray4Tag: {
@@ -635,7 +597,7 @@ class BagOfInternedStringPtrs {
         if (cnt == 0) {
           return end();
         }
-        return {this, arr->data(), cnt, 0};
+        return const_iterator(this, arr->data(), cnt, 0);
       }
       case kArray8Tag: {
         auto *arr = GetArray8();
@@ -643,18 +605,18 @@ class BagOfInternedStringPtrs {
         if (cnt == 0) {
           return end();
         }
-        return {this, arr->data(), cnt, 0};
+        return const_iterator(this, arr->data(), cnt, 0);
       }
       case kSetTag:
-        return {this, GetSet()->begin()};
+        return const_iterator(this, GetSet()->begin());
     }
     return end();
   }
   const_iterator end() const {
     if (IsSet()) {
-      return {this, GetSet()->end()};
+      return const_iterator(this, GetSet()->end());
     }
-    return {};
+    return const_iterator();
   }
   const_iterator cbegin() const { return begin(); }
   const_iterator cend() const { return end(); }
@@ -973,8 +935,6 @@ static_assert(alignof(InternedStringPtr) == alignof(uintptr_t),
 
 class StringInternStore {
  public:
-  static constexpr size_t kNumShards = 64;
-
   friend class InternedString;
   static StringInternStore &Instance();
   //
@@ -988,12 +948,8 @@ class StringInternStore {
   static int64_t GetMemoryUsage();
 
   size_t UniqueStrings() const {
-    size_t count = 0;
-    for (size_t shard_index = 0; shard_index < kNumShards; ++shard_index) {
-      absl::MutexLock lock(&shards_[shard_index].mutex);
-      count += shards_[shard_index].str_to_interned.size();
-    }
-    return count;
+    absl::MutexLock lock(&mutex_);
+    return str_to_interned_.size();
   }
 
   struct Stats {
@@ -1004,14 +960,21 @@ class StringInternStore {
     };
     absl::btree_map<int, BucketStats> by_ref_stats_;
     absl::btree_map<int, BucketStats> by_size_stats_;
+    BucketStats inline_total_stats_;
     BucketStats out_of_line_total_stats_;
   };
   Stats GetStats() const;
 
  private:
+  static MemoryPool memory_pool_;
+
+  StringInternStore() = default;
+  bool Release(InternedString *str);
+  InternedStringPtr InternImpl(absl::string_view str,
+                               Allocator *allocator = nullptr);
   struct InternedStringPtrFullHash {
-    std::size_t operator()(const InternedStringPtr &string_ptr) const {
-      return absl::HashOf(string_ptr->Str());
+    std::size_t operator()(const InternedStringPtr &sp) const {
+      return absl::HashOf(sp->Str());
     }
   };
 
@@ -1021,22 +984,10 @@ class StringInternStore {
       return lhs->Str() == rhs->Str();
     }
   };
-
-  struct Shard {
-    mutable absl::Mutex mutex;
-    absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
-                        InternedStringPtrFullEqual>
-        str_to_interned ABSL_GUARDED_BY(mutex);
-  };
-
-  static MemoryPool memory_pool_;
-
-  StringInternStore() = default;
-  bool Release(InternedString *str);
-  InternedStringPtr InternImpl(absl::string_view str,
-                               Allocator *allocator = nullptr);
-
-  std::array<Shard, kNumShards> shards_;
+  absl::flat_hash_set<InternedStringPtr, InternedStringPtrFullHash,
+                      InternedStringPtrFullEqual>
+      str_to_interned_ ABSL_GUARDED_BY(mutex_);
+  mutable absl::Mutex mutex_;
 
   // Used for testing.
   static void SetMemoryUsage(int64_t value) {
@@ -1048,7 +999,6 @@ class StringInternStore {
 
   FRIEND_TEST(ValkeySearchTest, Info);
 };
-
 
 }  // namespace valkey_search
 

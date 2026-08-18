@@ -11,9 +11,11 @@
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
 #include "absl/synchronization/mutex.h"
 #include "libstemmer.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/memory_allocation.h"
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -72,9 +74,7 @@ std::function<void *(void *)> CreateTargetSetFn(
       InvasivePtr<Target>::AdoptRaw(
           static_cast<InvasivePtrRaw<Target>>(old_val));
     }
-    if (!updated_target) {
-      return nullptr;
-    }
+    if (!updated_target) return nullptr;
     InvasivePtr<Target> copy = updated_target;
     return static_cast<void *>(std::move(copy).ReleaseRaw());
   };
@@ -143,17 +143,9 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
                                  uint32_t min_stem_size)
     : with_offsets_(with_offsets),
       lexer_(language, punctuation, stop_words),
+      stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
-      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {
-  text_index_ = std::make_shared<TextIndex>(false);
-  stem_tree_ = Rax(FreeStemParentsCallback);
-}
-
-TextIndexSchema::~TextIndexSchema() {
-  per_key_text_indexes_.clear();
-  stem_tree_ = Rax();
-  text_index_.reset();
-}
+      rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
 
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
@@ -187,9 +179,7 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0
     auto &[positions, suffix_eligible] = (*token_positions)[token];
-    if (suffix) {
-      suffix_eligible = true;
-    }
+    if (suffix) suffix_eligible = true;
     auto [pos_it, _] =
         positions.try_emplace(position, FieldMask(num_text_fields_));
     pos_it->second.SetField(text_field_number);
@@ -263,7 +253,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
         text_index_->MutateTarget(token, updated_target, reverse_token,
-                                  item_count_op::kAdd);
+                                  item_count_op::ADD);
       }
     }
 
@@ -278,9 +268,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       const auto &originals = stem_entry.second;
       auto stem_mutate_fn = CreateSimpleTargetMutateFn<StemParents>(
           [&originals](InvasivePtr<StemParents> existing) {
-            if (!existing) {
-              existing = InvasivePtr<StemParents>::Make();
-            }
+            if (!existing) existing = InvasivePtr<StemParents>::Make();
             for (const auto &orig : originals) {
               if (std::find(existing->begin(), existing->end(), orig) ==
                   existing->end()) {
@@ -311,6 +299,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     }
   }
   TextIndex &key_index = node.mapped();
+  auto suffix_opt = text_index_->GetSuffix();
 
   std::vector<std::string> empty_words;
 
@@ -337,7 +326,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
         text_index_->MutateTarget(word_str, updated_target, reverse_word,
-                                  item_count_op::kSubtract);
+                                  item_count_op::SUBTRACT);
         if (stem_text_field_mask_) {
           empty_words.push_back(word_str);
         }
@@ -364,9 +353,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
                   *it = std::move(existing->back());
                   existing->pop_back();
                 }
-                if (existing->empty()) {
-                  existing.Clear();
-                }
+                if (existing->empty()) existing.Clear();
               }
               return existing;
             });
@@ -398,9 +385,7 @@ std::string TextIndexSchema::GetAllStemVariants(
   lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
 
   std::optional<absl::ReaderMutexLock> stem_guard;
-  if (lock_needed) {
-    stem_guard.emplace(&stem_tree_mutex_);
-  }
+  if (lock_needed) stem_guard.emplace(&stem_tree_mutex_);
 
   auto stem_iter = stem_tree_.GetWordIterator(stemmed);
   // GetWordIterator positions at the first word with this prefix, check if
@@ -412,10 +397,8 @@ std::string TextIndexSchema::GetAllStemVariants(
       uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();
       uint32_t count = 0;
       for (const auto &parent : parents) {
-        if (++count > max_expansions) {
-          break;  // Limit parent words added
-        }
-        words_to_search.push_back(parent);  // Views to tree-owned strings
+        if (++count > max_expansions) break;  // Limit parent words added
+        words_to_search.push_back(parent);    // Views to tree-owned strings
       }
     }
   }
@@ -429,9 +412,7 @@ const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
     CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
   }
   std::optional<std::lock_guard<std::mutex>> per_key_guard;
-  if (lock) {
-    per_key_guard.emplace(per_key_text_indexes_mutex_);
-  }
+  if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
   if (auto it = per_key_text_indexes_.find(key);
       it != per_key_text_indexes_.end()) {
     return &it->second;

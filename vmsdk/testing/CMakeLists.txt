@@ -34,6 +34,12 @@ target_link_libraries(module_test PUBLIC valkey_module)
 target_link_libraries(module_test PUBLIC vmsdklib)
 finalize_test_flags(module_test)
 
+set(SRCS_LOCK_FREE_QUEUE_TEST ${CMAKE_CURRENT_LIST_DIR}/lock_free_queue_test.cc)
+add_executable(lock_free_queue_test ${SRCS_LOCK_FREE_QUEUE_TEST})
+target_include_directories(lock_free_queue_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(lock_free_queue_test PUBLIC vmsdklib)
+finalize_test_flags(lock_free_queue_test)
+
 set(SRCS_THREAD_POOL_TEST ${CMAKE_CURRENT_LIST_DIR}/thread_pool_test.cc)
 add_executable(thread_pool_test ${SRCS_THREAD_POOL_TEST})
 target_include_directories(thread_pool_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

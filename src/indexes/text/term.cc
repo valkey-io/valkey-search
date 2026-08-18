@@ -66,24 +66,15 @@ void TermIterator::InsertValidKeyIterator(size_t idx) {
 }
 
 bool TermIterator::FindMinimumValidKey() {
-  if (key_iterators_.size() == 1) {
-    auto& iter = key_iterators_[0];
-    if (iter.IsValid()) {
-      current_key_ = &iter.GetKey();
-      current_key_indices_ = {0};
-      if (require_positions_) {
-        ClearPositionState();
-        pos_iterators_.emplace_back(iter.GetPositionIterator());
-        InsertValidPositionIterator(0);
-        TermIterator::NextPosition();
-      }
-      return true;
-    }
-    ClearKeyState();
-    return false;
-  }
-
   // 1. If the heap is empty, all underlying iterators are exhausted.
+  // Note: This can be due to three cases:
+  //   a) Initialization: No valid keys were found across any
+  //      iterators during the first scan in the constructor.
+  //   b) Natural Exhaustion: All iterators were at some point the 'current_key'
+  //      (active indices) and were popped, advanced, and found to be
+  //      Done/Invalid.
+  //   c) Seek Exhaustion: During SeekForwardKey, laggards were popped and
+  //      skipped, but found to be invalid/done.
   if (key_set_.empty()) {
     ClearKeyState();
     return false;
@@ -93,6 +84,8 @@ bool TermIterator::FindMinimumValidKey() {
   current_key_ = key_set_.min().key;
   current_key_indices_.clear();
   // 3. Extract all iterators that share this minimum key.
+  // This physically removes them from the heap (making it "empty" if all
+  // match).
   while (!key_set_.empty() && *key_set_.min().key == *current_key_) {
     current_key_indices_.push_back(key_set_.min().idx);
     key_set_.pop_min();  // O(log K)

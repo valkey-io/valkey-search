@@ -38,9 +38,9 @@ class TextIndexSchema;
 
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
-  std::atomic<uint64_t> total_positions{0};
-  std::atomic<uint64_t> num_unique_terms{0};
-  std::atomic<uint64_t> total_term_frequency{0};
+  alignas(64) std::atomic<uint64_t> total_positions{0};
+  alignas(64) std::atomic<uint64_t> num_unique_terms{0};
+  alignas(64) std::atomic<uint64_t> total_term_frequency{0};
 
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};

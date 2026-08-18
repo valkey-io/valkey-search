@@ -36,7 +36,6 @@ Key.
 
 #include "absl/container/btree_map.h"
 #include "src/indexes/text/flat_position_map.h"
-#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
@@ -70,9 +69,7 @@ using PositionMap = absl::btree_map<Position, FieldMask>;
 struct Postings {
   struct KeyIterator;
 
-  static void *operator new(size_t size) {
-    return ::operator new(size);
-  }
+  static void *operator new(size_t size) { return ::operator new(size); }
   static void operator delete(void *ptr, size_t size) {
     ::operator delete(ptr);
   }
@@ -130,15 +127,19 @@ struct Postings {
     friend struct Postings;
 
     const Postings *postings_{nullptr};
-    bool is_flat_{true};
-    size_t vec_idx_{0};
-    absl::btree_map<Key, FlatPositionMap *>::const_iterator tree_it_;
+    size_t byte_offset_{0};
+    uint32_t current_doc_id_{0};
+    uint64_t current_pos_count_{0};
+    size_t next_doc_offset_{0};
+    mutable Key current_key_cache_{};
+    mutable FlatPositionMap *current_map_cache_{nullptr};
   };
 
  private:
-  static constexpr size_t kFlatThreshold = 16;
-  std::vector<std::pair<Key, FlatPositionMap *>> flat_entries_;
-  absl::btree_map<Key, FlatPositionMap *> tree_entries_;
+  std::vector<uint8_t> stream_;
+  size_t key_count_{0};
+  size_t total_positions_{0};
+  size_t total_term_frequency_{0};
 };
 
 }  // namespace valkey_search::indexes::text

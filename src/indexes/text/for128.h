@@ -11,7 +11,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 
 namespace valkey_search::indexes::text {
 
@@ -24,9 +23,13 @@ class FOR128Codec {
   static uint8_t BitsRequired(const uint32_t *deltas, size_t count) {
     uint32_t max_val = 0;
     for (size_t i = 0; i < count; ++i) {
-      if (deltas[i] > max_val) max_val = deltas[i];
+      if (deltas[i] > max_val) {
+        max_val = deltas[i];
+      }
     }
-    if (max_val == 0) return 0;
+    if (max_val == 0) {
+      return 0;
+    }
     return 32 - __builtin_clz(max_val);
   }
 
@@ -39,7 +42,9 @@ class FOR128Codec {
     dst[1] = bits;
     size_t out_byte_idx = 2;
 
-    if (bits == 0) return out_byte_idx;
+    if (bits == 0) {
+      return out_byte_idx;
+    }
 
     uint64_t bit_buf = 0;
     int bit_cnt = 0;
@@ -61,7 +66,6 @@ class FOR128Codec {
   }
 
   // Unpack a block from src buffer into dst_deltas array.
-  // Returns total bytes read from src.
   static size_t Unpack(const uint8_t *src, uint32_t *dst_deltas,
                        size_t &out_count) {
     uint8_t count = src[0];

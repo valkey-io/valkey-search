@@ -149,7 +149,7 @@ static inline void raxStackFree(raxStack *ts) {
  * 'nodesize'. The padding is needed to store the child pointers to aligned
  * addresses. Note that we add 4 to the node size because the node has a four
  * bytes header. */
-#define raxPadding(nodesize) ((sizeof(void *) - (((nodesize) + 4) % sizeof(void *))) & (sizeof(void *) - 1))
+#define raxPadding(nodesize) ((sizeof(void *) - ((nodesize) % sizeof(void *))) & (sizeof(void *) - 1))
 
 /* Return the pointer to the last child pointer in a node. For the compressed
  * nodes this is the only child pointer. */
@@ -415,8 +415,8 @@ raxNode *raxCompressNode(raxNode *n, unsigned char *s, size_t len, raxNode **chi
 /* BEGIN SEARCH
  * Apply the item count operation to the nodes along the path. */
 void raxApplyOp(item_count_op *op, raxNode *n) {
-    if (op && *op != NONE) {
-        int delta = (*op == ADD) ? 1 : -1;
+    if (op && *op != kNone) {
+        int delta = (*op == kAdd) ? 1 : -1;
         n->subtree_items += delta;
     }
 }
@@ -720,7 +720,7 @@ int raxGenericInsertHelper(rax *rax, unsigned char *s, size_t len, void *data, v
          * The splitnode needs to inherit the correct subtree items count and have the
          * current op applied. */
         splitnode->subtree_items = (trimmedlen ? next->subtree_items : h->subtree_items);
-        assert(*op != SUBTRACT);
+        assert(*op != kSubtract);
         if (op) raxApplyOp(op, splitnode);
         rax->alloc_size += rax_ptr_alloc_size(splitnode);
         /* END SEARCH */
@@ -1026,7 +1026,7 @@ raxNode *raxRemoveChild(raxNode *parent, raxNode *child) {
      * We just check if in the old version of the node there was at the
      * end just a single byte and all padding: in that case removing one char
      * will remove a whole sizeof(void*) word. */
-    size_t shift = ((parent->size + 4) % sizeof(void *)) == 1 ? sizeof(void *) : 0;
+    size_t shift = (parent->size % sizeof(void *)) == 1 ? sizeof(void *) : 0;
 
     /* Move the children pointers before the deletion point. */
     if (shift) memmove(((char *)cp) - shift, cp, (parent->size - taillen - 1) * sizeof(raxNode **));
@@ -1292,7 +1292,7 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
     int splitpos = 0;
     raxStack ts;
     raxStack *ts_ptr = NULL;
-    if (op != ADD) {
+    if (op != kAdd) {
         ts_ptr = &ts;
         raxStackInit(ts_ptr);
     }
@@ -1304,7 +1304,7 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
 
     // The tree became out of sync with the user data if there is no
     // target and the op is a delete.
-    assert(current_value || op != SUBTRACT);
+    assert(current_value || op != kSubtract);
 
     // Get the new target from the mutation callback
     void *new_value = callback(current_value, caller_context);
@@ -1332,7 +1332,7 @@ int raxMutate(rax *rax, unsigned char *s, size_t len, raxMutateCallback callback
       success = 1;
     }
 
-    if (op != ADD) {
+    if (op != kAdd) {
         raxStackFree(ts_ptr);
         ts_ptr = NULL;
     }

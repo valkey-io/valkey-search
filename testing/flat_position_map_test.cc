@@ -8,7 +8,6 @@
 #include "src/indexes/text/flat_position_map.h"
 
 #include <algorithm>
-#include <memory>
 #include <random>
 #include <vector>
 
@@ -22,21 +21,21 @@ namespace valkey_search::indexes::text {
 // RAII wrapper for FlatPositionMap pointer
 class FlatPositionMapPtr {
  public:
-  FlatPositionMapPtr(const absl::btree_map<Position, FieldMask>& position_map,
+  FlatPositionMapPtr(const absl::btree_map<Position, FieldMask> &position_map,
                      size_t num_text_fields)
       : ptr_(FlatPositionMap::Create(position_map, num_text_fields)) {}
 
   ~FlatPositionMapPtr() { FlatPositionMap::Destroy(ptr_); }
 
   // Non-copyable
-  FlatPositionMapPtr(const FlatPositionMapPtr&) = delete;
-  FlatPositionMapPtr& operator=(const FlatPositionMapPtr&) = delete;
+  FlatPositionMapPtr(const FlatPositionMapPtr &) = delete;
+  FlatPositionMapPtr &operator=(const FlatPositionMapPtr &) = delete;
 
   // Movable
-  FlatPositionMapPtr(FlatPositionMapPtr&& other) noexcept : ptr_(other.ptr_) {
+  FlatPositionMapPtr(FlatPositionMapPtr &&other) noexcept : ptr_(other.ptr_) {
     other.ptr_ = nullptr;
   }
-  FlatPositionMapPtr& operator=(FlatPositionMapPtr&& other) noexcept {
+  FlatPositionMapPtr &operator=(FlatPositionMapPtr &&other) noexcept {
     if (this != &other) {
       FlatPositionMap::Destroy(ptr_);
       ptr_ = other.ptr_;
@@ -45,24 +44,26 @@ class FlatPositionMapPtr {
     return *this;
   }
 
-  FlatPositionMap& operator*() { return *ptr_; }
-  const FlatPositionMap& operator*() const { return *ptr_; }
-  FlatPositionMap* operator->() { return ptr_; }
-  const FlatPositionMap* operator->() const { return ptr_; }
-  FlatPositionMap* get() { return ptr_; }
-  const FlatPositionMap* get() const { return ptr_; }
+  FlatPositionMap &operator*() { return *ptr_; }
+  const FlatPositionMap &operator*() const { return *ptr_; }
+  FlatPositionMap *operator->() { return ptr_; }
+  const FlatPositionMap *operator->() const { return ptr_; }
+  // NOLINTNEXTLINE(readability-identifier-naming)
+  FlatPositionMap *get() { return ptr_; }
+  // NOLINTNEXTLINE(readability-identifier-naming)
+  const FlatPositionMap *get() const { return ptr_; }
 
  private:
-  FlatPositionMap* ptr_;
+  FlatPositionMap *ptr_;
 };
 
 class FlatPositionMapTest : public ::testing::Test {
  protected:
   absl::btree_map<Position, FieldMask> CreatePositionMap(
-      const std::vector<std::pair<Position, uint64_t>>& positions,
+      const std::vector<std::pair<Position, uint64_t>> &positions,
       size_t num_fields) {
     absl::btree_map<Position, FieldMask> position_map;
-    for (const auto& [pos, mask] : positions) {
+    for (const auto &[pos, mask] : positions) {
       FieldMask field_mask(num_fields);
       for (size_t i = 0; i < num_fields; ++i) {
         if (mask & (1ULL << i)) {
@@ -76,8 +77,8 @@ class FlatPositionMapTest : public ::testing::Test {
 
   // Helper to verify iteration correctness
   void VerifyIteration(
-      const FlatPositionMap& flat_map,
-      const std::vector<std::pair<Position, uint64_t>>& expected) {
+      const FlatPositionMap &flat_map,
+      const std::vector<std::pair<Position, uint64_t>> &expected) {
     PositionIterator iter(flat_map);
     size_t idx = 0;
     while (iter.IsValid()) {
@@ -239,6 +240,7 @@ TEST_F(FlatPositionMapTest, SkipBeyondEnd) {
 
 TEST_F(FlatPositionMapTest, LargeMapWithPartitions) {
   std::vector<std::pair<Position, uint64_t>> positions;
+  positions.reserve(200);
   for (int i = 0; i < 200; ++i) {
     positions.push_back({i * 10, 1ULL << (i % 4)});
   }
@@ -259,6 +261,7 @@ TEST_F(FlatPositionMapTest, LargeMapWithPartitions) {
 
 TEST_F(FlatPositionMapTest, SkipForwardWithPartitions) {
   std::vector<std::pair<Position, uint64_t>> positions;
+  positions.reserve(300);
   for (int i = 0; i < 300; ++i) {
     positions.push_back({i * 5, 1ULL});
   }
@@ -277,11 +280,12 @@ TEST_F(FlatPositionMapTest, SkipForwardWithPartitions) {
 TEST_F(FlatPositionMapTest, MoveConstructor) {
   auto position_map = CreatePositionMap({{10, 1}, {20, 2}}, 2);
   FlatPositionMapPtr map1(position_map, 2);
-  const char* data = map1->data();
+  const char *data = map1->data();
 
   FlatPositionMapPtr map2(std::move(map1));
 
   EXPECT_EQ(map2->data(), data);
+  // NOLINTNEXTLINE(clang-analyzer-cplusplus.Move,bugprone-use-after-move)
   EXPECT_EQ(map1.get(), nullptr);
   EXPECT_EQ(map2->CountPositions(), 2);
 }
@@ -292,11 +296,12 @@ TEST_F(FlatPositionMapTest, MoveAssignment) {
 
   FlatPositionMapPtr map1(position_map1, 1);
   FlatPositionMapPtr map2(position_map2, 1);
-  const char* data2 = map2->data();
+  const char *data2 = map2->data();
 
   map1 = std::move(map2);
 
   EXPECT_EQ(map1->data(), data2);
+  // NOLINTNEXTLINE(clang-analyzer-cplusplus.Move,bugprone-use-after-move)
   EXPECT_EQ(map2.get(), nullptr);
   EXPECT_EQ(map1->CountPositions(), 1);
 }
@@ -376,8 +381,12 @@ class RandomPositionMapGenerator {
 
   // Generate field mask with edge cases
   uint64_t GenerateFieldMask(size_t num_fields) {
-    if (num_fields == 0) return 0;  // Should never happen
-    if (num_fields == 1) return 1;
+    if (num_fields == 0) {
+      return 0;  // Should never happen
+    }
+    if (num_fields == 1) {
+      return 1;
+    }
 
     std::uniform_int_distribution<int> category_dist(0, 9);
     int category = category_dist(rng_);
@@ -438,10 +447,12 @@ class RandomPositionMapGenerator {
 
   // Generate random skip targets for testing
   std::vector<Position> GenerateSkipTargets(
-      const std::vector<std::pair<Position, uint64_t>>& positions,
+      const std::vector<std::pair<Position, uint64_t>> &positions,
       size_t num_targets) {
     std::vector<Position> targets;
-    if (positions.empty()) return targets;
+    if (positions.empty()) {
+      return targets;
+    }
 
     Position min_pos = positions.front().first;
     Position max_pos = positions.back().first;
@@ -499,7 +510,7 @@ TEST_F(FlatPositionMapTest, RandomMapGeneration_1000Tests) {
     size_t num_skip_tests = std::min(size_t{20}, num_elements);
     auto skip_targets = gen.GenerateSkipTargets(positions, num_skip_tests);
 
-    for (const auto& target : skip_targets) {
+    for (const auto &target : skip_targets) {
       PositionIterator iter(*flat_map);  // Fresh iterator for each target
 
       // Skip targets that are before the first position - should still work
@@ -764,7 +775,7 @@ TEST_F(FlatPositionMapTest, RandomMapWithTermFrequencyVerification) {
 
     // Calculate expected term frequency
     size_t expected_freq = 0;
-    for (const auto& [pos, mask] : positions) {
+    for (const auto &[pos, mask] : positions) {
       expected_freq += __builtin_popcountll(mask);
     }
 
@@ -865,6 +876,41 @@ TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
       }
     }
   }
+}
+
+TEST_F(FlatPositionMapTest, GetTotalAllocSizeWithVarintEmbeddedZeros) {
+  // Test case where field mask has value 64 (encodes as 0x81 0x00)
+  // to ensure 0x00 interior bytes do not trigger premature termination.
+  FieldMask mask(64);
+  mask.SetField(6);  // bit 6 is 1ULL << 6 = 64
+  ASSERT_EQ(mask.GetMask(), 64ULL);
+
+  absl::btree_map<Position, FieldMask> position_map;
+  position_map[1] = mask;
+  FlatPositionMapPtr flat_map(position_map, 64);
+
+  // Field mask 64 (2 bytes), position 1 (1 byte), terminator (1 byte),
+  // counts (2 bytes), FlatPositionMap struct (1 byte) = 7 bytes total.
+  EXPECT_EQ(flat_map->GetTotalAllocSize(), 7u);
+
+  FieldMask mask1(64);
+  mask1.SetField(6);
+  FieldMask mask2(64);
+  mask2.SetField(7);  // 128
+  FieldMask mask3(64);
+  mask3.SetField(0);  // 1
+
+  absl::btree_map<Position, FieldMask> multi_pos_map;
+  multi_pos_map[1] = mask1;
+  multi_pos_map[10] = mask2;
+  multi_pos_map[100] = mask3;
+  FlatPositionMapPtr multi_flat_map(multi_pos_map, 64);
+  EXPECT_GT(multi_flat_map->GetTotalAllocSize(), 7u);
+
+  PositionIterator iter(*multi_flat_map);
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetPosition(), 1);
+  EXPECT_EQ(iter.GetFieldMask(), 64ULL);
 }
 
 }  // namespace valkey_search::indexes::text

@@ -15,6 +15,7 @@
 #include "src/commands/filter_parser.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -39,7 +40,7 @@ class TagIndexTest : public vmsdk::ValkeyTest {
 };
 
 std::vector<std::string> Fetch(
-    valkey_search::indexes::EntriesFetcherBase& fetcher) {
+    valkey_search::indexes::EntriesFetcherBase &fetcher) {
   std::vector<std::string> keys;
   auto itr = fetcher.Begin();
   while (!itr->Done()) {
@@ -270,9 +271,11 @@ TEST_F(TagIndexTest, DeletedKeysNegativeSearchTest) {
 static absl::flat_hash_set<std::string> ParseAndUnescapeTags(
     absl::string_view raw_tag_string, char separator) {
   auto parsed = indexes::Tag::ParseSearchTags(raw_tag_string, separator);
-  if (!parsed.ok()) return {};
+  if (!parsed.ok()) {
+    return {};
+  }
   absl::flat_hash_set<std::string> result;
-  for (const auto& tag : parsed.value()) {
+  for (const auto &tag : parsed.value()) {
     result.insert(indexes::Tag::UnescapeTag(tag));
   }
   return result;
@@ -432,6 +435,117 @@ TEST_F(TagIndexTest, ParseSearchTagsWhitespaceOnly) {
   auto result = indexes::Tag::ParseSearchTags("   ", '|');
   ASSERT_TRUE(result.ok());
   EXPECT_TRUE(result.value().empty());
+}
+
+TEST_F(TagIndexTest, GetRawTagStringTest) {
+  auto key1 = StringInternStore::Intern("key1");
+  auto missing_key = StringInternStore::Intern("non_existent_key");
+  EXPECT_TRUE(index->AddRecord("key1", "tag1, tag2").value());
+
+  auto raw_tags = index->GetRawTagString(key1);
+  ASSERT_TRUE(raw_tags.has_value());
+  EXPECT_EQ(raw_tags.value(), "tag1, tag2");
+  EXPECT_FALSE(index->IsCaseSensitive());
+  EXPECT_EQ(index->GetSeparator(), ',');
+
+  auto missing_raw_tags = index->GetRawTagString(missing_key);
+  EXPECT_FALSE(missing_raw_tags.has_value());
+}
+
+TEST_F(TagIndexTest, RawTagStringPredicateEvaluateTest) {
+  std::string filter_tag_string = "tech|scien*";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+
+  EXPECT_TRUE(predicate.Evaluate("news, TECH, sport", ',', false).matches);
+  EXPECT_TRUE(predicate.Evaluate("news, scientific", ',', false).matches);
+  EXPECT_TRUE(predicate.Evaluate("news; TECH; sport", ';', false).matches);
+  EXPECT_TRUE(predicate.Evaluate("news| scientific", '|', false).matches);
+  EXPECT_FALSE(predicate.Evaluate("news, TECH, sport", ',', true).matches);
+  EXPECT_FALSE(predicate.Evaluate("news, sport, politics", ',', false).matches);
+  EXPECT_FALSE(predicate.Evaluate("", ',', false).matches);
+}
+
+TEST_F(TagIndexTest, PrefilterEvaluatorEvaluateTagsTest) {
+  auto key1 = StringInternStore::Intern("key1");
+  auto key2 = StringInternStore::Intern("key2");
+  auto key3 = StringInternStore::Intern("key3");
+
+  EXPECT_TRUE(index->AddRecord("key1", "news, tech").value());
+  EXPECT_TRUE(index->AddRecord("key2", "sports, health").value());
+
+  std::string filter_tag_string = "tech";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+
+  PrefilterEvaluator evaluator(nullptr, QueryOperations::kNone);
+
+  EXPECT_TRUE(evaluator.Evaluate(predicate, key1));
+  EXPECT_FALSE(evaluator.Evaluate(predicate, key2));
+  EXPECT_FALSE(evaluator.Evaluate(predicate, key3));
+}
+
+TEST_F(TagIndexTest, PrefilterEvaluatorCustomSeparatorTest) {
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator(";");
+  tag_index_proto.set_case_sensitive(false);
+  auto custom_index =
+      std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(tag_index_proto);
+
+  auto key1 = StringInternStore::Intern("key1");
+  auto key2 = StringInternStore::Intern("key2");
+
+  EXPECT_TRUE(custom_index->AddRecord("key1", "news; tech").value());
+  EXPECT_TRUE(custom_index->AddRecord("key2", "sports; health").value());
+
+  std::string filter_tag_string = "tech";
+  auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+  query::TagPredicate predicate(custom_index.get(), alias, identifier,
+                                filter_tag_string, parsed_tags);
+
+  PrefilterEvaluator evaluator(nullptr, QueryOperations::kNone);
+
+  EXPECT_TRUE(evaluator.Evaluate(predicate, key1));
+  EXPECT_FALSE(evaluator.Evaluate(predicate, key2));
+}
+
+TEST_F(TagIndexTest, PrefilterEvaluatorWildcardTest) {
+  auto key1 = StringInternStore::Intern("key1");
+  auto key2 = StringInternStore::Intern("key2");
+
+  EXPECT_TRUE(index->AddRecord("key1", "news, technology").value());
+  EXPECT_TRUE(index->AddRecord("key2", "sports, health").value());
+
+  PrefilterEvaluator evaluator(nullptr, QueryOperations::kNone);
+
+  // 1. Prefix wildcard match "tech*"
+  {
+    std::string query_str = "tech*";
+    auto parsed = FilterParser::ParseQueryTags(query_str).value();
+    query::TagPredicate pred(index.get(), alias, identifier, query_str, parsed);
+    EXPECT_TRUE(evaluator.Evaluate(pred, key1));
+    EXPECT_FALSE(evaluator.Evaluate(pred, key2));
+  }
+
+  // 2. Wildcard prefix longer than tag "technology_extra*" -> no match
+  {
+    std::string query_str = "technology_extra*";
+    auto parsed = FilterParser::ParseQueryTags(query_str).value();
+    query::TagPredicate pred(index.get(), alias, identifier, query_str, parsed);
+    EXPECT_FALSE(evaluator.Evaluate(pred, key1));
+    EXPECT_FALSE(evaluator.Evaluate(pred, key2));
+  }
+
+  // 3. Multi-tag query with wildcards "sport*|tech*"
+  {
+    std::string query_str = "sport*|tech*";
+    auto parsed = FilterParser::ParseQueryTags(query_str).value();
+    query::TagPredicate pred(index.get(), alias, identifier, query_str, parsed);
+    EXPECT_TRUE(evaluator.Evaluate(pred, key1));
+    EXPECT_TRUE(evaluator.Evaluate(pred, key2));
+  }
 }
 
 }  // namespace

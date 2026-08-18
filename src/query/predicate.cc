@@ -13,7 +13,9 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/filter_parser.h"
 #include "src/indexes/numeric.h"
@@ -49,10 +51,10 @@ EvaluationResult BuildTextEvaluationResult(
 
 TermPredicate::TermPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, bool exact)
+    FieldMaskPredicate field_mask, absl::string_view term, bool exact)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term),
+      term_(StringInternStore::Intern(term)),
       exact_(exact) {}
 
 EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
@@ -118,7 +120,7 @@ EvaluationResult TermPredicate::Evaluate(
     std::string stemmed = text_index_schema_->GetAllStemVariants(
         term_, stem_variants, stem_field_mask, true);
     // Search for the stemmed word itself - may or may not exist in corpus
-    if (stemmed != term_) {
+    if (stemmed != term_.Str()) {
       if (TryAddWordKeyIteratorForPrefilter(text_index, stemmed, target_key,
                                             stem_field_mask, require_positions,
                                             key_iterators)) {
@@ -145,10 +147,10 @@ EvaluationResult TermPredicate::Evaluate(
 
 PrefixPredicate::PrefixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term)
+    FieldMaskPredicate field_mask, absl::string_view term)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(StringInternStore::Intern(term)) {}
 
 EvaluationResult PrefixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -194,10 +196,10 @@ EvaluationResult PrefixPredicate::Evaluate(
 
 SuffixPredicate::SuffixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term)
+    FieldMaskPredicate field_mask, absl::string_view term)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(StringInternStore::Intern(term)) {}
 
 EvaluationResult SuffixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -212,7 +214,8 @@ EvaluationResult SuffixPredicate::Evaluate(
   if (!suffix_opt.has_value()) {
     return EvaluationResult(false);
   }
-  std::string reversed_term(term_.rbegin(), term_.rend());
+  absl::string_view str = term_.Str();
+  std::string reversed_term(str.rbegin(), str.rend());
   auto word_iter = suffix_opt.value().get().GetWordIterator(reversed_term);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
@@ -251,10 +254,10 @@ EvaluationResult SuffixPredicate::Evaluate(
 
 InfixPredicate::InfixPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term)
+    FieldMaskPredicate field_mask, absl::string_view term)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term) {}
+      term_(StringInternStore::Intern(term)) {}
 
 EvaluationResult InfixPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -270,10 +273,10 @@ EvaluationResult InfixPredicate::Evaluate(
 
 FuzzyPredicate::FuzzyPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    FieldMaskPredicate field_mask, std::string term, uint32_t distance)
+    FieldMaskPredicate field_mask, absl::string_view term, uint32_t distance)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
-      term_(term),
+      term_(StringInternStore::Intern(term)),
       distance_(distance) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator &evaluator) const {
@@ -359,6 +362,31 @@ EvaluationResult TagPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateTags(*this);
 }
 
+bool TagPredicate::MatchesSingleTag(absl::string_view in_tag,
+                                    bool case_sensitive) const {
+  for (const auto &tag : tags_) {
+    absl::string_view left_hand_side = in_tag;
+    absl::string_view right_hand_side = tag;
+    if (!right_hand_side.empty() && right_hand_side.back() == '*') {
+      if (left_hand_side.length() < right_hand_side.length() - 1) {
+        continue;
+      }
+      left_hand_side = left_hand_side.substr(0, right_hand_side.length() - 1);
+      right_hand_side = right_hand_side.substr(0, right_hand_side.length() - 1);
+    }
+    if (case_sensitive) {
+      if (left_hand_side == right_hand_side) {
+        return true;
+      }
+    } else {
+      if (absl::EqualsIgnoreCase(left_hand_side, right_hand_side)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 EvaluationResult TagPredicate::Evaluate(
     const absl::flat_hash_set<absl::string_view> *in_tags,
     bool case_sensitive) const {
@@ -367,26 +395,20 @@ EvaluationResult TagPredicate::Evaluate(
   }
 
   for (const auto &in_tag : *in_tags) {
-    for (const auto &tag : tags_) {
-      absl::string_view left_hand_side = in_tag;
-      absl::string_view right_hand_side = tag;
-      if (right_hand_side.back() == '*') {
-        if (left_hand_side.length() < right_hand_side.length() - 1) {
-          continue;
-        }
-        left_hand_side = left_hand_side.substr(0, right_hand_side.length() - 1);
-        right_hand_side =
-            right_hand_side.substr(0, right_hand_side.length() - 1);
-      }
-      if (case_sensitive) {
-        if (left_hand_side == right_hand_side) {
-          return EvaluationResult(true);
-        }
-      } else {
-        if (absl::EqualsIgnoreCase(left_hand_side, right_hand_side)) {
-          return EvaluationResult(true);
-        }
-      }
+    if (MatchesSingleTag(in_tag, case_sensitive)) {
+      return EvaluationResult(true);
+    }
+  }
+  return EvaluationResult(false);
+}
+
+EvaluationResult TagPredicate::Evaluate(absl::string_view raw_tag_string,
+                                        char separator,
+                                        bool case_sensitive) const {
+  for (const auto &part : absl::StrSplit(raw_tag_string, separator)) {
+    absl::string_view in_tag = absl::StripAsciiWhitespace(part);
+    if (!in_tag.empty() && MatchesSingleTag(in_tag, case_sensitive)) {
+      return EvaluationResult(true);
     }
   }
   return EvaluationResult(false);

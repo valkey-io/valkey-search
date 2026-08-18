@@ -33,12 +33,10 @@ Key.
 */
 
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
 
 #include "absl/container/btree_map.h"
 #include "src/indexes/text/flat_position_map.h"
+#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
@@ -72,6 +70,13 @@ using PositionMap = absl::btree_map<Position, FieldMask>;
 struct Postings {
   struct KeyIterator;
 
+  static void *operator new(size_t size) {
+    return ::operator new(size);
+  }
+  static void operator delete(void *ptr, size_t size) {
+    ::operator delete(ptr);
+  }
+
   // Destructor: clean up all FlatPositionMaps
   ~Postings();
 
@@ -79,10 +84,10 @@ struct Postings {
   bool IsEmpty() const;
 
   // Insert the key with FlatPositionMap
-  void InsertKey(const Key& key, FlatPositionMap* flat_map);
+  void InsertKey(const Key &key, FlatPositionMap *flat_map);
 
   // Remove a key and all positions for it
-  void RemoveKey(const Key& key, TextIndexMetadata* metadata);
+  void RemoveKey(const Key &key, TextIndexMetadata *metadata);
 
   // Total number of keys
   size_t GetKeyCount() const;
@@ -94,7 +99,7 @@ struct Postings {
   size_t GetTotalTermFrequency() const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
-  Postings* Defrag();
+  Postings *Defrag();
 
   // Get a Key iterator.
   KeyIterator GetKeyIterator() const;
@@ -109,10 +114,10 @@ struct Postings {
 
     // Skip forward to next key that is equal to or greater than.
     // return true if it lands on an equal key, false otherwise.
-    bool SkipForwardKey(const Key& key);
+    bool SkipForwardKey(const Key &key);
 
     // Get Current key
-    const Key& GetKey() const;
+    const Key &GetKey() const;
 
     // Check if word is present in any of the fields specified by field_mask for
     // current key
@@ -125,13 +130,13 @@ struct Postings {
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, FlatPositionMap*>* key_map_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator current_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator end_;
+    const absl::btree_map<Key, FlatPositionMap *> *key_map_;
+    absl::btree_map<Key, FlatPositionMap *>::const_iterator current_;
+    absl::btree_map<Key, FlatPositionMap *>::const_iterator end_;
   };
 
  private:
-  absl::btree_map<Key, FlatPositionMap*> key_to_positions_;
+  absl::btree_map<Key, FlatPositionMap *> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

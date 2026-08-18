@@ -84,9 +84,11 @@ float TermIterator::GetScore() const {
   // unspecified union artifact per the Redis oracle (do not golden-test which).
   if (!per_term_idf_.empty()) {
     const size_t chosen = current_key_indices_.front();
-    return scorer_->ScoreLeaf(
-        {per_term_idf_[chosen], key_iterators_[chosen].GetTermFrequency(),
-         key_iterators_[chosen].GetDocLen(), avg_doc_len_, leaf_weight_});
+    const uint32_t term_frequency =
+        static_cast<uint32_t>(key_iterators_[chosen].GetTermFrequency());
+    return scorer_->ScoreLeaf({per_term_idf_[chosen], term_frequency,
+                               key_iterators_[chosen].GetDocLen(), avg_doc_len_,
+                               leaf_weight_});
   }
 
   // F is document-wide: sum the term frequency across every word/field

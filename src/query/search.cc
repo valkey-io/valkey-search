@@ -38,6 +38,7 @@
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/proximity.h"
@@ -661,6 +662,23 @@ struct ResolvedLeaf {
   // per-candidate ScoreNode walk needs only a cheap map lookup.
   const indexes::Tag *tag_index = nullptr;
   absl::InlinedVector<std::pair<std::string, float>, 4> tag_values;
+
+  // --- Expansion leaf (Prefix/Suffix/Fuzzy) ---
+  // One entry per matched expansion term: its posting list plus that term's own
+  // precomputed IDF. Empty for term/tag leaves. ScoreNode contributes exactly
+  // ONE matched term (the first whose posting contains the key), never the sum
+  // over matched terms -- matching Redis's single-representative behavior
+  // (docs/redis_prefix_suffix_fuzzy_scoring.md). Which term wins is an
+  // unspecified corpus artifact, so this "first present" pick may differ from
+  // the in-iterator path's heap-order pick on a doc matching several terms;
+  // both honor the one-term invariant.
+  struct ExpansionTerm {
+    indexes::text::InvasivePtr<indexes::text::Postings> postings;
+    float idf = 0.0f;
+  };
+  absl::InlinedVector<ExpansionTerm,
+                      indexes::text::kWordExpansionInlineCapacity>
+      expansion_terms;
 };
 
 // Keyed on the base Predicate* (not TermPredicate*) so the per-document scoring
@@ -681,6 +699,20 @@ using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
 // walk then only does the cheap per-key term-frequency lookup. A leaf whose
 // term (and all its variants) is absent from the index resolves to empty
 // postings.
+
+// Appends one matched expansion term -- its posting list plus that term's own
+// precomputed IDF -- to `leaf`. Used when resolving a prefix/suffix/fuzzy leaf,
+// which contributes a single matched term per document (never the sum).
+void AddExpansionTerm(
+    indexes::text::InvasivePtr<indexes::text::Postings> postings,
+    uint32_t total_docs, const indexes::scoring::Scorer *scorer,
+    ResolvedLeaf &leaf) {
+  const uint32_t dt = static_cast<uint32_t>(
+      std::min<size_t>(postings->GetKeyCount(), total_docs));
+  leaf.expansion_terms.push_back(
+      {std::move(postings), scorer->PrecomputeIDF({total_docs, dt})});
+}
+
 void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
                    const indexes::scoring::Scorer *scorer,
                    ResolvedLeaves &resolved) {
@@ -695,10 +727,70 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       break;
     }
     case PredicateType::kText: {
-      // kText is shared by Term/Prefix/Suffix/Infix predicates; only
-      // TermPredicate is scored, so this cast must stay dynamic.
+      // kText covers Term/Prefix/Suffix/Fuzzy predicates; each concrete type is
+      // dynamic_cast exactly once here (once per query -- not in the
+      // per-document ScoreNode path). Prefix/suffix/fuzzy resolve to their
+      // expansion terms (scored one-term-not-sum); ScoreNode picks a single
+      // matched term per document. Infix is unimplemented
+      // (InfixPredicate::BuildTextIterator and ::Evaluate both CHECK(false)),
+      // so an infix query aborts before scoring and never reaches this point.
+      const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+      if (auto *p = dynamic_cast<const PrefixPredicate *>(predicate)) {
+        if (resolved.contains(predicate)) break;
+        ResolvedLeaf leaf;
+        auto text_index = p->GetTextIndexSchema()->GetTextIndex();
+        auto it = text_index->GetPrefix().GetWordIterator(p->GetTextString());
+        uint32_t n = 0;
+        while (!it.Done() && n < max_words) {
+          AddExpansionTerm(it.GetPostingsTarget(), total_docs, scorer, leaf);
+          it.Next();
+          ++n;
+        }
+        if (!leaf.expansion_terms.empty()) {
+          resolved.emplace(predicate, std::move(leaf));
+        }
+        break;
+      }
+      if (auto *s = dynamic_cast<const SuffixPredicate *>(predicate)) {
+        if (resolved.contains(predicate)) break;
+        ResolvedLeaf leaf;
+        auto text_index = s->GetTextIndexSchema()->GetTextIndex();
+        auto suffix = text_index->GetSuffix();
+        if (suffix.has_value()) {
+          const absl::string_view term = s->GetTextString();
+          std::string reversed(term.rbegin(), term.rend());
+          auto it = suffix.value().get().GetWordIterator(reversed);
+          uint32_t n = 0;
+          while (!it.Done() && n < max_words) {
+            AddExpansionTerm(it.GetPostingsTarget(), total_docs, scorer, leaf);
+            it.Next();
+            ++n;
+          }
+        }
+        if (!leaf.expansion_terms.empty()) {
+          resolved.emplace(predicate, std::move(leaf));
+        }
+        break;
+      }
+      if (auto *f = dynamic_cast<const FuzzyPredicate *>(predicate)) {
+        if (resolved.contains(predicate)) break;
+        ResolvedLeaf leaf;
+        auto text_index = f->GetTextIndexSchema()->GetTextIndex();
+        auto expansion = indexes::text::FuzzySearch::Search(
+            text_index->GetPrefix(), f->GetTextString(), f->GetDistance(),
+            max_words);
+        for (auto &postings : expansion.postings) {
+          AddExpansionTerm(std::move(postings), total_docs, scorer, leaf);
+        }
+        if (!leaf.expansion_terms.empty()) {
+          resolved.emplace(predicate, std::move(leaf));
+        }
+        break;
+      }
+      // Otherwise a plain TermPredicate: its own (+ stem-variant) posting
+      // lists.
       auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
-      if (!term_pred || resolved.contains(term_pred)) break;
+      if (resolved.contains(term_pred)) break;
       auto text_index_schema = term_pred->GetTextIndexSchema();
       CHECK(text_index_schema != nullptr);
       auto text_index = text_index_schema->GetTextIndex();
@@ -840,14 +932,33 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       return predicate->GetWeight() * sum;
     }
     case PredicateType::kText: {
-      // kText is shared by Term/Prefix/Suffix/Infix predicates; only
-      // TermPredicate is present in the resolved map (see ResolveLeaves). A
-      // miss here is a non-scored text predicate (prefix/suffix/fuzzy): not
-      // scored, but the document still matched, so treat as a zero contribution
-      // rather than a non-match. This avoids a per-candidate dynamic_cast.
+      // kText is shared by Term/Prefix/Suffix/Fuzzy/Infix predicates. Term and
+      // expansion (prefix/suffix/fuzzy) predicates are present in the resolved
+      // map (see ResolveLeaves); a miss is an unresolved text predicate (e.g.
+      // infix): not scored, but the document still matched, so treat as a zero
+      // contribution rather than a non-match. This avoids a per-candidate
+      // dynamic_cast.
       auto it = score_ctx.resolved.find(predicate);
       if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
+
+      // Expansion leaf: contribute exactly ONE matched term's BM25 (its own IDF
+      // + own F), never the sum. Pick the first expansion term whose posting
+      // contains this key -- the representative is unspecified per the oracle,
+      // so this may differ from the in-iterator heap-order pick on multi-match
+      // docs; both honor the one-term invariant. doc_len is co-located in the
+      // matched posting entry.
+      if (!leaf.expansion_terms.empty()) {
+        for (const auto &term : leaf.expansion_terms) {
+          if (auto entry = term.postings->LookupKey(key)) {
+            return score_ctx.scorer->ScoreLeaf(
+                {term.idf, entry->tf, entry->doc_len, score_ctx.avg_doc_len,
+                 predicate->GetWeight()});
+          }
+        }
+        return std::nullopt;  // doc carries none of the expansion terms
+      }
+
       if (leaf.postings.empty()) return std::nullopt;
 
       // Sum the term frequency across the original word and its stem variants:

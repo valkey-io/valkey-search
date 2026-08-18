@@ -1891,5 +1891,90 @@ TEST_F(ScoreTextQueryTestBase, FuzzySingleMatchEqualsExactTerm) {
   EXPECT_FLOAT_EQ(*fuzzy, *exact);
 }
 
+// --- Expansion scoring: extra-step path (ScoreTextQuery / ScoreNode) ---------
+//
+// The tests above drive the in-iterator path (pure-text queries). Score() below
+// always takes the extra-step ScoreNode path -- the one combined (text +
+// numeric/tag/negate) queries use. Same contract: one matched term, not the
+// sum. The representative pick (first present expansion term) can differ from
+// the in-iterator heap pick on multi-match docs, so cross-path equality is
+// asserted only on single-match docs.
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto prefix = Score(*schema, "@text:cat*", "d_cat");
+  auto exact = Score(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+  // Single-match: extra-step and in-iterator pick the same (only) term.
+  auto in_iter = ScoreViaIterator(*schema, "@text:cat*", "d_cat");
+  ASSERT_TRUE(in_iter);
+  EXPECT_FLOAT_EQ(*prefix, *in_iter);
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixMultiMatchScoresOneTermNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_multi", "category catalog", ""},
+      {"d_cat2", "category", ""},
+      {"d_cat3", "category", ""},
+  });
+  auto prefix = Score(*schema, "@text:cat*", "d_multi");
+  auto only_category = Score(*schema, "@text:category", "d_multi");
+  auto only_catalog = Score(*schema, "@text:catalog", "d_multi");
+  ASSERT_TRUE(prefix && only_category && only_catalog);
+  EXPECT_LT(*prefix, *only_category + *only_catalog);
+  EXPECT_TRUE(std::fabs(*prefix - *only_category) < 1e-4f ||
+              std::fabs(*prefix - *only_catalog) < 1e-4f)
+      << "prefix=" << *prefix << " category=" << *only_category
+      << " catalog=" << *only_catalog;
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepSuffixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog", "jogging", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto suffix = Score(*schema, "@text:*ing", "d_run");
+  auto exact = Score(*schema, "@text:running", "d_run");
+  ASSERT_TRUE(suffix && exact);
+  EXPECT_GT(*suffix, 0.0f);
+  EXPECT_FLOAT_EQ(*suffix, *exact);
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepFuzzySingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_dog", "dog", ""},
+      {"d_bird", "bird", ""},
+  });
+  auto fuzzy = Score(*schema, "@text:%cat%", "d_cat");
+  auto exact = Score(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(fuzzy && exact);
+  EXPECT_GT(*fuzzy, 0.0f);
+  EXPECT_FLOAT_EQ(*fuzzy, *exact);
+}
+
+// The real reason the extra-step path matters: a prefix combined with a numeric
+// clause. The numeric contributes 0, so the combined score equals the prefix
+// alone -- and must be non-zero (the expansion IS scored here, unlike before).
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+  });
+  auto combined = Score(*schema, "@text:cat* @rating:[0 100]", "d_cat");
+  auto prefix_only = Score(*schema, "@text:cat*", "d_cat");
+  ASSERT_TRUE(combined && prefix_only);
+  EXPECT_GT(*combined, 0.0f);
+  EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
 }  // namespace
 }  // namespace valkey_search

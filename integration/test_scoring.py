@@ -156,8 +156,12 @@ _DMIX_TEXT = {
 }
 INDEX_MIX = ScoringIndex(
     "idxMix",
+    # WITHSUFFIXTRIE enables suffix queries; it is a lookup structure only and
+    # does not change tokenization or scores, so the verified constants below
+    # (and the existing idxMix tests) are unaffected.
     ["FT.CREATE", "idxMix", "ON", "HASH", "PREFIX", "1", "d:",
-     "SCHEMA", "body", "TEXT", "NOSTEM", "rank", "NUMERIC", "cat", "TAG"],
+     "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE", "rank", "NUMERIC",
+     "cat", "TAG"],
     {
         **{k: {**v, "rank": str(i + 1)}
            for i, (k, v) in enumerate(_DMIX_TEXT.items())},
@@ -987,3 +991,54 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         assert fuzzy["psf:cat"] > 0.0
         assert fuzzy["psf:cat"] == pytest.approx(exact["psf:cat"],
                                                  abs=SCORE_ABS_TOL)
+
+    # 15.5: a prefix combined with tag + numeric (text + numeric + tag) takes
+    # the EXTRA-STEP scoring path (numeric/tag/negate force it, unlike a
+    # pure-text query). "hel*" single-matches "hello", so the prefix leaf equals
+    # the exact "hello" leaf; text + tag sum to the Redis-verified
+    # "hello @cat:{a}" values (single-match agrees with Redis) and the numeric
+    # adds 0. Proves expansions are scored in combined queries, not dropped to 0.
+    def test_prefix_combined_with_tag_and_numeric_scored(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(
+            client, "hel* @cat:{a} @rank:[0 100]")
+        # cat:{a} restricts to d:1, d:3; ranked by score (d:3 > d:1).
+        assert keys == ["d:3", "d:1"]
+        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # d:3 = prefix(hello) leaf + tag(a) leaf; numeric contributes 0.
+        assert scores["d:3"] == pytest.approx(
+            MIX_HELLO_SCORES["d:3"] + MIX_CAT_A_SCORES["d:3"],
+            abs=SCORE_ABS_TOL)
+
+    # 15.6: a suffix combined with tag + numeric (text + numeric + tag), on the
+    # extra-step path. "*llo" single-matches "hello" in every doc here, so the
+    # suffix leaf equals the exact "hello" leaf, and text + tag sum to the same
+    # Redis-verified values as "hello @cat:{a}"; the numeric adds 0.
+    def test_suffix_combined_with_tag_and_numeric_scored(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(
+            client, "@body:*llo @cat:{a} @rank:[0 100]")
+        # cat:{a} restricts to d:1, d:3; ranked by score (d:3 > d:1).
+        assert keys == ["d:3", "d:1"]
+        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # d:3 = suffix(hello) leaf + tag(a) leaf; numeric contributes 0.
+        assert scores["d:3"] == pytest.approx(
+            MIX_HELLO_SCORES["d:3"] + MIX_CAT_A_SCORES["d:3"],
+            abs=SCORE_ABS_TOL)
+
+    # 15.7: a fuzzy pattern combined with tag + numeric (text + numeric + tag),
+    # on the extra-step path. "%helo%" (edit distance 1) single-matches "hello",
+    # so the fuzzy leaf equals the exact "hello" leaf and the combined scores
+    # match "hello @cat:{a}"; the numeric adds 0.
+    def test_fuzzy_combined_with_tag_and_numeric_scored(self):
+        client = self.server.get_new_client()
+        INDEX_MIX.load(client)
+        keys, scores = INDEX_MIX.search(
+            client, "@body:%helo% @cat:{a} @rank:[0 100]")
+        assert keys == ["d:3", "d:1"]
+        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
+            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)

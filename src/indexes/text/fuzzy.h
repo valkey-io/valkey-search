@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
@@ -29,6 +30,11 @@ struct FuzzySearch {
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
         key_iterators;
     absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
+    // The matched terms' posting lists, index-aligned with per_term_dt. Needed
+    // by the extra-step scoring path, which does per-key LookupKey rather than
+    // a forward iteration; the in-iterator path ignores this.
+    absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
+        postings;
   };
 
   // Returns matched terms for all words within edit distance <= max_distance
@@ -155,6 +161,7 @@ struct FuzzySearch {
           auto postings = child_iter.GetPostingsTarget();
           result.per_term_dt.push_back(postings->GetKeyCount());
           result.key_iterators.emplace_back(postings->GetKeyIterator());
+          result.postings.push_back(std::move(postings));
           ++word_count;
           if (word_count >= max_words) {
             return;

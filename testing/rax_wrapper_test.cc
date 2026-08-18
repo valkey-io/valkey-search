@@ -53,7 +53,7 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void AddWords(const std::vector<std::pair<std::string, int>> &words,
-                item_count_op op = kNone) {
+                item_count_op op = NONE) {
     for (const auto &[word, value] : words) {
       rax_.MutateTarget(
           word,
@@ -66,7 +66,7 @@ class RaxTest : public vmsdk::ValkeyTest {
   }
 
   void DeleteWords(const std::vector<std::string> &words,
-                   item_count_op op = kNone) {
+                   item_count_op op = NONE) {
     for (const auto &word : words) {
       rax_.MutateTarget(
           word,
@@ -538,7 +538,7 @@ TEST_F(RaxTest, SubtreeKeyCount) {
             {"can", 4},
             {"dog", 5},
             {"card", 6}},
-           kAdd);
+           ADD);
 
   VerifySubtreeKeyCount("", 7);
   VerifySubtreeKeyCount("c", 6);
@@ -549,21 +549,21 @@ TEST_F(RaxTest, SubtreeKeyCount) {
   VerifySubtreeKeyCount("z", 0);
 
   // Remove "car" — "car" prefix still has card(x2)
-  DeleteWords({"car"}, kSubtract);
+  DeleteWords({"car"}, SUBTRACT);
   VerifySubtreeKeyCount("", 6);
   VerifySubtreeKeyCount("ca", 4);
   VerifySubtreeKeyCount("car", 2);
   VerifySubtreeKeyCount("card", 2);
 
   // Decrement "card" without changing tree structure
-  rax_.MutateTarget("card", [](void *old) { return old; }, kSubtract);
+  rax_.MutateTarget("card", [](void *old) { return old; }, SUBTRACT);
   VerifySubtreeKeyCount("", 5);
   VerifySubtreeKeyCount("ca", 3);
   VerifySubtreeKeyCount("car", 1);
   VerifySubtreeKeyCount("card", 1);
 
   // Remove "card"
-  DeleteWords({"card"}, kSubtract);
+  DeleteWords({"card"}, SUBTRACT);
   VerifySubtreeKeyCount("", 4);
   VerifySubtreeKeyCount("ca", 2);
   VerifySubtreeKeyCount("car", 0);
@@ -590,17 +590,24 @@ TEST_F(RaxTest, FindTarget) {
 }
 
 TEST_F(RaxTest, RaxMallocMemoryTracking) {
-  {
-    Rax empty_rax{nullptr};
-    EXPECT_GT(empty_rax.GetAllocSize(), 0)
-        << "Creating Rax should increase the internal tracked allocated memory";
-    size_t initial_size = empty_rax.GetAllocSize();
+  // Validates that rax_malloc.h correctly routes allocations through
+  // the VMSDK memory tracking system.
 
-    empty_rax.MutateTarget("test_key",
-                           [](void *) { return reinterpret_cast<void *>(1); });
-    EXPECT_GT(empty_rax.GetAllocSize(), initial_size)
-        << "Inserting into Rax should increase tracked memory";
+  uint64_t initial_memory = vmsdk::GetUsedMemoryCnt();
+  {
+    // Create empty Rax. The only heap allocations are from raxNew().
+    Rax empty_rax{nullptr};
+    uint64_t after_create_memory = vmsdk::GetUsedMemoryCnt();
+    std::cout << "Memory increased by "
+              << (after_create_memory - initial_memory) << " bytes"
+              << std::endl;
+    EXPECT_GT(after_create_memory, initial_memory)
+        << "Creating Rax should increase the tracked allocated memory";
+    EXPECT_EQ(empty_rax.GetAllocSize(), after_create_memory - initial_memory);
   }
+  // The memory should return to zero after falling out of scope.
+  EXPECT_EQ(initial_memory, vmsdk::GetUsedMemoryCnt())
+      << "Destroying Rax should free all rax allocations";
 }
 
 }  // namespace

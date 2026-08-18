@@ -13,8 +13,6 @@
 #include <cstdint>
 #include <utility>
 
-#include "src/utils/allocator.h"
-
 namespace valkey_search::indexes::text {
 
 namespace detail {
@@ -24,14 +22,6 @@ struct alignas(alignof(std::max_align_t)) InvasivePtrStorage {
   template <typename... Args>
   explicit InvasivePtrStorage(Args &&...args)
       : data_(std::forward<Args>(args)...) {}
-
-  static void *operator new(size_t size) {
-    return ::operator new(size);
-  }
-
-  static void operator delete(void *ptr, size_t size) {
-    ::operator delete(ptr);
-  }
 
   alignas(alignof(std::max_align_t)) std::atomic<uint32_t> refcount_ = 1;
   alignas(alignof(std::max_align_t)) T data_;

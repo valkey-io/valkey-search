@@ -35,8 +35,8 @@ namespace {
 class VectorExternalizerTest : public ValkeySearchTestWithParam<bool> {
  public:
   VectorExternalizerTest()
-      : allocator(CREATE_UNIQUE_PTR(FixedSizeAllocator, 100 * sizeof(float) + 1,
-                                    true)) {}
+      : allocator(
+            CREATE_UNIQUE_PTR(FixedSizeAllocator, 100 * sizeof(float), true)) {}
   void SetUp() override {
     ValkeySearchTestWithParam<bool>::SetUp();
     vectors = DeterministicallyGenerateVectors(kLRUCapacity + 20, 100, 10.0);

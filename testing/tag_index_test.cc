@@ -119,6 +119,41 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
 }
 
+TEST_F(TagIndexTest, ModifyShortInlineTagStringRegressionTest) {
+  EXPECT_TRUE(index->AddRecord("key1", "a").value());
+
+  {
+    std::string filter_tag_string = "a";
+    auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+    query::TagPredicate predicate(index.get(), alias, identifier,
+                                  filter_tag_string, parsed_tags);
+    auto entries_fetcher = index->Search(predicate, false);
+    EXPECT_EQ(entries_fetcher->Size(), 1);
+    EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+  }
+
+  EXPECT_TRUE(index->ModifyRecord("key1", "b").value());
+
+  {
+    std::string filter_tag_string = "a";
+    auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+    query::TagPredicate predicate(index.get(), alias, identifier,
+                                  filter_tag_string, parsed_tags);
+    auto entries_fetcher = index->Search(predicate, false);
+    EXPECT_EQ(entries_fetcher->Size(), 0);
+  }
+
+  {
+    std::string filter_tag_string = "b";
+    auto parsed_tags = FilterParser::ParseQueryTags(filter_tag_string).value();
+    query::TagPredicate predicate(index.get(), alias, identifier,
+                                  filter_tag_string, parsed_tags);
+    auto entries_fetcher = index->Search(predicate, false);
+    EXPECT_EQ(entries_fetcher->Size(), 1);
+    EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
+  }
+}
+
 TEST_F(TagIndexTest, KeyTrackingTest) {
   EXPECT_TRUE(index->AddRecord("key1", "tag1").value());
   EXPECT_TRUE(index->AddRecord("key2", "tag2").value());

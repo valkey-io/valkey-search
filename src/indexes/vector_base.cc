@@ -509,7 +509,7 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, uint64_t count, const InternedStringPtr &key,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<const char *> &top_keys) const {
+    absl::flat_hash_set<InternedStringPtr> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
   if (!result.ok()) {
     return false;
@@ -521,7 +521,7 @@ bool VectorBase::AddPrefilteredKey(
   if (result.value().first < results.top().first) {
     auto top = results.top();
     auto vector_key = GetKeyDuringSearch(top.second);
-    top_keys.erase(vector_key.value()->Str().data());
+    top_keys.erase(vector_key.value());
     results.pop();
     results.emplace(result.value());
     return true;

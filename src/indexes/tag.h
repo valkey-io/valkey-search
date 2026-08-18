@@ -98,13 +98,16 @@ class Tag : public IndexBase {
   std::optional<absl::string_view> GetRawTagString(
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  using SlotsVector = absl::InlinedVector<void *, 4>;
+  using ExtrasVector = absl::InlinedVector<InternedStringPtr, 4>;
+
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated
   // queries, also walks an extras vector of untracked keys.
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
-    EntriesFetcherIterator(const std::vector<void *> &slots,
-                           const std::vector<InternedStringPtr> &extras);
+    EntriesFetcherIterator(const SlotsVector &slots,
+                           const ExtrasVector &extras);
     ~EntriesFetcherIterator() override;
     bool Done() const override;
     void Next() override;
@@ -113,8 +116,8 @@ class Tag : public IndexBase {
    private:
     void AdvanceToNextNonEmpty();
 
-    const std::vector<void *> &slots_;
-    const std::vector<InternedStringPtr> &extras_;
+    const SlotsVector &slots_;
+    const ExtrasVector &extras_;
     size_t slot_idx_{0};
     bool slots_done_{false};
     size_t extras_idx_{0};
@@ -123,13 +126,12 @@ class Tag : public IndexBase {
     BagOfInternedStringPtrs bag_;
     BagOfInternedStringPtrs::const_iterator bag_it_;
     BagOfInternedStringPtrs::const_iterator bag_end_;
-    InternedStringPtr current_;
   };
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(std::vector<void *> matched_slots,
-                   std::vector<InternedStringPtr> extras, size_t size)
+    EntriesFetcher(SlotsVector matched_slots,
+                   ExtrasVector extras, size_t size)
         : size_(size),
           matched_slots_(std::move(matched_slots)),
           extras_(std::move(extras)) {}
@@ -138,8 +140,8 @@ class Tag : public IndexBase {
 
    private:
     size_t size_;
-    std::vector<void *> matched_slots_;
-    std::vector<InternedStringPtr> extras_;
+    SlotsVector matched_slots_;
+    ExtrasVector extras_;
   };
 
   // Kept virtual so unit tests can mock Search; no production subclass.

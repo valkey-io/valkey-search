@@ -18,7 +18,10 @@ import threading
 import glob
 import statistics
 import csv
-import redis
+try:
+    import redis
+except ImportError:
+    import valkey as redis
 import json
 from datetime import datetime
 
@@ -27,9 +30,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../.."))
 DATASET_DIR = os.path.join(SCRIPT_DIR, "dataset")
 QUERIES_FILE = os.path.join(DATASET_DIR, "queries.txt")
 
-DEFAULT_SERVER = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-server")
-DEFAULT_MODULE = os.path.join(PROJECT_ROOT, ".build-release/libsearch.so")
-DEFAULT_CLI = os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-cli")
+DEFAULT_SERVER = os.environ.get("VALKEY_SERVER_PATH", os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-server"))
+DEFAULT_MODULE = os.environ.get("VALKEY_SEARCH_PATH", os.path.join(PROJECT_ROOT, ".build-release/libsearch.so"))
+DEFAULT_CLI = os.environ.get("VALKEY_CLI_PATH", os.path.join(PROJECT_ROOT, ".build-release/valkey-server/.build-release/bin/valkey-cli"))
 
 def get_default_csv_path():
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -54,7 +57,7 @@ SETUPS = {
     "text_only": {
         "name": "TextOnly_LinearIngest",
         "title": "Setup 1: Pure TEXT Index (Linear Ingestion -> Pure Text Searches)",
-        "summary": "Evaluates pure TEXT indexing without TAG fields. Performs single-pass document ingestion, measures post-ingestion memory footprint, and runs pure text search queries.",
+        "summary": "Evaluates pure TEXT indexing without TAG fields. Performs single-pass document ingestion, measures post-ingestion memory footprint, and runs representative single-term text search queries.",
         "schema_type": "text_only",
         "has_mutation": False,
         "search_mode": "text_only",
@@ -62,7 +65,7 @@ SETUPS = {
     "text_tag_mixed": {
         "name": "TextTag_MixedWorkload",
         "title": "Setup 2: TEXT + TAG Index (Standard Mixed Workload)",
-        "summary": "Evaluates combined TEXT and TAG indexing. Ingests full documents with multi-value tags, measures post-ingestion memory, and executes mixed search queries (Exact terms, TAG filters, and Prefix wildcards).",
+        "summary": "Evaluates combined TEXT and TAG indexing. Ingests full documents with multi-value tags, measures post-ingestion memory, and executes representative tag and term search queries.",
         "schema_type": "text_tag",
         "has_mutation": False,
         "search_mode": "mixed",
@@ -70,7 +73,7 @@ SETUPS = {
     "text_tag_churn_prefix": {
         "name": "TextTag_MutationChurn_Prefix",
         "title": "Setup 3: TEXT + TAG Index (Mutation Churn + Pure Prefix Subtree Traversal)",
-        "summary": "Evaluates memory churn and radix tree subtree traversal. Ingests full documents, overwrites/mutates 50% of the documents with updated content, measures post-mutation memory fragmentation, and executes pure prefix wildcard searches (term*).",
+        "summary": "Evaluates memory churn and radix tree subtree traversal. Ingests full documents, overwrites/mutates 50% of the documents with updated content, measures post-mutation memory fragmentation, and executes representative prefix wildcard searches.",
         "schema_type": "text_tag",
         "has_mutation": True,
         "search_mode": "prefix_only",
@@ -121,6 +124,8 @@ def start_server(server_bin, module_bin, reader_threads, writer_threads, port):
         f.write(f"""port {port}
 save ""
 appendonly no
+io-threads 4
+io-threads-do-reads yes
 pidfile {pid_path}
 logfile {log_path}
 loadmodule {module_bin} --reader-threads {reader_threads} --writer-threads {writer_threads}
@@ -149,10 +154,47 @@ def stop_server(client, conf_path):
     if os.path.exists(conf_path):
         os.remove(conf_path)
 
+def generate_dataset_if_missing(dataset_dir, num_docs=15000):
+    db_file = os.path.join(dataset_dir, "documents.txt")
+    queries_file = os.path.join(dataset_dir, "queries.txt")
+    if os.path.exists(db_file) and os.path.exists(queries_file):
+        return
+
+    os.makedirs(dataset_dir, exist_ok=True)
+    print(f"[INFO] Dataset missing in '{dataset_dir}'. Auto-generating {num_docs} synthetic benchmark documents...")
+
+    import random, string
+    rng = random.Random(42)
+
+    vocab = [''.join(rng.choices(string.ascii_lowercase, k=rng.randint(4, 10))) for _ in range(2000)]
+    prefix_vocab = ['pref_' + ''.join(rng.choices(string.ascii_lowercase, k=5)) for _ in range(100)]
+    all_vocab = vocab + prefix_vocab
+
+    if not os.path.exists(db_file):
+        with open(db_file, "w", encoding="utf-8") as f:
+            for i in range(num_docs):
+                cat = f"cat_{i % 100:03d}"
+                status = ["active", "pending", "draft", "archived", "verified"][i % 5]
+                region = f"region_{i % 50:02d}"
+                dept = f"dept_{i % 200:03d}"
+                sku = f"sku_{i % 1000:04d}"
+                tags = f"{cat},{status},{region},{dept},{sku}"
+
+                doc_words = rng.choices(all_vocab, k=300)
+                body = " ".join(doc_words)
+                f.write(f"{tags}\t{body}\n")
+
+    if not os.path.exists(queries_file):
+        with open(queries_file, "w", encoding="utf-8") as f:
+            sample_queries = rng.choices(vocab, k=50) + rng.choices(prefix_vocab, k=50)
+            for q in sample_queries:
+                f.write(f"{q}\n")
+
 def load_dataset(dataset_dir):
+    generate_dataset_if_missing(dataset_dir)
     db_file = os.path.join(dataset_dir, "documents.txt")
     if not os.path.exists(db_file):
-        raise RuntimeError(f"Database file not found: {db_file}. Run generate_dataset.py first.")
+        raise RuntimeError(f"Database file not found: {db_file}")
     
     print(f"Loading documents from {db_file} into memory...")
     docs = []
@@ -166,12 +208,12 @@ def load_dataset(dataset_dir):
             else:
                 tags, body = "default_tag", line
             docs.append((f"doc:{i:05d}", f"Document Title {i:05d}", tags, body))
-    
-    docs = docs[:len(docs)//2]
     print(f"Loaded {len(docs)} documents.")
     return docs
 
 def load_queries(queries_file):
+    dataset_dir = os.path.dirname(queries_file)
+    generate_dataset_if_missing(dataset_dir)
     if not os.path.exists(queries_file):
         raise RuntimeError(f"Queries file not found: {queries_file}")
     with open(queries_file, "r", encoding="utf-8") as f:
@@ -211,239 +253,270 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
     print("=" * 80)
     
     client, conf_path = start_server(server_bin, module_bin, num_threads, num_threads, port)
-    
-    # 1. Create Index based on setup
-    if setup_info["schema_type"] == "text_only":
-        print("Creating pure TEXT index 'bench_idx'...")
-        client.execute_command(
-            "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
-            "SCHEMA", "title", "TEXT", "body", "TEXT"
-        )
-    else:
-        print("Creating TEXT + TAG index 'bench_idx'...")
-        client.execute_command(
-            "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
-            "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
-        )
-    
-    # 2. Ingestion Phase
-    num_docs = len(docs)
-    chunk_size = (num_docs + num_threads - 1) // num_threads
-    
-    ingest_latencies = []
-    lat_lock = threading.Lock()
-    
-    def ingest_worker(thread_idx, doc_subset):
-        thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
-        local_lats = []
-        for key, title, tags, body in doc_subset:
-            t0 = time.perf_counter()
-            if setup_info["schema_type"] == "text_only":
-                thread_client.hset(key, mapping={"title": title, "body": body})
-            else:
-                thread_client.hset(key, mapping={"title": title, "tags": tags, "body": body})
-            t1 = time.perf_counter()
-            local_lats.append((t1 - t0) * 1000.0)  # ms
-        with lat_lock:
-            ingest_latencies.extend(local_lats)
-
-    threads = []
-    print(f"Phase 1: Ingesting {num_docs} documents with {num_threads} client threads...")
-    ingest_start = time.perf_counter()
-    for t_idx in range(num_threads):
-        start_idx = t_idx * chunk_size
-        end_idx = min(num_docs, (t_idx + 1) * chunk_size)
-        subset = docs[start_idx:end_idx]
-        if subset:
-            t = threading.Thread(target=ingest_worker, args=(t_idx, subset))
-            threads.append(t)
-            t.start()
+    try:
+        # 1. Create Index based on setup
+        if setup_info["schema_type"] == "text_only":
+            print("Creating pure TEXT index 'bench_idx'...")
+            client.execute_command(
+                "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
+                "SCHEMA", "title", "TEXT", "body", "TEXT"
+            )
+        else:
+            print("Creating TEXT + TAG index 'bench_idx'...")
+            client.execute_command(
+                "FT.CREATE", "bench_idx", "ON", "HASH", "PREFIX", "1", "doc:", "STOPWORDS", "0",
+                "SCHEMA", "title", "TEXT", "tags", "TAG", "SEPARATOR", ",", "body", "TEXT"
+            )
         
-    for t in threads:
-        t.join()
-    ingest_end = time.perf_counter()
-    ingest_duration = ingest_end - ingest_start
-    ingest_rate = num_docs / ingest_duration if ingest_duration > 0 else 0.0
-    token_rate = (num_docs * 500) / ingest_duration if ingest_duration > 0 else 0.0
-    
-    ingest_p50 = statistics.median(ingest_latencies) if ingest_latencies else 0.0
-    ingest_p95 = statistics.quantiles(ingest_latencies, n=20)[18] if len(ingest_latencies) >= 20 else ingest_p50
-    ingest_p99 = statistics.quantiles(ingest_latencies, n=100)[98] if len(ingest_latencies) >= 100 else ingest_p95
-
-    print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:,.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
-
-    # 3. Mutation Phase (only in text_tag_churn_prefix setup)
-    update_rate = 0.0
-    update_p50 = 0.0
-    if setup_info["has_mutation"]:
-        NUM_UPDATES = num_docs // 2
-        update_chunk_size = (NUM_UPDATES + num_threads - 1) // num_threads
-        update_latencies = []
-        update_lat_lock = threading.Lock()
+        # 2. Ingestion Phase
+        num_docs = len(docs)
+        chunk_size = (num_docs + num_threads - 1) // num_threads
         
-        def update_worker(thread_idx, doc_subset):
+        ingest_latencies = []
+        lat_lock = threading.Lock()
+        
+        def ingest_worker(thread_idx, doc_subset):
             thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
             local_lats = []
             for key, title, tags, body in doc_subset:
-                updated_tags = tags + ",updated_tag,v2"
-                updated_body = body[:250] + " updated_content " + body[250:]
                 t0 = time.perf_counter()
-                thread_client.hset(key, mapping={"title": f"Updated {title}", "tags": updated_tags, "body": updated_body})
+                if setup_info["schema_type"] == "text_only":
+                    thread_client.hset(key, mapping={"title": title, "body": body})
+                else:
+                    thread_client.hset(key, mapping={"title": title, "tags": tags, "body": body})
                 t1 = time.perf_counter()
-                local_lats.append((t1 - t0) * 1000.0)
-            with update_lat_lock:
-                update_latencies.extend(local_lats)
+                local_lats.append((t1 - t0) * 1000.0)  # ms
+            with lat_lock:
+                ingest_latencies.extend(local_lats)
 
-        update_threads = []
-        print(f"Phase 2: Updating {NUM_UPDATES} documents with {num_threads} threads (mutation churn)...")
-        update_start = time.perf_counter()
+        threads = []
+        print(f"Phase 1: Ingesting {num_docs} documents with {num_threads} client threads...")
+        ingest_start = time.perf_counter()
         for t_idx in range(num_threads):
-            start_idx = t_idx * update_chunk_size
-            end_idx = min(NUM_UPDATES, (t_idx + 1) * update_chunk_size)
+            start_idx = t_idx * chunk_size
+            end_idx = min(num_docs, (t_idx + 1) * chunk_size)
             subset = docs[start_idx:end_idx]
             if subset:
-                t = threading.Thread(target=update_worker, args=(t_idx, subset))
-                update_threads.append(t)
+                t = threading.Thread(target=ingest_worker, args=(t_idx, subset))
+                threads.append(t)
                 t.start()
-                
-        for t in update_threads:
+            
+        for t in threads:
             t.join()
-        update_end = time.perf_counter()
-        update_duration = update_end - update_start
-        update_rate = NUM_UPDATES / update_duration if update_duration > 0 else 0.0
-        update_p50 = statistics.median(update_latencies) if update_latencies else 0.0
-        print(f"Updates completed in {update_duration:.2f}s | Mutation Throughput: {update_rate:,.1f} updates/s | Latency p50={update_p50:.2f}ms")
-
-    # 4. Wait for indexing to settle & Measure Memory
-    for _ in range(120):
-        try:
-            info_idx = client.execute_command("FT.INFO", "bench_idx")
-            info_dict = {}
-            if isinstance(info_idx, list):
-                for i in range(0, len(info_idx), 2):
-                    k = info_idx[i].decode() if isinstance(info_idx[i], bytes) else str(info_idx[i])
-                    info_dict[k] = info_idx[i+1]
-            indexed_docs = int(info_dict.get("num_docs", 0))
-            if indexed_docs >= num_docs:
-                break
-        except Exception:
-            pass
-        time.sleep(0.2)
+        ingest_end = time.perf_counter()
+        ingest_duration = ingest_end - ingest_start
+        ingest_rate = num_docs / ingest_duration if ingest_duration > 0 else 0.0
+        total_tokens = sum(len(title.split()) + len(body.split()) for _, title, _, body in docs)
+        token_rate = total_tokens / ingest_duration if ingest_duration > 0 else 0.0
         
-    time.sleep(0.5)
-    
-    search_info = parse_info_search(client)
-    mem_info = parse_info_memory(client)
-    
-    search_mem_bytes = int(search_info.get("search_used_memory_bytes", 0))
-    search_mem_human = search_info.get("search_used_memory_human", f"{search_mem_bytes/(1024*1024):.2f}M")
-    used_mem_bytes = int(mem_info.get("used_memory", 0))
-    used_mem_rss_bytes = int(mem_info.get("used_memory_rss", 0))
-    
-    print(f"Memory Measured:")
-    print(f"  - Search Used Memory: {search_mem_human} ({search_mem_bytes:,} bytes)")
-    print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
+        ingest_p50 = statistics.median(ingest_latencies) if ingest_latencies else 0.0
+        ingest_p95 = statistics.quantiles(ingest_latencies, n=20)[18] if len(ingest_latencies) >= 20 else ingest_p50
+        ingest_p99 = statistics.quantiles(ingest_latencies, n=100)[98] if len(ingest_latencies) >= 100 else ingest_p95
 
-    # 5. Search Benchmark Phase using memtier_benchmark (16 threads, 1 client per thread)
-    if setup_info["search_mode"] == "prefix_only":
-        active_queries = [q for q in queries if q.endswith("*")]
+        print(f"Ingestion completed in {ingest_duration:.2f}s | Throughput: {ingest_rate:,.1f} docs/s ({token_rate:,.1f} tokens/s) | Latency p50={ingest_p50:.2f}ms, p95={ingest_p95:.2f}ms, p99={ingest_p99:.2f}ms")
+
+        # 3. Mutation Phase (only in text_tag_churn_prefix setup)
+        update_rate = 0.0
+        update_p50 = 0.0
+        if setup_info["has_mutation"]:
+            NUM_UPDATES = num_docs // 2
+            update_chunk_size = (NUM_UPDATES + num_threads - 1) // num_threads
+            update_latencies = []
+            update_lat_lock = threading.Lock()
+            
+            def update_worker(thread_idx, doc_subset):
+                thread_client = redis.Redis(host="127.0.0.1", port=port, socket_timeout=300)
+                local_lats = []
+                for key, title, tags, body in doc_subset:
+                    updated_tags = tags + ",updated_tag,v2"
+                    updated_body = body[:250] + " updated_content " + body[250:]
+                    t0 = time.perf_counter()
+                    thread_client.hset(key, mapping={"title": f"Updated {title}", "tags": updated_tags, "body": updated_body})
+                    t1 = time.perf_counter()
+                    local_lats.append((t1 - t0) * 1000.0)
+                with update_lat_lock:
+                    update_latencies.extend(local_lats)
+
+            update_threads = []
+            print(f"Phase 2: Updating {NUM_UPDATES} documents with {num_threads} threads (mutation churn)...")
+            update_start = time.perf_counter()
+            for t_idx in range(num_threads):
+                start_idx = t_idx * update_chunk_size
+                end_idx = min(NUM_UPDATES, (t_idx + 1) * update_chunk_size)
+                subset = docs[start_idx:end_idx]
+                if subset:
+                    t = threading.Thread(target=update_worker, args=(t_idx, subset))
+                    update_threads.append(t)
+                    t.start()
+                    
+            for t in update_threads:
+                t.join()
+            update_end = time.perf_counter()
+            update_duration = update_end - update_start
+            update_rate = NUM_UPDATES / update_duration if update_duration > 0 else 0.0
+            update_p50 = statistics.median(update_latencies) if update_latencies else 0.0
+            print(f"Updates completed in {update_duration:.2f}s | Mutation Throughput: {update_rate:,.1f} updates/s | Latency p50={update_p50:.2f}ms")
+
+        # 4. Wait for indexing to settle & Measure Memory
+        settled = False
+        last_info_error = None
+        indexed_docs = 0
+        for _ in range(120):
+            try:
+                info_idx = client.execute_command("FT.INFO", "bench_idx")
+                info_dict = {}
+                if isinstance(info_idx, list):
+                    for i in range(0, len(info_idx), 2):
+                        k = info_idx[i].decode() if isinstance(info_idx[i], bytes) else str(info_idx[i])
+                        info_dict[k] = info_idx[i+1]
+                elif isinstance(info_idx, dict):
+                    info_dict = {k.decode() if isinstance(k, bytes) else str(k): v for k, v in info_idx.items()}
+                else:
+                    raise ValueError(f"Unexpected FT.INFO output type: {type(info_idx)}")
+
+                raw_docs = info_dict.get("num_docs") or info_dict.get(b"num_docs", 0)
+                indexed_docs = int(raw_docs)
+                if indexed_docs >= num_docs:
+                    settled = True
+                    break
+            except Exception as e:
+                last_info_error = e
+            time.sleep(0.2)
+
+        if not settled:
+            err_msg = f"Indexing failed to settle: indexed {indexed_docs}/{num_docs} documents before timeout."
+            if last_info_error:
+                err_msg += f" Last FT.INFO error: {last_info_error}"
+            print(f"[ERROR] {err_msg}")
+            raise RuntimeError(err_msg)
+
+        time.sleep(0.5)
+        
+        search_info = parse_info_search(client)
+        mem_info = parse_info_memory(client)
+        
+        search_mem_bytes = int(search_info.get("search_used_memory_bytes", 0))
+        search_mem_human = search_info.get("search_used_memory_human", f"{search_mem_bytes/(1024*1024):.2f}M")
+        used_mem_bytes = int(mem_info.get("used_memory", 0))
+        used_mem_rss_bytes = int(mem_info.get("used_memory_rss", 0))
+        
+        print(f"Memory Measured:")
+        print(f"  - Search Used Memory: {search_mem_human} ({search_mem_bytes:,} bytes)")
+        print(f"  - Total Process Memory: {used_mem_bytes/(1024*1024):.2f} MB (RSS: {used_mem_rss_bytes/(1024*1024):.2f} MB)")
+
+        # 5. Search Benchmark Phase using memtier_benchmark (16 threads, 1 client per thread)
+        pure_terms = [q for q in queries if not q.startswith("@tags:") and not q.endswith("*") and " " not in q and len(q) >= 3]
+        prefix_terms = [q for q in queries if q.endswith("*")]
+
+        active_queries = []
+        if setup_info["search_mode"] == "prefix_only":
+            print(f"Phase 3: Generating single-prefix queries for memtier_benchmark...")
+            for p in prefix_terms[:50]:
+                active_queries.append(f"FT.SEARCH bench_idx {p} NOCONTENT LIMIT 0 10")
+        elif setup_info["search_mode"] == "text_only":
+            print(f"Phase 2: Generating single-term text queries for memtier_benchmark...")
+            for w in pure_terms[:50]:
+                active_queries.append(f"FT.SEARCH bench_idx {w} NOCONTENT LIMIT 0 10")
+        else:
+            print(f"Phase 2: Generating tag and term queries for memtier_benchmark...")
+            for i, w in enumerate(pure_terms[:30]):
+                c = f"cat_{i%100:03d}"
+                active_queries.append(f"FT.SEARCH bench_idx @tags:{{{c}}} NOCONTENT LIMIT 0 10")
+                active_queries.append(f"FT.SEARCH bench_idx {w} NOCONTENT LIMIT 0 10")
+
+        active_queries = active_queries[:50]
         if not active_queries:
-            active_queries = queries
-        print(f"Phase 3: Running Pure Prefix Searches with memtier_benchmark ({len(active_queries)} distinct prefix* queries)...")
-    elif setup_info["search_mode"] == "text_only":
-        active_queries = [q for q in queries if not q.startswith("@tags:")]
-        if not active_queries:
-            active_queries = queries
-        print(f"Phase 2: Running Pure Text Searches with memtier_benchmark ({len(active_queries)} distinct queries)...")
-    else:
-        active_queries = queries
-        print(f"Phase 2: Running Mixed Searches with memtier_benchmark ({len(active_queries)} distinct queries)...")
+            active_queries = ["FT.SEARCH bench_idx * NOCONTENT LIMIT 0 10"]
 
-    TOTAL_SEARCH_QUERIES = 20000
-    MEMTIER_THREADS = 16
-    MEMTIER_CLIENTS = 1
-    requests_per_client = (TOTAL_SEARCH_QUERIES + (MEMTIER_THREADS * MEMTIER_CLIENTS) - 1) // (MEMTIER_THREADS * MEMTIER_CLIENTS)
-    
-    json_filename = f".memtier_out_{port}.json"
-    json_out_path = os.path.join(PROJECT_ROOT, json_filename)
-    if os.path.exists(json_out_path):
-        os.remove(json_out_path)
+        TOTAL_SEARCH_QUERIES = 5000
+        MEMTIER_THREADS = 16
+        MEMTIER_CLIENTS = 1
+        requests_per_client = (TOTAL_SEARCH_QUERIES + (MEMTIER_THREADS * MEMTIER_CLIENTS) - 1) // (MEMTIER_THREADS * MEMTIER_CLIENTS)
         
-    docker_runner = os.path.join(PROJECT_ROOT, ".devcontainer/run_in_docker.sh")
-    memtier_cmd = [
-        docker_runner, "memtier_benchmark",
-        "--server=127.0.0.1",
-        f"--port={port}",
-        "--protocol=redis",
-        f"--threads={MEMTIER_THREADS}",
-        f"--clients={MEMTIER_CLIENTS}",
-        f"--requests={requests_per_client}",
-        "--hide-histogram",
-        f"--json-out-file={json_filename}"
-    ]
-
-    
-    # Use a single clean representative search query command per setup for memtier stability
-    q_rep = active_queries[0] if active_queries else "term"
-    memtier_cmd.append(f'--command=FT.SEARCH bench_idx {q_rep} LIMIT 0 10')
-
-
-
-
-
+        json_filename = f".memtier_out_{port}.json"
+        json_out_path = os.path.join(PROJECT_ROOT, json_filename)
+        if os.path.exists(json_out_path):
+            os.remove(json_out_path)
+            
+        docker_runner = os.path.join(PROJECT_ROOT, ".devcontainer/run_in_docker.sh")
+        memtier_cmd = [
+            docker_runner, "memtier_benchmark",
+            "--server=127.0.0.1",
+            f"--port={port}",
+            "--protocol=redis",
+            f"--threads={MEMTIER_THREADS}",
+            f"--clients={MEMTIER_CLIENTS}",
+            f"--requests={requests_per_client}",
+            "--print-percentiles=50,95,99",
+            "--hide-histogram",
+            f"--json-out-file={json_filename}"
+        ]
+        memtier_cmd.append(f"--command={active_queries[0]}")
+        print(f"Executing memtier_benchmark ({MEMTIER_THREADS} threads, {MEMTIER_CLIENTS} client/thread, representative query '{active_queries[0]}', target={TOTAL_SEARCH_QUERIES} queries)...")
+        search_start = time.perf_counter()
+        subprocess.run(memtier_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        search_end = time.perf_counter()
+        search_duration = search_end - search_start
         
-    print(f"Executing memtier_benchmark ({MEMTIER_THREADS} threads, {MEMTIER_CLIENTS} client/thread, target={TOTAL_SEARCH_QUERIES} queries)...")
-    search_start = time.perf_counter()
-    subprocess.run(memtier_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    search_end = time.perf_counter()
-    search_duration = search_end - search_start
-    
-    search_qps = 0.0
-    search_p50 = 0.0
-    search_p95 = 0.0
-    search_p99 = 0.0
-    
-    if os.path.exists(json_out_path):
+        if not os.path.exists(json_out_path):
+            raise RuntimeError(f"memtier_benchmark JSON output file not found at '{json_out_path}'.")
+
         with open(json_out_path, "r") as f:
             data = json.load(f)
-            # Parse ALL STATS -> Sets -> ALL COMMANDS -> Ops/sec, Latency
-            all_stats = data.get("ALL STATS", {}).get("Sets", {})
-            search_qps = float(all_stats.get("Ops/sec", 0.0))
-            if search_qps == 0.0:
-                totals = data.get("ALL STATS", {}).get("Totals", {})
-                search_qps = float(totals.get("Ops/sec", 0.0))
-            
-            # Latency histograms
-            lat_percentiles = data.get("ALL STATS", {}).get("Latency", {})
-            search_p50 = float(lat_percentiles.get("p50.00", 0.0))
-            search_p95 = float(lat_percentiles.get("p95.00", 0.0))
-            search_p99 = float(lat_percentiles.get("p99.00", 0.0))
-            
-    print(f"Search completed in {search_duration:.2f}s | QPS: {search_qps:,.1f} queries/s | Latency p50={search_p50:.2f}ms, p95={search_p95:.2f}ms, p99={search_p99:.2f}ms")
 
-    stop_server(client, conf_path)
+        all_stats = data.get("ALL STATS")
+        if not all_stats or "Totals" not in all_stats:
+            raise RuntimeError("Malformed memtier_benchmark JSON output: 'ALL STATS.Totals' section missing.")
 
-    
-    return {
-        "setup": setup_name,
-        "threads": num_threads,
-        "ingest_throughput_docs_sec": round(ingest_rate, 1),
-        "ingest_tokens_sec": round(token_rate, 1),
-        "ingest_duration_sec": round(ingest_duration, 3),
-        "ingest_latency_p50_ms": round(ingest_p50, 3),
-        "ingest_latency_p95_ms": round(ingest_p95, 3),
-        "ingest_latency_p99_ms": round(ingest_p99, 3),
-        "mutation_throughput_docs_sec": round(update_rate, 1) if setup_info["has_mutation"] else "N/A",
-        "mutation_latency_p50_ms": round(update_p50, 3) if setup_info["has_mutation"] else "N/A",
-        "search_used_memory_bytes": search_mem_bytes,
-        "search_used_memory_mb": round(search_mem_bytes / (1024 * 1024), 2),
-        "total_used_memory_mb": round(used_mem_bytes / (1024 * 1024), 2),
-        "used_memory_rss_mb": round(used_mem_rss_bytes / (1024 * 1024), 2),
-        "search_qps": round(search_qps, 1),
-        "search_latency_p50_ms": round(search_p50, 3),
-        "search_latency_p95_ms": round(search_p95, 3),
-        "search_latency_p99_ms": round(search_p99, 3),
-    }
+        totals = all_stats["Totals"]
+        if "Ops/sec" not in totals:
+            raise RuntimeError("Malformed memtier_benchmark JSON output: 'Ops/sec' metric missing from Totals.")
+        search_qps = float(totals["Ops/sec"])
+
+        percentiles = totals.get("Percentile Latencies")
+        if not percentiles:
+            raise RuntimeError("Malformed memtier_benchmark JSON output: 'Percentile Latencies' missing from Totals.")
+
+        p50_val = percentiles.get("p50.000", percentiles.get("p50.00"))
+        p95_val = percentiles.get("p95.000", percentiles.get("p95.00"))
+        p99_val = percentiles.get("p99.000", percentiles.get("p99.00"))
+
+        if p50_val is None or p95_val is None or p99_val is None:
+            raise RuntimeError(f"Malformed memtier_benchmark JSON output: Missing required percentiles (p50.000, p95.000, p99.000) in {percentiles}")
+
+        search_p50 = float(p50_val)
+        search_p95 = float(p95_val)
+        search_p99 = float(p99_val)
+
+        try:
+            os.remove(json_out_path)
+        except OSError:
+            pass
+                
+        print(f"Search completed in {search_duration:.2f}s | QPS: {search_qps:,.1f} queries/s | Latency p50={search_p50:.2f}ms, p95={search_p95:.2f}ms, p99={search_p99:.2f}ms")
+
+        return {
+            "setup": setup_name,
+            "threads": num_threads,
+            "ingest_throughput_docs_sec": round(ingest_rate, 1),
+            "ingest_tokens_sec": round(token_rate, 1),
+            "ingest_duration_sec": round(ingest_duration, 3),
+            "ingest_latency_p50_ms": round(ingest_p50, 3),
+            "ingest_latency_p95_ms": round(ingest_p95, 3),
+            "ingest_latency_p99_ms": round(ingest_p99, 3),
+            "mutation_throughput_docs_sec": round(update_rate, 1) if setup_info["has_mutation"] else "N/A",
+            "mutation_latency_p50_ms": round(update_p50, 3) if setup_info["has_mutation"] else "N/A",
+            "search_used_memory_bytes": search_mem_bytes,
+            "search_used_memory_mb": round(search_mem_bytes / (1024 * 1024), 2),
+            "total_used_memory_mb": round(used_mem_bytes / (1024 * 1024), 2),
+            "used_memory_rss_mb": round(used_mem_rss_bytes / (1024 * 1024), 2),
+            "search_qps": round(search_qps, 1),
+            "search_latency_p50_ms": round(search_p50, 3),
+            "search_latency_p95_ms": round(search_p95, 3),
+            "search_latency_p99_ms": round(search_p99, 3),
+        }
+    finally:
+        stop_server(client, conf_path)
 
 def format_table(headers, rows):
     col_widths = [len(h) for h in headers]
@@ -558,19 +631,29 @@ def finalize_and_print_stats(csv_path, baseline_csv=None):
                 "search_latency_p50_reduction_pct": fmt(srch_lat_pct),
             })
 
-    # Re-write the complete finalized file
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=RAW_FIELDNAMES)
-        writer.writeheader()
-        for r in raw_rows:
-            writer.writerow(r)
-            
-        if benefit_rows:
-            f.write(f"\n# Calculated Percentage Benefits ({opt_branch} vs {base_branch})\n")
-            bwriter = csv.DictWriter(f, fieldnames=BENEFIT_FIELDNAMES)
-            bwriter.writeheader()
-            for br in benefit_rows:
-                bwriter.writerow(br)
+    # Re-write the complete finalized file atomically via a temporary file
+    tmp_csv_path = f"{csv_path}.tmp"
+    try:
+        with open(tmp_csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=RAW_FIELDNAMES, extrasaction="ignore")
+            writer.writeheader()
+            for r in raw_rows:
+                writer.writerow(r)
+                
+            if benefit_rows:
+                f.write(f"\n# Calculated Percentage Benefits ({opt_branch} vs {base_branch})\n")
+                bwriter = csv.DictWriter(f, fieldnames=BENEFIT_FIELDNAMES, extrasaction="ignore")
+                bwriter.writeheader()
+                for br in benefit_rows:
+                    bwriter.writerow(br)
+        os.replace(tmp_csv_path, csv_path)
+    except Exception:
+        if os.path.exists(tmp_csv_path):
+            try:
+                os.remove(tmp_csv_path)
+            except OSError:
+                pass
+        raise
 
     # Print Human-Friendly Formatted Version to stdout
     print("\n" + "=" * 110)
@@ -629,7 +712,9 @@ def main():
     if not os.path.exists(args.server):
         raise FileNotFoundError(f"valkey-server not found at {args.server}")
     if not os.path.exists(args.module):
-        raise FileNotFoundError(f"libsearch.so not found at {args.module}")
+        print(f"[INFO] libsearch.so not found at '{args.module}'. Building automatically...")
+        build_script = os.path.join(PROJECT_ROOT, "build.sh")
+        subprocess.run([build_script], check=True, cwd=PROJECT_ROOT)
 
     csv_path = os.path.abspath(args.csv if args.csv else get_default_csv_path())
     

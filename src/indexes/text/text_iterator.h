@@ -9,7 +9,6 @@
 #define VALKEY_SEARCH_INDEXES_TEXT_ITERATOR_H_
 
 #include "src/indexes/text/posting.h"
-#include "src/utils/string_interning.h"
 
 namespace valkey_search::indexes::text {
 
@@ -45,7 +44,7 @@ class TextIterator {
   // The field which the iterator was initialized to search for.
   virtual FieldMaskPredicate QueryFieldMask() const = 0;
 
-  // Key-level iteration
+  // Key/DocId-level iteration
   // Returns true if there is a match (i.e. `CurrentKey()` is valid) provided
   // the TextIterator is used as described above. Use `CurrentKey()` to access
   // the matching document. Otherwise, returns false. Returns false if we have
@@ -54,7 +53,7 @@ class TextIterator {
   virtual bool DoneKeys() const = 0;
   // Returns the current key.
   // ASSERT: !DoneKeys()
-  virtual const Key& CurrentKey() const = 0;
+  virtual const Key &CurrentKey() const = 0;
   // Advances the key iteration until there is a match OR until we have
   // exhausted all keys. Returns true when there is a match wrt constraints
   // (e.g. field, position, inorder, slop, etc). Returns false otherwise. When
@@ -62,7 +61,6 @@ class TextIterator {
   // Returns false if no key is found. In this case, the DoneKeys and
   // DonePositions APIs will return true.
   // This API  resets the Positions.
-  // ASSERT: !DoneKeys()
   virtual bool NextKey() = 0;
   // Seeks forward to the first key >= target_key that matches all constraints.
   // Returns true if such a key is found, false if no more matching keys exist.
@@ -72,7 +70,7 @@ class TextIterator {
   // DonePositions APIs will return true.
   // This API resets the Positions.
   // ASSERT: !DoneKeys().
-  virtual bool SeekForwardKey(const Key& target_key) = 0;
+  virtual bool SeekForwardKey(const Key &target_key) = 0;
 
   // Position-level iteration
   // Returns true if there is a match (i.e. `CurrentPosition()` is valid)
@@ -86,7 +84,7 @@ class TextIterator {
   // Represents start and end. start == end in all TextIterators except for the
   // OR Proximity since it can contain a nested proximity block.
   // ASSERT: !DonePositions()
-  virtual const PositionRange& CurrentPosition() const = 0;
+  virtual const PositionRange &CurrentPosition() const = 0;
   // Moves to the next position match. Returns true if there is one.
   // Otherwise, returns false if we have exhausted all positions.
   // ASSERT: !DonePositions()

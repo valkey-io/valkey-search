@@ -681,8 +681,8 @@ TEST_P(FTSearchTest, FTSearchTests) {
         }
       }
       EXPECT_CALL(*kMockValkeyModule, GetBlockedClientPrivateData(&fake_ctx_))
-          .WillRepeatedly(testing::InvokeWithoutArgs(
-              [&] { return private_data_external; }));
+          .WillRepeatedly(
+              [&](ValkeyModuleCtx *) { return private_data_external; });
       async::Reply(&fake_ctx_, nullptr, 0);
       async::Free(&fake_ctx_, private_data_external);
     }

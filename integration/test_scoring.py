@@ -125,6 +125,19 @@ EXPANSION_DOCS = {
     "doc:7": {"body": "dog"},
 }
 
+# Tag-prefix corpus: cat dt redis=4, redcap=2, so the two carry distinct IDFs and
+# the value credited to doc:5 (which carries both) is observable. Every body is
+# the same single token, giving equal non-zero doc_len -- a tag term needs a TEXT
+# field to score at all, and equal lengths keep the comparison on IDF alone.
+TAG_PREFIX_DOCS = {
+    "doc:1": {"body": "aa", "cat": "redis", "rank": "1"},
+    "doc:2": {"body": "aa", "cat": "redis", "rank": "2"},
+    "doc:3": {"body": "aa", "cat": "redis", "rank": "3"},
+    "doc:4": {"body": "aa", "cat": "redcap", "rank": "4"},
+    "doc:5": {"body": "aa", "cat": "redis,redcap", "rank": "5"},
+    "doc:6": {"body": "aa", "cat": "green", "rank": "6"},
+}
+
 
 # =====================================================================
 # Helpers
@@ -659,3 +672,37 @@ class TestScoring(ValkeySearchTestCaseBase):
             keys, scores = search(client, IDX_MAIN, query)
             assert keys == ["doc:3", "doc:1"], query
             assert scores == pytest.approx(baseline, abs=SCORE_ABS_TOL), query
+
+    # Group 17: a tag prefix is scored like a text expansion -- exactly ONE
+    # matched value's BM25 (TF is 1, its own IDF), never the sum over the values
+    # it expands to, while an explicit union still sums. As in Group 15, compare
+    # against our own exact-value scores: which value represents the prefix can
+    # diverge from Redis on a doc matching several.
+    def test_tag_prefix_scoring(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, TAG_PREFIX_DOCS)
+
+        # A doc whose only matching value is one tag scores exactly like the
+        # exact-value query for it. This case does agree with Redis.
+        _, prefix = search(client, IDX_MAIN, "@cat:{red*}")
+        _, redis = search(client, IDX_MAIN, "@cat:{redis}")
+        assert prefix["doc:1"] > 0.0
+        assert prefix["doc:1"] == pytest.approx(redis["doc:1"],
+                                                abs=SCORE_ABS_TOL)
+
+        # doc:5 carries both redis (dt=4) and redcap (dt=2): the union sums them,
+        # the prefix credits exactly one, so it lands strictly below.
+        _, redcap = search(client, IDX_MAIN, "@cat:{redcap}")
+        _, both = search(client, IDX_MAIN, "@cat:{redis|redcap}")
+        got = prefix["doc:5"]
+        assert both["doc:5"] == pytest.approx(redis["doc:5"] + redcap["doc:5"],
+                                              abs=SCORE_ABS_TOL)
+        assert got < both["doc:5"] - SCORE_ABS_TOL
+        assert (got == pytest.approx(redis["doc:5"], abs=SCORE_ABS_TOL)
+                or got == pytest.approx(redcap["doc:5"], abs=SCORE_ABS_TOL)), (
+            f"prefix={got} redis={redis['doc:5']} redcap={redcap['doc:5']}")
+
+        # A numeric clause adds nothing, so the tag expansion still reaches the
+        # total on the combined-query path.
+        _, combined = search(client, IDX_MAIN, "@cat:{red*} @rank:[0 100]")
+        assert combined == pytest.approx(prefix, abs=SCORE_ABS_TOL)

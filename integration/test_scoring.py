@@ -240,6 +240,38 @@ INDEX_HV = ScoringIndex(
 # hv:short, 0 for hv:long.
 HV_HYBRID_SCORES = {"hv:short": 0.267405, "hv:long": 0.138313}
 
+# idxPSF: NOSTEM + suffix trie, for prefix/suffix/fuzzy EXPANSION scoring.
+#
+# NOTE — unlike every other index in this file, the prefix/suffix/fuzzy tests do
+# NOT pin Redis EXPLAINSCORE values. An expansion is scored on a SINGLE matched
+# term (its own IDF+F, never the sum over matched terms), but WHICH term is an
+# unspecified, corpus-dependent union-iterator artifact
+# (docs/redis_prefix_suffix_fuzzy_scoring.md §2). On a doc that matches via
+# several expansion terms we deliberately pick a different representative than
+# Redis, so pinning Redis's numbers would be spuriously incompatible. Instead
+# these tests assert self-consistent relationships against our OWN exact-term
+# scores on the same index:
+#   - single-match doc  == the exact-term query (this DOES agree with Redis), and
+#   - multi-match doc    == ONE matched term's score AND < the sum of both
+#     (the invariant, independent of which term wins).
+#
+# Terms: cat* -> {cat, category(dt=3), catalog}; *ing -> {running, jogging};
+# %cat% neighbourhood here is just {cat} (dog/others are >1 edit away).
+INDEX_PSF = ScoringIndex(
+    "idxPSF",
+    ["FT.CREATE", "idxPSF", "ON", "HASH", "PREFIX", "1", "psf:",
+     "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE"],
+    {
+        "psf:cat": {"body": "cat"},
+        "psf:multi": {"body": "category catalog"},
+        "psf:cat2": {"body": "category"},
+        "psf:cat3": {"body": "category"},
+        "psf:run": {"body": "running"},
+        "psf:jog": {"body": "jogging"},
+        "psf:dog": {"body": "dog"},
+    },
+)
+
 # =====================================================================
 # Expected scores (verified against Redis 8.6; idxA unless noted)
 # =====================================================================
@@ -899,3 +931,59 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         # nearest first: hv:long (distance 0) then hv:short (distance 32).
         assert res[1] == b"hv:long" and res[2] == b"#0"
         assert res[4] == b"hv:short" and res[5] == b"#32"
+
+    # Group 15: prefix / suffix / fuzzy expansion scoring -------------------
+    #
+    # An expansion contributes ONE matched term's BM25, never the sum. We assert
+    # against our own exact-term scores rather than pinned Redis values, because
+    # our representative-term pick diverges from Redis on multi-match docs (see
+    # the INDEX_PSF note above and docs/redis_prefix_suffix_fuzzy_scoring.md §2).
+
+    # 15.1: a doc matching the prefix via a single term scores exactly like the
+    # exact-term query for that term (this case DOES agree with Redis).
+    def test_prefix_single_match_equals_exact_term(self):
+        client = self.server.get_new_client()
+        INDEX_PSF.load(client)
+        _, prefix = INDEX_PSF.search(client, "cat*")
+        _, exact = INDEX_PSF.search(client, "cat")
+        assert prefix["psf:cat"] > 0.0
+        assert prefix["psf:cat"] == pytest.approx(exact["psf:cat"],
+                                                  abs=SCORE_ABS_TOL)
+
+    # 15.2: a doc matching the prefix via SEVERAL terms is scored on exactly ONE
+    # of them (never their sum). Which term wins is unspecified/corpus-dependent,
+    # so assert only the invariant: == one exact-term score, and < their sum.
+    def test_prefix_multi_match_scores_one_term_not_sum(self):
+        client = self.server.get_new_client()
+        INDEX_PSF.load(client)
+        _, prefix = INDEX_PSF.search(client, "cat*")
+        _, category = INDEX_PSF.search(client, "category")
+        _, catalog = INDEX_PSF.search(client, "catalog")
+        got = prefix["psf:multi"]
+        cat_s = category["psf:multi"]
+        cat_l = catalog["psf:multi"]
+        # one matched term, not the sum
+        assert got < cat_s + cat_l - SCORE_ABS_TOL
+        assert (got == pytest.approx(cat_s, abs=SCORE_ABS_TOL)
+                or got == pytest.approx(cat_l, abs=SCORE_ABS_TOL)), (
+            f"prefix={got} category={cat_s} catalog={cat_l}")
+
+    # 15.3: suffix single-match scores like the exact term (needs WITHSUFFIXTRIE).
+    def test_suffix_single_match_equals_exact_term(self):
+        client = self.server.get_new_client()
+        INDEX_PSF.load(client)
+        _, suffix = INDEX_PSF.search(client, "@body:*ing")
+        _, exact = INDEX_PSF.search(client, "running")
+        assert suffix["psf:run"] > 0.0
+        assert suffix["psf:run"] == pytest.approx(exact["psf:run"],
+                                                  abs=SCORE_ABS_TOL)
+
+    # 15.4: fuzzy single-match scores like the exact term.
+    def test_fuzzy_single_match_equals_exact_term(self):
+        client = self.server.get_new_client()
+        INDEX_PSF.load(client)
+        _, fuzzy = INDEX_PSF.search(client, "%cat%")
+        _, exact = INDEX_PSF.search(client, "cat")
+        assert fuzzy["psf:cat"] > 0.0
+        assert fuzzy["psf:cat"] == pytest.approx(exact["psf:cat"],
+                                                 abs=SCORE_ABS_TOL)

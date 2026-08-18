@@ -1528,6 +1528,36 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     if (cands.empty()) return std::nullopt;
     return cands[0].score;
   }
+
+  // Score `key` for `filter` through the IN-ITERATOR path
+  // (TextIterator::GetScore), which is the path pure-text prefix/suffix/fuzzy
+  // queries run on -- unlike Score() above, which uses the extra-step
+  // ScoreTextQuery. Mirrors DoSearchNonVector's per-key scoring
+  // (GetScore() * GetWeight()). `filter` must be a single text predicate.
+  // Returns nullopt when the document does not match.
+  std::optional<float> ScoreViaIterator(MockIndexSchema &schema,
+                                        absl::string_view filter,
+                                        const std::string &key) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(schema, filter, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    auto *text_pred = dynamic_cast<query::TextPredicate *>(
+        parsed.value().root_predicate.get());
+    EXPECT_NE(text_pred, nullptr) << "not a single text predicate: " << filter;
+    if (text_pred == nullptr) return std::nullopt;
+    text_pred->SetScorer(
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+    auto text_index = schema.GetTextIndexSchema()->GetTextIndex();
+    auto interned = StringInternStore::Intern(key);
+    vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
+    auto iter =
+        text_pred->BuildTextIterator(text_index, text_pred->GetFieldMask(),
+                                     /*require_positions=*/false);
+    if (!iter->SeekForwardKey(interned) || iter->DoneKeys())
+      return std::nullopt;
+    if (iter->CurrentKey()->Str() != key) return std::nullopt;
+    return iter->GetScore() * iter->GetWeight();
+  }
 };
 
 // Every case has the same shape: score `filter` against `key`, compare to a
@@ -1787,6 +1817,78 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
   auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
   ASSERT_TRUE(recomputed.has_value());
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// --- Prefix / suffix / fuzzy expansion scoring (in-iterator path) ------------
+//
+// Contract (docs/redis_prefix_suffix_fuzzy_scoring.md): an expansion
+// contributes exactly ONE matched term's BM25 (its own IDF + own F), never the
+// sum over matched terms. A doc matching a single expansion term therefore
+// scores identically to the exact-term query for that term.
+
+// A doc matching the prefix via a single term scores like the exact term.
+TEST_F(ScoreTextQueryTestBase, PrefixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto prefix = ScoreViaIterator(*schema, "@text:cat*", "d_cat");
+  auto exact = ScoreViaIterator(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+}
+
+// A doc matching the prefix via SEVERAL terms is scored on ONE of them, never
+// their sum (category df=3, catalog df=1 -> distinct IDFs, so the pick is
+// observable). Which term wins is an unspecified union artifact, so assert only
+// the invariant: score == one candidate's BM25 and strictly below their sum.
+TEST_F(ScoreTextQueryTestBase, PrefixMultiMatchScoresOneTermNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_multi", "category catalog", ""},
+      {"d_cat2", "category", ""},
+      {"d_cat3", "category", ""},
+  });
+  auto prefix = ScoreViaIterator(*schema, "@text:cat*", "d_multi");
+  auto only_category = ScoreViaIterator(*schema, "@text:category", "d_multi");
+  auto only_catalog = ScoreViaIterator(*schema, "@text:catalog", "d_multi");
+  ASSERT_TRUE(prefix && only_category && only_catalog);
+  EXPECT_LT(*prefix, *only_category + *only_catalog);
+  EXPECT_TRUE(std::fabs(*prefix - *only_category) < 1e-4f ||
+              std::fabs(*prefix - *only_catalog) < 1e-4f)
+      << "prefix=" << *prefix << " category=" << *only_category
+      << " catalog=" << *only_catalog;
+}
+
+// A doc matching the suffix via a single term scores like the exact term.
+TEST_F(ScoreTextQueryTestBase, SuffixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog", "jogging", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto suffix = ScoreViaIterator(*schema, "@text:*ing", "d_run");
+  auto exact = ScoreViaIterator(*schema, "@text:running", "d_run");
+  ASSERT_TRUE(suffix && exact);
+  EXPECT_GT(*suffix, 0.0f);
+  EXPECT_FLOAT_EQ(*suffix, *exact);
+}
+
+// A doc matching the fuzzy pattern via a single term scores like the exact
+// term.
+TEST_F(ScoreTextQueryTestBase, FuzzySingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_dog", "dog", ""},
+      {"d_bird", "bird", ""},
+  });
+  auto fuzzy = ScoreViaIterator(*schema, "@text:%cat%", "d_cat");
+  auto exact = ScoreViaIterator(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(fuzzy && exact);
+  EXPECT_GT(*fuzzy, 0.0f);
+  EXPECT_FLOAT_EQ(*fuzzy, *exact);
 }
 
 }  // namespace

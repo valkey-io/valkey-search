@@ -994,7 +994,7 @@ class TestTextScoring(ValkeySearchTestCaseBase):
 
     # 15.5: a prefix combined with tag + numeric (text + numeric + tag) takes
     # the EXTRA-STEP scoring path (numeric/tag/negate force it, unlike a
-    # pure-text query). "hel*" single-matches "hello", so the prefix leaf equals
+    # pure-text query). "hell*" single-matches "hello", so the prefix leaf equals
     # the exact "hello" leaf; text + tag sum to the Redis-verified
     # "hello @cat:{a}" values (single-match agrees with Redis) and the numeric
     # adds 0. Proves expansions are scored in combined queries, not dropped to 0.
@@ -1002,7 +1002,7 @@ class TestTextScoring(ValkeySearchTestCaseBase):
         client = self.server.get_new_client()
         INDEX_MIX.load(client)
         keys, scores = INDEX_MIX.search(
-            client, "hel* @cat:{a} @rank:[0 100]")
+            client, "hell* @cat:{a} @rank:[0 100]")
         # cat:{a} restricts to d:1, d:3; ranked by score (d:3 > d:1).
         assert keys == ["d:3", "d:1"]
         for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():

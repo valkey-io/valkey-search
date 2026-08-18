@@ -56,10 +56,12 @@ unsigned int count_num_terms(const PositionMap& pos_map) {
   return num_terms;
 }
 
-void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
-  // Insert FlatPositionMap pointer plus a mirror of its (immutable) tf.
-  PostingValue value{flat_map,
-                     static_cast<uint32_t>(flat_map->GetTermFrequency())};
+void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map,
+                         uint32_t doc_len) {
+  // Insert FlatPositionMap pointer plus mirrors of its (immutable) tf and the
+  // key's document length.
+  PostingValue value{
+      flat_map, static_cast<uint32_t>(flat_map->GetTermFrequency()), doc_len};
   key_to_positions_.emplace(key, value);
 }
 
@@ -102,13 +104,13 @@ size_t Postings::GetTotalTermFrequency() const {
   return total_frequency;
 }
 
-std::optional<uint32_t> Postings::LookupTermFrequency(
+std::optional<PostingValue> Postings::LookupKey(
     BorrowedInternedStringPtr key) const {
   auto it = key_to_positions_.find(key.AsInternedRef());
   if (it == key_to_positions_.end()) {
     return std::nullopt;
   }
-  return it->second.tf;
+  return it->second;
 }
 
 // Defragment posting list
@@ -193,6 +195,12 @@ size_t Postings::KeyIterator::GetTermFrequency() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
   return current_->second.tf;
+}
+
+uint32_t Postings::KeyIterator::GetDocLen() const {
+  CHECK(key_map_ != nullptr && current_ != end_)
+      << "KeyIterator is invalid or exhausted";
+  return current_->second.doc_len;
 }
 
 }  // namespace valkey_search::indexes::text

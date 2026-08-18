@@ -75,9 +75,11 @@ float TermIterator::GetScore() const {
     term_frequency += key_iterators_[idx].GetTermFrequency();
   }
 
-  // text_index_schema_ is non-null whenever scorer_ was resolved above.
-  const uint32_t doc_len = text_index_schema_->GetKeyDocLen(
-      BorrowedInternedStringPtr(*current_key_));
+  // doc_len is co-located in the posting entry the merge already visited (same
+  // value for every iterator on this key), so read it straight off a current
+  // iterator instead of a random per-key scoring-map lookup.
+  const uint32_t doc_len =
+      key_iterators_[current_key_indices_.front()].GetDocLen();
 
   // idf_ and avg_doc_len_ are precomputed at construction, so only the
   // per-document term frequency and doc_len vary here.

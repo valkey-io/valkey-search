@@ -852,23 +852,22 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       // Sum the term frequency across the original word and its stem variants:
       // a doc matches the leaf if any resolved posting list contains its key.
+      // doc_len is co-located in the posting entry, so the same lookup yields
+      // it (identical across postings for one key) — no separate per-key
+      // scoring-map probe. It is 0 only when no posting matches, in which case
+      // tf is 0 and we return early; avg_doc_len is 0 for a length-agnostic
+      // scorer, which ScoreLeaf treats as a degenerate corpus and scores 0.
       uint32_t tf = 0;
+      uint32_t doc_len = 0;
       for (const auto &postings : leaf.postings) {
-        if (auto tf_opt = postings->LookupTermFrequency(key)) {
-          tf += *tf_opt;
+        if (auto entry = postings->LookupKey(key)) {
+          tf += entry->tf;
+          doc_len = entry->doc_len;
         }
       }
 
       if (tf == 0) return std::nullopt;
 
-      // avg_doc_len is corpus-wide (precomputed in ScoreContext); only doc_len
-      // varies per document. Both are 0 when the scorer doesn't need length
-      // normalization (e.g. TFIDF), which the scorer treats as a degenerate
-      // corpus and scores 0.
-      uint32_t doc_len = 0;
-      if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
-        doc_len = score_ctx.index_schema.GetDocumentLength(key);
-      }
       return score_ctx.scorer->ScoreLeaf({leaf.term_weight, tf, doc_len,
                                           score_ctx.avg_doc_len,
                                           predicate->GetWeight()});

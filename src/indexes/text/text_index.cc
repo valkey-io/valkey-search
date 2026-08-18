@@ -38,6 +38,7 @@ static void FreeStemParentsCallback(void *target) {
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
                                        FlatPositionMap *flat_map,
+                                       uint32_t doc_len,
                                        TextIndexMetadata *metadata) {
   InvasivePtr<Postings> postings;
   if (existing_postings) {
@@ -47,7 +48,7 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
     postings = InvasivePtr<Postings>::Make();
   }
 
-  postings->InsertKey(key, flat_map);
+  postings->InsertKey(key, flat_map, doc_len);
   return postings;
 }
 
@@ -214,8 +215,14 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
 
   TextIndex key_index{with_suffix_trie_};
 
-  // Accumulate document length (total term frequency for this key)
+  // doc_len (total term frequency for this key) must be known before postings
+  // are inserted, so each PostingValue can carry it for the scoring hot path.
   uint32_t doc_len = 0;
+  for (const auto &entry : token_positions) {
+    for (const auto &[_, field_mask] : entry.second.first) {
+      doc_len += field_mask.CountSetFields();
+    }
+  }
   uint32_t norm = 0;
 
   // Index the key's tokens
@@ -232,9 +239,7 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     metadata_.total_positions += pos_map.size();
     uint32_t token_freq = 0;
     for (const auto &[_, field_mask] : pos_map) {
-      uint32_t fields_count = field_mask.CountSetFields();
-      token_freq += fields_count;
-      doc_len += fields_count;
+      token_freq += field_mask.CountSetFields();
     }
     norm = std::max(norm, token_freq);
 
@@ -256,8 +261,8 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
       }
       bool is_new_word = !existing;
 
-      updated_target =
-          AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
+      updated_target = AddKeyToPostings(std::move(existing), key, flat_map,
+                                        doc_len, &metadata_);
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);

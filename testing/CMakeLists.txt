@@ -88,6 +88,12 @@ target_link_libraries(indexes_test PRIVATE text)
 target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
 finalize_test_flags(indexes_test)
 
+add_executable(doc_id_map_test ${CMAKE_CURRENT_LIST_DIR}/doc_id_map_test.cc)
+target_include_directories(doc_id_map_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(doc_id_map_test PRIVATE string_interning)
+target_link_libraries(doc_id_map_test PRIVATE gtest gtest_main)
+finalize_test_flags(doc_id_map_test)
+
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_test.cc

@@ -10,6 +10,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search {
 
@@ -27,13 +28,19 @@ class DocIdMap {
   }
 
   DocId GetOrAssign(absl::string_view doc_key) {
-    size_t shard = std::hash<absl::string_view>{}(doc_key) % kNumShards;
+    InternedStringPtr interned_key = StringInternStore::Intern(doc_key);
+    return GetOrAssign(interned_key);
+  }
+
+  DocId GetOrAssign(const InternedStringPtr& interned_key) {
+    if (!interned_key) return kInvalidDocId;
+    size_t shard = interned_key.Hash() % kNumShards;
     auto& s = shards_[shard];
     
     // First check existing entry under shard lock
     {
       absl::MutexLock lock(&s.mutex);
-      auto it = s.key_to_id.find(doc_key);
+      auto it = s.key_to_id.find(interned_key);
       if (it != s.key_to_id.end()) {
         return it->second;
       }
@@ -45,16 +52,16 @@ class DocIdMap {
     // Ensure reverse mapping chunk exists
     EnsureChunkAllocated(id);
     
-    // Store reverse mapping string in lock-free chunk
+    // Store reverse mapping interned string in lock-free chunk
     size_t chunk_idx = id / kChunkSize;
     size_t offset = id % kChunkSize;
-    std::string* chunk = chunks_[chunk_idx].load(std::memory_order_acquire);
-    chunk[offset] = std::string(doc_key);
+    InternedStringPtr* chunk = chunks_[chunk_idx].load(std::memory_order_acquire);
+    chunk[offset] = interned_key;
 
     // Insert into forward lookup map
     {
       absl::MutexLock lock(&s.mutex);
-      auto [it, inserted] = s.key_to_id.emplace(std::string(doc_key), id);
+      auto [it, inserted] = s.key_to_id.emplace(interned_key, id);
       if (!inserted) {
         // Double-check race condition: another thread inserted the key first
         return it->second;
@@ -68,28 +75,34 @@ class DocIdMap {
   }
 
   DocId GetDocId(absl::string_view doc_key) const {
-    size_t shard = std::hash<absl::string_view>{}(doc_key) % kNumShards;
+    InternedStringPtr interned_key = StringInternStore::Intern(doc_key);
+    return GetDocId(interned_key);
+  }
+
+  DocId GetDocId(const InternedStringPtr& interned_key) const {
+    if (!interned_key) return kInvalidDocId;
+    size_t shard = interned_key.Hash() % kNumShards;
     auto& s = shards_[shard];
     absl::MutexLock lock(&s.mutex);
-    auto it = s.key_to_id.find(doc_key);
+    auto it = s.key_to_id.find(interned_key);
     if (it != s.key_to_id.end()) {
       return it->second;
     }
     return kInvalidDocId;
   }
 
-  // Lock-free O(1) reverse lookup by DocId
-  const std::string& GetKey(DocId id) const {
+  // Lock-free O(1) reverse lookup returning InternedStringPtr directly
+  const InternedStringPtr& GetKey(DocId id) const {
     size_t chunk_idx = id / kChunkSize;
     size_t offset = id % kChunkSize;
 
     if (chunk_idx < kMaxChunks) {
-      std::string* chunk = chunks_[chunk_idx].load(std::memory_order_acquire);
+      InternedStringPtr* chunk = chunks_[chunk_idx].load(std::memory_order_acquire);
       if (chunk != nullptr) {
         return chunk[offset];
       }
     }
-    static const std::string empty;
+    static const InternedStringPtr empty;
     return empty;
   }
 
@@ -105,7 +118,7 @@ class DocIdMap {
 
     absl::MutexLock alloc_lock(&alloc_mutex_);
     for (size_t i = 0; i < kMaxChunks; ++i) {
-      std::string* chunk = chunks_[i].load(std::memory_order_relaxed);
+      InternedStringPtr* chunk = chunks_[i].load(std::memory_order_relaxed);
       if (chunk != nullptr) {
         delete[] chunk;
         chunks_[i].store(nullptr, std::memory_order_relaxed);
@@ -132,7 +145,7 @@ class DocIdMap {
     if (chunks_[chunk_idx].load(std::memory_order_acquire) == nullptr) {
       absl::MutexLock lock(&alloc_mutex_);
       if (chunks_[chunk_idx].load(std::memory_order_relaxed) == nullptr) {
-        std::string* new_chunk = new std::string[kChunkSize];
+        InternedStringPtr* new_chunk = new InternedStringPtr[kChunkSize];
         chunks_[chunk_idx].store(new_chunk, std::memory_order_release);
       }
     }
@@ -141,11 +154,11 @@ class DocIdMap {
   static constexpr size_t kNumShards = 32;
   struct Shard {
     mutable absl::Mutex mutex;
-    absl::flat_hash_map<std::string, DocId> key_to_id ABSL_GUARDED_BY(mutex);
+    absl::flat_hash_map<InternedStringPtr, DocId> key_to_id ABSL_GUARDED_BY(mutex);
   };
 
   Shard shards_[kNumShards];
-  std::atomic<std::string*> chunks_[kMaxChunks];
+  std::atomic<InternedStringPtr*> chunks_[kMaxChunks];
   mutable absl::Mutex alloc_mutex_;
   std::atomic<DocId> next_id_;
 };

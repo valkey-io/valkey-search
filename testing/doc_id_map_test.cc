@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "src/utils/string_interning.h"
 
 namespace valkey_search {
 
@@ -20,7 +21,7 @@ class DocIdMapTest : public ::testing::Test {
   }
 };
 
-TEST_F(DocIdMapTest, BasicGetOrAssign) {
+TEST_F(DocIdMapTest, BasicGetOrAssignWithInternedPtr) {
   auto& map = DocIdMap::Instance();
   EXPECT_EQ(map.Size(), 0);
 
@@ -33,23 +34,34 @@ TEST_F(DocIdMapTest, BasicGetOrAssign) {
   EXPECT_NE(id1, id2);
   EXPECT_EQ(map.Size(), 2);
 
-  // Idempotency check: fetching doc:1 again should return id1
-  DocId id1_repeat = map.GetOrAssign("doc:1");
+  // Idempotency check with direct InternedStringPtr
+  InternedStringPtr ptr1 = StringInternStore::Intern("doc:1");
+  DocId id1_repeat = map.GetOrAssign(ptr1);
   EXPECT_EQ(id1, id1_repeat);
   EXPECT_EQ(map.Size(), 2);
 }
 
-TEST_F(DocIdMapTest, ReverseLookupGetKey) {
+TEST_F(DocIdMapTest, ReverseLookupReturnsInternedPtr) {
   auto& map = DocIdMap::Instance();
 
   DocId id1 = map.GetOrAssign("doc:alpha");
   DocId id2 = map.GetOrAssign("doc:beta");
 
-  EXPECT_EQ(map.GetKey(id1), "doc:alpha");
-  EXPECT_EQ(map.GetKey(id2), "doc:beta");
+  const InternedStringPtr& key1 = map.GetKey(id1);
+  const InternedStringPtr& key2 = map.GetKey(id2);
+
+  EXPECT_TRUE(key1);
+  EXPECT_EQ(key1->Str(), "doc:alpha");
+  EXPECT_TRUE(key2);
+  EXPECT_EQ(key2->Str(), "doc:beta");
+
+  // Verify interning address identity: key1 raw pointer matches StringInternStore address!
+  InternedStringPtr expected_key1 = StringInternStore::Intern("doc:alpha");
+  EXPECT_EQ(key1.RawPtr(), expected_key1.RawPtr());
 
   // Invalid ID check
-  EXPECT_EQ(map.GetKey(999999), "");
+  const InternedStringPtr& empty = map.GetKey(999999);
+  EXPECT_FALSE(empty);
 }
 
 TEST_F(DocIdMapTest, GetDocIdReadOnly) {
@@ -61,7 +73,7 @@ TEST_F(DocIdMapTest, GetDocIdReadOnly) {
   EXPECT_EQ(map.GetDocId("doc:existing"), id);
 }
 
-TEST_F(DocIdMapTest, CrossChunkAllocation) {
+TEST_F(DocIdMapTest, CrossChunkAllocationWithInterning) {
   auto& map = DocIdMap::Instance();
 
   // Populate more than one chunk (kChunkSize = 4096)
@@ -80,7 +92,8 @@ TEST_F(DocIdMapTest, CrossChunkAllocation) {
   // Verify all keys reverse lookup correctly across chunk boundary
   for (size_t i = 0; i < total_docs; ++i) {
     std::string expected_key = "doc:" + std::to_string(i);
-    EXPECT_EQ(map.GetKey(ids[i]), expected_key);
+    const InternedStringPtr& key_ptr = map.GetKey(ids[i]);
+    EXPECT_EQ(key_ptr->Str(), expected_key);
   }
 }
 
@@ -97,7 +110,7 @@ TEST_F(DocIdMapTest, ConcurrentGetOrAssign) {
         std::string key = "thread_" + std::to_string(t) + "_doc_" + std::to_string(i);
         DocId id = map.GetOrAssign(key);
         EXPECT_NE(id, kInvalidDocId);
-        EXPECT_EQ(map.GetKey(id), key);
+        EXPECT_EQ(map.GetKey(id)->Str(), key);
       }
     });
   }

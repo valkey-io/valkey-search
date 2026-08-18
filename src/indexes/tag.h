@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -162,6 +163,16 @@ class Tag : public IndexBase {
   // (dt) for tag scoring. O(1) rax lookup plus a bag size read.
   size_t GetTagValueDocCount(absl::string_view value) const
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+
+  // Enumerates every indexed tag value matching the prefix query value
+  // `prefix_value` (which must end in '*'), each paired with the number of
+  // documents carrying it (its BM25 IDF document frequency). The returned
+  // values are the normalized rax keys, so callers can pass them straight to
+  // ContainsKey. Mirrors the prefix walk in Search(); used to score a tag
+  // prefix as an expansion (one matched value per document). Empty when the
+  // value is not a prefix or nothing matches.
+  std::vector<std::pair<std::string, size_t>> GetPrefixMatchedValues(
+      absl::string_view prefix_value) const ABSL_LOCKS_EXCLUDED(index_mutex_);
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(

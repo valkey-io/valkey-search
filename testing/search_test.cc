@@ -1976,5 +1976,63 @@ TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
   EXPECT_FLOAT_EQ(*combined, *prefix_only);
 }
 
+// --- Tag prefix expansion scoring (extra-step path) --------------------------
+//
+// A tag prefix (`@color:{re*}`) is scored like a text expansion: it contributes
+// exactly ONE matched value's BM25 (F ≡ 1, its own IDF), never the sum over the
+// values it expands to -- while an explicit union (`{red|reef}`) still sums.
+// Verified empirically against Redis 8.6 (tag prefix scores a single
+// representative value; a union sums its members).
+
+// A doc whose only matching value is one tag scores like the exact-value query.
+TEST_F(ScoreTextQueryTestBase, TagPrefixSingleMatchEqualsExactValue) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_red2", "aa", "red"},
+      {"d_reef", "aa", "reef"},
+  });
+  auto prefix = Score(*schema, "@color:{re*}", "d_red");
+  auto exact = Score(*schema, "@color:{red}", "d_red");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+}
+
+// A doc carrying SEVERAL values matching the prefix is scored on exactly ONE of
+// them, never their sum (red df=3, reef df=1 -> distinct IDFs, so the pick is
+// observable). Which value wins is unspecified, so assert only the invariant:
+// score == one candidate value's BM25 and strictly below the union of both.
+TEST_F(ScoreTextQueryTestBase, TagPrefixMultiMatchScoresOneValueNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_red2", "aa", "red"},
+      {"d_multi", "aa", "red,reef"},
+  });
+  auto prefix = Score(*schema, "@color:{re*}", "d_multi");
+  auto only_red = Score(*schema, "@color:{red}", "d_multi");
+  auto only_reef = Score(*schema, "@color:{reef}", "d_multi");
+  auto both = Score(*schema, "@color:{red|reef}", "d_multi");
+  ASSERT_TRUE(prefix && only_red && only_reef && both);
+  EXPECT_FLOAT_EQ(*both, *only_red + *only_reef);  // union sums
+  EXPECT_LT(*prefix, *both);                       // prefix picks one
+  EXPECT_TRUE(std::fabs(*prefix - *only_red) < 1e-4f ||
+              std::fabs(*prefix - *only_reef) < 1e-4f)
+      << "prefix=" << *prefix << " red=" << *only_red << " reef=" << *only_reef;
+}
+
+// A tag prefix combined with a numeric clause is scored (the numeric adds 0),
+// proving the expansion is not silently dropped on the combined-query path.
+TEST_F(ScoreTextQueryTestBase, TagPrefixInCombinedQueryScored) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_reef", "aa", "reef"},
+  });
+  auto combined = Score(*schema, "@color:{re*} @rating:[0 100]", "d_red");
+  auto prefix_only = Score(*schema, "@color:{re*}", "d_red");
+  ASSERT_TRUE(combined && prefix_only);
+  EXPECT_GT(*combined, 0.0f);
+  EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
 }  // namespace
 }  // namespace valkey_search

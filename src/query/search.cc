@@ -663,6 +663,16 @@ struct ResolvedLeaf {
   const indexes::Tag *tag_index = nullptr;
   absl::InlinedVector<std::pair<std::string, float>, 4> tag_values;
 
+  // Tag prefix expansions (values like `foo*` in a TagPredicate): one group per
+  // prefix query value, each holding the (matched value, IDF) pairs the prefix
+  // expands to. Unlike tag_values (summed), ScoreNode contributes exactly ONE
+  // matched value per GROUP -- the first the document carries -- matching
+  // Redis: a tag prefix is scored on a single representative value, never the
+  // sum over matched values, while a union still sums across its members. F ≡ 1
+  // as for exact tag values.
+  absl::InlinedVector<absl::InlinedVector<std::pair<std::string, float>, 4>, 2>
+      tag_prefix_groups;
+
   // --- Expansion leaf (Prefix/Suffix/Fuzzy) ---
   // One entry per matched expansion term: its posting list plus that term's own
   // precomputed IDF. Empty for term/tag leaves. ScoreNode contributes exactly
@@ -861,6 +871,25 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       const bool case_sensitive = tag_index->IsCaseSensitive();
       absl::flat_hash_set<std::string> seen;
       for (const auto &value : tag_pred->GetTags()) {
+        // A prefix value (`foo*`) is scored as an expansion: one group of its
+        // matched values, of which ScoreNode credits a single representative
+        // per document (never the sum). GetPrefixMatchedValues returns the
+        // matched values already normalized, with each value's document count.
+        if (!value.empty() && value.back() == '*') {
+          absl::InlinedVector<std::pair<std::string, float>, 4> group;
+          for (auto &[matched, count] :
+               tag_index->GetPrefixMatchedValues(value)) {
+            uint32_t dt =
+                static_cast<uint32_t>(std::min<size_t>(count, total_docs));
+            if (dt == 0) continue;
+            group.emplace_back(std::move(matched),
+                               scorer->PrecomputeIDF({total_docs, dt}));
+          }
+          if (!group.empty()) {
+            leaf.tag_prefix_groups.push_back(std::move(group));
+          }
+          continue;
+        }
         std::string norm =
             case_sensitive ? value : absl::AsciiStrToLower(value);
         if (!seen.insert(norm).second) continue;
@@ -1004,7 +1033,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // without rejecting the already-admitted candidate.
       if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
-      if (leaf.tag_index == nullptr || leaf.tag_values.empty()) return 0.0f;
+      if (leaf.tag_index == nullptr ||
+          (leaf.tag_values.empty() && leaf.tag_prefix_groups.empty())) {
+        return 0.0f;
+      }
 
       uint32_t doc_len = 0;
       if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
@@ -1022,6 +1054,19 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1, doc_len,
                                             score_ctx.avg_doc_len,
                                             predicate->GetWeight()});
+      }
+      // Each prefix group contributes exactly ONE matched value -- the first
+      // the document carries -- never the sum over the values it expands to; a
+      // union still sums across its members (each group + each exact value).
+      for (const auto &group : leaf.tag_prefix_groups) {
+        for (const auto &[value, idf] : group) {
+          if (!leaf.tag_index->ContainsKey(value, key.AsInternedRef()))
+            continue;
+          sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1,
+                                              doc_len, score_ctx.avg_doc_len,
+                                              predicate->GetWeight()});
+          break;
+        }
       }
       return sum;
     }

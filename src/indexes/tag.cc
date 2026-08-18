@@ -499,6 +499,32 @@ size_t Tag::GetTagValueDocCount(absl::string_view value) const {
   return count;
 }
 
+std::vector<std::pair<std::string, size_t>> Tag::GetPrefixMatchedValues(
+    absl::string_view prefix_value) const {
+  std::vector<std::pair<std::string, size_t>> matched;
+  if (prefix_value.empty() || prefix_value.back() != '*') return matched;
+  // Strip the trailing '*' and normalize, mirroring the prefix branch of
+  // Search(); walk the rax subtree, yielding each value plus its bag size.
+  std::string norm = Normalize(prefix_value.substr(0, prefix_value.size() - 1));
+  auto* qbytes =
+      reinterpret_cast<unsigned char*>(const_cast<char*>(norm.data()));
+
+  absl::MutexLock lock(&index_mutex_);
+  raxIterator it;
+  raxStart(&it, tree_);
+  raxSeekSubTree(&it, qbytes, norm.size());
+  while (raxNext(&it)) {
+    if (it.data == nullptr) continue;
+    auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(it.data));
+    size_t count = bag.size();
+    (void)bag.Release();
+    matched.emplace_back(
+        std::string(reinterpret_cast<const char*>(it.key), it.key_len), count);
+  }
+  raxStop(&it);
+  return matched;
+}
+
 bool Tag::IsTracked(const InternedStringPtr& key) const {
   absl::MutexLock lock(&index_mutex_);
   return tracked_tags_by_keys_.contains(key);

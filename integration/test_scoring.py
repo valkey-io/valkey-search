@@ -653,7 +653,7 @@ class TestScoring(ValkeySearchTestCaseBase):
         # exact "hello" leaf and the combined total matches "hello @cat:{a}";
         # the numeric clause adds nothing.
         _, baseline = search(client, IDX_MAIN, "hello @cat:{a}")
-        for query in ("hel* @cat:{a} @rank:[0 100]",
+        for query in ("hell* @cat:{a} @rank:[0 100]",
                       "@body:*llo @cat:{a} @rank:[0 100]",
                       "@body:%helo% @cat:{a} @rank:[0 100]"):
             keys, scores = search(client, IDX_MAIN, query)

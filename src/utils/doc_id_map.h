@@ -71,23 +71,6 @@ class DocIdMap {
     return id;
   }
 
-  DocId GetDocId(absl::string_view doc_key) const {
-    InternedStringPtr interned_key = StringInternStore::Intern(doc_key);
-    return GetDocId(interned_key);
-  }
-
-  DocId GetDocId(const InternedStringPtr& interned_key) const {
-    if (!interned_key) return kInvalidDocId;
-    size_t shard = interned_key.Hash() % kNumShards;
-    auto& s = shards_[shard];
-    absl::MutexLock lock(&s.mutex);
-    auto it = s.key_to_id.find(interned_key);
-    if (it != s.key_to_id.end()) {
-      return it->second;
-    }
-    return kInvalidDocId;
-  }
-
   // Lock-free O(1) reverse lookup using bitwise chunk/offset mask
   const InternedStringPtr& GetKey(DocId id) const {
     size_t chunk_idx = id >> kChunkShift;

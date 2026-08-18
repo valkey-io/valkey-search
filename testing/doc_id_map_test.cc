@@ -64,15 +64,6 @@ TEST_F(DocIdMapTest, ReverseLookupReturnsInternedPtr) {
   EXPECT_FALSE(empty);
 }
 
-TEST_F(DocIdMapTest, GetDocIdReadOnly) {
-  auto& map = DocIdMap::Instance();
-
-  EXPECT_EQ(map.GetDocId("non_existent"), kInvalidDocId);
-
-  DocId id = map.GetOrAssign("doc:existing");
-  EXPECT_EQ(map.GetDocId("doc:existing"), id);
-}
-
 TEST_F(DocIdMapTest, CrossChunkAllocationWithInterning) {
   auto& map = DocIdMap::Instance();
 
@@ -131,7 +122,6 @@ TEST_F(DocIdMapTest, ClearResetsMap) {
 
   map.Clear();
   EXPECT_EQ(map.Size(), 0);
-  EXPECT_EQ(map.GetDocId("doc:1"), kInvalidDocId);
 
   DocId new_id = map.GetOrAssign("doc:1");
   EXPECT_EQ(new_id, 1);

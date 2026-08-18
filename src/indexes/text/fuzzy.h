@@ -22,14 +22,19 @@ namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
-  // Returns KeyIterators for all words within edit distance <= max_distance
-  static absl::InlinedVector<Postings::KeyIterator,
-                             kWordExpansionInlineCapacity>
-  Search(const Rax& tree, absl::string_view pattern, size_t max_distance,
-         uint32_t max_words) {
-    absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                        kWordExpansionInlineCapacity>
+  // Matched terms within the edit distance: their KeyIterators plus the
+  // per-term document frequency (dt), index-aligned, so scoring can contribute
+  // a single matched term's own BM25 (never the sum).
+  struct Expansion {
+    absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
         key_iterators;
+    absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
+  };
+
+  // Returns matched terms for all words within edit distance <= max_distance
+  static Expansion Search(const Rax& tree, absl::string_view pattern,
+                          size_t max_distance, uint32_t max_words) {
+    Expansion result;
 
     // Dynamic Programming matrix rows for Damerau-Levenshtein algorithm
     // Row i-2 (for transposition)
@@ -49,8 +54,8 @@ struct FuzzySearch {
     auto iter = tree.GetPathIterator("");
     uint32_t word_count = 0;
     SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
-                    curr, key_iterators, max_words, word_count);
-    return key_iterators;
+                    curr, result, max_words, word_count);
+    return result;
   }
 
  private:
@@ -64,9 +69,7 @@ struct FuzzySearch {
           prev,  // Row i-1 of DP matrix (previous row)
       absl::InlinedVector<size_t, 32>&
           curr,  // Row i of DP matrix (current row being computed)
-      absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                          kWordExpansionInlineCapacity>& key_iterators,
-      uint32_t max_words, uint32_t& word_count) {
+      Expansion& result, uint32_t max_words, uint32_t& word_count) {
     // Iterate over children at current tree level
     while (!iter.Done() && word_count < max_words) {
       absl::string_view edge = iter.GetChildEdge();
@@ -149,8 +152,9 @@ struct FuzzySearch {
         // The edit distance is in prev row now as we did the row swap
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
-          key_iterators.emplace_back(
-              child_iter.GetPostingsTarget()->GetKeyIterator());
+          auto postings = child_iter.GetPostingsTarget();
+          result.per_term_dt.push_back(postings->GetKeyCount());
+          result.key_iterators.emplace_back(postings->GetKeyIterator());
           ++word_count;
           if (word_count >= max_words) {
             return;
@@ -160,7 +164,7 @@ struct FuzzySearch {
         // Recurse into child's subtree
         if (child_iter.CanDescend()) {
           SearchRecursive(child_iter, pattern, max_distance, new_word,
-                          prev_tree_ch, prev_prev, prev, curr, key_iterators,
+                          prev_tree_ch, prev_prev, prev, curr, result,
                           max_words, word_count);
         }
       }

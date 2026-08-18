@@ -52,6 +52,13 @@ IDX_NO_TEXT_FIELD = [
     "SCHEMA", "rank", "NUMERIC", "cat", "TAG",
 ]
 
+# WITHSUFFIXTRIE, so suffix queries expand; NOSTEM keeps expansion the only
+# source of extra matched terms.
+IDX_EXPANSION = [
+    "FT.CREATE", "idxExpansion", "ON", "HASH", "PREFIX", "1", "doc:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+]
+
 
 # =====================================================================
 # Documents
@@ -99,6 +106,20 @@ PARTIAL_TEXT_DOCS = {
 # Ten non-stopword tokens: doc_len is 10 in an indexed TEXT field, 0 anywhere
 # else, so the same value tells the two apart.
 TEN_WORDS = "one two three four five six seven eight nine ten"
+
+# Expansion corpus: cat* -> {cat, category (dt=3), catalog}; *ing -> {running,
+# jogging}; %cat% -> just {cat}, every other token being >1 edit away. doc:2
+# matches cat* via two terms with distinct IDFs, so which one is credited is
+# observable.
+EXPANSION_DOCS = {
+    "doc:1": {"body": "cat"},
+    "doc:2": {"body": "category catalog"},
+    "doc:3": {"body": "category"},
+    "doc:4": {"body": "category"},
+    "doc:5": {"body": "running"},
+    "doc:6": {"body": "jogging"},
+    "doc:7": {"body": "dog"},
+}
 
 
 # =====================================================================
@@ -574,3 +595,44 @@ class TestScoring(ValkeySearchTestCaseBase):
         wait_indexed(client, IDX_MAIN, 8)
         _, restored = search(client, IDX_MAIN, "hello")
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
+
+    # Group 15: a prefix / suffix / fuzzy expansion is scored on exactly ONE
+    # matched term (its own IDF and TF), never the sum over matched terms.
+    #
+    # Unlike every other group here, these assertions are not pinned to Redis
+    # EXPLAINSCORE values: which term represents the expansion is an unspecified,
+    # corpus-dependent union-iterator artifact, and on a multi-match doc we
+    # deliberately pick a different representative than Redis. So compare against
+    # our own exact-term scores on the same index instead.
+    def test_expansion_scoring(self):
+        client = self.server.get_new_client()
+        load(client, IDX_EXPANSION, EXPANSION_DOCS)
+
+        # A doc matching via a single term scores exactly like the exact-term
+        # query for that term. This case does agree with Redis.
+        _, prefix = search(client, IDX_EXPANSION, "cat*")
+        _, cat = search(client, IDX_EXPANSION, "cat")
+        assert prefix["doc:1"] > 0.0
+        assert prefix["doc:1"] == pytest.approx(cat["doc:1"], abs=SCORE_ABS_TOL)
+
+        # doc:2 matches cat* via both "category" and "catalog". Which term wins is
+        # unspecified, so assert only the invariant: one term's score, below the sum.
+        _, category = search(client, IDX_EXPANSION, "category")
+        _, catalog = search(client, IDX_EXPANSION, "catalog")
+        got = prefix["doc:2"]
+        assert got < category["doc:2"] + catalog["doc:2"] - SCORE_ABS_TOL
+        assert (got == pytest.approx(category["doc:2"], abs=SCORE_ABS_TOL)
+                or got == pytest.approx(catalog["doc:2"], abs=SCORE_ABS_TOL)), (
+            f"prefix={got} category={category['doc:2']} "
+            f"catalog={catalog['doc:2']}")
+
+        # Suffix (needs WITHSUFFIXTRIE) and fuzzy single matches behave the same.
+        _, suffix = search(client, IDX_EXPANSION, "@body:*ing")
+        _, running = search(client, IDX_EXPANSION, "running")
+        assert suffix["doc:5"] > 0.0
+        assert suffix["doc:5"] == pytest.approx(running["doc:5"],
+                                                abs=SCORE_ABS_TOL)
+
+        _, fuzzy = search(client, IDX_EXPANSION, "%cat%")
+        assert fuzzy["doc:1"] > 0.0
+        assert fuzzy["doc:1"] == pytest.approx(cat["doc:1"], abs=SCORE_ABS_TOL)

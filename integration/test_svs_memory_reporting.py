@@ -14,8 +14,9 @@ import struct
 from typing import List
 import numpy as np
 from valkey import ResponseError
+from ft_info_parser import FTInfoParser
 from valkey_search_test_case import ValkeySearchTestCaseBase
-from valkeytestframework.conftest import resource_port_tracker
+from valkeytestframework.conftest import resource_port_tracker  # noqa: F401 — required by base class fixture
 from valkeytestframework.util import waiters
 import pytest
 
@@ -72,14 +73,17 @@ class TestSVSMemoryReporting(ValkeySearchTestCaseBase):
         pipe.execute()
 
     def _wait_for_indexed(self, client, index_name, expected):
-        def check():
-            try:
-                info = client.execute_command("FT.INFO", index_name)
-                pairs = dict(zip(info[::2], info[1::2]))
-                return int(pairs.get(b"num_docs", 0)) >= expected
-            except Exception:
-                return False
-        waiters.wait_for_true(check, timeout=120)
+        waiters.wait_for_true(
+            lambda: self._check_docs(client, index_name, expected),
+            timeout=120,
+        )
+
+    def _check_docs(self, client, index_name, expected):
+        try:
+            info = FTInfoParser(client.execute_command("FT.INFO", index_name))
+            return info.num_docs >= expected
+        except Exception:
+            return False
 
     def _used_memory_bytes(self, client):
         info = client.info("search")

@@ -65,7 +65,7 @@ bool Postings::IsEmpty() const {
 }
 
 void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map) {
-  DocId doc_id = DocIdMap::Instance().GetOrAssign(key);
+  DocId doc_id = DocIdMap::Instance().GetOrAssign(key.Str());
   size_t num_pos = flat_map ? flat_map->CountPositions() : 0;
   size_t term_freq = flat_map ? flat_map->CountTermFrequency() : 0;
 
@@ -160,7 +160,8 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
-  DocId target_id = DocIdMap::Instance().GetOrAssign(key);
+  DocId target_id = DocIdMap::Instance().GetDocId(key.Str());
+  if (target_id == kInvalidDocId) return false;
   while (IsValid() && current_doc_id_ < target_id) {
     NextKey();
   }
@@ -169,7 +170,7 @@ bool Postings::KeyIterator::SkipForwardKey(const Key& key) {
 
 const Key& Postings::KeyIterator::GetKey() const {
   CHECK(IsValid()) << "KeyIterator is invalid or exhausted";
-  current_key_cache_ = DocIdMap::Instance().GetKey(current_doc_id_);
+  current_key_cache_ = StringInternStore::Intern(DocIdMap::Instance().GetKey(current_doc_id_));
   return current_key_cache_;
 }
 

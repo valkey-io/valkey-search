@@ -31,6 +31,7 @@ Tokenization Pipeline:
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -56,6 +57,11 @@ struct Lexer {
   absl::StatusOr<std::vector<std::string>> Tokenize(
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
       InProgressStemMap* stem_mappings = nullptr) const;
+
+  template <typename Callback>
+  absl::Status Tokenize(
+      absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
+      InProgressStemMap* stem_mappings, Callback&& callback) const;
 
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
@@ -83,6 +89,72 @@ struct Lexer {
   std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
                               uint32_t min_stem_size) const;
 };
+
+template <typename Callback>
+inline absl::Status Lexer::Tokenize(
+    absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
+    InProgressStemMap* stem_mappings, Callback&& callback) const {
+  if (stemming_enabled) {
+    CHECK(stem_mappings) << "stem_mappings must not be null";
+  }
+  if (!IsValidUtf8(text)) {
+    return absl::InvalidArgumentError("Invalid UTF-8");
+  }
+
+  sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
+  std::string word;
+  word.reserve(64);
+  size_t pos = 0;
+  uint32_t token_index = 0;
+  while (pos < text.size()) {
+    while (pos < text.size() && IsPunctuation(text[pos])) {
+      if (text[pos] == '\\' && pos + 1 < text.size()) {
+        break;
+      }
+      pos++;
+    }
+
+    word.clear();
+
+    while (pos < text.size()) {
+      char ch = text[pos];
+      if (ch == '\\' && pos + 1 < text.size()) {
+        char next_ch = text[pos + 1];
+        pos++;
+        if (next_ch == '\\' || IsPunctuation(next_ch)) {
+          word.push_back(text[pos++]);
+        } else {
+          if (IsPunctuation('\\')) {
+            break;
+          } else {
+            word.push_back(text[pos++]);
+          }
+        }
+      } else if (IsPunctuation(ch)) {
+        break;
+      } else {
+        word.push_back(ch);
+        pos++;
+      }
+    }
+
+    if (!word.empty()) {
+      NormalizeLowerCaseInPlace(word);
+
+      if (IsStopWord(word)) {
+        continue;
+      }
+
+      if (stemming_enabled) {
+        UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
+      }
+      callback(word, token_index++);
+      word.clear();
+    }
+  }
+
+  return absl::OkStatus();
+}
 
 }  // namespace valkey_search::indexes::text
 

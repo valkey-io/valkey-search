@@ -11,35 +11,6 @@
 #include <cstring>
 
 #include "absl/log/check.h"
-#include "src/utils/allocator.h"
-
-extern "C" {
-void *__wrap_malloc(size_t size) noexcept;
-void __wrap_free(void *ptr) noexcept;
-void *__wrap_realloc(void *ptr, size_t size) noexcept;
-int __wrap_malloc_usable_size(void *ptr) noexcept;
-
-void *RaxMemMalloc(size_t size) {
-  return __wrap_malloc(size);
-}
-void RaxMemFree(void *ptr) {
-  if (!ptr) return;
-  __wrap_free(ptr);
-}
-void *RaxMemRealloc(void *ptr, size_t size) {
-  if (!ptr) return RaxMemMalloc(size);
-  if (size == 0) {
-    RaxMemFree(ptr);
-    return nullptr;
-  }
-  return __wrap_realloc(ptr, size);
-}
-int RaxMemUsableSize(void *ptr) {
-  if (!ptr) return 0;
-  return __wrap_malloc_usable_size(ptr);
-}
-}
-
 
 namespace valkey_search::indexes::text {
 
@@ -397,7 +368,8 @@ Rax::PathIterator Rax::PathIterator::DescendNew() const {
     // Compressed: descend through the compressed path to child
     std::string new_path = path_;
     new_path.append(reinterpret_cast<const char *>(node_->data), node_->size);
-    raxNode *child = *RaxNodeFirstChildPtr(node_);
+    raxNode *child = *reinterpret_cast<raxNode **>(node_->data + node_->size +
+                                                   RaxPadding(node_->size));
     return PathIterator(rax_, child, std::move(new_path));
   }
 

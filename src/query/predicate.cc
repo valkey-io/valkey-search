@@ -463,6 +463,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
     absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                         indexes::text::kProximityTermsInlineCapacity>
         iterators;
+    iterators.reserve(children_.size());
     for (const auto &child : children_) {
       // In AND: skip text children when in prefilter evaluation because text in
       // AND is fully (recursively) resolved in the entries fetcher layer
@@ -528,6 +529,7 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
   auto filter_iterators =
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>();
+  filter_iterators.reserve(children_.size());
   for (const auto &child : children_) {
     EvaluationResult result =
         EvaluatePredicate(child.get(), evaluator, require_positions, true);

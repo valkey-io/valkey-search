@@ -4,8 +4,7 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
-#ifndef VALKEYSEARCH_SRC_INDEXES_TEXT_FOR128_H_
-#define VALKEYSEARCH_SRC_INDEXES_TEXT_FOR128_H_
+#pragma once
 
 #include <algorithm>
 #include <cstddef>
@@ -17,6 +16,27 @@ namespace valkey_search::indexes::text {
 constexpr size_t kFORBlockSize = 128;
 
 // Frame of Reference (FOR128) Bit-Packing Codec
+//
+// Functionality:
+// - Provides high-performance bit-packing compression and decompression for
+// blocks
+//   of up to 128 integer deltas (Frame-of-Reference / FOR encoding).
+// - Computes the minimum bit-width required (`BitsRequired`) to store the
+// maximum delta
+//   in a block, eliminating unnecessary leading zero bits.
+// - Serializes blocks into a compact byte format (`Pack`):
+//     [count: 1 byte (uint8_t)] [bit_width: 1 byte (uint8_t)] [bit-packed
+//     payload...]
+// - Unpacks encoded bytes back into 32-bit delta arrays (`Unpack`) for fast
+// sequential decoding.
+//
+// Usage:
+// - Used in full-text and tag inverted indexes (e.g.,
+// `src/indexes/text/posting.h` and posting lists)
+//   to compress sorted arrays of document IDs (DocIDs) and word/token
+//   positions, significantly reducing memory footprint for large postings lists
+//   while maintaining fast query scan speeds.
+// - Verified and benchmarked via unit tests in `testing/for128_test.cc`.
 class FOR128Codec {
  public:
   // Calculate minimum bits needed to store a block of deltas
@@ -97,5 +117,3 @@ class FOR128Codec {
 };
 
 }  // namespace valkey_search::indexes::text
-
-#endif  // VALKEYSEARCH_SRC_INDEXES_TEXT_FOR128_H_

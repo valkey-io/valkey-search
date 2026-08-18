@@ -73,7 +73,7 @@ class TextIndex {
   void MutateTarget(
       absl::string_view word, const InvasivePtr<Postings> &target,
       const std::optional<std::string> &reverse_word = std::nullopt,
-      item_count_op op = kNone);
+      item_count_op op = NONE);
 
  private:
   Rax prefix_tree_;
@@ -137,7 +137,7 @@ class TextIndexSchema {
   //
   // This is the main index of all Text fields in this index schema
   //
-  std::shared_ptr<TextIndex> text_index_;
+  std::shared_ptr<TextIndex> text_index_ = std::make_shared<TextIndex>(false);
 
   // Guards rax tree structural changes during concurrent writes.
   // Used exclusively by CommitKeyData/DeleteKeyData when inserting or removing

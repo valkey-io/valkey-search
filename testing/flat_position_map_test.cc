@@ -280,11 +280,11 @@ TEST_F(FlatPositionMapTest, SkipForwardWithPartitions) {
 TEST_F(FlatPositionMapTest, MoveConstructor) {
   auto position_map = CreatePositionMap({{10, 1}, {20, 2}}, 2);
   FlatPositionMapPtr map1(position_map, 2);
-  const char *data = map1->data();
+  const char *data = map1->Data();
 
   FlatPositionMapPtr map2(std::move(map1));
 
-  EXPECT_EQ(map2->data(), data);
+  EXPECT_EQ(map2->Data(), data);
   // NOLINTNEXTLINE(clang-analyzer-cplusplus.Move,bugprone-use-after-move)
   EXPECT_EQ(map1.get(), nullptr);
   EXPECT_EQ(map2->CountPositions(), 2);
@@ -296,11 +296,11 @@ TEST_F(FlatPositionMapTest, MoveAssignment) {
 
   FlatPositionMapPtr map1(position_map1, 1);
   FlatPositionMapPtr map2(position_map2, 1);
-  const char *data2 = map2->data();
+  const char *data2 = map2->Data();
 
   map1 = std::move(map2);
 
-  EXPECT_EQ(map1->data(), data2);
+  EXPECT_EQ(map1->Data(), data2);
   // NOLINTNEXTLINE(clang-analyzer-cplusplus.Move,bugprone-use-after-move)
   EXPECT_EQ(map2.get(), nullptr);
   EXPECT_EQ(map1->CountPositions(), 1);

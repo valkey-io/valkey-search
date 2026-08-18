@@ -1,4 +1,3 @@
-#include "src/utils/allocator.h"
 /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
@@ -6,14 +5,14 @@
  *
  */
 
+#include "src/indexes/text/flat_position_map.h"
+
 #include <cstdlib>
 #include <cstring>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
-#include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/posting.h"
-#include "src/utils/allocator.h"
 
 namespace {
 
@@ -180,7 +179,7 @@ FlatPositionMap *FlatPositionMap::Create(
   map->unused_ = 0;
 
   // Write data immediately after struct
-  char *p = map->data();
+  char *p = map->Data();
 
   // Write counts
   map->WriteCounts(p, num_positions, num_partitions);
@@ -197,22 +196,6 @@ FlatPositionMap *FlatPositionMap::Create(
   std::memcpy(p, position_data.data(), position_data.size());
 
   return map;
-}
-
-size_t FlatPositionMap::GetTotalAllocSize() const {
-  const char *p = data();
-  auto [num_positions, num_partitions] = ReadCounts(p);
-  size_t header_size = p - data();
-  size_t partition_map_size = num_partitions * kPartitionDeltaBytes * 2;
-  const char *curr = data() + header_size + partition_map_size;
-  while (U8(*curr) != kTerminatorByte) {
-    while (U8(*curr) & kContinueBit) {
-      curr++;
-    }
-    curr++;
-  }
-  curr++;  // include terminator byte
-  return sizeof(FlatPositionMap) + (curr - data());
 }
 
 void FlatPositionMap::Destroy(FlatPositionMap *map) {
@@ -261,16 +244,19 @@ void FlatPositionMap::WriteCounts(char *&p, uint32_t num_positions,
 // Iterator Implementation
 //=============================================================================
 
+PositionIterator::PositionIterator(const uint8_t *data, size_t max_bytes,
+                                   size_t num_positions)
+    : stream_data_(data),
+      stream_max_bytes_(max_bytes),
+      stream_num_positions_(num_positions) {
+  if (stream_num_positions_ > 0 && stream_data_ != nullptr &&
+      stream_max_bytes_ > 0) {
+    DecodeStreamPosition();
+  }
+}
+
 PositionIterator::PositionIterator(const FlatPositionMap &flat_map)
-    : flat_map_(flat_map.data()),
-      current_ptr_(nullptr),
-      data_start_(nullptr),
-      cumulative_position_(0),
-      num_partitions_(0),
-      current_partition_idx_(0),
-      next_partition_offset_(UINT32_MAX),
-      header_size_(0),
-      current_field_mask_(1) {
+    : flat_map_(flat_map.Data()) {
   CHECK(flat_map_)
       << "Cannot create PositionIterator from null FlatPositionMap";
 
@@ -289,10 +275,51 @@ PositionIterator::PositionIterator(const FlatPositionMap &flat_map)
   NextPosition();
 }
 
-bool PositionIterator::IsValid() const { return current_ptr_ != nullptr; }
+void PositionIterator::DecodeStreamPosition() {
+  if (stream_byte_offset_ >= stream_max_bytes_) {
+    stream_pos_index_ = stream_num_positions_;
+    return;
+  }
+  uint64_t delta = 0, mask = 0;
+  size_t delta_bytes_read =
+      ReadVarint(reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
+                 stream_max_bytes_ - stream_byte_offset_, delta);
+  if (delta_bytes_read == 0) {
+    stream_pos_index_ = stream_num_positions_;
+    return;
+  }
+  stream_byte_offset_ += delta_bytes_read;
+  size_t mask_bytes_read =
+      ReadVarint(reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
+                 stream_max_bytes_ - stream_byte_offset_, mask);
+  if (mask_bytes_read == 0) {
+    stream_pos_index_ = stream_num_positions_;
+    return;
+  }
+  stream_byte_offset_ += mask_bytes_read;
+  stream_cumulative_pos_ += static_cast<Position>(delta);
+  stream_field_mask_ = mask;
+}
+
+bool PositionIterator::IsValid() const {
+  if (stream_data_ != nullptr) {
+    return stream_pos_index_ < stream_num_positions_;
+  }
+  return current_ptr_ != nullptr;
+}
 
 // Advance to next position, updating current_position_ and current_field_mask_
 void PositionIterator::NextPosition() {
+  if (stream_data_ != nullptr) {
+    if (stream_pos_index_ < stream_num_positions_) {
+      stream_pos_index_++;
+      if (stream_pos_index_ < stream_num_positions_) {
+        DecodeStreamPosition();
+      }
+    }
+    return;
+  }
+
   if (!IsValid()) {
     return;
   }
@@ -362,8 +389,16 @@ uint32_t PositionIterator::FindPartitionForTarget(const char *partition_map,
 // Returns true if exact match found, false otherwise (iter positioned at next
 // >= target)
 bool PositionIterator::SkipForwardPosition(Position target) {
-  CHECK(target >= cumulative_position_)
-      << "SkipForwardPosition called with target < current position";
+  if (!IsValid() || GetPosition() >= target) {
+    return IsValid() && GetPosition() == target;
+  }
+
+  if (stream_data_ != nullptr) {
+    while (IsValid() && GetPosition() < target) {
+      NextPosition();
+    }
+    return IsValid() && GetPosition() == target;
+  }
 
   // Scan within current partition until we reach target or partition end
   while (IsValid()) {
@@ -415,22 +450,32 @@ bool PositionIterator::SkipForwardPosition(Position target) {
   return false;
 }
 
-Position PositionIterator::GetPosition() const { return cumulative_position_; }
+Position PositionIterator::GetPosition() const {
+  if (stream_data_ != nullptr) {
+    return stream_cumulative_pos_;
+  }
+  return cumulative_position_;
+}
 
-uint64_t PositionIterator::GetFieldMask() const { return current_field_mask_; }
+uint64_t PositionIterator::GetFieldMask() const {
+  if (stream_data_ != nullptr) {
+    return stream_field_mask_;
+  }
+  return current_field_mask_;
+}
 
 //=============================================================================
 // Public Query Methods
 //=============================================================================
 
 uint32_t FlatPositionMap::CountPositions() const {
-  const char *p = data();
+  const char *p = Data();
   auto [num_positions, _] = ReadCounts(p);
   return num_positions;
 }
 
 uint32_t FlatPositionMap::GetNumPartitions() const {
-  const char *p = data();
+  const char *p = Data();
   auto [_, num_partitions] = ReadCounts(p);
   return num_partitions;
 }
@@ -441,6 +486,22 @@ size_t FlatPositionMap::CountTermFrequency() const {
     total_frequency += __builtin_popcountll(iter.GetFieldMask());
   }
   return total_frequency;
+}
+
+size_t FlatPositionMap::GetTotalAllocSize() const {
+  const char *p = Data();
+  auto [num_positions, num_partitions] = ReadCounts(p);
+  size_t header_size = p - Data();
+  size_t partition_map_size = num_partitions * kPartitionDeltaBytes * 2;
+  const char *curr = Data() + header_size + partition_map_size;
+  while (U8(*curr) != kTerminatorByte) {
+    while (U8(*curr) & kContinueBit) {
+      curr++;
+    }
+    curr++;
+  }
+  curr++;  // include terminator byte
+  return sizeof(FlatPositionMap) + (curr - Data());
 }
 
 }  // namespace valkey_search::indexes::text

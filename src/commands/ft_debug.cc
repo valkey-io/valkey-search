@@ -264,8 +264,9 @@ std::ostream &operator<<(std::ostream &os,
 absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   auto stats = StringInternStore::Instance().GetStats();
-  ValkeyModule_ReplyWithArray(ctx, 3);
+  ValkeyModule_ReplyWithArray(ctx, 4);
   // Reply[0] -> GlobalStats
+  DumpBucket(ctx, stats.inline_total_stats_);
   DumpBucket(ctx, stats.out_of_line_total_stats_);
   // Reply[1] -> ByRefcount
   ValkeyModule_ReplyWithArray(ctx, stats.by_ref_stats_.size());
@@ -284,6 +285,7 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   // Put the stats into the log
   //
   VMSDK_LOG(NOTICE, ctx) << "<<<< Start InternStringPool Stats >>>>>";
+  VMSDK_LOG(NOTICE, ctx) << "Inline Total: " << stats.inline_total_stats_;
   VMSDK_LOG(NOTICE, ctx) << "OutOfLine Total: "
                          << stats.out_of_line_total_stats_;
   VMSDK_LOG(NOTICE, ctx) << "ByRefCount Buckets: "

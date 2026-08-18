@@ -111,7 +111,9 @@ class InternedStringPtr {
  public:
   InternedStringPtr() = default;
 
-  InternedString *Impl() const { return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_); }
+  InternedString *Impl() const {
+    return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_);
+  }
 
   InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
     if (impl_ && !IsInline()) {
@@ -168,7 +170,7 @@ class InternedStringPtr {
   absl::string_view Str() const {
     if (IsInline()) {
       uint8_t len = (impl_ & 0x1C) >> 2;
-      return absl::string_view(reinterpret_cast<const char*>(&impl_) + 1, len);
+      return {reinterpret_cast<const char *>(&impl_) + 1, len};
     }
     if (impl_) {
       return reinterpret_cast<InternedString *>(impl_)->Str();
@@ -182,9 +184,15 @@ class InternedStringPtr {
   const InternedStringPtr &operator*() const { return *this; }
   operator bool() const { return impl_ != 0; }
 
-  size_t RefCount() const { return (impl_ && !IsInline()) ? reinterpret_cast<InternedString *>(impl_)->RefCount() : 1; }
+  size_t RefCount() const {
+    return (impl_ && !IsInline())
+               ? reinterpret_cast<InternedString *>(impl_)->RefCount()
+               : 1;
+  }
 
-  const InternedString *RawPtr() const { return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_); }
+  const InternedString *RawPtr() const {
+    return IsInline() ? nullptr : reinterpret_cast<InternedString *>(impl_);
+  }
 
   size_t Hash() const { return absl::HashOf(impl_); }
 
@@ -198,6 +206,11 @@ class InternedStringPtr {
     return impl_ <=> other.impl_;
   }
 
+  template <typename H>
+  friend H AbslHashValue(H h, const InternedStringPtr &p) {
+    return H::combine(std::move(h), p.impl_);
+  }
+
   static std::optional<InternedStringPtr> MakeInline(absl::string_view str) {
     if (str.size() > 6) {
       return std::nullopt;
@@ -205,7 +218,7 @@ class InternedStringPtr {
     uintptr_t data = kInlineMask;
     data |= (str.size() << 2);
     if (!str.empty()) {
-      std::memcpy(reinterpret_cast<char*>(&data) + 1, str.data(), str.size());
+      std::memcpy(reinterpret_cast<char *>(&data) + 1, str.data(), str.size());
     }
     return InternedStringPtr(data);
   }
@@ -214,7 +227,8 @@ class InternedStringPtr {
   uintptr_t impl_{0};
   static constexpr uintptr_t kInlineMask = 1ULL << 63;
 
-  explicit InternedStringPtr(InternedString *impl) : impl_(reinterpret_cast<uintptr_t>(impl)) {}
+  explicit InternedStringPtr(InternedString *impl)
+      : impl_(reinterpret_cast<uintptr_t>(impl)) {}
   explicit InternedStringPtr(uintptr_t inline_data) : impl_(inline_data) {}
 
   friend class StringInternStore;
@@ -236,9 +250,7 @@ class BorrowedInternedStringPtr {
     return *reinterpret_cast<const InternedStringPtr *>(this);
   }
 
-  absl::string_view Str() const {
-    return AsOwned().Str();
-  }
+  absl::string_view Str() const { return AsOwned().Str(); }
   const BorrowedInternedStringPtr *operator->() const { return this; }
   const BorrowedInternedStringPtr &operator*() const { return *this; }
   explicit operator bool() const { return impl_ != 0; }
@@ -255,6 +267,11 @@ class BorrowedInternedStringPtr {
     return impl_ == other.impl_;
   }
   size_t Hash() const { return absl::HashOf(impl_); }
+
+  template <typename H>
+  friend H AbslHashValue(H h, const BorrowedInternedStringPtr &p) {
+    return H::combine(std::move(h), p.impl_);
+  }
 
  private:
   uintptr_t impl_{0};
@@ -284,14 +301,19 @@ struct std::hash<valkey_search::InternedStringPtr> {
   }
 };
 
+template <>
+struct std::hash<valkey_search::BorrowedInternedStringPtr> {
+  std::size_t operator()(
+      const valkey_search::BorrowedInternedStringPtr &sp) const {
+    return sp.Hash();
+  }
+};
+
 namespace valkey_search {
 
 template <typename T>
 using InternedStringHashMap = absl::flat_hash_map<InternedStringPtr, T>;
 using InternedStringSet = absl::flat_hash_set<InternedStringPtr>;
-
-template <typename T>
-using InternedStringNodeHashMap = absl::node_hash_map<InternedStringPtr, T>;
 
 //
 // BagOfInternedStringPtrs is a space-optimized drop-in replacement for
@@ -1004,6 +1026,7 @@ class StringInternStore {
     };
     absl::btree_map<int, BucketStats> by_ref_stats_;
     absl::btree_map<int, BucketStats> by_size_stats_;
+    BucketStats inline_total_stats_;
     BucketStats out_of_line_total_stats_;
   };
   Stats GetStats() const;
@@ -1048,7 +1071,6 @@ class StringInternStore {
 
   FRIEND_TEST(ValkeySearchTest, Info);
 };
-
 
 }  // namespace valkey_search
 

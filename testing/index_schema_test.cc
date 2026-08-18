@@ -144,7 +144,7 @@ TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
                                            test_case.hash_field, mock_index));
 
     auto key = StringInternStore::Intern("key");
-    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
     EXPECT_CALL(*mock_index, IsTracked(key))
         .WillRepeatedly(Return(test_case.is_tracked));
     if (test_case.expect_index_add_w_result.has_value()) {
@@ -629,7 +629,7 @@ TEST_P(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
         index_schema->AddIndex("attribute_name", "vector", mock_index));
 
     auto key = StringInternStore::Intern("key");
-    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
     EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
 
     EXPECT_CALL(*mock_index, AddRecord(key, testing::_)).Times(0);
@@ -2692,7 +2692,7 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
   VMSDK_EXPECT_OK(index_schema->AddIndex("name", "name", mock_index));
 
   auto key = StringInternStore::Intern("product:1");
-  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Widget")))
@@ -2760,7 +2760,7 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
   VMSDK_EXPECT_OK(index_schema->AddIndex("name", "name", mock_index));
 
   auto key = StringInternStore::Intern("product:2");
-  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str().data());
+  auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key->Str());
 
   EXPECT_CALL(*mock_index, IsTracked(key)).WillRepeatedly(Return(false));
   EXPECT_CALL(*mock_index, AddRecord(key, absl::string_view("Gadget")))

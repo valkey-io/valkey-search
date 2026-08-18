@@ -25,7 +25,6 @@
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
-#include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -95,7 +94,7 @@ void Tag::IndexTagForKey(absl::string_view tag, const InternedStringPtr &key) {
   std::string norm = Normalize(tag);
   MutateCtx ctx{&key, /*insert=*/true};
   raxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()), norm.size(),
-            &TagMutateTrampoline, &ctx, kAdd);
+            &TagMutateTrampoline, &ctx, ADD);
 }
 
 void Tag::DeindexTagForKey(absl::string_view tag,
@@ -103,7 +102,7 @@ void Tag::DeindexTagForKey(absl::string_view tag,
   std::string norm = Normalize(tag);
   MutateCtx ctx{&key, /*insert=*/false};
   raxMutate(tree_, reinterpret_cast<unsigned char *>(norm.data()), norm.size(),
-            &TagMutateTrampoline, &ctx, kSubtract);
+            &TagMutateTrampoline, &ctx, SUBTRACT);
 }
 
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
@@ -234,7 +233,8 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto &tag_info = it->second;
-  auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  auto old_raw_tag_string = std::move(tag_info.raw_tag_string);
+  auto old_parsed_tags = ParseRecordTags(*old_raw_tag_string, separator_);
 
   tag_info.raw_tag_string = std::move(interned_data);
   auto persistent_new_tags =
@@ -341,8 +341,8 @@ std::optional<absl::string_view> Tag::GetRawTagString(
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
-    const std::vector<void *> &slots,
-    const std::vector<InternedStringPtr> &extras)
+    const Tag::SlotsVector &slots,
+    const Tag::ExtrasVector &extras)
     : slots_(slots), extras_(extras) {
   AdvanceToNextNonEmpty();
 }
@@ -361,7 +361,6 @@ void Tag::EntriesFetcherIterator::Next() {
   if (!slots_done_) {
     ++bag_it_;
     if (bag_it_ != bag_end_) {
-      current_ = *bag_it_;
       return;
     }
     (void)bag_.Release();
@@ -370,13 +369,13 @@ void Tag::EntriesFetcherIterator::Next() {
     return;
   }
   ++extras_idx_;
-  if (extras_idx_ < extras_.size()) {
-    current_ = extras_[extras_idx_];
-  }
 }
 
 const InternedStringPtr &Tag::EntriesFetcherIterator::operator*() const {
-  return current_;
+  if (!slots_done_) {
+    return *bag_it_;
+  }
+  return extras_[extras_idx_];
 }
 
 void Tag::EntriesFetcherIterator::AdvanceToNextNonEmpty() {
@@ -386,16 +385,12 @@ void Tag::EntriesFetcherIterator::AdvanceToNextNonEmpty() {
     bag_it_ = bag_.begin();
     bag_end_ = bag_.end();
     if (bag_it_ != bag_end_) {
-      current_ = *bag_it_;
       return;
     }
     (void)bag_.Release();
     ++slot_idx_;
   }
   slots_done_ = true;
-  if (extras_idx_ < extras_.size()) {
-    current_ = extras_[extras_idx_];
-  }
 }
 
 std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
@@ -405,10 +400,34 @@ std::unique_ptr<EntriesFetcherIteratorBase> Tag::EntriesFetcher::Begin() {
 // TODO: b/357027854 - Support Suffix/Infix Search
 std::unique_ptr<EntriesFetcherBase> Tag::Search(
     const query::TagPredicate &predicate, bool negate) const {
+  const auto &tags = predicate.GetTags();
+  if (!negate && tags.size() == 1) {
+    absl::string_view tag = *tags.begin();
+    const bool is_prefix = !tag.empty() && tag.back() == '*';
+    if (!is_prefix) {
+      std::string norm = Normalize(tag);
+      auto *qbytes =
+          reinterpret_cast<unsigned char *>(const_cast<char *>(norm.data()));
+      void *p = nullptr;
+      if (raxFind(tree_, qbytes, norm.size(), &p) == 1 && p != nullptr) {
+        SlotsVector matched_slots;
+        matched_slots.push_back(p);
+        auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(p));
+        size_t total = bag.size();
+        (void)bag.Release();
+        return std::make_unique<EntriesFetcher>(std::move(matched_slots),
+                                                ExtrasVector{}, total);
+      }
+      return std::make_unique<EntriesFetcher>(SlotsVector{}, ExtrasVector{}, 0);
+    }
+  }
+
   // Collect matched rax slots (each slot's 8 bytes encode a bag) without
   // iterating their postings; the iterator yields lazily during Begin().
   absl::flat_hash_set<void *> seen;
-  std::vector<void *> matched_slots;
+  seen.reserve(predicate.GetTags().size());
+  SlotsVector matched_slots;
+  matched_slots.reserve(predicate.GetTags().size());
   size_t total = 0;
 
   auto collect_slot = [&](void *slot) {
@@ -445,12 +464,12 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
     }
   }
 
-  std::vector<InternedStringPtr> extras;
+  ExtrasVector extras;
   size_t out_size = total;
 
   if (negate) {
     // Yield every posting NOT in `seen`, plus every untracked key.
-    std::vector<void *> negate_slots;
+    SlotsVector negate_slots;
     size_t negate_total = 0;
     raxIterator it;
     raxStart(&it, tree_);

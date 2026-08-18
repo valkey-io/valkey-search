@@ -57,7 +57,6 @@ minimal state overhead, maintaining cumulative position for delta decoding.
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 
 #include "absl/container/btree_map.h"
 
@@ -92,9 +91,9 @@ class FlatPositionMap {
   size_t GetTotalAllocSize() const;
 
   // Access to raw data pointer (stored immediately after this object)
-  inline char *data() { return reinterpret_cast<char *>(this + 1); }
+  inline char *Data() { return reinterpret_cast<char *>(this + 1); }
 
-  inline const char *data() const {
+  inline const char *Data() const {
     return reinterpret_cast<const char *>(this + 1);
   }
 
@@ -121,10 +120,12 @@ class FlatPositionMap {
   FlatPositionMap() = default;
 };
 
-// Iterator for FlatPositionMap
+// Iterator for Position data (supports both stream-direct and FlatPositionMap)
 class PositionIterator {
  public:
-  PositionIterator(const FlatPositionMap &flat_map);
+  PositionIterator() = default;
+  PositionIterator(const uint8_t *data, size_t max_bytes, size_t num_positions);
+  explicit PositionIterator(const FlatPositionMap &flat_map);
 
   bool IsValid() const;
   void NextPosition();
@@ -133,16 +134,27 @@ class PositionIterator {
   uint64_t GetFieldMask() const;
 
  private:
-  const char *flat_map_;     // Pointer to start of serialized data
-  const char *current_ptr_;  // Pointer to next byte to be read
-  const char *
-      data_start_;  // Start of position/field data (after header+partition map)
-  Position cumulative_position_;    // Absolute position (sum of all deltas)
-  uint32_t num_partitions_;         // Number of partition boundaries
-  uint32_t current_partition_idx_;  // Index of next partition boundary
-  uint32_t next_partition_offset_;  // Cached byte offset of next partition
-  size_t header_size_;              // Size of variable-length header
-  uint64_t current_field_mask_;     // Bit mask of fields at current position
+  void DecodeStreamPosition();
+
+  // Stream-direct members
+  const uint8_t *stream_data_{nullptr};
+  size_t stream_max_bytes_{0};
+  size_t stream_byte_offset_{0};
+  size_t stream_num_positions_{0};
+  size_t stream_pos_index_{0};
+  Position stream_cumulative_pos_{0};
+  uint64_t stream_field_mask_{0};
+
+  // Legacy FlatPositionMap members
+  const char *flat_map_{nullptr};
+  const char *current_ptr_{nullptr};
+  const char *data_start_{nullptr};
+  Position cumulative_position_{0};
+  uint32_t num_partitions_{0};
+  uint32_t current_partition_idx_{0};
+  uint32_t next_partition_offset_{UINT32_MAX};
+  size_t header_size_{0};
+  uint64_t current_field_mask_{1};
 
   // Private static helper function for navigation
   static uint32_t FindPartitionForTarget(const char *partition_map,

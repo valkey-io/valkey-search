@@ -161,7 +161,14 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    return false;
+    if (value.IsMissing()) {
+      return false;
+    }
+    // Something evaluated to nothing: name the field with a nil value rather
+    // than dropping it, which is what Redisearch does.
+    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+    ValkeyModule_ReplyWithNull(ctx);
+    return true;
   }
 
   // Handle array values with RESP array serialization

@@ -27,9 +27,16 @@ class Value {
  public:
   class Nil {
    public:
-    Nil() : reason_("ctor") {}
+    // The reason a Nil carries isn't visible to clients, so it also records
+    // *why* there is no value: a field the key never had reads as kMissing,
+    // while an expression that evaluated to nothing gives its own reason. The
+    // reply leaves the former out and names the latter with a nil value, which
+    // is what Redisearch does.
+    static constexpr absl::string_view kMissing{"missing"};
+    Nil() : reason_(kMissing) {}
     explicit Nil(std::string reason) : reason_(std::move(reason)) {}
     std::string GetReason() const { return reason_; }
+    bool IsMissing() const { return reason_ == kMissing; }
 
    private:
     std::string reason_;
@@ -57,6 +64,9 @@ class Value {
 
   // test for type of Value
   bool IsNil() const;
+  // Nil because the key never had this field, rather than because something
+  // evaluated to nothing.
+  bool IsMissing() const;
   bool IsBool() const;
   bool IsDouble() const;
   bool IsString() const;

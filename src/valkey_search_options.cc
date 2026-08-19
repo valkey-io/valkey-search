@@ -347,6 +347,20 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--max-group-key-expansion" flag. A GROUPBY over a multi-value
+/// field puts the record in one group per element, so a record with several
+/// such key fields expands to the product of their lengths.
+constexpr absl::string_view kMaxGroupKeyExpansionConfig{
+    "max-group-key-expansion"};
+constexpr uint32_t kDefaultMaxGroupKeyExpansion{1 << 16};
+constexpr uint32_t kMinimumMaxGroupKeyExpansion{1};
+static auto max_group_key_expansion =
+    config::NumberBuilder(kMaxGroupKeyExpansionConfig,   // name
+                          kDefaultMaxGroupKeyExpansion,  // default limit (64k)
+                          kMinimumMaxGroupKeyExpansion,  // min limit (1)
+                          UINT_MAX)                      // max limit
+        .Build();
+
 /// Register the "--tag-min-prefix-length" flag. Controls the minimum number
 /// of characters required before trailing '*' in TAG wildcard queries.
 /// The length excludes the '*' character itself.
@@ -628,6 +642,10 @@ vmsdk::config::Number& GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number& GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number&>(*max_term_expansions);
+}
+
+vmsdk::config::Number& GetMaxGroupKeyExpansion() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_group_key_expansion);
 }
 
 vmsdk::config::Number& GetTagMinPrefixLength() {

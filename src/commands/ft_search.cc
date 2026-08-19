@@ -60,7 +60,8 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
 
   // WITHSCORES keeps the top-level relevance score even under NOCONTENT
   const bool emit_score =
-      parameters.with_scores && query::QueryHasTextPredicate(parameters);
+      parameters.with_scores && (query::QueryHasTextPredicate(parameters) ||
+                                 parameters.IsNonVectorQuery());
   ValkeyModule_ReplyWithArray(ctx, (emit_score ? 2 : 1) * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
   for (auto i = range.start_index; i < range.end_index; ++i) {

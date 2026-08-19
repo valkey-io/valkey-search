@@ -222,9 +222,9 @@ struct SearchParameters {
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
-  // TODO: Scorer is currently a placeholder. The selected scoring function is
-  // not yet invoked; non-vector queries will report a score of 0.0.
-  indexes::scoring::ScorerType scorer{indexes::scoring::ScorerType::kBm25Std};
+  // Seeded from the `default-scorer` config; an explicit SCORER overrides it.
+  indexes::scoring::ScorerType scorer{static_cast<indexes::scoring::ScorerType>(
+      options::GetDefaultScorer().GetValue())};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;

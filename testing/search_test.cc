@@ -32,6 +32,7 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
+#include "src/coordinator/search_converter.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -1787,6 +1788,32 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
   auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
   ASSERT_TRUE(recomputed.has_value());
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// A query that omits SCORER picks up the `default-scorer` config.
+TEST(ScorerConfigTest, DefaultScorerSeedsSearchParameters) {
+  auto &config = options::GetDefaultScorer();
+  const int original = config.GetValue();
+  for (const auto &[name, expected] : *indexes::scoring::kScorerByStr) {
+    VMSDK_EXPECT_OK(config.FromString(name));
+    EXPECT_EQ(UnitTestSearchParameters().scorer, expected) << name;
+  }
+  VMSDK_EXPECT_OK(config.SetValue(original));
+}
+
+// A shard scores with whatever SearchParameters::scorer holds, so the fanout
+// request must carry the coordinator's choice; otherwise SCORER is silently
+// downgraded to the default on every shard.
+TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
+  for (auto type : {indexes::scoring::ScorerType::kBm25Std,
+                    indexes::scoring::ScorerType::kTfidf}) {
+    EXPECT_EQ(coordinator::ScorerFromGRPC(coordinator::ScorerToGRPC(type)),
+              type);
+  }
+  // An absent field (peer that predates the field) must mean the default.
+  coordinator::SearchIndexPartitionRequest request;
+  EXPECT_EQ(coordinator::ScorerFromGRPC(request.scorer()),
+            indexes::scoring::ScorerType::kBm25Std);
 }
 
 }  // namespace

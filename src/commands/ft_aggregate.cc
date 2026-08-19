@@ -177,7 +177,6 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
-    std::string double_storage;
     std::string_view value_view;
     if (name == "$") {
       value_view = *value.AsStringView();
@@ -185,17 +184,9 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
       switch (indexer_type) {
         case indexes::IndexerType::kTag:
         case indexes::IndexerType::kText:
-        case indexes::IndexerType::kNone: {
-          value_view = *value.AsStringView();
-          break;
-        }
+        case indexes::IndexerType::kNone:
         case indexes::IndexerType::kNumeric: {
-          auto dble = value.AsDouble();
-          if (!dble) {
-            return false;
-          }
-          double_storage = expr::FormatDouble(*dble);
-          value_view = double_storage;
+          value_view = *value.AsStringView();
           break;
         }
         default:

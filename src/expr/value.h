@@ -81,6 +81,12 @@ class Value {
   std::optional<std::string> AsString() const;
   std::optional<Array> AsArray() const;
 
+  // Deterministic string representation for hashing/identity. Unlike
+  // AsStringView()/AsString() which return nullopt/"" for arrays (and must for
+  // compatibility), this handles all types including arrays (serialized as
+  // JSON-like bracketed strings).
+  std::string Serialize() const;
+
   bool IsTrue() const {
     auto r = AsBool();
     return (r && *r);

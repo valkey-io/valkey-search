@@ -687,6 +687,42 @@ class TestNonVector(ValkeySearchTestCaseBase):
             assert client.execute_command(*doc) == 3
         validate_aggregate_count_distinctish(client)
 
+    def test_aggregate_count_distinctish_array_values(self):
+        """
+            Test COUNT_DISTINCTISH with array-valued JSON fields.
+        """
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "arraytest", "ON", "JSON",
+            "PREFIX", "1", "arritem:",
+            "SCHEMA",
+            "$.group", "AS", "group", "TAG",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.tags", "AS", "tags", "TAG"
+        ) == b"OK"
+
+        # 3 distinct arrays + 1 duplicate
+        docs = [
+            ('arritem:1', '{"group":"a","price":10,"tags":["red","blue"]}'),
+            ('arritem:2', '{"group":"a","price":20,"tags":["blue","green"]}'),
+            ('arritem:3', '{"group":"a","price":30,"tags":["red","blue"]}'),
+            ('arritem:4', '{"group":"a","price":40,"tags":["red","blue","yellow"]}'),
+        ]
+        for key, val in docs:
+            client.execute_command("JSON.SET", key, "$", val)
+
+        result = client.execute_command(
+            "FT.AGGREGATE", "arraytest", "*",
+            "LOAD", "1", "tags",
+            "GROUPBY", "1", "@group",
+            "REDUCE", "COUNT_DISTINCTISH", "1", "@tags", "AS", "approx_distinct"
+        )
+        assert result[0] == 1
+        row = dict(zip(result[1][::2], result[1][1::2]))
+        approx = float(row[b'approx_distinct'])
+        # 3 distinct arrays, allow HLL tolerance
+        assert 2 <= approx <= 4, f"Expected ~3, got {approx}"
+
     def test_uningested_multi_field(self):
         """
             Test out the case where some index fields are not ingested. But other numeric and tag fields are.

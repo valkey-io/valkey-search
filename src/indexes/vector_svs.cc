@@ -22,6 +22,7 @@
 
 #include <exception>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -424,6 +425,14 @@ absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
                             // staging anyway, but keep the gauge accurate).
 
   try {
+    // Sync the memory counter on every exit path so no mutation is missed.
+    // UpdateReportedMemory is a no-op when svs_index_ is null (e.g. when
+    // add() fails and we reset svs_index_ below), which is correct.
+    auto memory_sync =
+        absl::MakeCleanup([this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_) {
+          UpdateReportedMemory();
+        });
+
     // 1. Flatten buffered vectors into [n × dim] contiguous FP32 for both
     //    LeanVecTrainingData::build (which reads it) and the subsequent
     //    DynamicVamanaIndex::add (which copies it into SVS storage).
@@ -479,6 +488,12 @@ absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
     auto add_status = svs_index_->add(n, labels.data(), flat.data());
     if (!add_status.ok()) {
       buffer_flushing_ = false;
+      // Destroy the just-built graph so the svs_index_ != nullptr guard at
+      // the top of this function does not permanently block retries. Resetting
+      // to null leaves the index in kStaging with pending_buffer_ intact so
+      // the next flush can attempt training again.
+      (void)svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
+      svs_index_ = nullptr;
       return absl::InternalError(
           absl::StrCat("LeanVec initial add failed: ", add_status.message()));
     }
@@ -503,7 +518,6 @@ absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
     VMSDK_LOG(NOTICE, nullptr)
         << "LeanVec index ready. Trained on " << n << " vectors, ingested " << n
         << " vectors. State=ready.";
-    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     buffer_flushing_ = false;
@@ -555,6 +569,14 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
                                             absl::string_view record) {
   try {
     absl::MutexLock lock(&index_mutex_);
+    // Sync the memory counter on every exit path. This covers the case where
+    // remove() succeeds but add() fails — without this guard, the stale
+    // last_reported_svs_memory_ causes later deltas to over-report freed
+    // memory, wrapping the unsigned used_memory_bytes counter.
+    auto memory_sync =
+        absl::MakeCleanup([this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_) {
+          UpdateReportedMemory();
+        });
 
     if (index_state_ == SVSIndexState::kStaging) {
       return absl::FailedPreconditionError(
@@ -584,7 +606,6 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
           absl::StrCat("SVS add (modify) failed: ", add_status.message()));
     }
 
-    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     return absl::InternalError(

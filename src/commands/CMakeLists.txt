@@ -30,6 +30,7 @@ target_link_libraries(commands PUBLIC fanout)
 target_link_libraries(commands PUBLIC response_generator)
 target_link_libraries(commands PUBLIC search)
 target_link_libraries(commands PUBLIC vmsdklib)
+target_link_libraries(commands PUBLIC hyperloglog_counter)
 target_link_libraries(commands PUBLIC valkey_module)
 
 set(SRCS_FT_SEARCH_PARSER ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.cc

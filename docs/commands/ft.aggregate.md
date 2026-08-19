@@ -87,6 +87,7 @@ The following reducer functions are available. The reducer functions that take a
 | :---------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
 | COUNT 0                       | Number of records                                                                                                                  |
 | COUNT_DISTINCT 1 <expression> | The exact number of distinct values of the expression. Caution this consumes memory proportional to the number of distinct values. |
+| COUNT_DISTINCTISH 1 <expression>   | Approximate number of distinct values using HyperLogLog (P=14). Uses constant ~12KB memory per group with ~0.81% standard error. Preferred over COUNT_DISTINCT for large groups. Nil values are excluded. |
 | SUM 1 <expression>            | The numerical sum of the values of the expression.                                                                                 |
 | MIN 1 <expression>            | The smallest numerical values of the expression.                                                                                   |
 | MAX 1 <expression>            | The largest numerical values of the expression.                                                                                    |

@@ -11,6 +11,7 @@
 #include <iomanip>
 #include <sstream>
 
+#include "absl/strings/str_cat.h"
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -196,6 +197,49 @@ std::optional<Value::Array> Value::AsArray() const {
     return *result;
   }
   return std::nullopt;
+}
+
+std::string Value::Serialize() const {
+  if (IsNil()) {
+    return "";
+  }
+  if (IsArray()) {
+    auto arr = GetArray();
+    std::string result = "[";
+    for (size_t i = 0; i < arr->size(); ++i) {
+      if (i > 0) {
+        absl::StrAppend(&result, ",");
+      }
+      const auto& elem = (*arr)[i];
+      if (elem.IsString()) {
+        auto sv = *elem.AsStringView();
+        absl::StrAppend(&result, "\"");
+        for (char c : sv) {
+          if (c == '"' || c == '\\') {
+            result += '\\';
+          }
+          result += c;
+        }
+        absl::StrAppend(&result, "\"");
+      } else if (elem.IsArray()) {
+        absl::StrAppend(&result, elem.Serialize());
+      } else if (elem.IsNil()) {
+        absl::StrAppend(&result, "null");
+      } else if (elem.IsBool()) {
+        absl::StrAppend(&result, elem.GetBool() ? "true" : "false");
+      } else {
+        absl::StrAppend(&result, *elem.AsStringView());
+      }
+    }
+    absl::StrAppend(&result, "]");
+    return result;
+  }
+  // Scalar: bool/double/string
+  auto sv = AsStringView();
+  if (sv.has_value()) {
+    return std::string(*sv);
+  }
+  return "";
 }
 
 Value::Array Value::GetArray() const { return std::get<Array>(value_); }

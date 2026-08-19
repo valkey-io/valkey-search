@@ -608,3 +608,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1",
                    r"@tags:{ a\}b | a\|b | x\}y\}z | a\\b | normal }",
                    "LIMIT", "0", "40")
+
+    # COUNT_DISTINCTISH compatibility tests are intentionally omitted.
+    # COUNT_DISTINCTISH uses HyperLogLog which is an approximate algorithm.
+    # Our implementation uses Valkey's dense HLL (P=14, MurmurHash64A)
+    # while Redis uses a different HLL (P=8, FNV hash), producing different
+    # approximate counts. Exact comparison is not meaningful.
+    # Functional testing is covered in integration/test_non_vector.py.

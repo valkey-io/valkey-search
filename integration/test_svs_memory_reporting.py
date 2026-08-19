@@ -85,6 +85,13 @@ class TestSVSMemoryReporting(ValkeySearchTestCaseBase):
         except Exception:
             return False
 
+    def _get_num_docs(self, client, index_name):
+        try:
+            info = FTInfoParser(client.execute_command("FT.INFO", index_name))
+            return info.num_docs
+        except Exception:
+            return -1
+
     def _used_memory_bytes(self, client):
         info = client.info("search")
         return int(info["search_used_memory_bytes"])
@@ -138,4 +145,72 @@ class TestSVSMemoryReporting(ValkeySearchTestCaseBase):
             f"DROPINDEX freed only {freed} bytes; "
             f"expected >= {min_freed} "
             f"(vectors={vector_bytes} + edges={edge_bytes})"
+        )
+
+    def test_memory_accounting_full_lifecycle(self):
+        """
+        Validates used_memory_bytes at every stage of the SVS index lifecycle:
+          baseline → FT.CREATE → load+flush → delete subset → FT.DROPINDEX → near baseline.
+        """
+        vectors = random_vectors(NUM_VECTORS, DIM, seed=2)
+        index_name = "svs_mem_lifecycle"
+        n_delete = 100
+
+        vector_bytes = NUM_VECTORS * DIM * 4
+        edge_bytes = NUM_VECTORS * GRAPH_MAX_DEGREE * 4
+        min_graph_bytes = vector_bytes + edge_bytes
+
+        # Stage 1: baseline before any SVS activity.
+        baseline = self._used_memory_bytes(self.client)
+
+        # Stage 2: FT.CREATE — empty graph overhead visible immediately.
+        self._create_svs_index(self.client, index_name)
+        after_create = self._used_memory_bytes(self.client)
+        assert after_create > baseline, (
+            f"FT.CREATE did not increase used_memory_bytes: "
+            f"baseline={baseline} after_create={after_create}"
+        )
+
+        # Stage 3: load all vectors and wait for flush.
+        self._load_vectors(self.client, index_name, vectors)
+        self._wait_for_indexed(self.client, index_name, NUM_VECTORS)
+        after_load = self._used_memory_bytes(self.client)
+        assert after_load - baseline >= min_graph_bytes, (
+            f"used_memory_bytes delta after load ({after_load - baseline}) "
+            f"< expected minimum {min_graph_bytes} "
+            f"(vectors={vector_bytes} + edges={edge_bytes})"
+        )
+
+        # Stage 4: delete a subset of vectors.
+        # Vamana is a dense graph — removes tombstone rather than shrink,
+        # so memory should stay flat or decrease slightly.
+        pipe = self.client.pipeline(transaction=False)
+        for i in range(n_delete):
+            pipe.delete(f"{index_name}:{i:06d}")
+        pipe.execute()
+        waiters.wait_for_true(
+            lambda: self._get_num_docs(self.client, index_name)
+            <= NUM_VECTORS - n_delete,
+            timeout=30,
+        )
+        after_delete = self._used_memory_bytes(self.client)
+        assert after_delete <= after_load, (
+            f"used_memory_bytes grew after {n_delete} deletes: "
+            f"before={after_load} after={after_delete}"
+        )
+
+        # Stage 5: FT.DROPINDEX — wait for full memory reclaim (graph + intern store).
+        # DROPINDEX is asynchronous; the destructor frees both the SVS graph and
+        # the intern store on a background thread. Wait until used_memory_bytes
+        # returns near baseline before asserting.
+        self.client.execute_command("FT.DROPINDEX", index_name)
+        tolerance = max(512 * 1024, int(baseline * 0.05))
+        waiters.wait_for_true(
+            lambda: self._used_memory_bytes(self.client) <= baseline + tolerance,
+            timeout=60,
+        )
+        after_drop = self._used_memory_bytes(self.client)
+        assert after_drop <= baseline + tolerance, (
+            f"used_memory_bytes after DROPINDEX ({after_drop}) did not return near "
+            f"baseline ({baseline} ± {tolerance})"
         )

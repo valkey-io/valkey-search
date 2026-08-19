@@ -427,6 +427,12 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
+      // 2. Skip keys not in the INKEYS set (when specified).
+      if (parameters.inkeys.has_value() &&
+          !parameters.inkeys->contains(key->Str())) {
+        iterator->Next();
+        continue;
+      }
       const valkey_search::indexes::text::TextIndex *text_index =
           text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
                             : nullptr;
@@ -655,6 +661,12 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       while (!iterator->Done()) {
         const auto &key = **iterator;
         BACKGROUND_PAUSEPOINT("search_entries_fetcher");
+        // Skip keys not in the INKEYS set (when specified).
+        if (parameters.inkeys.has_value() &&
+            !parameters.inkeys->contains(key->Str())) {
+          iterator->Next();
+          continue;
+        }
         if (needs_dedup) {
           if (seen_keys.contains(key->Str().data())) {
             iterator->Next();
@@ -850,6 +862,13 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   // coordinator tracker counts this as a "successful" node with 0 results —
   // enabling partial results from other shards that did complete.
   if (parameters.cancellation_token->IsCancelled()) {
+    return absl::OkStatus();
+  }
+  // INKEYS with an empty set means no keys can match.
+  // Short-circuit before acquiring the lock to avoid unnecessary contention.
+  if (parameters.inkeys.has_value() && parameters.inkeys->empty()) {
+    parameters.search_result =
+        SearchResult(0, std::vector<indexes::Neighbor>{}, parameters);
     return absl::OkStatus();
   }
   vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());

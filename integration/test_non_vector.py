@@ -1,6 +1,6 @@
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 import json
 import random
@@ -649,6 +649,32 @@ class TestNonVector(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
+
+class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
+    """
+        A REDUCE with no AS clause auto-generates its output name, and which form
+        it generates is gated on search.emulate-release (see COMPATIBILITY.md).
+        debug-mode is required to set emulate-release above the module version.
+    """
+
+    def test_default_reducer_alias(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        for release, alias in (("1.2.1", b'COUNT_DISTINCT(@rating)'),
+                               ("1.3.0", b'__generated_aliascount_distinctrating')):
+            assert client.execute_command("CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.AGGREGATE", "products", "@price:[1 1000]",
+                "LOAD", "2", "rating", "category",
+                "GROUPBY", "1", "@category",
+                "REDUCE", "COUNT_DISTINCT", "1", "@rating"
+            )
+            assert result[0] >= 1
+            for i in range(1, len(result)):
+                row = dict(zip(result[i][::2], result[i][1::2]))
+                assert alias in row, f"{release}: expected {alias} in {list(row)}"
 
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 

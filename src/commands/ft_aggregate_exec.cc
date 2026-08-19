@@ -11,7 +11,11 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_join.h"
+#include "absl/strings/strip.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -413,19 +417,26 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
-    // for memory allocator issue causing ostringstream to crash.
-    // std::ostringstream os;
-    // os << *r;
-    // VMSDK_ASSIGN_OR_RETURN(auto output,
-    //                        parameters.MakeReference(os.str(), true));
-    std::string default_name(r->name_);
-    default_name += '(';
-    for (size_t i = 0; i < arg_texts.size(); ++i) {
-      if (i > 0) default_name += ',';
-      default_name += arg_texts[i];
-    }
-    default_name += ')';
+    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+    // "__generated_alias" + reducer + comma-joined args with the leading '@'
+    // stripped, lowercasing the whole thing; the legacy form is
+    // "REDUCER(args)". See COMPATIBILITY.md.
+    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_reducer_default_alias",
+        [&] {
+          auto name = absl::StrCat(
+              "__generated_alias", r->name_,
+              absl::StrJoin(arg_texts, ",",
+                            [](std::string* out, absl::string_view arg) {
+                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                            }));
+          absl::AsciiStrToLower(&name);
+          return name;
+        },
+        [&] {
+          return absl::StrCat(r->name_, "(", absl::StrJoin(arg_texts, ","),
+                              ")");
+        });
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =

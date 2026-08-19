@@ -32,10 +32,12 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -150,9 +152,10 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     index->algo_->allow_replace_deleted_ =
         options::GetHNSWAllowReplaceDeleted().GetValue();
     RDBChunkInputStream input(std::move(iter));
-    VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(input, index->space_.get(),
-                                vector_index_proto.initial_cap(), index.get()));
+    VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
+        input, index->space_.get(), vector_index_proto.initial_cap(),
+        index.get(), vector_index_proto.hnsw_algorithm().m(),
+        options::GetHNSWValidationEnable().GetValue()));
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
@@ -272,10 +275,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
-    // The concern with calling updatePoint is that it might have implications
-    // on the search accuracy. Need to revisit this in the future.
-    algo_->markDelete(internal_id);
+    // addPoint() routes an existing label to an in-place update.
     algo_->addPoint((T *)record.data(), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
@@ -325,8 +325,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
       auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);
       if (!enable_partial_results && cancellation_token->IsCancelled()) {
-        return absl::CancelledError(
-            "Search operation cancelled due to timeout");
+        return absl::CancelledError(query::kTimeoutMsg);
       }
       return res;
     } catch (const std::exception &e) {

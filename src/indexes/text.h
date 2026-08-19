@@ -47,15 +47,15 @@ class Text : public IndexBase {
   bool IsStemmingEnabled() const { return !no_stem_; }
   bool WithSuffixTrie() const { return with_suffix_trie_; }
   double Weight() const { return weight_; }
-  absl::StatusOr<bool> AddRecord(const InternedStringPtr& key,
-                                 absl::string_view data) override
+  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+                                         absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<bool> RemoveRecord(
       const InternedStringPtr& key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<bool> ModifyRecord(const InternedStringPtr& key,
-                                    absl::string_view data) override
+  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr& key,
+                                            absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
   bool IsTracked(const InternedStringPtr& key) const override;

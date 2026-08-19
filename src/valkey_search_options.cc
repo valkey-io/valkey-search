@@ -153,6 +153,15 @@ static auto hnsw_allow_replace_deleted =
         .Dev()
         .Build();
 
+// Kill switch for HNSW index load-time validation (corruption hardening).
+// Default true; can be disabled in the field if a bug in the validation logic
+// were to reject otherwise-valid indexes.
+constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
+static auto hnsw_validation_enable =
+    config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -215,6 +224,16 @@ constexpr absl::string_view kEnableConsistentResults{
     "enable-consistent-results"};
 static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
+
+/// Maximum reader thread pool queue depth before rejecting new queries.
+/// When the queue exceeds this threshold, FT.SEARCH is rejected before fan-out
+/// to prevent cascading timeouts. 0 = unlimited (disabled).
+constexpr absl::string_view kMaxQueryQueueDepth{"max-query-queue-depth"};
+constexpr int kDefaultMaxQueryQueueDepth{100000};
+static auto max_query_queue_depth =
+    config::NumberBuilder(kMaxQueryQueueDepth, kDefaultMaxQueryQueueDepth, 0,
+                          INT_MAX)
+        .Build();
 
 /// Enable search result background cleanup
 /// If set to true, search result cleanup will be scheduled on background thread
@@ -556,6 +575,14 @@ config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
   return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
 }
 
+const config::Boolean& GetHNSWValidationEnable() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_validation_enable);
+}
+
+config::Boolean& GetHNSWValidationEnableMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_validation_enable);
+}
+
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
@@ -568,6 +595,10 @@ const vmsdk::config::Boolean& GetPreferPartialResults() {
 
 const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+}
+
+vmsdk::config::Number& GetMaxQueryQueueDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_query_queue_depth);
 }
 
 const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {

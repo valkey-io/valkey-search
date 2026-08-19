@@ -165,12 +165,13 @@ InternedStringPtr VectorBase::InternVector(absl::string_view record,
   return StringInternStore::Intern(record, vector_allocator_.get());
 }
 
-absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
-                                           absl::string_view record) {
+absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
+                                                   absl::string_view record) {
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
-    return false;
+    // A vector with the wrong byte length cannot be interned: invalid data.
+    return RecordResult::kInvalidData;
   }
   VMSDK_ASSIGN_OR_RETURN(
       auto internal_id,
@@ -186,7 +187,7 @@ absl::StatusOr<bool> VectorBase::AddRecord(const InternedStringPtr &key,
     }
     return add_result;
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 absl::StatusOr<uint64_t> VectorBase::GetInternalId(
@@ -217,23 +218,26 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
   return it->second;
 }
 
-absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
-                                              absl::string_view record) {
+absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
+    const InternedStringPtr &key, absl::string_view record) {
   // VectorExternalizer tracks added entries. We need to untrack mutations which
   // are processed as modified records.
   std::optional<float> magnitude;
   auto interned_vector = InternVector(record, magnitude);
   if (!interned_vector) {
+    // A vector with the wrong byte length cannot be interned: invalid data.
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
-    return false;
+    return RecordResult::kInvalidData;
   }
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(
       bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
                                interned_vector));
   if (!res) {
-    return false;
+    // The new vector is identical to the tracked one: nothing to re-index. This
+    // is a no-op, not invalid data.
+    return RecordResult::kMissing;
   }
 
   auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
@@ -248,7 +252,7 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
     return modify_result;
   }
   TrackVector(internal_id, interned_vector);
-  return true;
+  return RecordResult::kAdded;
 }
 
 template <typename T>
@@ -305,9 +309,6 @@ absl::StatusOr<bool> VectorBase::RemoveRecord(
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     const InternedStringPtr &key) {
-  if (key->Str().empty()) {
-    return std::nullopt;
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
@@ -336,9 +337,6 @@ char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
                                               float magnitude,
                                               const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
@@ -352,15 +350,12 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   key_by_internal_id_.insert({id, key});
   return id;
 }
-// Return an error if the key is empty or not being tracked.
+// Return an error if the key is not being tracked.
 // Return false if the tracked vector matches the input vector.
 // Otherwise, track the new vector and return true.
 absl::StatusOr<bool> VectorBase::UpdateMetadata(
     const InternedStringPtr &key, float magnitude,
     const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   uint64_t internal_id;
   {
     absl::WriterMutexLock lock(&key_to_metadata_mutex_);

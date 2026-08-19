@@ -101,9 +101,13 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             m.decode('utf-8') if isinstance(m, bytes) else m 
             for m in actual_metrics
         )
-        # Expected baseline: 68 APP metrics as of current implementation
+        # Expected baseline: 70 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
+            # Counts uses of the legacy (incompatible) invalid-data handling
+            # while search.emulate-release is below the fix version. See
+            # COMPATIBILITY.md.
+            "compatibility-invalid_data_drops_key",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",
@@ -126,6 +130,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
             "hnsw_create_exceptions_count",
+            "hnsw_duplicate_label_on_load_count",
             "hnsw_modify_exceptions_count",
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",

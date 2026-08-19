@@ -64,11 +64,20 @@ const config::Boolean& GetHNSWAllowReplaceDeleted();
 /// Return a mutable reference for testing
 config::Boolean& GetHNSWAllowReplaceDeletedMutable();
 
+/// Return the configuration entry for the HNSW load-time validation kill switch
+const config::Boolean& GetHNSWValidationEnable();
+
+/// Return a mutable reference for testing
+config::Boolean& GetHNSWValidationEnableMutable();
+
 /// Reset the state of the options (mainly needed for testing)
 absl::Status Reset();
 
 /// Default option of delivering partial results when timeout occurs
 const config::Boolean& GetPreferPartialResults();
+
+/// Maximum query queue depth before rejecting new queries (0 = unlimited)
+config::Number& GetMaxQueryQueueDepth();
 
 /// Default option of delivering consistent results when timeout occurs
 const config::Boolean& GetPreferConsistentResults();

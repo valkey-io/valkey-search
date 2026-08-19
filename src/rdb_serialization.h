@@ -302,7 +302,7 @@ class RDBChunkInputStream : public hnswlib::InputStream {
 
   absl::StatusOr<std::string> LoadString() {
     VMSDK_ASSIGN_OR_RETURN(auto str, LoadChunk());
-    return *str.release();
+    return std::move(*str);
   }
 
   template <typename T, std::enable_if_t<std::is_trivial<T>::value &&

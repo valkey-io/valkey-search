@@ -33,9 +33,9 @@ def run_pausepoint_reset(type, node0, node1):
             return count > 0
 
         # wait for reaching consistency check pausepoint
-        waiters.wait_for_true(wait_for_pausepoint, timeout=5)
+        waiters.wait_for_true(wait_for_pausepoint)
         # wait for reaching handle cluster message pausepoint
-        waiters.wait_for_true(counter_is_increasing, timeout=5)
+        waiters.wait_for_true(counter_is_increasing)
 
         if type == 0:
             metadata_reconciliation_completed_count_before = node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"]
@@ -43,9 +43,8 @@ def run_pausepoint_reset(type, node0, node1):
             reset_pause_handle_message_result = node1.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
             # wait for metadata to reconcile
             waiters.wait_for_true(
-                lambda: int(node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"]) 
-                    > metadata_reconciliation_completed_count_before, 
-                timeout=5
+                lambda: int(node1.info("SEARCH")["search_coordinator_metadata_reconciliation_completed_count"])
+                    > metadata_reconciliation_completed_count_before
             )
             # reset consistency check pausepoint second
             reset_pausepoint_result = node0.execute_command("FT._DEBUG PAUSEPOINT RESET fanout_remote_pausepoint")
@@ -65,23 +64,7 @@ def run_pausepoint_reset(type, node0, node1):
 
 class TestFTDropindexConsistency(ValkeySearchClusterTestCaseDebugMode):
 
-    def test_dropindex_success(self):
-        cluster: ValkeyCluster = self.new_cluster_client()
-        node0: Valkey = self.new_client_for_primary(0)
-        index_name = "index1"
-
-        assert node0.execute_command(
-            "FT.CREATE", index_name,
-            "ON", "HASH",
-            "PREFIX", "1", "doc:",
-            "SCHEMA", "price", "NUMERIC"
-        ) == b"OK"
-
-        assert node0.execute_command(
-            "FT.DROPINDEX", index_name
-        ) == b"OK"
-
-    def test_duplicate_dropindex(self):
+    def test_dropindex(self):
         cluster: ValkeyCluster = self.new_cluster_client()
         node0: Valkey = self.new_client_for_primary(0)
         index_name = "index1"

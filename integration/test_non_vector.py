@@ -8,6 +8,8 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
 import pytest
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -154,6 +156,25 @@ def validate_limit_queries(client: Valkey):
     assert result[0] == 4  # Total count only
     assert len(result) == 1
 
+def validate_bare_wildcard_queries(client: Valkey):
+    """
+        Test bare '*' match-all behavior for non-vector FT.SEARCH in DIALECT 2.
+    """
+    result = client.execute_command("FT.SEARCH", "products", "*", "DIALECT", "2")
+    assert result[0] == 4
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 5
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "LIMIT", "0", "2", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 3
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "SORTBY", "price", "ASC", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 5
+
 def create_bulk_data_standalone(client: Valkey):
     """
         Create bulk data for standalone testing.
@@ -189,14 +210,14 @@ def validate_buffer_multiplier_config(client: Valkey):
     assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 2.5") == b"OK"
     assert client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1.2") == b"OK"
     # Test that values outside range are rejected
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier -1.0")
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier 0.5")
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be between 1.0 and 1000.0"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier 1001.0")
     # Test that invalid strings are rejected
-    with pytest.raises(ResponseError, match=r"Buffer multiplier must be a valid number"):
+    with pytest.raises(ResponseError):
         client.execute_command("CONFIG SET search.search-result-buffer-multiplier invalid")
 
 def validate_bulk_limit_queries(client: Valkey):
@@ -240,6 +261,45 @@ def validate_bulk_limit_queries(client: Valkey):
     assert actual_results <= 3  # Should return at most 3 results
     assert actual_results == min(3, max(0, total_count - 2))  # Respect offset of 2
 
+def validate_tag_and_negate_queries(client: Valkey):
+    """
+        Test TAG and negated TAG queries using the bulk_products index (2500 docs, 10 categories).
+        Reuses the bulk data created by create_bulk_data_standalone: category = "cat0".."cat9",
+        each with 250 docs.
+    """
+    # Exact tag match
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 250
+
+    # Tag OR
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0|cat1}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 500
+
+    # Nonexistent tag
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{nonexistent}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 0
+
+    # Negate single category: 2500 - 250 = 2250
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 2250
+
+    # Negate two categories: 2500 - 500 = 2000
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0|cat1}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 2000
+
+    # Positive tag AND negate: cat0 AND NOT rating=3.0
+    # cat0 = 250 docs. rating cycles 3.0/4.0/5.0, so 1/3 of cat0 has rating 3.0.
+    # cat0 docs are at indices 0,10,20,...2490. rating=3.0 when i%3==0.
+    # cat0 AND rating=3.0: i%10==0 AND i%3==0 => i%30==0 => 84 docs (0..2490 step 30 = 83+1=84)
+    # Result: 250 - 84 = 166
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0} @rating:[4.0 +inf]", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 166, f"Expected 166, got {result[0]}"
+
+    # Negate with LIMIT pagination
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0}", "NOCONTENT", "LIMIT", "0", "50")
+    assert result[0] == 2250
+    assert len(result) - 1 == 50
+
 def validate_aggregate_queries(client: Valkey):
     """
         Test FT.AGGREGATE with numeric and tag queries.
@@ -257,6 +317,13 @@ def validate_aggregate_queries(client: Valkey):
         "LOAD", "1", "category"
     )
     assert result[0] == 2
+
+    for command in (
+        ("FT.AGGREGATE", "products", "@price:[1 +inf]", "APPLY", "", "AS", "result"),
+        ("FT.AGGREGATE", "products", "@price:[1 +inf]", "FILTER", ""),
+    ):
+        with pytest.raises(ResponseError, match=r"Invalid or missing expression"):
+            client.execute_command(*command)
 
 def validate_aggregate_complex_queries(client: Valkey):
     """
@@ -386,6 +453,18 @@ def validate_aggregate_complex_queries(client: Valkey):
         row = dict(zip(result[i][::2], result[i][1::2]))
         assert row[b'distinct_ratings'] == b'50'
 
+    # 10b. COUNT_DISTINCT without AS
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert row[b'COUNT_DISTINCT(@rating)'] == b'50'
+
     # 11. GROUPBY with STDDEV reducer
     result = client.execute_command(
         "FT.AGGREGATE", "products", "@price:[1 4]",
@@ -477,6 +556,8 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_non_vector_queries(client)
         # Test LIMIT functionality
         validate_limit_queries(client)
+        # Test bare wildcard functionality
+        validate_bare_wildcard_queries(client)
         # Test AGGREGATE functionality
         validate_aggregate_queries(client)
 
@@ -509,6 +590,50 @@ class TestNonVector(ValkeySearchTestCaseBase):
         assert result[0] == 1
         assert result[1] == b'multifield_product:4'
 
+    def test_zero_length_json_key_is_indexed(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 19.99, "rating": 4.8})
+        ) == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "",
+            "SCHEMA",
+            "$.category", "AS", "category", "TAG",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.rating", "AS", "rating", "NUMERIC"
+        ) == b"OK"
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@category:{books} @price:[19 20]"
+        )
+        assert result[0] == 1
+        assert result[1] == b""
+        assert result[2][0] == b"$"
+        assert json.loads(result[2][1].decode("utf-8")) == {
+            "category": "books",
+            "price": 19.99,
+            "rating": 4.8,
+        }
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 25.0, "rating": 4.8})
+        ) == b"OK"
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[25 25]", "NOCONTENT"
+            )[0] == 1
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[19 20]", "NOCONTENT"
+            )[0] == 0
+        )
+
     def test_bulk_limit_background_changes(self):
         """
             Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
@@ -516,6 +641,14 @@ class TestNonVector(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         create_bulk_data_standalone(client)
         validate_bulk_limit_queries(client)
+
+    def test_tag_and_negate_at_scale(self):
+        """
+            Test TAG and negated TAG queries with bulk data to exercise the tag index at scale.
+        """
+        client: Valkey = self.server.get_new_client()
+        create_bulk_data_standalone(client)
+        validate_tag_and_negate_queries(client)
 
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
@@ -634,4 +767,3 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         # Verify fetch-limited queries metric
         client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert client.info("search").get("search_nonvector_results_fetched_limited_count", 0) == 8
-

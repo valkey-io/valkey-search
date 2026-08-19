@@ -16,6 +16,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/valkey_search.h"
@@ -165,6 +166,14 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   VMSDK_LOG(NOTICE, ctx) << "Loading RDB from version: " << rdb_version
                          << " with " << rdb_section_count << " sections.";
 
+  // Initialize restore progress tracking
+  auto rdb_load_start = absl::Now();
+  Metrics::GetStats().rdb_restore_in_progress = true;
+  Metrics::GetStats().rdb_restore_total_indexes = rdb_section_count;
+  Metrics::GetStats().rdb_restore_completed_indexes = 0;
+  Metrics::GetStats().rdb_restore_current_index_keys_total = 0;
+  Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+
   // Begin RDBSection iteration
   RDBSectionIter it(rdb, rdb_section_count);
   while (it.HasNext()) {
@@ -190,33 +199,33 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       }
     }
   }
+
+  // Mark restore as complete (all indexes loaded successfully)
+  Metrics::GetStats().rdb_restore_in_progress = false;
+  Metrics::GetStats().rdb_last_restore_aux_load_duration_ms =
+      absl::ToInt64Milliseconds(absl::Now() - rdb_load_start);
+
   return absl::OkStatus();
 }
 
-absl::StatusOr<vmsdk::UniqueValkeyDetachedThreadSafeContext>
-CreateRDBDetachedContext(ValkeyModuleIO *rdb) {
+vmsdk::UniqueValkeyDetachedThreadSafeContext CreateRDBDetachedContext(
+    ValkeyModuleIO *rdb) {
   /* Wrap the RDB context in a detached context to ensure we have a client. */
   auto ctx = ValkeyModule_GetContextFromIO(rdb);
-  return vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(
-      ValkeyModule_GetDetachedThreadSafeContext(ctx));
+  return vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
 }
 
 int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
   auto ctx = CreateRDBDetachedContext(rdb);
-  if (!ctx.ok()) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Could not create RDB load context: " << ctx.status().message();
-    return VALKEYMODULE_ERR;
-  }
   SafeRDB safe_rdb(rdb);
-  auto result = PerformRDBLoad(ctx.value().get(), &safe_rdb, encver);
+  auto result = PerformRDBLoad(ctx.get(), &safe_rdb, encver);
   if (result.ok()) {
     Metrics::GetStats().rdb_load_success_cnt++;
 
     return VALKEYMODULE_OK;
   }
   Metrics::GetStats().rdb_load_failure_cnt++;
-  VMSDK_LOG_EVERY_N_SEC(WARNING, ctx.value().get(), 0.1)
+  VMSDK_LOG_EVERY_N_SEC(WARNING, ctx.get(), 0.1)
       << "Failed to load ValkeySearch aux section from RDB: "
       << result.message();
   return VALKEYMODULE_ERR;

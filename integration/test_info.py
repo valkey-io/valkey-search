@@ -49,7 +49,6 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_number_of_indexes",
             "search_total_indexed_documents",
             "search_total_active_write_threads",
-            "search_total_indexing_time",
             "search_used_memory_bytes",
             "search_index_reclaimable_memory"
         ]
@@ -102,9 +101,13 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             m.decode('utf-8') if isinstance(m, bytes) else m 
             for m in actual_metrics
         )
-        # Expected baseline: 68 APP metrics as of current implementation
+        # Expected baseline: 70 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
+            # Counts uses of the legacy (incompatible) invalid-data handling
+            # while search.emulate-release is below the fix version. See
+            # COMPATIBILITY.md.
+            "compatibility-invalid_data_drops_key",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",
@@ -127,17 +130,14 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
             "hnsw_create_exceptions_count",
+            "hnsw_duplicate_label_on_load_count",
             "hnsw_modify_exceptions_count",
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",
-            "number_of_active_indexes",
-            "number_of_active_indexes_indexing",
-            "number_of_active_indexes_running_queries",
             "number_of_attributes",
             "number_of_indexes",
             "total_active_write_threads",
             "total_indexed_documents",
-            "total_indexing_time",
             "background_indexing_status",
             "flat_vector_index_search_latency_usec",
             "hnsw_vector_index_search_latency_usec",
@@ -148,7 +148,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "hybrid_requests_count",
             "inline_filtering_requests_count",
             "nonvector_requests_count",
-            "query_prefiltering_requests_cnt",
+            "prefiltering_requests_count",
             "result_record_dropped_count",
             "successful_requests_count",
             "vector_requests_count",

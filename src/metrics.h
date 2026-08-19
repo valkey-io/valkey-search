@@ -27,11 +27,11 @@ class Metrics {
   ~Metrics() = default;
 
   struct Stats {
-    uint64_t reclaimable_memory{0};
     uint64_t query_successful_requests_cnt{0};
     uint64_t query_failed_requests_cnt{0};
     uint64_t query_result_record_dropped_cnt{0};
     uint64_t query_hybrid_requests_cnt{0};
+    std::atomic<uint64_t> reclaimable_memory{0};
     std::atomic<uint64_t> query_nonvector_requests_cnt{0};
     std::atomic<uint64_t> query_vector_requests_cnt{0};
     std::atomic<uint64_t> query_text_requests_cnt{0};
@@ -42,6 +42,7 @@ class Metrics {
     std::atomic<uint64_t> hnsw_modify_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_search_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_create_exceptions_cnt{0};
+    std::atomic<uint64_t> hnsw_duplicate_label_on_load_cnt{0};
     std::atomic<uint64_t> flat_add_exceptions_cnt{0};
     std::atomic<uint64_t> flat_remove_exceptions_cnt{0};
     std::atomic<uint64_t> flat_modify_exceptions_cnt{0};
@@ -55,6 +56,15 @@ class Metrics {
     uint64_t rdb_load_failure_cnt{0};
     uint64_t rdb_save_success_cnt{0};
     uint64_t rdb_save_failure_cnt{0};
+
+    // RDB Restore Progress Tracking
+    std::atomic<uint64_t> rdb_restore_total_indexes{0};
+    std::atomic<uint64_t> rdb_restore_completed_indexes{0};
+    std::atomic<uint64_t> rdb_restore_current_index_keys_total{0};
+    std::atomic<uint64_t> rdb_restore_current_index_keys_loaded{0};
+    std::atomic<bool> rdb_restore_in_progress{false};
+    std::atomic<uint64_t> rdb_restore_backpressure_wait_cycles{0};
+    std::atomic<uint64_t> rdb_last_restore_aux_load_duration_ms{0};
 
     // FT.INTERNAL_UPDATE error handling metrics
     std::atomic<uint64_t> ft_internal_update_parse_failures_cnt{0};

@@ -164,8 +164,9 @@ class TextIndexSchema {
   // To support the Delete record and the post-filtering case, there is a
   // separate table of postings that are indexed by Key.
   //
-  // This object must also ensure that updates of this object are multi-thread
-  // safe.
+  // Pointer stability is required as the main thread can evaluate a query
+  // against a key's TextIndex structure concurrently with ingestion in the
+  // post-filtering case.
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
@@ -203,10 +204,6 @@ class TextIndexSchema {
   // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
 
-  // We track subtree items if the index has a HNSW field to enable filtering
-  // planning decisions with prefix/suffix text filtering.
-  bool track_subtree_item_counts_ = false;
-
  public:
   // FT.INFO stats for text index
   uint64_t GetTotalPositions() const;
@@ -234,11 +231,6 @@ class TextIndexSchema {
   // Locking needs to be true if called outside of read phase of time sliced
   // mutex.
   const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
-
-  // TODO: remove this because we'll always track the counts once it's optimized
-  bool TrackSubtreeItemsCountEnabled() const {
-    return track_subtree_item_counts_;
-  }
 };
 
 }  // namespace valkey_search::indexes::text

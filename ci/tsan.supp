@@ -1,3 +1,20 @@
 # Temporarily suppressing HNSWLib race reports, which occur on the write path.
 # Fixing these may impact performance due to added synchronization. 
 race:hnswalg.h
+
+# zmalloc_used_memory is Valkey's global memory stats counter, updated by
+# VM_Alloc/VM_Free without synchronization. valkey-search worker threads use
+# Valkey's allocator for indexing operations, causing unsynchronized writes 
+# to this counter while the main thread reads it in beforeSleep/cronUpdateMemoryStats.
+race:zmalloc_used_memory
+race:zmalloc_usable
+
+# jemalloc internal try-lock pattern
+race:malloc_mutex_trylock_final
+
+# Valkey core race: serverCron (main thread) reads from the global 'server'
+# struct while the bio_rdb_save background thread writes to it during
+# replica RDB transfer (replicaReceiveRDBFromPrimaryToDisk).
+# valkey-search code is not involved.
+race:replicaReceiveRDBFromPrimaryToDisk
+

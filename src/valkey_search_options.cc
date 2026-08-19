@@ -6,8 +6,8 @@
  */
 #include "valkey_search_options.h"
 
-#include "absl/strings/numbers.h"
 #include "valkey_search.h"
+#include "version.h"
 #include "vmsdk/src/concurrency.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/thread_pool.h"
@@ -145,6 +145,23 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Not allowing replace delete is aligned with RediSearch
+constexpr absl::string_view kHNSWAllowReplaceDeleted{
+    "hnsw-allow-replace-deleted"};
+static auto hnsw_allow_replace_deleted =
+    config::BooleanBuilder(kHNSWAllowReplaceDeleted, false)  // default false
+        .Dev()
+        .Build();
+
+// Kill switch for HNSW index load-time validation (corruption hardening).
+// Default true; can be disabled in the field if a bug in the validation logic
+// were to reject otherwise-valid indexes.
+constexpr absl::string_view kHNSWValidationEnable{"hnsw-validation-enable"};
+static auto hnsw_validation_enable =
+    config::BooleanBuilder(kHNSWValidationEnable, true)  // default true
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -208,6 +225,16 @@ constexpr absl::string_view kEnableConsistentResults{
 static config::Boolean prefer_consistent_results(kEnableConsistentResults,
                                                  false);
 
+/// Maximum reader thread pool queue depth before rejecting new queries.
+/// When the queue exceeds this threshold, FT.SEARCH is rejected before fan-out
+/// to prevent cascading timeouts. 0 = unlimited (disabled).
+constexpr absl::string_view kMaxQueryQueueDepth{"max-query-queue-depth"};
+constexpr int kDefaultMaxQueryQueueDepth{100000};
+static auto max_query_queue_depth =
+    config::NumberBuilder(kMaxQueryQueueDepth, kDefaultMaxQueryQueueDepth, 0,
+                          INT_MAX)
+        .Build();
+
 /// Enable search result background cleanup
 /// If set to true, search result cleanup will be scheduled on background thread
 constexpr absl::string_view kSearchResultBackgroundCleanup{
@@ -243,6 +270,7 @@ static auto ft_info_timeout_ms =
         kDefaultFTInfoTimeoutMs,  // default timeout (5 seconds)
         kMinimumFTInfoTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                    // can only be set in debug mode
         .Build();
 
 /// Register the "--ft-info-rpc-timeout-ms" flag. Controls the timeout for
@@ -254,6 +282,7 @@ static auto ft_info_rpc_timeout_ms =
         kDefaultFTInfoRpcTimeoutMs,  // default timeout (2.5 seconds)
         kMinimumFTInfoRpcTimeoutMs,  // min timeout (100ms)
         kMaximumFTInfoRpcTimeoutMs)  // max timeout (5 minutes)
+        .Dev()                       // can only be set in debug mode
         .Build();
 
 /// Register the "--local-fanout-queue-wait-threshold" flag. Controls the queue
@@ -335,75 +364,39 @@ static auto tag_min_prefix_length =
 /// Controls when pre-filtering is used vs inline-filtering for hybrid queries
 constexpr absl::string_view kPrefilteringThresholdRatioConfig{
     "prefiltering-threshold-ratio"};
-constexpr absl::string_view kDefaultPrefilteringThresholdRatio{"0.001"};
+constexpr double kDefaultPrefilteringThresholdRatio{0.001};
 constexpr double kMinimumPrefilteringThresholdRatio{0.0};
 constexpr double kMaximumPrefilteringThresholdRatio{1.0};
-static double prefiltering_threshold_ratio{0.001};
 
 static auto prefiltering_threshold_ratio_config =
-    config::StringBuilder(kPrefilteringThresholdRatioConfig,
-                          kDefaultPrefilteringThresholdRatio)
-        .WithValidationCallback([](const std::string& value) -> absl::Status {
-          double parsed_value;
-          if (!absl::SimpleAtod(value, &parsed_value)) {
-            return absl::InvalidArgumentError(
-                "Prefiltering threshold ratio must be a valid number");
-          }
-          if (parsed_value < kMinimumPrefilteringThresholdRatio ||
-              parsed_value > kMaximumPrefilteringThresholdRatio) {
-            return absl::InvalidArgumentError(absl::StrFormat(
-                "Prefiltering threshold ratio must be between %.1f and %.1f",
-                kMinimumPrefilteringThresholdRatio,
-                kMaximumPrefilteringThresholdRatio));
-          }
-          return absl::OkStatus();
-        })
-        .WithModifyCallback([](const std::string& value) {
-          double parsed_value;
-          CHECK(absl::SimpleAtod(value, &parsed_value));
-          prefiltering_threshold_ratio = parsed_value;
-        })
+    config::DoubleBuilder(kPrefilteringThresholdRatioConfig,
+                          kDefaultPrefilteringThresholdRatio,
+                          kMinimumPrefilteringThresholdRatio,
+                          kMaximumPrefilteringThresholdRatio)
         .Dev()  // can only be set in debug mode
         .Build();
 
 /// Register the "search-result-buffer-multiplier" flag
 constexpr absl::string_view kSearchResultBufferMultiplierConfig{
     "search-result-buffer-multiplier"};
-constexpr absl::string_view kDefaultSearchResultBufferMultiplier{"1.5"};
+constexpr double kDefaultSearchResultBufferMultiplier{1.5};
 constexpr double kMinimumSearchResultBufferMultiplier{1.0};
 constexpr double kMaximumSearchResultBufferMultiplier{1000.0};
-static double search_result_buffer_multiplier{1.5};
 
 static auto search_result_buffer_multiplier_config =
-    config::StringBuilder(kSearchResultBufferMultiplierConfig,
-                          kDefaultSearchResultBufferMultiplier)
-        .WithValidationCallback([](const std::string& value) -> absl::Status {
-          double parsed_value;
-          if (!absl::SimpleAtod(value, &parsed_value)) {
-            return absl::InvalidArgumentError(
-                "Buffer multiplier must be a valid number");
-          }
-          if (parsed_value < kMinimumSearchResultBufferMultiplier ||
-              parsed_value > kMaximumSearchResultBufferMultiplier) {
-            return absl::InvalidArgumentError(absl::StrFormat(
-                "Buffer multiplier must be between %.1f and %.1f",
-                kMinimumSearchResultBufferMultiplier,
-                kMaximumSearchResultBufferMultiplier));
-          }
-          return absl::OkStatus();
-        })
-        .WithModifyCallback([](const std::string& value) {
-          double parsed_value;
-          CHECK(absl::SimpleAtod(value, &parsed_value));
-          search_result_buffer_multiplier = parsed_value;
-        })
+    config::DoubleBuilder(kSearchResultBufferMultiplierConfig,
+                          kDefaultSearchResultBufferMultiplier,
+                          kMinimumSearchResultBufferMultiplier,
+                          kMaximumSearchResultBufferMultiplier)
         .Build();
 
 double GetSearchResultBufferMultiplier() {
-  return search_result_buffer_multiplier;
+  return search_result_buffer_multiplier_config->GetValue();
 }
 
-double GetPrefilteringThresholdRatio() { return prefiltering_threshold_ratio; }
+double GetPrefilteringThresholdRatio() {
+  return prefiltering_threshold_ratio_config->GetValue();
+}
 
 /// Register the "drain-mutation-queue-on-load" flag
 /// Drain the mutation queue after RDB load
@@ -412,6 +405,20 @@ constexpr absl::string_view kDrainMutationQueueOnLoadConfig{
 static auto drain_mutation_queue_on_load =
     config::BooleanBuilder(kDrainMutationQueueOnLoadConfig, true)
         .Dev()  // can only be set in debug mode
+        .Build();
+
+/// Register the "max-mutation-queue-size-on-restore" parameter
+/// Limit the mutation queue size during RDB restore to prevent memory spikes
+constexpr absl::string_view kMaxMutationQueueSizeOnRestoreConfig{
+    "max-mutation-queue-size-on-restore"};
+constexpr uint32_t kDefaultMaxMutationQueueSizeOnRestore{10000};
+constexpr uint32_t kMinimumMaxMutationQueueSizeOnRestore{1};
+constexpr uint32_t kMaximumMaxMutationQueueSizeOnRestore{1000000};
+static auto max_mutation_queue_size_on_restore =
+    config::NumberBuilder(kMaxMutationQueueSizeOnRestoreConfig,
+                          kDefaultMaxMutationQueueSizeOnRestore,
+                          kMinimumMaxMutationQueueSizeOnRestore,
+                          kMaximumMaxMutationQueueSizeOnRestore)
         .Build();
 
 /// Register the "drain-mutation-queue-on-save" flag
@@ -503,6 +510,20 @@ static auto max_nonvector_search_results_fetched =
         kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
         .Build();
 
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                                            kQueryStringDepthConfig))
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -546,6 +567,22 @@ vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
 }
 
+const config::Boolean& GetHNSWAllowReplaceDeleted() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
+config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
+const config::Boolean& GetHNSWValidationEnable() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_validation_enable);
+}
+
+config::Boolean& GetHNSWValidationEnableMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_validation_enable);
+}
+
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
@@ -558,6 +595,10 @@ const vmsdk::config::Boolean& GetPreferPartialResults() {
 
 const vmsdk::config::Boolean& GetPreferConsistentResults() {
   return static_cast<vmsdk::config::Boolean&>(prefer_consistent_results);
+}
+
+vmsdk::config::Number& GetMaxQueryQueueDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_query_queue_depth);
 }
 
 const vmsdk::config::Boolean& GetSearchResultBackgroundCleanup() {
@@ -612,6 +653,11 @@ vmsdk::config::Number& GetFanoutUniformityMinIndexSize() {
       *fanout_uniformity_min_index_size);
 }
 
+vmsdk::config::Number& GetMaxMutationQueueSizeOnRestore() {
+  return dynamic_cast<vmsdk::config::Number&>(
+      *max_mutation_queue_size_on_restore);
+}
+
 vmsdk::config::Number& GetAsyncFanoutThreshold() {
   return dynamic_cast<vmsdk::config::Number&>(*async_fanout_threshold);
 }
@@ -623,6 +669,109 @@ config::Number& GetRaxTargetMutexPoolSize() {
 vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
   return dynamic_cast<vmsdk::config::Number&>(
       *max_nonvector_search_results_fetched);
+}
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+}
+
+/// Register the "--mutation-weight-vector" flag. Controls the weight multiplier
+/// for vector index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightVectorConfig{
+    "mutation-weight-vector"};
+constexpr uint32_t kDefaultMutationWeightVector{130};
+constexpr uint32_t kMinimumMutationWeight{0};
+constexpr uint32_t kMaximumMutationWeight{10000};
+static auto mutation_weight_vector =
+    config::NumberBuilder(kMutationWeightVectorConfig,
+                          kDefaultMutationWeightVector, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-text" flag. Controls the weight multiplier
+/// for text index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTextConfig{"mutation-weight-text"};
+constexpr uint32_t kDefaultMutationWeightText{550};
+static auto mutation_weight_text =
+    config::NumberBuilder(kMutationWeightTextConfig, kDefaultMutationWeightText,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-numeric" flag. Controls the weight
+/// multiplier for numeric index types in mutation queue entries
+/// (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightNumericConfig{
+    "mutation-weight-numeric"};
+constexpr uint32_t kDefaultMutationWeightNumeric{430};
+static auto mutation_weight_numeric =
+    config::NumberBuilder(kMutationWeightNumericConfig,
+                          kDefaultMutationWeightNumeric, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-tag" flag. Controls the weight multiplier
+/// for tag index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTagConfig{"mutation-weight-tag"};
+constexpr uint32_t kDefaultMutationWeightTag{330};
+static auto mutation_weight_tag =
+    config::NumberBuilder(kMutationWeightTagConfig, kDefaultMutationWeightTag,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+config::Number& GetMutationWeightVector() {
+  return dynamic_cast<config::Number&>(*mutation_weight_vector);
+}
+
+config::Number& GetMutationWeightText() {
+  return dynamic_cast<config::Number&>(*mutation_weight_text);
+}
+
+config::Number& GetMutationWeightNumeric() {
+  return dynamic_cast<config::Number&>(*mutation_weight_numeric);
+}
+
+config::Number& GetMutationWeightTag() {
+  return dynamic_cast<config::Number&>(*mutation_weight_tag);
+}
+
+/// Register the "emulate-release" flag (see COMPATIBILITY.md).
+/// Default: current major.0.0 (SemVer-preserving when no opt-in).
+/// Min:     1.0.0 (oldest release whose behavior we can emulate).
+/// Max:     normally pinned to the running module version (can't emulate the
+///          future), but the upper bound is lifted while `debug-mode` is on so
+///          tests/dev sessions can pin to an unreleased version. The configured
+///          max stays at logical infinity for the type; the runtime check below
+///          enforces the production ceiling.
+constexpr absl::string_view kEmulateReleaseConfig{"emulate-release"};
+constexpr vmsdk::ValkeyVersion kEmulateReleaseMin{1, 0, 0};
+constexpr vmsdk::ValkeyVersion kEmulateReleaseMaxInfinity{0xFFFF, 0xFF, 0xFF};
+
+static absl::Status ValidateEmulateRelease(vmsdk::ValkeyVersion v) {
+  if (!config::IsDebugModeEnabled() && v > kModuleVersion) {
+    return absl::OutOfRangeError(absl::StrFormat(
+        "%s must be <= %s unless %s is enabled", kEmulateReleaseConfig,
+        kModuleVersion.ToString(), config::kDebugMode));
+  }
+  return absl::OkStatus();
+}
+
+static auto emulate_release_config =
+    config::VersionBuilder(kEmulateReleaseConfig,
+                           vmsdk::ValkeyVersion(kModuleVersion.Major(), 0, 0),
+                           kEmulateReleaseMin, kEmulateReleaseMaxInfinity)
+        .WithValidationCallback(ValidateEmulateRelease)
+        .Build();
+
+config::Version& GetEmulateRelease() {
+  return dynamic_cast<config::Version&>(*emulate_release_config);
+}
+
+bool EnabledInVersion(vmsdk::ValkeyVersion version) {
+  return GetEmulateRelease().GetValue() >= version;
 }
 
 }  // namespace options

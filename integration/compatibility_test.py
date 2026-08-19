@@ -5,12 +5,26 @@ from operator import itemgetter
 from itertools import chain, combinations
 import pickle
 import compatibility
-from compatibility.data_sets import * 
+from compatibility import GENERATORS, compute_sources_hash
+from compatibility.data_sets import *
+
+ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
+CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
+    ValkeySearchClusterTestCaseDebugMode,
     ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
 )
+
+# The compatibility pickles capture Redisearch behavior, which is the
+# compatible target. Run Valkey Search with search.emulate-release pinned to the
+# release that fixes the invalid-data compatibility defect so the compatible
+# (whole-key-drop) behavior is exercised. This requires debug-mode (the value is
+# above kModuleVersion), which the *DebugMode base classes enable. Datasets
+# without invalid data are unaffected by this setting.
+COMPAT_EMULATE_RELEASE = "1.3.0"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -78,7 +92,10 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if key_type == "json" and isinstance(x, int):
+        if isinstance(x, list):
+            # TOLIST reducer returns a Python list for both hash and json
+            result = x
+        elif key_type == "json" and isinstance(x, int):
             result = x
         elif key_type == "json" and x.startswith(b'['):
             assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
@@ -229,9 +246,20 @@ def compare_row(l, r, key_type):
         return False
     for i in range(len(lks)):
         #
+        # TOLIST reducer returns lists where order is non-deterministic.
+        # Check for list values first, before any field-name-based heuristics.
+        # Sort both lists before comparing since insertion order differs between
+        # Redis (random hash table traversal) and valkey-search (index order).
+        #
+        if isinstance(l[lks[i]], list) and isinstance(r[rks[i]], list):
+            if sorted(l[lks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)) != \
+               sorted(r[rks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)):
+                print("mismatch list field: ", lks[i], " ", sorted(l[lks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)), "!=", sorted(r[rks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)))
+                return False
+        #
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
-        if lks[i].startswith("n") or lks[i].endswith("score"):
+        elif lks[i].startswith("n") or lks[i].endswith("score"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 print("RL: ", r)
@@ -490,8 +518,51 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
 
     return data_set
 
-class TestAnswersCMD(ValkeySearchTestCaseBase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz", "text-search-answers.pickle.gz"])
+def _load_answers_with_hash_check(answer_file_name):
+    """Load a compatibility pickle answer file and verify its sources hash.
+
+    Set SKIP_COMPATIBILITY_HASH_CHECK=1 to bypass the hash check (useful when
+    manually generating a small pickle for local testing).
+    """
+    pickle_path = os.path.join(
+        os.getenv("ROOT_DIR"), "integration/compatibility", answer_file_name
+    )
+    with gzip.open(pickle_path, "rb") as f:
+        payload = pickle.load(f)
+
+    if isinstance(payload, dict) and "answers" in payload:
+        stored_hash = payload.get("sources_hash")
+        answers = payload["answers"]
+    else:
+        stored_hash = None
+        answers = payload
+
+    if os.getenv("SKIP_COMPATIBILITY_HASH_CHECK") == "1":
+        print(f"SKIP_COMPATIBILITY_HASH_CHECK=1; skipping hash check for {answer_file_name}")
+        return answers
+
+    current_hash = compute_sources_hash()
+    if stored_hash != current_hash:
+        pytest.fail(
+            f"\nCompatibility pickle file '{answer_file_name}' is stale.\n"
+            f"  Stored hash:  {stored_hash}\n"
+            f"  Current hash: {current_hash}\n"
+            f"\n"
+            f"Python sources in integration/compatibility/ have changed since\n"
+            f"the pickle was generated. Regenerate with:\n"
+            f"\n"
+            f"  ./integration/compatibility/regenerate.sh\n"
+            f"\n"
+            f"Then commit the updated pickle file. To bypass this check (e.g.\n"
+            f"when manually generating a small pickle for local testing), set\n"
+            f"the env variable SKIP_COMPATIBILITY_HASH_CHECK=1.\n",
+            pytrace=False,
+        )
+    return answers
+
+
+class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
+    @pytest.mark.parametrize("answers", ALL_ANSWER_FILES)
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
@@ -503,11 +574,13 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
         passed_tests = {}
 
         print("Running test_answers with answers file:", answers)
-        with gzip.open(os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers, "rb") as answer_file:
-            answers = pickle.load(answer_file)
+        answers = _load_answers_with_hash_check(answers)
 
         data_set = None
         client = self.server.get_new_client()
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+        )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
@@ -550,8 +623,8 @@ class TestAnswersCMD(ValkeySearchTestCaseBase):
     '''
 
 # TODO: fix cluster mode test failures
-class TestAnswersCME(ValkeySearchClusterTestCase):
-    @pytest.mark.parametrize("answers", ["aggregate-answers.pickle.gz"])
+class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
+    @pytest.mark.parametrize("answers", CLUSTER_ANSWER_FILES)
     def test_answers(self, answers):
         global correct_answers, wrong_answers, failed_tests, passed_tests
 
@@ -562,14 +635,17 @@ class TestAnswersCME(ValkeySearchClusterTestCase):
 
         print("Running CLUSTER test_answers with answers file:", answers)
 
-        with gzip.open(
-            os.getenv("ROOT_DIR") + "/integration/compatibility/" + answers,
-            "rb",
-        ) as answer_file:
-            answers = pickle.load(answer_file)
+        answers = _load_answers_with_hash_check(answers)
 
         data_set = None
         cluster_client = self.new_cluster_client()
+
+        # Pin every primary to the compatible (whole-key-drop) behavior so the
+        # invalid-data datasets match the Redisearch reference answers.
+        for node_idx in range(self.CLUSTER_SIZE):
+            self.client_for_primary(node_idx).execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
         for expected in answers:
             data_set = do_answer_cluster(

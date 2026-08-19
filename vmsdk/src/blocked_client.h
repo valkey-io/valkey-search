@@ -83,7 +83,7 @@ class BlockedClient {
   void SetReplyPrivateData(void *private_data);
   void UnblockClient();
   void MeasureTimeStart();
-  void MeasureTimeEnd();
+  void MeasureTimeEnd(ValkeyModuleBlockedClient *blocked_client);
   ~BlockedClient() { UnblockClient(); }
 
   BlockedClientCategory GetCategory() const { return category_; }

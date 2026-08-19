@@ -78,7 +78,6 @@ class ReplicationGroup:
         # slave0:ip=127.0.0.1,port=14892,state=online,offset=98,lag=0,type=replica
         waiters.wait_for_true(
             lambda: self._check_all_replicas_are_connected(),
-            timeout=30,
         )
 
         # Now that we see all the replicas are connected, wait for their status to change
@@ -88,7 +87,6 @@ class ReplicationGroup:
             # Wait for the replication to complete for this replica
             waiters.wait_for_true(
                 lambda: self._check_is_replica_online(name),
-                timeout=30,
             )
 
     def _check_all_replicas_are_connected(self):
@@ -110,8 +108,8 @@ class ReplicationGroup:
         return True
 
     def _replication_lag(self, index) -> int:
-        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
         replica_offset = self.replicas[index].client.info("REPLICATION")['slave_repl_offset']
+        primary_offset = self.primary.client.info("REPLICATION")['master_repl_offset']
         assert primary_offset >= replica_offset
         return primary_offset - replica_offset
 
@@ -475,7 +473,6 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
                 self.CLUSTER_SIZE + (self.CLUSTER_SIZE * replica_count)
             ),
             True,
-            timeout=10,
         )
 
         # Wait for the cluster to be up
@@ -488,6 +485,9 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
             )
             rg.setup_replications_cluster()
         logging.info("Cluster is up and running!")
+
+        # Wait for cluster topology to settle
+        self.wait_for_cluster_topology_to_settle()
         yield
 
         # Cleanup
@@ -553,6 +553,33 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
     
     def replication_lag(self) -> int:
         return max([rg.replication_lag() for rg in self.replication_groups])
+
+    def _cluster_slots_complete(self, client, expected_nodes_per_shard: int) -> bool:
+        """Check if CLUSTER SLOTS returns complete topology with all replicas."""
+        slots = client.execute_command("CLUSTER", "SLOTS")
+        if not slots:
+            return False
+        for slot_range in slots:
+            # slot_range format: [start, end, [primary_ip, port, id, ...], [replica1...], ...]
+            # Length should be 2 (start, end) + expected_nodes_per_shard (1 primary + N replicas)
+            if len(slot_range) < 2 + expected_nodes_per_shard:
+                return False
+        return True
+
+    def wait_for_cluster_topology_to_settle(self):
+        # Wait for the core's cluster view to sync.
+        replica_count = len(self.replication_groups[0].replicas)
+        expected_nodes_per_shard = 1 + replica_count
+        for node in self.get_nodes():
+            waiters.wait_for_true(
+                lambda n=node: self._cluster_slots_complete(n.client, expected_nodes_per_shard)
+            )
+        # Then wait for the search module's cached cluster map to expire and update.
+        # TODO: Replace the sleep with a wait on condition.
+        expiration_ms = int(self.client_for_primary(0).config_get(
+            "search.cluster-map-expiration-ms"
+        )["search.cluster-map-expiration-ms"])
+        time.sleep(expiration_ms / 1000.0)
 
 class ValkeySearchClusterTestCaseDebugMode(ValkeySearchClusterTestCase):
     '''

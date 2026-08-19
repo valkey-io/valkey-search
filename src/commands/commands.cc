@@ -19,6 +19,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
@@ -26,6 +27,21 @@
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search {
+
+// Number of in-flight query operations (FT.SEARCH / FT.AGGREGATE), reported as
+// the count of currently-live SearchParameters objects. A SearchParameters is
+// alive for the whole duration of a (possibly asynchronous) query - while
+// queued on the reader thread pool, awaiting main-thread completion, or pending
+// background cleanup - and holds the shared_ptr to the IndexSchema it queries.
+// Exposed as a developer-visible INFO field (search_async_queries_in_flight) so
+// tests can wait for the system to become idle before shutting the server down,
+// avoiding spurious leak reports from in-flight query state at process exit.
+static vmsdk::info_field::Integer async_queries_in_flight(
+    "query", "async_queries_in_flight",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return query::GetSearchParametersInFlight();
+    }));
+
 namespace async {
 
 struct Result {
@@ -36,8 +52,7 @@ struct Result {
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
             [[maybe_unused]] int argc) {
-  return ValkeyModule_ReplyWithError(
-      ctx, "Search operation cancelled due to timeout");
+  return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -55,8 +70,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   if (!parameters->enable_partial_results &&
       parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, "Search operation cancelled due to timeout");
+    return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
   }
   parameters->SendReply(ctx, parameters->search_result);
   return VALKEYMODULE_OK;
@@ -67,6 +81,11 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   // Some things can only be cleaned up on the main thread.
   // We need to do this here.
   parameters->index_schema = nullptr;
+  // return_attributes holds ValkeyModuleStrings retained from client argv.
+  // Must be freed here (main thread) to avoid racing with freeClientArgv().
+  parameters->return_attributes.clear();
+  // Cleanup of score_as
+  parameters->score_as = nullptr;
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [parameters]() { delete parameters; });
 }
@@ -75,6 +94,22 @@ void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
 
 CONTROLLED_BOOLEAN(ForceReplicasOnly, false);
 DEV_INTEGER_COUNTER(stats, single_slot_queries);
+
+bool IsSingleSlotQueryRoutedToLocalNode(ValkeyModuleCtx *ctx,
+                                        const QueryCommand &parameters) {
+  if (!parameters.index_schema) {
+    return false;
+  }
+
+  const auto &single_slot_number =
+      parameters.index_schema->GetSingleSlotNumber();
+  if (!single_slot_number.has_value()) {
+    return false;
+  }
+
+  const auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
+  return cluster_map && cluster_map->IOwnSlot(*single_slot_number);
+}
 
 std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
     ValkeyModuleCtx *ctx, const QueryCommand &parameters) {
@@ -86,12 +121,13 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
   // refresh cluster map if needed
   auto cluster_map = ValkeySearch::Instance().GetOrRefreshClusterMap(ctx);
 
-  if (vmsdk::ParseHashTag(parameters.index_schema_name).has_value()) {
-    auto key = vmsdk::MakeUniqueValkeyString(parameters.index_schema_name);
-    auto this_slot = ValkeyModule_ClusterKeySlot(key.get());
+  const auto &single_slot_number =
+      parameters.index_schema->GetSingleSlotNumber();
+  if (single_slot_number.has_value()) {
     single_slot_queries.Increment();
     return cluster_map->GetTargetsForSlot(
-        mode, query::fanout::IsSystemUnderLowUtilization(), this_slot);
+        mode, query::fanout::IsSystemUnderLowUtilization(),
+        *single_slot_number);
   } else {
     return cluster_map->GetTargets(
         mode, query::fanout::IsSystemUnderLowUtilization());
@@ -99,6 +135,7 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargets(
 }
 
 CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
+CONTROLLED_BOOLEAN(ForceQueueDepthExceeded, false);
 
 //
 // Common Class for FT.SEARCH and FT.AGGREGATE command
@@ -136,9 +173,11 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
                            ValkeySearch::Instance().IsCluster() &&
                            !parameters->local_only;
 
-    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout)) {
+    if (ABSL_PREDICT_FALSE(inside_multi_exec && do_fanout) &&
+        !IsSingleSlotQueryRoutedToLocalNode(ctx, *parameters)) {
       return absl::InvalidArgumentError(
-          "MULTI/EXEC or Lua script are not supported in CME mode.");
+          "MULTI/EXEC or Lua script are not supported in CME mode unless the "
+          "query targets a single-slot index on the local node.");
     }
 
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
@@ -155,8 +194,7 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       // Check if operation was cancelled and partial results are disabled.
       if (!parameters->enable_partial_results &&
           parameters->cancellation_token->IsCancelled()) {
-        ValkeyModule_ReplyWithError(
-            ctx, "Search operation cancelled due to timeout");
+        ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
         ++Metrics::GetStats().query_failed_requests_cnt;
         return absl::OkStatus();
       }
@@ -174,6 +212,19 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
       search_targets = ComputeSearchTargets(ctx, *parameters);
       if (search_targets.empty()) {
         return absl::InternalError("No available nodes to execute the query");
+      }
+    }
+
+    // Reject queries before creating a blocked client if the reader thread
+    // pool queue is too deep. Covers both fanout and single-node paths.
+    // No scaling factor needed — each node protects its own queue via the
+    // server-side check in coordinator/server.cc.
+    auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
+    if (configured_limit > 0) {
+      auto *thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
+      if (ForceQueueDepthExceeded.GetValue() ||
+          thread_pool->QueueSize() >= static_cast<size_t>(configured_limit)) {
+        return absl::ResourceExhaustedError(query::kQueueDepthMsg);
       }
     }
 

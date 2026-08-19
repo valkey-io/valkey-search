@@ -54,6 +54,16 @@ class ValkeySearch {
   vmsdk::ThreadPool *GetUtilityThreadPool() const {
     return utility_thread_pool_.get();
   }
+
+  // Stop and join all owned thread pools so no worker threads remain alive.
+  // Intended for use during module shutdown before global destructors run,
+  // to avoid worker threads racing with destruction of global state.
+  void JoinAllThreadPools() {
+    if (reader_thread_pool_) reader_thread_pool_->JoinWorkers();
+    if (writer_thread_pool_) writer_thread_pool_->JoinWorkers();
+    if (utility_thread_pool_) utility_thread_pool_->JoinWorkers();
+  }
+
   std::shared_ptr<vmsdk::ThreadGroupCPUMonitor> GetCoordinatorThreadsMonitor()
       const {
     return coordinator_thread_monitor_;
@@ -101,7 +111,7 @@ class ValkeySearch {
   static void InitInstance(std::unique_ptr<ValkeySearch> instance);
 
   uint32_t GetHNSWBlockSize() const;
-  void SetHNSWBlockSize(uint32_t block_size);
+  absl::Status SetHNSWBlockSize(uint32_t block_size);
 
   absl::Status OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                       int argc);

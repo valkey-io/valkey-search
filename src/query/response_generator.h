@@ -31,6 +31,9 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount();
 }  // namespace valkey_search::options
 namespace valkey_search::query {
 
+// Check if this node owns the slot for the given key in cluster mode
+bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key);
+
 // Adds all local content for neighbors to the list of neighbors.
 // Skipping neighbors if one of the following:
 // Neighbor already contained in the attribute content map.
@@ -40,9 +43,7 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier,
-    const std::optional<query::SortByParameter> &sortby_parameter =
-        std::nullopt);
+    const std::optional<std::string> &vector_identifier);
 
 }  // namespace valkey_search::query
 

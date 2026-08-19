@@ -78,35 +78,59 @@ bool HashHasRecord(ValkeyModuleKey *key, absl::string_view identifier) {
 
 absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
     ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
-    [[maybe_unused]] ValkeyModuleKey *open_key, absl::string_view key,
+    ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::VerifyMainThread();
-  auto key_str = vmsdk::MakeUniqueValkeyString(key);
-  // `VALKEYMODULE_OPEN_KEY_NOEXPIRE` is for safety. The caller functions to
-  // FetchAllRecords already check for key existence and expiration, so we do
-  // not return stale results which are already expired. But adding this flag
-  // ensures that even if they forget to check, we will not force deletion of
-  // lazy expired from the SEARCH based command results which was known to cause
-  // a `server.also_propagate.numops == 0` crash in the core.
-  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
-  if (!key_obj) {
+  if (!open_key) {
     return absl::NotFoundError(absl::StrCat(
         "No such record with key: `", vector_identifier.value_or(""), "`"));
   }
-  // Only check for vector_identifier if it's not empty (vector queries)
   if (vector_identifier.has_value() &&
-      !HashHasRecord(key_obj.get(), vector_identifier.value())) {
+      !HashHasRecord(open_key, vector_identifier.value())) {
     return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
                                             vector_identifier.value_or(""),
                                             "`"));
   }
+  if (!identifiers.empty()) {
+    size_t hash_len = ValkeyModule_ValueLength(open_key);
+    if (identifiers.size() <= hash_len / 2) {
+      return FetchSpecificFields(open_key, identifiers);
+    }
+  }
+  return FetchAllFields(open_key, identifiers);
+}
+
+RecordsMap HashAttributeDataType::FetchAllFields(
+    ValkeyModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::UniqueValkeyScanCursor cursor = vmsdk::MakeUniqueValkeyScanCursor();
   HashScanCallbackData callback_data{identifiers};
-  while (ValkeyModule_ScanKey(key_obj.get(), cursor.get(), HashScanCallback,
+  while (ValkeyModule_ScanKey(open_key, cursor.get(), HashScanCallback,
                               &callback_data)) {
   }
   return std::move(callback_data.key_value_content);
+}
+
+// Fetch only the requested fields by name using HashGet, avoiding a full scan.
+// This is faster than scanning when the hash has many more fields than
+// requested. Fields that don't exist in the hash are silently skipped.
+RecordsMap HashAttributeDataType::FetchSpecificFields(
+    ValkeyModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> &identifiers) const {
+  RecordsMap content;
+  for (const auto &id : identifiers) {
+    ValkeyModuleString *value = nullptr;
+    ValkeyModule_HashGet(open_key, VALKEYMODULE_HASH_CFIELDS, id.data(), &value,
+                         nullptr);
+    if (value) {
+      auto field_str = vmsdk::MakeUniqueValkeyString(id);
+      auto field_view = vmsdk::ToStringView(field_str.get());
+      content.emplace(field_view,
+                      RecordsMapValue(std::move(field_str),
+                                      vmsdk::UniqueValkeyString(value)));
+    }
+  }
+  return content;
 }
 
 absl::Status NormalizeJsonRecord(absl::string_view record,
@@ -114,11 +138,26 @@ absl::Status NormalizeJsonRecord(absl::string_view record,
   if (!record.empty() && record[0] != '[') {
     return absl::NotFoundError("Invalid record");
   }
+  bool was_string = false;
   if (absl::ConsumePrefix(&record, "[")) {
     absl::ConsumeSuffix(&record, "]");
     if (absl::ConsumePrefix(&record, "\"")) {
       absl::ConsumeSuffix(&record, "\"");
+      was_string = true;
     }
+  }
+  // The JSON module returns string values still JSON-escaped; decode them so
+  // the indexed value matches the (already unescaped) query side. Done before
+  // the empty check so a valid empty string ("") indexes as "" rather than
+  // being treated as a missing record.
+  if (was_string) {
+    auto decoded = vmsdk::JsonUnquote(record);
+    if (!decoded.has_value()) {
+      return absl::InvalidArgumentError("Invalid JSON string value");
+    }
+    auto record_ptr = vmsdk::MakeUniqueValkeyString(*decoded);
+    out_record.swap(record_ptr);
+    return absl::OkStatus();
   }
   if (record.empty()) {
     return absl::NotFoundError("Empty record");

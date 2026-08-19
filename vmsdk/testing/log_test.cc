@@ -77,8 +77,8 @@ std::string CustomSinkFormatter(const absl::LogEntry& entry) {
   EXPECT_EQ(entry.verbosity(), static_cast<int>(LogLevel::kNotice));
   return std::string("CustomSinkFormatter");
 }
-#ifdef BROKEN_UNIT_TEST
 TEST_F(LogTest, SinkOptions) {
+  custom_formatter_used = 0;
   ValkeyModuleCtx ctx;
   VMSDK_EXPECT_OK(InitLogging(&ctx, "DEBUG"));
   SetSinkFormatter(CustomSinkFormatter);
@@ -86,14 +86,15 @@ TEST_F(LogTest, SinkOptions) {
     ThreadPool thread_pool("test-pool-", 5);
     thread_pool.StartWorkers();
     ValkeyModuleCtx fake_ctxes[10];
-    for (int i = 0; i < 10; ++i) {
-      EXPECT_CALL(
-          *kMockValkeyModule,
-          Log(&fake_ctxes[i], testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING),
-              testing::_));
+    for (auto& fake_ctxe : fake_ctxes) {
+      EXPECT_CALL(*kMockValkeyModule,
+                  Log(&fake_ctxe, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING),
+                      testing::_));
+    }
+    for (auto& fake_ctxe : fake_ctxes) {
       thread_pool.Schedule(
-          [&fake_ctxes, i]() mutable {
-            VMSDK_LOG(NOTICE, &fake_ctxes[i]) << "s1, expected";
+          [&fake_ctxes, &fake_ctxe]() mutable {
+            VMSDK_LOG(NOTICE, &fake_ctxe) << "s1, expected";
           },
           ThreadPool::Priority::kHigh);
     }
@@ -102,7 +103,6 @@ TEST_F(LogTest, SinkOptions) {
 
   EXPECT_EQ(custom_formatter_used, 10);
 }
-#endif
 TEST_F(LogTest, WithoutInitValue) {
   ValkeyModuleCtx ctx;
   EXPECT_CALL(*kMockValkeyModule,

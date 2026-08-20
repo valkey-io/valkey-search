@@ -112,7 +112,8 @@ finalize_test_flags(core_test)
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/query/fanout_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
 target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -150,6 +151,7 @@ target_link_libraries(coordinator_common INTERFACE server)
 # 1. Utils Test Suite - consolidates utility tests
 set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/allocator_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/cancel_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc

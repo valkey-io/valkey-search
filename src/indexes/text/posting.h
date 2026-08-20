@@ -82,7 +82,8 @@ struct Postings {
   void InsertKey(const Key& key, FlatPositionMap* flat_map);
 
   // Remove a key and all positions for it
-  void RemoveKey(const Key& key, TextIndexMetadata* metadata);
+  void RemoveKey(const Key& key, TextIndexMetadata* metadata,
+                 MemoryPool* position_pool = nullptr);
 
   // Total number of keys
   size_t GetKeyCount() const;

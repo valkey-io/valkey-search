@@ -12,7 +12,6 @@
 #include "absl/base/optimization.h"
 #include "absl/container/btree_map.h"
 #include "absl/container/inlined_vector.h"
-#include "src/indexes/text/flat_position_map.h"
 #include "src/utils/doc_id_map.h"
 #include "src/utils/string_interning.h"
 
@@ -138,9 +137,32 @@ struct FieldMask {
   uint8_t num_fields_ = 0;
 };
 
-static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
-
 using PositionMap = absl::btree_map<Position, FieldMask>;
+
+// Iterator for Position data direct from chunk varint stream
+class PositionIterator {
+ public:
+  PositionIterator() = default;
+  PositionIterator(const uint8_t *data, size_t max_bytes, size_t num_positions);
+
+  bool IsValid() const;
+  void NextPosition();
+  bool SkipForwardPosition(Position target);
+  Position GetPosition() const;
+  uint64_t GetFieldMask() const;
+
+ private:
+  void DecodeStreamPosition();
+
+  // Stream-direct members
+  const uint8_t *stream_data_{nullptr};
+  size_t stream_max_bytes_{0};
+  size_t stream_byte_offset_{0};
+  size_t stream_num_positions_{0};
+  size_t stream_pos_index_{0};
+  Position stream_cumulative_pos_{0};
+  uint64_t stream_field_mask_{0};
+};
 
 struct Postings {
   struct KeyIterator;
@@ -165,14 +187,10 @@ struct Postings {
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Insert the key with PositionMap (direct, no FlatPositionMap allocation)
+  // Insert the key with PositionMap (direct, zero intermediate allocation)
   void InsertKey(const Key &key, const PositionMap *pos_map);
   void InsertKey(DocId doc_id, const PositionMap *pos_map);
   void InsertKey(const EncodedDocId &enc_doc_id, const PositionMap *pos_map);
-
-  // Insert the key with FlatPositionMap
-  void InsertKey(const Key &key, FlatPositionMap *flat_map);
-  void InsertKey(DocId doc_id, FlatPositionMap *flat_map);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key &key, TextIndexMetadata *metadata);

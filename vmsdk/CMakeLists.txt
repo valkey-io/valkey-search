@@ -1,2 +1,5 @@
 add_subdirectory(src)
-add_subdirectory(testing)
+
+if (BUILD_UNIT_TESTS)
+    add_subdirectory(testing)
+endif()

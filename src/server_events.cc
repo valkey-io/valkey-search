@@ -9,9 +9,9 @@
 
 #include <cstdint>
 
-#include "src/coordinator/metadata_manager.h"
-#include "src/schema_manager.h"
-#include "src/valkey_search.h"
+#include "coordinator/metadata_manager.h"
+#include "schema_manager.h"
+#include "valkey_search.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -76,9 +76,17 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
 }
 
-void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }
+void AtForkPrepare() {
+  if (ValkeySearch::HasInstance()) {
+    ValkeySearch::Instance().AtForkPrepare();
+  }
+}
 
-void AfterForkParent() { ValkeySearch::Instance().AfterForkParent(); }
+void AfterForkParent() {
+  if (ValkeySearch::HasInstance()) {
+    ValkeySearch::Instance().AfterForkParent();
+  }
+}
 
 void SubscribeToServerEvents() {
   // Note: all the events are subscribed to here. The engine only supports

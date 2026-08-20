@@ -12,6 +12,9 @@ RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 INTEGRATION_TEST="no"
 SAN_BUILD="no"
+SAN_COMPILE_FLAGS=""
+SAN_LINKER_FLAGS=""
+BUILD_DIR_ARG=""
 ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
@@ -30,15 +33,19 @@ Usage: build.sh [options...]
     --debug                           Build for debug version.
     --clean                           Clean the current build configuration (debug or release).
     --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
-    --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --build-dir[=PATH]                Use an alternate build directory.
+    --run-tests                       Run all unit tests via CTest. Optionally, pass a ctest -R regex to
+                                       filter: "--run-tests=<pattern>" (e.g. "SchemaManagerTest" or
+                                       "SchemaManagerTest.SomeCase").
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
-    --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
+    --test-errors-stdout              When a test fails, dump the captured tests output to stdout (ctest --output-on-failure).
     --run-integration-tests[=pattern] Run integration tests.
     --use-system-modules              Use system's installed gRPC, Protobuf & Abseil dependencies.
+    --vendored                        Statically link gRPC, Protobuf & Abseil (VALKEY_VENDORED_DEPS=ON).
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
-    --jobs=N                          Limit the build workers to N. Default: use all available cores.
+    --jobs=N                          Limit the build workers and CTest's parallel test jobs to N. Default: use all available cores for the build, run tests serially.
 
 Example usage:
 
@@ -69,6 +76,22 @@ while [ $# -gt 0 ]; do
         shift || true
         RUN_CMAKE="yes"
         echo "Running cmake: true"
+        ;;
+    --build-dir)
+        shift || true
+        if [ $# -eq 0 ]; then
+            echo "Missing value for --build-dir"
+            print_usage
+            exit 1
+        fi
+        BUILD_DIR_ARG=$1
+        shift || true
+        echo "Using build directory ${BUILD_DIR_ARG}"
+        ;;
+    --build-dir=*)
+        BUILD_DIR_ARG=${arg#*=}
+        shift || true
+        echo "Using build directory ${BUILD_DIR_ARG}"
         ;;
     --no-build)
         shift || true
@@ -126,15 +149,24 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
+    --vendored)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DVALKEY_VENDORED_DEPS=ON"
+        shift || true
+        echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
+        ;;
     --asan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
         SAN_BUILD="address"
+        SAN_COMPILE_FLAGS="-O1 -fno-omit-frame-pointer -fsanitize=address -fno-lto -DSAN_BUILD=address"
+        SAN_LINKER_FLAGS="-fsanitize=address"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --tsan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
         SAN_BUILD="thread"
+        SAN_COMPILE_FLAGS="-O1 -fno-omit-frame-pointer -fsanitize=thread -fno-lto -DSAN_BUILD=thread"
+        SAN_LINKER_FLAGS="-fsanitize=thread"
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
@@ -170,114 +202,110 @@ else
   BUILD_TOOL="make -j$(num_proc)"
 fi
 
-function build_icu_if_needed() {
-    printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
-    
-    local ICU_SOURCE_DIR="${ROOT_DIR}/third_party/icu/source"
-    local ICU_BUILD_DIR="${BUILD_DIR}/icu"
-    
-    # ICU source is committed to repository - no download needed
-    if [ ! -d "${ICU_SOURCE_DIR}" ]; then
-        printf "${RED}ERROR: ICU source not found in third_party/icu/source${RESET}\n"
-        printf "ICU source should be committed to the repository.\n"
-        exit 1
-    fi
-    
-    # Check if ICU static libraries exist in build directory (clean approach)
-    if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
-       [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
-       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
-        printf "${GREEN}ICU static libraries found in build directory${RESET}\n"
-        return 0
-    fi
-    
-    printf "${BOLD_PINK}Building ICU with static data packaging...${RESET}\n"
-    
-    # Create clean build directory (out-of-tree build)
-    rm -rf "${ICU_BUILD_DIR}"
-    mkdir -p "${ICU_BUILD_DIR}"
-    cd "${ICU_BUILD_DIR}"
-    
-    printf "Configuring ICU for static linking with embedded data...\n"
-    
-    local ICU_LOG="${ICU_BUILD_DIR}/icu-build.log"
+# Compute the compiler/linker flags valkey-search is built with. These used to
+# live in cmake/Modules/valkey_search.cmake as a set of per-target CMake
+# functions; they now live here so build.sh can pass them to cmake as plain
+# -DCMAKE_*_FLAGS arguments instead of CMakeLists.txt having to know about
+# build configs/architectures/sanitizers.
+#
+# Debug-vs-Release selection is left entirely to CMake's own per-config flag
+# variables (CMAKE_*_FLAGS_RELEASE / CMAKE_*_FLAGS_DEBUG, which CMake merges
+# with the plain CMAKE_*_FLAGS based on CMAKE_BUILD_TYPE) rather than branched
+# on here: we hand cmake static values for both configs and let it pick.
+# Architecture/OS are still detected here via `case`, since that's platform
+# detection rather than a build-configuration choice.
+function compute_build_flags() {
+    local arch_simd_flags=""
+    case "$(uname -m)" in
+    x86_64)
+        arch_simd_flags="-mcx16 -msse4.2 -mpclmul -mavx -mavx2 -maes -mfma -mprfchw"
+        ;;
+    esac
 
-    # Configure with static data packaging (output saved to log file)
-    if ! "${ICU_SOURCE_DIR}/configure" \
-        --enable-static \
-        --disable-shared \
-        --with-data-packaging=static \
-        --disable-extras \
-        --disable-icuio \
-        --disable-layout \
-        --disable-tests \
-        --disable-samples \
-        --enable-tools \
-        --prefix="${ICU_BUILD_DIR}/install" \
-        CFLAGS="-O2 -fPIC" \
-        CXXFLAGS="-O2 -fPIC" > "${ICU_LOG}" 2>&1; then
-        printf "${RED}ICU configure failed. See ${ICU_LOG}${RESET}\n"
-        tail -30 "${ICU_LOG}"
-        exit 1
+    local openmp_flags="-fopenmp"
+    case "${UNAME_S}" in
+    Darwin)
+        openmp_flags=""
+        ;;
+    esac
+
+    # Always-on flags, merged by CMake with the _RELEASE/_DEBUG variants below.
+    # SAN_COMPILE_FLAGS/SAN_LINKER_FLAGS are set directly at the --asan/--tsan
+    # argument-parsing sites (empty when no sanitizer was requested).
+    local common_flags="-falign-functions=5 -fmath-errno -ffp-contract=off -fno-rounding-math ${arch_simd_flags} -mtune=generic -gdwarf-5 -gz=zlib -ffast-math -funroll-loops -ftree-vectorize ${openmp_flags} -flax-vector-conversions -Wno-unknown-pragmas -Wno-sign-compare -Wno-uninitialized -DTESTING_TMP_DISABLED ${SAN_COMPILE_FLAGS}"
+
+    VALKEY_SEARCH_C_FLAGS="${common_flags}"
+    VALKEY_SEARCH_CXX_FLAGS="${common_flags}"
+
+    # Passing -DCMAKE_{C,CXX}_FLAGS_RELEASE on the cmake command line replaces
+    # CMake's own default for that cache variable (normally "-O3 -DNDEBUG")
+    # rather than appending to it, so we have to reproduce it explicitly here.
+    # -ffat-lto-objects only makes sense alongside -flto; sanitizer builds
+    # pass -fno-lto (see SAN_COMPILE_FLAGS above), and combining the two
+    # produces object files the final (non-LTO) link can't consume, failing
+    # with "plugin needed to handle lto object".
+    local lto_flags="-ffat-lto-objects"
+    if [[ "${SAN_BUILD}" != "no" ]]; then
+        lto_flags=""
     fi
-    
-    printf "Building ICU static libraries...\n"
-    
-    # Build with static data mode (output saved to log file)
-    if ! make PKGDATA_MODE=static -j$(num_proc) >> "${ICU_LOG}" 2>&1; then
-        printf "${RED}ICU build failed. See ${ICU_LOG}${RESET}\n"
-        tail -50 "${ICU_LOG}"
-        exit 1
-    fi
-    
-    printf "Installing ICU libraries...\n"
-    
-    # Install to build directory
-    if ! make install PKGDATA_MODE=static >> "${ICU_LOG}" 2>&1; then
-        printf "${RED}ICU install failed. See ${ICU_LOG}${RESET}\n"
-        tail -30 "${ICU_LOG}"
-        exit 1
-    fi
-    
-    cd "${ROOT_DIR}"
-    
-    # Verify libraries were created in build directory
-    if [ -f "${ICU_BUILD_DIR}/install/lib/libicudata.a" ] && \
-       [ -f "${ICU_BUILD_DIR}/install/lib/libicui18n.a" ] && \
-       [ -f "${ICU_BUILD_DIR}/install/lib/libicuuc.a" ]; then
-        printf "${GREEN}SUCCESS: ICU static libraries built successfully${RESET}\n"
-        printf "Libraries created in build directory:\n"
-        ls -lh "${ICU_BUILD_DIR}/install/lib/"*.a
-        printf "Source directory kept clean\n"
-    else
-        printf "${RED}ERROR: ICU static libraries not found after build${RESET}\n"
-        exit 1
-    fi
+    VALKEY_SEARCH_C_FLAGS_RELEASE="-O3 -DNDEBUG -ffile-prefix-map=${ROOT_DIR}= ${lto_flags}"
+    VALKEY_SEARCH_CXX_FLAGS_RELEASE="${VALKEY_SEARCH_C_FLAGS_RELEASE}"
+
+    VALKEY_SEARCH_C_FLAGS_DEBUG="-O0 -fno-omit-frame-pointer -fno-lto"
+    VALKEY_SEARCH_CXX_FLAGS_DEBUG="${VALKEY_SEARCH_C_FLAGS_DEBUG}"
+
+    VALKEY_SEARCH_SHARED_LINKER_FLAGS="${SAN_LINKER_FLAGS}"
+    VALKEY_SEARCH_MODULE_LINKER_FLAGS="${SAN_LINKER_FLAGS}"
+
+    # Emit fat LTO objects at compile time (above) and defer the actual LTO
+    # optimization to link time, only for Release builds.
+    VALKEY_SEARCH_SHARED_LINKER_FLAGS_RELEASE="-flto"
+    VALKEY_SEARCH_MODULE_LINKER_FLAGS_RELEASE="-flto"
 }
-
 
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     printf "Generating ${GREEN}${CMAKE_GENERATOR}${RESET} build files\n"
-    mkdir -p ${BUILD_DIR}
-    cd $_
     local BUILD_TYPE=$(capitalize_string ${BUILD_CONFIG})
-    rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
-    cd ${ROOT_DIR}
+    mkdir -p "${BUILD_DIR}"
+    rm -f "${BUILD_DIR}/CMakeCache.txt"
+    compute_build_flags
+    printf "Running: cmake -S %s -B %s -DCMAKE_BUILD_TYPE=%s -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON -DCMAKE_C_FLAGS=\"%s\" -DCMAKE_CXX_FLAGS=\"%s\" -DCMAKE_C_FLAGS_RELEASE=\"%s\" -DCMAKE_CXX_FLAGS_RELEASE=\"%s\" -DCMAKE_C_FLAGS_DEBUG=\"%s\" -DCMAKE_CXX_FLAGS_DEBUG=\"%s\" -DCMAKE_SHARED_LINKER_FLAGS=\"%s\" -DCMAKE_MODULE_LINKER_FLAGS=\"%s\" -DCMAKE_SHARED_LINKER_FLAGS_RELEASE=\"%s\" -DCMAKE_MODULE_LINKER_FLAGS_RELEASE=\"%s\" -Wno-dev -G\"%s\" %s\n" \
+        "${ROOT_DIR}" "${BUILD_DIR}" "${BUILD_TYPE}" \
+        "${VALKEY_SEARCH_C_FLAGS}" "${VALKEY_SEARCH_CXX_FLAGS}" \
+        "${VALKEY_SEARCH_C_FLAGS_RELEASE}" "${VALKEY_SEARCH_CXX_FLAGS_RELEASE}" \
+        "${VALKEY_SEARCH_C_FLAGS_DEBUG}" "${VALKEY_SEARCH_CXX_FLAGS_DEBUG}" \
+        "${VALKEY_SEARCH_SHARED_LINKER_FLAGS}" "${VALKEY_SEARCH_MODULE_LINKER_FLAGS}" \
+        "${VALKEY_SEARCH_SHARED_LINKER_FLAGS_RELEASE}" "${VALKEY_SEARCH_MODULE_LINKER_FLAGS_RELEASE}" \
+        "${CMAKE_GENERATOR}" "${CMAKE_EXTRA_ARGS}"
+    cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_UNIT_TESTS=ON \
+        -DCMAKE_C_FLAGS="${VALKEY_SEARCH_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${VALKEY_SEARCH_CXX_FLAGS}" \
+        -DCMAKE_C_FLAGS_RELEASE="${VALKEY_SEARCH_C_FLAGS_RELEASE}" \
+        -DCMAKE_CXX_FLAGS_RELEASE="${VALKEY_SEARCH_CXX_FLAGS_RELEASE}" \
+        -DCMAKE_C_FLAGS_DEBUG="${VALKEY_SEARCH_C_FLAGS_DEBUG}" \
+        -DCMAKE_CXX_FLAGS_DEBUG="${VALKEY_SEARCH_CXX_FLAGS_DEBUG}" \
+        -DCMAKE_SHARED_LINKER_FLAGS="${VALKEY_SEARCH_SHARED_LINKER_FLAGS}" \
+        -DCMAKE_MODULE_LINKER_FLAGS="${VALKEY_SEARCH_MODULE_LINKER_FLAGS}" \
+        -DCMAKE_SHARED_LINKER_FLAGS_RELEASE="${VALKEY_SEARCH_SHARED_LINKER_FLAGS_RELEASE}" \
+        -DCMAKE_MODULE_LINKER_FLAGS_RELEASE="${VALKEY_SEARCH_MODULE_LINKER_FLAGS_RELEASE}" \
+        -Wno-dev -G"${CMAKE_GENERATOR}" ${CMAKE_EXTRA_ARGS}
 }
 
 function build() {
     printf "${BOLD_PINK}Building${RESET}\n"
     if [ -d "${BUILD_DIR}" ]; then
-        cd "${BUILD_DIR}"
-        if [ -z "${JOBS}" ]; then
-            ${BUILD_TOOL} ${VERBOSE_ARGS} ${CMAKE_TARGET}
-        else
-            ${BUILD_TOOL} -j ${JOBS} ${VERBOSE_ARGS} ${CMAKE_TARGET}
+        local build_args=()
+        if [ -n "${JOBS}" ]; then
+            build_args+=(--parallel "${JOBS}")
         fi
-        cd "${ROOT_DIR}"
+        if [ -n "${VERBOSE_ARGS}" ]; then
+            build_args+=(--verbose)
+        fi
+        if [ -n "${CMAKE_TARGET}" ]; then
+            build_args+=(--target "${CMAKE_TARGET}")
+        fi
+        cmake --build "${BUILD_DIR}" "${build_args[@]}"
 
         printf "\n${GREEN}Build Successful!${RESET}\n\n"
         printf "${BOLD_PINK}Module path:${RESET} ${BUILD_DIR}/libsearch.${MODULE_EXT}\n\n"
@@ -299,36 +327,33 @@ function format() {
     printf "Applied clang-format\n"
 }
 
-function print_test_prefix() {
-    printf "${BOLD_PINK}Running:${RESET} $1"
-}
-
-function print_test_ok() {
-    printf " ... ${GREEN}ok${RESET}\n"
-}
-
 function print_test_summary() {
-    printf "${BLUE}Test output can be found here:${RESET} ${TEST_OUTPUT_FILE}\n"
+    printf "${BLUE}CTest JUnit report:${RESET} ${BUILD_DIR}/test-results.xml\n"
+    printf "${BLUE}Full test output:${RESET} ${BUILD_DIR}/Testing/Temporary/LastTest.log\n"
 }
 
-function print_test_error_and_exit() {
-    printf " ... ${RED}failed${RESET}\n"
+# Runs the unit tests registered with CTest (via gtest_discover_tests). $1,
+# if non-empty, is passed to ctest's "-R" regex test filter.
+function run_unit_tests() {
+    local filter="$1"
+    printf "${BOLD_PINK}Running unit tests (via CTest)${RESET}\n"
+
+    local ctest_args=(--output-junit "test-results.xml")
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        # Only dump the failed test's output, not the entire accumulated log
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}"
-        fi
+        ctest_args+=(--output-on-failure)
+    fi
+    if [ -n "${JOBS}" ]; then
+        ctest_args+=(--parallel "${JOBS}")
+    fi
+    if [ -n "${filter}" ]; then
+        ctest_args+=(-R "${filter}")
     fi
 
-    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
-    # running the remainder of the tests
-    if [[ "${SAN_BUILD}" == "no" ]]; then
-        print_test_summary
-        exit 1
-    else
-        # Make sure to exit the script with an error
-        EXIT_CODE=1
-    fi
+    # CTest already runs every registered test and reports pass/fail for each
+    # one (regardless of sanitizer build), so just propagate its exit code.
+    # Run in a subshell so we don't disturb the caller's working directory.
+    (cd "${BUILD_DIR}" && ctest "${ctest_args[@]}") || EXIT_CODE=1
+    print_test_summary
 }
 
 function check_tool() {
@@ -358,7 +383,7 @@ function determine_ninja() {
 }
 
 function check_tools() {
-    local tools="cmake g++ gcc"
+    local tools="cmake ctest g++ gcc"
     for tool in $tools; do
         check_tool ${tool}
     done
@@ -391,7 +416,9 @@ function is_configure_required() {
 
     local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
     local IFS=$'\n'
-    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v ".build-release" | grep -v ".build-debug")
+    local cmake_files=$(find "${ROOT_DIR}" \
+        \( -path "${BUILD_DIR}" -o -path "${BUILD_DIR}/*" \) -prune -o \
+        \( -name "CMakeLists.txt" -o -name "*.cmake" \) -print)
     for cmake_file in $cmake_files; do
         local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
         if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
@@ -422,18 +449,28 @@ if [[ "${FORMAT}" == "yes" ]]; then
     format
 fi
 
-BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
 if [[ "${SAN_BUILD}" != "no" ]]; then
     printf "${BOLD_PINK}${SAN_BUILD} sanitizer build is enabled${RESET}\n"
+    # Needed before the build step, not just the test-run step: CMake's default
+    # gtest_discover_tests() runs each test binary's --gtest_list_tests as part
+    # of the build itself, which would otherwise hit an ASan ODR-violation
+    # false positive.
+    export ASAN_OPTIONS="detect_odr_violation=0"
+fi
+
+if [ -n "${BUILD_DIR_ARG}" ]; then
+    case "${BUILD_DIR_ARG}" in
+        /*) BUILD_DIR="${BUILD_DIR_ARG}" ;;
+        *) BUILD_DIR="$(pwd)/${BUILD_DIR_ARG}" ;;
+    esac
+else
+    BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}
     if [[ "${SAN_BUILD}" == "address" ]]; then
         BUILD_DIR=${BUILD_DIR}-asan
-    else
+    elif [[ "${SAN_BUILD}" == "thread" ]]; then
         BUILD_DIR=${BUILD_DIR}-tsan
     fi
 fi
-
-TESTS_DIR=${BUILD_DIR}/tests
-TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
 
 printf "Checking if configure is required..."
 
@@ -442,9 +479,6 @@ printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
 check_tools
 
 START_TIME=$(date +%s)
-
-# Build ICU dependencies before configuring cmake
-build_icu_if_needed
 
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
@@ -459,33 +493,10 @@ BUILD_RUNTIME=$((END_TIME - START_TIME))
 
 START_TIME=$(date +%s)
 
-if [[ "${SAN_BUILD}" != "no" ]]; then
-    export ASAN_OPTIONS="detect_odr_violation=0"
-fi
-
 if [[ "${RUN_TEST}" == "all" ]]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    while read -r test; do
-        echo "==> Running executable: ${test}" >> "${TEST_OUTPUT_FILE}"
-        echo "" >> "${TEST_OUTPUT_FILE}"
-        # Write each test's output to a per-test file so on failure we only dump the relevant output
-        rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-        print_test_prefix "${test}"
-        ("${test}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
-    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
+    run_unit_tests ""
 elif [ ! -z "${RUN_TEST}" ]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    echo "==> Running executable: ${TESTS_DIR}/${RUN_TEST}" >> "${TEST_OUTPUT_FILE}"
-    echo "" >> "${TEST_OUTPUT_FILE}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_prefix "${TESTS_DIR}/${RUN_TEST}"
-    ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
+    run_unit_tests "${RUN_TEST}"
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then
         echo ""

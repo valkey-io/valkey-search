@@ -5,11 +5,12 @@
  *
  */
 
-#include "vmsdk/src/blocked_client.h"
+#include "blocked_client.h"
 
-#include "gtest/gtest.h"
-#include "vmsdk/src/testing_infra/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include <gtest/gtest.h>
+#include <valkey/valkey_module.h>
+
+#include "testing_infra/utils.h"
 
 namespace vmsdk {
 

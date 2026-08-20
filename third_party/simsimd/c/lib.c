@@ -36,7 +36,7 @@
 #define SIMSIMD_TARGET_SAPPHIRE 1
 #endif
 
-#include "third_party/simsimd/include/simsimd/simsimd.h"
+#include <simsimd/simsimd.h>
 
 #ifdef __cplusplus
 extern "C" {

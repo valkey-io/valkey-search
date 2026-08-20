@@ -10,7 +10,6 @@
 #include <memory>
 #include <vector>
 
-#include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
 #include "src/commands/ft_search.h"

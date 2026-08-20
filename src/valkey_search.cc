@@ -1235,12 +1235,48 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
   writer_thread_pool_suspend_watch_ = std::nullopt;
 }
 
+// Global defrag callback. Invoked by the core defrag cron on the main thread
+// with a time-bounded ctx. Its job is to be cheap: identify fragmented index
+// memory and hand the actual rebuild to the background mutation path, never
+// doing index work inline here.
+//
+// Return value convention (same as the per-key defrag callback and core's
+// scanners): non-zero means "more work remains, call me again next cycle";
+// zero means "done for now". The cursor (DefragCursorGet/Set) carries our
+// resume position across cycles.
+//
+// This is a skeleton: it wires up the core API and reports "done". The actual
+// sampling/probe/reingestion is added once the reingestion path (and the
+// tcache handling, valkey#1210) is finalized. Kept a no-op so it is safe to
+// ship and exercise the core API end to end.
+//
+// The counter below is a temporary proof-of-wiring aid: it lets a test confirm
+// the core actually invokes the module's global defrag callback (and that
+// DefragShouldStop/cursor are reachable). Exposed via FT._DEBUG DEFRAG_STATS.
+std::atomic<uint64_t> g_defrag_callback_invocations{0};
+
+static int OnGlobalDefragCallback(ValkeyModuleDefragCtx *defrag_ctx) {
+  g_defrag_callback_invocations.fetch_add(1, std::memory_order_relaxed);
+  // Prove the new ctx fields are reachable: read the cursor and the deadline.
+  unsigned long cursor = 0;
+  ValkeyModule_DefragCursorGet(defrag_ctx, &cursor);
+  (void)ValkeyModule_DefragShouldStop(defrag_ctx);
+  return 0;  // No outstanding work; nothing to reschedule.
+}
+
 absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
+
+  // Register the global defrag callback if the running core exposes the API.
+  // Older cores without it simply skip module global defrag; the module still
+  // loads and works normally.
+  if (ValkeyModule_RegisterDefragFunc != nullptr) {
+    ValkeyModule_RegisterDefragFunc(ctx, OnGlobalDefragCallback);
+  }
 
   // Register all global configuration variables
   VMSDK_RETURN_IF_ERROR(ModuleConfigManager::Instance().Init(ctx));

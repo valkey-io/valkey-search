@@ -313,6 +313,24 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+// Proof-of-wiring counter defined in valkey_search.cc: number of times core
+// invoked the module global defrag callback.
+extern std::atomic<uint64_t> g_defrag_callback_invocations;
+
+// FT._DEBUG DEFRAG_STATS
+// Reports how many times the core invoked the module's global defrag callback.
+// A non-zero value proves the core-side changes (time-bounded global defrag
+// with cursor) reach the module.
+absl::Status DefragStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  ValkeyModule_ReplyWithArray(ctx, 2);
+  ValkeyModule_ReplyWithCString(ctx, "callback_invocations");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, static_cast<long long>(
+               g_defrag_callback_invocations.load(std::memory_order_relaxed)));
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -365,6 +383,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ControlledCmd(ctx, itr);
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
+  } else if (keyword == "DEFRAG_STATS") {
+    return DefragStats(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {

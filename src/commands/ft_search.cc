@@ -194,6 +194,14 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
 
   auto sortby = parameters.sortby_parameter.value();
 
+  // Sorting by the vector score (ascending) is the natural KNN order already,
+  // so leave the neighbors untouched rather than running the comparator, which
+  // would treat them as equivalent and could permute them under partial_sort.
+  if (parameters.IsVectorQuery() && parameters.score_as &&
+      vmsdk::ToStringView(parameters.score_as.get()) == sortby.field) {
+    return;
+  }
+
   // Check if field is a declared numeric attribute
   auto index_result = parameters.index_schema->GetIndex(sortby.field);
   bool is_numeric =

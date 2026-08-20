@@ -196,19 +196,17 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   uint8_t *dest = tail_->data + tail_->size;
   uint8_t *record_start = dest;
 
-  // Append pre-encoded doc_id
+  // Layout per document record in PostingChunk:
+  // [Encoded DocId (varint)] [num_pos (varint)] [payload_len (varint)] [delta1, mask1, delta2, mask2, ...]
+
+  // 1. Append pre-encoded doc_id bytes (cached to avoid repeated varint encoding)
   std::memcpy(dest, enc_doc_id.bytes, enc_doc_id.len);
   dest += enc_doc_id.len;
 
-  // Append num_pos
-  uint64_t v = num_pos;
-  while (v >= 0x80) {
-    *dest++ = static_cast<uint8_t>((v & 0x7F) | 0x80);
-    v >>= 7;
-  }
-  *dest++ = static_cast<uint8_t>(v & 0x7F);
+  // 2. Append number of positions (varint encoded)
+  WriteVarint(dest, num_pos);
 
-  // Append position payloads
+  // 3. Append serialized positions & field bitmasks if present
   if (pos_map && num_pos > 0) {
     uint8_t stack_buf[512];
     uint8_t *pdest = stack_buf;
@@ -221,29 +219,16 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
 
     uint32_t last_pos = 0;
     for (const auto &[pos, mask] : *pos_map) {
-      uint64_t delta = pos - last_pos;
-      while (delta >= 0x80) {
-        *pdest++ = static_cast<uint8_t>((delta & 0x7F) | 0x80);
-        delta >>= 7;
-      }
-      *pdest++ = static_cast<uint8_t>(delta & 0x7F);
-
-      uint64_t m = mask.GetMask();
-      while (m >= 0x80) {
-        *pdest++ = static_cast<uint8_t>((m & 0x7F) | 0x80);
-        m >>= 7;
-      }
-      *pdest++ = static_cast<uint8_t>(m & 0x7F);
+      // Delta-encode position relative to previous position for compact storage
+      WriteVarint(pdest, pos - last_pos);
+      // Bitmask where bit i = 1 means the term appeared in text field i
+      WriteVarint(pdest, mask.GetMask());
       last_pos = pos;
     }
 
     size_t payload_len = static_cast<size_t>(pdest - pstart);
-    uint64_t pv = payload_len;
-    while (pv >= 0x80) {
-      *dest++ = static_cast<uint8_t>((pv & 0x7F) | 0x80);
-      pv >>= 7;
-    }
-    *dest++ = static_cast<uint8_t>(pv & 0x7F);
+    // Write total byte size of serialized position payload
+    WriteVarint(dest, payload_len);
 
     std::memcpy(dest, pstart, payload_len);
     dest += payload_len;

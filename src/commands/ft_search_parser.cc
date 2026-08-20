@@ -247,9 +247,15 @@ absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
   if (sortby_parameter.has_value()) {
-    // Validate sortby field exists in the index schema
-    VMSDK_RETURN_IF_ERROR(
-        index_schema->GetIdentifier(sortby_parameter->field).status());
+    // The KNN score alias is sortable (by distance) but is not an index field;
+    // every other sort field must exist in the schema.
+    const bool sort_by_score =
+        IsVectorQuery() && score_as &&
+        vmsdk::ToStringView(score_as.get()) == sortby_parameter->field;
+    if (!sort_by_score) {
+      VMSDK_RETURN_IF_ERROR(
+          index_schema->GetIdentifier(sortby_parameter->field).status());
+    }
   }
 
   return absl::OkStatus();

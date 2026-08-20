@@ -197,6 +197,18 @@ void VectorRegistry::DetachFromValkeyHash(const RegistryKey &search_key) {
                        attribute_identifier_str.get(), new_val.get(), nullptr);
 }
 
+size_t VectorRegistry::GetRecordUseCount(
+    const InternedStringPtr &key, const InternedStringPtr &attribute_identifier,
+    uint32_t db_num) const {
+  RegistryKey search_key{db_num, key, attribute_identifier};
+  absl::MutexLock lock(&mutex_);
+  auto it = tracked_vectors_.find(search_key);
+  if (it == tracked_vectors_.end()) {
+    return 0;
+  }
+  return it->second.vector_record.use_count();
+}
+
 void VectorRegistry::UntrackIfUnused(
     const InternedStringPtr &key,
     const InternedStringPtr &interned_attribute_identifier, uint32_t db_num) {

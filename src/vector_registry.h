@@ -83,6 +83,14 @@ class VectorRegistry {
 
   bool IsSharingActive() const { return hash_vector_sharing_; }
 
+  // Returns the number of live references to the tracked VectorRecord for this
+  // key/attribute, or 0 when there is no entry. Unlike LookupRecord this
+  // neither copies the shared_ptr nor updates the lookup statistics, so a debug
+  // probe cannot perturb what it is observing.
+  size_t GetRecordUseCount(const InternedStringPtr &key,
+                           const InternedStringPtr &attribute_identifier,
+                           uint32_t db_num) const ABSL_LOCKS_EXCLUDED(mutex_);
+
   // Untracks a vector record entry from the registry if the registry holds the
   // sole remaining reference (use_count == 1).
   void UntrackIfUnused(const InternedStringPtr &key,

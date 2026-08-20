@@ -18,6 +18,7 @@
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -334,6 +335,69 @@ absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+// Reports how many live references the module holds to the vector buffer that
+// the engine is currently sharing for a given hash field.
+//
+// The sharing state is read from the engine directly
+// (ValkeyModule_HashHasStringRef, the same call the registry uses) rather than
+// inferred from allocation size, so tests can assert on one field instead of
+// reading sharing out of MEMORY USAGE.
+//
+//   -1  there is no such field: the key is missing, is not a hash, or does not
+//       carry this field. Distinguished from 0 so that a test asserting "not
+//       shared" cannot pass against a typo'd key or field name.
+//    0  the field exists and holds a plain value -- nothing is shared.
+//   >0  the number of live references to the shared buffer: one held by the
+//       registry plus one per index over the field. A normally indexed key
+//       therefore reports 2.
+absl::Status VectorSharedCountCmd(ValkeyModuleCtx *ctx,
+                                  vmsdk::ArgsIterator &itr) {
+  std::string key_name;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, key_name));
+  std::string field_name;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, field_name));
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+
+  auto reply = [ctx](long long value) {
+    ValkeyModule_ReplyWithLongLong(ctx, value);
+    return absl::OkStatus();
+  };
+  auto key_str = vmsdk::MakeUniqueValkeyString(key_name);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return reply(-1);
+  }
+  if (ValkeyModule_KeyType(key_obj.get()) != VALKEYMODULE_KEYTYPE_HASH) {
+    return reply(-1);
+  }
+  auto field_str = vmsdk::MakeUniqueValkeyString(field_name);
+  // ValkeyModule_HashHasStringRef must not be called for a field that does not
+  // exist: hashTypeHasStringRef dereferences the result of hashtableFindRef
+  // without a null check, so a missing field on a hashtable-encoded hash
+  // crashes the server. Establishing existence first is also what makes -1
+  // distinguishable from 0.
+  int exists = 0;
+  ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_EXISTS, field_str.get(),
+                       &exists, nullptr);
+  if (!exists) {
+    return reply(-1);
+  }
+  if (!VectorRegistry::Instance().IsSharingActive()) {
+    // ValkeyModule_HashHasStringRef is only resolved when sharing is enabled.
+    // The field exists and is certainly not shared.
+    return reply(0);
+  }
+  // The engine returns a boolean: nonzero when the field currently holds a
+  // shared reference, zero when it holds a plain value.
+  if (ValkeyModule_HashHasStringRef(key_obj.get(), field_str.get()) <= 0) {
+    return reply(0);
+  }
+  return reply(VectorRegistry::Instance().GetRecordUseCount(
+      StringInternStore::Intern(key_name),
+      StringInternStore::Intern(field_name), ValkeyModule_GetSelectedDb(ctx)));
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -349,6 +413,10 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
       {"FT._DEBUG VECTOR_SHARING_STATS", "Show VectorRegistry Sharing Stats"},
+      {"FT._DEBUG VECTOR_SHARED_COUNT <key> <field>",
+       "Number of module references to the vector buffer the engine shares "
+       "for this hash field; 0 if the field exists but is not shared, -1 if "
+       "there is no such field"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
@@ -389,6 +457,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return StringPoolStats(ctx, itr);
   } else if (keyword == "VECTOR_SHARING_STATS") {
     return VectorSharingStatsCmd(ctx, itr);
+  } else if (keyword == "VECTOR_SHARED_COUNT") {
+    return VectorSharedCountCmd(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {

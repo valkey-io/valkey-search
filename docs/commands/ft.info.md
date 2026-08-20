@@ -86,6 +86,27 @@ An array of key value pairs.
 - `ef_construction` (integer) The count of vectors in the index. The default is 200, and the max is 4096\. Higher values increase the time needed to create indexes, but improve the recall ratio.
 - `ef_runtime` (integer) The count of vectors to be examined during a query operation. The default is 10, and the max is 4096\.
 
+#### SVS VECTOR Field Type Extension.
+
+*(Requires `ENABLE_SVS=ON` build)*
+
+- `name` (string) `SVS`.
+- `graph_max_degree` (integer) Maximum outgoing edges per graph node.
+- `construction_window_size` (integer) Window size used during graph build.
+- `search_window_size` (integer) Default search window size at query time.
+- `alpha` (float) Graph build pruning factor.
+- `compression` (string) One of `NONE`, `FP16`, `LVQ4`, `LVQ8`, `LVQ4X4`, `LVQ4X8`, `LEANVEC4X4`, `LEANVEC4X8`, `LEANVEC8X8`, `SQ8`.
+- `state` (string) `ready` once the index is operational; `training` while a LeanVec index is accumulating its training set.
+- `raw_vector_storage` (string) `KEEP` or `DROP` (see `RAW_VECTOR_STORAGE` in `FT.CREATE`).
+- For LeanVec compression types, three additional fields are also present:
+  - `leanvec_dims` (integer) Reduced dimensionality target for the LeanVec projection.
+  - `leanvec_training_threshold` (integer) Number of vectors required before training fires.
+  - `training_progress` (string) `<buffered>/<threshold>` — current training progress.
+
+SVS graph memory is included in `used_memory_bytes` (reported via `INFO SEARCH`) once vectors are flushed to the graph.
+
+> **Note:** SVS indexes are not persisted to RDB. The index is rebuilt from scratch on server restart and will be empty until vectors are re-ingested.
+
 ### Response when the PRIMARY option is specified.
 
 An array of key value pairs

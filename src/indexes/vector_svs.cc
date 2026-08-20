@@ -22,6 +22,7 @@
 
 #include <exception>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -38,6 +39,7 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/latency_sampler.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -144,6 +146,10 @@ VectorSVS<T>::~VectorSVS() {
     auto status = svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
     if (!status.ok()) {
       VMSDK_LOG(WARNING, nullptr) << "SVS destroy failed: " << status.message();
+    }
+    if (last_reported_svs_memory_ > 0) {
+      vmsdk::ReportFreeMemorySize(last_reported_svs_memory_);
+      last_reported_svs_memory_ = 0;
     }
     svs_index_ = nullptr;
   }
@@ -284,6 +290,10 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
       << " alpha=" << config.alpha
       << " search_window_size=" << config.search_window_size;
 
+  {
+    absl::MutexLock lock(&index->index_mutex_);
+    index->UpdateReportedMemory();
+  }
   return index;
 }
 
@@ -384,6 +394,7 @@ absl::Status VectorSVS<T>::FlushBuffer() {
     VMSDK_LOG(NOTICE, nullptr)
         << "Flush complete. SVS graph now has " << num_elements_ << " vectors.";
 
+    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     buffer_flushing_ = false;
@@ -414,6 +425,14 @@ absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
                             // staging anyway, but keep the gauge accurate).
 
   try {
+    // Sync the memory counter on every exit path so no mutation is missed.
+    // UpdateReportedMemory is a no-op when svs_index_ is null (e.g. when
+    // add() fails and we reset svs_index_ below), which is correct.
+    auto memory_sync =
+        absl::MakeCleanup([this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_) {
+          UpdateReportedMemory();
+        });
+
     // 1. Flatten buffered vectors into [n × dim] contiguous FP32 for both
     //    LeanVecTrainingData::build (which reads it) and the subsequent
     //    DynamicVamanaIndex::add (which copies it into SVS storage).
@@ -469,6 +488,12 @@ absl::Status VectorSVS<T>::TrainAndBuildLeanVecIndex() {
     auto add_status = svs_index_->add(n, labels.data(), flat.data());
     if (!add_status.ok()) {
       buffer_flushing_ = false;
+      // Destroy the just-built graph so the svs_index_ != nullptr guard at
+      // the top of this function does not permanently block retries. Resetting
+      // to null leaves the index in kStaging with pending_buffer_ intact so
+      // the next flush can attempt training again.
+      (void)svs::runtime::v0::DynamicVamanaIndex::destroy(svs_index_);
+      svs_index_ = nullptr;
       return absl::InternalError(
           absl::StrCat("LeanVec initial add failed: ", add_status.message()));
     }
@@ -531,6 +556,7 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
     if (num_elements_ > 0) {
       --num_elements_;
     }
+    UpdateReportedMemory();
     return absl::OkStatus();
   } catch (const std::exception& e) {
     return absl::InternalError(
@@ -543,6 +569,14 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(uint64_t internal_id,
                                             absl::string_view record) {
   try {
     absl::MutexLock lock(&index_mutex_);
+    // Sync the memory counter on every exit path. This covers the case where
+    // remove() succeeds but add() fails — without this guard, the stale
+    // last_reported_svs_memory_ causes later deltas to over-report freed
+    // memory, wrapping the unsigned used_memory_bytes counter.
+    auto memory_sync =
+        absl::MakeCleanup([this]() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_) {
+          UpdateReportedMemory();
+        });
 
     if (index_state_ == SVSIndexState::kStaging) {
       return absl::FailedPreconditionError(
@@ -994,6 +1028,18 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   return absl::UnimplementedError(
       "SVS index RDB persistence is not yet implemented");
+}
+
+template <typename T>
+void VectorSVS<T>::UpdateReportedMemory() {
+  if (svs_index_ == nullptr) return;
+  size_t new_memory = svs_index_->get_memory_usage();
+  if (new_memory > last_reported_svs_memory_) {
+    vmsdk::ReportAllocMemorySize(new_memory - last_reported_svs_memory_);
+  } else if (new_memory < last_reported_svs_memory_) {
+    vmsdk::ReportFreeMemorySize(last_reported_svs_memory_ - new_memory);
+  }
+  last_reported_svs_memory_ = new_memory;
 }
 
 // Explicit template instantiation

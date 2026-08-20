@@ -13,7 +13,6 @@
 #include "absl/base/optimization.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
-#include "src/indexes/text/flat_position_map.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/doc_id_map.h"
 
@@ -263,105 +262,7 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   total_term_frequency_ += term_freq;
 }
 
-void Postings::InsertKey(const Key &key, FlatPositionMap *flat_map) {
-  DocId doc_id = DocIdMap::Instance().GetOrAssign(key);
-  InsertKey(doc_id, flat_map);
-}
 
-void Postings::InsertKey(DocId doc_id, FlatPositionMap *flat_map) {
-  size_t num_pos = flat_map ? flat_map->CountPositions() : 0;
-  size_t term_freq = flat_map ? flat_map->CountTermFrequency() : 0;
-
-  size_t est_bytes_needed = 24 + num_pos * 10;
-  if (tail_ == nullptr ||
-      (tail_->size + est_bytes_needed > tail_->capacity && tail_->size > 0)) {
-    uint32_t chunk_cap = std::max(PostingChunk::kDefaultCapacity,
-                                  static_cast<uint32_t>(est_bytes_needed + 32));
-    auto *new_chunk = PostingChunk::Create(chunk_cap);
-    if (tail_ != nullptr) {
-      tail_->next = new_chunk;
-      tail_ = new_chunk;
-    } else {
-      head_ = tail_ = new_chunk;
-    }
-  }
-
-  uint8_t *dest = tail_->data + tail_->size;
-  uint8_t *record_start = dest;
-
-  uint64_t v = doc_id;
-  while (v >= 0x80) {
-    *dest++ = static_cast<uint8_t>((v & 0x7F) | 0x80);
-    v >>= 7;
-  }
-  *dest++ = static_cast<uint8_t>(v & 0x7F);
-
-  v = num_pos;
-  while (v >= 0x80) {
-    *dest++ = static_cast<uint8_t>((v & 0x7F) | 0x80);
-    v >>= 7;
-  }
-  *dest++ = static_cast<uint8_t>(v & 0x7F);
-
-  if (flat_map && num_pos > 0) {
-    uint8_t stack_buf[512];
-    uint8_t *pdest = stack_buf;
-    std::unique_ptr<uint8_t[]> heap_buf;
-    if (ABSL_PREDICT_FALSE(num_pos * 10 > sizeof(stack_buf))) {
-      heap_buf = std::make_unique<uint8_t[]>(num_pos * 10);
-      pdest = heap_buf.get();
-    }
-    uint8_t *pstart = pdest;
-
-    PositionIterator iter(*flat_map);
-    uint32_t last_pos = 0;
-    while (iter.IsValid()) {
-      uint32_t pos = iter.GetPosition();
-      uint64_t mask = iter.GetFieldMask();
-
-      uint64_t delta = pos - last_pos;
-      while (delta >= 0x80) {
-        *pdest++ = static_cast<uint8_t>((delta & 0x7F) | 0x80);
-        delta >>= 7;
-      }
-      *pdest++ = static_cast<uint8_t>(delta & 0x7F);
-
-      uint64_t m = mask;
-      while (m >= 0x80) {
-        *pdest++ = static_cast<uint8_t>((m & 0x7F) | 0x80);
-        m >>= 7;
-      }
-      *pdest++ = static_cast<uint8_t>(m & 0x7F);
-
-      last_pos = pos;
-      iter.NextPosition();
-    }
-
-    size_t payload_len = static_cast<size_t>(pdest - pstart);
-    uint64_t pv = payload_len;
-    while (pv >= 0x80) {
-      *dest++ = static_cast<uint8_t>((pv & 0x7F) | 0x80);
-      pv >>= 7;
-    }
-    *dest++ = static_cast<uint8_t>(pv & 0x7F);
-
-    std::memcpy(dest, pstart, payload_len);
-    dest += payload_len;
-    FlatPositionMap::Destroy(flat_map);
-  }
-
-  uint32_t offset_in_chunk = static_cast<uint32_t>(record_start - tail_->data);
-  tail_->size = static_cast<uint32_t>(dest - tail_->data);
-
-  if (key_count_ > 0 && (key_count_ % kBlockSkipInterval == 0)) {
-    skip_index_.push_back(BlockSkipEntry{last_doc_id_, tail_, offset_in_chunk});
-  }
-  last_doc_id_ = doc_id;
-
-  key_count_++;
-  total_positions_ += num_pos;
-  total_term_frequency_ += term_freq;
-}
 
 void Postings::RemoveKey(const Key &key, TextIndexMetadata *metadata) {
   DocId target_id = DocIdMap::Instance().GetDocId(key);
@@ -623,6 +524,71 @@ PositionIterator Postings::KeyIterator::GetPositionIterator() const {
           static_cast<size_t>(next_doc_offset_ -
                               (pos_data_ptr_ - current_chunk_->data)),
           current_pos_count_};
+}
+
+PositionIterator::PositionIterator(const uint8_t *data, size_t max_bytes,
+                                   size_t num_positions)
+    : stream_data_(data),
+      stream_max_bytes_(max_bytes),
+      stream_num_positions_(num_positions) {
+  if (stream_num_positions_ > 0 && stream_data_ != nullptr &&
+      stream_max_bytes_ > 0) {
+    DecodeStreamPosition();
+  }
+}
+
+void PositionIterator::DecodeStreamPosition() {
+  if (stream_byte_offset_ >= stream_max_bytes_) {
+    stream_pos_index_ = stream_num_positions_;
+    return;
+  }
+  uint64_t delta = 0, mask = 0;
+  size_t delta_bytes_read =
+      ReadVarint(reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
+                 stream_max_bytes_ - stream_byte_offset_, delta);
+  if (delta_bytes_read == 0) {
+    stream_pos_index_ = stream_num_positions_;
+    return;
+  }
+  stream_byte_offset_ += delta_bytes_read;
+  size_t mask_bytes_read =
+      ReadVarint(reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
+                 stream_max_bytes_ - stream_byte_offset_, mask);
+  if (mask_bytes_read == 0) {
+    stream_pos_index_ = stream_num_positions_;
+    return;
+  }
+  stream_byte_offset_ += mask_bytes_read;
+  stream_cumulative_pos_ += static_cast<Position>(delta);
+  stream_field_mask_ = mask;
+}
+
+bool PositionIterator::IsValid() const {
+  return stream_data_ != nullptr && stream_pos_index_ < stream_num_positions_;
+}
+
+void PositionIterator::NextPosition() {
+  if (stream_data_ != nullptr && stream_pos_index_ < stream_num_positions_) {
+    stream_pos_index_++;
+    if (stream_pos_index_ < stream_num_positions_) {
+      DecodeStreamPosition();
+    }
+  }
+}
+
+bool PositionIterator::SkipForwardPosition(Position target) {
+  while (IsValid() && GetPosition() < target) {
+    NextPosition();
+  }
+  return IsValid() && GetPosition() == target;
+}
+
+Position PositionIterator::GetPosition() const {
+  return stream_cumulative_pos_;
+}
+
+uint64_t PositionIterator::GetFieldMask() const {
+  return stream_field_mask_;
 }
 
 }  // namespace valkey_search::indexes::text

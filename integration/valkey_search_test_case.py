@@ -251,8 +251,9 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
                 port=external_port,
                 external_server=True
             )
+            self.client.flushall()
             self.rg = None
-            self.nodes = []
+            self.nodes: List[Node] = [Node(client=self.client, server=self.server)]
         else:
             replica_count = 0
             if hasattr(request, "param") and request.param["replica_count"]:

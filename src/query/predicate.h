@@ -160,6 +160,8 @@ class TagPredicate : public Predicate {
   // Evaluate against tags (string_view set from indexed data or parsed query)
   EvaluationResult Evaluate(const absl::flat_hash_set<absl::string_view>* tags,
                             bool case_sensitive) const;
+  EvaluationResult Evaluate(absl::string_view raw_tag_string, char separator,
+                            bool case_sensitive) const;
   const indexes::Tag* GetIndex() const { return index_; }
   absl::string_view GetAlias() const { return alias_; }
   absl::string_view GetIdentifier() const {
@@ -172,6 +174,8 @@ class TagPredicate : public Predicate {
   const absl::flat_hash_set<std::string>& GetTags() const { return tags_; }
 
  private:
+  bool MatchesSingleTag(absl::string_view in_tag, bool case_sensitive) const;
+
   const indexes::Tag* index_;
   vmsdk::UniqueValkeyString identifier_;
   std::string alias_;

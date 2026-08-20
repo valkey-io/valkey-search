@@ -591,10 +591,10 @@ bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
-  if (ABSL_PREDICT_FALSE(key == nullptr)) {
+  auto key_cstr = vmsdk::ToStringView(key);
+  if (key_cstr.empty()) {
     return;
   }
-  auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
   // Fail fast if the key type does not match the data type.

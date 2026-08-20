@@ -50,10 +50,11 @@ class PostingTest : public ValkeySearchTest {
 
   // Helper to insert key with PositionMap, creating FlatPositionMap internally
   void InsertKeyWithPositionMap(const InternedStringPtr& key,
-                                PositionMap&& pos_map, size_t num_fields = 5) {
+                                PositionMap&& pos_map, size_t num_fields = 5,
+                                uint32_t doc_len = 0) {
     // Create FlatPositionMap from PositionMap
     FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_fields);
-    postings_->InsertKey(key, flat_map);
+    postings_->InsertKey(key, flat_map, doc_len);
   }
 };
 

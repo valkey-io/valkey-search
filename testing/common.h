@@ -418,11 +418,11 @@ std::unordered_map<std::string, std::string> ToStringMap(const RecordsMap& map);
 
 struct NeighborTest {
   std::string external_id;
-  float distance;
+  float score;
   std::optional<std::unordered_map<std::string, std::string>>
       attribute_contents;
   inline bool operator==(const NeighborTest& other) const {
-    return external_id == other.external_id && distance == other.distance &&
+    return external_id == other.external_id && score == other.score &&
            attribute_contents == other.attribute_contents;
   }
 };

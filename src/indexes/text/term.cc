@@ -7,20 +7,48 @@
 
 #include "src/indexes/text/term.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <utility>
+
+#include "src/indexes/scoring/scorer.h"
+
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
         key_iterators,
     const FieldMaskPredicate query_field_mask, const bool require_positions,
-    const FieldMaskPredicate stem_field_mask, bool has_original)
+    const FieldMaskPredicate stem_field_mask, bool has_original,
+    float leaf_weight, uint32_t num_doc_contain_term,
+    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       require_positions_(require_positions),
-      has_original_(has_original) {
+      has_original_(has_original),
+      leaf_weight_(leaf_weight),
+      num_doc_contain_term_(num_doc_contain_term),
+      text_index_schema_(text_index_schema) {
+  // Derive the query-invariant corpus stats from the schema and precompute the
+  // per-term IDF once, so GetScore() avoids a per-document log call. A null
+  // schema/scorer or empty corpus disables scoring (constant-stub fallback).
+  if (text_index_schema_ != nullptr && scorer != nullptr) {
+    const auto stats = text_index_schema_->GetIndexScoringStats();
+    if (stats.total_docs > 0) {
+      scorer_ = scorer;
+      // total_docs and num_doc_contain_term_ come from separate,
+      // independently-locked counters and can be transiently out of sync, so
+      // clamp to keep dt <= total_docs (matches ResolveLeaves in search.cc).
+      idf_ = scorer_->PrecomputeIDF(
+          {stats.total_docs,
+           std::min(num_doc_contain_term_, stats.total_docs)});
+      avg_doc_len_ = stats.avg_doc_len;
+    }
+  }
+
   // Populate the key_set_ heap.
   for (size_t i = 0; i < key_iterators_.size(); ++i) {
     InsertValidKeyIterator(i);
@@ -29,6 +57,34 @@ TermIterator::TermIterator(
   if (!key_set_.empty()) {
     TermIterator::NextKey();
   }
+}
+
+float TermIterator::GetScore() const {
+  if (DoneKeys()) {
+    return 0.0f;
+  }
+  // No scoring context: preserve the constant stub used before scoring landed.
+  if (scorer_ == nullptr) {
+    return 1.0f;
+  }
+
+  // F is document-wide: sum the term frequency across every word/field
+  // iterator currently positioned on this key (§5.2).
+  uint32_t term_frequency = 0;
+  for (size_t idx : current_key_indices_) {
+    term_frequency += key_iterators_[idx].GetTermFrequency();
+  }
+
+  // doc_len is co-located in the posting entry the merge already visited (same
+  // value for every iterator on this key), so read it straight off a current
+  // iterator instead of a random per-key scoring-map lookup.
+  const uint32_t doc_len =
+      key_iterators_[current_key_indices_.front()].GetDocLen();
+
+  // idf_ and avg_doc_len_ are precomputed at construction, so only the
+  // per-document term frequency and doc_len vary here.
+  return scorer_->ScoreLeaf(
+      {idf_, term_frequency, doc_len, avg_doc_len_, leaf_weight_});
 }
 
 FieldMaskPredicate TermIterator::QueryFieldMask() const {

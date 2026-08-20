@@ -185,18 +185,48 @@ class IndexSchema : public KeyspaceEventSubscription,
     return score_field_.value();
   }
   inline bool HasScoreField() const { return score_field_.has_value(); }
-  float GetDocumentScore(const Key &key) const
+  float GetDocumentScore(BorrowedInternedStringPtr key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    auto itr = index_key_info_.find(key);
+    auto itr = index_key_info_.find(key.AsInternedRef());
     if (itr == index_key_info_.end()) {
       return score_;
     }
     return itr->second.document_score;
   }
 
+  uint32_t GetDocumentLength(BorrowedInternedStringPtr key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetKeyDocLen(key);
+  }
+
+  uint32_t GetDocumentNorm(const Key &key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetKeyNorm(key);
+  }
+
+  uint64_t GetTotalDocumentLength() const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetMetadata().total_doc_len.load();
+  }
+
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
+    // BM25's N is the count of ALL indexed docs, not just text-bearing keys.
+    // IndexSchema owns text_index_schema_, so `this` outlives the callback; the
+    // scoring hot path already holds time_sliced_mutex_ in read phase when this
+    // runs, so reading index_key_info_ needs no extra lock.
+    text_index_schema_->SetTotalDocsProvider(
+        [this]() -> uint32_t { return index_key_info_.size(); });
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;

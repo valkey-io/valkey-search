@@ -116,7 +116,7 @@ TEST_F(FlatPositionMapTest, SinglePositionSingleField) {
   EXPECT_FALSE(iter.IsValid());
 
   EXPECT_EQ(flat_map->CountPositions(), 1);
-  EXPECT_EQ(flat_map->CountTermFrequency(), 1);
+  EXPECT_EQ(flat_map->GetTermFrequency(), 1);
 }
 
 TEST_F(FlatPositionMapTest, MultiplePositionsIteration) {
@@ -197,7 +197,7 @@ TEST_F(FlatPositionMapTest, TermFrequencyCalculation) {
       CreatePositionMap({{10, 0b001}, {20, 0b011}, {30, 0b111}}, 3);
   FlatPositionMapPtr flat_map(position_map, 3);
 
-  EXPECT_EQ(flat_map->CountTermFrequency(), 6);  // 1+2+3
+  EXPECT_EQ(flat_map->GetTermFrequency(), 6);  // 1+2+3
 }
 
 //=============================================================================
@@ -768,7 +768,7 @@ TEST_F(FlatPositionMapTest, RandomMapWithTermFrequencyVerification) {
       expected_freq += __builtin_popcountll(mask);
     }
 
-    EXPECT_EQ(flat_map->CountTermFrequency(), expected_freq)
+    EXPECT_EQ(flat_map->GetTermFrequency(), expected_freq)
         << "Test " << test << " failed: term frequency mismatch";
   }
 }
@@ -796,7 +796,7 @@ TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
       FlatPositionMapPtr flat_map(position_map, 1);
 
       ASSERT_EQ(flat_map->CountPositions(), target_size);
-      EXPECT_EQ(flat_map->CountTermFrequency(), target_size);
+      EXPECT_EQ(flat_map->GetTermFrequency(), target_size);
 
       // Test skip to various positions
       PositionIterator iter1(*flat_map);

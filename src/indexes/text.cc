@@ -183,6 +183,16 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
 
+  // Document frequency (dt) for scoring is the original word's posting count;
+  // stem variants are not folded in (we skip stem-root scoring for now).
+  uint32_t num_doc_contain_term = 0;
+  {
+    auto word_iter = text_index->GetPrefix().GetWordIterator(text_string);
+    if (!word_iter.Done() && word_iter.GetWord() == text_string) {
+      num_doc_contain_term = word_iter.GetPostingsTarget()->GetKeyCount();
+    }
+  }
+
   // Search for the original word - may or may not exist in corpus
   found_original =
       TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
@@ -212,7 +222,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // first pass)
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions, stem_field_mask,
-      found_original);
+      found_original, GetWeight(), num_doc_contain_term,
+      GetTextIndexSchema().get(), GetScorer());
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

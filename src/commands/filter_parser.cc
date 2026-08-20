@@ -903,6 +903,72 @@ FilterParser::ParseTextTokens(
   return pred;
 }
 
+// Parses a QMA block. Expects the parser position to be after `=> {`.
+// Parses `$weight:` followed by a positive float, expects closing `}`.
+// Returns the weight value on success.
+absl::StatusOr<double> FilterParser::ParseQMABlock() {
+  SkipWhitespace();
+  // Parse attribute name starting with $
+  if (!Match('$')) {
+    if (IsEnd() || Peek() == '}') {
+      return absl::InvalidArgumentError("Missing value for $weight attribute");
+    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected character in QMA block at position ", pos_ + 1,
+                     ": expected '$'"));
+  }
+  // Parse the attribute name
+  std::string attr_name;
+  while (!IsEnd() && Peek() != ':' && !std::isspace(Peek()) && Peek() != '}') {
+    attr_name += expression_[pos_++];
+  }
+  // Only $weight is supported
+  if (attr_name != "weight") {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported QMA attribute: `$", attr_name, "`"));
+  }
+  // Expect colon after attribute name
+  if (!Match(':')) {
+    return absl::InvalidArgumentError("Missing value for $weight attribute");
+  }
+  SkipWhitespace();
+  // Parse the weight value
+  if (IsEnd() || Peek() == ';' || Peek() == '}') {
+    return absl::InvalidArgumentError("Missing value for $weight attribute");
+  }
+  // Parse the number manually to handle positive-only constraint
+  std::string number_str;
+  bool has_negative = false;
+  if (!IsEnd() && Peek() == '-') {
+    has_negative = true;
+    number_str += expression_[pos_++];
+  }
+  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+    number_str += expression_[pos_++];
+  }
+  double value;
+  if (number_str.empty() || (has_negative && number_str.size() == 1)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a positive number");
+  }
+  if (!absl::SimpleAtod(number_str, &value)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a positive number");
+  }
+  if (value <= 0.0) {
+    return absl::InvalidArgumentError("Weight must be a positive number");
+  }
+  SkipWhitespace();
+  // Consume optional semicolon
+  Match(';');
+  SkipWhitespace();
+  // Expect closing brace
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Missing closing '}' in QMA block");
+  }
+  return value;
+}
+
 // Parsing rules:
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has lower precedence than the AND operator. precedence. For
@@ -961,6 +1027,30 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (!predicate) {
         return absl::InvalidArgumentError(
             absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
+      }
+      // Check for QMA block: => { ... } after closing )
+      {
+        SkipWhitespace();
+        size_t saved_pos = pos_;
+        if (!IsEnd() && pos_ + 1 < expression_.size() &&
+            expression_[pos_] == '=' && expression_[pos_ + 1] == '>') {
+          // Look ahead past => and optional whitespace for {
+          size_t lookahead = pos_ + 2;
+          while (lookahead < expression_.size() &&
+                 std::isspace(expression_[lookahead])) {
+            lookahead++;
+          }
+          if (lookahead < expression_.size() && expression_[lookahead] == '{') {
+            // This is a QMA block, consume => and { then parse
+            pos_ = lookahead + 1;
+            VMSDK_ASSIGN_OR_RETURN(auto weight, ParseQMABlock());
+            predicate->SetWeight(static_cast<float>(weight));
+          } else {
+            // Not a QMA block (could be => [ which is vector delimiter,
+            // but that should have been handled upstream). Restore position.
+            pos_ = saved_pos;
+          }
+        }
       }
       if (result.prev_predicate) {
         node_count_++;

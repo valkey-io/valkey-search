@@ -1,901 +1,501 @@
+"""
+End-to-end tests for BM25STD scoring through FT.SEARCH ... WITHSCORES.
+
+Scores are verified against the 8.6 reference implementation. Every TEXT field
+is NOSTEM so query terms match raw tokens and the verified tables apply directly.
+
+WITHSCORES reply layout: [count, key, score_str, attrs, key, score_str, ...]
+where score_str is formatted "%.12g".
+"""
+
 import struct
 
 import pytest
 from valkey import ResponseError
-from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
+
+SCORE_ABS_TOL = 1e-5
 
 
 def _vec(*floats):
     """Packs floats into a FLOAT32 little-endian blob for a VECTOR field."""
     return struct.pack(f"{len(floats)}f", *floats)
 
-"""
-End-to-end tests for BM25STD scoring through FT.SEARCH ... WITHSCORES.
 
-Scores are verified against the Redis 8.6 docker baseline. All indexes use NOSTEM
-so query terms match raw tokens and the verified score table applies directly.
+# =====================================================================
+# Indexes
+# =====================================================================
 
-WITHSCORES reply layout: [count, key, score_str, attrs, key, score_str, ...]
-where score_str is formatted "%.12g".
-"""
+# General-purpose index: two TEXT fields + NUMERIC + TAG + VECTOR.
+IDX_MAIN = [
+    "FT.CREATE", "idxMain", "ON", "HASH", "PREFIX", "1", "doc:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM",
+    "rank", "NUMERIC", "cat", "TAG",
+    "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+    "DISTANCE_METRIC", "L2",
+]
 
-SCORE_ABS_TOL = 1e-5
+# Same text schema as idxMain, so base scores match, plus the document_score
+# multiplier: index-level SCORE is the fallback, per-doc `boost` the override.
+IDX_DOC_SCORE = [
+    "FT.CREATE", "idxDocScore", "ON", "HASH", "PREFIX", "1", "doc:",
+    "SCORE", "0.5", "SCORE_FIELD", "boost",
+    "SCHEMA", "body", "TEXT", "NOSTEM",
+]
+
+# No TEXT field, so avg_doc_len is 0 and neither numeric nor tag can rank.
+IDX_NO_TEXT_FIELD = [
+    "FT.CREATE", "idxNoTextField", "ON", "HASH", "PREFIX", "1", "doc:",
+    "SCHEMA", "rank", "NUMERIC", "cat", "TAG",
+]
 
 
-def parse_withscores(result):
-    """Parses a WITHSCORES reply into an ordered list of (key, score) tuples,
-    preserving result order (score desc, key asc)."""
-    count = result[0]
-    pairs = []
+# =====================================================================
+# Documents
+# =====================================================================
+
+# Text corpus: N=8, dt hello=6 world=6 rare=2 unique=1, avg_doc_len=5.25.
+# `boost` is read only by idxDocScore (doc:2 omits it to exercise the SCORE
+# fallback); `vec` only by the hybrid KNN query, which prefilters to doc:6/doc:8.
+TEXT_DOCS = {
+    "doc:1": {"body": "hello world one two three",
+              "rank": "10", "boost": "2.0"},
+    "doc:2": {"body": "hello world one two three hello",
+              "rank": "20"},
+    "doc:3": {"body": "hello world one two three hello hello",
+              "rank": "30", "boost": "0.25"},
+    "doc:4": {"body": "hello world one two three hello hello hello hello",
+              "rank": "40", "boost": "-1.0"},
+    "doc:5": {"body": "hello hello hello hello",
+              "rank": "50", "boost": "inf"},
+    "doc:6": {"body": "world rare unique document",
+              "rank": "55", "vec": _vec(1.0, 1.0)},
+    "doc:7": {"body": "hello world one two three hello",
+              "rank": "60", "boost": "-inf"},
+    "doc:8": {"body": "rare",
+              "rank": "70", "vec": _vec(5.0, 5.0)},
+}
+
+# Equal doc_len, but per-field TF favors doc:2 (body TF 2 vs 1) while doc-wide TF
+# favors doc:1 (3 vs 2), so only document-wide counting ranks doc:1 first.
+MULTI_FIELD_DOCS = {
+    "doc:1": {"body": "alpha", "title": "alpha alpha"},
+    "doc:2": {"body": "alpha alpha", "title": "beta"},
+}
+
+# 4 text docs + 6 text-less ones, so N must be 10 rather than 4.
+# avg_doc_len=0.70; cat dt: a=2, b=2, c=1, x=6.
+PARTIAL_TEXT_DOCS = {
+    "doc:1": {"body": "hello world", "cat": "a,b", "rank": "1"},
+    "doc:2": {"body": "hello there friend", "cat": "b", "rank": "2"},
+    "doc:3": {"body": "hello", "cat": "a", "rank": "3"},
+    "doc:4": {"body": "world only", "cat": "c", "rank": "4"},
+    **{f"doc:{i}": {"cat": "x", "rank": str(i)} for i in range(5, 11)},
+}
+
+
+# =====================================================================
+# Helpers
+# =====================================================================
+
+def load(client, index, docs):
+    """Creates the index, writes the docs, waits for backfill to complete."""
+    client.execute_command(*index)
+    for key, mapping in docs.items():
+        client.hset(key, mapping=mapping)
+    IndexingTestHelper.wait_for_backfill_complete_on_node(client, index[1])
+
+
+def wait_indexed(client, index, num_docs):
+    """Waits for queued mutations to drain and the index to hold num_docs."""
+    def ready():
+        info = IndexingTestHelper.get_ft_info(client, index[1])
+        return info.mutation_queue_size == 0 and info.num_docs == num_docs
+    waiters.wait_for_true(ready)
+
+
+def search(client, index, *query):
+    """Runs FT.SEARCH <query> WITHSCORES; returns (ordered keys, {key: score})."""
+    result = client.execute_command("FT.SEARCH", index[1], *query, "WITHSCORES")
+    count, pairs = result[0], []
     # After the count, each result is a triple: key, score, attrs.
     for i in range(1, len(result), 3):
         key = result[i].decode() if isinstance(result[i], bytes) else result[i]
         pairs.append((key, float(result[i + 1])))
     assert len(pairs) == count
-    return pairs
-
-
-class ScoringIndex:
-    """An FT.CREATE command plus its documents ({key: {field: value}}), with
-    helpers to load it and run scored searches against it."""
-
-    def __init__(self, index, create_cmd, docs):
-        self.index = index
-        self.create_cmd = create_cmd
-        self.docs = docs
-
-    def load(self, client: Valkey):
-        client.execute_command(*self.create_cmd)
-        for key, mapping in self.docs.items():
-            client.hset(key, mapping=mapping)
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, self.index)
-
-    def search(self, client: Valkey, *query):
-        """Runs FT.SEARCH <query> WITHSCORES; returns (ordered keys, {key: score})."""
-        pairs = parse_withscores(
-            client.execute_command("FT.SEARCH", self.index, *query, "WITHSCORES")
-        )
-        return [k for k, _ in pairs], dict(pairs)
+    return [k for k, _ in pairs], dict(pairs)
 
 
 # =====================================================================
-# Test indexes
+# Tests
 # =====================================================================
 
-# idxA: single text field, NOSTEM, all document_score = 1.0. Doc lengths and
-# term frequencies feed the verified expected-score tables below.
-#   N = 8, dt(hello) = 6, dt(world) = 6, dt(rare) = 2, dt(unique) = 1,
-#   total_doc_len = 42, avg_doc_len = 5.25.
-_DOCS_A = {
-    "docA:1": "hello world one two three",
-    "docA:2": "hello world one two three hello",
-    "docA:3": "hello world one two three hello hello",
-    "docA:4": "hello world one two three hello hello hello hello",
-    "docA:5": "hello hello hello hello",
-    "docA:6": "world rare unique document",
-    "docA:7": "hello world one two three hello",
-    "docA:8": "rare",
-}
-INDEX_A = ScoringIndex(
-    "idxA",
-    ["FT.CREATE", "idxA", "ON", "HASH", "PREFIX", "1", "docA:",
-     "SCHEMA", "body", "TEXT", "NOSTEM"],
-    {key: {"body": body} for key, body in _DOCS_A.items()},
-)
+class TestScoring(ValkeySearchTestCaseBase):
 
-# idxA7: the same docs as idxA (so N / avg_doc_len / dt are identical) plus a
-# numeric `rank` field assigned in key order, so SORTBY rank yields an order
-# clearly distinct from score order. The numeric field is not a text term, so
-# per-doc scores match idxA. docA:6 and docA:8 have no "hello" and stay out of
-# hello results but still count toward the index stats.
-_RANKS_A7 = {"docA:1": 10, "docA:2": 20, "docA:3": 30, "docA:4": 40,
-             "docA:5": 50, "docA:6": 55, "docA:7": 60, "docA:8": 70}
-INDEX_A7 = ScoringIndex(
-    "idxA7",
-    ["FT.CREATE", "idxA7", "ON", "HASH", "PREFIX", "1", "docA:",
-     "SCHEMA", "body", "TEXT", "NOSTEM", "rank", "NUMERIC"],
-    {key: {"body": _DOCS_A[key], "rank": str(rank)}
-     for key, rank in _RANKS_A7.items()},
-)
-
-# idxB: a numeric `boost` field declared as SCORE_FIELD. Every doc has the
-# identical body "hello world", so the unweighted BM25 total (the "base") is the
-# same for all; only document_score (from boost) differs => final = base * boost.
-_BOOSTS_B = {
-    "docB:1": "2.0", "docB:2": "1.0", "docB:3": "0.5",
-    "docB:4": "-1.0", "docB:5": "inf", "docB:6": "-inf",
-}
-INDEX_B = ScoringIndex(
-    "idxB",
-    ["FT.CREATE", "idxB", "ON", "HASH", "PREFIX", "1", "docB:", "SCORE_FIELD",
-     "boost", "SCHEMA", "body", "TEXT", "NOSTEM", "boost", "NUMERIC"],
-    {key: {"body": "hello world", "boost": boost}
-     for key, boost in _BOOSTS_B.items()},
-)
-
-# idxBdef: SCORE default multiplier, no SCORE_FIELD. Six identical docs so its
-# index stats (N, avg_doc_len, dt) match idxB exactly; each doc's unweighted
-# base equals BASE_SCORE and the final score is 0.5 * base.
-INDEX_BDEF = ScoringIndex(
-    "idxBdef",
-    ["FT.CREATE", "idxBdef", "ON", "HASH", "PREFIX", "1", "docBd:",
-     "SCORE", "0.5", "SCHEMA", "body", "TEXT", "NOSTEM"],
-    {f"docBd:{i}": {"body": "hello world"} for i in range(1, 7)},
-)
-
-# idxC: three text fields. TF is counted document-wide, not per-field, so
-# docC:1 ("redis" in all three fields, TF=3) must outscore docC:2 (TF=1) on the
-# term "redis" -- whether the query is field-scoped (@f1:redis) or unscoped.
-INDEX_C = ScoringIndex(
-    "idxC",
-    ["FT.CREATE", "idxC", "ON", "HASH", "PREFIX", "1", "docC:",
-     "SCHEMA", "f1", "TEXT", "NOSTEM", "f2", "TEXT", "NOSTEM",
-     "f3", "TEXT", "NOSTEM"],
-    {
-        "docC:1": {"f1": "redis", "f2": "redis stack", "f3": "redis valkey"},
-        "docC:2": {"f1": "redis", "f2": "other", "f3": "words"},
-    },
-)
-
-# idxMix: text `body` + numeric `rank` + tag `cat`, a general-purpose combined
-# index for text + numeric/tag query tests. 4 docs have a text body; 6 have only
-# rank+cat (no text), so text-doc count (4) != total-doc count (10).
-#
-# BM25's index size N must be ALL indexed docs, not just text-bearing ones. N
-# feeds both IDF and avg_doc_len, so scores computed with the wrong N=4 diverge
-# sharply from the correct N=10. Verified against Redis 8.6: FT.INFO
-# num_docs=10 and EXPLAINSCORE uses N=10.
-_DMIX_TEXT = {
-    "d:1": {"body": "hello world", "cat": "a,b"},
-    "d:2": {"body": "hello there friend", "cat": "b"},
-    "d:3": {"body": "hello", "cat": "a"},
-    "d:4": {"body": "world only", "cat": "c"},
-}
-INDEX_MIX = ScoringIndex(
-    "idxMix",
-    ["FT.CREATE", "idxMix", "ON", "HASH", "PREFIX", "1", "d:",
-     "SCHEMA", "body", "TEXT", "NOSTEM", "rank", "NUMERIC", "cat", "TAG"],
-    {
-        **{k: {**v, "rank": str(i + 1)}
-           for i, (k, v) in enumerate(_DMIX_TEXT.items())},
-        **{f"d:{i}": {"rank": str(i), "cat": "x"} for i in range(5, 11)},
-    },
-)
-# Expected "hello" scores with the correct N=10 (all docs). With the buggy
-# N=4 (text docs only) these would be ~0.303 / ~0.203 instead.
-MIX_HELLO_SCORES = {"d:3": 0.974311, "d:1": 0.650739, "d:2": 0.650739}
-
-# --- idxMix tag / numeric scores (verified against Redis 8.6) ---------------
-# A tag value is a BM25 term with F == 1, IDF over the per-tag-value document
-# count (dt), normalized by the document's TEXT length. N=10, avg_doc_len=0.70.
-#   cat dt: a=2 (d:1,d:3), b=2 (d:1,d:2), c=1 (d:4), x=6 (d:5..10).
-# @cat:{a}: rarer-per-shorter-text d:3 (text len 1) outranks d:1 (text len 2).
-MIX_CAT_A_SCORES = {"d:3": 1.260592, "d:1": 0.841945}
-# @cat:{c}: dt=1 (highest tag IDF here); single match d:4.
-MIX_CAT_C_SCORE = 1.132230
-# @cat:{x}: dt=6, six text-less docs -> doc_len 0, all identical.
-MIX_CAT_X_SCORE = 0.890311
-# @cat:{a|b}: union sums matched values; d:1 carries both (a+b), d:3 only a,
-# d:2 only b.
-MIX_CAT_A_OR_B_SCORES = {"d:1": 1.683890, "d:3": 1.260592, "d:2": 0.841945}
-# hello @cat:{a}: text term + tag term summed (d:3 = 0.974311 + 1.260592).
-MIX_HELLO_AND_CAT_A_SCORES = {"d:3": 2.234903, "d:1": 1.492684}
-
-# idxNumOnly / idxTagOnly: indexes with NO text field. BM25 doc-length
-# normalization needs a TEXT field (avg_doc_len derives from it); without one
-# avg_doc_len is 0. Numeric never ranks, and a tag term with avg_doc_len 0
-# scores a well-defined 0 (our implementation returns 0 here rather than Redis's
-# nan). So every matching doc scores 0 on either index.
-INDEX_NUM_ONLY = ScoringIndex(
-    "idxNumOnly",
-    ["FT.CREATE", "idxNumOnly", "ON", "HASH", "PREFIX", "1", "n:",
-     "SCHEMA", "rank", "NUMERIC"],
-    {f"n:{i}": {"rank": str(i)} for i in range(1, 5)},
-)
-INDEX_TAG_ONLY = ScoringIndex(
-    "idxTagOnly",
-    ["FT.CREATE", "idxTagOnly", "ON", "HASH", "PREFIX", "1", "t:",
-     "SCHEMA", "cat", "TAG"],
-    {
-        "t:1": {"cat": "red"},
-        "t:2": {"cat": "red,blue"},
-        "t:3": {"cat": "green"},
-    },
-)
-# index with numeric and tag field (no text field)
-INDEX_NUM_TAG = ScoringIndex(
-    "idxNumTag",
-    ["FT.CREATE", "idxNumTag", "ON", "HASH", "PREFIX", "1", "nt:",
-     "SCHEMA", "rank", "NUMERIC", "cat", "TAG"],
-    {
-        "nt:1": {"rank": 1, "cat": "red"},
-        "nt:2": {"rank": 2, "cat": "red,blue"},
-        "nt:3": {"rank": 3, "cat": "green"},
-        "nt:4": {"rank": 4, "cat": "red,green"},
-        "nt:5": {"rank": 5, "cat": "blue"},
-    },
-)
-
-# idxHV: text `body` + a 2-D FLOAT32 vector `vec` (L2), for hybrid text=>[KNN]
-# scoring. Both docs contain "cat"; "hv:short" is a one-word body (high BM25) far
-# from the query vector, while "hv:long" buries "cat" in a long body (low BM25)
-# but sits exactly on the query vector [1,1] (distance 0). Ranked by text score
-# "hv:short" wins; ranked by vector distance "hv:long" would win.
-INDEX_HV = ScoringIndex(
-    "idxHV",
-    ["FT.CREATE", "idxHV", "ON", "HASH", "PREFIX", "1", "hv:",
-     "SCHEMA", "body", "TEXT", "NOSTEM",
-     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
-     "DISTANCE_METRIC", "L2"],
-    {
-        "hv:short": {"body": "cat", "vec": _vec(5.0, 5.0)},
-        "hv:long": {"body": "cat dog bird fish tree stone river cloud",
-                    "vec": _vec(1.0, 1.0)},
-    },
-)
-# Hybrid text scores (verified against Redis 8.6). __vec_score (distance): 32 for
-# hv:short, 0 for hv:long.
-HV_HYBRID_SCORES = {"hv:short": 0.267405, "hv:long": 0.138313}
-
-# =====================================================================
-# Expected scores (verified against Redis 8.6; idxA unless noted)
-# =====================================================================
-
-# --- Group 1: single-term ---
-HELLO_SCORES = {
-    "docA:5": 0.574385, "docA:4": 0.523122, "docA:3": 0.477286,
-    "docA:2": 0.430172, "docA:7": 0.430172, "docA:1": 0.331888,
-}
-RARE_SCORES = {"docA:8": 1.915183, "docA:6": 1.419164}
-# NOSTEM: no stem-root inflation. Redis's stemmed value would be 3.970230.
-UNIQUE_SCORE = 1.985115
-
-# --- Group 2: AND / OR ---
-# "hello world": docs with BOTH terms, scored on hello+world.
-HELLO_WORLD_SCORES = {
-    "docA:4": 0.774956, "docA:3": 0.763658, "docA:2": 0.737626,
-    "docA:7": 0.737626, "docA:1": 0.663776,
-}
-# OR "hello | world" partial-match score for a doc with only one term.
-WORLD_ONLY_SCORE = 0.360540  # docA:6 (world only)
-# "hello world one": 3-leaf AND, each admitted doc scored on all three leaves.
-HELLO_WORLD_ONE_SCORES = {
-    "docA:2": 1.202911, "docA:7": 1.202911, "docA:3": 1.197037,
-    "docA:1": 1.166036, "docA:4": 1.156069,
-}
-# "(hello world) | (rare unique)": docA:6 fully satisfies only the rare+unique
-# group, so its world token is not scored; the rest satisfy hello+world.
-HELLO_WORLD_OR_RARE_UNIQUE_SCORES = {
-    "docA:6": 3.404279, **HELLO_WORLD_SCORES,
-}
-# "hello hello": the repeated term is scored once per predicate position, so
-# every score is exactly twice the single-term "hello" value.
-HELLO_HELLO_SCORES = {k: 2 * v for k, v in HELLO_SCORES.items()}
-
-# --- Group 3: query weights ---
-# "(hello)=>{$weight:5}": a leaf weight scales the leaf score linearly.
-HELLO_WEIGHT5_SCORES = {k: 5 * v for k, v in HELLO_SCORES.items()}
-# "((hello)=>{$weight:4} (world)=>{$weight:3})=>{$weight:2}": nested layered
-# weights multiply -- doc = 2 * (4*hello_leaf + 3*world_leaf).
-HELLO4_WORLD3_OUTER2_SCORES = {
-    "docA:4": 5.695980, "docA:3": 5.536520, "docA:2": 5.286103,
-    "docA:7": 5.286103, "docA:1": 4.646429,
-}
-# "((hello)=>{$weight:4} | (rare)=>{$weight:2})=>{$weight:3}": per-leaf weight
-# inside an OR, times the outer group weight. hello docs scored 12*hello_leaf,
-# rare docs 6*rare_leaf.
-HELLO4_OR_RARE2_OUTER3_SCORES = {
-    "docA:8": 11.491096, "docA:6": 8.514985, "docA:5": 6.892615,
-    "docA:4": 6.277460, "docA:3": 5.727435, "docA:2": 5.162066,
-    "docA:7": 5.162066, "docA:1": 3.982653,
-}
-
-# --- Group 4: document_score multiplier (idxB) ---
-# Unweighted BM25 total for body "hello world" (the boost=1.0 case).
-BASE_SCORE = 0.148215949535
-
-# --- Group 13: match-all (idxA) ---
-# A wildcard `*` scores every doc as a single BM25 leaf with a constant IDF (1.0)
-# and term frequency (1), normalized by the doc's text length (N=8,
-# avg_doc_len=5.25). Only doc_len varies, so the shortest docs score highest.
-MATCH_ALL_A_SCORES = {
-    "docA:8": 1.495146, "docA:5": 1.107914, "docA:6": 1.107914,
-    "docA:1": 1.019868, "docA:2": 0.944785, "docA:7": 0.944785,
-    "docA:3": 0.880000, "docA:4": 0.773869,
-}
-
-
-class TestTextScoring(ValkeySearchTestCaseBase):
-
-    # Group 1: single-term ranking ----------------------------------------
-
-    # 1.1-1.5: single-term "hello" ranking.
-    def test_single_term_hello_ranking(self):
+    # Group 1: single-term ranking.
+    def test_single_term(self):
         client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "hello")
+        load(client, IDX_MAIN, TEXT_DOCS)
 
-        # 1.1 only the 6 docs containing "hello"; docA:6, docA:8 absent.
-        assert keys == ["docA:5", "docA:4", "docA:3", "docA:2", "docA:7", "docA:1"]
+        # Exact scores, order, and the doc:2/doc:7 tie-break by key.
+        keys, hello = search(client, IDX_MAIN, "hello")
+        assert keys == ["doc:5", "doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
+        assert hello == pytest.approx({
+            "doc:5": 0.574385, "doc:4": 0.523122, "doc:3": 0.477286,
+            "doc:2": 0.430172, "doc:7": 0.430172, "doc:1": 0.331888,
+        }, abs=SCORE_ABS_TOL)
+        # Doc-length normalization.
+        assert hello["doc:5"] > hello["doc:4"]
+        # Sub-linear TF saturation.
+        assert hello["doc:4"] / hello["doc:1"] < 5.0
 
-        # 1.2 exact scores.
-        for key, expected in HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # Rarer term (dt=2).
+        keys, rare = search(client, IDX_MAIN, "rare")
+        assert keys == ["doc:8", "doc:6"]
+        assert rare == pytest.approx({"doc:8": 1.915183, "doc:6": 1.419164},
+                                     abs=SCORE_ABS_TOL)
+        # IDF outweighs term frequency at equal doc_len.
+        assert rare["doc:6"] > hello["doc:5"]
 
-        # 1.3 length normalization: shorter docA:5 (F=4,len=4) outranks the
-        # higher-TF longer docA:4 (F=5,len=9).
-        assert scores["docA:5"] > scores["docA:4"]
+        # No match.
+        assert search(client, IDX_MAIN, "nonexistent") == ([], {})
 
-        # 1.4 TF saturation is sub-linear: 5x the TF yields well under 5x score.
-        assert scores["docA:4"] / scores["docA:1"] < 5.0
-
-        # 1.5 tie-break by key ascending: identical scores, docA:2 before docA:7.
-        assert scores["docA:2"] == pytest.approx(scores["docA:7"], abs=SCORE_ABS_TOL)
-        assert keys.index("docA:2") < keys.index("docA:7")
-
-    # 1.6: "rare" (dt=2) two matches.
-    def test_single_term_rare(self):
+    # Group 2: AND / OR admission and score accumulation.
+    def test_and_or(self):
         client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "rare")
-
-        assert keys == ["docA:8", "docA:6"]
-        for key, expected in RARE_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 1.7: "unique" (dt=1, highest IDF) single match; NOSTEM avoids stem inflation.
-    def test_single_term_unique(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "unique")
-
-        assert keys == ["docA:6"]
-        assert scores["docA:6"] == pytest.approx(UNIQUE_SCORE, abs=SCORE_ABS_TOL)
-
-    # 1.8: nonexistent term yields empty result.
-    def test_single_term_nonexistent(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, _ = INDEX_A.search(client, "nonexistent")
-        assert keys == []
-
-    # 1.9: a single rare occurrence (dt=2) outscores a higher-TF common term
-    # (dt=6) at equal doc_len, purely on IDF. docA:6 "rare" (F=1,len=4) vs
-    # docA:5 "hello" (F=4,len=4).
-    def test_idf_differentiation_across_terms(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        _, rare = INDEX_A.search(client, "rare")
-        _, hello = INDEX_A.search(client, "hello")
-        assert rare["docA:6"] > hello["docA:5"]
-
-    # Group 2: AND / OR admission + accumulation --------------------------
-
-    # 2.1 / 2.2: implicit AND admits only docs with BOTH terms; each is scored
-    # on the hello and world leaves summed.
-    def test_and_admits_both_terms_and_sums(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "hello world")
-
-        # docA:5 (no world), docA:6 (no hello), docA:8 (neither) excluded.
-        assert keys == ["docA:4", "docA:3", "docA:2", "docA:7", "docA:1"]
-        for key, expected in HELLO_WORLD_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 2.3 / 2.4: OR admits any doc with either term; docs with both are scored
-    # on both, single-term docs on the one they have.
-    def test_or_admits_either_term_partial_scoring(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "hello | world")
-
-        # Every doc except docA:8 (neither term) is admitted, score desc:
-        # both-term docs, then hello-only docA:5, then world-only docA:6.
-        assert keys == ["docA:4", "docA:3", "docA:2", "docA:7", "docA:1",
-                        "docA:5", "docA:6"]
-        # docs with both terms keep their AND totals.
-        for key, expected in HELLO_WORLD_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-        # single-term docs are scored on the one term they contain.
-        assert scores["docA:5"] == pytest.approx(HELLO_SCORES["docA:5"],
-                                                 abs=SCORE_ABS_TOL)
-        assert scores["docA:6"] == pytest.approx(WORLD_ONLY_SCORE,
-                                                 abs=SCORE_ABS_TOL)
-
-    # 2.5: mixed admission paths. docA:6 ("world rare unique document") is
-    # admitted via the rare branch and must be scored on rare ONLY -- its world
-    # token is inside the (hello world) AND branch it never satisfied (no
-    # hello), so it must NOT leak into the score. This is the regression test
-    # for the AND-group scoring bug.
-    def test_or_branch_does_not_leak_and_sibling_leaf(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "(hello world) | rare")
-
-        # docA:5 (no rare, no world) excluded; everything else admitted, score
-        # desc: the high-IDF rare docs first, then the hello+world AND docs.
-        assert keys == ["docA:8", "docA:6", "docA:4", "docA:3", "docA:2",
-                        "docA:7", "docA:1"]
-        # rare-branch docs scored on rare only (NOT rare + world for docA:6).
-        assert scores["docA:8"] == pytest.approx(RARE_SCORES["docA:8"],
-                                                 abs=SCORE_ABS_TOL)
-        assert scores["docA:6"] == pytest.approx(RARE_SCORES["docA:6"],
-                                                 abs=SCORE_ABS_TOL)
-        # AND-branch docs keep their hello+world totals.
-        for key, expected in HELLO_WORLD_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 2.6: AND of a leaf and an OR group. None of the admitted docs contain
-    # rare, so (world | rare) contributes only world -- equivalent to the plain
-    # "hello world" AND query for this corpus.
-    def test_and_of_leaf_and_or_group(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "hello (world | rare)")
-
-        assert keys == ["docA:4", "docA:3", "docA:2", "docA:7", "docA:1"]
-        for key, expected in HELLO_WORLD_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 2.7: three-leaf AND accumulates all three leaves into each doc's score,
-    # with tie-break by key ascending (docA:2 before docA:7).
-    def test_three_leaf_and_accumulates(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "hello world one")
-
-        assert keys == ["docA:2", "docA:7", "docA:3", "docA:1", "docA:4"]
-        for key, expected in HELLO_WORLD_ONE_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 2.8: OR of two AND-groups. docA:6 ("world rare unique document") fully
-    # satisfies only the (rare unique) group, so it is scored on rare+unique
-    # ONLY -- its world token belongs to the (hello world) group it never
-    # satisfied and must NOT leak in. docA:5 (hello only) and docA:8 (rare only)
-    # complete neither group and are excluded.
-    def test_or_of_two_and_groups(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "(hello world) | (rare unique)")
-
-        # score desc: docA:6 (rare+unique, high IDF) first, then hello+world.
-        assert keys == ["docA:6", "docA:4", "docA:3", "docA:2", "docA:7",
-                        "docA:1"]
-        for key, expected in HELLO_WORLD_OR_RARE_UNIQUE_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 2.9: a repeated term is scored once per predicate position, so every
-    # doc's score is exactly twice its single-term "hello" score.
-    def test_repeated_term_double_counts(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "hello hello")
-
-        assert keys == ["docA:5", "docA:4", "docA:3", "docA:2", "docA:7", "docA:1"]
-        for key, expected in HELLO_HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # Group 3: query weights ----------------------------------------------
-
-    # 3.1 / 3.2: a leaf weight scales the score linearly (5x) and leaves the
-    # ordering identical to the unweighted query.
-    def test_leaf_weight_scales_linearly(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "(hello)=>{$weight:5}")
-
-        # 3.2 order unchanged vs unweighted (query 1.1).
-        assert keys == ["docA:5", "docA:4", "docA:3", "docA:2", "docA:7", "docA:1"]
-        # 3.1 each score is 5x the unweighted value.
-        for key, expected in HELLO_WEIGHT5_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 3.3: nested layered weights multiply -- inner per-leaf weights (4 on
-    # hello, 3 on world) and an outer group weight of 2 compound.
-    def test_nested_layered_weights_multiply(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(
-            client, "((hello)=>{$weight:4} (world)=>{$weight:3})=>{$weight:2}")
-
-        assert keys == ["docA:4", "docA:3", "docA:2", "docA:7", "docA:1"]
-        for key, expected in HELLO4_WORLD3_OUTER2_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 3.4 / 3.5: per-leaf weights inside an OR, times the outer group weight.
-    # The rare-only docA:8 (high IDF x weight) outranks the hello-only docA:5.
-    def test_per_leaf_weight_inside_or_times_group_weight(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        _, scores = INDEX_A.search(
-            client, "((hello)=>{$weight:4} | (rare)=>{$weight:2})=>{$weight:3}")
-
-        for key, expected in HELLO4_OR_RARE2_OUTER3_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-        # 3.5 rare-only doc outranks hello-only doc via IDF x weight.
-        assert scores["docA:8"] > scores["docA:5"]
-
-    # Group 4: SCORE / SCORE_FIELD document_score multiplier ---------------
-
-    # 4.1: SCORE must be within [0.0, 1.0]; out-of-range rejected at create.
-    def test_score_param_range_rejected(self):
-        client = self.server.get_new_client()
-        for bad in ("2.0", "-0.5"):
-            with pytest.raises(ResponseError, match="must be between 0.0 and 1.0"):
-                client.execute_command(
-                    "FT.CREATE", f"idxBad{bad}", "ON", "HASH",
-                    "SCORE", bad, "SCHEMA", "body", "TEXT", "NOSTEM"
-                )
-
-    # 4.2: in-range SCORE applied as a multiplier on the BM25 total.
-    def test_score_param_applied(self):
-        client = self.server.get_new_client()
-        INDEX_BDEF.load(client)
-        _, scores = INDEX_BDEF.search(client, "hello world")
-        for score in scores.values():
-            assert score == pytest.approx(0.5 * BASE_SCORE, abs=SCORE_ABS_TOL)
-
-    # 4.3 / 4.5: SCORE_FIELD scales the final score (overriding the SCORE
-    # default), including negatives which take the score below zero.
-    def test_score_field_scales_and_overrides(self):
-        client = self.server.get_new_client()
-        INDEX_B.load(client)
-        _, scores = INDEX_B.search(client, "hello world")
-
-        assert scores["docB:1"] == pytest.approx(2.0 * BASE_SCORE, abs=SCORE_ABS_TOL)
-        assert scores["docB:2"] == pytest.approx(1.0 * BASE_SCORE, abs=SCORE_ABS_TOL)
-        assert scores["docB:3"] == pytest.approx(0.5 * BASE_SCORE, abs=SCORE_ABS_TOL)
-        # negative boost -> negative score (BM25STD is not floored at 0).
-        assert scores["docB:4"] == pytest.approx(-1.0 * BASE_SCORE, abs=SCORE_ABS_TOL)
-        assert scores["docB:4"] < 0
-
-    # 4.4: results ordered by final score; identical body so order follows boost.
-    def test_score_field_orders_by_boost(self):
-        client = self.server.get_new_client()
-        INDEX_B.load(client)
-        keys, _ = INDEX_B.search(client, "hello world")
-        assert keys == ["docB:5", "docB:1", "docB:2", "docB:3", "docB:4", "docB:6"]
-
-    # 4.6 / 4.7: infinite SCORE_FIELD propagates to an infinite final score.
-    # +inf ranks first; -inf is accepted (not excluded) and ranks last.
-    def test_score_field_infinity(self):
-        client = self.server.get_new_client()
-        INDEX_B.load(client)
-        keys, scores = INDEX_B.search(client, "hello world")
-
-        assert scores["docB:5"] == float("inf")
-        assert keys[0] == "docB:5"
-        # -inf is accepted and returned (diverges from Redis, which excludes it).
-        assert scores["docB:6"] == float("-inf")
-        assert keys[-1] == "docB:6"
-
-    # Group 5: document-wide TF across fields ------------------------------
-
-    # 5.1: a field-scoped query (@f1:redis) still uses the document-wide term
-    # frequency. docC:1 has "redis" in all three fields (TF=3) and outscores
-    # docC:2 (TF=1), even though both match @f1:redis with one f1 occurrence.
-    def test_field_scoped_query_uses_doc_wide_tf(self):
-        client = self.server.get_new_client()
-        INDEX_C.load(client)
-        keys, scores = INDEX_C.search(client, "@f1:redis")
-
-        assert keys == ["docC:1", "docC:2"]
-        assert scores["docC:1"] > scores["docC:2"]
-
-    # 5.2: an unscoped query yields the same doc-wide TF and ordering.
-    def test_unscoped_query_uses_doc_wide_tf(self):
-        client = self.server.get_new_client()
-        INDEX_C.load(client)
-        keys, scores = INDEX_C.search(client, "redis")
-
-        assert keys == ["docC:1", "docC:2"]
-        assert scores["docC:1"] > scores["docC:2"]
-
-    # Group 6: phrase scoring == AND scoring -------------------------------
-
-    # 6.1: an exact phrase narrows admission (adjacency) but does not change
-    # scoring -- it scores the same leaves as the proximity AND of the same
-    # terms. In Corpus A "hello world" is always adjacent, so the phrase and
-    # the AND query return the same docs with identical scores.
-    def test_phrase_scores_equal_to_and(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        phrase_keys, phrase_scores = INDEX_A.search(client, '@body:"hello world"')
-        and_keys, and_scores = INDEX_A.search(client, "hello world")
-
-        assert phrase_keys == and_keys
-        for key in and_keys:
-            assert phrase_scores[key] == pytest.approx(and_scores[key],
-                                                       abs=SCORE_ABS_TOL)
-        # and both match the verified AND totals.
-        for key, expected in HELLO_WORLD_SCORES.items():
-            assert phrase_scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # Group 7: SORTBY interaction ------------------------------------------
-
-    # 7.1 / 7.2: SORTBY rank ASC overrides the score-desc order, but WITHSCORES
-    # is still populated with the same per-doc scores as the unsorted query.
-    def test_sortby_overrides_order_scores_intact(self):
-        client = self.server.get_new_client()
-        INDEX_A7.load(client)
-        keys, scores = INDEX_A7.search(client, "hello", "SORTBY", "rank", "ASC")
-
-        # 7.1 order is by rank ascending, NOT by score (which would be 5,4,3,2,7,1).
-        assert keys == ["docA:1", "docA:2", "docA:3", "docA:4", "docA:5", "docA:7"]
-        # 7.2 scores still present and equal to the no-SORTBY values.
-        for key, expected in HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 7.3: SORTBY rank DESC reverses the order; scores are unchanged.
-    def test_sortby_desc_reverses_order(self):
-        client = self.server.get_new_client()
-        INDEX_A7.load(client)
-        keys, scores = INDEX_A7.search(client, "hello", "SORTBY", "rank", "DESC")
-
-        assert keys == ["docA:7", "docA:5", "docA:4", "docA:3", "docA:2", "docA:1"]
-        for key, expected in HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # Group 8: scorer selection -------------------------------------------
-
-    # 8.1 / 8.2: explicit SCORER BM25STD yields the same scores and order as the
-    # default (no SCORER), confirming BM25STD is the default scorer.
-    def test_explicit_bm25std_equals_default(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        default_keys, default_scores = INDEX_A.search(client, "hello")
-        explicit_keys, explicit_scores = INDEX_A.search(
-            client, "hello", "SCORER", "BM25STD")
-
-        assert explicit_keys == default_keys
-        for key in default_keys:
-            assert explicit_scores[key] == pytest.approx(default_scores[key],
-                                                         abs=SCORE_ABS_TOL)
-        # and both match the verified query 1.2 values.
-        for key, expected in HELLO_SCORES.items():
-            assert explicit_scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 8.3: an unimplemented/unknown SCORER is rejected at parse time
-    def test_invalid_scorer_get_rejected(self):
-        client = self.server.get_new_client()
-        INDEX_A.load(client)
-        with pytest.raises(ResponseError, match=r"Unknown argument `TFIDF`"):
-            client.execute_command(
-                "FT.SEARCH", INDEX_A.index, "hello", "SCORER", "TFIDF")
-
-    # Group 9: index size N = all docs, not just text docs -----------------
-
-    # 9.1: BM25's N must count every indexed doc, not only text-bearing ones.
-    # idxMix has 4 text docs + 6 numeric/tag-only docs (N=10). The verified
-    # scores match Redis's N=10; scoring with N=4 (text docs only) would produce
-    # ~0.303/~0.203 and fail here.
-    def test_index_size_counts_all_docs_not_just_text(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        keys, scores = INDEX_MIX.search(client, "hello")
-
-        assert keys == ["d:3", "d:1", "d:2"]
-        for key, expected in MIX_HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # Group 10: numeric scoring — a filter, never a ranker ------------------
-
-    # 10.1: a numeric predicate contributes 0 to the score. Adding a numeric
-    # clause to a text query changes neither scores nor order: the four "hello"
-    # docs keep their verified text scores, and the numeric-only docs it also
-    # admits carry no text term (score 0).
-    def test_numeric_clause_contributes_zero(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        # Text-only baseline.
-        _, base = INDEX_MIX.search(client, "hello")
-        # OR a numeric branch matching a text-less doc (d:5, rank=5, no body).
-        keys, scores = INDEX_MIX.search(client, "hello | @rank:[5 5]")
-
-        assert set(keys) == {"d:1", "d:2", "d:3", "d:5"}
-        # text docs keep their exact text scores; numeric adds nothing.
-        for key, expected in MIX_HELLO_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-            assert scores[key] == pytest.approx(base[key], abs=SCORE_ABS_TOL)
-        # numeric-only match carries no text term, so score 0.
-        assert scores["d:5"] == pytest.approx(0.0, abs=SCORE_ABS_TOL)
-
-    # 10.2: a pure numeric range scores every matching doc 0, so it only filters
-    # (all ten docs match rank in [0, 100]).
-    def test_numeric_only_scores_zero(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        keys, scores = INDEX_MIX.search(client, "@rank:[0 100]")
-
-        assert len(keys) == 10
-        for score in scores.values():
-            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
-
-    # Group 11: tag scoring — BM25 term with F == 1 -------------------------
-
-    # 11.1: a tag value is scored with per-tag-value IDF and TEXT-length
-    # normalization. @cat:{a} (dt=2) matches d:1, d:3; the shorter-text d:3
-    # (len 1) outranks d:1 (len 2).
-    def test_tag_single_value_scores(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        keys, scores = INDEX_MIX.search(client, "@cat:{a}")
-
-        assert keys == ["d:3", "d:1"]
-        for key, expected in MIX_CAT_A_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-
-    # 11.2: a rarer tag value scores higher (IDF). @cat:{c} (dt=1) on d:4
-    # outscores @cat:{x} (dt=6) on the text-less d:5..10, purely on IDF.
-    def test_tag_rarer_value_scores_higher(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        _, c = INDEX_MIX.search(client, "@cat:{c}")
-        keys_x, x = INDEX_MIX.search(client, "@cat:{x}")
-
-        assert c["d:4"] == pytest.approx(MIX_CAT_C_SCORE, abs=SCORE_ABS_TOL)
-        # dt=6, all six text-less docs identical (doc_len 0).
-        assert len(keys_x) == 6
-        for score in x.values():
-            assert score == pytest.approx(MIX_CAT_X_SCORE, abs=SCORE_ABS_TOL)
-        assert c["d:4"] > x["d:5"]
-
-    # 11.3: a union {a|b} sums the terms for every matched value a doc carries.
-    # d:1 has both (a+b), d:3 only a, d:2 only b.
-    def test_tag_union_sums_matched_values(self):
-        client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        keys, scores = INDEX_MIX.search(client, "@cat:{a|b}")
-
-        assert keys == ["d:1", "d:3", "d:2"]
-        for key, expected in MIX_CAT_A_OR_B_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-        # d:1's a+b total equals the sum of its single-value contributions.
-        assert scores["d:1"] == pytest.approx(
-            MIX_CAT_A_SCORES["d:1"] + MIX_CAT_A_OR_B_SCORES["d:2"],
+        load(client, IDX_MAIN, TEXT_DOCS)
+        # Single-term baseline the AND/OR totals build on.
+        _, hello = search(client, IDX_MAIN, "hello")
+
+        # AND admits only docs holding both terms, scored on both leaves.
+        keys, hello_world = search(client, IDX_MAIN, "hello world")
+        assert keys == ["doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
+        assert hello_world == pytest.approx({
+            "doc:4": 0.774956, "doc:3": 0.763658, "doc:2": 0.737626,
+            "doc:7": 0.737626, "doc:1": 0.663776,
+        }, abs=SCORE_ABS_TOL)
+
+        # OR admits either term, scoring each doc only on the terms it has.
+        keys, either = search(client, IDX_MAIN, "hello | world")
+        assert keys == ["doc:4", "doc:3", "doc:2", "doc:7", "doc:1",
+                        "doc:5", "doc:6"]
+        assert either == pytest.approx(
+            {**hello_world, "doc:5": hello["doc:5"], "doc:6": 0.360540},
             abs=SCORE_ABS_TOL)
 
-    # 11.4: tag term frequency is NOT counted (F == 1). A $weight scales the
-    # tag term linearly, exactly like a text leaf.
-    def test_tag_weight_scales_linearly(self):
+        # An OR branch must not leak its AND sibling's leaf: doc:6 is admitted by
+        # rare, so its "world" token stays unscored.
+        keys, or_leaf = search(client, IDX_MAIN, "(hello world) | rare")
+        assert keys == ["doc:8", "doc:6", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert or_leaf == pytest.approx(
+            {**hello_world, "doc:8": 1.915183, "doc:6": 1.419164},
+            abs=SCORE_ABS_TOL)
+
+        # OR of two AND groups: doc:6 satisfies only (rare unique) and is scored
+        # on those two leaves alone.
+        keys, or_groups = search(client, IDX_MAIN, "(hello world) | (rare unique)")
+        assert keys == ["doc:6", "doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
+        assert or_groups == pytest.approx({**hello_world, "doc:6": 3.404279},
+                                          abs=SCORE_ABS_TOL)
+
+        # Three-leaf AND accumulates every leaf.
+        keys, three_leaf = search(client, IDX_MAIN, "hello world one")
+        assert keys == ["doc:2", "doc:7", "doc:3", "doc:1", "doc:4"]
+        assert three_leaf == pytest.approx({
+            "doc:2": 1.202911, "doc:7": 1.202911, "doc:3": 1.197037,
+            "doc:1": 1.166036, "doc:4": 1.156069,
+        }, abs=SCORE_ABS_TOL)
+
+        # A repeated term is scored once per predicate position.
+        _, repeated = search(client, IDX_MAIN, "hello hello")
+        assert repeated == pytest.approx({k: 2 * v for k, v in hello.items()},
+                                        abs=SCORE_ABS_TOL)
+
+    # Group 3: query weights scale leaves and compound through nesting.
+    def test_query_weights(self):
         client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        _, base = INDEX_MIX.search(client, "@cat:{a}")
-        _, weighted = INDEX_MIX.search(client, "(@cat:{a})=>{$weight:3}")
+        load(client, IDX_MAIN, TEXT_DOCS)
+        _, hello = search(client, IDX_MAIN, "hello")
+        _, rare = search(client, IDX_MAIN, "rare")
 
-        for key, b in MIX_CAT_A_SCORES.items():
-            assert base[key] == pytest.approx(b, abs=SCORE_ABS_TOL)
-            assert weighted[key] == pytest.approx(3 * b, abs=SCORE_ABS_TOL)
+        # A leaf weight scales linearly and leaves the order untouched.
+        keys, weighted = search(client, IDX_MAIN, "(hello)=>{$weight:5}")
+        assert keys == ["doc:5", "doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
+        assert weighted == pytest.approx({k: 5 * v for k, v in hello.items()},
+                                         abs=SCORE_ABS_TOL)
 
-    # 11.5: text + tag AND sums the text term and the tag term into each doc's
-    # score; a numeric clause added to the same query contributes 0 (unchanged).
-    def test_text_and_tag_terms_sum_numeric_adds_zero(self):
+        # Inner leaf weights (4 on hello, 3 on world) and an outer group weight
+        # of 2 compound: each doc scores 2 * (4 * hello_leaf + 3 * world_leaf).
+        keys, nested = search(
+            client, IDX_MAIN,
+            "((hello)=>{$weight:4} (world)=>{$weight:3})=>{$weight:2}")
+        assert keys == ["doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
+        assert nested == pytest.approx({
+            "doc:4": 5.695980, "doc:3": 5.536520, "doc:2": 5.286103,
+            "doc:7": 5.286103, "doc:1": 4.646429,
+        }, abs=SCORE_ABS_TOL)
+
+        # Inside an OR each leaf keeps its own weight times the group weight, so
+        # the rare-only docs (2 * 3) overtake the hello docs (4 * 3).
+        keys, or_weighted = search(
+            client, IDX_MAIN,
+            "((hello)=>{$weight:4} | (rare)=>{$weight:2})=>{$weight:3}")
+        assert keys == ["doc:8", "doc:6", "doc:5", "doc:4", "doc:3",
+                        "doc:2", "doc:7", "doc:1"]
+        assert or_weighted == pytest.approx(
+            {**{k: 12 * v for k, v in hello.items()},
+             **{k: 6 * v for k, v in rare.items()}},
+            abs=SCORE_ABS_TOL)
+
+    # Group 4: SCORE / SCORE_FIELD document_score multiplier.
+    def test_document_score(self):
         client = self.server.get_new_client()
-        INDEX_MIX.load(client)
-        keys, scores = INDEX_MIX.search(client, "hello @cat:{a}")
 
-        assert keys == ["d:3", "d:1"]
-        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-        # d:3's total is the text term + the tag term.
-        assert scores["d:3"] == pytest.approx(
-            MIX_HELLO_SCORES["d:3"] + MIX_CAT_A_SCORES["d:3"], abs=SCORE_ABS_TOL)
-        # adding a numeric clause changes nothing (numeric contributes 0).
-        _, with_num = INDEX_MIX.search(client, "hello @cat:{a} @rank:[0 100]")
-        for key, expected in MIX_HELLO_AND_CAT_A_SCORES.items():
-            assert with_num[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # SCORE is rejected at create time unless it is within [0.0, 1.0].
+        for bad in ("2.0", "-0.5"):
+            with pytest.raises(ResponseError,
+                               match=r"must be between 0\.0 and 1\.0"):
+                client.execute_command(
+                    "FT.CREATE", f"idxBad{bad}", "ON", "HASH",
+                    "SCORE", bad, "SCHEMA", "body", "TEXT", "NOSTEM")
 
-    # Group 12: text-less indexes score 0 (no doc-length normalization) -----
+        load(client, IDX_DOC_SCORE, TEXT_DOCS)
 
-    # 12.1: on a numeric-only index a numeric predicate matches (filters) but
-    # every matching doc scores 0 -- numeric never ranks.
-    def test_numeric_only_index_scores_zero(self):
+        # Score is the BM25 total times the doc's boost, and doc:2 has no boost
+        # field so it falls back to the index-level SCORE of 0.5. A negative boost
+        # is not floored; -inf is kept and ranked last, where the reference instead
+        # drops the doc from the results.
+        keys, scores = search(client, IDX_DOC_SCORE, "hello")
+        assert keys == ["doc:5", "doc:1", "doc:2", "doc:3", "doc:4", "doc:7"]
+        assert scores == pytest.approx({
+            "doc:5": float("inf"), "doc:1": 0.663776, "doc:2": 0.215086,
+            "doc:3": 0.119322, "doc:4": -0.523122, "doc:7": float("-inf"),
+        }, abs=SCORE_ABS_TOL)
+
+    # Group 5: term frequency is counted document-wide, not per field.
+    def test_doc_wide_term_frequency(self):
         client = self.server.get_new_client()
-        INDEX_NUM_ONLY.load(client)
-        keys, scores = INDEX_NUM_ONLY.search(client, "@rank:[1 4]")
+        load(client, IDX_MAIN, MULTI_FIELD_DOCS)
 
-        assert len(keys) == 4
-        for score in scores.values():
-            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+        keys, scoped = search(client, IDX_MAIN, "@body:alpha")
+        assert keys == ["doc:1", "doc:2"]
+        assert scoped == pytest.approx({"doc:1": 0.286505, "doc:2": 0.250692},
+                                       abs=SCORE_ABS_TOL)
 
-    # 12.2: on a tag-only index (no TEXT field) a tag query matches but scores a
-    # well-defined 0 -- avg_doc_len is 0 without a text field, so the BM25 tag
-    # term degenerates to 0 (our implementation returns 0, not Redis's nan).
-    def test_tag_only_index_scores_zero(self):
+        # Field scoping narrows admission but leaves the scores untouched.
+        _, unscoped = search(client, IDX_MAIN, "alpha")
+        assert unscoped == pytest.approx(scoped, abs=SCORE_ABS_TOL)
+        _, title = search(client, IDX_MAIN, "@title:alpha")
+        assert title == pytest.approx({"doc:1": scoped["doc:1"]},
+                                      abs=SCORE_ABS_TOL)
+
+    # Group 6: an exact phrase narrows admission by adjacency without changing scores.
+    def test_exact_phrase(self):
         client = self.server.get_new_client()
-        INDEX_TAG_ONLY.load(client)
-        keys, scores = INDEX_TAG_ONLY.search(client, "@cat:{red}")
+        load(client, IDX_MAIN, TEXT_DOCS)
 
-        assert set(keys) == {"t:1", "t:2"}
-        for score in scores.values():
-            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+        # Adjacent terms: the exact phrase admits and scores exactly like the AND.
+        and_keys, and_scores = search(client, IDX_MAIN, "hello world")
+        keys, scores = search(client, IDX_MAIN, '@body:"hello world"')
+        assert keys == and_keys
+        assert scores == pytest.approx(and_scores, abs=SCORE_ABS_TOL)
 
-    # 12.3: on a numeric and tag index (no text field), the scores are all 0
-    def test_num_tag_index_scores_zero(self):
+        # Reversing the exact phrase admits nothing, while the AND still matches.
+        assert search(client, IDX_MAIN, '@body:"one world"') == ([], {})
+        keys, _ = search(client, IDX_MAIN, "one world")
+        assert set(keys) == {"doc:1", "doc:2", "doc:3", "doc:4", "doc:7"}
+
+    # Group 7: SORTBY replaces the result order, leaving the scores untouched.
+    def test_sortby(self):
         client = self.server.get_new_client()
-        INDEX_NUM_TAG.load(client)
-        # search by tag red, get 3 docs with score 0
-        keys, scores = INDEX_NUM_TAG.search(client, "@cat:{red}")
-        assert len(keys) == 3
-        for score in scores.values():
-            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+        load(client, IDX_MAIN, TEXT_DOCS)
+        _, hello = search(client, IDX_MAIN, "hello")
 
-        # search by numeric range 1-5, get 5 docs with score 0
-        keys, scores = INDEX_NUM_TAG.search(client, "@rank:[1 5]")
-        assert len(keys) == 5
-        for score in scores.values():
-            assert score == pytest.approx(0.0, abs=SCORE_ABS_TOL)
+        # Rank ascending, not the score order (doc:5, 4, 3, 2, 7, 1).
+        keys, scores = search(client, IDX_MAIN, "hello", "SORTBY", "rank", "ASC")
+        assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5", "doc:7"]
+        assert scores == pytest.approx(hello, abs=SCORE_ABS_TOL)
 
-    # Group 13: match-all (wildcard) scoring --------------------------------
+        keys, scores = search(client, IDX_MAIN, "hello", "SORTBY", "rank", "DESC")
+        assert keys == ["doc:7", "doc:5", "doc:4", "doc:3", "doc:2", "doc:1"]
+        assert scores == pytest.approx(hello, abs=SCORE_ABS_TOL)
 
-    # 13.1: `*` admits every doc and scores it as a constant BM25 leaf (IDF 1.0,
-    # F 1) normalized by text length, so the ranking is purely shortest-first.
-    def test_match_all_scores_by_doc_length(self):
+    # Group 8: BM25STD is the default scorer; unknown scorers are rejected.
+    def test_scorer_selection(self):
         client = self.server.get_new_client()
-        INDEX_A.load(client)
-        keys, scores = INDEX_A.search(client, "*")
+        load(client, IDX_MAIN, TEXT_DOCS)
 
-        # all 8 docs, score desc then key asc (docA:5 before docA:6; docA:2
-        # before docA:7 on ties).
-        assert keys == ["docA:8", "docA:5", "docA:6", "docA:1", "docA:2",
-                        "docA:7", "docA:3", "docA:4"]
-        for key, expected in MATCH_ALL_A_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # An explicit SCORER BM25STD matches the default exactly.
+        default_keys, default_scores = search(client, IDX_MAIN, "hello")
+        keys, scores = search(client, IDX_MAIN, "hello", "SCORER", "BM25STD")
+        assert keys == default_keys
+        assert scores == pytest.approx(default_scores, abs=SCORE_ABS_TOL)
 
-    # Group 14: hybrid text + vector ---------------------------------------
+        # BM25STD is the only registered scorer, so anything else fails to parse.
+        with pytest.raises(ResponseError, match=r"Unknown argument `TFIDF`"):
+            client.execute_command("FT.SEARCH", IDX_MAIN[1], "hello",
+                                   "SCORER", "TFIDF")
 
-    # 14.1: a hybrid `text=>[KNN]` query ranks by the text (BM25) score, not by
-    # vector distance. hv:short (short body, high BM25) outranks hv:long (long
-    # body, low BM25) even though hv:short is FARther in vector space
-    # (__vec_score 32 vs 0). Scores match the Redis 8.6 oracle.
-    def test_hybrid_ranks_by_text_score_not_vector_distance(self):
+    # Group 9: N counts every indexed doc, not just the text-bearing ones.
+    def test_index_size_counts_all_docs(self):
         client = self.server.get_new_client()
-        INDEX_HV.load(client)
-        keys, scores = INDEX_HV.search(
-            client, "cat=>[KNN 2 @vec $q]",
-            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        assert IndexingTestHelper.get_ft_info(client, IDX_MAIN[1]).num_docs == 10
 
-        # ranked by text score (short before long), NOT by distance.
-        assert keys == ["hv:short", "hv:long"]
-        for key, expected in HV_HYBRID_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
-        assert scores["hv:short"] > scores["hv:long"]
+        # Three docs match, but IDF and avg_doc_len are computed over all ten.
+        keys, scores = search(client, IDX_MAIN, "hello")
+        assert keys == ["doc:3", "doc:1", "doc:2"]
+        assert scores == pytest.approx({
+            "doc:3": 0.974311, "doc:1": 0.650739, "doc:2": 0.650739,
+        }, abs=SCORE_ABS_TOL)
 
-    # 14.2: SORTBY __vec_score orders a hybrid query by vector distance (nearest
-    # first), overriding the default text-score ranking. hv:long (distance 0)
-    # now precedes hv:short (distance 32). WITHSCORES still reports the text
-    # scores, unchanged by SORTBY.
-    def test_hybrid_sortby_vector_distance(self):
+    # Group 10: a numeric predicate filters but never contributes to the score.
+    def test_numeric_never_ranks(self):
         client = self.server.get_new_client()
-        INDEX_HV.load(client)
-        keys, scores = INDEX_HV.search(
-            client, "cat=>[KNN 2 @vec $q]",
-            "SORTBY", "__vec_score",
-            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        _, hello = search(client, IDX_MAIN, "hello")
 
-        # ranked by vector distance ascending (nearest first), NOT text score.
-        assert keys == ["hv:long", "hv:short"]
-        # scores are still the text (BM25) scores, unchanged by SORTBY.
-        for key, expected in HV_HYBRID_SCORES.items():
-            assert scores[key] == pytest.approx(expected, abs=SCORE_ABS_TOL)
+        # ORing a numeric branch admits a text-less doc and changes no score.
+        keys, mixed = search(client, IDX_MAIN, "hello | @rank:[5 5]")
+        assert keys == ["doc:3", "doc:1", "doc:2", "doc:5"]
+        assert mixed == pytest.approx({**hello, "doc:5": 0.0},
+                                      abs=SCORE_ABS_TOL)
 
-    # 14.3: WITHSORTKEYS on a hybrid `text=>[KNN]` sorted by __vec_score emits
-    # each result's sort key (the vector distance) prefixed with '#', since
-    # __vec_score is a synthesized field, not a stored attribute. Reply layout
-    # (no WITHSCORES) is [count, key, sortkey, attrs, ...].
-    def test_hybrid_sortby_vector_distance_withsortkeys(self):
+        # A pure numeric range admits everything and scores it all 0.
+        _, scores = search(client, IDX_MAIN, "@rank:[0 100]")
+        assert scores == pytest.approx({f"doc:{i}": 0.0 for i in range(1, 11)},
+                                       abs=SCORE_ABS_TOL)
+
+    # Group 11: tag values score as BM25 terms with per-value IDF.
+    def test_tag_scoring(self):
         client = self.server.get_new_client()
-        INDEX_HV.load(client)
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        _, hello = search(client, IDX_MAIN, "hello")
+
+        # IDF over the per-value doc count, normalized by the doc's text length.
+        keys, cat_a = search(client, IDX_MAIN, "@cat:{a}")
+        assert keys == ["doc:3", "doc:1"]
+        assert cat_a == pytest.approx({"doc:3": 1.260592, "doc:1": 0.841945},
+                                      abs=SCORE_ABS_TOL)
+
+        # A rarer value scores higher: dt=1 for c against dt=6 for x.
+        _, cat_c = search(client, IDX_MAIN, "@cat:{c}")
+        _, cat_x = search(client, IDX_MAIN, "@cat:{x}")
+        assert cat_c == pytest.approx({"doc:4": 1.132230}, abs=SCORE_ABS_TOL)
+        assert cat_x == pytest.approx(
+            {f"doc:{i}": 0.890311 for i in range(5, 11)}, abs=SCORE_ABS_TOL)
+        assert cat_c["doc:4"] > cat_x["doc:5"]
+
+        # A union sums every matched value a doc carries.
+        keys, cat_a_or_b = search(client, IDX_MAIN, "@cat:{a|b}")
+        assert keys == ["doc:1", "doc:3", "doc:2"]
+        assert cat_a_or_b["doc:1"] == pytest.approx(
+            cat_a["doc:1"] + cat_a_or_b["doc:2"], abs=SCORE_ABS_TOL)
+
+        # A weight scales a tag term like a text leaf.
+        _, weighted = search(client, IDX_MAIN, "(@cat:{a})=>{$weight:3}")
+        assert weighted == pytest.approx({k: 3 * v for k, v in cat_a.items()},
+                                         abs=SCORE_ABS_TOL)
+
+        # Text and tag leaves sum, and a numeric clause adds nothing.
+        keys, text_and_tag = search(client, IDX_MAIN, "hello @cat:{a}")
+        assert keys == ["doc:3", "doc:1"]
+        assert text_and_tag == pytest.approx(
+            {k: hello[k] + cat_a[k] for k in cat_a}, abs=SCORE_ABS_TOL)
+        _, with_numeric = search(client, IDX_MAIN, "hello @cat:{a} @rank:[0 100]")
+        assert with_numeric == pytest.approx(text_and_tag, abs=SCORE_ABS_TOL)
+
+    # Group 12: with no TEXT field avg_doc_len is 0, so nothing can rank.
+    def test_no_text_field_scores_zero(self):
+        client = self.server.get_new_client()
+        load(client, IDX_NO_TEXT_FIELD, PARTIAL_TEXT_DOCS)
+
+        # The same query scores 1.260592 / 0.841945 once a TEXT field exists
+        # (group 11). Here the tag term degenerates to a well-defined 0, where the
+        # reference returns nan instead.
+        _, cat_a = search(client, IDX_NO_TEXT_FIELD, "@cat:{a}")
+        assert cat_a == pytest.approx({"doc:1": 0.0, "doc:3": 0.0},
+                                      abs=SCORE_ABS_TOL)
+
+        _, ranks = search(client, IDX_NO_TEXT_FIELD, "@rank:[1 10]")
+        assert ranks == pytest.approx({f"doc:{i}": 0.0 for i in range(1, 11)},
+                                      abs=SCORE_ABS_TOL)
+
+    # Group 13: a wildcard scores every doc on doc_len alone.
+    def test_match_all(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, TEXT_DOCS)
+
+        # IDF and TF are constant here, so the order is shortest-first and the
+        # equal-length doc:5 and doc:6 tie despite holding different terms.
+        keys, scores = search(client, IDX_MAIN, "*")
+        assert keys == ["doc:8", "doc:5", "doc:6", "doc:1", "doc:2",
+                        "doc:7", "doc:3", "doc:4"]
+        assert scores == pytest.approx({
+            "doc:8": 1.495146, "doc:5": 1.107914, "doc:6": 1.107914,
+            "doc:1": 1.019868, "doc:2": 0.944785, "doc:7": 0.944785,
+            "doc:3": 0.880000, "doc:4": 0.773869,
+        }, abs=SCORE_ABS_TOL)
+
+    # Group 14: a hybrid text=>[KNN] query ranks by text score, not by distance.
+    def test_hybrid_text_vector(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, TEXT_DOCS)
+        _, rare = search(client, IDX_MAIN, "rare")
+        params = ("PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
+
+        # doc:8 leads on text score while sitting furthest away (distance 32 vs 0),
+        # and the hybrid scores are exactly the text-only scores.
+        keys, scores = search(client, IDX_MAIN, "rare=>[KNN 2 @vec $q]", *params)
+        assert keys == ["doc:8", "doc:6"]
+        assert scores == pytest.approx(rare, abs=SCORE_ABS_TOL)
+
+        # SORTBY __vec_score flips the order to nearest-first, scores unchanged.
+        keys, scores = search(client, IDX_MAIN, "rare=>[KNN 2 @vec $q]",
+                              "SORTBY", "__vec_score", *params)
+        assert keys == ["doc:6", "doc:8"]
+        assert scores == pytest.approx(rare, abs=SCORE_ABS_TOL)
+
+        # __vec_score is synthesized rather than stored, so WITHSORTKEYS emits the
+        # distance with a '#' prefix: [count, key, sortkey, attrs, ...].
         res = client.execute_command(
-            "FT.SEARCH", "idxHV", "cat=>[KNN 2 @vec $q]",
-            "SORTBY", "__vec_score", "WITHSORTKEYS",
-            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
-
+            "FT.SEARCH", IDX_MAIN[1], "rare=>[KNN 2 @vec $q]",
+            "SORTBY", "__vec_score", "WITHSORTKEYS", *params)
         assert res[0] == 2
-        # nearest first: hv:long (distance 0) then hv:short (distance 32).
-        assert res[1] == b"hv:long" and res[2] == b"#0"
-        assert res[4] == b"hv:short" and res[5] == b"#32"
+        assert res[1] == b"doc:6" and res[2] == b"#0"
+        assert res[4] == b"doc:8" and res[5] == b"#32"
+
+    # Group 15: corpus statistics track mutations immediately, so scores change as
+    # soon as a doc is added or removed. The reference defers this until GC runs.
+    def test_scores_follow_mutations(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, TEXT_DOCS)
+        _, before = search(client, IDX_MAIN, "hello")
+
+        # Deleting a non-matching doc changes N and avg_doc_len only.
+        client.delete("doc:6")
+        wait_indexed(client, IDX_MAIN, 7)
+        keys, smaller_n = search(client, IDX_MAIN, "hello")
+        assert keys == ["doc:5", "doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
+        assert smaller_n == pytest.approx({
+            "doc:5": 0.368158, "doc:4": 0.336278, "doc:3": 0.307233,
+            "doc:2": 0.277295, "doc:7": 0.277295, "doc:1": 0.214569,
+        }, abs=SCORE_ABS_TOL)
+
+        # Deleting a matching doc also drops dt, raising IDF for the rest.
+        client.delete("doc:5")
+        wait_indexed(client, IDX_MAIN, 6)
+        _, smaller_dt = search(client, IDX_MAIN, "hello")
+        assert set(smaller_dt) == {"doc:4", "doc:3", "doc:2", "doc:7", "doc:1"}
+        assert all(smaller_dt[k] > smaller_n[k] for k in smaller_dt)
+
+        # Re-adding both docs restores the original statistics exactly.
+        for key in ("doc:5", "doc:6"):
+            client.hset(key, mapping=TEXT_DOCS[key])
+        wait_indexed(client, IDX_MAIN, 8)
+        _, restored = search(client, IDX_MAIN, "hello")
+        assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)

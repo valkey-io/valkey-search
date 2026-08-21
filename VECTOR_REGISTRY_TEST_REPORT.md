@@ -26,15 +26,20 @@ This review adds two suites and one debug affordance:
   is confirmed). The rest of `indexes_test` is unaffected.
 - `integration/test_vector_registry_lifecycle.py` — reproduces every
   failure mode against a real valkey-server with the module at its default
-  configuration, and covers ingestion, backfill and RDB load. **13 tests: 7
-  fail** deterministically across repeated runs — one per failure mode — and 6
-  pass. It complements the branch's existing
+  configuration, and covers ingestion, backfill, RDB load, whole-keyspace
+  operations, and a key indexed by two indexes while one is mid-backfill.
+  **27 tests: 11 fail** deterministically across repeated runs; 16 pass. It complements the branch's existing
   `integration/test_vector_registry.py`, which covers steady-state sharing and
   stays green (11 tests).
 - `FT._DEBUG VECTOR_SHARED_COUNT <key> <field>` — makes the engine-side sharing state
   of a single field directly assertable (section 4.1).
+- `FT._DEBUG VALIDATE_VECTOR_REGISTRY` — sweeps the whole keyspace and reports
+  every disagreement between the keyspace, the indexes, the registry and the
+  engine's shared fields (section 4.2). Every test in the lifecycle suite ends
+  with it.
 
-Six failure modes are described in section 3. **FM-1 should block the merge.**
+Seven failure modes are described in section 3. **FM-1 and FM-7 should block
+the merge.**
 
 ## 1. Why the existing suite does not catch these
 
@@ -177,6 +182,15 @@ branch, and leaves `needs_sharing` false (`src/vector_registry.cc:93`), so
 `ShareWithValkeyHash` is never called. `FT._DEBUG VECTOR_SHARED_COUNT` reports `0` where
 a normally indexed key reports `2`.
 
+**The orphan is unreclaimable, and it poisons the key.** The entry outlives
+every mechanism that would normally clear it. Measured in sequence: create the
+orphan, `FT.DROPINDEX` — `entry_cnt` stays 1; `DEL` the key — still 1;
+`FLUSHALL`, which also drops the index — still 1. Recreate the index and write
+the same key with its original bytes, and the surviving entry matches, so `Track`
+takes the dedup branch again and the key is **never shared for the life of the
+process**. One mis-sized write therefore costs both a permanently pinned vector
+and the sharing of that key forever after.
+
 **Tests.** `OverwriteValidWithInvalid/Hash_{VectorOnly,Mixed}_Sharing{On,Off}`
 (unit, 4); `test_fm2_invalid_overwrite_leaves_stale_registry_entry` and
 `test_fm2b_key_restored_to_old_value_is_never_shared_again` (integration).
@@ -207,6 +221,10 @@ failure. On `c2b8c17a` it is dropped from the index but the registry entry still
 leaks. The leaked entry is the invariant across both, so that is what the test
 asserts; it reports the observed hit count alongside, so a reviewer can see which
 symptom their engine exhibits.
+
+**It also makes the dataset unloadable.** Because the index goes on tracking the
+key, the next RDB load aborts the server — see FM-7, which is the reason FM-3
+matters well beyond a stale search result.
 
 **Tests.** `KeyReplacedByWrongTypeIsUntracked/Hash_*` (unit, 4);
 `test_fm3_key_replaced_by_other_type_is_removed_from_index` (integration).
@@ -314,6 +332,35 @@ gone for the life of every key that is not subsequently modified.
 **Test.** `test_fm6_rdb_reload_reshares_hash_vectors` (integration). Not
 expressible in the unit suite, which does not drive an RDB round trip.
 
+### FM-7 — An RDB load aborts the server after a key's type changes
+
+**Severity: blocking.** `Check failed: record.ok()` — the process aborts, and it
+aborts again on every subsequent load of the same dataset.
+
+**Stimulus.** The FM-3 state: index a hash key, then `RENAME` a list onto it
+(or `RESTORE ... REPLACE` / `COPY ... REPLACE`). Then save and load — `DEBUG
+RELOAD`, a restart, a replica full sync, or a restore from backup.
+
+**Mechanism.** FM-3 leaves the index still tracking the key. On load,
+`VectorBase::LoadTrackedKeys` walks `tracked_metadata_by_key_`, asks the
+attribute data type for each key's field, and checks the result unconditionally
+(`src/indexes/vector_base.cc:455`):
+
+```cpp
+auto record = attribute_data_type->GetRecord(ctx, key_obj.get(), ..., attribute_identifier_);
+CHECK(record.ok());
+```
+
+The key is a list now, so `GetRecord` fails and the CHECK aborts.
+
+**Observed.** `F0000 ... vector_base.cc:455] Check failed: record.ok()` followed
+by a valkey crash report. This is worse than a crash-on-command: the offending
+state is *persisted*. Once the dataset contains a tracked key whose type has
+changed, every load of that dataset aborts — so the server cannot restart, a
+replica cannot sync it, and a backup cannot be restored.
+
+**Test.** `test_fm7_rdb_load_after_a_type_change_must_not_crash` (integration).
+
 ## 4. Integration-level visibility
 
 Every failure mode is observable from a client.
@@ -323,8 +370,9 @@ file covers steady-state sharing, this one covers the transitions. It uses the
 same `ValkeySearchTestCaseDebugMode` base, whose per-test server fixture matters
 here because FM-1 crashes the server it runs against.
 
-**13 tests: 7 fail** identically across repeated runs — exactly one per failure
-mode — and 6 pass. The file uses the suite's shared `Index` / `Vector` /
+**27 tests: 11 fail** identically across repeated runs; 16 pass. Every test ends
+with `FT._DEBUG VALIDATE_VECTOR_REGISTRY` (section 4.2), so a test that passes
+its own assertions but leaves the registry inconsistent still fails. The file uses the suite's shared `Index` / `Vector` /
 `Numeric` / `Tag` helpers from `indexes.py` and `waiters` for synchronisation,
 so it adds no test infrastructure of its own.
 
@@ -337,6 +385,7 @@ Ingestion:
 | `test_fm2b_key_restored_to_old_value_is_never_shared_again` | FM-2 follow-on | `VECTOR_SHARED_COUNT` | `2` | `0` |
 | `test_fm3_key_replaced_by_other_type_is_removed_from_index` | FM-3 | `entry_cnt`, with `FT.SEARCH` hits reported | `0` | `1` — a key that is not a hash is still counted |
 | `test_fm4_identical_rewrite_keeps_sharing` | FM-4 | `VECTOR_SHARED_COUNT` | `2` | `0` |
+| `test_fm7_rdb_load_after_a_type_change_must_not_crash` | FM-7 | server liveness across `DEBUG RELOAD` after a type change | `PING` succeeds | server aborts: `vector_base.cc:455 Check failed: record.ok()` |
 
 Backfill — keys that already existed when the index was created. Structurally
 backfill can only insert a key the index has not seen, or re-read one whose
@@ -356,6 +405,48 @@ vector-field states, so index contents and registry state are checked together:
 |---|---|---|---|---|
 | `test_fm5_json_vectors_stay_unregistered_across_reload` | FM-5 | `entry_cnt` after `DEBUG RELOAD`, plus vector/numeric/tag searches | `0`, searches intact | searches intact, `entry_cnt` populated |
 | `test_fm6_rdb_reload_reshares_hash_vectors` | FM-6 | `VECTOR_SHARED_COUNT` and `hash_sharing_hits` after `DEBUG RELOAD`, plus searches and the invalid/absent keys | `2`, hits increase | `0`, hits unchanged — index intact, sharing gone |
+
+Whole-keyspace operations — each moves or removes keys behind the index's back;
+all end with the validator:
+
+| Test | Result |
+|---|---|
+| `test_multi_exec_batch_leaves_registry_consistent` | **passes** — two MULTI/EXEC batches (20 writes, then 10 rewrites + 10 deletes) |
+| `test_flushdb_clears_the_registry` | **passes** |
+| `test_flushall_clears_the_registry` | **passes** |
+| `test_swapdb_moves_keys_out_from_under_the_index` | **passes** |
+| `test_rename_indexed_key_to_a_new_name` | **passes** |
+| `test_rename_indexed_key_out_of_the_prefix` | **passes** |
+
+One field, two indexes, only one holding the key. Backfill is per index, not per
+key, so a key can be indexed by one index and absent from another covering the
+very same field; both then share a single registry record, which makes this the
+one shape that exercises reference counting above two. `SKIPINITIALSCAN` builds
+the state deterministically and leaves the system idle, so the registry can be
+validated *inside* it — and it validates clean, confirming the asymmetry is
+legitimate rather than a defect. An operation is then applied and the result
+checked:
+
+| Test | Operation applied in the asymmetric state | Result |
+|---|---|---|
+| `test_two_indexes_one_skipped_the_key[different]` | rewrite with a different vector | **passes** — the write reaches both indexes, `use_count` 3 |
+| `test_two_indexes_one_skipped_the_key[missing]` | `HDEL` the vector field | **passes** |
+| `test_two_indexes_one_skipped_the_key[delete]` | `DEL` the key | **passes** |
+| `test_two_indexes_one_skipped_the_key[same]` | rewrite with the identical vector | **fails** — FM-4 |
+| `test_two_indexes_one_skipped_the_key[invalid]` | rewrite with a wrong-size vector | **fails** — FM-2 |
+| `test_two_indexes_one_skipped_the_key[reload]` | `DEBUG RELOAD` | **fails** — FM-6 |
+| `test_two_indexes_one_skipped_the_key_drop_the_holder` | drop the index holding the key | **passes** |
+
+The three failures are already-known modes surfacing in this state, not new
+ones: the validator reports only the expected problem in each, and confirms the
+reference count is correct throughout — with both indexes holding the key the
+record's `use_count` is 3 (registry + 2), exactly as it should be.
+
+Building the state this way also exposed a bug in the validator itself, since
+fixed: it required a registry entry whenever a field was *eligible*, when an
+entry is only called for once some index is actually holding the record. An
+index that covers an eligible field but has not taken the key needs no entry of
+its own.
 
 The share-count probe itself:
 
@@ -437,6 +528,71 @@ hash values readable via `HGET`, which is necessary but not sufficient — a
 correct-looking value proves nothing about whether the reference was detached.
 `test_share_count_tracks_number_of_holders` asserts the detach itself.
 
+### 4.2 `FT._DEBUG VALIDATE_VECTOR_REGISTRY`
+
+A per-key probe answers "is *this* field right". It cannot answer "is the
+registry as a whole in step with the keyspace" — `entry_cnt` is the only
+whole-registry observable, and an aggregate hides compensating errors.
+
+`VALIDATE_VECTOR_REGISTRY` sweeps every DB that holds an index schema and, for
+each key, replays the index definitions to derive what the registry *should*
+contain: which attributes apply to the key, whether the vector field is present
+and correctly sized (after JSON normalization), and how many indexes reference
+the same identifier — a field can be covered by several indexes, which share one
+record. It then compares in both directions and checks the engine's sharing
+state:
+
+- **keyspace → registry** — a required entry is missing, or its payload does not
+  match the key's current value;
+- **registry → keyspace** — an entry no answer in the keyspace calls for
+  (orphans);
+- **reference counts** — `use_count` must equal 1 (the registry) plus the number
+  of indexes actually holding the record;
+- **index tracking** — an index tracks a key whose field is absent or unusable,
+  or fails to track one that is usable;
+- **engine sharing** — a HASH field that should be shared is holding its own
+  copy.
+
+It replies with one string per problem; an empty reply means consistent.
+
+**It only runs when idle.** A queued mutation or a running backfill means the
+registry is legitimately mid-flight, so the command returns
+`FailedPreconditionError` rather than reporting noise. Verified: creating an
+index over 4,000 pre-existing keys and validating immediately returns *"index
+'idx' in db 0 is still backfilling; retry when the system is idle"*, and the
+same call after the backfill completes returns consistent. The mutation-queue
+half of the guard is implemented against the same counter `FT.INFO` reports, but
+I could not force the queue non-empty from a client — 20,000 pipelined writes of
+1536-dimension vectors drained faster than the round trip — so that branch is
+unverified.
+
+Supporting hooks: `SchemaManager::GetDBNumbers()` and
+`VectorRegistry::SnapshotEntries()`, both additive and read-only.
+
+**Verified against the known failures.** On a clean keyspace — including keys
+outside the prefix, keys with no vector field, and a mixed schema — it reports
+consistent. Each known mode is then caught, and nothing else is:
+
+| State | Reported |
+|---|---|
+| clean | *(empty)* |
+| FM-2 (valid → invalid overwrite) | `registry holds an entry that no indexed key calls for` |
+| FM-3 (`RENAME` a list onto the key) | same, for the renamed key |
+| FM-4 (identical rewrite) | `engine holds its own copy of a vector that should be shared` |
+| FM-5 (JSON reload) | orphan entry keyed by the JSON path |
+| FM-6 (HASH reload) | `engine holds its own copy of a vector that should be shared` |
+| two indexes, one created with `SKIPINITIALSCAN` | *(empty — the asymmetry is legitimate)* |
+
+No additional problems were reported in any state, and the 16 passing tests all
+end consistent — so it is not producing false positives.
+
+**It also sharpened FM-2.** The report previously said the stale entry clears
+when the key is deleted. That holds only while the index still exists: after
+`FT.DROPINDEX`, `entry_cnt` stays at 1, and deleting the key afterwards does not
+clear it either. Once an FM-2 orphan is created and its index is dropped, the
+entry — and the vector memory it pins — is unreclaimable for the life of the
+process.
+
 ## 5. Transitions still not covered
 
 Worth adding before merge:
@@ -514,7 +670,7 @@ Tests:
 - `testing/vector_registry_state_machine_test.cc` — new, 16 parameterised tests
   × 8 combinations.
 - `testing/CMakeLists.txt` — added to `INDEXES_TEST_SOURCES`.
-- `integration/test_vector_registry_lifecycle.py` — new, 13 tests, built on the
+- `integration/test_vector_registry_lifecycle.py` — new, 27 tests, built on the
   suite's shared `indexes.py` helpers. Sits beside the existing
   `integration/test_vector_registry.py`, which is unchanged and still passes
   (11 tests).
@@ -522,8 +678,12 @@ Tests:
 Source (debug-only and additive; no existing behaviour is touched):
 
 - `src/commands/ft_debug.cc` — adds the `VECTOR_SHARED_COUNT` subcommand (4.1).
+- `src/commands/ft_debug.cc` — also adds `VALIDATE_VECTOR_REGISTRY` (4.2).
 - `src/vector_registry.{h,cc}` — adds `GetRecordUseCount`, a non-perturbing read
-  of an entry's reference count, used by that subcommand.
+  of an entry's reference count, and `SnapshotEntries`, which lists the
+  registry's contents so orphans can be found.
+- `src/schema_manager.{h,cc}` — adds `GetDBNumbers`, the set of DBs holding an
+  index schema, so the validator knows which keyspaces to sweep.
 
 Run with:
 

@@ -10,7 +10,9 @@
 #include <absl/base/no_destructor.h>
 
 #include <memory>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
@@ -90,6 +92,22 @@ class VectorRegistry {
   size_t GetRecordUseCount(const InternedStringPtr &key,
                            const InternedStringPtr &attribute_identifier,
                            uint32_t db_num) const ABSL_LOCKS_EXCLUDED(mutex_);
+
+  // One tracked entry, as reported by ForEachEntry.
+  struct EntrySnapshot {
+    uint32_t db_num;
+    std::string key;
+    std::string attribute_identifier;
+    absl::string_view payload;
+    long use_count;
+  };
+  // Snapshot of every tracked entry. Used by
+  // FT._DEBUG VALIDATE_VECTOR_REGISTRY to find entries that no longer
+  // correspond to anything in the keyspace. The payload views point into
+  // records the registry owns, so the result must not outlive the caller's
+  // use of it on the main thread.
+  std::vector<EntrySnapshot> SnapshotEntries() const
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Untracks a vector record entry from the registry if the registry holds the
   // sole remaining reference (use_count == 1).

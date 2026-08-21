@@ -13,6 +13,8 @@ against the `memory_sharing` branch; each carries the mode it covers. The rest
 pass and guard behaviour that is currently correct.
 """
 
+import time
+
 import pytest
 import valkey
 from indexes import Index, KeyDataType, Numeric, Tag, Vector, float_to_bytes
@@ -23,6 +25,7 @@ from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 
 DIM = 128
 VALID = [float(i) for i in range(DIM)]
+OTHER = [float(i + 1000) for i in range(DIM)]
 # Too few components to be a DIM-wide vector: rejected by IsValidSizeVector.
 SHORT = [1.0, 2.0]
 
@@ -65,6 +68,23 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             self.client.execute_command(
                 "FT._DEBUG", "VECTOR_SHARED_COUNT", key, field
             )
+        )
+
+    def validate_registry(self) -> list:
+        """FT._DEBUG VALIDATE_VECTOR_REGISTRY: every disagreement between the
+        keyspace, the indexes, the registry and the engine's shared fields.
+        Empty means consistent. Errors if the system is not idle."""
+        return [
+            x.decode()
+            for x in self.client.execute_command(
+                "FT._DEBUG", "VALIDATE_VECTOR_REGISTRY"
+            )
+        ]
+
+    def assert_registry_consistent(self):
+        problems = self.validate_registry()
+        assert problems == [], "registry is out of sync:\n  " + "\n  ".join(
+            problems
         )
 
     SHARED_BY_ONE_INDEX = 2
@@ -125,6 +145,17 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             self.write_key(index, "missing", None, mixed),
         )
 
+    def settle(self, seconds: float = 1.0):
+        """Give the mutation workers time to drain when there is no counter to
+        wait on. VALIDATE_VECTOR_REGISTRY refuses to run while work is queued,
+        so a premature call fails loudly rather than silently."""
+        time.sleep(seconds)
+
+    def wait_for_backfill(self, index: Index, timeout: float = 30.0):
+        waiters.wait_for_true(
+            lambda: index.backfill_complete(self.client), timeout=timeout
+        )
+
     def wait_for_docs(self, index: Index, count: int):
         waiters.wait_for_equal(lambda: index.info(self.client).num_docs, count)
 
@@ -169,6 +200,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             assert self.search_count(index, "@num:[5 20]") == 3
             assert self.search_count(index, "@tag:{a}") == 3
 
+        self.assert_registry_consistent()
+
     @pytest.mark.parametrize("mixed", [False, True], ids=["vector_only", "mixed"])
     def test_backfill_json(self, mixed: bool):
         """Backfill of a JSON index over all three vector-field states.
@@ -189,6 +222,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             assert self.search_count(index, "@tag:{a}") == 3
 
     # ---- ingestion -------------------------------------------------------
+
+        self.assert_registry_consistent()
 
     def test_fm1_invalid_overwrite_on_flat_index_must_not_crash_server(self):
         """FM-1: untrack reached from a mutation worker thread aborts the server.
@@ -243,6 +278,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             self.registry_stat("entry_cnt") == 0
         ), "registry still holds a vector for a key that is not indexed"
 
+        self.assert_registry_consistent()
+
     def test_fm2b_key_restored_to_old_value_is_never_shared_again(self):
         """FM-2, follow-on: the stale entry permanently disables sharing.
 
@@ -269,6 +306,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             "the stale registry entry sent Track down the dedup branch, so "
             "the field was never re-shared"
         )
+
+        self.assert_registry_consistent()
 
     def test_fm3_key_replaced_by_other_type_is_removed_from_index(self):
         """FM-3: a key whose type changes in place is never untracked.
@@ -302,6 +341,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             f"(FT.SEARCH returns {hits} hits for it on this engine build)"
         )
         assert hits == 0, "FT.SEARCH returns a key that no longer holds a vector"
+
+        self.assert_registry_consistent()
 
     def test_fm4_identical_rewrite_keeps_sharing(self):
         """FM-4: rewriting a field with the same bytes silently unshares it.
@@ -339,6 +380,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
     # ---- RDB load with sharing on ---------------------------------------
 
+        self.assert_registry_consistent()
+
     def test_fm5_json_vectors_stay_unregistered_across_reload(self):
         """FM-5: an RDB load registers JSON vectors that ingestion does not.
 
@@ -369,6 +412,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert (
             self.registry_stat("entry_cnt") == 0
         ), "RDB load registered JSON vectors that ingestion never registers"
+
+        self.assert_registry_consistent()
 
     def test_fm6_rdb_reload_reshares_hash_vectors(self):
         """FM-6: an RDB load restores the registry entry but never re-shares.
@@ -410,7 +455,259 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             self.share_count(valid) == self.SHARED_BY_ONE_INDEX
         ), "the engine holds its own copy of every vector after a reload"
 
+    def test_fm7_rdb_load_after_a_type_change_must_not_crash(self):
+        """FM-7: an RDB load aborts the server if any tracked key is no longer
+        readable as the schema's type.
+
+        FM-3 leaves the index tracking a key whose type has changed. On the
+        next save/load VectorBase::LoadTrackedKeys walks the tracked keys and
+        asks the attribute data type for each field, then CHECKs the result:
+
+            vector_base.cc:455] Check failed: record.ok()
+
+        Stimulus: index a hash key, RENAME a list onto it, then DEBUG RELOAD.
+
+        Expected: the reload completes.
+        Observed: the server aborts. The same load runs on every restart, on a
+        replica's full sync, and on any restore from backup, so a single
+        RENAME can leave a dataset that cannot be loaded.
+        """
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        key = self.write_key(index, "1", VALID)
+        self.wait_for_docs(index, 1)
+
+        self.client.rpush("src", "a", "b")
+        self.client.rename("src", key)  # the key is a LIST now
+        waiters.wait_for_equal(lambda: self.client.type(key), b"list")
+        self.settle()
+
+        try:
+            self.client.execute_command("DEBUG", "RELOAD")
+            self.settle()
+            alive = self.client.ping()
+        except valkey.exceptions.ConnectionError as e:
+            pytest.fail(f"server died loading an RDB after a type change: {e}")
+        assert alive, "server did not survive the reload"
+
+    # ---- whole-keyspace operations ---------------------------------------
+    #
+    # Each of these moves or removes keys behind the index's back. The registry
+    # has to follow, and VALIDATE_VECTOR_REGISTRY is what says whether it did.
+
+    def test_multi_exec_batch_leaves_registry_consistent(self):
+        """Mutations issued inside MULTI/EXEC are queued and drained lazily.
+
+        IndexSchema::EnqueueMultiMutation defers the index work while Track
+        still runs at notification time on the main thread, so the two halves
+        of the update are separated in a way ordinary writes never are.
+        """
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+
+        pipe = self.client.pipeline(transaction=True)
+        for i in range(20):
+            pipe.hset(f"doc:{i}", "vec", float_to_bytes(VALID))
+        pipe.execute()
+        self.wait_for_docs(index, 20)
+        assert self.registry_stat("entry_cnt") == 20
+
+        # A second transaction that rewrites some keys with a different vector
+        # and deletes others.
+        pipe = self.client.pipeline(transaction=True)
+        for i in range(0, 10):
+            pipe.hset(f"doc:{i}", "vec", float_to_bytes(OTHER))
+        for i in range(10, 20):
+            pipe.delete(f"doc:{i}")
+        pipe.execute()
+        self.wait_for_docs(index, 10)
+        assert self.registry_stat("entry_cnt") == 10
+
+    def test_flushdb_clears_the_registry(self):
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        for i in range(10):
+            self.write_key(index, str(i), VALID)
+        self.wait_for_docs(index, 10)
+        assert self.registry_stat("entry_cnt") == 10
+
+        self.client.flushdb()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+        assert self.client.dbsize() == 0
+
+    def test_flushall_clears_the_registry(self):
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        for i in range(10):
+            self.write_key(index, str(i), VALID)
+        self.wait_for_docs(index, 10)
+        assert self.registry_stat("entry_cnt") == 10
+
+        self.client.flushall()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+    def test_swapdb_moves_keys_out_from_under_the_index(self):
+        """SWAPDB exchanges two keyspaces without touching any key.
+
+        The registry is keyed by db number, so every entry for the indexed db
+        now refers to keys that live somewhere else.
+        """
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        for i in range(5):
+            self.write_key(index, str(i), VALID)
+        self.wait_for_docs(index, 5)
+        assert self.registry_stat("entry_cnt") == 5
+
+        self.client.execute_command("SWAPDB", 0, 1)
+        waiters.wait_for_equal(lambda: self.client.dbsize(), 0)
+        self.settle()
+
+    def test_rename_indexed_key_to_a_new_name(self):
+        """RENAME of an indexed key to an unused name inside the prefix.
+
+        The old name must leave the registry and the new one must enter it.
+        """
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        old = self.write_key(index, "old", VALID)
+        self.wait_for_docs(index, 1)
+        assert self.share_count(old) == self.SHARED_BY_ONE_INDEX
+
+        self.client.rename(old, "doc:new")
+        waiters.wait_for_equal(lambda: self.client.exists(old), 0)
+        self.settle()
+
+        assert self.share_count(old) == self.NO_SUCH_FIELD
+        assert self.registry_stat("entry_cnt") == 1
+
+    def test_rename_indexed_key_out_of_the_prefix(self):
+        """RENAME an indexed key to a name the index does not cover."""
+        index = self.build_index()
+        index.create(self.client, wait_for_backfill=True)
+        old = self.write_key(index, "old", VALID)
+        self.wait_for_docs(index, 1)
+
+        self.client.rename(old, "outside:1")
+        waiters.wait_for_equal(lambda: self.client.exists(old), 0)
+        self.settle()
+
+        assert self.knn_hits(index) == 0, "the key left the index's prefix"
+        assert self.registry_stat("entry_cnt") == 0
+
+    # ---- one field, two indexes, only one of them holding the key --------
+    #
+    # Backfill is per index, not per key, so a key can be indexed by one index
+    # and absent from another that covers the very same field. SKIPINITIALSCAN
+    # produces exactly that state deterministically and leaves the system idle,
+    # so the registry can be validated while it holds. Both indexes share a
+    # single record per {db, key, identifier}, which makes this the one shape
+    # that exercises reference counting above two.
+
+    def _create_skipscan_index(self, name: str) -> Index:
+        """An index over the same prefix and field, created without scanning."""
+        self.client.execute_command(
+            "FT.CREATE", name, "ON", "HASH", "PREFIX", "1", "doc",
+            "SKIPINITIALSCAN",
+            "SCHEMA", "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        return Index(
+            name,
+            [Vector("vec", DIM, type="HNSW", distance="L2")],
+            prefixes=["doc"],
+            type=KeyDataType.HASH,
+        )
+
+    def _one_index_ahead(self):
+        """Index `a` holds the key; index `b` covers the same field but was
+        created with SKIPINITIALSCAN, so it never saw the key."""
+        first = self.build_index(name="a")
+        first.create(self.client, wait_for_backfill=True)
+        key = self.write_key(first, "1", VALID)
+        self.wait_for_docs(first, 1)
+        assert self.share_count(key) == 2, "registry + index a"
+
+        second = self._create_skipscan_index("b")
+        self.wait_for_backfill(second)
+        self.settle()
+
+        assert second.info(self.client).num_docs == 0, "b should not have scanned"
+        assert self.share_count(key) == 2, "b holds no reference to the record"
+        # The asymmetry is legitimate, so the registry is consistent in it.
+        self.assert_registry_consistent()
+        return first, second, key
+
+    @pytest.mark.parametrize(
+        "operation",
+        ["same", "different", "invalid", "missing", "delete", "reload"],
+    )
+    def test_two_indexes_one_skipped_the_key(self, operation: str):
+        """Apply one operation while the two indexes disagree about the key.
+
+        A mutation is delivered to every matching index, so any write pulls the
+        skipped index into line; a reload does not, because the skipped index
+        has no tracked keys to restore. Either way the registry must end up
+        describing exactly what the indexes hold.
+        """
+        first, second, key = self._one_index_ahead()
+
+        if operation == "same":
+            self.client.hset(key, "vec", float_to_bytes(VALID))
+        elif operation == "different":
+            self.client.hset(key, "vec", float_to_bytes(OTHER))
+        elif operation == "invalid":
+            self.client.hset(key, "vec", float_to_bytes(SHORT))
+        elif operation == "missing":
+            self.client.hdel(key, "vec")
+        elif operation == "delete":
+            self.client.delete(key)
+        elif operation == "reload":
+            self.client.execute_command("DEBUG", "RELOAD")
+        self.settle()
+
+        # The validator goes first: it names the precise disagreement, where
+        # the assertions below only say a number came out wrong. It is also
+        # what checks the reference count -- share_count reports 0 for a field
+        # that is not shared at all, which would otherwise mask a bad count.
+        self.assert_registry_consistent()
+
+        if operation in ("same", "different"):
+            # The write reached both indexes; they now share one record.
+            assert self.registry_stat("entry_cnt") == 1
+            assert self.knn_hits(first) == 1
+            assert self.knn_hits(second) == 1
+            assert self.share_count(key) == 3, (
+                "registry + two indexes should share one record"
+            )
+        elif operation == "reload":
+            # Nothing pulled b into line, so the asymmetry survives the reload.
+            assert self.registry_stat("entry_cnt") == 1
+            assert self.knn_hits(first) == 1
+            assert self.knn_hits(second) == 0
+            assert self.share_count(key) == 2, "registry + index a only"
+        else:
+            assert self.registry_stat("entry_cnt") == 0, (
+                "no index holds the key, so nothing should remain registered"
+            )
+            assert self.knn_hits(first) == 0
+            assert self.knn_hits(second) == 0
+
+    def test_two_indexes_one_skipped_the_key_drop_the_holder(self):
+        """Dropping the index that holds the key leaves nothing referencing it,
+        even though a second index still covers the field."""
+        first, second, key = self._one_index_ahead()
+
+        first.drop(self.client)
+        self.settle()
+
+        self.assert_registry_consistent()
+        assert self.registry_stat("entry_cnt") == 0
+        assert self.knn_hits(second) == 0
+
     # ---- the share-count probe itself ------------------------------------
+
+        self.assert_registry_consistent()
 
     def test_share_count_tracks_number_of_holders(self):
         """Pins what the count means, so later tests can rely on it.
@@ -437,6 +734,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_equal(lambda: self.share_count(valid), self.NOT_SHARED)
         assert self.client.hget(valid, "vec") == float_to_bytes(VALID)
 
+        self.assert_registry_consistent()
+
     def test_share_count_distinguishes_absent_from_unshared(self):
         """Pins the -1 / 0 boundary.
 
@@ -458,3 +757,5 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.delete(valid)
         assert self.share_count(valid) == self.NO_SUCH_FIELD
         assert self.client.ping()
+
+        self.assert_registry_consistent()

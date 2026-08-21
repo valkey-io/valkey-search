@@ -7,7 +7,6 @@
 
 #include "src/indexes/text/snowball_language.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -154,24 +153,10 @@ absl::StatusOr<std::vector<std::string>> SnowballLanguage::TokenizeWithStemMap(
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
   std::vector<std::string> tokens;
-  Stemmer* stemmer = stemmer_.get();
   SegmentInternal(
       text, /*handle_escapes=*/true, /*filter_stop_words=*/true,
-      [&tokens, &stem_mappings, stemmer, min_stem_size](std::string&& token) {
-        std::string stem = stemmer->GetStemRoot(token, min_stem_size);
-        if (stem != token) {
-          auto it = stem_mappings.find(stem);
-          if (it == stem_mappings.end()) {
-            it = stem_mappings.try_emplace(std::move(stem)).first;
-          }
-          auto& variants = it->second;
-          if (std::find(variants.begin(), variants.end(), token) ==
-              variants.end()) {
-            variants.emplace_back(token);
-          }
-        }
-        tokens.push_back(std::move(token));
-      });
+      [&tokens](std::string&& token) { tokens.push_back(std::move(token)); });
+  stemmer_->BuildStemMap(tokens, min_stem_size, stem_mappings);
   return tokens;
 }
 

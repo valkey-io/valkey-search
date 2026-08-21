@@ -93,6 +93,7 @@ message VectorIndex {
   oneof algorithm {
     HNSWAlgorithm hnsw_algorithm = 6;
     FlatAlgorithm flat_algorithm = 7;
+    SVSVamanaAlgorithm svs_vamana_algorithm = 8;
   }
 }
 
@@ -108,6 +109,24 @@ enum VectorDataType {
   VECTOR_DATA_TYPE_FLOAT32 = 1;
 }
 
+enum SVSCompressionType {
+  SVS_COMPRESSION_NONE = 0;
+  SVS_COMPRESSION_FP16 = 1;
+  SVS_COMPRESSION_LVQ4 = 2;
+  SVS_COMPRESSION_LVQ8 = 3;
+  SVS_COMPRESSION_LVQ4X4 = 4;
+  SVS_COMPRESSION_LVQ4X8 = 5;
+  SVS_COMPRESSION_LEANVEC4X4 = 6;
+  SVS_COMPRESSION_LEANVEC4X8 = 7;
+  SVS_COMPRESSION_LEANVEC8X8 = 8;
+  SVS_COMPRESSION_SQ8 = 9;
+}
+
+enum RawVectorStorage {
+  RAW_VECTOR_STORAGE_KEEP = 0;
+  RAW_VECTOR_STORAGE_DROP = 1;
+}
+
 message HNSWAlgorithm {
   uint32 m = 1;
   uint32 ef_construction = 2;
@@ -116,5 +135,28 @@ message HNSWAlgorithm {
 
 message FlatAlgorithm {
   uint32 block_size = 1;
+}
+
+message SVSVamanaAlgorithm {
+  uint32 graph_max_degree = 1;
+  uint32 construction_window_size = 2;
+  uint32 search_window_size = 3;
+  float alpha = 4;
+  SVSCompressionType compression = 5;
+  // Required when compression is one of the LEANVEC* variants. Number of
+  // dimensions the LeanVec projection reduces to; must be < dim.
+  uint32 leanvec_dims = 6;
+  // Number of vectors to accumulate before training the LeanVec matrices
+  // and building the index. Only used for LEANVEC* compression.
+  uint32 leanvec_training_threshold = 7;
+  // KEEP (default): retain intern store for exact vector retrieval.
+  // DROP: skip intern store, use SVS native reconstruct/get_distance APIs.
+  RawVectorStorage raw_vector_storage = 8;
+  // Per-dimension epsilon for distance-based vector matching (dedup).
+  // Effective threshold = this value * dimension_count.
+  // Negative values (parser default is -1.0) mean use the compiled default
+  // (kDefaultDistanceMatchEpsilonPerDim). 0 means explicit exact-match
+  // (only appropriate for lossless FP32/SQI8 with L2).
+  float distance_match_epsilon_per_dim = 9;
 }
 

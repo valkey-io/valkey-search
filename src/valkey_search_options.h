@@ -172,6 +172,9 @@ inline bool EnabledInVersion(int major, int minor, int patch) {
   return EnabledInVersion(vmsdk::ValkeyVersion(major, minor, patch));
 }
 
+/// Return the configuration entry for SVS OpenMP thread count
+config::Number& GetSVSOmpThreads();
+
 }  // namespace options
 }  // namespace valkey_search
 

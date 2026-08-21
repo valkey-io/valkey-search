@@ -43,6 +43,9 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#ifdef ENABLE_SVS
+#include "src/indexes/vector_svs.h"
+#endif
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
@@ -214,6 +217,26 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
             }
           }
         }
+#ifdef ENABLE_SVS
+        case data_model::VectorIndex::kSvsVamanaAlgorithm: {
+          switch (index.vector_index().vector_data_type()) {
+            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
+              VMSDK_ASSIGN_OR_RETURN(
+                  auto index,
+                  indexes::VectorSVS<float>::Create(
+                      index.vector_index(), attribute.identifier(),
+                      index_schema->GetAttributeDataType().ToProto()));
+              index_schema->SubscribeToVectorExternalizer(
+                  attribute.identifier(), index.get());
+              return index;
+            }
+            default: {
+              return absl::InvalidArgumentError(
+                  "Unsupported vector data type.");
+            }
+          }
+        }
+#endif
         default: {
           return absl::InvalidArgumentError("Unsupported algorithm.");
         }
@@ -769,6 +792,7 @@ bool IndexSchema::ProcessAttributeMutation(
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat:
+        case indexes::IndexerType::kSVS:
           Metrics::GetStats().ingest_field_vector++;
           break;
         case indexes::IndexerType::kNumeric:
@@ -1151,10 +1175,8 @@ int IndexSchema::GetNumericAttributeCount() const {
 int IndexSchema::GetVectorAttributeCount() const {
   return std::count_if(attributes_.begin(), attributes_.end(),
                        [](const auto &attr) {
-                         auto type = attr.second.GetIndex()->GetIndexerType();
-                         return type == indexes::IndexerType::kVector ||
-                                type == indexes::IndexerType::kHNSW ||
-                                type == indexes::IndexerType::kFlat;
+                         return indexes::IsVectorIndexType(
+                             attr.second.GetIndex()->GetIndexerType());
                        });
 }
 
@@ -1289,6 +1311,10 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       ValkeyModule_ReplyWithSimpleString(ctx, "english");
       break;
   }
+}
+
+bool IsVectorIndex(std::shared_ptr<indexes::IndexBase> index) {
+  return indexes::IsVectorIndexType(index->GetIndexerType());
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {

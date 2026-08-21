@@ -25,7 +25,7 @@ FT.CREATE <index-name>
                   NUMERIC
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
                 | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE] [WEIGHT <weight>]
-                | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
+                | VECTOR [HNSW | FLAT | SVS] <attr_count> [<attribute_name> <attribute_value>]+
             [SORTABLE]
         )+
 ```
@@ -73,7 +73,7 @@ See [Text Field Format](../topics/search-data-formats.md#text-fields) for more d
 
 See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for details and examples.
 
-`VECTOR`: A vector field contains a vector. Two vector indexing algorithms are currently supported: HNSW (Hierarchical Navigable Small World) and FLAT (brute force). Each algorithm has a set of additional attributes, some required and other optional.
+`VECTOR`: A vector field contains a vector. Three vector indexing algorithms are supported: HNSW (Hierarchical Navigable Small World), FLAT (brute force), and SVS (Scalable Vector Search — requires the module to be built with `ENABLE_SVS=ON`). Each algorithm has a set of additional attributes, some required and some optional.
 
 - `FLAT:` This algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
@@ -88,6 +88,48 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.
   - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
+- `SVS:` *(Requires `ENABLE_SVS=ON` build)* The SVS Vamana algorithm provides approximate answers with competitive memory efficiency, supporting optional vector compression. SVS is an alternative to HNSW for workloads where memory footprint is a priority.
+
+  > **Note:** SVS indexes are not persisted to RDB. The index is rebuilt from scratch on server restart and will be empty until vectors are re-ingested.
+  - `DIM <number>` (required): Specifies the number of dimensions in a vector.
+  - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
+  - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
+  - `INITIAL_CAP <size>` (optional): Initial index size.
+  - `GRAPH_MAX_DEGREE <number>` (optional): Maximum number of outgoing edges per node in the Vamana graph. Default is 64.
+  - `CONSTRUCTION_WINDOW_SIZE <number>` (optional): Search window size used during index construction. Higher values improve recall at the cost of slower builds. Default is 128.
+  - `SEARCH_WINDOW_SIZE <number>` (optional): Search window size used at query time. Higher values improve recall at the cost of slower queries. Can also be overridden per-query. Default is 10.
+  - `ALPHA <float>` (optional): Graph pruning parameter. Values slightly above 1.0 (default 1.2) produce well-connected graphs.
+  - `COMPRESSION [NONE | FP16 | LVQ4 | LVQ8 | LVQ4X4 | LVQ4X8 | LEANVEC4X4 | LEANVEC4X8 | LEANVEC8X8 | SQ8]` (optional): Vector compression mode. Default is `NONE` (full FP32). See [SVS compression](#svs-compression) below.
+
+#### SVS compression
+
+SVS supports several compression modes that reduce memory footprint at the cost of some recall:
+
+| Compression | Description |
+|---|---|
+| `NONE` | No compression (FP32). Default. |
+| `FP16` | Half-precision float. ~2× smaller than FP32. |
+| `LVQ4` | 4-bit LVQ scalar quantization. |
+| `LVQ8` | 8-bit LVQ scalar quantization. |
+| `LVQ4X4` | Two-level LVQ: 4-bit primary, 4-bit secondary reranking. |
+| `LVQ4X8` | Two-level LVQ: 4-bit primary, 8-bit secondary reranking. |
+| `LEANVEC4X4` | LeanVec: learned projection + 4-bit primary, 4-bit secondary. |
+| `LEANVEC4X8` | LeanVec: learned projection + 4-bit primary, 8-bit secondary. |
+| `LEANVEC8X8` | LeanVec: learned projection + 8-bit primary, 8-bit secondary. |
+| `SQ8` | Scalar quantization (1 byte/dimension). ~4× memory reduction vs FP32, no training phase required. |
+
+LeanVec learns a low-dimensional projection (PCA-style) from a training sample, which can yield better recall-per-memory than LVQ for high-dimensional embeddings (≥ 768 dimensions). LeanVec requires two additional parameters:
+
+  - `LEANVEC_DIMS <N>` (required when using `LEANVEC*`): Target reduced dimensionality for the primary graph traversal. Must be less than `DIM`. A typical starting point is `DIM / 4` (e.g., 192 for 768-d vectors).
+  - `LEANVEC_TRAINING_THRESHOLD <N>` (optional): Number of vectors to buffer before training the projection matrices and building the index. Default is 10000. The index is unavailable for search until this threshold is reached — `FT.INFO` will show `state: training` and `FT.SEARCH` will return an error until training completes.
+
+#### SVS storage and deduplication
+
+  - `RAW_VECTOR_STORAGE [KEEP | DROP]` (optional): Controls whether the original FP32 vectors are retained alongside the compressed graph. `KEEP` (default) retains them, enabling exact `GetValue` retrieval and precise deduplication. `DROP` eliminates the intern store — reducing memory by approximately `DIM × 4` bytes per vector — at the cost of using the SVS native reconstruct and `get_distance` APIs for all retrieval paths.
+
+  - `DISTANCE_MATCH_EPSILON <float>` (optional): Per-dimension epsilon threshold for distance-based vector-match detection. Applies to all lossy compression types when `RAW_VECTOR_STORAGE DROP` is active. The effective threshold is `DISTANCE_MATCH_EPSILON × DIM`. Default is `0.0021`, which covers worst-case quantization error for all supported lossy compression types (FP16, LVQ4, LVQ8, SQ8, LeanVec variants) at dimensions 64–512. Set to `0.0` to require exact distance equality — safe only for uncompressed FP32 or SQI8 with L2 metric.
+
+**Note on `SEARCH_WINDOW_SIZE` for LeanVec:** Because LeanVec uses a lower-dimensional primary representation for graph traversal, a larger `SEARCH_WINDOW_SIZE` is typically needed to achieve the same recall as LVQ. Start with values in the 200–500 range and tune to your target recall.
 
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
 
@@ -150,6 +192,54 @@ FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR HNSW          \
     10 TYPE FLOAT32 DIM 20 DISTANCE_METRIC COSINE M 4 EF_CONSTRUCTION   \
     100 my_tag_field_key_1 TAG SEPARATOR '@' CASESENSITIVE              \
     my_numeric_field_key_1 NUMERIC my_numeric_field_key_2 NUMERIC my_tag_field_key_2 TAG
+```
+
+Result:
+
+```
+OK
+```
+
+### SVS example (requires ENABLE_SVS=ON build):
+
+```
+FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR SVS 6 TYPE FLOAT32 DIM 128 DISTANCE_METRIC COSINE GRAPH_MAX_DEGREE 64 SEARCH_WINDOW_SIZE 10
+```
+
+Result:
+
+```
+OK
+```
+
+### SVS example with LVQ8 compression:
+
+```
+FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR SVS 8 TYPE FLOAT32 DIM 128 DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 64 SEARCH_WINDOW_SIZE 10 COMPRESSION LVQ8
+```
+
+Result:
+
+```
+OK
+```
+
+### SVS example with SQ8 compression:
+
+```
+FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR SVS 8 TYPE FLOAT32 DIM 128 DISTANCE_METRIC L2 GRAPH_MAX_DEGREE 64 SEARCH_WINDOW_SIZE 10 COMPRESSION SQ8
+```
+
+Result:
+
+```
+OK
+```
+
+### SVS example with LeanVec compression (768-d vectors):
+
+```
+FT.CREATE my_index_name SCHEMA my_vector_field_key VECTOR SVS 12 TYPE FLOAT32 DIM 768 DISTANCE_METRIC COSINE GRAPH_MAX_DEGREE 64 SEARCH_WINDOW_SIZE 200 COMPRESSION LEANVEC4X8 LEANVEC_DIMS 192 LEANVEC_TRAINING_THRESHOLD 10000
 ```
 
 Result:

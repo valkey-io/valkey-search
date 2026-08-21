@@ -43,6 +43,18 @@ constexpr absl::string_view kBlockSizeParam{"BLOCK_SIZE"};
 constexpr absl::string_view kMParam{"M"};
 constexpr absl::string_view kEfConstructionParam{"EF_CONSTRUCTION"};
 constexpr absl::string_view kEfRuntimeParam{"EF_RUNTIME"};
+constexpr absl::string_view kGraphMaxDegreeParam{"GRAPH_MAX_DEGREE"};
+constexpr absl::string_view kConstructionWindowSizeParam{
+    "CONSTRUCTION_WINDOW_SIZE"};
+constexpr absl::string_view kSearchWindowSizeParam{"SEARCH_WINDOW_SIZE"};
+constexpr absl::string_view kAlphaParam{"ALPHA"};
+constexpr absl::string_view kCompressionParam{"COMPRESSION"};
+constexpr absl::string_view kLeanVecDimsParam{"LEANVEC_DIMS"};
+constexpr absl::string_view kLeanVecTrainingThresholdParam{
+    "LEANVEC_TRAINING_THRESHOLD"};
+constexpr absl::string_view kRawVectorStorageParam{"RAW_VECTOR_STORAGE"};
+constexpr absl::string_view kDistanceMatchEpsilonParam{
+    "DISTANCE_MATCH_EPSILON"};
 constexpr absl::string_view kDimensionsParam{"DIM"};
 constexpr absl::string_view kDistanceMetricParam{"DISTANCE_METRIC"};
 constexpr absl::string_view kDataTypeParam{"TYPE"};
@@ -218,6 +230,26 @@ const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::Language>>
     kLanguageByStr({{"ENGLISH", data_model::LANGUAGE_ENGLISH}});
 const absl::NoDestructor<
+    absl::flat_hash_map<absl::string_view, data_model::SVSCompressionType>>
+    kSVSCompressionByStr({
+        {"NONE", data_model::SVS_COMPRESSION_NONE},
+        {"FP16", data_model::SVS_COMPRESSION_FP16},
+        {"LVQ4", data_model::SVS_COMPRESSION_LVQ4},
+        {"LVQ8", data_model::SVS_COMPRESSION_LVQ8},
+        {"LVQ4X4", data_model::SVS_COMPRESSION_LVQ4X4},
+        {"LVQ4X8", data_model::SVS_COMPRESSION_LVQ4X8},
+        {"LEANVEC4X4", data_model::SVS_COMPRESSION_LEANVEC4X4},
+        {"LEANVEC4X8", data_model::SVS_COMPRESSION_LEANVEC4X8},
+        {"LEANVEC8X8", data_model::SVS_COMPRESSION_LEANVEC8X8},
+        {"SQ8", data_model::SVS_COMPRESSION_SQ8},
+    });
+const absl::NoDestructor<
+    absl::flat_hash_map<absl::string_view, data_model::RawVectorStorage>>
+    kRawVectorStorageByStr({
+        {"KEEP", data_model::RAW_VECTOR_STORAGE_KEEP},
+        {"DROP", data_model::RAW_VECTOR_STORAGE_DROP},
+    });
+const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
@@ -344,6 +376,44 @@ vmsdk::KeyValueParser<FlatParameters> CreateFlatParamParser() {
                         GENERATE_VALUE_PARSER(FlatParameters, block_size));
   return parser;
 }
+vmsdk::KeyValueParser<SVSParameters> CreateSVSParser() {
+  vmsdk::KeyValueParser<SVSParameters> parser;
+  parser.AddParamParser(kDimensionsParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, dimensions));
+  parser.AddParamParser(kDataTypeParam,
+                        GENERATE_ENUM_PARSER(SVSParameters, vector_data_type,
+                                             *indexes::kVectorDataTypeByStr));
+  parser.AddParamParser(kDistanceMetricParam,
+                        GENERATE_ENUM_PARSER(SVSParameters, distance_metric,
+                                             *indexes::kDistanceMetricByStr));
+  parser.AddParamParser(kInitialCapParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, initial_cap));
+  parser.AddParamParser(kGraphMaxDegreeParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, graph_max_degree));
+  parser.AddParamParser(
+      kConstructionWindowSizeParam,
+      GENERATE_VALUE_PARSER(SVSParameters, construction_window_size));
+  parser.AddParamParser(
+      kSearchWindowSizeParam,
+      GENERATE_VALUE_PARSER(SVSParameters, search_window_size));
+  parser.AddParamParser(kAlphaParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, alpha));
+  parser.AddParamParser(
+      kCompressionParam,
+      GENERATE_ENUM_PARSER(SVSParameters, compression, *kSVSCompressionByStr));
+  parser.AddParamParser(kLeanVecDimsParam,
+                        GENERATE_VALUE_PARSER(SVSParameters, leanvec_dims));
+  parser.AddParamParser(
+      kLeanVecTrainingThresholdParam,
+      GENERATE_VALUE_PARSER(SVSParameters, leanvec_training_threshold));
+  parser.AddParamParser(kRawVectorStorageParam,
+                        GENERATE_ENUM_PARSER(SVSParameters, raw_vector_storage,
+                                             *kRawVectorStorageByStr));
+  parser.AddParamParser(
+      kDistanceMatchEpsilonParam,
+      GENERATE_VALUE_PARSER(SVSParameters, distance_match_epsilon_per_dim));
+  return parser;
+}
 absl::Status ParseVector(vmsdk::ArgsIterator &itr,
                          data_model::Index &index_proto) {
   absl::string_view algo_str;
@@ -364,6 +434,12 @@ absl::Status ParseVector(vmsdk::ArgsIterator &itr,
   if (algo == data_model::VectorIndex::kHnswAlgorithm) {
     static auto parser = CreateHNSWParser();
     HNSWParameters parameters;
+    VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, vector_itr));
+    VMSDK_RETURN_IF_ERROR(parameters.Verify());
+    index_proto.set_allocated_vector_index(parameters.ToProto().release());
+  } else if (algo == data_model::VectorIndex::kSvsVamanaAlgorithm) {
+    static auto parser = CreateSVSParser();
+    SVSParameters parameters;
     VMSDK_RETURN_IF_ERROR(parser.Parse(parameters, vector_itr));
     VMSDK_RETURN_IF_ERROR(parameters.Verify());
     index_proto.set_allocated_vector_index(parameters.ToProto().release());
@@ -844,6 +920,66 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
   flat_algorithm_proto->set_block_size(block_size);
   vector_index_proto->set_allocated_flat_algorithm(
       flat_algorithm_proto.release());
+  return vector_index_proto;
+}
+absl::Status SVSParameters::Verify() const {
+  VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
+  if (graph_max_degree < 2) {
+    return absl::InvalidArgumentError("GRAPH_MAX_DEGREE must be at least 2.");
+  }
+  if (construction_window_size < 1) {
+    return absl::InvalidArgumentError(
+        "CONSTRUCTION_WINDOW_SIZE must be at least 1.");
+  }
+  if (search_window_size < 1) {
+    return absl::InvalidArgumentError("SEARCH_WINDOW_SIZE must be at least 1.");
+  }
+  if (alpha <= 0.0f) {
+    return absl::InvalidArgumentError("ALPHA must be positive.");
+  }
+  bool is_leanvec = (compression == data_model::SVS_COMPRESSION_LEANVEC4X4 ||
+                     compression == data_model::SVS_COMPRESSION_LEANVEC4X8 ||
+                     compression == data_model::SVS_COMPRESSION_LEANVEC8X8);
+  if (is_leanvec) {
+    if (leanvec_dims <= 0) {
+      return absl::InvalidArgumentError(
+          "LEANVEC_DIMS is required (>0) when COMPRESSION is LEANVEC*.");
+    }
+    if (static_cast<uint32_t>(leanvec_dims) >= dimensions) {
+      return absl::InvalidArgumentError("LEANVEC_DIMS must be less than DIM.");
+    }
+    if (leanvec_training_threshold < 1) {
+      return absl::InvalidArgumentError(
+          "LEANVEC_TRAINING_THRESHOLD must be at least 1.");
+    }
+  } else if (leanvec_dims > 0) {
+    return absl::InvalidArgumentError(
+        "LEANVEC_DIMS is only valid with LEANVEC* COMPRESSION.");
+  }
+  if (distance_match_epsilon_per_dim < 0.0f &&
+      distance_match_epsilon_per_dim != -1.0f) {
+    return absl::InvalidArgumentError(
+        "DISTANCE_MATCH_EPSILON must be >= 0. Omit the parameter to use "
+        "the compiled default.");
+  }
+  return absl::OkStatus();
+}
+std::unique_ptr<data_model::VectorIndex> SVSParameters::ToProto() const {
+  auto vector_index_proto = FTCreateVectorParameters::ToProto();
+  auto svs_algorithm_proto = std::make_unique<data_model::SVSVamanaAlgorithm>();
+  svs_algorithm_proto->set_graph_max_degree(graph_max_degree);
+  svs_algorithm_proto->set_construction_window_size(construction_window_size);
+  svs_algorithm_proto->set_search_window_size(search_window_size);
+  svs_algorithm_proto->set_alpha(alpha);
+  svs_algorithm_proto->set_compression(compression);
+  svs_algorithm_proto->set_leanvec_dims(leanvec_dims);
+  svs_algorithm_proto->set_leanvec_training_threshold(
+      leanvec_training_threshold);
+  svs_algorithm_proto->set_raw_vector_storage(raw_vector_storage);
+  svs_algorithm_proto->set_distance_match_epsilon_per_dim(
+      distance_match_epsilon_per_dim);
+  vector_index_proto->set_allocated_svs_vamana_algorithm(
+      svs_algorithm_proto.release());
   return vector_index_proto;
 }
 

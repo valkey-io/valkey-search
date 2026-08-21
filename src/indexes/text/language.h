@@ -16,12 +16,15 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/log/check.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/unicode_normalizer.h"
 #include "src/utils/scanner.h"
+#include "unicode/uniset.h"
+#include "unicode/utypes.h"
 #include "vmsdk/src/utils.h"
 
 namespace valkey_search::indexes::text {
@@ -44,15 +47,37 @@ struct PunctuationSet {
 
 // Build a PunctuationSet from a punctuation string. Iterates as code points
 // (not bytes) so multi-byte chars like U+060C are stored correctly.
-// ASCII whitespace and control characters are always included as boundaries.
+// ASCII whitespace/control characters and Unicode White_Space code points are
+// always included as word boundaries.
 inline PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
   PunctuationSet result;
+  // ASCII whitespace and control characters (0x00..0x7F).
   for (int i = 0; i < 128; ++i) {
     if (std::isspace(static_cast<unsigned char>(i)) ||
         std::iscntrl(static_cast<unsigned char>(i))) {
       result.ascii.set(i);
     }
   }
+
+  // Non-ASCII Unicode White_Space code points (NBSP U+00A0, NNBSP U+202F,
+  // typographic spaces U+2000..U+200A, ideographic space U+3000, etc.).
+  // Sourced from ICU's property data via UnicodeSet so it stays in sync with
+  // the linked Unicode version without maintaining a hand-coded list.
+  UErrorCode ec = U_ZERO_ERROR;
+  icu::UnicodeSet ws(UNICODE_STRING_SIMPLE("[\\p{White_Space}]"), ec);
+  CHECK(U_SUCCESS(ec)) << "ICU UnicodeSet for White_Space failed: "
+                       << u_errorName(ec);
+  for (int32_t i = 0; i < ws.getRangeCount(); ++i) {
+    UChar32 start = ws.getRangeStart(i);
+    UChar32 end = ws.getRangeEnd(i);
+    for (UChar32 cp = start; cp <= end; ++cp) {
+      if (cp >= 0x80) {
+        result.non_ascii.insert(static_cast<uint32_t>(cp));
+      }
+    }
+  }
+
+  // Language-specific punctuation characters from the punctuation string.
   utils::Scanner scanner(punctuation);
   utils::Scanner::Char cp;
   while ((cp = scanner.NextUtf8()) != utils::Scanner::kEOF) {

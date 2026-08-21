@@ -512,6 +512,82 @@ TEST_F(SnowballLanguageTest, FrenchApostropheSplitsToken) {
       << "Apostrophe should split l'école, making 'école' an independent token";
 }
 
+// --- Unicode whitespace as word boundaries ---
+
+TEST_F(SnowballLanguageTest, PunctuationSetContainsUnicodeWhitespace) {
+  PunctuationSet ps = BuildPunctuationSet(kAsciiPunctuation);
+  // ASCII space is in the ascii bitset.
+  EXPECT_TRUE(ps.Contains(0x0020));
+  // Non-ASCII Unicode White_Space code points must be in the non_ascii set.
+  EXPECT_TRUE(ps.Contains(0x00A0));  // NO-BREAK SPACE (NBSP)
+  EXPECT_TRUE(ps.Contains(0x1680));  // OGHAM SPACE MARK
+  EXPECT_TRUE(ps.Contains(0x2000));  // EN QUAD
+  EXPECT_TRUE(ps.Contains(0x200A));  // HAIR SPACE
+  EXPECT_TRUE(ps.Contains(0x202F));  // NARROW NO-BREAK SPACE
+  EXPECT_TRUE(ps.Contains(0x205F));  // MEDIUM MATHEMATICAL SPACE
+  EXPECT_TRUE(ps.Contains(0x3000));  // IDEOGRAPHIC SPACE
+  EXPECT_TRUE(ps.Contains(0x2028));  // LINE SEPARATOR
+  EXPECT_TRUE(ps.Contains(0x2029));  // PARAGRAPH SEPARATOR
+  EXPECT_TRUE(ps.Contains(0x0085));  // NEXT LINE (NEL)
+}
+
+TEST_F(SnowballLanguageTest, FrenchNBSPTreatedAsWordBoundary) {
+  TestFrenchLanguage french;
+  // "Il a dit\u00A0: «\u00A0Bonjour\u00A0!\u00A0»"
+  // This is the canonical French typesetting with NBSP before : and inside « »
+  auto result = french.Tokenize(
+      "Il a dit\xc2\xa0: \xc2\xab\xc2\xa0"
+      "Bonjour\xc2\xa0!\xc2\xa0\xc2\xbb");
+  ASSERT_TRUE(result.ok());
+  // "il" is a stop word but "dit" and "bonjour" should be clean tokens.
+  bool found_dit = false;
+  bool found_bonjour = false;
+  for (const auto& token : *result) {
+    if (token == "dit") found_dit = true;
+    if (token == "bonjour") found_bonjour = true;
+    // No token should contain NBSP bytes (\xc2\xa0).
+    EXPECT_EQ(token.find("\xc2\xa0"), std::string::npos)
+        << "Token '" << token << "' contains NBSP bytes";
+  }
+  EXPECT_TRUE(found_dit) << "Expected 'dit' as a clean token";
+  EXPECT_TRUE(found_bonjour) << "Expected 'bonjour' as a clean token";
+}
+
+TEST_F(SnowballLanguageTest, FrenchNarrowNBSPTreatedAsWordBoundary) {
+  TestFrenchLanguage french;
+  // U+202F (NARROW NO-BREAK SPACE) is used in modern French typography
+  // "\xE2\x80\xAF" is UTF-8 for U+202F
+  auto result = french.Tokenize("mot1\xe2\x80\xaf mot2");
+  ASSERT_TRUE(result.ok());
+  bool found_mot1 = false;
+  bool found_mot2 = false;
+  for (const auto& token : *result) {
+    if (token == "mot1") found_mot1 = true;
+    if (token == "mot2") found_mot2 = true;
+  }
+  EXPECT_TRUE(found_mot1) << "Expected 'mot1' split by NNBSP";
+  EXPECT_TRUE(found_mot2) << "Expected 'mot2' split by NNBSP";
+}
+
+TEST_F(SnowballLanguageTest, QueryTokenizeSplitsOnNBSP) {
+  TestFrenchLanguage french;
+  // Query path must also split on NBSP so queries match indexed content.
+  auto result = french.QueryTokenize(
+      "dit\xc2\xa0"
+      "bonjour");
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ((*result)[0], "dit");
+  EXPECT_EQ((*result)[1], "bonjour");
+}
+
+TEST_F(SnowballLanguageTest, IdeographicSpaceSplitsTokens) {
+  // U+3000 IDEOGRAPHIC SPACE (\xe3\x80\x80) should act as a word boundary.
+  auto result = english_.Tokenize("hello\xe3\x80\x80world");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world"}));
+}
+
 TEST_F(SnowballLanguageTest, GermanCompoundWordNotDecomposed) {
   TestGermanLanguage german;
   auto result = german.Tokenize("Donaudampfschifffahrtsgesellschaft");

@@ -541,7 +541,6 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
         VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
                                 << vmsdk::config::RedactIfNeeded(name)
                                 << " on FLUSHDB of DB " << selected_db;
-        continue;
       }
     }
     // Move expensive destruction (radix trees, posting lists, per-key indexes)

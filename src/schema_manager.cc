@@ -323,6 +323,17 @@ absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
   return names;
 }
 
+absl::flat_hash_set<uint32_t> SchemaManager::GetDBNumbers() const {
+  absl::flat_hash_set<uint32_t> dbs;
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  for (const auto &[db_num, schemas] : db_to_index_schemas_) {
+    if (!schemas.empty()) {
+      dbs.insert(db_num);
+    }
+  }
+  return dbs;
+}
+
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDB(
     uint32_t db_num) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);

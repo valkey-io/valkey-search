@@ -76,6 +76,18 @@ class VectorHNSW : public VectorBase {
     return space_.get();
   }
 
+  bool ForEachIndexedVector(
+      absl::AnyInvocable<void(uint64_t internal_id, bool deleted,
+                              const VectorRecord *record)>
+          fn) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    absl::ReaderMutexLock lock(&resize_mutex_);
+    algo_->ForEachSlot([&fn](uint64_t internal_id, bool deleted,
+                             const std::shared_ptr<const VectorRecord> &r) {
+      fn(internal_id, deleted, r.get());
+    });
+    return true;
+  }
+
   size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     return algo_->max_elements_;
   }

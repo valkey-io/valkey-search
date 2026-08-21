@@ -197,6 +197,36 @@ void VectorRegistry::DetachFromValkeyHash(const RegistryKey &search_key) {
                        attribute_identifier_str.get(), new_val.get(), nullptr);
 }
 
+size_t VectorRegistry::GetRecordUseCount(
+    const InternedStringPtr &key, const InternedStringPtr &attribute_identifier,
+    uint32_t db_num) const {
+  RegistryKey search_key{db_num, key, attribute_identifier};
+  absl::MutexLock lock(&mutex_);
+  auto it = tracked_vectors_.find(search_key);
+  if (it == tracked_vectors_.end()) {
+    return 0;
+  }
+  return it->second.vector_record.use_count();
+}
+
+std::vector<VectorRegistry::EntrySnapshot> VectorRegistry::SnapshotEntries()
+    const {
+  std::vector<EntrySnapshot> out;
+  absl::MutexLock lock(&mutex_);
+  out.reserve(tracked_vectors_.size());
+  for (const auto &[reg_key, value] : tracked_vectors_) {
+    out.push_back(EntrySnapshot{
+        .db_num = reg_key.db_num,
+        .key = std::string(reg_key.key->Str()),
+        .attribute_identifier =
+            std::string(reg_key.attribute_identifier->Str()),
+        .payload = absl::string_view(value.vector_record->GetRawVector(),
+                                     value.vector_record_size),
+        .use_count = value.vector_record.use_count()});
+  }
+  return out;
+}
+
 void VectorRegistry::UntrackIfUnused(
     const InternedStringPtr &key,
     const InternedStringPtr &interned_attribute_identifier, uint32_t db_num) {

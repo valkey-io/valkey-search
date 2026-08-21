@@ -284,6 +284,20 @@ class HierarchicalNSW
     return (int)r;
   }
 
+  // Visits every occupied slot in index order, handing the callback the slot's
+  // internal id, whether the slot is marked deleted, and the record the slot
+  // holds. A deleted slot keeps its record until the slot is reused, so the
+  // two together account for every record the index is holding. Intended for
+  // consistency validation on an otherwise idle system.
+  template <typename Fn>
+  void ForEachSlot(Fn &&fn) const {
+    const size_t count = cur_element_count_;
+    for (tableint internal_id = 0; internal_id < count; ++internal_id) {
+      fn(internal_id, isMarkedDeleted(internal_id),
+         GetDataByInternalId(internal_id));
+    }
+  }
+
   size_t getMaxElements() { return max_elements_; }
 
   size_t getCurrentElementCount() { return cur_element_count_; }

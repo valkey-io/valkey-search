@@ -62,6 +62,10 @@ class SchemaManager {
       uint32_t db_num, absl::string_view name) const
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::flat_hash_set<std::string> GetIndexSchemasInDB(uint32_t db_num) const;
+  // DB numbers that currently hold at least one index schema. Used by
+  // FT._DEBUG VALIDATE_VECTOR_REGISTRY to know which keyspaces to sweep.
+  absl::flat_hash_set<uint32_t> GetDBNumbers() const
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;

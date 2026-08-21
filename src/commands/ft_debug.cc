@@ -8,9 +8,21 @@
 #include <absl/base/no_destructor.h>
 #include <absl/strings/ascii.h>
 
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <vector>
+
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
 #include "module_config.h"
+#include "src/attribute_data_type.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
+#include "src/indexes/index_base.h"
+#include "src/indexes/vector_base.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/vector_registry.h"
@@ -18,6 +30,7 @@
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -334,6 +347,467 @@ absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
+// Reports how many live references the module holds to the vector buffer that
+// the engine is currently sharing for a given hash field.
+//
+// The sharing state is read from the engine directly
+// (ValkeyModule_HashHasStringRef, the same call the registry uses) rather than
+// inferred from allocation size, so tests can assert on one field instead of
+// reading sharing out of MEMORY USAGE.
+//
+//   -1  there is no such field: the key is missing, is not a hash, or does not
+//       carry this field. Distinguished from 0 so that a test asserting "not
+//       shared" cannot pass against a typo'd key or field name.
+//    0  the field exists and holds a plain value -- nothing is shared.
+//   >0  the number of live references to the shared buffer: one held by the
+//       registry plus one per index over the field. A normally indexed key
+//       therefore reports 2.
+absl::Status VectorSharedCountCmd(ValkeyModuleCtx *ctx,
+                                  vmsdk::ArgsIterator &itr) {
+  std::string key_name;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, key_name));
+  std::string field_name;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, field_name));
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+
+  auto reply = [ctx](long long value) {
+    ValkeyModule_ReplyWithLongLong(ctx, value);
+    return absl::OkStatus();
+  };
+  auto key_str = vmsdk::MakeUniqueValkeyString(key_name);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return reply(-1);
+  }
+  if (ValkeyModule_KeyType(key_obj.get()) != VALKEYMODULE_KEYTYPE_HASH) {
+    return reply(-1);
+  }
+  auto field_str = vmsdk::MakeUniqueValkeyString(field_name);
+  // ValkeyModule_HashHasStringRef must not be called for a field that does not
+  // exist: hashTypeHasStringRef dereferences the result of hashtableFindRef
+  // without a null check, so a missing field on a hashtable-encoded hash
+  // crashes the server. Establishing existence first is also what makes -1
+  // distinguishable from 0.
+  int exists = 0;
+  ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_EXISTS, field_str.get(),
+                       &exists, nullptr);
+  if (!exists) {
+    return reply(-1);
+  }
+  if (!VectorRegistry::Instance().IsSharingActive()) {
+    // ValkeyModule_HashHasStringRef is only resolved when sharing is enabled.
+    // The field exists and is certainly not shared.
+    return reply(0);
+  }
+  // The engine returns a boolean: nonzero when the field currently holds a
+  // shared reference, zero when it holds a plain value.
+  if (ValkeyModule_HashHasStringRef(key_obj.get(), field_str.get()) <= 0) {
+    return reply(0);
+  }
+  return reply(VectorRegistry::Instance().GetRecordUseCount(
+      StringInternStore::Intern(key_name),
+      StringInternStore::Intern(field_name), ValkeyModule_GetSelectedDb(ctx)));
+}
+
+// Whole-keyspace validation of the vector registry.
+//
+// Sweeps every DB that holds an index schema and, for each key, replays the
+// index definitions to work out which vector registry entries *should* exist:
+// which attributes apply to that key, whether the vector field is present and
+// of the right size, and how many indexes reference the same identifier (a
+// field can be indexed by more than one index, and they share one record). It
+// then compares that against the registry's actual contents in both
+// directions, and checks that the engine is sharing exactly the fields it
+// should be.
+//
+// Only meaningful when the system is idle: a pending mutation or a running
+// backfill means the registry is legitimately mid-flight, so the command
+// refuses to run rather than report noise.
+namespace {
+
+struct ExpectedEntry {
+  // Number of vector indexes that should be holding this record. The registry
+  // holds one reference of its own on top of these.
+  int holders{0};
+  std::string payload;
+  bool shareable{false};  // HASH keys can be shared with the engine; JSON not.
+};
+
+// {db, key, identifier} -> expectation
+using ExpectedMap =
+    absl::flat_hash_map<std::tuple<uint32_t, std::string, std::string>,
+                        ExpectedEntry>;
+
+struct SweepState {
+  ValkeyModuleCtx *ctx;
+  uint32_t db_num;
+  std::vector<std::shared_ptr<IndexSchema>> schemas;
+  ExpectedMap *expected;
+  std::vector<std::string> *problems;
+};
+
+bool KeyMatchesPrefix(absl::string_view key, const IndexSchema &schema) {
+  const auto &prefixes = schema.GetKeyPrefixes();
+  if (prefixes.empty()) {
+    return true;
+  }
+  return std::any_of(
+      prefixes.begin(), prefixes.end(),
+      [key](const std::string &p) { return key.starts_with(p); });
+}
+
+// Reads the attribute out of the key exactly as ingestion would, including the
+// JSON text -> float bytes normalization, and reports whether the result is a
+// usable vector.
+bool ReadVectorField(ValkeyModuleCtx *ctx, ValkeyModuleKey *key_obj,
+                     absl::string_view key, const IndexSchema &schema,
+                     const Attribute &attribute,
+                     const indexes::VectorBase &vector_base, std::string *out) {
+  auto record = schema.GetAttributeDataType().GetRecord(
+      ctx, key_obj, key, attribute.GetIdentifier());
+  if (!record.ok() || !record.value()) {
+    return false;
+  }
+  auto value = std::move(record.value());
+  if (schema.GetAttributeDataType().RecordsProvidedAsString()) {
+    value = vector_base.NormalizeStringRecord(std::move(value));
+    if (!value) {
+      return false;
+    }
+  }
+  auto view = vmsdk::ToStringView(value.get());
+  if (!vector_base.IsValidSizeVector(view)) {
+    return false;
+  }
+  out->assign(view.data(), view.size());
+  return true;
+}
+
+void ValidateOneKey(SweepState *state, absl::string_view key) {
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      state->ctx, key_str.get(),
+      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return;
+  }
+  for (const auto &schema : state->schemas) {
+    if (!schema->GetAttributeDataType().IsProperType(key_obj.get())) {
+      continue;
+    }
+    if (!KeyMatchesPrefix(key, *schema)) {
+      continue;
+    }
+    const bool shareable =
+        schema->GetAttributeDataType().ToProto() ==
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+    auto interned_key = StringInternStore::Intern(key);
+    for (const auto &[alias, attribute] : schema->GetAttributes()) {
+      if (!indexes::IsVectorIndex(attribute.GetIndex())) {
+        continue;
+      }
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get());
+      if (!vector_base) {
+        continue;
+      }
+      std::string payload;
+      const bool eligible =
+          ReadVectorField(state->ctx, key_obj.get(), key, *schema, attribute,
+                          *vector_base, &payload);
+
+      // The index itself should track the key iff the field is usable.
+      const bool tracked = vector_base->IsTracked(interned_key);
+      // An index created with SKIPINITIALSCAN legitimately lacks keys that
+      // predate it, so only the other direction -- tracking a key whose field
+      // is gone or unusable -- is always wrong for such an index.
+      const bool report_untracked = !schema->SkipInitialScan();
+      if (tracked != eligible && (tracked || report_untracked)) {
+        state->problems->push_back(absl::StrCat(
+            "db ", state->db_num, " key '", key, "' attribute '",
+            attribute.GetIdentifier(), "' of index '", schema->GetName(),
+            "': index ", tracked ? "tracks" : "does not track",
+            " the key but the field is ",
+            eligible ? "a usable vector" : "absent or unusable"));
+      }
+      // A registry entry is required only once some index is actually holding
+      // the record. An index that covers an eligible field but has not taken
+      // the key -- SKIPINITIALSCAN, say -- calls for no entry of its own.
+      if (!eligible || !shareable || !tracked) {
+        continue;
+      }
+      auto &entry = (*state->expected)[std::make_tuple(
+          state->db_num, std::string(key), attribute.GetIdentifier())];
+      if (entry.holders > 0 && entry.payload != payload) {
+        state->problems->push_back(
+            absl::StrCat("db ", state->db_num, " key '", key, "' attribute '",
+                         attribute.GetIdentifier(),
+                         "': two indexes disagree on the field's contents"));
+      }
+      entry.payload = payload;
+      entry.shareable = shareable;
+      ++entry.holders;
+    }
+  }
+}
+
+void ValidateScanCallback(ValkeyModuleCtx *ctx, ValkeyModuleString *keyname,
+                          ValkeyModuleKey *key, void *privdata) {
+  auto *state = static_cast<SweepState *>(privdata);
+  ValidateOneKey(state, vmsdk::ToStringView(keyname));
+}
+
+}  // namespace
+
+absl::Status ValidateVectorRegistryCmd(ValkeyModuleCtx *ctx,
+                                       vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  vmsdk::VerifyMainThread();
+
+  auto dbs = SchemaManager::Instance().GetDBNumbers();
+
+  // Refuse to run unless quiescent: a queued mutation or a running backfill
+  // means the registry is legitimately out of step with the keyspace.
+  std::vector<std::shared_ptr<IndexSchema>> all_schemas;
+  for (uint32_t db_num : dbs) {
+    for (const auto &name :
+         SchemaManager::Instance().GetIndexSchemasInDB(db_num)) {
+      auto schema = SchemaManager::Instance().GetIndexSchema(db_num, name);
+      if (!schema.ok()) {
+        continue;
+      }
+      auto stats = schema.value()->GetStats().GetStats();
+      if (stats.mutation_queue_size != 0) {
+        return absl::FailedPreconditionError(
+            absl::StrCat("index '", name, "' in db ", db_num, " has ",
+                         stats.mutation_queue_size,
+                         " pending mutations; retry when the system is idle"));
+      }
+      if (schema.value()->IsBackfillInProgress()) {
+        return absl::FailedPreconditionError(absl::StrCat(
+            "index '", name, "' in db ", db_num,
+            " is still backfilling; retry when the system is idle"));
+      }
+      all_schemas.push_back(schema.value());
+    }
+  }
+
+  std::vector<std::string> problems;
+  ExpectedMap expected;
+
+  // --- keyspace -> expectation -------------------------------------------
+  const int caller_db = ValkeyModule_GetSelectedDb(ctx);
+  for (uint32_t db_num : dbs) {
+    std::vector<std::shared_ptr<IndexSchema>> db_schemas;
+    for (const auto &schema : all_schemas) {
+      if (schema->GetDBNum() == db_num) {
+        db_schemas.push_back(schema);
+      }
+    }
+    if (db_schemas.empty()) {
+      continue;
+    }
+    ValkeyModule_SelectDb(ctx, db_num);
+    SweepState state{.ctx = ctx,
+                     .db_num = db_num,
+                     .schemas = db_schemas,
+                     .expected = &expected,
+                     .problems = &problems};
+    auto cursor = vmsdk::MakeUniqueValkeyScanCursor();
+    while (ValkeyModule_Scan(ctx, cursor.get(), ValidateScanCallback, &state)) {
+    }
+  }
+  ValkeyModule_SelectDb(ctx, caller_db);
+
+  // --- registry -> expectation -------------------------------------------
+  auto snapshot = VectorRegistry::Instance().SnapshotEntries();
+  absl::flat_hash_set<std::tuple<uint32_t, std::string, std::string>> seen;
+  for (const auto &entry : snapshot) {
+    auto id =
+        std::make_tuple(entry.db_num, entry.key, entry.attribute_identifier);
+    seen.insert(id);
+    auto it = expected.find(id);
+    if (it == expected.end()) {
+      problems.push_back(absl::StrCat(
+          "db ", entry.db_num, " key '", entry.key, "' attribute '",
+          entry.attribute_identifier,
+          "': registry holds an entry that no indexed key calls for"));
+      continue;
+    }
+    if (it->second.payload != entry.payload) {
+      problems.push_back(absl::StrCat(
+          "db ", entry.db_num, " key '", entry.key, "' attribute '",
+          entry.attribute_identifier,
+          "': registry payload does not match the key's current value"));
+    }
+    const long want = 1 + it->second.holders;
+    if (entry.use_count != want) {
+      problems.push_back(absl::StrCat(
+          "db ", entry.db_num, " key '", entry.key, "' attribute '",
+          entry.attribute_identifier, "': reference count is ", entry.use_count,
+          ", expected ", want, " (registry + ", it->second.holders,
+          " index(es))"));
+    }
+  }
+  for (const auto &[id, exp] : expected) {
+    if (!seen.contains(id)) {
+      problems.push_back(absl::StrCat(
+          "db ", std::get<0>(id), " key '", std::get<1>(id), "' attribute '",
+          std::get<2>(id), "': no registry entry for an indexed vector"));
+    }
+  }
+
+  // --- index contents -----------------------------------------------------
+  // Walk each vector index slot by slot. A live slot must hold exactly the
+  // record the registry has for that key; a deleted slot keeps its record
+  // until the slot is reused, so live and deleted slots together account for
+  // everything the index is holding.
+  absl::flat_hash_set<const void *> registry_records;
+  for (const auto &entry : snapshot) {
+    registry_records.insert(entry.payload.data());
+  }
+  absl::flat_hash_set<const void *> all_index_records;
+  size_t total_active_allocations = 0;
+  bool allocations_countable = true;
+  bool all_indexes_enumerable = true;
+
+  for (const auto &schema : all_schemas) {
+    for (const auto &[alias, attribute] : schema->GetAttributes()) {
+      if (!indexes::IsVectorIndex(attribute.GetIndex())) {
+        continue;
+      }
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get());
+      if (!vector_base) {
+        continue;
+      }
+      auto active = vector_base->ActiveVectorAllocations();
+      if (active.has_value()) {
+        total_active_allocations += *active;
+      } else {
+        allocations_countable = false;
+      }
+      const std::string identifier = attribute.GetIdentifier();
+      const uint32_t db_num = schema->GetDBNum();
+      const bool registered =
+          schema->GetAttributeDataType().ToProto() ==
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+      const std::string schema_name = schema->GetName();
+      const bool enumerable = vector_base->ForEachIndexedVector(
+          [&](uint64_t internal_id, bool deleted,
+              const indexes::VectorRecord *record) {
+            if (record == nullptr) {
+              if (!deleted) {
+                problems.push_back(
+                    absl::StrCat("db ", db_num, " index '", schema_name,
+                                 "' attribute '", identifier, "' slot ",
+                                 internal_id, ": live slot holds no vector"));
+              }
+              return;
+            }
+            all_index_records.insert(record->GetRawVector());
+            if (deleted) {
+              return;
+            }
+            // A live slot must be backed by a registry entry for its key --
+            // but only where entries are expected at all. JSON vectors are
+            // indexed and deliberately unregistered (FM-5), so their slots
+            // are correctly absent from the registry.
+            if (!registered) {
+              return;
+            }
+            auto key = vector_base->GetKeyDuringSearch(internal_id);
+            if (!key.ok()) {
+              problems.push_back(absl::StrCat(
+                  "db ", db_num, " index '", schema_name, "' attribute '",
+                  identifier, "' slot ", internal_id,
+                  ": live slot has no key mapped to it"));
+              return;
+            }
+            auto id = std::make_tuple(db_num, std::string(key.value()->Str()),
+                                      identifier);
+            auto it = expected.find(id);
+            if (it == expected.end() ||
+                !registry_records.contains(record->GetRawVector())) {
+              problems.push_back(absl::StrCat(
+                  "db ", db_num, " key '", key.value()->Str(), "' attribute '",
+                  identifier, "' index '", schema_name,
+                  "': live indexed vector is not in the registry"));
+              return;
+            }
+            if (it->second.payload !=
+                absl::string_view(record->GetRawVector(),
+                                  it->second.payload.size())) {
+              problems.push_back(absl::StrCat(
+                  "db ", db_num, " key '", key.value()->Str(), "' attribute '",
+                  identifier, "' index '", schema_name,
+                  "': indexed vector differs from the registry's record"));
+            }
+          });
+      if (!enumerable) {
+        all_indexes_enumerable = false;
+      }
+    }
+  }
+
+  // --- engine-side sharing ------------------------------------------------
+  if (VectorRegistry::Instance().IsSharingActive()) {
+    for (const auto &[id, exp] : expected) {
+      if (!exp.shareable) {
+        continue;
+      }
+      ValkeyModule_SelectDb(ctx, std::get<0>(id));
+      auto key_str = vmsdk::MakeUniqueValkeyString(std::get<1>(id));
+      auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+          ctx, key_str.get(),
+          VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      if (!key_obj ||
+          ValkeyModule_KeyType(key_obj.get()) != VALKEYMODULE_KEYTYPE_HASH) {
+        continue;
+      }
+      auto field_str = vmsdk::MakeUniqueValkeyString(std::get<2>(id));
+      int exists = 0;
+      ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_EXISTS,
+                           field_str.get(), &exists, nullptr);
+      if (!exists) {
+        continue;
+      }
+      if (ValkeyModule_HashHasStringRef(key_obj.get(), field_str.get()) <= 0) {
+        problems.push_back(absl::StrCat(
+            "db ", std::get<0>(id), " key '", std::get<1>(id), "' attribute '",
+            std::get<2>(id),
+            "': engine holds its own copy of a vector that should be shared"));
+      }
+    }
+    ValkeyModule_SelectDb(ctx, caller_db);
+  }
+
+  // Every allocated record must be reachable either from the registry or from
+  // an index slot -- anything else is a leak. Only meaningful once everything
+  // above agrees: an orphan, or a record whose index has since been dropped,
+  // already puts the two sides out of step. It also needs every index to be
+  // enumerable (FLAT is not yet) and a build with the pooled allocator.
+  if (problems.empty() && allocations_countable && all_indexes_enumerable) {
+    absl::flat_hash_set<const void *> reachable = all_index_records;
+    reachable.insert(registry_records.begin(), registry_records.end());
+    if (reachable.size() != total_active_allocations) {
+      problems.push_back(
+          absl::StrCat("vector allocators hold ", total_active_allocations,
+                       " live records, but ", reachable.size(),
+                       " distinct records are reachable from the registry and ",
+                       "the index slots -- the difference is unreferenced"));
+    }
+  }
+
+  std::sort(problems.begin(), problems.end());
+  ValkeyModule_ReplyWithArray(ctx, problems.size());
+  for (const auto &problem : problems) {
+    ValkeyModule_ReplyWithCString(ctx, problem.c_str());
+  }
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -349,6 +823,14 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
       {"FT._DEBUG VECTOR_SHARING_STATS", "Show VectorRegistry Sharing Stats"},
+      {"FT._DEBUG VALIDATE_VECTOR_REGISTRY",
+       "Sweep the keyspace and report every disagreement between the vector "
+       "registry, the indexes and the engine's shared fields. Empty reply "
+       "means consistent. Requires an idle system"},
+      {"FT._DEBUG VECTOR_SHARED_COUNT <key> <field>",
+       "Number of module references to the vector buffer the engine shares "
+       "for this hash field; 0 if the field exists but is not shared, -1 if "
+       "there is no such field"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
@@ -389,6 +871,10 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return StringPoolStats(ctx, itr);
   } else if (keyword == "VECTOR_SHARING_STATS") {
     return VectorSharingStatsCmd(ctx, itr);
+  } else if (keyword == "VALIDATE_VECTOR_REGISTRY") {
+    return ValidateVectorRegistryCmd(ctx, itr);
+  } else if (keyword == "VECTOR_SHARED_COUNT") {
+    return VectorSharedCountCmd(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {

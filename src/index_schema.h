@@ -175,6 +175,9 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   inline const std::string &GetName() const { return name_; }
   inline std::uint32_t GetDBNum() const { return db_num_; }
+  // True when the index was created with SKIPINITIALSCAN, so keys that already
+  // existed are legitimately absent from it until they are next mutated.
+  inline bool SkipInitialScan() const { return skip_initial_scan_; }
   inline const std::optional<uint16_t> &GetSingleSlotNumber() const {
     return single_slot_number_;
   }

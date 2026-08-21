@@ -85,78 +85,14 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
 absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     InProgressStemMap* stem_mappings) const {
-  if (stemming_enabled) {
-    CHECK(stem_mappings) << "stem_mappings must not be null";
-  }
-  if (!IsValidUtf8(text)) {
-    return absl::InvalidArgumentError("Invalid UTF-8");
-  }
-
-  // Get or create the thread-local stemmer for this lexer's language
-  sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
-  // Deque grows by adding new blocks—avoids the cost of copying
-  // existing elements during reallocation.
   std::vector<std::string> tokens;
-  std::string word;
-  word.reserve(64);
-  size_t pos = 0;
-  while (pos < text.size()) {
-    // Skip leading punctuation, but check for backslash escape sequences
-    while (pos < text.size() && IsPunctuation(text[pos])) {
-      if (text[pos] == '\\' && pos + 1 < text.size()) {
-        // Backslash at start - let word building handle escape
-        break;
-      }
-      pos++;
-    }
-
-    word.clear();
-
-    // Build word, handling backslash escape sequences
-    while (pos < text.size()) {
-      char ch = text[pos];
-      if (ch == '\\' && pos + 1 < text.size()) {
-        char next_ch = text[pos + 1];
-        pos++;  // Consume the backslash
-        if (next_ch == '\\' || IsPunctuation(next_ch)) {
-          // Backslash escapes backslash or punctuation
-          word.push_back(text[pos++]);  // Keep the escaped character
-        } else {
-          // Backslash before non-punctuation
-          if (IsPunctuation('\\')) {
-            // Backslash is punctuation → end token (Standard Unicode
-            // segmentation)
-            break;
-          } else {
-            // Backslash not punctuation → keep letter
-            word.push_back(text[pos++]);
-          }
-        }
-      } else if (IsPunctuation(ch)) {
-        // Regular punctuation - end of word
-        break;
-      } else {
-        // Regular character
-        word.push_back(ch);
-        pos++;
-      }
-    }
-
-    if (!word.empty()) {
-      NormalizeLowerCaseInPlace(word);
-
-      if (IsStopWord(word)) {
-        continue;  // Skip stop words
-      }
-
-      if (stemming_enabled) {
-        UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
-      }
-      tokens.push_back(std::move(word));
-      word.clear();
-    }
+  auto status = Tokenize(text, stemming_enabled, min_stem_size, stem_mappings,
+                         [&tokens](const std::string& token, uint32_t) {
+                           tokens.push_back(token);
+                         });
+  if (!status.ok()) {
+    return status;
   }
-
   return tokens;
 }
 

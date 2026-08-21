@@ -9,17 +9,11 @@
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
 #include <atomic>
-#include <bitset>
-#include <cctype>
 #include <memory>
 #include <optional>
 
-#include "absl/base/thread_annotations.h"
-#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
-#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
@@ -44,9 +38,9 @@ class TextIndexSchema;
 
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
-  std::atomic<uint64_t> total_positions{0};
-  std::atomic<uint64_t> num_unique_terms{0};
-  std::atomic<uint64_t> total_term_frequency{0};
+  alignas(64) std::atomic<uint64_t> total_positions{0};
+  alignas(64) std::atomic<uint64_t> num_unique_terms{0};
+  alignas(64) std::atomic<uint64_t> total_term_frequency{0};
 
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};
@@ -91,6 +85,8 @@ class TextIndexSchema {
   TextIndexSchema(data_model::Language language, const std::string &punctuation,
                   bool with_offsets, const std::vector<std::string> &stop_words,
                   uint32_t min_stem_size);
+
+  ~TextIndexSchema();
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
                                           absl::string_view data,
@@ -223,7 +219,9 @@ class TextIndexSchema {
   // Locking-enabled version of GetTrackedKeyCount.
   size_t GetTrackedKeyCount(bool lock) {
     std::optional<std::lock_guard<std::mutex>> per_key_guard;
-    if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+    if (lock) {
+      per_key_guard.emplace(per_key_text_indexes_mutex_);
+    }
     return GetTrackedKeyCount();
   }
 

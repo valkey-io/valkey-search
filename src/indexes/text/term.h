@@ -12,7 +12,7 @@
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/flat_position_map.h"
+#include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/inlined_priority_queue.h"
 

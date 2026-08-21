@@ -10,8 +10,6 @@
 #include "gtest/gtest.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
-#include "vmsdk/src/memory_allocation.h"
-#include "vmsdk/src/memory_tracker.h"
 
 namespace valkey_search::indexes::text {
 
@@ -24,7 +22,7 @@ class PostingTest : public ValkeySearchTest {
     metadata_ = std::make_unique<TextIndexMetadata>();
   }
 
-  InternedStringPtr InternKey(const std::string& key) {
+  InternedStringPtr InternKey(const std::string &key) {
     return StringInternStore::Intern(key);
   }
 
@@ -38,7 +36,7 @@ class PostingTest : public ValkeySearchTest {
           pos_fields_pairs,
       size_t num_fields = 5) {
     PositionMap pos_map;
-    for (const auto& [pos, field_indices] : pos_fields_pairs) {
+    for (const auto &[pos, field_indices] : pos_fields_pairs) {
       FieldMask field_mask(num_fields);
       for (size_t field_idx : field_indices) {
         field_mask.SetField(field_idx);
@@ -48,12 +46,10 @@ class PostingTest : public ValkeySearchTest {
     return pos_map;
   }
 
-  // Helper to insert key with PositionMap, creating FlatPositionMap internally
-  void InsertKeyWithPositionMap(const InternedStringPtr& key,
-                                PositionMap&& pos_map, size_t num_fields = 5) {
-    // Create FlatPositionMap from PositionMap
-    FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_fields);
-    postings_->InsertKey(key, flat_map);
+  // Helper to insert key with PositionMap
+  void InsertKeyWithPositionMap(const InternedStringPtr &key,
+                                PositionMap &&pos_map, size_t num_fields = 5) {
+    postings_->InsertKey(key, &pos_map);
   }
 };
 
@@ -292,7 +288,9 @@ TEST_F(PostingTest, LargeScaleOperations) {
 
     for (int i = 0; i < num_positions; ++i) {
       Position pos = std::rand() % 10000;
-      if (pos_map.count(pos)) continue;  // Skip duplicates within same doc
+      if (pos_map.count(pos)) {
+        continue;  // Skip duplicates within same doc
+      }
 
       FieldMask field_mask(5);
       int num_fields = 1 + (std::rand() % 5);  // 1-5 fields per position
@@ -379,6 +377,90 @@ TEST_F(PostingTest, FieldMaskImplementations) {
   }
 
   EXPECT_EQ(keys_verified, 3);
+}
+
+TEST_F(PostingTest, RemoveKeyMultiBlockAndSkipIndex) {
+  // Insert 200 documents so that multiple skip blocks are created (> 3 blocks
+  // of 64)
+  constexpr int kNumDocs = 200;
+  for (int i = 0; i < kNumDocs; ++i) {
+    std::string doc_name = "doc_" + std::to_string(1000 + i);
+    InsertKeyWithPositionMap(
+        InternKey(doc_name),
+        CreatePositionMap({{static_cast<Position>(i * 10), {0}}}));
+  }
+  EXPECT_EQ(postings_->GetKeyCount(), kNumDocs);
+
+  // 1. Remove a document from the first block (doc_1010)
+  postings_->RemoveKey(InternKey("doc_1010"), metadata_.get());
+  EXPECT_EQ(postings_->GetKeyCount(), kNumDocs - 1);
+
+  // 2. Remove the boundary document of the first block (doc_1063, index 63)
+  postings_->RemoveKey(InternKey("doc_1063"), metadata_.get());
+  EXPECT_EQ(postings_->GetKeyCount(), kNumDocs - 2);
+
+  // 3. Remove a document from a middle block (doc_1100, index 100)
+  postings_->RemoveKey(InternKey("doc_1100"), metadata_.get());
+  EXPECT_EQ(postings_->GetKeyCount(), kNumDocs - 3);
+
+  // 4. Remove the very last document (doc_1199, index 199)
+  postings_->RemoveKey(InternKey("doc_1199"), metadata_.get());
+  EXPECT_EQ(postings_->GetKeyCount(), kNumDocs - 4);
+
+  // Verify iterating through all remaining documents
+  auto iter = postings_->GetKeyIterator();
+  int count = 0;
+  while (iter.IsValid()) {
+    std::string name(iter.GetKey()->Str());
+    EXPECT_NE(name, "doc_1010");
+    EXPECT_NE(name, "doc_1063");
+    EXPECT_NE(name, "doc_1100");
+    EXPECT_NE(name, "doc_1199");
+    count++;
+    iter.NextKey();
+  }
+  EXPECT_EQ(count, kNumDocs - 4);
+
+  // Verify SkipForwardDocId works across block boundaries
+  iter = postings_->GetKeyIterator();
+  DocId doc1050_id = DocIdMap::Instance().GetDocId(InternKey("doc_1050"));
+  EXPECT_TRUE(iter.SkipForwardDocId(doc1050_id));
+  EXPECT_EQ(iter.GetKey()->Str(), "doc_1050");
+
+  DocId doc1150_id = DocIdMap::Instance().GetDocId(InternKey("doc_1150"));
+  EXPECT_TRUE(iter.SkipForwardDocId(doc1150_id));
+  EXPECT_EQ(iter.GetKey()->Str(), "doc_1150");
+
+  // Attempting to skip to a removed doc lands on the next doc
+  DocId removed_id = DocIdMap::Instance().GetDocId(InternKey("doc_1100"));
+  iter = postings_->GetKeyIterator();
+  EXPECT_FALSE(iter.SkipForwardDocId(removed_id));
+  EXPECT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetKey()->Str(), "doc_1101");
+
+  // Remove all remaining documents down to 0
+  for (int i = 0; i < kNumDocs; ++i) {
+    std::string doc_name = "doc_" + std::to_string(1000 + i);
+    postings_->RemoveKey(InternKey(doc_name), metadata_.get());
+  }
+  EXPECT_TRUE(postings_->IsEmpty());
+  EXPECT_EQ(postings_->GetKeyCount(), 0);
+  EXPECT_EQ(postings_->GetPositionCount(), 0);
+  EXPECT_FALSE(postings_->GetKeyIterator().IsValid());
+}
+
+TEST_F(PostingTest, ReadVarintTruncationAndOverflow) {
+  uint64_t val = 12345;
+  // Truncated varint (continuation bit set on last byte)
+  uint8_t truncated_data[] = {0x80, 0x80, 0x80};
+  EXPECT_EQ(ReadVarint(truncated_data, sizeof(truncated_data), val), 0);
+  EXPECT_EQ(val, 0);
+
+  // Varint with shift >= 64 (10 continuation bytes)
+  uint8_t overflow_data[] = {0x80, 0x80, 0x80, 0x80, 0x80,
+                             0x80, 0x80, 0x80, 0x80, 0x80};
+  EXPECT_EQ(ReadVarint(overflow_data, sizeof(overflow_data), val), 0);
+  EXPECT_EQ(val, 0);
 }
 
 }  // namespace valkey_search::indexes::text

@@ -18,7 +18,6 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/ascii.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/unicode_normalizer.h"
@@ -88,16 +87,6 @@ inline PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
     }
   }
   return result;
-}
-
-// Build a stop words hash set from a vector. Lowercases all entries.
-inline absl::flat_hash_set<std::string> BuildStopWordsSet(
-    const std::vector<std::string>& stop_words) {
-  absl::flat_hash_set<std::string> stop_words_set;
-  for (const auto& word : stop_words) {
-    stop_words_set.insert(absl::AsciiStrToLower(word));
-  }
-  return stop_words_set;
 }
 
 constexpr size_t kInProgressStemVariantsInlineCapacity = 4;

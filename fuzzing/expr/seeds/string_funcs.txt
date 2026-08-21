@@ -1,0 +1,1 @@
+upper(substr('hello world', 0, 5))

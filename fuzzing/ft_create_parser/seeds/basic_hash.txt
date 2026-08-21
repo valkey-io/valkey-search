@@ -1,0 +1,1 @@
+myidx ON HASH PREFIX 1 doc: SCHEMA title TEXT

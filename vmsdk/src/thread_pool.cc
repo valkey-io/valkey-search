@@ -195,8 +195,7 @@ absl::Status ThreadPool::SuspendWorkers() {
       return absl::InvalidArgumentError("Thread pool is already suspended");
     }
     suspend_workers_ = true;
-    blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.Size());
+    blocking_refcount_ = std::make_unique<absl::BlockingCounter>(Size());
     condition_.SignalAll();
   }
   blocking_refcount_->Wait();
@@ -217,8 +216,7 @@ absl::Status ThreadPool::ResumeWorkers() {
       return absl::InvalidArgumentError("Thread pool is not suspended");
     }
     suspend_workers_ = false;
-    blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.Size());
+    blocking_refcount_ = std::make_unique<absl::BlockingCounter>(Size());
   }
 
   blocking_refcount_->Wait();

@@ -658,6 +658,116 @@ absl::Status ValidateVectorRegistryCmd(ValkeyModuleCtx *ctx,
     }
   }
 
+  // --- index contents -----------------------------------------------------
+  // Walk each vector index slot by slot. A live slot must hold exactly the
+  // record the registry has for that key; a deleted slot keeps its record
+  // until the slot is reused, so live and deleted slots together account for
+  // everything the index is holding.
+  absl::flat_hash_set<const void *> registry_records;
+  for (const auto &entry : snapshot) {
+    registry_records.insert(entry.payload.data());
+  }
+  absl::flat_hash_set<const void *> all_index_records;
+  size_t total_active_allocations = 0;
+  bool allocations_countable = true;
+  bool all_indexes_enumerable = true;
+
+  for (const auto &schema : all_schemas) {
+    for (const auto &[alias, attribute] : schema->GetAttributes()) {
+      if (!indexes::IsVectorIndex(attribute.GetIndex())) {
+        continue;
+      }
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get());
+      if (!vector_base) {
+        continue;
+      }
+      auto active = vector_base->ActiveVectorAllocations();
+      if (active.has_value()) {
+        total_active_allocations += *active;
+      } else {
+        allocations_countable = false;
+      }
+      const std::string identifier = attribute.GetIdentifier();
+      const uint32_t db_num = schema->GetDBNum();
+      const bool registered =
+          schema->GetAttributeDataType().ToProto() ==
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+      const std::string schema_name = schema->GetName();
+      const bool enumerable = vector_base->ForEachIndexedVector(
+          [&](uint64_t internal_id, bool deleted,
+              const indexes::VectorRecord *record) {
+            if (record == nullptr) {
+              if (!deleted) {
+                problems.push_back(
+                    absl::StrCat("db ", db_num, " index '", schema_name,
+                                 "' attribute '", identifier, "' slot ",
+                                 internal_id, ": live slot holds no vector"));
+              }
+              return;
+            }
+            all_index_records.insert(record->GetRawVector());
+            if (deleted) {
+              return;
+            }
+            // A live slot must be backed by a registry entry for its key --
+            // but only where entries are expected at all. JSON vectors are
+            // indexed and deliberately unregistered (FM-5), so their slots
+            // are correctly absent from the registry.
+            if (!registered) {
+              return;
+            }
+            auto key = vector_base->GetKeyDuringSearch(internal_id);
+            if (!key.ok()) {
+              problems.push_back(absl::StrCat(
+                  "db ", db_num, " index '", schema_name, "' attribute '",
+                  identifier, "' slot ", internal_id,
+                  ": live slot has no key mapped to it"));
+              return;
+            }
+            auto id = std::make_tuple(db_num, std::string(key.value()->Str()),
+                                      identifier);
+            auto it = expected.find(id);
+            if (it == expected.end() ||
+                !registry_records.contains(record->GetRawVector())) {
+              problems.push_back(absl::StrCat(
+                  "db ", db_num, " key '", key.value()->Str(), "' attribute '",
+                  identifier, "' index '", schema_name,
+                  "': live indexed vector is not in the registry"));
+              return;
+            }
+            if (it->second.payload !=
+                absl::string_view(record->GetRawVector(),
+                                  it->second.payload.size())) {
+              problems.push_back(absl::StrCat(
+                  "db ", db_num, " key '", key.value()->Str(), "' attribute '",
+                  identifier, "' index '", schema_name,
+                  "': indexed vector differs from the registry's record"));
+            }
+          });
+      if (!enumerable) {
+        all_indexes_enumerable = false;
+      }
+    }
+  }
+
+  // Every allocated record must be reachable either from the registry or from
+  // an index slot -- anything else is a leak. Only meaningful once everything
+  // above agrees: an orphan, or a record whose index has since been dropped,
+  // already puts the two sides out of step. It also needs every index to be
+  // enumerable (FLAT is not yet) and a build with the pooled allocator.
+  if (problems.empty() && allocations_countable && all_indexes_enumerable) {
+    absl::flat_hash_set<const void *> reachable = all_index_records;
+    reachable.insert(registry_records.begin(), registry_records.end());
+    if (reachable.size() != total_active_allocations) {
+      problems.push_back(
+          absl::StrCat("vector allocators hold ", total_active_allocations,
+                       " live records, but ", reachable.size(),
+                       " distinct records are reachable from the registry and ",
+                       "the index slots -- the difference is unreferenced"));
+    }
+  }
+
   // --- engine-side sharing ------------------------------------------------
   if (VectorRegistry::Instance().IsSharingActive()) {
     for (const auto &[id, exp] : expected) {

@@ -553,6 +553,28 @@ state:
 - **engine sharing** — a HASH field that should be shared is holding its own
   copy.
 
+It also walks each HNSW index slot by slot, through
+`HierarchicalNSW::ForEachSlot` (`third_party/hnswlib/hnswalg.h`) surfaced on
+`VectorBase::ForEachIndexedVector`. The enumerator hands back each slot's
+internal id, whether the slot is marked deleted, and the record it holds, which
+adds two more checks:
+
+- **live slots are registered** — every non-deleted slot must hold exactly the
+  record the registry has for that slot's key, compared by pointer identity, not
+  just by bytes. Skipped for JSON schemas, whose vectors are indexed and
+  correctly unregistered (FM-5);
+- **nothing is stranded** — a deleted slot keeps its record until the slot is
+  reused, so the records reachable from the registry plus those held by index
+  slots must account for every live allocation in the vector allocators
+  (`FixedSizeAllocator::ActiveAllocations`). Anything else has leaked.
+
+The reconciliation runs only when every other check passed, every index could be
+enumerated (FLAT cannot yet), and the build uses the pooled allocator — SAN
+builds compile it out (`src/indexes/vector_base.h:254`). Gating it that way
+keeps it from adding a second, less useful message to a state already reported:
+an orphaned entry, or a record whose index has since been dropped, puts the two
+sides out of step for a reason the earlier checks already name.
+
 It replies with one string per problem; an empty reply means consistent.
 
 **It only runs when idle.** A queued mutation or a running backfill means the
@@ -566,8 +588,10 @@ I could not force the queue non-empty from a client — 20,000 pipelined writes 
 1536-dimension vectors drained faster than the round trip — so that branch is
 unverified.
 
-Supporting hooks: `SchemaManager::GetDBNumbers()` and
-`VectorRegistry::SnapshotEntries()`, both additive and read-only.
+Supporting hooks, all additive and read-only: `SchemaManager::GetDBNumbers()`,
+`VectorRegistry::SnapshotEntries()`, `IndexSchema::SkipInitialScan()`,
+`HierarchicalNSW::ForEachSlot()`, `VectorBase::ForEachIndexedVector()` and
+`VectorBase::ActiveVectorAllocations()`.
 
 **Verified against the known failures.** On a clean keyspace — including keys
 outside the prefix, keys with no vector field, and a mixed schema — it reports
@@ -582,6 +606,8 @@ consistent. Each known mode is then caught, and nothing else is:
 | FM-5 (JSON reload) | orphan entry keyed by the JSON path |
 | FM-6 (HASH reload) | `engine holds its own copy of a vector that should be shared` |
 | two indexes, one created with `SKIPINITIALSCAN` | *(empty — the asymmetry is legitimate)* |
+| HNSW with soft-deleted slots (`DEL` of indexed keys) | *(empty — deleted slots still hold their records, and the reconciliation accounts for them)* |
+| JSON index with live slots | *(empty — indexed but correctly unregistered)* |
 
 No additional problems were reported in any state, and the 16 passing tests all
 end consistent — so it is not producing false positives.
@@ -684,6 +710,12 @@ Source (debug-only and additive; no existing behaviour is touched):
   registry's contents so orphans can be found.
 - `src/schema_manager.{h,cc}` — adds `GetDBNumbers`, the set of DBs holding an
   index schema, so the validator knows which keyspaces to sweep.
+- `third_party/hnswlib/hnswalg.h` — adds `ForEachSlot`, which visits each
+  occupied slot in order with its internal id, deleted flag and record.
+- `src/indexes/vector_base.h` — adds `ForEachIndexedVector` (virtual, false by
+  default so a caller can tell "nothing to report" from "cannot tell") and
+  `ActiveVectorAllocations`.
+- `src/indexes/vector_hnsw.h` — overrides `ForEachIndexedVector`.
 
 Run with:
 

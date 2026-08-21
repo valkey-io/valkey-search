@@ -240,6 +240,26 @@ class VectorBase : public IndexBase {
     return interned_attribute_identifier_;
   }
 
+  // Visits every occupied slot of the underlying index in order: internal id,
+  // whether the slot is marked deleted, and the record it holds. Returns false
+  // when the index type cannot enumerate its contents, so a caller can tell
+  // "nothing to report" from "cannot tell". Only safe on an idle system.
+  virtual bool ForEachIndexedVector(
+      absl::AnyInvocable<void(uint64_t internal_id, bool deleted,
+                              const VectorRecord *record)>
+          fn) const {
+    return false;
+  }
+
+  // Live allocations in this index's vector allocator, or nullopt when the
+  // build has no allocator (SAN builds construct records with ::operator new).
+  std::optional<size_t> ActiveVectorAllocations() const {
+    if (!vector_allocator_) {
+      return std::nullopt;
+    }
+    return vector_allocator_->ActiveAllocations();
+  }
+
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,

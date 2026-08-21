@@ -60,7 +60,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
         bytes_fields = [
             "search_used_memory_human"
         ]
-        
+
         double_fields = [
             "search_used_read_cpu",
             "search_used_write_cpu"
@@ -70,12 +70,12 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             assert field in info_data
             print (info_data)
             integer = int(info_data.get(field))
-        
+
         for field in double_fields:
             assert field in info_data
             print (info_data)
             double = float(info_data.get(field))
-                          
+
         for field in string_fields:
             assert field in info_data
             string = info_data[field]
@@ -126,6 +126,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_server_search_index_partition_failure_count",
             "coordinator_server_search_index_partition_failure_latency_usec",
             "coordinator_server_search_index_partition_success_count",
+            "coordinator_server_search_index_partition_cpu_time_usec",
             "coordinator_server_search_index_partition_success_latency_usec",
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",

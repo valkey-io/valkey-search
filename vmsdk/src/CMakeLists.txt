@@ -19,6 +19,8 @@ set(VMSDKLIB_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/module_type.h
     ${CMAKE_CURRENT_LIST_DIR}/thread_pool.cc
     ${CMAKE_CURRENT_LIST_DIR}/thread_pool.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoped_thread_cpu_monitor.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoped_thread_cpu_monitor.cc
     ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.h
     ${CMAKE_CURRENT_LIST_DIR}/thread_monitoring.cc
     ${CMAKE_CURRENT_LIST_DIR}/thread_group_cpu_monitor.h

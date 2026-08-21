@@ -13,12 +13,14 @@ against the `memory_sharing` branch; each carries the mode it covers. The rest
 pass and guard behaviour that is currently correct.
 """
 
+import os
+import shutil
 import time
 
 import pytest
 import valkey
 from indexes import Index, KeyDataType, Numeric, Tag, Vector, float_to_bytes
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode
+from valkey_search_test_case import LOGS_DIR, ValkeySearchTestCaseDebugMode
 from valkeytestframework.util import waiters
 from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
 
@@ -80,6 +82,31 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
                 "FT._DEBUG", "VALIDATE_VECTOR_REGISTRY"
             )
         ]
+
+    def save_flush_restore(self):
+        """Persist, empty the keyspace, and load it back.
+
+        SAVE writes both the keys and the index sections; DEBUG RELOAD then
+        empties the keyspace and reads the RDB back. Only safe from a state
+        that already validates clean -- an inconsistent one can be unloadable
+        (FM-7).
+        """
+        self.client.execute_command("SAVE")
+        self.client.execute_command("DEBUG", "RELOAD")
+        self.settle()
+
+    def assert_survives_save_restore(self):
+        """A clean state must still be clean after a round trip through an RDB."""
+        before = self.registry_stat("entry_cnt")
+        self.save_flush_restore()
+        problems = self.validate_registry()
+        assert problems == [], (
+            "registry is out of sync after a save/restore cycle:\n  "
+            + "\n  ".join(problems)
+        )
+        assert (
+            self.registry_stat("entry_cnt") == before
+        ), "registry entry count changed across a save/restore cycle"
 
     def assert_registry_consistent(self):
         problems = self.validate_registry()
@@ -202,6 +229,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         self.assert_registry_consistent()
 
+        self.assert_survives_save_restore()
+
     @pytest.mark.parametrize("mixed", [False, True], ids=["vector_only", "mixed"])
     def test_backfill_json(self, mixed: bool):
         """Backfill of a JSON index over all three vector-field states.
@@ -224,6 +253,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
     # ---- ingestion -------------------------------------------------------
 
         self.assert_registry_consistent()
+
+        self.assert_survives_save_restore()
 
     def test_fm1_invalid_overwrite_on_flat_index_must_not_crash_server(self):
         """FM-1: untrack reached from a mutation worker thread aborts the server.
@@ -523,6 +554,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.wait_for_docs(index, 10)
         assert self.registry_stat("entry_cnt") == 10
 
+        self.assert_survives_save_restore()
+
     def test_flushdb_clears_the_registry(self):
         index = self.build_index()
         index.create(self.client, wait_for_backfill=True)
@@ -535,6 +568,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
         assert self.client.dbsize() == 0
 
+        self.assert_survives_save_restore()
+
     def test_flushall_clears_the_registry(self):
         index = self.build_index()
         index.create(self.client, wait_for_backfill=True)
@@ -545,6 +580,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         self.client.flushall()
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0)
+
+        self.assert_survives_save_restore()
 
     def test_swapdb_moves_keys_out_from_under_the_index(self):
         """SWAPDB exchanges two keyspaces without touching any key.
@@ -562,6 +599,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("SWAPDB", 0, 1)
         waiters.wait_for_equal(lambda: self.client.dbsize(), 0)
         self.settle()
+
+        self.assert_survives_save_restore()
 
     def test_rename_indexed_key_to_a_new_name(self):
         """RENAME of an indexed key to an unused name inside the prefix.
@@ -581,6 +620,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.share_count(old) == self.NO_SUCH_FIELD
         assert self.registry_stat("entry_cnt") == 1
 
+        self.assert_survives_save_restore()
+
     def test_rename_indexed_key_out_of_the_prefix(self):
         """RENAME an indexed key to a name the index does not cover."""
         index = self.build_index()
@@ -594,6 +635,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         assert self.knn_hits(index) == 0, "the key left the index's prefix"
         assert self.registry_stat("entry_cnt") == 0
+
+        self.assert_survives_save_restore()
 
     # ---- one field, two indexes, only one of them holding the key --------
     #
@@ -709,6 +752,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         self.assert_registry_consistent()
 
+        self.assert_survives_save_restore()
+
     def test_share_count_tracks_number_of_holders(self):
         """Pins what the count means, so later tests can rely on it.
 
@@ -736,6 +781,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         self.assert_registry_consistent()
 
+        self.assert_survives_save_restore()
+
     def test_share_count_distinguishes_absent_from_unshared(self):
         """Pins the -1 / 0 boundary.
 
@@ -759,3 +806,209 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert self.client.ping()
 
         self.assert_registry_consistent()
+
+        self.assert_survives_save_restore()
+
+
+class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
+    """Save on one server, load on another.
+
+    The lifecycle tests above reload in place with DEBUG RELOAD, which keeps
+    the module's state across the load. These start a second process on the
+    same RDB, which is what a restart actually does, and lets the sharing
+    setting differ between the writer and the reader.
+    """
+
+    DIM = 8
+    # Deliberately unnormalized, and spread out enough that the three metrics
+    # order them differently.
+    CORPUS = [[float((i * 7 + j * 3) % 11) + 0.5 for j in range(8)] for i in range(10)]
+    QUERY = [1.5, 0.25, 3.0, 2.0, 0.5, 4.0, 1.0, 2.5]
+
+    def _start(self, testdir: str, sharing: bool):
+        """A server with an explicit sharing setting, rooted at `testdir`."""
+        port = self.get_bind_port()
+        os.makedirs(testdir, exist_ok=True)
+        flag = "yes" if sharing else "no"
+        lines = [
+            "enable-debug-command yes",
+            "hash-max-listpack-entries 0",
+            f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
+            f"dir {testdir}",
+            f"loadmodule {os.getenv('MODULE_PATH')} --debug-mode yes "
+            f"--info-developer-visible yes --enable-vector-sharing {flag}",
+        ]
+        conf_file = f"{testdir}/valkey_{port}.conf"
+        with open(conf_file, "w+") as f:
+            f.write("\n".join(lines) + "\n")
+        logfile = f"{testdir}/logfile-{port}.log"
+        server, client = self.create_server(
+            testdir=testdir,
+            server_path=os.getenv("VALKEY_SERVER_PATH"),
+            # `args` are appended after the config file, so this is what
+            # actually decides where the RDB is read from and written to.
+            # `args` are appended after the config file, so these decide where
+            # the RDB is read from and written to. Both must be pinned: the
+            # framework otherwise picks a per-server directory and filename,
+            # and the reader would never find what the writer saved.
+            args={"logfile": logfile, "dir": testdir, "dbfilename": "dump.rdb"},
+            port=port,
+            conf_file=conf_file,
+        )
+        self.wait_for_logfile(logfile, "Ready to accept connections")
+        client.ping()
+        assert int(self._stat(client, "sharing_active")) == (1 if sharing else 0)
+        return server, client
+
+    @staticmethod
+    def _stat(client, name: str) -> int:
+        info = client.execute_command("INFO", "search")
+        key = f"search_vector_registry_{name}"
+        if isinstance(info, dict):
+            return int(info[key])
+        for line in info.decode().splitlines():
+            if line.startswith(key + ":"):
+                return int(line.split(":", 1)[1])
+        raise KeyError(key)
+
+    @staticmethod
+    def _validate(client) -> list:
+        return [
+            x.decode()
+            for x in client.execute_command(
+                "FT._DEBUG", "VALIDATE_VECTOR_REGISTRY"
+            )
+        ]
+
+    def _create_and_fill(self, client, metric: str):
+        index = Index(
+            "idx",
+            [Vector("vec", self.DIM, type="HNSW", distance=metric)],
+            prefixes=["doc"],
+            type=KeyDataType.HASH,
+        )
+        index.create(client, wait_for_backfill=True)
+        for i, vec in enumerate(self.CORPUS):
+            client.hset(f"doc:{i}", "vec", float_to_bytes(vec))
+        waiters.wait_for_equal(lambda: index.info(client).num_docs, len(self.CORPUS))
+        return index
+
+    def _knn(self, client) -> dict:
+        """{key: distance} for the whole corpus, as the engine computed it."""
+        reply = client.execute_command(
+            "FT.SEARCH", "idx",
+            f"*=>[KNN {len(self.CORPUS)} @vec $q AS score]",
+            "PARAMS", "2", "q", float_to_bytes(self.QUERY),
+            "RETURN", "1", "score", "DIALECT", "2",
+        )
+        out = {}
+        for i in range(1, len(reply), 2):
+            fields = reply[i + 1]
+            score = dict(zip(fields[::2], fields[1::2]))[b"score"]
+            out[reply[i].decode()] = float(score)
+        assert len(out) == len(self.CORPUS), f"expected the whole corpus, got {out}"
+        return out
+
+    def _save_and_hand_off(self, client, dst_dir: str):
+        """Persist, then place the RDB where the next server will look.
+
+        The working directory is read back from the server rather than assumed:
+        the test framework supplies its own `dir`, which overrides the config
+        file.
+        """
+        client.execute_command("SAVE")
+        cfg = client.execute_command("CONFIG", "GET", "dir")
+        src_dir = (cfg[1].decode() if isinstance(cfg[1], bytes) else cfg[1])
+        dbfile = client.execute_command("CONFIG", "GET", "dbfilename")
+        name = (dbfile[1].decode() if isinstance(dbfile[1], bytes) else dbfile[1])
+        os.makedirs(dst_dir, exist_ok=True)
+        shutil.copyfile(f"{src_dir}/{name}", f"{dst_dir}/{name}")
+
+    # ---- sharing setting differs between writer and reader ---------------
+
+    @pytest.mark.parametrize(
+        "writer_sharing,reader_sharing",
+        [(True, False), (False, True)],
+        ids=["written_shared_read_unshared", "written_unshared_read_shared"],
+    )
+    def test_rdb_moves_between_sharing_configurations(
+        self, writer_sharing: bool, reader_sharing: bool
+    ):
+        """An RDB written by one configuration must load in the other.
+
+        Sharing is a property of the running process, not of the data: the
+        index section stores vectors inline and the keys carry their own copy,
+        so neither side of the RDB should depend on whether the writer was
+        sharing.
+        """
+        base = f"{LOGS_DIR}/{self.test_name}"
+        writer_dir, reader_dir = f"{base}/writer", f"{base}/reader"
+
+        server, client = self._start(writer_dir, writer_sharing)
+        index = self._create_and_fill(client, "L2")
+        expected = self._knn(client)
+        assert self._stat(client, "entry_cnt") == len(self.CORPUS)
+        self._save_and_hand_off(client, reader_dir)
+        server.exit()
+
+        server2, client2 = self._start(reader_dir, reader_sharing)
+        assert index.info(client2).num_docs == len(self.CORPUS), (
+            "the reader lost documents"
+        )
+        assert self._knn(client2) == expected, (
+            "distances changed when the RDB moved between sharing settings"
+        )
+        assert self._stat(client2, "entry_cnt") == len(self.CORPUS)
+        assert self._validate(client2) == []
+        # The reader shares according to its own setting, not the writer's.
+        shared = client2.execute_command(
+            "FT._DEBUG", "VECTOR_SHARED_COUNT", "doc:0", "vec"
+        )
+        assert shared == (2 if reader_sharing else 0), (
+            f"reader sharing={reader_sharing} but share count is {shared}"
+        )
+        server2.exit()
+
+    # ---- distances survive persistence and a sharing toggle --------------
+
+    @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
+    def test_distances_agree_across_restart_and_sharing_toggle(self, metric: str):
+        """The same query must return the same distances in three places.
+
+        Ten unnormalized vectors are indexed and queried; the corpus is then
+        persisted and reloaded by a second process with sharing unchanged, and
+        by a third with sharing flipped. COSINE is the interesting one, since
+        the module normalizes internally and the index section stores the
+        normalized form while the keys keep the raw bytes.
+        """
+        base = f"{LOGS_DIR}/{self.test_name}"
+        first_dir = f"{base}/first"
+        same_dir = f"{base}/same_sharing"
+        toggled_dir = f"{base}/toggled_sharing"
+
+        server, client = self._start(first_dir, True)
+        self._create_and_fill(client, metric)
+        first = self._knn(client)
+        assert self._validate(client) == []
+        self._save_and_hand_off(client, same_dir)
+        self._save_and_hand_off(client, toggled_dir)
+        server.exit()
+
+        server2, client2 = self._start(same_dir, True)
+        second = self._knn(client2)
+        assert self._validate(client2) == []
+        server2.exit()
+
+        server3, client3 = self._start(toggled_dir, False)
+        third = self._knn(client3)
+        assert self._validate(client3) == []
+        server3.exit()
+
+        assert second == first, (
+            f"{metric}: distances changed across save/restore\n"
+            f"  before: {first}\n  after:  {second}"
+        )
+        assert third == first, (
+            f"{metric}: distances changed when sharing was turned off\n"
+            f"  sharing on:  {first}\n  sharing off: {third}"
+        )

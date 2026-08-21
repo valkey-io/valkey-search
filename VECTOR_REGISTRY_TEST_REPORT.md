@@ -28,7 +28,7 @@ This review adds two suites and one debug affordance:
   failure mode against a real valkey-server with the module at its default
   configuration, and covers ingestion, backfill, RDB load, whole-keyspace
   operations, and a key indexed by two indexes while one is mid-backfill.
-  **27 tests: 11 fail** deterministically across repeated runs; 16 pass. It complements the branch's existing
+  **32 tests: 17 fail** deterministically across repeated runs; 15 pass. It complements the branch's existing
   `integration/test_vector_registry.py`, which covers steady-state sharing and
   stays green (11 tests).
 - `FT._DEBUG VECTOR_SHARED_COUNT <key> <field>` — makes the engine-side sharing state
@@ -310,17 +310,30 @@ it does not self-heal.
 **Stimulus.** A HASH index holding a valid, shared vector. `DEBUG RELOAD` (or any
 restart from RDB).
 
-**Mechanism.** `VectorBase::LoadTrackedKeys` re-registers each tracked vector via
-`VectorRegistry::Track` (`src/indexes/vector_base.cc:459`), which sets
-`needs_sharing` and calls `ShareWithValkeyHash`. That call bails out early — it
-increments neither `hash_sharing_hits` nor `hash_sharing_errors`, so the exit is
-one of the guard returns in `src/vector_registry.cc:109–139` rather than a failed
-`HashSetStringRef`. The registry ends up holding the record while the engine
-keeps its own private copy of the same bytes.
+**It is specific to an in-process reload.** A *fresh process* loading the same
+RDB re-shares everything: `hash_sharing_hits` rises to the document count, every
+field comes back as a stringRef, and the validator reports consistent. So a
+restart from disk is fine; `DEBUG RELOAD` — and by extension a replica loading an
+RDB into a process that already holds data — is not.
 
-**Observed.** After the reload the index is intact — `FT.SEARCH` returns the same
-results and `entry_cnt` is restored — but `FT._DEBUG VECTOR_SHARED_COUNT` reports
-`0` where it reported `2` before, and `hash_sharing_hits` does not move.
+**Mechanism.** Nothing clears `VectorRegistry` across an in-process reload. The
+entries from before the reload survive it, so when
+`VectorBase::LoadTrackedKeys` re-registers each tracked vector via
+`VectorRegistry::Track` (`src/indexes/vector_base.cc:459`), `Track` finds an
+existing entry whose payload is byte-identical and takes the **dedup branch**
+(`src/vector_registry.cc:75–95`). That reuses the pre-reload record, leaves
+`needs_sharing` false, and never calls `ShareWithValkeyHash` — which is why
+neither `hash_sharing_hits` nor `hash_sharing_errors` moves. This is the same
+dedup branch as FM-4; the reload simply reaches it for every key at once.
+
+Corroborated by the allocator: after an in-process reload the new index's
+allocator reports **zero** live allocations while its slots hold records,
+because those records were allocated by the previous index's allocator and were
+never rebuilt.
+
+**Observed.** After `DEBUG RELOAD` the index is intact — `FT.SEARCH` returns the
+same results and `entry_cnt` is restored — but `FT._DEBUG VECTOR_SHARED_COUNT`
+reports `0` where it reported `2` before, and `hash_sharing_hits` does not move.
 Reproduced at both 4 and 128 dimensions, so it is not an artefact of listpack vs
 hashtable encoding.
 
@@ -370,7 +383,7 @@ file covers steady-state sharing, this one covers the transitions. It uses the
 same `ValkeySearchTestCaseDebugMode` base, whose per-test server fixture matters
 here because FM-1 crashes the server it runs against.
 
-**27 tests: 11 fail** identically across repeated runs; 16 pass. Every test ends
+**32 tests: 17 fail** identically across repeated runs; 15 pass. Every test ends
 with `FT._DEBUG VALIDATE_VECTOR_REGISTRY` (section 4.2), so a test that passes
 its own assertions but leaves the registry inconsistent still fails. The file uses the suite's shared `Index` / `Vector` /
 `Numeric` / `Tag` helpers from `indexes.py` and `waiters` for synchronisation,
@@ -447,6 +460,23 @@ fixed: it required a registry entry whenever a field was *eligible*, when an
 entry is only called for once some index is actually holding the record. An
 index that covers an eligible field but has not taken the key needs no entry of
 its own.
+
+Persistence — `TestVectorRegistryPersistence` starts a second process on the
+RDB the first one wrote, which is what a restart actually does and what lets the
+sharing setting differ between writer and reader. All pass:
+
+| Test | Result |
+|---|---|
+| `test_rdb_moves_between_sharing_configurations[written_shared_read_unshared]` | **passes** — index and distances intact, reader shares per its own setting |
+| `test_rdb_moves_between_sharing_configurations[written_unshared_read_shared]` | **passes** |
+| `test_distances_agree_across_restart_and_sharing_toggle[L2\|IP\|COSINE]` | **passes** — 10 unnormalized vectors, identical distances across the original query, a same-configuration restart, and a restart with sharing flipped |
+
+Every clean-ending test in the lifecycle class also now runs a
+save/`DEBUG RELOAD`/validate cycle at its end (`assert_survives_save_restore`).
+That is what exposed FM-6's real cause: an in-process reload leaves the registry
+populated, so `Track` dedups against stale entries instead of rebuilding and
+re-sharing. Six tests fail on that cycle rather than on their own subject, which
+is the correct signal — they end in a state a reload does not preserve.
 
 The share-count probe itself:
 
@@ -696,7 +726,7 @@ Tests:
 - `testing/vector_registry_state_machine_test.cc` — new, 16 parameterised tests
   × 8 combinations.
 - `testing/CMakeLists.txt` — added to `INDEXES_TEST_SOURCES`.
-- `integration/test_vector_registry_lifecycle.py` — new, 27 tests, built on the
+- `integration/test_vector_registry_lifecycle.py` — new, 32 tests, built on the
   suite's shared `indexes.py` helpers. Sits beside the existing
   `integration/test_vector_registry.py`, which is unchanged and still passes
   (11 tests).

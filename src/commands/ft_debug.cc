@@ -751,23 +751,6 @@ absl::Status ValidateVectorRegistryCmd(ValkeyModuleCtx *ctx,
     }
   }
 
-  // Every allocated record must be reachable either from the registry or from
-  // an index slot -- anything else is a leak. Only meaningful once everything
-  // above agrees: an orphan, or a record whose index has since been dropped,
-  // already puts the two sides out of step. It also needs every index to be
-  // enumerable (FLAT is not yet) and a build with the pooled allocator.
-  if (problems.empty() && allocations_countable && all_indexes_enumerable) {
-    absl::flat_hash_set<const void *> reachable = all_index_records;
-    reachable.insert(registry_records.begin(), registry_records.end());
-    if (reachable.size() != total_active_allocations) {
-      problems.push_back(
-          absl::StrCat("vector allocators hold ", total_active_allocations,
-                       " live records, but ", reachable.size(),
-                       " distinct records are reachable from the registry and ",
-                       "the index slots -- the difference is unreferenced"));
-    }
-  }
-
   // --- engine-side sharing ------------------------------------------------
   if (VectorRegistry::Instance().IsSharingActive()) {
     for (const auto &[id, exp] : expected) {
@@ -798,6 +781,23 @@ absl::Status ValidateVectorRegistryCmd(ValkeyModuleCtx *ctx,
       }
     }
     ValkeyModule_SelectDb(ctx, caller_db);
+  }
+
+  // Every allocated record must be reachable either from the registry or from
+  // an index slot -- anything else is a leak. Only meaningful once everything
+  // above agrees: an orphan, or a record whose index has since been dropped,
+  // already puts the two sides out of step. It also needs every index to be
+  // enumerable (FLAT is not yet) and a build with the pooled allocator.
+  if (problems.empty() && allocations_countable && all_indexes_enumerable) {
+    absl::flat_hash_set<const void *> reachable = all_index_records;
+    reachable.insert(registry_records.begin(), registry_records.end());
+    if (reachable.size() != total_active_allocations) {
+      problems.push_back(
+          absl::StrCat("vector allocators hold ", total_active_allocations,
+                       " live records, but ", reachable.size(),
+                       " distinct records are reachable from the registry and ",
+                       "the index slots -- the difference is unreferenced"));
+    }
   }
 
   std::sort(problems.begin(), problems.end());

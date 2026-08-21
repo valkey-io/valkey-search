@@ -5,13 +5,17 @@
  *
  */
 
+#include <memory>
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
-#include "absl/strings/string_view.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
+#include "re2/re2.h"
 #include "src/commands/commands.h"
 #include "src/schema_manager.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -19,14 +23,42 @@ namespace valkey_search {
 
 absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
-  if (argc > 1) {
+  if (argc > 1 && argc != 3) {
     return absl::InvalidArgumentError(vmsdk::WrongArity(kListCommand));
   }
+
+  std::unique_ptr<RE2> filter_regex;
+  if (argc == 3) {
+    if (absl::AsciiStrToUpper(vmsdk::ToStringView(argv[1])) != "REGEX") {
+      return absl::InvalidArgumentError(vmsdk::WrongArity(kListCommand));
+    }
+    RE2::Options options;
+    options.set_log_errors(false);
+    filter_regex = std::make_unique<RE2>(
+        std::string(vmsdk::ToStringView(argv[2])), options);
+    if (!filter_regex->ok()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Invalid regular expression: ", filter_regex->error()));
+    }
+  }
+
   absl::flat_hash_set<std::string> names =
       SchemaManager::Instance().GetIndexSchemasInDB(
           ValkeyModule_GetSelectedDb(ctx));
-  ValkeyModule_ReplyWithArray(ctx, names.size());
-  for (const auto &name : names) {
+
+  absl::flat_hash_set<std::string> filtered_names;
+  if (filter_regex != nullptr) {
+    for (const auto &name : names) {
+      if (RE2::PartialMatch(name, *filter_regex)) {
+        filtered_names.insert(name);
+      }
+    }
+  } else {
+    filtered_names = std::move(names);
+  }
+
+  ValkeyModule_ReplyWithArray(ctx, filtered_names.size());
+  for (const auto &name : filtered_names) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.c_str());
   }
   return absl::OkStatus();

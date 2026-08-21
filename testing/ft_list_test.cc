@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
@@ -88,6 +89,33 @@ TEST_F(FTListTest, basic) {
                 testing::AnyOf(
                     "*2\r\n+index_schema_name_1\r\n+index_schema_name_2\r\n",
                     "*2\r\n+index_schema_name_2\r\n+index_schema_name_1\r\n"));
+
+    fake_ctx.reply_capture.ClearReply();
+    ValkeyModuleString *argv[3];
+    argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "FT._LIST");
+    argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "REGEX");
+    argv[2] =
+        TestValkeyModule_CreateStringPrintf(&fake_ctx, "^index_schema_name_1$");
+    VMSDK_EXPECT_OK(FTListCmd(&fake_ctx, argv, 3));
+    EXPECT_THAT(fake_ctx.reply_capture.GetReply(),
+                testing::Eq("*1\r\n+index_schema_name_1\r\n"));
+    for (ValkeyModuleString *arg : argv) {
+      TestValkeyModule_FreeString(&fake_ctx, arg);
+    }
+
+    fake_ctx.reply_capture.ClearReply();
+    argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "FT._LIST");
+    argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "REGEX");
+    argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx, "schema_name");
+    VMSDK_EXPECT_OK(FTListCmd(&fake_ctx, argv, 3));
+    EXPECT_THAT(fake_ctx.reply_capture.GetReply(),
+                testing::AnyOf(
+                    "*2\r\n+index_schema_name_1\r\n+index_schema_name_2\r\n",
+                    "*2\r\n+index_schema_name_2\r\n+index_schema_name_1\r\n"));
+    for (ValkeyModuleString *arg : argv) {
+      TestValkeyModule_FreeString(&fake_ctx, arg);
+    }
+
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
         0, index_schema_name_1_str));
     VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
@@ -99,6 +127,22 @@ TEST_F(FTListTest, basic) {
 TEST_F(FTListTest, no_indexes) {
   EXPECT_CALL(*kMockValkeyModule, ReplyWithArray(&fake_ctx_, 0));
   VMSDK_EXPECT_OK(FTListCmd(&fake_ctx_, nullptr, 0));
+}
+
+TEST_F(FTListTest, invalid_regex) {
+  ValkeyModuleString *argv[3];
+  argv[0] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "FT._LIST");
+  argv[1] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "REGEX");
+  argv[2] = TestValkeyModule_CreateStringPrintf(&fake_ctx_, "(");
+
+  absl::Status status = FTListCmd(&fake_ctx_, argv, 3);
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(status.message(),
+              testing::HasSubstr("Invalid regular expression: "));
+
+  for (ValkeyModuleString *arg : argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, arg);
+  }
 }
 
 }  // namespace

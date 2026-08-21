@@ -275,10 +275,35 @@ class TestZeroLengthKeySaveRestore(ValkeySearchTestCaseDebugMode):
         self, index_type: str, extra_args: list[str]
     ):
         query_vector = float_to_bytes([1.0, 2.0, 3.0])
+        vector_count = 12
 
         create_zero_length_vector_index(self.client, "idx", index_type, extra_args)
-        self.client.hset("", mapping={"v": query_vector})
+        # Let the initial scan finish before writing the key so the test does
+        # not race backfill ingestion against the keyspace notification path.
         wait_for_backfill_complete(self.client, "idx")
+
+        self.client.hset("", mapping={"v": query_vector})
+        # Keep the HNSW graph large enough to avoid an unrelated load-validator
+        # bug that rejects a valid single-element graph when its random
+        # max_level is greater than the element count.
+        for i in range(1, vector_count):
+            support_vector = float_to_bytes(
+                [100.0 + i, 200.0 + i, 300.0 + i]
+            )
+            self.client.hset(
+                f"zero-length-support:{i}", mapping={"v": support_vector}
+            )
+
+        waiters.wait_for_true(
+            lambda: FTInfoParser(
+                self.client.execute_command("FT.INFO", "idx")
+            ).num_docs == vector_count
+        )
+        waiters.wait_for_true(
+            lambda: zero_length_vector_knn_search(
+                self.client, "idx", query_vector
+            ) == [1, b""]
+        )
 
         result = zero_length_vector_knn_search(self.client, "idx", query_vector)
         assert result[0] == 1
@@ -287,6 +312,11 @@ class TestZeroLengthKeySaveRestore(ValkeySearchTestCaseDebugMode):
         self.client.execute_command("SAVE")
         self.server.restart(remove_rdb=False)
         wait_for_backfill_complete(self.client, "idx")
+        waiters.wait_for_true(
+            lambda: FTInfoParser(
+                self.client.execute_command("FT.INFO", "idx")
+            ).num_docs == vector_count
+        )
 
         result = zero_length_vector_knn_search(self.client, "idx", query_vector)
         assert result[0] == 1

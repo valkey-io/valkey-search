@@ -63,7 +63,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
     }
 
 
-    void addPoint(const void *datapoint, labeltype label, bool replace_deleted = false) {
+    std::optional<labeltype> addPoint(const void *datapoint, labeltype label, bool replace_deleted = false) {
         int idx;
         std::unique_lock<std::mutex> lock(index_lock);
         auto search = dict_external_to_internal.find(label);
@@ -79,6 +79,7 @@ class BruteforceSearch : public AlgorithmInterface<dist_t> {
         }
         memcpy((*data_)[idx] + data_ptr_size_, &label, sizeof(labeltype));
         *(char**)((*data_)[idx]) = (char*)datapoint;
+        return std::nullopt;
     }
 
     char *getPoint(labeltype cur_external) {

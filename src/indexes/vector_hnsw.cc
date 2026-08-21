@@ -180,8 +180,12 @@ absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id,
-                      algo_->allow_replace_deleted_);
+      auto evicted = algo_->addPoint((T *)record.data(), internal_id,
+                                     algo_->allow_replace_deleted_);
+      if (evicted.has_value()) {
+        absl::MutexLock lock(&tracked_vectors_mutex_);
+        tracked_vectors_.erase(*evicted);
+      }
       return absl::OkStatus();
     } catch (const std::exception &e) {
       std::string error_msg = e.what();
@@ -276,8 +280,10 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
-    algo_->addPoint((T *)record.data(), internal_id,
-                    algo_->allow_replace_deleted_);
+    auto evicted = algo_->addPoint((T *)record.data(), internal_id,
+                                   algo_->allow_replace_deleted_);
+    CHECK(!evicted.has_value()) << "modify of live label " << internal_id
+                                << " unexpectedly displaced " << *evicted;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -382,21 +388,23 @@ VectorHNSW<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
       internal_id};
 }
 
-// Getting max label from label_lookup_ (active + tombstoned).
+// Max label stamped on any slot at load time (includes re-labeled tombstones,
+// which are absent from label_lookup_). Used to seed inc_id_ on load.
 template <typename T>
-uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
-  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
-  uint64_t max_label = 0;
-  for (const auto &[label, _] : algo_->label_lookup_) {
-    max_label = std::max(max_label, static_cast<uint64_t>(label));
-  }
-  return max_label;
+uint64_t VectorHNSW<T>::GetMaxLoadedLabel() const {
+  return static_cast<uint64_t>(algo_->max_loaded_label_);
 }
 
 template <typename T>
 size_t VectorHNSW<T>::GetLabelCount() const {
   std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
   return algo_->label_lookup_.size();
+}
+
+template <typename T>
+size_t VectorHNSW<T>::GetTrackedVectorCount() const {
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
+  return tracked_vectors_.size();
 }
 
 template class VectorHNSW<float>;

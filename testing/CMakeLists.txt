@@ -90,6 +90,7 @@ finalize_test_flags(indexes_test)
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/defrag_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/schema_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/server_events_test.cc

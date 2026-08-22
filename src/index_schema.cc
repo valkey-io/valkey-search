@@ -1282,12 +1282,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");
-  if (text_index_schema_) {
-    ValkeyModule_ReplyWithSimpleString(
-        ctx, std::string(text_index_schema_->GetLanguage().Name()).c_str());
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "english");
-  }
+  ValkeyModule_ReplyWithSimpleString(
+      ctx,
+      std::string(
+          indexes::text::LanguageRegistry::Instance().Get(language_)->Name())
+          .c_str());
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {

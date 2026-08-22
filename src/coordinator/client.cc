@@ -49,7 +49,6 @@ constexpr absl::string_view kRetryPolicy =
     "     \"retryableStatusCodes\": ["
     "       \"UNAVAILABLE\","
     "       \"UNKNOWN\","
-    "       \"RESOURCE_EXHAUSTED\","
     "       \"INTERNAL\","
     "       \"DATA_LOSS\","
     "       \"NOT_FOUND\""

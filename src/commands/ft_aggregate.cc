@@ -177,32 +177,10 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
-    char double_storage[50];
-    std::string_view value_view;
-    if (name == "$") {
-      value_view = *value.AsStringView();
-    } else {
-      switch (indexer_type) {
-        case indexes::IndexerType::kTag:
-        case indexes::IndexerType::kText:
-        case indexes::IndexerType::kNone: {
-          value_view = *value.AsStringView();
-          break;
-        }
-        case indexes::IndexerType::kNumeric: {
-          auto dble = value.AsDouble();
-          if (!dble) {
-            return false;
-          }
-          auto double_size =
-              snprintf(double_storage, sizeof(double_storage), "%.11g", *dble);
-          value_view = std::string_view(double_storage, double_size);
-          break;
-        }
-        default:
-          CHECK(false) << " Received type " << int(indexer_type);
-      }
+    if (name != "$") {
+      indexes::AssertValidIndexerType(indexer_type);
     }
+    std::string_view value_view = *value.AsStringView();
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     if (dialect == 2) {
       ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),

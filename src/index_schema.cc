@@ -2206,9 +2206,14 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     }
   }
   if (has_text_index) {
-    auto min_lang_version = indexes::text::LanguageRegistry::Instance()
-                                .Get(unpacked->language())
-                                ->MinRequiredVersion();
+    auto lang =
+        indexes::text::LanguageRegistry::Instance().Get(unpacked->language());
+    if (!lang) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          data_model::Language_Name(unpacked->language()),
+          " is not supported in module version ", kModuleVersion.ToString()));
+    }
+    auto min_lang_version = lang->MinRequiredVersion();
     if (min_lang_version > kRelease12) {
       return min_lang_version;
     }

@@ -28,7 +28,8 @@ class LanguageRegistry {
   static LanguageRegistry& Instance();
 
   /// Returns a shared Language instance for the given enum (default config).
-  /// Returns English for LANGUAGE_UNSPECIFIED or unknown values.
+  /// Returns English for LANGUAGE_UNSPECIFIED.
+  /// Returns nullptr for unknown/unregistered language values.
   std::shared_ptr<const Language> Get(data_model::Language language) const;
 
   // Non-copyable, non-movable

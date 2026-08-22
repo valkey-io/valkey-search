@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/customized_language.h"
 #include "src/indexes/text/languages/arabic.h"
@@ -60,14 +61,16 @@ std::shared_ptr<const Language> LanguageRegistry::Get(
   if (it != languages_.end()) {
     return it->second;
   }
-  return languages_.at(data_model::LANGUAGE_ENGLISH);
+  return nullptr;
 }
 
 std::shared_ptr<const Language> CreateLanguage(
     data_model::Language language, const std::string& punctuation,
     const std::vector<std::string>& stop_words) {
-  auto base = std::static_pointer_cast<const SnowballLanguage>(
-      LanguageRegistry::Instance().Get(language));
+  auto lang = LanguageRegistry::Instance().Get(language);
+  CHECK(lang != nullptr) << "CreateLanguage called with unregistered language: "
+                         << data_model::Language_Name(language);
+  auto base = std::static_pointer_cast<const SnowballLanguage>(lang);
   return std::make_shared<CustomizedLanguage>(std::move(base), punctuation,
                                               stop_words);
 }

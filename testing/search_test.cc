@@ -1388,8 +1388,8 @@ INSTANTIATE_TEST_SUITE_P(
 // FilterParser::Parse's UTF-8 gate. GRPCPredicateToPredicate must handle
 // malformed UTF-8 before it reaches decoders (e.g. FuzzySearch::Search) that
 // CHECK-fail on it, otherwise a malformed wire message crashes the node. The
-// handling is compat-gated (see COMPATIBILITY.md): >= 1.4.0 rejects with
-// InvalidArgumentError; < 1.4.0 substitutes U+FFFD (1.2 behavior). These tests
+// handling is compat-gated (see COMPATIBILITY.md): >= 1.3.0 rejects with
+// InvalidArgumentError; < 1.3.0 substitutes U+FFFD (1.2 behavior). These tests
 // pin emulate-release to the current release and assert the reject path, which
 // short-circuits at the converter entry before any index-schema lookup — so it
 // covers every text-bearing predicate type. (The legacy substitute path is
@@ -1400,7 +1400,7 @@ struct GRPCPredicateUtf8Case {
   // predicate types fill different protobuf fields, so the per-case setup is a
   // builder lambda rather than a plain data row.
   std::function<void(coordinator::Predicate &)> build;
-  bool expect_ok;  // Under emulate-release >= 1.4.0.
+  bool expect_ok;  // Under emulate-release >= 1.3.0.
 };
 
 class GRPCPredicateUtf8Test
@@ -1485,11 +1485,11 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
-// Legacy (< 1.4.0) counterpart of the gate above: instead of rejecting, the
+// Legacy (< 1.3.0) counterpart of the gate above: instead of rejecting, the
 // converter substitutes U+FFFD for malformed bytes and re-dispatches, so the
 // predicate is built successfully (matching nothing) — the 1.2 behavior. This
 // exercises the converter's own legacy branch (ReplaceInvalidUtf8 +
-// re-dispatch), which the >= 1.4.0 reject test and the FilterParser tests do
+// re-dispatch), which the >= 1.3.0 reject test and the FilterParser tests do
 // not cover.
 class GRPCPredicateUtf8LegacyTest : public ValkeySearchTest {
  protected:
@@ -1533,7 +1533,7 @@ TEST_F(GRPCPredicateUtf8LegacyTest, MalformedFuzzyToleratedViaSubstitution) {
   EXPECT_NE(result.value(), nullptr);
 }
 
-// Legacy (< 1.4.0): a malformed TAG keeps its raw bytes (no U+FFFD
+// Legacy (< 1.3.0): a malformed TAG keeps its raw bytes (no U+FFFD
 // substitution) so it exact-matches a raw-stored tag, as in 1.2. Asserts the
 // raw byte survived — ok()+non-null alone would not distinguish raw from
 // substituted. This inter-node branch is not exercised by the client-path

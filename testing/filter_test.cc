@@ -1858,8 +1858,8 @@ TEST_F(FilterMalformedUtf8Test, TruncatedUtf8InQueryToleratedNoError) {
 }
 
 // Malformed UTF-8 at the query boundary is compat-gated (see COMPATIBILITY.md):
-// emulate-release >= 1.4.0 rejects with InvalidArgumentError (matching the
-// ingestion path), while < 1.4.0 preserves the legacy 1.2 tolerate behavior.
+// emulate-release >= 1.3.0 rejects with InvalidArgumentError (matching the
+// ingestion path), while < 1.3.0 preserves the legacy 1.2 tolerate behavior.
 class FilterMalformedUtf8CompatTest : public ValkeySearchTest {
  protected:
   void SetUp() override {

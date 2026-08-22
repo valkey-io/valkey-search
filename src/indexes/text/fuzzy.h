@@ -40,8 +40,8 @@ struct FuzzySearch {
 
     // Decode pattern to code points so the DP matrix is indexed per character.
     // The pattern reaches here already well-formed UTF-8. Both entry points
-    // resolve malformed bytes upstream, compat-gated (>= 1.4.0 rejects with
-    // InvalidArgumentError; < 1.4.0 substitutes U+FFFD so the term matches
+    // resolve malformed bytes upstream, compat-gated (>= 1.3.0 rejects with
+    // InvalidArgumentError; < 1.3.0 substitutes U+FFFD so the term matches
     // nothing): client queries via FilterParser::Parse's upfront gate, and
     // inter-node requests via GRPCPredicateToPredicate in search_converter.cc.
     // kInvalidCp is therefore unreachable here, and the CHECK is a contract

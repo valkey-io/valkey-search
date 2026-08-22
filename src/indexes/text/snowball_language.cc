@@ -50,22 +50,32 @@ void SnowballLanguage::SegmentInternal(absl::string_view text,
                                        bool handle_escapes,
                                        bool filter_stop_words,
                                        TokenCallback on_token) const {
+  // Normalize + case-fold the full input text before segmentation. This ensures
+  // that compatibility mappings (e.g. NFKC: U+FF0C fullwidth comma → U+002C
+  // ASCII comma) are visible to the delimiter scanner. For NFC languages,
+  // normalization does not introduce new delimiters so this is a behavioral
+  // no-op (and the ICU fast path makes it near-zero cost on already-normalized
+  // text). Case-folding here also means per-token normalization is unnecessary.
+  std::string normalized_text(text);
+  normalizer_.NormalizeInPlace(normalized_text);
+  absl::string_view input(normalized_text);
+
   std::string word;
   word.reserve(64);
   size_t pos = 0;
 
-  while (pos < text.size()) {
+  while (pos < input.size()) {
     // Skip leading punctuation/whitespace (codepoint-aware).
-    while (pos < text.size()) {
-      if (handle_escapes && text[pos] == '\\' && pos + 1 < text.size()) {
+    while (pos < input.size()) {
+      if (handle_escapes && input[pos] == '\\' && pos + 1 < input.size()) {
         break;
       }
-      uint8_t lead = static_cast<uint8_t>(text[pos]);
+      uint8_t lead = static_cast<uint8_t>(input[pos]);
       if (lead < 0x80) {
         if (!punct_set_.Contains(lead)) break;
         pos++;
       } else {
-        utils::Scanner s(text.substr(pos));
+        utils::Scanner s(input.substr(pos));
         auto cp = s.NextUtf8();
         if (cp == utils::Scanner::kInvalidCp) {
           pos += s.LastUtf8ByteLen();
@@ -79,39 +89,39 @@ void SnowballLanguage::SegmentInternal(absl::string_view text,
     word.clear();
 
     // Build word until next punctuation boundary.
-    while (pos < text.size()) {
+    while (pos < input.size()) {
       // Handle backslash escape (ingestion path only).
-      if (handle_escapes && text[pos] == '\\' && pos + 1 < text.size()) {
+      if (handle_escapes && input[pos] == '\\' && pos + 1 < input.size()) {
         pos++;
-        uint8_t esc_lead = static_cast<uint8_t>(text[pos]);
+        uint8_t esc_lead = static_cast<uint8_t>(input[pos]);
         if (esc_lead < 0x80) {
           bool esc_is_delim = punct_set_.Contains(esc_lead);
           if (esc_lead != '\\' && !esc_is_delim && punct_set_.Contains('\\')) {
             break;
           }
-          word.push_back(text[pos]);
+          word.push_back(input[pos]);
           pos++;
         } else {
-          utils::Scanner s(text.substr(pos));
+          utils::Scanner s(input.substr(pos));
           auto esc_cp = s.NextUtf8();
           uint8_t esc_len = s.LastUtf8ByteLen();
           if (esc_cp != '\\' && !punct_set_.Contains(esc_cp) &&
               punct_set_.Contains('\\')) {
             break;
           }
-          word.append(text.data() + pos, esc_len);
+          word.append(input.data() + pos, esc_len);
           pos += esc_len;
         }
         continue;
       }
 
-      uint8_t lead = static_cast<uint8_t>(text[pos]);
+      uint8_t lead = static_cast<uint8_t>(input[pos]);
       if (lead < 0x80) {
         if (punct_set_.Contains(lead)) break;
-        word.push_back(text[pos]);
+        word.push_back(input[pos]);
         pos++;
       } else {
-        utils::Scanner s(text.substr(pos));
+        utils::Scanner s(input.substr(pos));
         auto cp = s.NextUtf8();
         if (cp == utils::Scanner::kInvalidCp) {
           pos += s.LastUtf8ByteLen();
@@ -119,13 +129,12 @@ void SnowballLanguage::SegmentInternal(absl::string_view text,
         }
         if (punct_set_.Contains(cp)) break;
         uint8_t len = s.LastUtf8ByteLen();
-        word.append(text.data() + pos, len);
+        word.append(input.data() + pos, len);
         pos += len;
       }
     }
 
     if (!word.empty()) {
-      normalizer_.NormalizeInPlace(word);
       if (!filter_stop_words || !stop_words_set_.contains(word)) {
         on_token(std::move(word));
         word.clear();

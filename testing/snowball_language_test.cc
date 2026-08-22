@@ -438,6 +438,74 @@ TEST_F(SnowballLanguageTest, ArabicPresentationFormsCollapse) {
   EXPECT_EQ((*result1)[0], (*result2)[0]);
 }
 
+// --- Arabic NFKC: normalize-before-split prevents delimiter injection ---
+
+TEST_F(SnowballLanguageTest, ArabicNfkcFullwidthCommaSplitsTokens) {
+  // U+FF0C (fullwidth comma, \xef\xbc\x8c) is NOT in the punctuation set,
+  // but NFKC maps it to U+002C (ASCII comma) which IS a delimiter.
+  // Normalizing before segmentation ensures the split happens correctly.
+  auto result = arabic_.Tokenize(
+      "abc\xef\xbc\x8c"
+      "def");
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 2)
+      << "Fullwidth comma should split into two tokens after NFKC";
+  EXPECT_EQ((*result)[0], "abc");
+  EXPECT_EQ((*result)[1], "def");
+}
+
+TEST_F(SnowballLanguageTest, ArabicNfkcFullwidthSemicolonSplitsTokens) {
+  // U+FF1B (fullwidth semicolon) → U+003B (ASCII semicolon) under NFKC.
+  auto result = arabic_.Tokenize(
+      "hello\xef\xbc\x9b"
+      "world");
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ((*result)[0], "hello");
+  EXPECT_EQ((*result)[1], "world");
+}
+
+TEST_F(SnowballLanguageTest, ArabicNbspSplitsAfterNfkc) {
+  // U+00A0 (NBSP, \xc2\xa0) is already in punct_set_ via White_Space, but
+  // NFKC also maps it to U+0020 (space). Either way it must split. This test
+  // ensures no embedded space byte ends up inside a token.
+  auto result = arabic_.Tokenize(
+      "\xd8\xa8\xd8\xa7\xd8\xad\xd8\xb1\xd9\x85"  // "باحرم"
+      "\xc2\xa0"                                  // U+00A0 NBSP
+      "\xd8\xa8\xd8\xa7\xd9\x84\xd9\x85\xd9\x84\xd8\xa7\xd8\xb9");  // "بالملاع"
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 2) << "NBSP should produce two tokens";
+  for (const auto& token : *result) {
+    EXPECT_EQ(token.find(' '), std::string::npos)
+        << "Token contains embedded space: " << token;
+    EXPECT_EQ(token.find("\xc2\xa0"), std::string::npos)
+        << "Token contains NBSP bytes: " << token;
+  }
+}
+
+TEST_F(SnowballLanguageTest, ArabicQueryTokenizeNfkcFullwidthComma) {
+  // Query path must also normalize before split to match indexed content.
+  auto result = arabic_.QueryTokenize(
+      "abc\xef\xbc\x8c"
+      "def");
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 2);
+  EXPECT_EQ((*result)[0], "abc");
+  EXPECT_EQ((*result)[1], "def");
+}
+
+TEST_F(SnowballLanguageTest, FrenchNfcPreservesFullwidthComma) {
+  // Contrast: NFC does NOT decompose U+FF0C, so French keeps it as part of
+  // the token (it's not in French punctuation set either).
+  TestFrenchLanguage french;
+  auto result = french.Tokenize(
+      "abc\xef\xbc\x8c"
+      "def");
+  ASSERT_TRUE(result.ok());
+  ASSERT_EQ(result->size(), 1)
+      << "Fullwidth comma should NOT split under NFC (French)";
+}
+
 // --- GetStemmer ---
 
 TEST_F(SnowballLanguageTest, StemmerNonNull) {

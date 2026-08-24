@@ -169,51 +169,34 @@ class TestFTSearchInkeysCluster(ValkeySearchClusterTestCase):
         )
 
     def test_inkeys_knn_vector_search(self):
-        """KNN + INKEYS: total_count equals the number of returned neighbors
-        that pass the INKEYS filter. The post-filter in content_resolution
-        is the only corrector for vector queries."""
+        """KNN + INKEYS returns the k nearest *within* the in-set keys, even
+        when those keys fall outside the global top-K. Vectors are [i,i,i,i]
+        and the query is [0,0,0,0], so distance grows with i: the three
+        farthest docs (vdoc:27/28/29) are nowhere near the global top-K."""
         client: ValkeyCluster = self.new_cluster_client()
         self._setup_vector_index(client, num_docs=30)
 
-        # Query vector near vdoc:0, but restrict to a subset of keys
+        # Restrict to the three FARTHEST docs, well outside the global top-K.
         query_vec = float_to_bytes([0.0] * 4)
-        target_keys = ["vdoc:0", "vdoc:1", "vdoc:2"]
+        target_keys = ["vdoc:27", "vdoc:28", "vdoc:29"]
         result = client.execute_command(
             "FT.SEARCH", "vidx",
-            "*=>[KNN 10 @vec $BLOB]",
+            "*=>[KNN 3 @vec $BLOB]",
             "INKEYS", "3", *target_keys,
             "PARAMS", "2", "BLOB", query_vec,
             "LIMIT", "0", "10",
             "DIALECT", "2",
         )
 
-        # total_count should be <= 3 (only keys in INKEYS that match)
-        assert result[0] <= 3, (
-            f"Expected total_count<=3, got {result[0]}"
-        )
-        # All returned keys must be in the target set
+        # Must return all three in-set matches, not under-return (e.g. 0).
         returned_keys = {result[i].decode() for i in range(1, len(result), 2)}
-        assert returned_keys.issubset(set(target_keys))
-        assert result[0] == len(returned_keys)
-
-    def test_inkeys_knn_zero_returns_zero(self):
-        """KNN + INKEYS 0: no results and total_count == 0."""
-        client: ValkeyCluster = self.new_cluster_client()
-        self._setup_vector_index(client, num_docs=30)
-
-        query_vec = float_to_bytes([0.0] * 4)
-        result = client.execute_command(
-            "FT.SEARCH", "vidx",
-            "*=>[KNN 10 @vec $BLOB]",
-            "INKEYS", "0",
-            "PARAMS", "2", "BLOB", query_vec,
-            "DIALECT", "2",
+        assert result[0] == 3, (
+            f"KNN+INKEYS must return all 3 in-set matches, got total_count="
+            f"{result[0]} keys={returned_keys}"
         )
-
-        assert result[0] == 0, (
-            f"KNN + INKEYS 0 should report total_count=0, got {result[0]}"
+        assert returned_keys == set(target_keys), (
+            f"Expected exactly {set(target_keys)}, got {returned_keys}"
         )
-        assert len(result) == 1
 
     def test_inkeys_with_sortby(self):
         """INKEYS + SORTBY in cluster mode — ordering is correct and

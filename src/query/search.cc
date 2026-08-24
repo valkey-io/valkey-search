@@ -112,11 +112,13 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
       const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      QueryOperations query_operations)
+      QueryOperations query_operations,
+      const std::optional<absl::flat_hash_set<std::string>> &inkeys)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
         text_index_schema_(text_index_schema),
-        query_operations_(query_operations) {}
+        query_operations_(query_operations),
+        inkeys_(inkeys) {}
   ~InlineVectorFilter() override = default;
 
   bool operator()(hnswlib::labeltype id) override {
@@ -124,6 +126,14 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     auto key = vector_index_->GetKeyDuringSearch(id);
     if (!key.ok()) {
       return false;
+    }
+    // Reject candidates outside INKEYS to avoid silently dropping in-set docs
+    // that rank outside the global top-K.
+    if (inkeys_.has_value() && !inkeys_->contains((*key)->Str())) {
+      return false;
+    }
+    if (filter_predicate_ == nullptr) {
+      return true;
     }
     const valkey_search::indexes::text::TextIndex *text_index = nullptr;
     if (text_index_schema_) {
@@ -138,16 +148,21 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   indexes::VectorBase *vector_index_;
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   QueryOperations query_operations_;
+  const std::optional<absl::flat_hash_set<std::string>> &inkeys_;
 };
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
-  if (parameters.filter_parse_results.root_predicate != nullptr) {
+  // Fold INKEYS into candidate selection so in-set docs outside global top-K
+  // aren't silently dropped by post-filtering.
+  if (parameters.filter_parse_results.root_predicate != nullptr ||
+      parameters.inkeys.has_value()) {
     const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
         parameters.index_schema->GetTextIndexSchema();
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        text_index_schema, parameters.filter_parse_results.query_operations);
+        text_index_schema, parameters.filter_parse_results.query_operations,
+        parameters.inkeys);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
@@ -517,6 +532,34 @@ CalcBestMatchingPrefilteredKeys(
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,
                           /*stop_on_fetch_limit=*/false);
+  return results;
+}
+
+// For pure-vector queries with INKEYS: compute K nearest within the set,
+// not the global top-K filtered by INKEYS (which silently drops in-set docs
+// outside the global top-K).
+std::priority_queue<std::pair<float, hnswlib::labeltype>>
+CalcBestMatchingInkeys(const SearchParameters &parameters,
+                       indexes::VectorBase *vector_index) {
+  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
+  CHECK(parameters.inkeys.has_value());
+  float query_magnitude = indexes::kDefaultMagnitude;
+  if (vector_index->GetNormalize()) {
+    query_magnitude = indexes::CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(parameters.query.data()),
+        parameters.query.size() / sizeof(float));
+  }
+  // Passed for API compatibility with AddPrefilteredKey, dedup is a no-op here
+  // since INKEYS are already unique (flat_hash_set, iterated once).
+  absl::flat_hash_set<const char *> top_keys;
+  for (const auto &key_str : *parameters.inkeys) {
+    if (parameters.cancellation_token->IsCancelled()) {
+      break;
+    }
+    InternedStringPtr key = StringInternStore::Intern(key_str);
+    vector_index->AddPrefilteredKey(parameters.query, query_magnitude, key,
+                                    parameters.k, results, top_keys);
+  }
   return results;
 }
 
@@ -1286,6 +1329,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
   }
 
   if (!parameters.filter_parse_results.root_predicate) {
+    if (parameters.inkeys.has_value()) {
+      ++Metrics::GetStats().query_prefiltering_requests_cnt;
+      std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
+          CalcBestMatchingInkeys(parameters, vector_index);
+      return vector_index->CreateReply(results);
+    }
     return PerformVectorSearch(vector_index, parameters);
   }
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -1293,8 +1342,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
       parameters, parameters.filter_parse_results.root_predicate.get(),
       entries_fetchers, false);
 
-  // Query planner makes the decision for pre-filtering vs inline-filtering.
-  if (UsePreFiltering(qualified_entries, vector_index)) {
+  // With INKEYS, prefer pre-filtering to ensure exact K nearest within the
+  // restricted set (inline filter with HNSW approximation might miss them).
+  if (parameters.inkeys.has_value() ||
+      UsePreFiltering(qualified_entries, vector_index)) {
     VMSDK_LOG(DEBUG, nullptr)
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;

@@ -310,10 +310,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
-  bool IsMarkedDestructing() const ABSL_LOCKS_EXCLUDED(mutated_records_mutex_) {
-    absl::MutexLock lock(&mutated_records_mutex_);
-    return is_destructing_;
-  }
+  bool IsMarkedDestructing() const { return is_destructing_.load(); }
   void ProcessMultiQueue();
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;

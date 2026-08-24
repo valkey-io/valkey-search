@@ -35,6 +35,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -297,6 +298,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
     uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
+    // addPoint() routes an existing label to an in-place update.
     algo_->addPoint(
         QueryVector(std::move(vector_record), GetVectorDataSize(), normalize_),
         internal_id, /*replace_deleted=*/false);
@@ -396,15 +398,11 @@ T VectorHNSW<T>::ComputeDistance(absl::string_view query,
                              algo_->dist_func_param_, query_magnitude);
 }
 
-// Getting max label from label_lookup_ (active + tombstoned).
+// Max label stamped on any slot at load time (includes re-labeled tombstones,
+// which are absent from label_lookup_). Used to seed inc_id_ on load.
 template <typename T>
-uint64_t VectorHNSW<T>::GetMaxInternalLabel() const {
-  std::unique_lock<std::mutex> lock_label(algo_->label_lookup_lock);
-  uint64_t max_label = 0;
-  for (const auto &[label, _] : algo_->label_lookup_) {
-    max_label = std::max(max_label, static_cast<uint64_t>(label));
-  }
-  return max_label;
+uint64_t VectorHNSW<T>::GetMaxLoadedLabel() const {
+  return static_cast<uint64_t>(algo_->max_loaded_label_);
 }
 
 template <typename T>

@@ -185,14 +185,14 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         )
 
         # At this point, doc:1 was re-indexed with the same vector, and doc:2 was added.
-        # For doc:1 update: Since HSET overwrites the reference, Track finds it, reuses it,
-        # and skips sharing (hash_sharing_hits remains 1).
+        # For doc:1 update: Since HSET overwrites the reference with a raw string,
+        # Track reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
         # AddRecord also calls LookupRecord (Hit).
-        # For doc:2 addition: Track adds it and shares it (hash_sharing_hits becomes 2).
+        # For doc:2 addition: Track adds it and shares it (hash_sharing_hits becomes 3).
         # AddRecord calls LookupRecord (Hit).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 2
-        assert stats["hash_sharing_hits"] == 2
+        assert stats["hash_sharing_hits"] == 3
         # LookupRecord should have 3 hits (doc:1 initial, doc:1 update, doc:2 initial)
         assert stats["lookup_record_hits"] == 3
         assert stats["lookup_record_misses"] == 0

@@ -2093,7 +2093,8 @@ void IndexSchema::MarkAsDestructing() {
       if (params) {
         params->search_result.status =
             GenerateIndexNotFoundError(db_num_, name_);
-        params->QueryCompleteMainThread(std::move(params));
+        auto *raw_params = params.get();
+        raw_params->QueryCompleteMainThread(std::move(params));
       }
     }
   }

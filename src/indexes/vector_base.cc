@@ -464,8 +464,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     save_vector = vector_record;
   }
   // Use max label from label_lookup_
-  inc_id_ = GetMaxInternalLabel();
-  ++inc_id_;
+  inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
 

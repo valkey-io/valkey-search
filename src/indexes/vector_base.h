@@ -227,7 +227,7 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
-  virtual uint64_t GetMaxInternalLabel() const { return 0; }
+  virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
   int GetDimensions() const { return dimensions_; }

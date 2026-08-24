@@ -1,10 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <random>
 #include <string>
 #include <unordered_set>
@@ -17,6 +19,7 @@
 #include "src/metrics.h"
 #include "third_party/hnswlib/index.pb.h"
 #include "visited_list_pool.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 
 #ifdef VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
@@ -83,6 +86,7 @@ class HierarchicalNSW
 
   mutable std::mutex label_lookup_lock;  // lock for label_lookup_
   std::unordered_map<labeltype, tableint> label_lookup_;
+  labeltype max_loaded_label_{0};  // max label stamped on any slot at load time
 
   std::default_random_engine level_generator_;
   std::default_random_engine update_probability_generator_;
@@ -897,6 +901,7 @@ class HierarchicalNSW
              vector_size_);
       memcpy(buf.data() + size_links_level0_ + vector_size_,
              (*data_level0_memory_)[i] + label_offset_, sizeof(labeltype));
+
       VMSDK_RETURN_IF_ERROR(
           output.SaveChunk(buf.data(), serialize_size_data_per_element_));
     };
@@ -916,7 +921,12 @@ class HierarchicalNSW
     return absl::OkStatus();
   }
 
-  inline void LoadCheck(bool ok, absl::string_view msg) const {
+  // Single choke-point for load-time validation. The kill switch
+  // (load_validation_enabled_, wired from the hnsw-validation-enable config) is
+  // consulted here and nowhere else, so a defective check can be globally
+  // disabled. On failure it throws; VectorHNSW::LoadFromRDB converts the
+  // exception into a failed (rejected) RDB load.
+  inline void loadCheck(bool ok, absl::string_view msg) const {
     if (ok) {
       return;
     }
@@ -924,12 +934,18 @@ class HierarchicalNSW
       throw std::runtime_error(
           absl::StrCat("HNSW index load validation failed: ", msg));
     }
+    // Validation disabled: don't fail the load, but log (throttled) the defect.
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        << "HNSW load validation is disabled; ignoring detected index "
+           "corruption: "
+        << msg;
   }
 
   template <typename SavedVectorGenerator>
   absl::Status LoadIndex(InputStream &input, SpaceInterface<dist_t> *s,
                          size_t max_elements_i, size_t expected_m,
                          bool validate, const SavedVectorGenerator &generator) {
+    clear();
     load_validation_enabled_ = validate;
     VMSDK_ASSIGN_OR_RETURN(auto serialized_header, input.LoadChunk());
     auto header = std::make_unique<data_model::HNSWIndexHeader>();
@@ -937,9 +953,10 @@ class HierarchicalNSW
       return absl::InternalError("Could not deserialize HNSW header");
     }
 
+    // --- Read raw header fields (untrusted) ---
     offsetLevel0_ = header->offset_level_0();
     max_elements_ = header->max_elements();
-    size_t curr_element_count_val = header->curr_element_count();
+    size_t target_element_count = header->curr_element_count();
     cur_element_count_ = 0;
     serialize_size_data_per_element_ =
         header->serialize_size_data_per_element();
@@ -972,61 +989,66 @@ class HierarchicalNSW
 
     // Resolve capacity: at least the live element count, honoring the larger of
     // the caller-requested cap and the file's recorded capacity.
-    size_t cur_count = curr_element_count_val;
+    size_t cur_count = target_element_count;
     size_t max_elements =
         std::max(cur_count, std::max(max_elements_i, max_elements_));
     max_elements_ = max_elements;
 
-    // --- Header validation (the kill switch lives inside LoadCheck) ---
+    // --- Header validation (the kill switch lives inside loadCheck) ---
     {
       const size_t exp_m = expected_m > 10000 ? 10000 : expected_m;
-      LoadCheck(exp_m >= 1, "M must be >= 1");
-      LoadCheck(M_ == exp_m, "header M does not match index definition");
-      LoadCheck(maxM_ == M_, "header maxM does not equal M");
-      LoadCheck(maxM0_ == 2 * M_, "header maxM0 does not equal 2*M");
-      LoadCheck(maxM0_ <= 0xFFFF,
+      // Layout parameters must match the index definition exactly.
+      loadCheck(exp_m >= 1, "M must be >= 1");
+      loadCheck(M_ == exp_m, "header M does not match index definition");
+      loadCheck(maxM_ == M_, "header maxM does not equal M");
+      loadCheck(maxM0_ == 2 * M_, "header maxM0 does not equal 2*M");
+      loadCheck(maxM0_ <= 0xFFFF,
                 "maxM0 exceeds the 16-bit neighbor-count field");
-      LoadCheck(vector_size_ > 0, "vector size must be > 0");
-      LoadCheck(serialize_size_data_per_element_ ==
+      loadCheck(vector_size_ > 0, "vector size must be > 0");
+      loadCheck(serialize_size_data_per_element_ ==
                     size_links_level0_ + vector_size_ + sizeof(labeltype),
                 "serialized element size is inconsistent with the geometry");
-      LoadCheck(offsetLevel0_ == 0, "offset_level_0 must be 0");
+      loadCheck(offsetLevel0_ == 0, "offset_level_0 must be 0");
+      // Recompute mult=1/log(M) and match within a guardband (cross-arch libm);
+      // skip M<2 where 1/log(M) is not finite. Soft, non-safety check.
       if (M_ >= 2) {
         const double expected_mult = 1.0 / std::log(static_cast<double>(M_));
-        LoadCheck(mult_ > 0.0 &&
+        loadCheck(mult_ > 0.0 &&
                       std::fabs(mult_ - expected_mult) <= 1e-6 * expected_mult,
                   "mult is inconsistent with M");
       }
-      LoadCheck(curr_element_count_val <= max_elements_,
+
+      // Element-count / level / entry-point consistency.
+      loadCheck(target_element_count <= max_elements_,
                 "curr_element_count exceeds max_elements");
-      if (curr_element_count_val == 0) {
-        LoadCheck(maxlevel_ == -1 || maxlevel_ == 0,
+      if (target_element_count == 0) {
+        loadCheck(maxlevel_ == -1 || maxlevel_ == 0,
                   "empty index has a non-trivial max_level");
       } else {
-        LoadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
-        LoadCheck(maxlevel_ <= static_cast<int>(curr_element_count_val),
+        loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
+        loadCheck(maxlevel_ <= static_cast<int>(target_element_count),
                   "max_level exceeds the element count");
-        LoadCheck(enterpoint_node_ < curr_element_count_val,
+        loadCheck(enterpoint_node_ < target_element_count,
                   "enterpoint_node is out of range");
       }
-      LoadCheck(size_data_per_element_ > 0, "size_data_per_element is 0");
-      LoadCheck(max_elements_ <= SIZE_MAX / size_data_per_element_,
+
+      // Guard every load allocation against size_t overflow / address-space
+      // wraparound, which also bounds an absurd element count.
+      loadCheck(size_data_per_element_ > 0, "size_data_per_element is 0");
+      loadCheck(max_elements_ <= SIZE_MAX / size_data_per_element_,
                 "level-0 allocation size overflows");
-      LoadCheck(max_elements_ <= SIZE_MAX / sizeof(void *),
+      loadCheck(max_elements_ <= SIZE_MAX / sizeof(void *),
                 "linkLists allocation size overflows");
-      LoadCheck(max_elements_ <= SIZE_MAX / sizeof(int),
+      loadCheck(max_elements_ <= SIZE_MAX / sizeof(int),
                 "element_levels allocation size overflows");
     }
-
-    fstdistfunc_ = s->get_dist_func();
-    dist_func_param_ = s->get_dist_func_param();
 
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
-    for (size_t i = 0; i < curr_element_count_val; i++) {
+    for (size_t i = 0; i < target_element_count; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
-      LoadCheck(chunk->size() ==
+      loadCheck(chunk->size() ==
                     size_links_level0_ + vector_size_ + sizeof(labeltype),
                 "level-0 element chunk has the wrong size");
       memcpy((*data_level0_memory_)[i], chunk->data(), size_links_level0_);
@@ -1036,24 +1058,24 @@ class HierarchicalNSW
       new (GetDataPtrByInternalId(i)) StoredVectorT(generator(
           absl::string_view(chunk->data() + size_links_level0_, vector_size_),
           isMarkedDeleted(i)));
+      cur_element_count_++;
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
-      cur_element_count_++;
 
+      // Validate the level-0 link list now that it is in place. The neighbor
+      // scan is clamped to maxM0_ so it stays within the record even when the
+      // (corrupt) count is larger and validation is disabled.
       linklistsizeint *ll0 = get_linklist0(i);
       size_t l0_count = getListCount(ll0);
-      LoadCheck(l0_count <= maxM0_, "level-0 neighbor count exceeds 2*M");
+      loadCheck(l0_count <= maxM0_, "level-0 neighbor count exceeds 2*M");
       tableint *l0_neighbors = (tableint *)(ll0 + 1);
       size_t l0_scan = std::min(l0_count, maxM0_);
       for (size_t j = 0; j < l0_scan; j++) {
-        LoadCheck(l0_neighbors[j] < curr_element_count_val,
+        loadCheck(l0_neighbors[j] < target_element_count,
                   "level-0 neighbor id out of range");
-        LoadCheck(l0_neighbors[j] != i, "level-0 self-loop");
+        loadCheck(l0_neighbors[j] != i, "level-0 self-loop");
       }
     }
-
-    size_links_per_element_ =
-        maxM_ * sizeof(tableint) + sizeof(linklistsizeint);
 
     std::vector<std::mutex>(max_elements).swap(link_list_locks_);
     std::vector<std::mutex>(MAX_LABEL_OPERATION_LOCKS).swap(label_op_locks_);
@@ -1066,66 +1088,107 @@ class HierarchicalNSW
     element_levels_ = std::vector<int>(max_elements);
     revSize_ = 1.0 / mult_;
     ef_ = 10;
-    for (size_t i = 0; i < curr_element_count_val; i++) {
+    labeltype max_label = 0;
+    for (size_t i = 0; i < cur_element_count_; i++) {
+      // Establish safe defaults first: element_levels_[i] stays 0 and the
+      // link-list pointer stays null until a valid allocation is stored, so an
+      // early return / thrown validation cannot leave clear() freeing an
+      // uninitialized pointer (ChunkedArray memory is not zeroed).
       element_levels_[i] = 0;
       *reinterpret_cast<char **>((*linkLists_)[i]) = nullptr;
 
       labeltype ext_label = GetExternalLabel(i);
-      LoadCheck(label_lookup_.find(ext_label) == label_lookup_.end(),
-                "duplicate label in index");
-      label_lookup_[ext_label] = i;
+      max_label = std::max(max_label, ext_label);
+
+      // A label can appear on multiple slots in RDBs written by older versions.
+      // There can be one live slot and any number of tombstoned slots all
+      // carrying the same label. We just need to rebuild the label lookup to
+      // point the label at the live slot if there is one.
+      auto dup_it = label_lookup_.find(ext_label);
+      if (dup_it == label_lookup_.end()) {
+        label_lookup_[ext_label] = i;
+      } else {
+        valkey_search::Metrics::GetStats().hnsw_duplicate_label_on_load_cnt +=
+            1;
+        if (!isMarkedDeleted(static_cast<tableint>(i))) {
+          loadCheck(isMarkedDeleted(dup_it->second),
+                    "duplicate live label in index");
+          // Overwrite mapping to tombstoned slot with the live one.
+          dup_it->second = i;
+        }
+      }
       size_t linkListSize;
       VMSDK_ASSIGN_OR_RETURN(auto size_chunk, input.LoadChunk());
-      LoadCheck(size_chunk->size() == sizeof(size_t),
+      loadCheck(size_chunk->size() == sizeof(size_t),
                 "link-list size chunk has the wrong size");
       memcpy(&linkListSize, size_chunk->data(), sizeof(size_t));
       linkListSize = le64toh(linkListSize);
       if (linkListSize != 0) {
-        LoadCheck(linkListSize % size_links_per_element_ == 0,
+        loadCheck(linkListSize % size_links_per_element_ == 0,
                   "upper-level link-list size is not a multiple of the stride");
         int level = linkListSize / size_links_per_element_;
-        LoadCheck(level <= maxlevel_, "element level exceeds max_level");
+        loadCheck(level <= maxlevel_, "element level exceeds max_level");
         VMSDK_ASSIGN_OR_RETURN(auto link_list_chunk, input.LoadChunk());
-        LoadCheck(link_list_chunk->size() == linkListSize,
+        loadCheck(link_list_chunk->size() == linkListSize,
                   "upper-level link-list chunk has the wrong size");
+        // Allocate from the derived level count (== linkListSize for valid
+        // data) so get_linklist() stays in-bounds for levels 1..level
+        // regardless of whether validation is enabled.
         size_t alloc_size =
             static_cast<size_t>(level) * size_links_per_element_;
         char *links = new char[alloc_size];
         memset(links, 0, alloc_size);
         memcpy(links, link_list_chunk->data(),
                std::min(alloc_size, link_list_chunk->size()));
+        // Store the pointer, then publish the level, so the two stay in sync
+        // for clear() even if a later check throws.
         *reinterpret_cast<char **>((*linkLists_)[i]) = links;
         element_levels_[i] = level;
+        // Validate per-level neighbor counts. Neighbor ids are validated in the
+        // global pass, since their target slots may not be loaded yet.
         for (int l = 1; l <= level; l++) {
-          LoadCheck(getListCount(get_linklist(i, l)) <= maxM_,
+          loadCheck(getListCount(get_linklist(i, l)) <= maxM_,
                     "upper-level neighbor count exceeds M");
         }
       }
     }
-
-    if (curr_element_count_val > 0) {
-      LoadCheck(enterpoint_node_ < curr_element_count_val &&
+    max_loaded_label_ = max_label;
+    // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
+    // The entry point must be one of the tallest nodes (proven invariant:
+    // maxlevel_ is only ever raised together with enterpoint_node_). The
+    // short-circuit also guards the array access if validation is disabled and
+    // enterpoint_node_ is out of range.
+    if (cur_element_count_ > 0) {
+      loadCheck(enterpoint_node_ < cur_element_count_ &&
                     element_levels_[enterpoint_node_] == maxlevel_,
                 "enterpoint node is not at max_level");
     }
-    for (size_t i = 0; i < curr_element_count_val; i++) {
+    // Every upper-level link must target a slot that actually exists at that
+    // level; otherwise a graph descent would over-read the target's smaller
+    // link-list allocation. This needs the full element_levels_, so it cannot
+    // be done in the streaming load loop above.
+    for (size_t i = 0; i < cur_element_count_; i++) {
       for (int level = 1; level <= element_levels_[i]; level++) {
         linklistsizeint *ll = get_linklist(i, level);
         size_t count = getListCount(ll);
+        // count was bounded to maxM_ per-record; clamp the scan so a corrupt
+        // count cannot over-read the per-level region when validation is off.
         size_t scan = std::min(count, maxM_);
         tableint *neighbors = (tableint *)(ll + 1);
         for (size_t j = 0; j < scan; j++) {
           tableint e = neighbors[j];
-          LoadCheck(e < curr_element_count_val,
+          loadCheck(e < cur_element_count_,
                     "upper-level neighbor id out of range");
-          LoadCheck(e != i, "upper-level self-loop");
-          LoadCheck(e >= curr_element_count_val || element_levels_[e] >= level,
+          loadCheck(e != i, "upper-level self-loop");
+          // Short-circuit guards element_levels_[e] when validation is off and
+          // e is out of range (the first check above did not throw).
+          loadCheck(e >= cur_element_count_ || element_levels_[e] >= level,
                     "upper-level neighbor is absent at that level");
         }
       }
     }
 
-    for (size_t i = 0; i < curr_element_count_val; i++) {
+    for (size_t i = 0; i < cur_element_count_; i++) {
       if (isMarkedDeleted(i)) {
         num_deleted_ += 1;
         valkey_search::Metrics::GetStats().reclaimable_memory += vector_size_;
@@ -1278,7 +1341,8 @@ class HierarchicalNSW
   /*
    * Adds point. Updates the point if it is already in the index.
    * If replacement of deleted elements is enabled: replaces previously deleted
-   * point if any, updating it with new point
+   * point if any, updating it with new point. If the label already exists in a
+   * slot, the same slot will be used.
    */
   void addPoint(QueryVectorT &&data_point, labeltype label,
                 bool replace_deleted = false) override {
@@ -1289,17 +1353,40 @@ class HierarchicalNSW
 
     // lock all operations with element by label
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
+    max_loaded_label_ = std::max(max_loaded_label_, label);
     if (!replace_deleted) {
       addPoint(std::move(data_point), label, -1);
       return;
     }
-    // check if there is vacant place
+
+    // If the label already exists, reuse the same slot.
+    {
+      std::unique_lock<std::mutex> lock_table(label_lookup_lock);
+      auto search = label_lookup_.find(label);
+      if (search != label_lookup_.end()) {
+        tableint existing = search->second;
+        lock_table.unlock();
+        if (isMarkedDeleted(existing)) {
+          {
+            std::unique_lock<std::mutex> lock_deleted_elements(
+                deleted_elements_lock);
+            deleted_elements.erase(existing);
+          }
+          unmarkDeletedInternal(existing);
+        }
+        updatePoint(std::move(data_point), existing, 1.0);
+        return;
+      }
+    }
+
+    // Otherwise, reuse a vacant tombstoned slot if any.
     tableint internal_id_replaced;
     std::unique_lock<std::mutex> lock_deleted_elements(deleted_elements_lock);
     bool is_vacant_place = !deleted_elements.empty();
     if (is_vacant_place) {
-      internal_id_replaced = *deleted_elements.begin();
-      deleted_elements.erase(internal_id_replaced);
+      auto it = deleted_elements.begin();
+      internal_id_replaced = *it;
+      deleted_elements.erase(it);
     }
     lock_deleted_elements.unlock();
 
@@ -1313,7 +1400,10 @@ class HierarchicalNSW
       SetExternalLabel(internal_id_replaced, label);
 
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
-      label_lookup_.erase(label_replaced);
+      auto it = label_lookup_.find(label_replaced);
+      if (it != label_lookup_.end() && it->second == internal_id_replaced) {
+        label_lookup_.erase(it);
+      }
       label_lookup_[label] = internal_id_replaced;
       lock_table.unlock();
 

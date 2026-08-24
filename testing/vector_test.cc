@@ -719,10 +719,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VERIFY_ADD(index->get(), vectors, i, ExpectedResults::kSuccess);
   }
   VectorBase *base = index->get();
-  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
+  EXPECT_EQ(base->GetMaxLoadedLabel(), 9u);
   VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(8), DeletionType::kNone));
   VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(9), DeletionType::kNone));
-  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
+  EXPECT_EQ(base->GetMaxLoadedLabel(), 9u);
   EXPECT_EQ(base->GetLabelCount(), 10u);
   EXPECT_EQ(base->GetTrackedKeyCount(), 8u);
   auto new_vectors = DeterministicallyGenerateVectors(5, kDimensions, 20.0);
@@ -1015,7 +1015,6 @@ class ChunkStream : public hnswlib::InputStream, public hnswlib::OutputStream {
  private:
   size_t read_idx_ = 0;
 };
-
 // On-disk geometry for kM / kDimensions, used to locate bytes for mutation.
 constexpr size_t kU32 = sizeof(uint32_t);
 constexpr size_t kStride = kM * kU32 + kU32;               // 68
@@ -1023,6 +1022,7 @@ constexpr size_t kLinks0 = 2 * kM * kU32 + kU32;           // 132
 constexpr size_t kVecBytes = kDimensions * sizeof(float);  // 400
 constexpr size_t kLabelOff = kLinks0 + kVecBytes;          // 532
 constexpr size_t kElemChunkBytes = kLabelOff + sizeof(hnswlib::labeltype);
+constexpr size_t kGoldenMax = 32;
 
 template <typename T>
 T PeekAt(const std::string &c, size_t off) {
@@ -1122,6 +1122,115 @@ GoldenLayout AnalyzeGolden(const ChunkStream &golden) {
   return g;
 }
 
+namespace {
+ChunkStream DuplicateLabelGolden(size_t num_slots,
+                                 const std::vector<size_t> &tombstones) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, kGoldenMax, /*normalized=*/false,
+                                    kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/true,
+                                    /*random_seed=*/100);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  auto vectors = DeterministicallyGenerateVectors(num_slots, kDimensions, 10.0);
+  for (size_t i = 0; i < num_slots; ++i) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vectors[i].data()),
+                              kDimensions * sizeof(float));
+    algo.addPoint(
+        QueryVector(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                            vector_allocator.get()),
+                    v_bytes.size(), false),
+        /*label=*/i);
+  }
+  for (size_t t : tombstones) {
+    algo.markDelete(t);
+  }
+  ChunkStream golden;
+  auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
+                       bool is_marked_deleted) {
+    size_t vector_size = kDimensions * sizeof(float);
+    return std::vector<char>(record->GetRawVector(),
+                             record->GetRawVector() + vector_size);
+  };
+  EXPECT_TRUE(algo.SaveIndex(golden, serializer).ok());
+  size_t live_slot = 0;
+  for (size_t i = 0; i < num_slots; ++i) {
+    if (std::find(tombstones.begin(), tombstones.end(), i) ==
+        tombstones.end()) {
+      live_slot = i;
+      break;
+    }
+  }
+  for (size_t t : tombstones) {
+    PokeAt<hnswlib::labeltype>(&golden.chunks[1 + t], kLabelOff,
+                               /*live label=*/live_slot);
+  }
+  return golden;
+}
+}  // namespace
+
+// Loading a dup-label RDB must rebuild label_lookup_ to point to the live slot.
+// Covers both 2-slot orderings and a 3-slot group (two tombstones, one live).
+TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
+  struct Case {
+    size_t num_slots;
+    std::vector<size_t> tombstones;
+  };
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  for (const Case &c : std::vector<Case>{{2, {1}}, {2, {0}}, {3, {0, 2}}}) {
+    size_t live_slot = c.num_slots;
+    for (size_t i = 0; i < c.num_slots; i++) {
+      if (std::find(c.tombstones.begin(), c.tombstones.end(), i) ==
+          c.tombstones.end()) {
+        live_slot = i;
+      }
+    }
+    auto vectors =
+        DeterministicallyGenerateVectors(c.num_slots, kDimensions, 10.0);
+    auto golden = DuplicateLabelGolden(c.num_slots, c.tombstones);
+
+    hnswlib::L2Space space{kDimensions};
+    VectorHNSW<float>::HNSWIndex algo;
+    algo.allow_replace_deleted_ = true;
+    auto generator = [allocator = vector_allocator.get()](
+                         absl::string_view vector_data,
+                         bool is_marked_deleted) {
+      return VectorRecord::Construct(
+          vector_data, kDefaultMagnitude,
+          static_cast<FixedSizeAllocator *>(allocator));
+    };
+    golden.Rewind();
+    VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, kM,
+                                   /*validate=*/true, generator));
+
+    // The live slot keeps the shared label; label_lookup_ points to the live
+    // slot.
+    EXPECT_EQ(algo.label_lookup_.size(), 1u);
+    EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
+    EXPECT_FALSE(algo.isMarkedDeleted(live_slot));
+    for (size_t t : c.tombstones) {
+      EXPECT_TRUE(algo.isMarkedDeleted(t));
+    }
+    EXPECT_EQ(algo.max_loaded_label_, live_slot);
+
+    // Reusing a tombstone for a fresh label must not disturb the live slot.
+    absl::string_view new_v(
+        reinterpret_cast<const char *>(vectors[live_slot].data()),
+        kDimensions * sizeof(float));
+    algo.addPoint(QueryVector(VectorRecord::Construct(new_v, kDefaultMagnitude,
+                                                      vector_allocator.get()),
+                              new_v.size(), false),
+                  /*label=*/1000, /*replace_deleted=*/true);
+    EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
+    EXPECT_FALSE(algo.isMarkedDeleted(live_slot));
+    hnswlib::tableint reused_slot = algo.label_lookup_[1000];
+    EXPECT_TRUE(std::find(c.tombstones.begin(), c.tombstones.end(),
+                          reused_slot) != c.tombstones.end());
+    EXPECT_FALSE(algo.isMarkedDeleted(reused_slot));
+  }
+}
+
 hnswlib::data_model::HNSWIndexHeader GetHeader(const ChunkStream &golden) {
   hnswlib::data_model::HNSWIndexHeader h;
   EXPECT_TRUE(h.ParseFromString(golden.chunks[0]));
@@ -1134,7 +1243,6 @@ void SetHeader(ChunkStream *golden,
   golden->chunks[0] = s;
 }
 
-constexpr size_t kGoldenMax = 32;
 ChunkStream MultiLayerGolden() {
   return BuildGoldenChunks({2, 1, 0, 0, 0, 0, 0, 0}, kGoldenMax);
 }
@@ -1147,6 +1255,47 @@ void ExpectReject(ChunkStream golden, absl::string_view substr) {
 
 }  // namespace
 
+TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/true,
+                                    /*random_seed=*/100);
+
+  // Labels 0,1 land at slots 0,1
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  std::vector<std::shared_ptr<const VectorRecord>> records;
+  records.reserve(vectors.size());
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vectors[i].data()),
+                              kDimensions * sizeof(float));
+    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                              vector_allocator.get()));
+    algo.addPoint(QueryVector(records.back(), v_bytes.size(), false),
+                  /*label=*/i);
+  }
+
+  // Delete the first entry
+  algo.markDelete(0);
+
+  // Add vector with label 1 again. Previously in the replace-deleted case, this
+  // would overwrite the tombstoned slot 0 and not re-use slot 1 with the same
+  // label.
+  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false),
+                /*label=*/1, /*replace_deleted=*/true);
+
+  // Each label keeps its own slot: label 1 stays live on slot 1 and label 0
+  // stays on the still-tombstoned slot 0.
+  EXPECT_EQ(algo.label_lookup_.size(), 2u);
+  EXPECT_EQ(algo.label_lookup_[0], 0u);
+  EXPECT_EQ(algo.label_lookup_[1], 1u);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+  EXPECT_FALSE(algo.isMarkedDeleted(1));
+}
+
+// ---- Happy path ----------------------------------------------------------
 TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {
   auto golden = BuildGoldenChunks({}, kGoldenMax);
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
@@ -1260,12 +1409,12 @@ TEST_F(VectorIndexTest, RejectLevel0NeighborOutOfRange) {
   ExpectReject(std::move(golden), "level-0 neighbor id out of range");
 }
 
-TEST_F(VectorIndexTest, RejectDuplicateLabel) {
+TEST_F(VectorIndexTest, RejectDuplicateLiveLabel) {
   auto golden = MultiLayerGolden();
   auto label0 = PeekAt<hnswlib::labeltype>(golden.chunks[1], kLabelOff);
   PokeAt<hnswlib::labeltype>(&golden.chunks[3], kLabelOff,
                              label0);  // element 2 dup
-  ExpectReject(std::move(golden), "duplicate label in index");
+  ExpectReject(std::move(golden), "duplicate live label in index");
 }
 
 TEST_F(VectorIndexTest, RejectSizeChunkWrongSize) {

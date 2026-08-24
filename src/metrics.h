@@ -42,6 +42,7 @@ class Metrics {
     std::atomic<uint64_t> hnsw_modify_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_search_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_create_exceptions_cnt{0};
+    std::atomic<uint64_t> hnsw_duplicate_label_on_load_cnt{0};
     std::atomic<uint64_t> flat_add_exceptions_cnt{0};
     std::atomic<uint64_t> flat_remove_exceptions_cnt{0};
     std::atomic<uint64_t> flat_modify_exceptions_cnt{0};

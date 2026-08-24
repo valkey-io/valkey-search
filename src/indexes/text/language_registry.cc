@@ -51,8 +51,10 @@ LanguageRegistry::LanguageRegistry() {
   languages_[L::LANGUAGE_INDONESIAN] = std::make_shared<IndonesianLanguage>();
   languages_[L::LANGUAGE_ARABIC] = std::make_shared<ArabicLanguage>();
 
-  // LANGUAGE_UNSPECIFIED maps to English
-  languages_[L::LANGUAGE_UNSPECIFIED] = languages_[L::LANGUAGE_ENGLISH];
+  // LANGUAGE_UNSPECIFIED maps to English — capture before inserting to avoid
+  // use-after-free if the insert triggers a rehash.
+  auto english = languages_[L::LANGUAGE_ENGLISH];
+  languages_[L::LANGUAGE_UNSPECIFIED] = english;
 }
 
 std::shared_ptr<const Language> LanguageRegistry::Get(

@@ -1,0 +1,135 @@
+name: "Codecov"
+
+permissions:
+  contents: read
+
+# Enabling on push and pull_request to track coverage trends and compare PRs against base
+on:
+  push:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+      - code_cov
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+  pull_request:
+    branches:
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+  workflow_dispatch:
+
+concurrency:
+  group: codecov-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-codecov-${{ github.ref }}-${{ github.sha }}
+          restore-keys: |
+            ccache-codecov-${{ github.ref }}-
+            ccache-codecov-
+
+      - name: Build and Run Tests with Coverage
+        id: test-run
+        run: |
+          mkdir -p test-results .ccache
+          docker run --privileged --rm \
+            --mount type=bind,source="$(pwd)/test-results",target=/workspace/test-results \
+            -v "$(pwd):/workspace" \
+            -e CCACHE_DIR=/workspace/.ccache \
+            -e CCACHE_MAXSIZE=1G \
+            -e CMAKE_EXTRA_ARGS="-DCMAKE_CXX_FLAGS=--coverage -DCMAKE_SHARED_LINKER_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage" \
+            --user "ubuntu:ubuntu" \
+            presubmit-image \
+            bash -c '
+              set -euo pipefail
+              sudo apt-get update -qq && sudo apt-get install -y -qq lcov
+              
+              # 1. Run Unit Tests
+              sudo -E ci/build_ubuntu.sh --debug --run-tests --unittest-output=/workspace/test-results
+              sudo chmod -R 777 /workspace/test-results
+              
+              # Capture Unit Tests coverage trace
+              sudo lcov --capture --directory .build-debug/ --output-file /workspace/test-results/unittests_raw.info --ignore-errors mismatch,unused,inconsistent,empty,gcov
+              sudo lcov --remove /workspace/test-results/unittests_raw.info \
+                   "/usr/*" \
+                   "/opt/*" \
+                   "*/third_party/*" \
+                   "*/submodules/*" \
+                   "*/testing/*" \
+                   "*/vmsdk/testing/*" \
+                   "*/.build*/*" \
+                   --output-file /workspace/test-results/unittests.info \
+                   --ignore-errors mismatch,unused,inconsistent,empty
+              
+              # 2. Run Integration Tests (GCC accumulates coverage into .gcda files)
+              export MODULE_PATH=/workspace/.build-debug/libsearch.so
+              sudo -E MODULE_PATH=/workspace/.build-debug/libsearch.so ci/build_ubuntu.sh --debug --run-integration-tests=oss --integration-output=/workspace/test-results
+              sudo chmod -R 777 /workspace/test-results
+              
+              # Capture Combined (Unit + Integration) coverage trace
+              sudo lcov --capture --directory .build-debug/ --output-file /workspace/test-results/combined_raw.info --ignore-errors mismatch,unused,inconsistent,empty,gcov
+              sudo lcov --remove /workspace/test-results/combined_raw.info \
+                   "/usr/*" \
+                   "/opt/*" \
+                   "*/third_party/*" \
+                   "*/submodules/*" \
+                   "*/testing/*" \
+                   "*/vmsdk/testing/*" \
+                   "*/.build*/*" \
+                   --output-file /workspace/test-results/combined.info \
+                   --ignore-errors mismatch,unused,inconsistent,empty
+              sudo chmod -R 777 /workspace/test-results
+            '
+
+      - name: Update Test Results Permissions
+        if: always()
+        run: sudo chmod -R 755 test-results
+
+      - name: Upload Unit Test Coverage to Codecov
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: test-results/unittests.info
+          flags: unittests
+          name: valkey-search-unittests
+          fail_ci_if_error: false
+
+      - name: Upload Combined Coverage to Codecov
+        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de # v5.5.2
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: test-results/combined.info
+          flags: integration,combined
+          name: valkey-search-combined
+          fail_ci_if_error: false
+
+      - name: Upload Test Results Artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codecov-test-results
+          path: test-results

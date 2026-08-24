@@ -87,6 +87,13 @@ fi
 
 case "${ID}" in
     amzn)
+        # ID=amzn covers both Amazon Linux 2 (VERSION_ID=2) and AL2023
+        # (VERSION_ID=2023). Only AL2023 is supported; reject anything else
+        # before we start installing AL2023-only packages (e.g. gcc14).
+        if [[ "${VERSION_ID}" != "2023" ]]; then
+            LOG_ERROR "Unsupported Amazon Linux version '${VERSION_ID}'. Only Amazon Linux 2023 is currently supported."
+            exit 1
+        fi
         install_amazon_linux
         ;;
     *)

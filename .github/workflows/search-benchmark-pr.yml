@@ -255,17 +255,23 @@ jobs:
           echo "✓ Dataset directory linked to persistent cache: $DATASET_CACHE"
           ls -lh "$PERF_BENCHMARK_PATH/" | grep datasets
 
+      # Fetch a trusted copy of the CI scripts from the base branch tip.
+      # base_ref names a branch in the target repo, so a fork PR cannot modify
+      # its contents, and (unlike base_sha) its tip always contains the current
+      # installer even for PRs that forked before it was added.
+      - name: Checkout trusted CI scripts (base branch)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.resolve.outputs.base_ref }}
+          path: valkey-search-trusted-ci
+          fetch-depth: 1
+          persist-credentials: false
+
       # Install the valkey-search build dependencies and toolchain via the
       # single maintained script (ci/install_deps.sh).
-      #
-      # SECURITY: this runs with sudo, and pull_request_target executes with
-      # base-repo secrets. We therefore run the script from the BASELINE
-      # checkout (base_sha, a commit in the target repo that a fork PR cannot
-      # modify) — never from the PR merge commit (MODULE_DIR), which is
-      # fork-controlled. This keeps privileged setup on trusted content while
-      # still using the single maintained script.
       - name: Install build dependencies and toolchain
-        working-directory: ${{ env.MODULE_BASELINE_DIR }}
+        working-directory: valkey-search-trusted-ci
         run: ./ci/install_deps.sh
 
       - name: Install benchmark Python dependencies
@@ -479,6 +485,7 @@ jobs:
           echo "Datasets persist at /home/ec2-user/search-datasets-cache"
           rm -rf "${{ github.workspace }}/comparison.md" \
                  "${{ github.workspace }}/valkey_ram" \
+                 "${{ github.workspace }}/valkey-search-trusted-ci" \
                  "$CORE_PATH" \
                  "$MODULE_PATH" \
                  "$MODULE_BASELINE_PATH" \

@@ -29,7 +29,7 @@ Usage: test.sh [options...]
     --help | -h              Print this help message and exit.
     --clean                  Clean the current build configuration.
     --debug                  Build for debug version.
-    --test                   Specify the test name [stability|vector_search_integration]. Default all.
+    --test                   Specify the test name [stability|vector_search_integration|benchmark]. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
     --tsan                   Build the TSan version of the module.
@@ -85,7 +85,7 @@ export SAN_BUILD
 # Source the common.rc after we setup our environment variables
 . ${WORKSPACE_HOME}/scripts/common.rc
 
-if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]]; then
+if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "benchmark" ]] && [[ ! "${TEST}" == "all" ]]; then
     printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
     print_usage
     exit 1
@@ -129,12 +129,15 @@ function configure() {
     setup_valkey_server
     setup_json_module
 
-    # If the binary is already there, do not rebuild it
+    # If the binary is not there, build it automatically
     printf "Checking for ${VALKEY_SEARCH_PATH}"
     if [ ! -f "${VALKEY_SEARCH_PATH}" ]; then
-        printf "... ${RED}not found${RESET}\n"
-        printf "\n${RED} Please build ${VALKEY_SEARCH_PATH} and try again${RESET}\n\n";
-        exit 1
+        printf "... ${RED}not found. Building libsearch.so automatically...${RESET}\n"
+        local build_flag=""
+        if [[ "${BUILD_CONFIG}" == "debug" ]]; then
+            build_flag="--debug"
+        fi
+        ${WORKSPACE_HOME}/build.sh ${build_flag}
     else
         printf "... ${GREEN}found${RESET}\n"
     fi
@@ -175,12 +178,14 @@ trap 'exit_code=$?; cleanup ${exit_code}; exit $exit_code' EXIT
 configure
 build
 
-if ! command -v memtier_benchmark &> /dev/null; then
-    printf "\n${RED}Error: memtier_benchmark is not installed or not in PATH.${RESET}\n\n" >&2
+if command -v memtier_benchmark &> /dev/null; then
+    export MEMTIER_PATH=memtier_benchmark
+elif [ -f "${WORKSPACE_HOME}/.devcontainer/run_in_docker.sh" ]; then
+    export MEMTIER_PATH="${WORKSPACE_HOME}/.devcontainer/run_in_docker.sh memtier_benchmark"
+else
+    printf "\n${RED}Error: memtier_benchmark is not installed or not in PATH and docker fallback is unavailable.${RESET}\n\n" >&2
     exit 1
 fi
-
-export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
 export TEST_UNDECLARED_OUTPUTS_DIR="$BUILD_DIR/output"
 
@@ -203,9 +208,18 @@ pkill -9 valkey-server || true
 
 ALL_FILES="vector_search_integration_test.py stability_test.py"
 
+if [ -f "${BUILD_DIR}/venv/bin/activate" ]; then
+    source "${BUILD_DIR}/venv/bin/activate"
+fi
+
 if [[ "${TEST}" == "all" ]]; then
     for file in $ALL_FILES; do
         python3 ${ROOT_DIR}/${file}
+    done
+elif [[ "${TEST}" == "benchmark" ]]; then
+    for bench_script in $(find ${WORKSPACE_HOME}/integration/benchmarks -name "run_benchmark.py"); do
+        echo "Executing benchmark script: ${bench_script}"
+        python3 ${bench_script} "$@"
     done
 else
     python3 ${ROOT_DIR}/${TEST}_test.py

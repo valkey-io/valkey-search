@@ -36,7 +36,7 @@ class MockAllocator : public Allocator {
 
   ~MockAllocator() override = default;
 
-  char* Allocate(size_t size) override {
+  char *Allocate(size_t size) override {
     // simulate the memory allocation in the current tracking scope
     vmsdk::ReportAllocMemorySize(size);
 
@@ -52,7 +52,7 @@ class MockAllocator : public Allocator {
   size_t ChunkSize() const override { return 1024; }
 
  protected:
-  void Free(AllocatorChunk* chunk, char* ptr) override {
+  void Free(AllocatorChunk *chunk, char *ptr) override {
     // Report memory deallocation to balance the allocation
     vmsdk::ReportFreeMemorySize(allocated_size_);
 
@@ -69,16 +69,16 @@ class StringInterningTest : public vmsdk::ValkeyTestWithParam<bool> {};
 TEST_F(StringInterningTest, BasicTest) {
   EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
   {
-    auto interned_key_1 = StringInternStore::Intern("key1");
+    auto interned_key_1 = StringInternStore::Intern("rvalue_key_key1");
     EXPECT_EQ(interned_key_1.RefCount(), 1);
 
-    EXPECT_EQ(interned_key_1->Str(), "key1");
+    EXPECT_EQ(interned_key_1->Str(), "rvalue_key_key1");
     EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 1);
-    auto interned_key_2 = StringInternStore::Intern("key2");
+    auto interned_key_2 = StringInternStore::Intern("rvalue_key_key2");
     EXPECT_EQ(interned_key_2.RefCount(), 1);
-    EXPECT_EQ(interned_key_2->Str(), "key2");
+    EXPECT_EQ(interned_key_2->Str(), "rvalue_key_key2");
     EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 2);
-    auto interned_key_2_1 = StringInternStore::Intern("key2");
+    auto interned_key_2_1 = StringInternStore::Intern("rvalue_key_key2");
     EXPECT_EQ(interned_key_2.RefCount(), 2);
     EXPECT_EQ(interned_key_2_1.RefCount(), 2);
     EXPECT_EQ(interned_key_2->Str().data(), interned_key_2_1->Str().data());
@@ -88,10 +88,138 @@ TEST_F(StringInterningTest, BasicTest) {
   EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
 }
 
+TEST_F(StringInterningTest, MixedSsoAndNonSsoInternedStringsInAbslHashSet) {
+  constexpr size_t kAllocChunkSize = 16;
+  auto allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, kAllocChunkSize, true);
+  absl::flat_hash_set<InternedStringPtr> set;
+
+  // Verify intern store is empty initially
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
+
+  // 1. SSO (inline) strings: lengths 0 through 6 (max inline capacity)
+  std::vector<std::string> sso_raw = {
+      "",       // 0 chars: empty string is inlined
+      "k",      // 1 char
+      "tag",    // 3 chars
+      "short",  // 5 chars
+      "123456"  // 6 chars: exact upper limit for SSO
+  };
+
+  std::vector<InternedStringPtr> sso_ptrs;
+  sso_ptrs.reserve(sso_raw.size());
+  for (const auto &s : sso_raw) {
+    auto ptr = StringInternStore::Intern(s);
+    EXPECT_TRUE(ptr.IsInline());
+    EXPECT_EQ(ptr.RawPtr(), nullptr);  // No underlying heap object
+    EXPECT_EQ(ptr.RefCount(), 1u);
+    EXPECT_EQ(ptr.Str(), s);
+    sso_ptrs.push_back(std::move(ptr));
+  }
+
+  // SSO strings bypass the global store and custom allocator entirely
+  EXPECT_EQ(allocator->ActiveAllocations(), 0);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
+
+  // Also verify that passing an allocator with a string <= 6 chars still uses
+  // SSO
+  auto sso_with_alloc = StringInternStore::Intern("sso", allocator.get());
+  EXPECT_TRUE(sso_with_alloc.IsInline());
+  EXPECT_EQ(allocator->ActiveAllocations(), 0);
+
+  // 2. Non-SSO strings (> 6 chars) backed by custom allocator (15 chars + null
+  // = 16)
+  std::vector<std::string> non_sso_raw = {
+      "alloc_string_01",
+      "alloc_string_02",
+      "alloc_string_03",
+      "alloc_string_04",
+  };
+
+  std::vector<InternedStringPtr> non_sso_ptrs;
+  non_sso_ptrs.reserve(non_sso_raw.size());
+  for (const auto &s : non_sso_raw) {
+    ASSERT_EQ(s.size() + 1, kAllocChunkSize);
+    auto ptr = StringInternStore::Intern(s, allocator.get());
+    EXPECT_FALSE(ptr.IsInline());
+    EXPECT_NE(ptr.RawPtr(), nullptr);  // Has underlying heap object
+    EXPECT_EQ(ptr.Str(), s);
+    non_sso_ptrs.push_back(std::move(ptr));
+  }
+
+  EXPECT_EQ(allocator->ActiveAllocations(), non_sso_raw.size());
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), non_sso_raw.size());
+
+  // 3. Boundary check: 6 chars (SSO) vs 7 chars (Non-SSO)
+  auto boundary_sso = StringInternStore::Intern("123456");
+  auto boundary_non_sso = StringInternStore::Intern("1234567");
+  EXPECT_TRUE(boundary_sso.IsInline());
+  EXPECT_FALSE(boundary_non_sso.IsInline());
+
+  // 4. Insert both SSO and Non-SSO into the same absl::flat_hash_set
+  for (const auto &ptr : sso_ptrs) {
+    auto [it, inserted] = set.insert(ptr);
+    EXPECT_TRUE(inserted);
+    EXPECT_EQ(*it, ptr);
+  }
+  for (const auto &ptr : non_sso_ptrs) {
+    auto [it, inserted] = set.insert(ptr);
+    EXPECT_TRUE(inserted);
+    EXPECT_EQ(*it, ptr);
+  }
+
+  EXPECT_EQ(set.size(), sso_ptrs.size() + non_sso_ptrs.size());
+
+  // 5. Verify contains() and find() for SSO strings
+  for (const auto &ptr : sso_ptrs) {
+    EXPECT_TRUE(set.contains(ptr));
+    auto it = set.find(ptr);
+    ASSERT_NE(it, set.end());
+    EXPECT_EQ(*it, ptr);
+    EXPECT_EQ(it->Str(), ptr.Str());
+    EXPECT_TRUE(it->IsInline());
+    EXPECT_EQ(it->RefCount(), 1u);
+  }
+
+  // 6. Verify contains() and find() for Non-SSO strings
+  for (const auto &ptr : non_sso_ptrs) {
+    EXPECT_TRUE(set.contains(ptr));
+    auto it = set.find(ptr);
+    ASSERT_NE(it, set.end());
+    EXPECT_EQ(*it, ptr);
+    EXPECT_EQ(it->Str(), ptr.Str());
+    EXPECT_FALSE(it->IsInline());
+    // Ref count is >= 2 because both non_sso_ptrs vector and set hold handles
+    EXPECT_GE(it->RefCount(), 2u);
+  }
+
+  // 7. Verify lookup with freshly interned duplicate handles
+  for (const auto &s : sso_raw) {
+    auto dup = StringInternStore::Intern(s);
+    EXPECT_TRUE(dup.IsInline());
+    EXPECT_TRUE(set.contains(dup));
+    EXPECT_EQ(dup.RefCount(), 1u);
+  }
+  for (const auto &s : non_sso_raw) {
+    auto dup = StringInternStore::Intern(s);
+    EXPECT_FALSE(dup.IsInline());
+    EXPECT_TRUE(set.contains(dup));
+  }
+
+  // 8. Verify missing keys (both SSO and Non-SSO)
+  auto missing_sso = StringInternStore::Intern("none");  // 4 chars (SSO)
+  EXPECT_TRUE(missing_sso.IsInline());
+  EXPECT_FALSE(set.contains(missing_sso));
+
+  auto missing_non_sso = StringInternStore::Intern(
+      "missing_alloc_0", allocator.get());  // 15 chars (Non-SSO)
+  EXPECT_FALSE(missing_non_sso.IsInline());
+  EXPECT_FALSE(set.contains(missing_non_sso));
+}
+
 TEST_P(StringInterningTest, WithAllocator) {
   bool require_ptr_alignment = GetParam();
-  auto allocator = CREATE_UNIQUE_PTR(
-      FixedSizeAllocator, strlen("prefix_key1") + 1, require_ptr_alignment);
+  auto allocator = CREATE_UNIQUE_PTR(FixedSizeAllocator, strlen("prefix_key1"),
+                                     require_ptr_alignment);
   {
     EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 0);
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
@@ -117,26 +245,9 @@ TEST_P(StringInterningTest, WithAllocator) {
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
   }
 }
-/*
-TEST_F(StringInterningTest, StringInternStoreTracksMemoryInternally) {
-  MemoryPool caller_pool{0};
-  InternedStringPtr interned_str;
-  auto allocator = std::make_unique<MockAllocator>();
-
-  {
-    NestedMemoryScope scope{caller_pool};
-    interned_str = StringInternStore::Intern("test_string", allocator.get());
-  }
-
-  EXPECT_EQ(caller_pool.GetUsage(), 0);
-  EXPECT_EQ(StringInternStore::GetMemoryUsage(), 12);
-
-  interned_str.reset();
-}
-*/
 INSTANTIATE_TEST_SUITE_P(StringInterningTests, StringInterningTest,
                          ::testing::Values(true, false),
-                         [](const TestParamInfo<bool>& info) {
+                         [](const TestParamInfo<bool> &info) {
                            return std::to_string(info.param);
                          });
 
@@ -234,11 +345,11 @@ TEST_F(StringInterningMultithreadTest, ConcurrentInterning) {
     threads.emplace_back(intern_function);
   }
 
-  for (auto& thread : threads) {
+  for (auto &thread : threads) {
     thread.join();
   }
 
-  for (auto& thread : threads) {
+  for (auto &thread : threads) {
     EXPECT_EQ(thread.joinable(), false);
   }
 
@@ -263,12 +374,12 @@ TEST_F(BagOfInternedStringPtrsTest, DefaultEmpty) {
   EXPECT_TRUE(bag.empty());
   EXPECT_EQ(bag.size(), 0u);
   EXPECT_EQ(bag.begin(), bag.end());
-  EXPECT_FALSE(bag.contains(StringInternStore::Intern("nope")));
-  EXPECT_EQ(bag.find(StringInternStore::Intern("nope")), bag.end());
+  EXPECT_FALSE(bag.contains(StringInternStore::Intern("rvalue_key_nope")));
+  EXPECT_EQ(bag.find(StringInternStore::Intern("rvalue_key_nope")), bag.end());
 }
 
 TEST_F(BagOfInternedStringPtrsTest, SingleElementLifecycle) {
-  auto k = StringInternStore::Intern("k");
+  auto k = StringInternStore::Intern("rvalue_key_single");
   EXPECT_EQ(k.RefCount(), 1);
   {
     BagOfInternedStringPtrs bag;
@@ -280,13 +391,20 @@ TEST_F(BagOfInternedStringPtrsTest, SingleElementLifecycle) {
     EXPECT_TRUE(bag.contains(k));
     EXPECT_NE(bag.find(k), bag.end());
     EXPECT_EQ(it->Hash(), k.Hash());
-    EXPECT_EQ((*it)->Str(), "k");
+    EXPECT_EQ((*it)->Str(), "rvalue_key_single");
   }
   EXPECT_EQ(k.RefCount(), 1);
 }
 
+TEST_F(BagOfInternedStringPtrsTest, InlineStr) {
+  auto k = StringInternStore::Intern("k");
+  EXPECT_EQ(k.RefCount(), 1);
+  EXPECT_EQ(k->Str(), "k");
+  EXPECT_EQ(k.RefCount(), 1);
+}
+
 TEST_F(BagOfInternedStringPtrsTest, InsertDuplicateInSingleMode) {
-  auto k = StringInternStore::Intern("dup");
+  auto k = StringInternStore::Intern("rvalue_key_dup");
   BagOfInternedStringPtrs bag;
   bag.insert(k);
   EXPECT_EQ(k.RefCount(), 2);
@@ -305,8 +423,8 @@ TEST_F(BagOfInternedStringPtrsTest, InsertDuplicateInSingleMode) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, PromoteSingleToMulti) {
-  auto a = StringInternStore::Intern("a");
-  auto b = StringInternStore::Intern("b");
+  auto a = StringInternStore::Intern("rvalue_key_prom_a");
+  auto b = StringInternStore::Intern("rvalue_key_prom_b");
   BagOfInternedStringPtrs bag;
   bag.insert(a);
   EXPECT_EQ(bag.TestModeForTesting(),
@@ -323,17 +441,18 @@ TEST_F(BagOfInternedStringPtrsTest, PromoteSingleToMulti) {
 
 TEST_F(BagOfInternedStringPtrsTest, MultiInsertEraseFindContains) {
   std::vector<InternedStringPtr> keys;
+  keys.reserve(10);
   for (int i = 0; i < 8; ++i) {
     keys.push_back(StringInternStore::Intern("multi_" + std::to_string(i)));
   }
   BagOfInternedStringPtrs bag;
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     auto [it, inserted] = bag.insert(k);
     EXPECT_TRUE(inserted);
     EXPECT_NE(it, bag.end());
   }
   EXPECT_EQ(bag.size(), keys.size());
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     EXPECT_TRUE(bag.contains(k));
     EXPECT_NE(bag.find(k), bag.end());
     EXPECT_EQ(k.RefCount(), 2);
@@ -350,9 +469,9 @@ TEST_F(BagOfInternedStringPtrsTest, MultiInsertEraseFindContains) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, DemoteMultiToSingleOnErase) {
-  auto a = StringInternStore::Intern("demoteA");
-  auto b = StringInternStore::Intern("demoteB");
-  auto c = StringInternStore::Intern("demoteC");
+  auto a = StringInternStore::Intern("rvalue_key_demoteA");
+  auto b = StringInternStore::Intern("rvalue_key_demoteB");
+  auto c = StringInternStore::Intern("rvalue_key_demoteC");
   BagOfInternedStringPtrs bag;
   bag.insert(a);
   bag.insert(b);
@@ -377,7 +496,7 @@ TEST_F(BagOfInternedStringPtrsTest, DemoteMultiToSingleOnErase) {
   // After demotion the surviving element is reachable through normal
   // single-mode iteration.
   EXPECT_EQ(std::distance(bag.begin(), bag.end()), 1);
-  EXPECT_EQ((*bag.begin())->Str(), "demoteA");
+  EXPECT_EQ((*bag.begin())->Str(), "rvalue_key_demoteA");
   // Removing the lone element returns to empty.
   EXPECT_EQ(bag.erase(a), 1u);
   EXPECT_TRUE(bag.empty());
@@ -417,8 +536,8 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIterator) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, ClearAllStates) {
-  auto a = StringInternStore::Intern("clear_a");
-  auto b = StringInternStore::Intern("clear_b");
+  auto a = StringInternStore::Intern("rvalue_key_clear_a");
+  auto b = StringInternStore::Intern("rvalue_key_clear_b");
   // Empty -> empty.
   {
     BagOfInternedStringPtrs bag;
@@ -456,8 +575,8 @@ TEST_F(BagOfInternedStringPtrsTest, NonCopyable) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, MoveCtorAndAssign) {
-  auto a = StringInternStore::Intern("mv_a");
-  auto b = StringInternStore::Intern("mv_b");
+  auto a = StringInternStore::Intern("rvalue_key_mv_a");
+  auto b = StringInternStore::Intern("rvalue_key_mv_b");
   // Single.
   {
     BagOfInternedStringPtrs src;
@@ -488,7 +607,7 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAndAssign) {
   {
     BagOfInternedStringPtrs bag;
     bag.insert(a);
-    auto& bag_ref = bag;
+    auto &bag_ref = bag;
     bag = std::move(bag_ref);
     EXPECT_EQ(bag.size(), 1u);
     EXPECT_TRUE(bag.contains(a));
@@ -496,21 +615,22 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAndAssign) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, IterationVisitsEverythingExactlyOnce) {
-  auto check_iteration = [](const std::vector<std::string>& strings) {
+  auto check_iteration = [](const std::vector<std::string> &strings) {
     std::vector<InternedStringPtr> keys;
-    for (const auto& s : strings) {
+    keys.reserve(strings.size());
+    for (const auto &s : strings) {
       keys.push_back(StringInternStore::Intern(s));
     }
     BagOfInternedStringPtrs bag;
-    for (const auto& k : keys) {
+    for (const auto &k : keys) {
       bag.insert(k);
     }
     absl::flat_hash_set<std::string> seen;
-    for (const auto& v : bag) {
+    for (const auto &v : bag) {
       seen.insert(std::string(v->Str()));
     }
     EXPECT_EQ(seen.size(), strings.size());
-    for (const auto& s : strings) {
+    for (const auto &s : strings) {
       EXPECT_TRUE(seen.contains(s)) << s;
     }
     EXPECT_EQ(static_cast<size_t>(std::distance(bag.begin(), bag.end())),
@@ -536,7 +656,7 @@ TEST_F(BagOfInternedStringPtrsTest, IteratorIsStlForwardIterator) {
   bag.insert(b);
   auto found = std::find_if(
       bag.begin(), bag.end(),
-      [&](const InternedStringPtr& p) { return p->Str() == "stl_b"; });
+      [&](const InternedStringPtr &p) { return p->Str() == "stl_b"; });
   ASSERT_NE(found, bag.end());
   EXPECT_EQ((*found)->Str(), "stl_b");
   std::vector<InternedStringPtr> copied(bag.begin(), bag.end());
@@ -571,7 +691,7 @@ TEST_F(BagOfInternedStringPtrsTest, SwapAcrossAllModeCombinations) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, RvalueInsertAdoptsRefCount) {
-  auto k = StringInternStore::Intern("rv_k");
+  auto k = StringInternStore::Intern("rvalue_key_rv_k");
   EXPECT_EQ(k.RefCount(), 1);
   BagOfInternedStringPtrs bag;
   {
@@ -617,7 +737,7 @@ TEST_F(BagOfInternedStringPtrsTest, NoLeaksUnderRepeatedChurn) {
 namespace {
 // Pre-intern N keys "trkN_0" ... "trkN_{N-1}" with a unique prefix per call
 // so concurrent tests don't collide on ref counts.
-std::vector<InternedStringPtr> MakeKeys(int n, const std::string& prefix) {
+std::vector<InternedStringPtr> MakeKeys(int n, const std::string &prefix) {
   std::vector<InternedStringPtr> keys;
   keys.reserve(n);
   for (int i = 0; i < n; ++i) {
@@ -628,8 +748,8 @@ std::vector<InternedStringPtr> MakeKeys(int n, const std::string& prefix) {
 
 // Walk the bag and verify it contains exactly the first `expected_count` keys
 // from `keys` (regardless of iteration order), and nothing else.
-void ExpectBagContains(const BagOfInternedStringPtrs& bag,
-                       const std::vector<InternedStringPtr>& keys,
+void ExpectBagContains(const BagOfInternedStringPtrs &bag,
+                       const std::vector<InternedStringPtr> &keys,
                        size_t expected_count) {
   EXPECT_EQ(bag.size(), expected_count);
   for (size_t i = 0; i < expected_count; ++i) {
@@ -640,7 +760,7 @@ void ExpectBagContains(const BagOfInternedStringPtrs& bag,
   }
   // Iteration must visit each expected key exactly once.
   absl::flat_hash_set<size_t> seen;
-  for (const auto& v : bag) {
+  for (const auto &v : bag) {
     for (size_t i = 0; i < expected_count; ++i) {
       if (v == keys[i]) {
         EXPECT_TRUE(seen.insert(i).second) << "key " << i << " visited twice";
@@ -656,7 +776,7 @@ TEST_F(BagOfInternedStringPtrsTest, InsertProgressionEmptyToSet) {
   using Mode = BagOfInternedStringPtrs::TestMode;
   // Insert keys one at a time and verify size + content + ref counts + mode
   // at every boundary.
-  auto keys = MakeKeys(10, "ipe_");
+  auto keys = MakeKeys(10, "rvalue_key_ipe_");
 
   BagOfInternedStringPtrs bag;
   EXPECT_EQ(bag.size(), 0u);
@@ -704,7 +824,7 @@ TEST_F(BagOfInternedStringPtrsTest, InsertProgressionEmptyToSet) {
   bag.insert(keys[9]);
   ExpectBagContains(bag, keys, 10);
   EXPECT_EQ(bag.TestModeForTesting(), Mode::kSet);
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     EXPECT_EQ(k.RefCount(), 2);
   }
 }
@@ -713,14 +833,14 @@ TEST_F(BagOfInternedStringPtrsTest, EraseProgressionSetToEmpty) {
   using Mode = BagOfInternedStringPtrs::TestMode;
   // Inverse of the previous test: starting from 10 elements (Set mode),
   // erase one at a time and verify mode-boundary demotions.
-  auto keys = MakeKeys(10, "ese_");
+  auto keys = MakeKeys(10, "rvalue_key_ese_");
   BagOfInternedStringPtrs bag;
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     bag.insert(k);
   }
   ExpectBagContains(bag, keys, 10);
   EXPECT_EQ(bag.TestModeForTesting(), Mode::kSet);
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     EXPECT_EQ(k.RefCount(), 2);
   }
 
@@ -786,7 +906,7 @@ TEST_F(BagOfInternedStringPtrsTest, ArrayPacksToFrontAfterMidErase) {
     EXPECT_TRUE(bag.contains(keys[3]));
     // Iterate; should yield exactly 3 distinct elements with no null views.
     int n = 0;
-    for (const auto& v : bag) {
+    for (const auto &v : bag) {
       EXPECT_TRUE(v);
       ++n;
     }
@@ -801,7 +921,7 @@ TEST_F(BagOfInternedStringPtrsTest, ArrayPacksToFrontAfterMidErase) {
     EXPECT_EQ(bag.size(), 6u);
     EXPECT_FALSE(bag.contains(keys[3]));
     int n = 0;
-    for (const auto& v : bag) {
+    for (const auto &v : bag) {
       EXPECT_TRUE(v);
       ++n;
     }
@@ -832,7 +952,7 @@ TEST_F(BagOfInternedStringPtrsTest, EraseLastElementOfArray) {
 }
 
 TEST_F(BagOfInternedStringPtrsTest, DuplicateInsertNoOpAcrossModes) {
-  auto keys = MakeKeys(6, "dup_");
+  auto keys = MakeKeys(6, "rvalue_key_dup_");
   BagOfInternedStringPtrs bag;
   // Single
   bag.insert(keys[0]);
@@ -853,7 +973,7 @@ TEST_F(BagOfInternedStringPtrsTest, DuplicateInsertNoOpAcrossModes) {
 TEST_F(BagOfInternedStringPtrsTest, DestructorReleasesAllElementsInEveryMode) {
   // For each mode, build a bag that holds the keys, then destroy the bag and
   // confirm every key's ref count returns to 1.
-  auto keys = MakeKeys(10, "drel_");
+  auto keys = MakeKeys(10, "my_test_drel_");
   for (size_t n : {0, 1, 2, 4, 5, 8, 9, 10}) {
     {
       BagOfInternedStringPtrs bag;
@@ -874,7 +994,7 @@ TEST_F(BagOfInternedStringPtrsTest, DestructorReleasesAllElementsInEveryMode) {
 TEST_F(BagOfInternedStringPtrsTest, MoveCtorAcrossEveryMode) {
   // Build a source bag in each mode, move-construct into a destination, and
   // verify the destination has the contents and the source is empty.
-  auto keys = MakeKeys(10, "mv_");
+  auto keys = MakeKeys(10, "mv_test_key_");
   for (size_t n : {0, 1, 2, 5, 9}) {
     BagOfInternedStringPtrs src;
     for (size_t i = 0; i < n; ++i) src.insert(keys[i]);
@@ -890,7 +1010,7 @@ TEST_F(BagOfInternedStringPtrsTest, MoveCtorAcrossEveryMode) {
     }
     // dst goes out of scope; refs should drop back.
   }
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     EXPECT_EQ(k.RefCount(), 1);
   }
 }
@@ -900,7 +1020,7 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
   {
     auto keys = MakeKeys(3, "eia4_");
     BagOfInternedStringPtrs bag;
-    for (const auto& k : keys) bag.insert(k);  // Array4 with 3
+    for (const auto &k : keys) bag.insert(k);  // Array4 with 3
     auto it = bag.find(keys[1]);
     ASSERT_NE(it, bag.end());
     bag.erase(it);
@@ -911,7 +1031,7 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
   {
     auto keys = MakeKeys(6, "eia8_");
     BagOfInternedStringPtrs bag;
-    for (const auto& k : keys) bag.insert(k);  // Array8 with 6
+    for (const auto &k : keys) bag.insert(k);  // Array8 with 6
     auto it = bag.find(keys[2]);
     ASSERT_NE(it, bag.end());
     bag.erase(it);
@@ -922,7 +1042,7 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
   {
     auto keys = MakeKeys(10, "eiaset_");
     BagOfInternedStringPtrs bag;
-    for (const auto& k : keys) bag.insert(k);  // Set with 10
+    for (const auto &k : keys) bag.insert(k);  // Set with 10
     auto it = bag.find(keys[4]);
     ASSERT_NE(it, bag.end());
     bag.erase(it);
@@ -935,7 +1055,7 @@ TEST_F(BagOfInternedStringPtrsTest, EraseByIteratorAllArrayModes) {
 TEST_F(BagOfInternedStringPtrsTest, RvalueInsertIntoArrayAndSetModes) {
   // Walk a moving InternedStringPtr into the bag at every mode boundary and
   // confirm the rvalue path adopts the ref count rather than copying it.
-  auto keys = MakeKeys(10, "rva_");
+  auto keys = MakeKeys(10, "rvalue_key_");
   BagOfInternedStringPtrs bag;
   // Single mode (Empty -> Single).
   {
@@ -1065,7 +1185,7 @@ TEST_F(BagOfInternedStringPtrsTest, ReservePicksCorrectMode) {
         << "n=" << c.n;
     auto keys =
         MakeKeys(static_cast<int>(c.n), "rsv_" + std::to_string(c.n) + "_");
-    for (const auto& k : keys) {
+    for (const auto &k : keys) {
       bag.insert(k);
     }
     EXPECT_EQ(bag.size(), c.n) << "n=" << c.n;
@@ -1078,12 +1198,12 @@ TEST_F(BagOfInternedStringPtrsTest, ReserveIsNoopOnNonEmptyBag) {
   // reserve() should not corrupt a bag that already has elements.
   auto keys = MakeKeys(3, "rsvne_");
   BagOfInternedStringPtrs bag;
-  for (const auto& k : keys) bag.insert(k);
+  for (const auto &k : keys) bag.insert(k);
   auto mode_before = bag.TestModeForTesting();
   bag.reserve(100);  // would promote to Set if we honored this; we don't.
   EXPECT_EQ(bag.TestModeForTesting(), mode_before);
   EXPECT_EQ(bag.size(), 3u);
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     EXPECT_TRUE(bag.contains(k));
   }
 }
@@ -1094,14 +1214,14 @@ TEST_F(BagOfInternedStringPtrsTest, ChurnAcrossAllModes) {
   auto keys = MakeKeys(10, "fchurn_");
   for (int rep = 0; rep < 25; ++rep) {
     BagOfInternedStringPtrs bag;
-    for (const auto& k : keys) bag.insert(k);  // grow through all modes
+    for (const auto &k : keys) bag.insert(k);  // grow through all modes
     EXPECT_EQ(bag.size(), 10u);
     for (auto it = keys.rbegin(); it != keys.rend(); ++it) {
       bag.erase(*it);  // shrink through all modes
     }
     EXPECT_TRUE(bag.empty());
   }
-  for (const auto& k : keys) {
+  for (const auto &k : keys) {
     EXPECT_EQ(k.RefCount(), 1);
   }
 }

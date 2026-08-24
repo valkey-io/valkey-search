@@ -8,7 +8,6 @@
 #include "src/utils/string_interning.h"
 
 #include <cstring>
-#include <utility>
 
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -54,31 +53,29 @@ MemoryPool StringInternStore::memory_pool_{0};
 struct InlineInternedString : public InternedString {
   // Inline string data follows immediately after this structure.
   // char data_[length_ + 1];  // null-terminated
-  InlineInternedString(size_t length) {
+  InlineInternedString(size_t length, bool is_custom_alloc = false) {
+    DCHECK_LE(length, 0x3fffffff) << "String length exceeds 30-bit limit";
     is_inline_ = 1;
+    is_custom_alloc_ = is_custom_alloc ? 1 : 0;
     length_ = length;
     ref_count_.store(1, std::memory_order_seq_cst);
   }
 };
 struct OutOfLineInternedString : public InternedString {
-  const char* out_of_line_data_;
-  OutOfLineInternedString(const char* data, size_t length) {
+  const char *out_of_line_data_;
+  OutOfLineInternedString(const char *data, size_t length,
+                          bool is_custom_alloc = false) {
+    DCHECK_LE(length, 0x3fffffff) << "String length exceeds 30-bit limit";
     is_inline_ = 0;
+    is_custom_alloc_ = is_custom_alloc ? 1 : 0;
     out_of_line_data_ = data;
     length_ = length;
     ref_count_.store(1, std::memory_order_seq_cst);
   }
 };
 
-/*
-// This generates warnings.
-static_assert(offsetof(OutOfLineInternedString, out_of_line_data_) ==
-                  sizeof(InternedString),
-              "OutOfLineInternedString layout must match InternedString");
-*/
-
 static_assert(sizeof(OutOfLineInternedString) ==
-                  sizeof(InternedString) + sizeof(char*),
+                  sizeof(InternedString) + sizeof(char *),
               "OutOfLineInternedString size must match InternedString size");
 
 void InternedString::DecrementRefCount() {
@@ -107,34 +104,35 @@ void InternedString::DecrementRefCount() {
   } while (!completed);
 }
 
-InternedString* InternedString::Constructor(absl::string_view str,
-                                            Allocator* allocator) {
+InternedString *InternedString::Constructor(absl::string_view str,
+                                            Allocator *allocator) {
   // NOTE: isolate memory tracking for allocation.
   IsolatedMemoryScope scope{StringInternStore::memory_pool_};
-  CHECK(str.size() <= 0x7fffffff) << "String too large to intern";
+  CHECK(str.size() <= 0x3fffffff) << "String too large to intern";
 
-  InternedString* ptr;
-  char* data;
+  InternedString *ptr;
+  char *data;
   if (allocator) {
     //
     // Allocate the InternedString structure and the string data separately.
     //
-    data = allocator->Allocate(str.size() + 1);
-    ptr = new OutOfLineInternedString(data, str.size());
+    data = allocator->Allocate(str.size());
+    ptr =
+        new OutOfLineInternedString(data, str.size(), /*is_custom_alloc=*/true);
   } else {
     //
     // Allocate the InternedString structure and the string data in one
     // block.
     //
-    size_t total_size = sizeof(InternedString) + str.size() + 1;
-    ptr = new (new char[total_size]) InlineInternedString(str.size());
+    size_t total_size = sizeof(InternedString) + str.size();
+    ptr = new (new char[total_size])
+        InlineInternedString(str.size(), /*is_custom_alloc=*/false);
     data = ptr->data_;
   }
   //
   // Now, copy the string data. and finish initializing the InternedString.
   //
   memcpy(data, str.data(), str.size());
-  data[str.size()] = '\0';
   return ptr;
 }
 
@@ -142,7 +140,7 @@ absl::string_view InternedString::Str() const {
   if (is_inline_) {
     return {data_, length_};
   } else {
-    auto ptr = reinterpret_cast<const OutOfLineInternedString*>(this);
+    auto ptr = reinterpret_cast<const OutOfLineInternedString *>(this);
     return {ptr->out_of_line_data_, length_};
   }
 }
@@ -152,31 +150,42 @@ void InternedString::Destructor() {
   IsolatedMemoryScope scope{StringInternStore::memory_pool_};
   if (StringInternStore::Instance().Release(this)) {
     if (is_inline_) {
-      delete[] reinterpret_cast<char*>(this);
+      if (is_custom_alloc_) {
+        Allocator::Free(reinterpret_cast<char *>(this));
+      } else {
+        delete[] reinterpret_cast<char *>(this);
+      }
     } else {
-      auto ptr = reinterpret_cast<const OutOfLineInternedString*>(this);
-      Allocator::Free(const_cast<char*>(ptr->out_of_line_data_));
+      auto ptr = reinterpret_cast<const OutOfLineInternedString *>(this);
+      if (ptr->is_custom_alloc_) {
+        Allocator::Free(const_cast<char *>(ptr->out_of_line_data_));
+      } else {
+        delete[] const_cast<char *>(ptr->out_of_line_data_);
+      }
       delete ptr;
     }
   }
 }
 
-InternedStringPtr* MakeShadowInternPtrPtr(InternedString* str, void*& storage) {
+InternedStringPtr *MakeShadowInternPtrPtr(InternedString *str, void *&storage) {
   storage = str;
   static_assert(sizeof(storage) == sizeof(InternedStringPtr));
-  return reinterpret_cast<InternedStringPtr*>(&storage);
+  return reinterpret_cast<InternedStringPtr *>(&storage);
 }
 
-bool StringInternStore::Release(InternedString* str) {
+bool StringInternStore::Release(InternedString *str) {
   //
   // Need to make an InternStringPtr to look it up in the map.
   // But we don't want to have the refcounts changed, so we create a
   // temporary InternedStringPtr that doesn't modify the refcounts.
   //
   OutOfLineInternedString fake(str->Str().data(), str->Str().size());
-  void* storage;
-  InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
-  absl::MutexLock lock(&mutex_);
+  void *storage;
+  InternedStringPtr *ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
+
+  size_t shard_idx = absl::HashOf(str->Str()) % kNumShards;
+  auto &shard = shards_[shard_idx];
+  absl::MutexLock lock(&shard.mutex);
   //
   // Now that we have the lock, try our decrement to see if we really
   // want to destroy this entry.
@@ -191,84 +200,93 @@ bool StringInternStore::Release(InternedString* str) {
   //
   // This is the true 1->0 transition. Remove from map.
   //
-  auto it = str_to_interned_.find(*ptr_ptr);
-  CHECK(it != str_to_interned_.end()) << "Bad Map State";
+  auto it = shard.str_to_interned.find(*ptr_ptr);
+  CHECK(it != shard.str_to_interned.end()) << "Bad Map State";
   CHECK(str->RefCount() == 0);
-  str_to_interned_.erase(
+  shard.str_to_interned.erase(
       it);  // Note this will also call the DecrementRefCount, but
             // since refcount is already zero, it will be a no-op.
   return true;
 }
 
 InternedStringPtr StringInternStore::Intern(absl::string_view str,
-                                            Allocator* allocator) {
+                                            Allocator *allocator) {
+  if (auto inline_ptr = InternedStringPtr::MakeInline(str)) {
+    return *inline_ptr;
+  }
   return Instance().InternImpl(str, allocator);
 }
 
-StringInternStore* StringInternStore::MakeInstance() {
+StringInternStore *StringInternStore::MakeInstance() {
   IsolatedMemoryScope scope{StringInternStore::memory_pool_};
   return new StringInternStore();
 }
 
-StringInternStore& StringInternStore::Instance() {
-  static StringInternStore* instance = MakeInstance();
+StringInternStore &StringInternStore::Instance() {
+  static StringInternStore *instance = MakeInstance();
   return *instance;
 }
 
 InternedStringPtr StringInternStore::InternImpl(absl::string_view str,
-                                                Allocator* allocator) {
+                                                Allocator *allocator) {
   IsolatedMemoryScope scope{memory_pool_};
   //
   // Construct a fake InternedStringPtr to look up in the map.
   // Doing it carefully to avoid modifying refcounts.
   //
   OutOfLineInternedString fake(str.data(), str.size());
-  void* storage;
-  InternedStringPtr* ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
+  void *storage;
+  InternedStringPtr *ptr_ptr = MakeShadowInternPtrPtr(&fake, storage);
 
-  absl::MutexLock lock(&mutex_);
-  auto it = str_to_interned_.find(*ptr_ptr);
-  if (it != str_to_interned_.end()) {
+  size_t shard_idx = absl::HashOf(str) % kNumShards;
+  auto &shard = shards_[shard_idx];
+
+  absl::MutexLock lock(&shard.mutex);
+  auto it = shard.str_to_interned.find(*ptr_ptr);
+  if (it != shard.str_to_interned.end()) {
     return *it;  // will bump the refcount automatically.
   }
   //
   // Create a new interned string. Without bumping the refcount....
   //
-  InternedString* new_ptr = InternedString::Constructor(str, allocator);
-  str_to_interned_.insert(std::move(InternedStringPtr(new_ptr)));
-  return {new_ptr};
+  InternedString *new_ptr = InternedString::Constructor(str, allocator);
+  shard.str_to_interned.insert(InternedStringPtr(new_ptr));
+  return InternedStringPtr(new_ptr);
 }
 
 int64_t StringInternStore::GetMemoryUsage() { return memory_pool_.GetUsage(); }
 
 StringInternStore::Stats StringInternStore::GetStats() const {
   Stats stats;
-  absl::MutexLock lock(&mutex_);
-  for (const auto& str : str_to_interned_) {
-    auto size = str->Str().size();
-    auto allocated = str->Allocated();
-    auto refcount =
-        str.RefCount();  // This is volatile even while holding the lock
-    if (str->IsInline()) {
-      stats.inline_total_stats_.count_++;
-      stats.inline_total_stats_.bytes_ += size;
-      stats.inline_total_stats_.allocated_ += allocated;
-      stats.by_ref_stats_[refcount].count_++;
-      stats.by_ref_stats_[refcount].bytes_ += size;
-      stats.by_ref_stats_[refcount].allocated_ += allocated;
-      stats.by_size_stats_[size].count_++;
-      stats.by_size_stats_[size].bytes_ += size;
-      stats.by_size_stats_[size].allocated_ += allocated;
-    } else {
-      stats.out_of_line_total_stats_.count_++;
-      stats.out_of_line_total_stats_.bytes_ += size;
-      stats.out_of_line_total_stats_.allocated_ += allocated;
-      stats.by_ref_stats_[-refcount].count_++;
-      stats.by_ref_stats_[-refcount].bytes_ += size;
-      stats.by_ref_stats_[-refcount].allocated_ += allocated;
-      stats.by_size_stats_[-size].count_++;
-      stats.by_size_stats_[-size].bytes_ += size;
-      stats.by_size_stats_[-size].allocated_ += allocated;
+  for (size_t shard_index = 0; shard_index < kNumShards; ++shard_index) {
+    const auto &shard = shards_[shard_index];
+    absl::MutexLock lock(&shard.mutex);
+    for (const auto &str : shard.str_to_interned) {
+      auto size = str->Str().size();
+      auto allocated = str.RawPtr()->Allocated();
+      auto refcount =
+          str.RefCount();  // This is volatile even while holding the lock
+      if (str->IsInline()) {
+        stats.inline_total_stats_.count_++;
+        stats.inline_total_stats_.bytes_ += size;
+        stats.inline_total_stats_.allocated_ += allocated;
+        stats.by_ref_stats_[refcount].count_++;
+        stats.by_ref_stats_[refcount].bytes_ += size;
+        stats.by_ref_stats_[refcount].allocated_ += allocated;
+        stats.by_size_stats_[size].count_++;
+        stats.by_size_stats_[size].bytes_ += size;
+        stats.by_size_stats_[size].allocated_ += allocated;
+      } else {
+        stats.out_of_line_total_stats_.count_++;
+        stats.out_of_line_total_stats_.bytes_ += size;
+        stats.out_of_line_total_stats_.allocated_ += allocated;
+        stats.by_ref_stats_[-refcount].count_++;
+        stats.by_ref_stats_[-refcount].bytes_ += size;
+        stats.by_ref_stats_[-refcount].allocated_ += allocated;
+        stats.by_size_stats_[-size].count_++;
+        stats.by_size_stats_[-size].bytes_ += size;
+        stats.by_size_stats_[-size].allocated_ += allocated;
+      }
     }
   }
   return stats;

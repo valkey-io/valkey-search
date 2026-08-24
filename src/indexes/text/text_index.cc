@@ -11,11 +11,11 @@
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
-#include "absl/strings/ascii.h"
 #include "absl/synchronization/mutex.h"
 #include "libstemmer.h"
+#include "src/indexes/text/posting.h"
 #include "src/valkey_search_options.h"
-#include "vmsdk/src/memory_allocation.h"
+
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -36,27 +36,31 @@ static void FreeStemParentsCallback(void *target) {
 }
 
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
-                                       const InternedStringPtr &key,
-                                       FlatPositionMap *flat_map,
+                                       const EncodedDocId &enc_doc_id,
+                                       const PositionMap &pos_map,
                                        TextIndexMetadata *metadata) {
-  InvasivePtr<Postings> postings;
-  if (existing_postings) {
-    postings = existing_postings;
-  } else {
+  if (!existing_postings) {
     metadata->num_unique_terms++;
-    postings = InvasivePtr<Postings>::Make();
+    existing_postings = InvasivePtr<Postings>::Make();
   }
 
-  postings->InsertKey(key, flat_map);
-  return postings;
+  existing_postings->InsertKey(enc_doc_id, &pos_map);
+  return existing_postings;
+}
+
+InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
+                                       DocId doc_id, const PositionMap &pos_map,
+                                       TextIndexMetadata *metadata) {
+  return AddKeyToPostings(std::move(existing_postings),
+                          EncodedDocId::Encode(doc_id), pos_map, metadata);
 }
 
 InvasivePtr<Postings> RemoveKeyFromPostings(
-    InvasivePtr<Postings> existing_postings, const InternedStringPtr &key,
+    InvasivePtr<Postings> existing_postings, DocId doc_id,
     TextIndexMetadata *metadata) {
   CHECK(existing_postings) << "Per-key tree became unaligned";
 
-  existing_postings->RemoveKey(key, metadata);
+  existing_postings->RemoveKey(doc_id, metadata);
 
   if (existing_postings->IsEmpty()) {
     metadata->num_unique_terms--;
@@ -157,35 +161,41 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     stem_mappings_ptr = &in_progress_stem_mappings_[key];
   }
 
-  // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
-
-  if (!tokens.ok()) {
-    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
-      return false;  // UTF-8 errors → hash_indexing_failures
-    }
-    return tokens.status();
-  }
-
-  // Map tokens -> positions -> field-masks
+  // Map tokens -> positions -> field-masks directly via streaming tokenizer
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
     token_positions = &in_progress_key_updates_[key];
+    if (token_positions->empty() && data.size() > 16) {
+      token_positions->reserve(data.size() / 6);
+    }
   }
-  for (uint32_t i = 0; i < tokens->size(); ++i) {
-    const auto &token = (*tokens)[i];
-    uint32_t position =
-        with_offsets_ ? i
-                      : 0;  // If positional info is disabled we default to 0
-    auto &[positions, suffix_eligible] = (*token_positions)[token];
-    if (suffix) suffix_eligible = true;
-    auto [pos_it, _] =
-        positions.try_emplace(position, FieldMask(num_text_fields_));
-    pos_it->second.SetField(text_field_number);
+
+  auto status = lexer_.Tokenize(
+      data, stem, min_stem_size_, stem_mappings_ptr,
+      [&](const std::string &token, uint32_t token_idx) {
+        uint32_t position = with_offsets_ ? token_idx : 0;
+        auto &[positions, suffix_eligible] = (*token_positions)[token];
+        if (suffix) suffix_eligible = true;
+        auto [pos_it, _] =
+            positions.try_emplace(position, FieldMask(num_text_fields_));
+        pos_it->second.SetField(text_field_number);
+      });
+
+  if (!status.ok()) {
+    if (status.code() == absl::StatusCode::kInvalidArgument) {
+      return false;  // UTF-8 errors → hash_indexing_failures
+    }
+    return status;
   }
 
   return true;
+}
+
+TextIndexSchema::~TextIndexSchema() {
+  per_key_text_indexes_.clear();
+  stem_tree_ = Rax();
+  text_index_.reset();
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
@@ -213,6 +223,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
   TextIndex key_index{with_suffix_trie_};
 
+  // Pre-resolve and pre-encode DocId once for all tokens in this document
+  DocId doc_id = DocIdMap::Instance().GetOrAssign(key);
+  EncodedDocId enc_doc_id = EncodedDocId::Encode(doc_id);
+
   // Index the key's tokens
   for (auto &entry : token_positions) {
     const std::string &token = entry.first;
@@ -229,10 +243,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       metadata_.total_term_frequency += field_mask.CountSetFields();
     }
 
-    // Create FlatPositionMap from PositionMap
-    FlatPositionMap *flat_map =
-        FlatPositionMap::Create(pos_map, num_text_fields_);
-
     // The updated target gets set in target_add_fn and later used in
     // target_set_fn, so that all trees point to the same postings object
     InvasivePtr<Postings> updated_target;
@@ -248,7 +258,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       bool is_new_word = !existing;
 
       updated_target =
-          AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
+          AddKeyToPostings(std::move(existing), enc_doc_id, pos_map, &metadata_);
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
@@ -303,6 +313,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
 
   std::vector<std::string> empty_words;
 
+  DocId doc_id = DocIdMap::Instance().GetDocId(key);
+
   auto iter = key_index.GetPrefix().GetWordIterator("");
   while (!iter.Done()) {
     std::string word_str(iter.GetWord());
@@ -321,7 +333,7 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
 
       InvasivePtr<Postings> updated_target;
       updated_target =
-          RemoveKeyFromPostings(std::move(existing), key, &metadata_);
+          RemoveKeyFromPostings(std::move(existing), doc_id, &metadata_);
 
       if (!updated_target) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);

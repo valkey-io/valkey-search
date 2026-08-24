@@ -12,9 +12,9 @@
 
 namespace valkey_search::indexes::text {
 // Inline capacity for word expansion key iterators
-constexpr size_t kWordExpansionInlineCapacity = 200;
+constexpr size_t kWordExpansionInlineCapacity = 16;
 // Inline capacity for proximity terms
-constexpr size_t kProximityTermsInlineCapacity = 64;
+constexpr size_t kProximityTermsInlineCapacity = 16;
 }  // namespace valkey_search::indexes::text
 
 #include "absl/base/thread_annotations.h"

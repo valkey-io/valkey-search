@@ -168,9 +168,9 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   bool AddPrefilteredKey(
-      absl::string_view query, uint64_t count, const InternedStringPtr& key,
-      std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
-      absl::flat_hash_set<const char*>& top_keys) const;
+      absl::string_view query, uint64_t count, const InternedStringPtr &key,
+      std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
+      absl::flat_hash_set<InternedStringPtr> &top_keys) const;
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
   template <typename T>
@@ -198,8 +198,8 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
         attribute_data_type_(attribute_data_type)
 #ifndef SAN_BUILD
         ,
-        vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator, dimensions * sizeof(float) + 1, true))
+        vector_allocator_(CREATE_UNIQUE_PTR(FixedSizeAllocator,
+                                            dimensions * sizeof(float), true))
 #endif  // !SAN_BUILD
   {
   }

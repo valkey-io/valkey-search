@@ -96,6 +96,10 @@ PARTIAL_TEXT_DOCS = {
     **{f"doc:{i}": {"cat": "x", "rank": str(i)} for i in range(5, 11)},
 }
 
+# Ten non-stopword tokens: doc_len is 10 in an indexed TEXT field, 0 anywhere
+# else, so the same value tells the two apart.
+TEN_WORDS = "one two three four five six seven eight nine ten"
+
 
 # =====================================================================
 # Helpers
@@ -340,7 +344,7 @@ class TestScoring(ValkeySearchTestCaseBase):
             client.execute_command("FT.SEARCH", IDX_MAIN[1], "hello",
                                    "SCORER", "TFIDF")
 
-    # Group 9: N counts every indexed doc, not just the text-bearing ones.
+    # Group 9: N counts every keyspace match, but only indexed TEXT adds doc_len.
     def test_index_size_counts_all_docs(self):
         client = self.server.get_new_client()
         load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
@@ -351,6 +355,28 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert keys == ["doc:3", "doc:1", "doc:2"]
         assert scores == pytest.approx({
             "doc:3": 0.974311, "doc:1": 0.650739, "doc:2": 0.650739,
+        }, abs=SCORE_ABS_TOL)
+
+        # A doc matching only the keyspace still joins the corpus: N goes 10 -> 11
+        # so IDF rises, while its ten words sit outside the schema and leave
+        # total_doc_len at 7, dropping avg_doc_len from 0.70 to 7/11.
+        client.hset("doc:11", mapping={"filler": TEN_WORDS})
+        wait_indexed(client, IDX_MAIN, 11)
+        keys, unindexed_words = search(client, IDX_MAIN, "hello")
+        assert keys == ["doc:3", "doc:1", "doc:2"]
+        assert unindexed_words == pytest.approx({
+            "doc:3": 0.998685, "doc:1": 0.656575, "doc:2": 0.656575,
+        }, abs=SCORE_ABS_TOL)
+
+        # The same ten words in the indexed TEXT field: N goes to 12 and
+        # total_doc_len to 17, so avg_doc_len jumps to 17/12 and lifts every
+        # score, even though the new doc carries no query term.
+        client.hset("doc:12", mapping={"body": TEN_WORDS})
+        wait_indexed(client, IDX_MAIN, 12)
+        keys, indexed_words = search(client, IDX_MAIN, "hello")
+        assert keys == ["doc:3", "doc:1", "doc:2"]
+        assert indexed_words == pytest.approx({
+            "doc:3": 1.491665, "doc:1": 1.123015, "doc:2": 1.123015,
         }, abs=SCORE_ABS_TOL)
 
     # Group 10: a numeric predicate filters but never contributes to the score.
@@ -371,6 +397,8 @@ class TestScoring(ValkeySearchTestCaseBase):
                                        abs=SCORE_ABS_TOL)
 
     # Group 11: tag values score as BM25 terms with per-value IDF.
+    # With a TEXT field in the schema: tags score exactly like text, except TF=1.
+    # Without one: avg_doc_len is 0, so every leaf degenerates to a score of 0.
     def test_tag_scoring(self):
         client = self.server.get_new_client()
         load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
@@ -409,23 +437,18 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, with_numeric = search(client, IDX_MAIN, "hello @cat:{a} @rank:[0 100]")
         assert with_numeric == pytest.approx(text_and_tag, abs=SCORE_ABS_TOL)
 
-    # Group 12: with no TEXT field avg_doc_len is 0, so nothing can rank.
-    def test_no_text_field_scores_zero(self):
-        client = self.server.get_new_client()
+        # Same docs, same tag query, but a schema without a TEXT field: the leaf
+        # that scored 1.260592 / 0.841945 above degenerates to a well-defined 0,
+        # where the reference returns nan instead. Numerics stay 0 either way.
         load(client, IDX_NO_TEXT_FIELD, PARTIAL_TEXT_DOCS)
+        _, no_text_cat_a = search(client, IDX_NO_TEXT_FIELD, "@cat:{a}")
+        assert no_text_cat_a == pytest.approx({"doc:1": 0.0, "doc:3": 0.0},
+                                              abs=SCORE_ABS_TOL)
+        _, no_text_ranks = search(client, IDX_NO_TEXT_FIELD, "@rank:[1 10]")
+        assert no_text_ranks == pytest.approx(
+            {f"doc:{i}": 0.0 for i in range(1, 11)}, abs=SCORE_ABS_TOL)
 
-        # The same query scores 1.260592 / 0.841945 once a TEXT field exists
-        # (group 11). Here the tag term degenerates to a well-defined 0, where the
-        # reference returns nan instead.
-        _, cat_a = search(client, IDX_NO_TEXT_FIELD, "@cat:{a}")
-        assert cat_a == pytest.approx({"doc:1": 0.0, "doc:3": 0.0},
-                                      abs=SCORE_ABS_TOL)
-
-        _, ranks = search(client, IDX_NO_TEXT_FIELD, "@rank:[1 10]")
-        assert ranks == pytest.approx({f"doc:{i}": 0.0 for i in range(1, 11)},
-                                      abs=SCORE_ABS_TOL)
-
-    # Group 13: a wildcard scores every doc on doc_len alone.
+    # Group 12: a wildcard scores every doc on doc_len alone.
     def test_match_all(self):
         client = self.server.get_new_client()
         load(client, IDX_MAIN, TEXT_DOCS)
@@ -441,7 +464,7 @@ class TestScoring(ValkeySearchTestCaseBase):
             "doc:3": 0.880000, "doc:4": 0.773869,
         }, abs=SCORE_ABS_TOL)
 
-    # Group 14: a hybrid text=>[KNN] query ranks by text score, not by distance.
+    # Group 13: a hybrid text=>[KNN] query ranks by text score, not by distance.
     def test_hybrid_text_vector(self):
         client = self.server.get_new_client()
         load(client, IDX_MAIN, TEXT_DOCS)
@@ -469,7 +492,7 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert res[1] == b"doc:6" and res[2] == b"#0"
         assert res[4] == b"doc:8" and res[5] == b"#32"
 
-    # Group 15: corpus statistics track mutations immediately, so scores change as
+    # Group 14: corpus statistics track mutations immediately, so scores change as
     # soon as a doc is added or removed. The reference defers this until GC runs.
     def test_scores_follow_mutations(self):
         client = self.server.get_new_client()

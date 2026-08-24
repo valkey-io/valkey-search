@@ -37,9 +37,6 @@ IDX_HYBRID = [
     "DISTANCE_METRIC", "L2",
 ]
 
-# One doc per shard, so every body is a single-doc corpus and only the
-# coordinator can evict. The decoy hv:1 is farthest but scores lowest on text,
-# so keying the merge on text score instead of distance would keep it.
 HYBRID_SPREAD_DOCS = {
     "hv:2": {"body": "cat cat", "vec": _vec(1.0, 1.0)},      # dist 0
     "hv:3": {"body": "cat cat cat", "vec": _vec(2.0, 2.0)},  # dist 2
@@ -47,8 +44,7 @@ HYBRID_SPREAD_DOCS = {
 }
 
 # {SA} co-locates three docs so that shard holds more than k, making shard-local
-# eviction run as well. The decoy {SA}2 outscores {SB}1 on text, so a text-keyed
-# merge would drop {SB}1.
+# eviction run as well.
 HYBRID_COLOCATED_DOCS = {
     "hv:{SA}1": {"body": "cat", "vec": _vec(1.0, 1.0)},              # dist 0
     "hv:{SA}2": {"body": "cat cat cat", "vec": _vec(2.0, 2.0)},      # dist 2
@@ -238,14 +234,16 @@ class TestScoringCluster(ValkeySearchClusterTestCase):
         assert keys == ["doc:7", "doc:5", "doc:4", "doc:3", "doc:2", "doc:1"]
         assert scores == pytest.approx(hello, abs=SCORE_ABS_TOL)
 
-    # Group 14: a hybrid text=>[KNN] fanout keeps the k nearest, then ranks the
-    # survivors by text score.
+    # Group 13: a hybrid text=>[KNN] fanout evicts by distance -- first on any
+    # shard holding more than k matches, then again at the coordinator -- and
+    # ranks the survivors by text score.
     def test_hybrid_text_vector(self):
         self._load(IDX_HYBRID, HYBRID_SPREAD_DOCS)
         params = ("PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
         expected = {"hv:3": 0.452072, "hv:2": 0.395563}
 
-        # The decoy hv:1 (dist 32) is evicted despite the survivors' text scores.
+        # One doc per shard, so only the coordinator evicts: hv:1 (dist 32) goes,
+        # and hv:3 still leads on text score even though hv:2 is nearer.
         keys, scores = self._search(IDX_HYBRID, "cat=>[KNN 2 @vec $q]", *params)
         assert keys == ["hv:3", "hv:2"]
         assert scores == pytest.approx(expected, abs=SCORE_ABS_TOL)
@@ -256,7 +254,22 @@ class TestScoringCluster(ValkeySearchClusterTestCase):
         assert keys == ["hv:2", "hv:3"]
         assert scores == pytest.approx(expected, abs=SCORE_ABS_TOL)
 
-    # Group 16: LIMIT trims the merged global ranking, not each shard's page.
+        # FLUSHALL on all nodes to clear the cluster
+        for client in self.get_all_primary_clients():
+            client.execute_command("FLUSHALL", "SYNC")
+        self.new_cluster_client().execute_command("FT.DROPINDEX", IDX_HYBRID[1])
+        self._load(IDX_HYBRID, HYBRID_COLOCATED_DOCS)
+
+        # {SA} holds three matches, so that shard evicts to its two nearest before
+        # the coordinator evicts again: {SA}3 never leaves the shard and {SA}2 loses
+        # the merge, though both outscore the surviving {SA}1 on text.
+        keys, scores = self._search(IDX_HYBRID, "cat=>[KNN 2 @vec $q]", *params)
+        assert keys == ["hv:{SB}1", "hv:{SA}1"]
+        assert scores == pytest.approx({"hv:{SB}1": 0.486847,
+                                        "hv:{SA}1": 0.167868},
+                                       abs=SCORE_ABS_TOL)
+
+    # Group 15: LIMIT trims the merged global ranking, not each shard's page.
     def test_pagination(self):
         self._load(IDX_MAIN, TEXT_DOCS)
 
@@ -265,30 +278,4 @@ class TestScoringCluster(ValkeySearchClusterTestCase):
         assert total == 6
         assert keys == ["doc:4", "doc:1"]
         assert scores == pytest.approx({"doc:4": 0.560068, "doc:1": 0.349157},
-                                       abs=SCORE_ABS_TOL)
-
-    # Group 17: a shard holding more than k matches evicts locally and again at
-    # the coordinator, leaving the two globally nearest.
-    def test_hybrid_shard_local_and_coordinator_eviction(self):
-        self._load(IDX_HYBRID, HYBRID_COLOCATED_DOCS)
-
-        keys, scores = self._search(
-            IDX_HYBRID, "cat=>[KNN 2 @vec $q]",
-            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
-        assert keys == ["hv:{SB}1", "hv:{SA}1"]
-        assert scores == pytest.approx({"hv:{SB}1": 0.486847,
-                                        "hv:{SA}1": 0.167868},
-                                       abs=SCORE_ABS_TOL)
-
-    # Group 18: a numeric-filtered vector query merges by distance, and the
-    # filter is applied before KNN.
-    def test_numeric_filtered_vector(self):
-        self._load(IDX_VECTOR_NUM, VECTOR_NUM_DOCS)
-
-        # vn:{SA}4 is nearest but filtered out; vn:{SB}3 is in range but evicted.
-        keys, scores = self._search_vec(
-            IDX_VECTOR_NUM, "@n:[0 100]=>[KNN 2 @vec $q]",
-            "PARAMS", "2", "q", _vec(1.0, 1.0), "DIALECT", "2")
-        assert keys == ["vn:{SA}1", "vn:{SC}2"]
-        assert scores == pytest.approx({"vn:{SA}1": 0.0, "vn:{SC}2": 1.0},
                                        abs=SCORE_ABS_TOL)

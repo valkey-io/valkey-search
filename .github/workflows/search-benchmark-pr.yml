@@ -257,8 +257,15 @@ jobs:
 
       # Install the valkey-search build dependencies and toolchain via the
       # single maintained script (ci/install_deps.sh).
+      #
+      # SECURITY: this runs with sudo, and pull_request_target executes with
+      # base-repo secrets. We therefore run the script from the BASELINE
+      # checkout (base_sha, a commit in the target repo that a fork PR cannot
+      # modify) — never from the PR merge commit (MODULE_DIR), which is
+      # fork-controlled. This keeps privileged setup on trusted content while
+      # still using the single maintained script.
       - name: Install build dependencies and toolchain
-        working-directory: ${{ env.MODULE_DIR }}
+        working-directory: ${{ env.MODULE_BASELINE_DIR }}
         run: ./ci/install_deps.sh
 
       - name: Install benchmark Python dependencies

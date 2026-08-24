@@ -14,6 +14,7 @@
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -29,6 +30,13 @@ enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
 inline bool IsVectorIndex(IndexerType type) {
   return type == IndexerType::kVector || type == IndexerType::kHNSW ||
          type == IndexerType::kFlat;
+}
+
+inline void AssertValidIndexerType(IndexerType type) {
+  CHECK(type == IndexerType::kTag || type == IndexerType::kText ||
+        type == IndexerType::kNone || type == IndexerType::kNumeric ||
+        type == IndexerType::kVector)
+      << "Unexpected indexer type: " << static_cast<int>(type);
 }
 
 enum class DeletionType {

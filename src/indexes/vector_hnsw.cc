@@ -34,6 +34,7 @@
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -263,10 +264,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
-    // The concern with calling updatePoint is that it might have implications
-    // on the search accuracy. Need to revisit this in the future.
-    algo_->markDelete(internal_id);
+    // addPoint() routes an existing label to an in-place update.
     algo_->addPoint(InputVector(record, GetVectorAllocator()), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {

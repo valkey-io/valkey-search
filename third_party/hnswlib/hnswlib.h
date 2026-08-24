@@ -144,7 +144,7 @@ typedef size_t labeltype;
 class BaseFilterFunctor {
  public:
   virtual bool operator()(hnswlib::labeltype id) { return true; }
-  virtual ~BaseFilterFunctor() {};
+  virtual ~BaseFilterFunctor(){};
 };
 
 // VALKEYSEARCH BEGIN
@@ -154,7 +154,7 @@ class BaseFilterFunctor {
 class BaseCancellationFunctor {
  public:
   virtual bool isCancelled() { return false; }
-  virtual ~BaseCancellationFunctor() {};
+  virtual ~BaseCancellationFunctor(){};
 };
 // VALKEYSEARCH END
 

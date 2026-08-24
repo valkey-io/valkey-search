@@ -26,6 +26,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
+#include "src/expr/value.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -545,7 +546,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
           auto numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
-                vmsdk::MakeUniqueValkeyString(absl::StrCat(*numeric));
+                vmsdk::MakeUniqueValkeyString(expr::FormatDouble(*numeric));
           }
           break;
         }

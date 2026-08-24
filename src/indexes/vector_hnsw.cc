@@ -35,6 +35,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -282,7 +283,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
     const std::vector<char> &norm_record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
+    // addPoint() routes an existing label to an in-place update.
     algo_->addPoint(InputVector(vector_record, norm_record), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {

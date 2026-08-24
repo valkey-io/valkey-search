@@ -484,6 +484,12 @@ static vmsdk::info_field::Integer hnsw_create_exceptions_count(
       return Metrics::GetStats().hnsw_create_exceptions_cnt;
     }));
 
+static vmsdk::info_field::Integer hnsw_duplicate_label_on_load_count(
+    "hnswlib", "hnsw_duplicate_label_on_load_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().hnsw_duplicate_label_on_load_cnt;
+    }));
+
 static vmsdk::info_field::Integer string_interning_store_size(
     "string_interning", "string_interning_store_size",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {

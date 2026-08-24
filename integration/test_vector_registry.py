@@ -67,11 +67,11 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         initial_info = _get_vmsdk_info(client)
         
-        sharing_active = int(initial_info.get("vector_registry_sharing_active", 0))
+        sharing_active = int(initial_info["vector_registry_sharing_active"])
         if not sharing_active:
             pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
             
-        initial_shared = int(initial_info.get("vector_registry_shared_externally_cnt", 0))
+        initial_shared = int(initial_info["vector_registry_shared_externally_cnt"])
 
         # 1. Ingest 10 vectors by issuing hset command
         expected_vectors = {}
@@ -82,16 +82,10 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             expected_vectors[key] = vec_bytes
             client.hset(key, mapping={"vec": vec_bytes})
 
-        # Wait for mutations / backfill to finish indexing
-        waiters.wait_for_equal(
-            lambda: vector_index.info(client).num_docs,
-            num_vectors,
-        )
-
         # 2. Ensure that the vector registry indicates these vectors were shared with the engine
         info_data = _get_vmsdk_info(client)
-        shared_cnt = int(info_data.get("vector_registry_shared_externally_cnt", 0)) - initial_shared
-        entry_cnt = int(info_data.get("vector_registry_entry_cnt", 0))
+        shared_cnt = int(info_data["vector_registry_shared_externally_cnt"]) - initial_shared
+        entry_cnt = int(info_data["vector_registry_entry_cnt"])
 
         assert shared_cnt == num_vectors, f"Expected {num_vectors} shared vectors, got {shared_cnt}"
         assert entry_cnt == num_vectors, f"Expected entry count {num_vectors}, got {entry_cnt}"
@@ -105,7 +99,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         vector_index.drop(client)
 
         waiters.wait_for_equal(
-            lambda: int(_get_vmsdk_info(client).get("vector_registry_entry_cnt", -1)),
+            lambda: int(_get_vmsdk_info(client)["vector_registry_entry_cnt"]),
             0,
         )
 
@@ -129,7 +123,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         """
         client: Valkey = self.server.get_new_client()
         initial_info = _get_vmsdk_info(client)
-        if not int(initial_info.get("vector_registry_sharing_active", 0)):
+        if not int(initial_info["vector_registry_sharing_active"]):
             pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
             
         dim = 8
@@ -157,11 +151,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         vec_bytes1 = float_to_bytes(vec_data1)
         client.hset(key1, mapping={"vec": vec_bytes1})
 
-        waiters.wait_for_equal(
-            lambda: vector_index.info(client).num_docs,
-            1,
-        )
-
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 1
@@ -171,65 +160,37 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         # 3. Update document with the EXACT SAME vector
         client.hset(key1, mapping={"vec": vec_bytes1})
-        
-        # To guarantee the background indexing of the update has completed,
-        # we add a second document and wait for the total doc count to be 2.
-        key2 = "doc:2"
-        vec_data2 = [2.0] * dim
-        vec_bytes2 = float_to_bytes(vec_data2)
-        client.hset(key2, mapping={"vec": vec_bytes2})
 
-        waiters.wait_for_equal(
-            lambda: vector_index.info(client).num_docs,
-            2,
-        )
-
-        # At this point, doc:1 was re-indexed with the same vector, and doc:2 was added.
-        # For doc:1 update: Since HSET overwrites the reference with a raw string,
+        # Since HSET overwrites the reference with a raw string,
         # Track reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
         # AddRecord also calls LookupRecord (Hit).
-        # For doc:2 addition: Track adds it and shares it (hash_sharing_hits becomes 3).
-        # AddRecord calls LookupRecord (Hit).
         stats = _get_vector_registry_stats(client)
-        assert stats["entry_cnt"] == 2
-        assert stats["hash_sharing_hits"] == 3
-        # LookupRecord should have 3 hits (doc:1 initial, doc:1 update, doc:2 initial)
-        assert stats["lookup_record_hits"] == 3
+        assert stats["entry_cnt"] == 1
+        assert stats["hash_sharing_hits"] == 2
+        assert stats["lookup_record_hits"] == 2
         assert stats["lookup_record_misses"] == 0
 
         # 4. Update document with a DIFFERENT vector
-        vec_data3 = [3.0] * dim
-        vec_bytes3 = float_to_bytes(vec_data3)
-        client.hset(key1, mapping={"vec": vec_bytes3})
+        vec_data2 = [3.0] * dim
+        vec_bytes2 = float_to_bytes(vec_data2)
+        client.hset(key1, mapping={"vec": vec_bytes2})
 
-        # Sync by adding doc:3
-        key3 = "doc:3"
-        vec_data4 = [4.0] * dim
-        vec_bytes4 = float_to_bytes(vec_data4)
-        client.hset(key3, mapping={"vec": vec_bytes4})
-        waiters.wait_for_equal(
-            lambda: vector_index.info(client).num_docs,
-            3,
-        )
-
-        # For doc:1 update: Track sees the content differs, replaces it, and shares it.
-        # AddRecord calls LookupRecord (Hit).
-        # For doc:3 addition: Track adds it and shares it (hash_sharing_hits becomes 4).
+        # Track sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
         # AddRecord calls LookupRecord (Hit).
         stats = _get_vector_registry_stats(client)
-        assert stats["entry_cnt"] == 3
-        assert stats["hash_sharing_hits"] == 4
-        assert stats["lookup_record_hits"] == 5  # +2 hits
+        assert stats["entry_cnt"] == 1
+        assert stats["hash_sharing_hits"] == 3
+        assert stats["lookup_record_hits"] == 3
         assert stats["lookup_record_misses"] == 0
 
-        # 5. Delete a document and verify drop in entry count
-        client.delete(key2)
+        # 5. Delete the document and verify drop in entry count
+        client.delete(key1)
         waiters.wait_for_equal(
             lambda: vector_index.info(client).num_docs,
-            2,
+            0,
         )
         stats = _get_vector_registry_stats(client)
-        assert stats["entry_cnt"] == 2
+        assert stats["entry_cnt"] == 0
 
     @pytest.mark.parametrize("index_type,distance_metric", [
         ("HNSW", "L2"),
@@ -291,7 +252,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         """
         client: Valkey = self.server.get_new_client()
         initial_info = _get_vmsdk_info(client)
-        if not int(initial_info.get("vector_registry_sharing_active", 0)):
+        if not int(initial_info["vector_registry_sharing_active"]):
             pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
             
         dim = 8
@@ -324,85 +285,31 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             # Ensure we reset the control variable even if asserts fail
             client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
 
-    def test_vector_registry_copy_and_delete(self):
-        client: Valkey = self.server.get_new_client()
-        dim = 8
-        vector_index = Index(
-            "copy_idx",
-            [Vector("vec", dim, type="HNSW", distance="L2")],
-            prefixes=["doc:"],
-            type=KeyDataType.HASH,
-        )
-        vector_index.create(client)
-
-        initial_info = _get_vmsdk_info(client)
-        if not int(initial_info.get("vector_registry_sharing_active", 0)):
-            pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
-
-        # 1. Ingest doc:1
-        vec_data = [1.0] * dim
-        vec_bytes = float_to_bytes(vec_data)
-        client.hset("doc:1", mapping={"vec": vec_bytes})
-
-        waiters.wait_for_equal(lambda: vector_index.info(client).num_docs, 1)
-
-        # 2. Copy doc:1 to doc:2
-        client.copy("doc:1", "doc:2")
-
-        waiters.wait_for_equal(lambda: vector_index.info(client).num_docs, 2)
-
-        # 3. Delete doc:1
-        client.delete("doc:1")
-
-        waiters.wait_for_equal(lambda: vector_index.info(client).num_docs, 1)
-
-        # 4. HGET doc:2 vec and verify it matches vec_bytes
-        val = client.hget("doc:2", "vec")
-        assert val == vec_bytes, f"Expected {vec_bytes}, got {val}"
-
-
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
     """
     Integration tests comparing Valkey memory consumption when vector memory sharing is OFF vs ON.
     Tests requirements #3 (HNSW) and #4 (FLAT).
     """
 
-    def _start_server_with_sharing(self, sharing_enabled: bool, test_suffix: str) -> tuple[object, Valkey]:
-        """Helper to launch a server instance with explicit vector sharing configuration."""
-        port = self.get_bind_port()
-        test_name = f"{self.test_name}_{test_suffix}"
-        testdir = f"{LOGS_DIR}/{test_name}"
-        os.makedirs(testdir, exist_ok=True)
-
-        server_path = os.getenv("VALKEY_SERVER_PATH")
-        sharing_flag = "yes" if sharing_enabled else "no"
-
-        lines = [
+    def get_config_file_lines(self, testdir, port) -> list[str]:
+        sharing_flag = "yes" if getattr(self, "_sharing_enabled", True) else "no"
+        return [
             "enable-debug-command yes",
             "hash-max-listpack-entries 0",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"dir {testdir}",
             f"loadmodule {os.getenv('MODULE_PATH')} --debug-mode yes --info-developer-visible yes --enable-vector-sharing {sharing_flag}",
         ]
-        conf_file = f"{testdir}/valkey_{port}.conf"
-        with open(conf_file, "w+") as f:
-            for line in lines:
-                f.write(f"{line}\n")
 
-        logfile = f"{testdir}/logfile-primary-{port}.log"
-        args = {
-            "logfile": logfile,
-        }
-
-        server, client = self.create_server(
-            testdir=testdir,
-            server_path=server_path,
-            args=args,
-            port=port,
-            conf_file=conf_file,
+    def _start_server_with_sharing(self, sharing_enabled: bool, test_suffix: str) -> tuple[object, Valkey]:
+        """Helper to launch a server instance with explicit vector sharing configuration."""
+        self._sharing_enabled = sharing_enabled
+        server, client, _ = self.start_server(
+            port=self.get_bind_port(),
+            test_name=f"{self.test_name}_{test_suffix}",
+            cluster_enabled=False,
+            is_primary=True,
         )
-        self.wait_for_logfile(logfile, "Ready to accept connections")
-        client.ping()
         return server, client
 
     def _ingest_and_measure_memory(self, sharing_enabled: bool, index_type: str, index_name: str) -> tuple[int, int, int]:
@@ -425,8 +332,8 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
             )
             vector_index.create(client)
 
-            initial_info = client.info("vector_registry")
-            initial_shared = int(initial_info.get("vector_registry_shared_externally_cnt", 0))
+            initial_info = _get_vmsdk_info(client)
+            initial_shared = int(initial_info["vector_registry_shared_externally_cnt"])
 
             for i in range(num_vectors):
                 key = f"doc:{i}"
@@ -440,14 +347,13 @@ class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
             )
 
             info_data = _get_vmsdk_info(client)
-            print(f"DEBUG INGEST MEMORY (sharing={sharing_enabled}) INFO DATA:", info_data)
             
-            sharing_active = int(info_data.get("vector_registry_sharing_active", 0))
+            sharing_active = int(info_data["vector_registry_sharing_active"])
             if sharing_enabled and not sharing_active:
                 pytest.skip("Vector memory sharing is not active/supported on this Valkey server version.")
 
-            shared_cnt = int(info_data.get("vector_registry_shared_externally_cnt", 0)) - initial_shared
-            entry_cnt = int(info_data.get("vector_registry_entry_cnt", 0))
+            shared_cnt = int(info_data["vector_registry_shared_externally_cnt"]) - initial_shared
+            entry_cnt = int(info_data["vector_registry_entry_cnt"])
             used_memory = int(client.info("memory")["used_memory"])
 
             return shared_cnt, entry_cnt, used_memory

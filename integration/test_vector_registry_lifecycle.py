@@ -17,6 +17,7 @@ import os
 import shutil
 import pytest
 import valkey
+from valkey import Valkey
 from indexes import Index, KeyDataType, Numeric, Tag, Vector, float_to_bytes
 from valkey_search_test_case import LOGS_DIR, ValkeySearchTestCaseDebugMode
 from valkeytestframework.util import waiters
@@ -752,38 +753,41 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     CORPUS = [[float((i * 7 + j * 3) % 11) + 0.5 for j in range(8)] for i in range(10)]
     QUERY = [1.5, 0.25, 3.0, 2.0, 0.5, 4.0, 1.0, 2.5]
 
-    def _start(self, testdir: str, sharing: bool):
-        """A server with an explicit sharing setting, rooted at `testdir`."""
-        port = self.get_bind_port()
-        os.makedirs(testdir, exist_ok=True)
-        flag = "yes" if sharing else "no"
-        lines = [
+    def get_config_file_lines(self, testdir, port) -> list[str]:
+        sharing_flag = "yes" if getattr(self, "_sharing_enabled", True) else "no"
+        return [
             "enable-debug-command yes",
             "hash-max-listpack-entries 0",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"dir {testdir}",
             f"loadmodule {os.getenv('MODULE_PATH')} --debug-mode yes "
-            f"--info-developer-visible yes --enable-vector-sharing {flag}",
+            f"--info-developer-visible yes --enable-vector-sharing {sharing_flag}",
         ]
-        conf_file = f"{testdir}/valkey_{port}.conf"
-        with open(conf_file, "w+") as f:
-            f.write("\n".join(lines) + "\n")
-        logfile = f"{testdir}/logfile-{port}.log"
-        server, client = self.create_server(
-            testdir=testdir,
-            server_path=os.getenv("VALKEY_SERVER_PATH"),
-            args={"logfile": logfile, "dir": testdir, "dbfilename": "dump.rdb"},
-            port=port,
-            conf_file=conf_file,
+
+    def append_startup_args(self, args: dict[str, str]) -> dict[str, str]:
+        args = super().append_startup_args(args)
+        if hasattr(self, "_current_testdir"):
+            args["dir"] = self._current_testdir
+            args["dbfilename"] = "dump.rdb"
+        return args
+
+    def _start(self, test_suffix: str, sharing: bool) -> tuple[object, Valkey]:
+        """A server with an explicit sharing setting, rooted at a suffix under LOGS_DIR."""
+        self._sharing_enabled = sharing
+        self._current_testdir = f"{LOGS_DIR}/{self.test_name}_{test_suffix}"
+        server, client, _ = self.start_server(
+            port=self.get_bind_port(),
+            test_name=f"{self.test_name}_{test_suffix}",
+            cluster_enabled=False,
+            is_primary=True,
         )
-        self.wait_for_logfile(logfile, "Ready to accept connections")
-        client.ping()
-        assert int(self._stat(client, "sharing_active")) == (1 if sharing else 0)
+        assert int(self.registry_stat("sharing_active", client)) == (1 if sharing else 0)
         return server, client
 
-    @staticmethod
-    def _stat(client, name: str) -> int:
-        info = client.execute_command("INFO", "everything")
+    def registry_stat(self, name: str, client: Valkey | None = None) -> int:
+        """One `search_vector_registry_*` INFO field."""
+        cl = client if client is not None else self.client
+        info = cl.execute_command("INFO", "everything")
         key = f"search_vector_registry_{name}"
         if isinstance(info, dict):
             return int(info[key])
@@ -802,7 +806,6 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
         index.create(client, wait_for_backfill=True)
         for i, vec in enumerate(self.CORPUS):
             client.hset(f"doc:{i}", "vec", float_to_bytes(vec))
-        waiters.wait_for_equal(lambda: index.info(client).num_docs, len(self.CORPUS))
         return index
 
     def _knn(self, client) -> dict:
@@ -821,13 +824,14 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
         assert len(out) == len(self.CORPUS), f"expected the whole corpus, got {out}"
         return out
 
-    def _save_and_hand_off(self, client, dst_dir: str):
+    def _save_and_hand_off(self, client, dst_suffix: str):
         """Persist, then place the RDB where the next server will look."""
         client.execute_command("SAVE")
         cfg = client.execute_command("CONFIG", "GET", "dir")
         src_dir = (cfg[1].decode() if isinstance(cfg[1], bytes) else cfg[1])
         dbfile = client.execute_command("CONFIG", "GET", "dbfilename")
         name = (dbfile[1].decode() if isinstance(dbfile[1], bytes) else dbfile[1])
+        dst_dir = f"{LOGS_DIR}/{self.test_name}_{dst_suffix}"
         os.makedirs(dst_dir, exist_ok=True)
         shutil.copyfile(f"{src_dir}/{name}", f"{dst_dir}/{name}")
 
@@ -839,49 +843,41 @@ class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     def test_rdb_moves_between_sharing_configurations(
         self, writer_sharing: bool, reader_sharing: bool
     ):
-        base = f"{LOGS_DIR}/{self.test_name}"
-        writer_dir, reader_dir = f"{base}/writer", f"{base}/reader"
-
-        server, client = self._start(writer_dir, writer_sharing)
+        server, client = self._start("writer", writer_sharing)
         index = self._create_and_fill(client, "L2")
         expected = self._knn(client)
-        assert self._stat(client, "entry_cnt") == len(self.CORPUS)
-        self._save_and_hand_off(client, reader_dir)
+        assert self.registry_stat("entry_cnt", client) == len(self.CORPUS)
+        self._save_and_hand_off(client, "reader")
         server.exit()
 
-        server2, client2 = self._start(reader_dir, reader_sharing)
+        server2, client2 = self._start("reader", reader_sharing)
         waiters.wait_for_equal(
             lambda: index.info(client2).num_docs, len(self.CORPUS)
         )
         assert self._knn(client2) == expected, (
             "distances changed when the RDB moved between sharing settings"
         )
-        assert self._stat(client2, "entry_cnt") == len(self.CORPUS)
+        assert self.registry_stat("entry_cnt", client2) == len(self.CORPUS)
         if reader_sharing:
-            assert self._stat(client2, "shared_externally_cnt") > 0
+            assert self.registry_stat("shared_externally_cnt", client2) > 0
         else:
-            assert self._stat(client2, "shared_externally_cnt") == 0
+            assert self.registry_stat("shared_externally_cnt", client2) == 0
         server2.exit()
 
     @pytest.mark.parametrize("metric", ["L2", "IP", "COSINE"])
     def test_distances_agree_across_restart_and_sharing_toggle(self, metric: str):
-        base = f"{LOGS_DIR}/{self.test_name}"
-        first_dir = f"{base}/first"
-        same_dir = f"{base}/same_sharing"
-        toggled_dir = f"{base}/toggled_sharing"
-
-        server, client = self._start(first_dir, True)
+        server, client = self._start("first", True)
         self._create_and_fill(client, metric)
         first = self._knn(client)
-        self._save_and_hand_off(client, same_dir)
-        self._save_and_hand_off(client, toggled_dir)
+        self._save_and_hand_off(client, "same_sharing")
+        self._save_and_hand_off(client, "toggled_sharing")
         server.exit()
 
-        server2, client2 = self._start(same_dir, True)
+        server2, client2 = self._start("same_sharing", True)
         second = self._knn(client2)
         server2.exit()
 
-        server3, client3 = self._start(toggled_dir, False)
+        server3, client3 = self._start("toggled_sharing", False)
         third = self._knn(client3)
         server3.exit()
 

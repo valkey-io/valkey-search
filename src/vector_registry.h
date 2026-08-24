@@ -115,6 +115,21 @@ class VectorRegistry {
   // Map to track active vector records.
   absl::flat_hash_map<RegistryKey, RegistryValue> tracked_vectors_
       ABSL_GUARDED_BY(mutex_);
+  // Cache the last untracked vector to safely handle Valkey RENAME operations.
+  // When Valkey executes RENAME, it fires two sequential events on the main
+  // thread:
+  // 1. A 'del' for the source key (which drops the VectorRecord).
+  // 2. A 'rename_to' (treated as a 'set') for the destination key.
+  // By caching the shared_ptr during the 'del' phase, we prevent the memory
+  // from being freed prematurely (or being freed in a background worker thread
+  // before the main thread can reclaim it). When the subsequent 'set' phase
+  // arrives, we can reuse this cached pointer if the bytes match perfectly,
+  // preventing ASAN heap-use-after-free and preserving the vector reference.
+  struct LastUntracked {
+    std::shared_ptr<indexes::VectorRecord> record;
+    size_t size{0};
+  };
+  LastUntracked last_untracked_ ABSL_GUARDED_BY(mutex_);
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};

@@ -84,7 +84,21 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
       // from Valkey. Therefore, the sharing reference in the Valkey Hash is
       // already gone or invalid, and there is no need to call
       // DetachFromValkey.
-      tracked_vectors_.erase(search_key);
+      auto it = tracked_vectors_.find(search_key);
+      if (it != tracked_vectors_.end()) {
+        // Cache the shared_ptr before dropping our reference. A Valkey RENAME
+        // operation consists of a 'del' event followed by a 'rename_to' event.
+        // During this process, Valkey's hash optimization moves the Hash object
+        // to the new key, retaining the existing StringRef without modifying
+        // it. Without caching, this 'del' event would cause the VectorRegistry
+        // to drop the last reference to the VectorRecord, freeing the memory
+        // while Valkey's new hash key still holds a dangling string reference
+        // pointer. By caching it in `last_untracked_`, we keep the memory alive
+        // until the 'rename_to' event arrives immediately afterward.
+        last_untracked_ = {it->second.vector_record,
+                           it->second.vector_record_size};
+        tracked_vectors_.erase(it);
+      }
       return nullptr;
     }
     auto vector_str = vmsdk::ToStringView(vector);
@@ -100,11 +114,29 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
       // been overwritten with a new raw vector value, so the old sharing
       // reference is already gone. Thus, there is no need to call
       // DetachFromValkey.
-      float reciprocal_magnitude = indexes::CalcReciprocalMagnitude(
-          reinterpret_cast<const float *>(vector_str.data()),
-          vector_str.size() / sizeof(float));
-      vector_record = indexes::VectorRecord::Construct(
-          vector_str, reciprocal_magnitude, allocator);
+      // In case of a Valkey RENAME ('rename_to' event), the new key will arrive
+      // here. We check if the recently cached 'del' record (`last_untracked_`)
+      // exactly matches the incoming vector bytes. If it does, we reuse the
+      // existing VectorRecord. This cache approach successfully resolves the
+      // RENAME use-after-free by maintaining the same pointer that Valkey
+      // optimized and retained in its hash.
+      if (last_untracked_.record) {
+        if (last_untracked_.size == vector_str.size() &&
+            memcmp(last_untracked_.record->GetRawVector(), vector_str.data(),
+                   vector_str.size()) == 0) {
+          vector_record = last_untracked_.record;
+        }
+        // Always consume the cache so we don't hold onto it forever.
+        last_untracked_ = {nullptr, 0};
+      }
+
+      if (!vector_record) {
+        float reciprocal_magnitude = indexes::CalcReciprocalMagnitude(
+            reinterpret_cast<const float *>(vector_str.data()),
+            vector_str.size() / sizeof(float));
+        vector_record = indexes::VectorRecord::Construct(
+            vector_str, reciprocal_magnitude, allocator);
+      }
       vector_size = vector_str.size();
       tracked_vectors_[search_key] = {
           .vector_record = vector_record,
@@ -143,17 +175,6 @@ bool VectorRegistry::ShareWithValkey(
     return false;
   }
 
-  ValkeyModuleString *record{nullptr};
-  ValkeyModule_HashGet(key_obj.get(), VALKEYMODULE_HASH_NONE,
-                       attribute_identifier_str.get(), &record, nullptr);
-  if (!record) {
-    return false;
-  }
-  vmsdk::UniqueValkeyString record_ptr(record);
-  if (vmsdk::ToStringView(record) !=
-      absl::string_view(vector_record->GetRawVector(), vector_size)) {
-    return false;
-  }
   if (ForceHashSharingError.GetValue() ||
       ValkeyModule_HashSetStringRef(
           key_obj.get(), attribute_identifier_str.get(),

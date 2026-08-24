@@ -454,8 +454,12 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto record = attribute_data_type->GetRecord(
         ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
     CHECK(record.ok());
-    if (attribute_data_type->RecordsProvidedAsString()) {
+    if (attribute_data_type->RecordsProvidedAsString() && record.value()) {
       record.value() = NormalizeStringRecord(std::move(record.value()));
+    }
+    if (!record.value()) {
+      return absl::DataLossError(absl::StrCat(
+          "Missing or invalid vector payload for key: ", interned_key->Str()));
     }
     auto vector_record = VectorRegistry::Instance().Track(
         interned_key, interned_attribute_identifier_, record.value().get(),

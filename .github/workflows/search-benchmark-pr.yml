@@ -255,52 +255,15 @@ jobs:
           echo "✓ Dataset directory linked to persistent cache: $DATASET_CACHE"
           ls -lh "$PERF_BENCHMARK_PATH/" | grep datasets
 
-      - name: Install dependencies
+      # Install the valkey-search build dependencies and toolchain via the
+      # single maintained script (ci/install_deps.sh).
+      - name: Install build dependencies and toolchain
+        working-directory: ${{ env.MODULE_DIR }}
+        run: ./ci/install_deps.sh
+
+      - name: Install benchmark Python dependencies
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        run: |
-          sudo dnf groupinstall "Development Tools" -y
-          sudo dnf install -y gcc gcc-c++ cmake \
-              ninja-build \
-              python3-devel \
-              openssl-devel \
-              systemd-devel \
-              bzip2-devel \
-              libffi-devel \
-              perf
-
-          gcc --version
-          g++ --version
-
-          pip install --require-hashes -r requirements.txt
-
-      - name: Ensure GCC >= 12 (required for valkey-search build)
-        # NOTE: This uses AL2023-specific packages. Update if runner OS changes.
-        run: |
-          GCC_MIN_VERSION=12
-          CURRENT_VERSION=0
-
-          if /usr/local/bin/gcc --version 2>/dev/null; then
-            CURRENT_VERSION=$(/usr/local/bin/gcc -dumpversion | cut -d. -f1)
-          fi
-
-          if [[ "$CURRENT_VERSION" -ge "$GCC_MIN_VERSION" ]]; then
-            echo "✓ GCC $CURRENT_VERSION already available at /usr/local/bin/gcc (>= $GCC_MIN_VERSION)"
-            /usr/local/bin/gcc --version
-            /usr/local/bin/g++ --version
-          else
-            echo "GCC >= $GCC_MIN_VERSION not found (current: $CURRENT_VERSION) — installing GCC 14 from AL2023 repos..."
-            sudo dnf install -y gcc14 gcc14-c++
-
-            # Create symlinks in /usr/local/bin so builds pick up GCC 14 by default
-            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/gcc
-            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/g++
-            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/cc
-            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/c++
-
-            echo "✓ GCC 14 installed and symlinked"
-            /usr/local/bin/gcc --version
-            /usr/local/bin/g++ --version
-          fi
+        run: pip install --require-hashes -r requirements.txt
 
       - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
         working-directory: valkey_ram

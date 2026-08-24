@@ -5,6 +5,7 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <random>
 #include <string>
 #include <unordered_set>
@@ -926,7 +927,8 @@ class HierarchicalNSW
     // --- Read raw header fields (untrusted) ---
     offsetLevel0_ = header->offset_level_0();
     max_elements_ = header->max_elements();
-    cur_element_count_ = header->curr_element_count();
+    size_t target_element_count = header->curr_element_count();
+    cur_element_count_ = 0;
     serialize_size_data_per_element_ =
         header->serialize_size_data_per_element();
     label_offset_ = header->label_offset();
@@ -958,7 +960,7 @@ class HierarchicalNSW
 
     // Resolve capacity: at least the live element count, honoring the larger of
     // the caller-requested cap and the file's recorded capacity.
-    size_t cur_count = cur_element_count_;
+    size_t cur_count = target_element_count;
     size_t max_elements =
         std::max(cur_count, std::max(max_elements_i, max_elements_));
     max_elements_ = max_elements;
@@ -988,16 +990,16 @@ class HierarchicalNSW
       }
 
       // Element-count / level / entry-point consistency.
-      loadCheck(cur_element_count_ <= max_elements_,
+      loadCheck(target_element_count <= max_elements_,
                 "curr_element_count exceeds max_elements");
-      if (cur_element_count_ == 0) {
+      if (target_element_count == 0) {
         loadCheck(maxlevel_ == -1 || maxlevel_ == 0,
                   "empty index has a non-trivial max_level");
       } else {
         loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
-        loadCheck(maxlevel_ <= static_cast<int>(cur_element_count_),
+        loadCheck(maxlevel_ <= static_cast<int>(target_element_count),
                   "max_level exceeds the element count");
-        loadCheck(enterpoint_node_ < cur_element_count_,
+        loadCheck(enterpoint_node_ < target_element_count,
                   "enterpoint_node is out of range");
       }
 
@@ -1015,7 +1017,7 @@ class HierarchicalNSW
     data_level0_memory_ = std::make_unique<ChunkedArray>(
         size_data_per_element_, k_elements_per_chunk, max_elements);
 
-    for (size_t i = 0; i < cur_element_count_; i++) {
+    for (size_t i = 0; i < target_element_count; i++) {
       VMSDK_ASSIGN_OR_RETURN(auto chunk, input.LoadChunk());
       loadCheck(chunk->size() ==
                     size_links_level0_ + vector_size_ + sizeof(labeltype),
@@ -1026,6 +1028,7 @@ class HierarchicalNSW
              sizeof(labeltype));
       new (GetDataPtrByInternalId(i)) SavedVectorT(generator(absl::string_view(
           chunk->data() + size_links_level0_, vector_size_)));
+      cur_element_count_++;
       memcpy((*data_level0_memory_)[i] + label_offset_, (char *)&id,
              sizeof(labeltype));
 
@@ -1038,7 +1041,7 @@ class HierarchicalNSW
       tableint *l0_neighbors = (tableint *)(ll0 + 1);
       size_t l0_scan = std::min(l0_count, maxM0_);
       for (size_t j = 0; j < l0_scan; j++) {
-        loadCheck(l0_neighbors[j] < cur_element_count_,
+        loadCheck(l0_neighbors[j] < target_element_count,
                   "level-0 neighbor id out of range");
         loadCheck(l0_neighbors[j] != i, "level-0 self-loop");
       }
@@ -1357,7 +1360,10 @@ class HierarchicalNSW
       SetExternalLabel(internal_id_replaced, label);
 
       std::unique_lock<std::mutex> lock_table(label_lookup_lock);
-      label_lookup_.erase(label_replaced);
+      auto it = label_lookup_.find(label_replaced);
+      if (it != label_lookup_.end() && it->second == internal_id_replaced) {
+        label_lookup_.erase(it);
+      }
       label_lookup_[label] = internal_id_replaced;
       lock_table.unlock();
 

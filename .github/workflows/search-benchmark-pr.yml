@@ -272,7 +272,15 @@ jobs:
       # single maintained script (ci/install_deps.sh).
       - name: Install build dependencies and toolchain
         working-directory: valkey-search-trusted-ci
-        run: ./ci/install_deps.sh
+        run: |
+          # The installer only exists on base branches that carry
+          # it. If a benchmarked PR targets a branch without it, fail fast with
+          # an actionable message instead of a cryptic 127 from a missing file.
+          if [[ ! -x ./ci/install_deps.sh ]]; then
+            echo "::error::ci/install_deps.sh not found on base branch '${{ needs.resolve.outputs.base_ref }}'. This branch must contain the installer to run the benchmark; rebase it onto a revision that includes ci/install_deps.sh."
+            exit 1
+          fi
+          ./ci/install_deps.sh
 
       - name: Install benchmark Python dependencies
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}

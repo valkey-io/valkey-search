@@ -155,7 +155,7 @@ jobs:
 
   benchmark:
     needs: resolve
-    runs-on: [self-hosted, valkey-search-arm-pr]
+    runs-on: [self-hosted, ec2-al-2023-pr-benchmarking-arm64]
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '1440') }}
     env:
       # Module configuration

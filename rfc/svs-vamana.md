@@ -124,7 +124,7 @@ The graph structure, ID translator, and entry point are preserved across the tra
 
 The compression transition uses **copy semantics** to avoid blocking concurrent searches:
 
-1. Threshold crossed -- valkey-search detects the live vector count exceeds `LEANVEC_TRAINING_THRESHOLD`.
+1. Threshold crossed -- valkey-search detects the live vector count reaches `LEANVEC_TRAINING_THRESHOLD`.
 2. Capability check -- valkey-search verifies the target compression type is built in:
    - FP16/SQ8: always available in the open-source submodule build (this RFC)
    - LVQ/LeanVec: require proprietary backends outside the scope of this RFC; `FT.CREATE` with these types returns an error unless a future proprietary build is loaded
@@ -191,7 +191,7 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
 | COMPRESSION | enum | NONE | See compression table | Storage backend for vector data |
 | LEANVEC_DIMS | int | -- | >0 and <DIM | Target dimensionality after LeanVec projection. Required for LEANVEC variants. |
 | LEANVEC_TRAINING_THRESHOLD | int | 10000 | >=1 | Number of vectors to buffer before training the LeanVec projection |
-| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | **KEEP**: retain original FP32 vectors; `reconstruct_at()` returns full precision; exact vector matching in `ModifyRecord`. **DROP**: do not retain original vectors; reconstruction uses SVS's stored representation (lossy for FP16/SQ8/LVQ/LeanVec); `ModifyRecord` uses `get_distance()` comparison with a per-dimension epsilon for match detection; reduces memory footprint at the cost of reconstruction precision. |
+| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | **KEEP**: retain original FP32 vectors; `reconstruct_at()` returns full precision; `IsVectorMatch` compares the stored vector exactly; `ModifyRecord` performs remove+add using the supplied data. **DROP**: do not retain original vectors; reduces memory footprint; `ModifyRecord` still performs remove+add using the supplied data unchanged; `reconstruct_at()` returns the lossy stored representation (precision depends on compression type); `IsVectorMatch` uses `get_distance()` with a per-dimension epsilon to approximate identity -- this may misclassify near-threshold vectors under IP and COSINE metrics where the self-distance is not zero. |
 
 #### Compression Types
 
@@ -536,22 +536,35 @@ These risks do not apply to the open-source submodule baseline, where SVS is com
 
 Rather than shipping raw pre-compiled C++ objects, Intel can build `libsvs_c_api.a` directly from private C++ sources and apply a symbol localization step before distribution:
 
-```sh
+```bash
 # Combine all SVS C++ objects into a single relocatable object
 ld -r -o svs_combined.o svs_private/*.o
 
 # Localize all hidden C++ internals, then apply explicit allowlist
-# keeping only svs_c_* symbols as globally visible
+# keeping only svs_* symbols (all SVS public C API exports) as globally visible.
+# Note: SVS C API symbols are prefixed svs_index_*, svs_error_*, svs_get_*, etc.
 objcopy --localize-hidden svs_combined.o svs_localized.o
-objcopy --keep-global-symbols=<(nm -g --defined-only svs_localized.o \
-    | awk '$3 ~ /^svs_c_/ {print $3}') \
+
+# Generate allowlist from localized object (all remaining svs_* globals) and apply
+nm -g --defined-only svs_localized.o \
+    | awk '$3 ~ /^svs_/ {print $3}' > svs_allowlist.txt
+objcopy --keep-global-symbols=svs_allowlist.txt \
     --strip-unneeded svs_localized.o svs_c_api.o
 
 # Package as a static library
 ar rcs libsvs_c_api.a svs_c_api.o
 
+# Verify required public API symbols are present
+for sym in svs_index_search_topk svs_index_get_memory_usage \
+           svs_index_build_dynamic svs_index_dynamic_add_points \
+           svs_index_dynamic_delete_points svs_get_version; do
+    nm -g --defined-only svs_c_api.o | grep -q " $sym$" || {
+        echo "ERROR: required symbol $sym not found in libsvs_c_api.a" >&2; exit 1
+    }
+done
+
 # Verify: fail the build if any non-allowlisted global symbol remains
-LEAKED=$(nm -g --defined-only svs_c_api.o | awk '$3 !~ /^svs_c_/' | grep -v ' U ')
+LEAKED=$(nm -g --defined-only svs_c_api.o | awk '$3 !~ /^svs_/' | grep -v ' U ')
 if [ -n "$LEAKED" ]; then
     echo "ERROR: non-allowlisted global symbols in libsvs_c_api.a:" >&2
     echo "$LEAKED" >&2
@@ -559,7 +572,7 @@ if [ -n "$LEAKED" ]; then
 fi
 ```
 
-This produces a static library where all C++ mangled symbols (template instantiations, STL types, internal methods) are localized and stripped from the visible symbol table. The explicit `--keep-global-symbols` allowlist ensures only `svs_c_*` C API exports remain; the `nm` verification step fails the build if any non-allowlisted symbol leaks through, making the guarantee enforceable in CI.
+This produces a static library where all C++ mangled symbols (template instantiations, STL types, internal methods) are localized and stripped from the visible symbol table. The `svs_*` allowlist covers all SVS public C API exports (`svs_index_*`, `svs_error_*`, `svs_get_*`, `svs_search_results_*`, etc.); the symbol probe and `nm` verification steps fail the build if required symbols are missing or if non-allowlisted symbols leak through, making the guarantees enforceable in CI.
 
 **On LTO:** If `libsvs_c_api.a` is built directly from C++ sources (rather than from a pre-compiled shared-library tarball package), the compiler performs source-level optimization across the full `index -> dataset -> distance` call chain at SVS build time. LTO at the `libsearch.so` link step is then not needed for SVS code paths -- the performance-critical inlining is already baked into the static library. The hardened `libsvs_c_api.a` can then be linked into `libsearch.so` as an opaque pre-compiled artifact without LTO participation.
 

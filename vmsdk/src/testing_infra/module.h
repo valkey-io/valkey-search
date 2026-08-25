@@ -84,6 +84,15 @@ class MockValkeyModule {
   MOCK_METHOD(int, SubscribeToKeyspaceEvents,
               (ValkeyModuleCtx * ctx, int types,
                ValkeyModuleNotificationFunc cb));
+  // Active-defrag APIs. RegisterDefragFunc records the module's global defrag
+  // callback; the remaining three are what that callback calls back into.
+  MOCK_METHOD(int, RegisterDefragFunc,
+              (ValkeyModuleCtx * ctx, ValkeyModuleDefragFunc func));
+  MOCK_METHOD(int, DefragShouldStop, (ValkeyModuleDefragCtx * ctx));
+  MOCK_METHOD(int, DefragCursorSet,
+              (ValkeyModuleDefragCtx * ctx, unsigned long cursor));  // NOLINT
+  MOCK_METHOD(int, DefragCursorGet,
+              (ValkeyModuleDefragCtx * ctx, unsigned long *cursor));  // NOLINT
   MOCK_METHOD(int, KeyExists, (ValkeyModuleCtx * ctx, ValkeyModuleString *key));
   MOCK_METHOD(ValkeyModuleKey *, OpenKey,
               (ValkeyModuleCtx * ctx, ValkeyModuleString *key, int flags));
@@ -647,6 +656,25 @@ inline int TestValkeyModule_GetClientInfoById(void *ci, uint64_t id) {
 inline int TestValkeyModule_SubscribeToKeyspaceEvents(
     ValkeyModuleCtx *ctx, int types, ValkeyModuleNotificationFunc cb) {
   return kMockValkeyModule->SubscribeToKeyspaceEvents(ctx, types, cb);
+}
+
+inline int TestValkeyModule_RegisterDefragFunc(ValkeyModuleCtx *ctx,
+                                               ValkeyModuleDefragFunc func) {
+  return kMockValkeyModule->RegisterDefragFunc(ctx, func);
+}
+
+inline int TestValkeyModule_DefragShouldStop(ValkeyModuleDefragCtx *ctx) {
+  return kMockValkeyModule->DefragShouldStop(ctx);
+}
+
+inline int TestValkeyModule_DefragCursorSet(ValkeyModuleDefragCtx *ctx,
+                                            unsigned long cursor) {  // NOLINT
+  return kMockValkeyModule->DefragCursorSet(ctx, cursor);
+}
+
+inline int TestValkeyModule_DefragCursorGet(ValkeyModuleDefragCtx *ctx,
+                                            unsigned long *cursor) {  // NOLINT
+  return kMockValkeyModule->DefragCursorGet(ctx, cursor);
 }
 
 inline int TestValkeyModule_KeyExistsDefaultImpl(ValkeyModuleCtx *ctx,
@@ -1552,6 +1580,10 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_GetClientInfoById = &TestValkeyModule_GetClientInfoById;
   ValkeyModule_SubscribeToKeyspaceEvents =
       &TestValkeyModule_SubscribeToKeyspaceEvents;
+  ValkeyModule_RegisterDefragFunc = &TestValkeyModule_RegisterDefragFunc;
+  ValkeyModule_DefragShouldStop = &TestValkeyModule_DefragShouldStop;
+  ValkeyModule_DefragCursorSet = &TestValkeyModule_DefragCursorSet;
+  ValkeyModule_DefragCursorGet = &TestValkeyModule_DefragCursorGet;
   ValkeyModule_KeyExists = &TestValkeyModule_KeyExists;
   ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
   ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;

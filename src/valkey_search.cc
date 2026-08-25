@@ -29,6 +29,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
+#include "src/defrag.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -1241,6 +1242,10 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
 
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
+
+  // Participate in active defrag for our non-keyspace memory. A no-op on cores
+  // that don't expose the module global defrag API. See src/defrag.h.
+  defrag::RegisterGlobalDefragCallback(ctx);
 
   // Register all global configuration variables
   VMSDK_RETURN_IF_ERROR(ModuleConfigManager::Instance().Init(ctx));

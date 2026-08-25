@@ -10,6 +10,7 @@
 
 #include "module_config.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/defrag.h"
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
@@ -313,6 +314,48 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+// FT._DEBUG DEFRAG_STATS [RESET]
+//
+// Reports what the module's global defrag callback has done. Each counter maps
+// to one element of the core contract (see src/defrag.h), so a test can check
+// them independently:
+//   callback_invocations - core reached our callback at all
+//   cursor_reads         - core handed us a usable persistent cursor
+//   deadline_checks      - we polled the deadline
+//   deadline_stops       - the deadline fired and we yielded mid-pass
+//   completed_passes     - we finished and reset the cursor to 0 ("done")
+//
+// RESET zeroes the counters so a test can measure a specific window.
+absl::Status DefragStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
+  if (itr.HasNext()) {
+    std::string keyword;
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, keyword));
+    if (absl::AsciiStrToUpper(keyword) != "RESET") {
+      return absl::InvalidArgumentError("Invalid argument. Use RESET");
+    }
+    VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+    defrag::ResetStats();
+    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+    return absl::OkStatus();
+  }
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+
+  const defrag::Stats stats = defrag::GetStats();
+  const std::pair<const char *, uint64_t> fields[] = {
+      {"callback_invocations", stats.callback_invocations},
+      {"cursor_reads", stats.cursor_reads},
+      {"deadline_checks", stats.deadline_checks},
+      {"deadline_stops", stats.deadline_stops},
+      {"completed_passes", stats.completed_passes},
+  };
+  ValkeyModule_ReplyWithArray(ctx, 2 * std::size(fields));
+  for (const auto &[name, value] : fields) {
+    ValkeyModule_ReplyWithCString(ctx, name);
+    ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(value));
+  }
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -327,6 +370,8 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "control pause points"},
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
+      {"FT._DEBUG DEFRAG_STATS [RESET]",
+       "Show what the global defrag callback has done, or RESET the counters"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
@@ -365,6 +410,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ControlledCmd(ctx, itr);
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
+  } else if (keyword == "DEFRAG_STATS") {
+    return DefragStats(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {

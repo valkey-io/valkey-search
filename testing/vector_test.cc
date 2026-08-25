@@ -591,12 +591,12 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     VerifyAdd(index->get(), vectors, i, ExpectedResults::kSuccess);
   }
   VectorBase *base = index->get();
-  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
+  VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(7), DeletionType::kNone));
   VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(8), DeletionType::kNone));
-  VMSDK_EXPECT_OK((*index)->RemoveRecord(IndexToKey(9), DeletionType::kNone));
-  EXPECT_EQ(base->GetMaxInternalLabel(), 9u);
-  EXPECT_EQ(base->GetLabelCount(), 10u);
+  // Deletes drop those labels from the live-only label_lookup_.
+  EXPECT_EQ(base->GetLabelCount(), 8u);
   EXPECT_EQ(base->GetTrackedKeyCount(), 8u);
+  EXPECT_EQ((*index)->GetTrackedVectorCount(), 10u);
   auto new_vectors = DeterministicallyGenerateVectors(5, kDimensions, 20.0);
   for (size_t i = 0; i < new_vectors.size(); ++i) {
     auto key = StringInternStore::Intern(absl::StrCat("new_", i, "_key"));
@@ -608,6 +608,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_EQ(base->GetTrackedKeyCount(), 13u);
   // Verifies we reused tombstoned hnsw nodes
   EXPECT_EQ(base->GetLabelCount(), 13u);
+
+  // VERY IMPORTANT. Previously we weren't actually freeing
+  // vectors of reused slots.
+  EXPECT_EQ((*index)->GetTrackedVectorCount(), 13u);
+
   absl::string_view query = VectorToStr(new_vectors[0]);
   auto search_result = (*index)->Search(query, 13, CancelNever());
   VMSDK_EXPECT_OK(search_result);
@@ -714,8 +719,9 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (int t = 0; t < kThreads; ++t) {
     threads.emplace_back([&algo, t]() {
       for (int i = 0; i < kIters; ++i) {
-        algo.markDelete(t);    // += vector_size_
-        algo.unmarkDelete(t);  // -= vector_size_  (net per cycle: 0)
+        // Labels and slot numbers should match, so we can use "internal" API.
+        algo.markDeletedInternal(t);    // += vector_size_
+        algo.unmarkDeletedInternal(t);  // -= vector_size_  (net per cycle: 0)
       }
     });
   }
@@ -828,16 +834,26 @@ class ChunkStream : public hnswlib::InputStream, public hnswlib::OutputStream {
 };
 
 // VectorTracker that copies each vector into stable storage and hands back a
-// pointer to it (LoadIndex stores that pointer in the level-0 record).
+// pointer to it (LoadIndex stores that pointer in the level-0 record). Records
+// bytes by label, mirroring how the real tracker keys tracked_vectors_.
 class BufTracker : public hnswlib::VectorTracker {
  public:
-  char *TrackVector(uint64_t /*id*/, char *vector, size_t len) override {
+  char *TrackVector(uint64_t id, char *vector, size_t len) override {
     storage_.emplace_back(vector, len);
+    by_label_[id] = &storage_.back();
     return storage_.back().data();
   }
 
+  const std::string *GetByLabel(uint64_t label) const {
+    auto it = by_label_.find(label);
+    return it == by_label_.end() ? nullptr : it->second;
+  }
+
+  size_t LabelCount() const { return by_label_.size(); }
+
  private:
   std::deque<std::string> storage_;
+  absl::flat_hash_map<uint64_t, std::string *> by_label_;
 };
 
 // On-disk geometry for kM / kDimensions, used to locate bytes for mutation.
@@ -987,13 +1003,110 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   // label.
   algo.addPoint(vectors[0].data(), /*label=*/1, /*replace_deleted=*/true);
 
-  // Each label keeps its own slot: label 1 stays live on slot 1 and label 0
-  // stays on the still-tombstoned slot 0.
-  EXPECT_EQ(algo.label_lookup_.size(), 2u);
-  EXPECT_EQ(algo.label_lookup_[0], 0u);
+  // label 1 updates in place on its own slot rather than reusing tombstoned
+  // slot 0. label_lookup_ is live-only, so it holds just label 1; slot 0 stays
+  // tombstoned.
+  EXPECT_EQ(algo.label_lookup_.size(), 1u);
   EXPECT_EQ(algo.label_lookup_[1], 1u);
   EXPECT_TRUE(algo.isMarkedDeleted(0));
   EXPECT_FALSE(algo.isMarkedDeleted(1));
+}
+
+namespace {
+// Build a golden of `num_slots` slots that all share the live slot's label, as
+// a legacy dup-label RDB does. Every slot in `tombstone_slots` is deleted; the
+// one live slot keeps the shared label. Each slot still holds its own distinct
+// bytes.
+ChunkStream DuplicateLabelGolden(size_t num_slots,
+                                 const std::vector<size_t> &tombstone_slots) {
+  hnswlib::L2Space space{kDimensions};
+  hnswlib::HierarchicalNSW<float> algo(&space, kGoldenMax, kM, kEFConstruction,
+                                       /*random_seed=*/100,
+                                       /*allow_replace_deleted=*/true);
+  auto vectors = DeterministicallyGenerateVectors(num_slots, kDimensions, 10.0);
+  for (size_t i = 0; i < num_slots; i++) {
+    algo.addPoint(vectors[i].data(), /*label=*/i);
+  }
+  size_t live_slot = num_slots;
+  for (size_t t : tombstone_slots) {
+    algo.markDelete(t);
+  }
+  for (size_t i = 0; i < num_slots; i++) {
+    if (std::find(tombstone_slots.begin(), tombstone_slots.end(), i) ==
+        tombstone_slots.end()) {
+      live_slot = i;
+    }
+  }
+  ChunkStream golden;
+  EXPECT_TRUE(algo.SaveIndex(golden).ok());
+  // Collide every slot's stored label with the live slot's.
+  for (size_t i = 0; i < num_slots; i++) {
+    PokeAt<hnswlib::labeltype>(&golden.chunks[1 + i], kLabelOff, live_slot);
+  }
+  return golden;
+}
+}  // namespace
+
+// Loading a dup-label RDB must give every slot a unique label and leave each
+// slot's own vector intact. The live slot keeps the shared label; each
+// tombstone is re-labeled uniquely. label_lookup_ holds live labels only.
+// Covers both 2-slot orderings and a 3-slot group (two tombstones, one live).
+TEST_F(VectorIndexTest, LoadDuplicateLabelReassignsUniqueLabels) {
+  struct Case {
+    size_t num_slots;
+    std::vector<size_t> tombstones;
+  };
+  for (const Case &c : std::vector<Case>{{2, {1}}, {2, {0}}, {3, {0, 2}}}) {
+    size_t live_slot = c.num_slots;  // set below
+    for (size_t i = 0; i < c.num_slots; i++) {
+      if (std::find(c.tombstones.begin(), c.tombstones.end(), i) ==
+          c.tombstones.end()) {
+        live_slot = i;
+      }
+    }
+    auto vectors =
+        DeterministicallyGenerateVectors(c.num_slots, kDimensions, 10.0);
+    auto golden = DuplicateLabelGolden(c.num_slots, c.tombstones);
+
+    hnswlib::L2Space space{kDimensions};
+    hnswlib::HierarchicalNSW<float> algo(&space);
+    algo.allow_replace_deleted_ = true;
+    BufTracker tracker;
+    golden.Rewind();
+    VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, &tracker, kM,
+                                   /*validate=*/true));
+
+    // The live slot keeps the shared label; label_lookup_ is live-only.
+    EXPECT_EQ(algo.label_lookup_.size(), 1u);
+    EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
+
+    // Every slot has a unique label and reads back its own bytes (no dangling
+    // or cross-contaminated data_ptr), all seeded below max_loaded_label_.
+    std::set<hnswlib::labeltype> labels;
+    for (size_t i = 0; i < c.num_slots; i++) {
+      hnswlib::labeltype label = algo.getExternalLabel(i);
+      EXPECT_TRUE(labels.insert(label).second)
+          << "duplicate label on slot " << i;
+      EXPECT_LE(label, algo.max_loaded_label_);
+      EXPECT_EQ(std::string(algo.getDataByInternalId(i), kVecBytes),
+                VectorToStr(vectors[i]));
+      // The vector is tracked under the slot's final label, not a stale one.
+      const std::string *tracked = tracker.GetByLabel(label);
+      ASSERT_NE(tracked, nullptr) << "no tracked vector for slot " << i;
+      EXPECT_EQ(*tracked, VectorToStr(vectors[i]));
+    }
+    // One tracked entry per slot: no stale duplicate-label entry left behind.
+    EXPECT_EQ(tracker.LabelCount(), c.num_slots);
+
+    // Reusing a tombstone returns its displaced (synthetic) label so the caller
+    // can drop it from tracked_vectors_, and must not disturb the live slot.
+    auto evicted = algo.addPoint(vectors[live_slot].data(), /*label=*/1000,
+                                 /*replace_deleted=*/true);
+    ASSERT_TRUE(evicted.has_value());
+    EXPECT_GT(*evicted, live_slot);
+    EXPECT_EQ(algo.label_lookup_[live_slot], live_slot);
+    EXPECT_FALSE(algo.isMarkedDeleted(live_slot));
+  }
 }
 
 // ---- Happy path ----------------------------------------------------------

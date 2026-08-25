@@ -471,9 +471,8 @@ absl::Status VectorBase::LoadTrackedKeys(
     ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
                       attribute_identifier_);
   }
-  // Use max label from label_lookup_
-  inc_id_ = GetMaxInternalLabel();
-  ++inc_id_;
+  // Seed above every label stamped at load, including re-labeled tombstones.
+  inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
 

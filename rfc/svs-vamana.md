@@ -40,7 +40,7 @@ The valkey-search module currently provides two vector indexing algorithms: FLAT
 
 #### Prior Model: Pre-Built Runtime `.so`
 
-```
+```text
 valkey-server
   \-- MODULE LOAD libsearch.so (73 MB, built by valkey-search)
          +-- statically links: gRPC, Abseil, Protobuf, hnswlib, ICU, snowball, ...
@@ -56,7 +56,7 @@ The SVS nightly tarball ships a pre-compiled runtime with all algorithms (FP32, 
 
 #### Target Model: Static Submodule (Recommended)
 
-```
+```text
 valkey-server
   \-- MODULE LOAD libsearch.so
          \-- statically compiled from source:
@@ -106,14 +106,19 @@ SVS is added as a git submodule under `third_party/svs/` and compiled as an obje
 
 ### Deferred Compression
 
-Traditional compressed vector indexes require a training phase. SVS implements deferred compression:
+Deferred compression applies **only to LeanVec** compression types. For all other types the index is ready immediately:
 
-1. The index starts with FP32 or FP16 storage regardless of target compression type.
-2. Queries are served immediately using the uncompressed representation.
-3. When live vector count reaches `LEANVEC_TRAINING_THRESHOLD`, valkey-search initiates the compression transition.
-4. The graph structure, ID translator, and entry point are preserved -- only the data storage layer changes.
+| Compression | Activation | `state` in FT.INFO |
+|-------------|-----------|---------------------|
+| NONE | Immediate -- index ready at creation | Always `ready` |
+| FP16 | Immediate -- index built with FP16 storage at creation | Always `ready` |
+| SQ8 | Immediate -- index built with SQ8 storage at creation | Always `ready` |
+| LVQ4/8/4X4/4X8 | Immediate -- index built with LVQ storage at creation (proprietary) | Always `ready` |
+| LEANVEC* | Deferred -- accumulates vectors until `LEANVEC_TRAINING_THRESHOLD`, then trains projection and builds compressed index | `training` below threshold; `ready` after |
 
-This is exposed in `FT.INFO` as a `state` field: `"training"` while below threshold, `"ready"` after compression has been applied.
+For LeanVec types, SVS requires a minimum corpus to train the projection matrices. Until `LEANVEC_TRAINING_THRESHOLD` vectors have been buffered, the index is in `state: training`, search returns an error, and modifications are queued. Once the threshold is crossed, valkey-search trains the LeanVec matrices on the buffered corpus, builds the compressed index, and transitions to `state: ready`.
+
+The graph structure, ID translator, and entry point are preserved across the transition -- only the data storage layer changes.
 
 #### Transition Mechanics
 
@@ -124,10 +129,11 @@ The compression transition uses **copy semantics** to avoid blocking concurrent 
    - FP16/SQ8: always available in the open-source submodule build (this RFC)
    - LVQ/LeanVec: require proprietary backends outside the scope of this RFC; `FT.CREATE` with these types returns an error unless a future proprietary build is loaded
 3. Clone with new storage -- a compressed index is built from a snapshot of the source index. Mutations that complete on the source index after the snapshot is taken are journaled. Searches continue against the original uncompressed index during this phase.
-4. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the journaled mutations into the compressed index to bring it fully up to date, atomically swaps the index pointer, and releases the lock. The old uncompressed storage is freed.
-5. Memory accounting update -- the freed memory is reflected in `FT.INFO` and per-index byte counters.
+4. Pre-lock catch-up -- without holding the exclusive lock, valkey-search drains the bulk of the journal into the compressed index. New mutations arriving during this phase continue to be journaled. This step repeats until the remaining journal tail is small enough that replaying it under the lock will complete within the latency bound.
+5. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the bounded remaining journal tail into the compressed index, atomically swaps the index pointer, and releases the lock. The old uncompressed storage is freed.
+6. Memory accounting update -- the freed memory is reflected in `FT.INFO` and per-index byte counters.
 
-**Hard constraint:** Searches must never block for more than ~10ms during the transition. The copy-then-swap approach ensures this -- 2x peak memory during the overlap window is acceptable.
+**Hard constraint:** Searches must never block for more than ~10ms during the transition. The pre-lock catch-up phase (step 4) ensures the journal tail replayed under the lock in step 5 is small enough to satisfy this bound. 2x peak memory during the overlap window is acceptable.
 
 **Fallback behavior:** If the target compression is unavailable at `FT.CREATE` time (LVQ/LeanVec requested), the command returns an error immediately. Deferred compression transitions within the open-source build target FP16 or SQ8 only.
 
@@ -146,16 +152,16 @@ SVS is compiled into valkey-search unconditionally on x86_64 Linux. No separate 
 | Milvus | DiskANN (Vamana family) | Scalar/Product quantization | Limited |
 | Qdrant | No (HNSW only) | Scalar/Product quantization | No |
 | Weaviate | No (HNSW only) | Product quantization | No |
-| **valkey-search + SVS** | **Yes (SVS_VAMANA)** | **LVQ + LeanVec** | **x86_64 AVX-512/AVX2** |
+| **valkey-search + SVS** | **Yes (SVS_VAMANA)** | **FP16, SQ8 (open-source); LVQ + LeanVec (future -- see Future Considerations)** | **x86_64 AVX-512/AVX2** |
 
 ## Specification
 
-### FT.CREATE with ALGORITHM SVS
+### FT.CREATE with ALGORITHM SVS_VAMANA
 
-The `SVS_VAMANA` algorithm is selected via the `ALGORITHM` parameter in the `VECTOR` field specification of `FT.CREATE`:
+The `SVS_VAMANA` algorithm is selected via the `VECTOR` field specification of `FT.CREATE`:
 
-```
-FT.CREATE <index> ... SCHEMA <field> VECTOR SVS <num_params>
+```text
+FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
     TYPE FLOAT32
     DIM <dimensions>
     DISTANCE_METRIC L2|IP|COSINE
@@ -185,7 +191,7 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS <num_params>
 | COMPRESSION | enum | NONE | See compression table | Storage backend for vector data |
 | LEANVEC_DIMS | int | -- | >0 and <DIM | Target dimensionality after LeanVec projection. Required for LEANVEC variants. |
 | LEANVEC_TRAINING_THRESHOLD | int | 10000 | >=1 | Number of vectors to buffer before training the LeanVec projection |
-| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | Whether to retain original uncompressed vectors alongside the index |
+| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | **KEEP**: retain original FP32 vectors; `reconstruct_at()` returns full precision; exact vector matching in `ModifyRecord`. **DROP**: do not retain original vectors; reconstruction uses SVS's stored representation (lossy for FP16/SQ8/LVQ/LeanVec); `ModifyRecord` uses `get_distance()` comparison with a per-dimension epsilon for match detection; reduces memory footprint at the cost of reconstruction precision. |
 
 #### Compression Types
 
@@ -206,8 +212,8 @@ In the open-source submodule build (this RFC), baseline, FP16, and SQ8 types are
 
 #### Example
 
-```
-FT.CREATE my_index SCHEMA vec VECTOR SVS 20
+```text
+FT.CREATE my_index SCHEMA vec VECTOR SVS_VAMANA 16
     TYPE FLOAT32
     DIM 768
     DISTANCE_METRIC COSINE
@@ -215,12 +221,10 @@ FT.CREATE my_index SCHEMA vec VECTOR SVS 20
     CONSTRUCTION_WINDOW_SIZE 200
     SEARCH_WINDOW_SIZE 20
     ALPHA 0.95
-    COMPRESSION LEANVEC4X8
-    LEANVEC_DIMS 128
-    LEANVEC_TRAINING_THRESHOLD 50000
+    COMPRESSION SQ8
 ```
 
-This creates an index that immediately accepts vectors and serves queries using FP32 storage, then after 50,000 vectors transparently trains a LeanVec projection from 768 to 128 dimensions with LVQ4x8 compression.
+This creates an index with SQ8 scalar quantization. The index is ready immediately with no training phase required. LVQ and LeanVec compression types are available via a future proprietary build; see Future Considerations.
 
 ### FT.INFO Response
 
@@ -244,7 +248,7 @@ Additional fields for LeanVec compression types:
 
 No new `FT.SEARCH` parameters are introduced. The existing KNN query syntax applies:
 
-```
+```text
 FT.SEARCH my_index "*=>[KNN 10 @vec $query_vec]" PARAMS 2 query_vec <blob>
 ```
 
@@ -254,11 +258,13 @@ The recall/latency trade-off is controlled by `SEARCH_WINDOW_SIZE` set at index 
 
 ### RDB
 
-The SVS runtime v0.4.0 provides `save()` / `load()` APIs that serialize the complete DynamicVamana index (graph, vector data, metadata) to a stream.
+> **Status: Planned (Phase 2).** RDB persistence for SVS is not yet implemented. `SaveIndexImpl` currently returns `UnimplementedError`. The design below describes the target implementation.
+
+The SVS C API provides `save()` / `load()` APIs that serialize the complete DynamicVamana index (graph, vector data, metadata) to a stream.
 
 1. **Save**: An `RDBOstreamAdapter` wraps RDB chunk I/O as a `std::streambuf`, buffering at 4MB boundaries.
 2. **Load**: An `RDBIstreamAdapter` provides the input stream for `DynamicVamanaIndex::load()`. The index is reconstructed with all graph edges, vector data, and compression state intact.
-3. **Deferred compression state**: For LeanVec indexes below their training threshold, the pending buffer and training data are serialized alongside the index metadata. Once deferred compression lands upstream, this staging state is eliminated.
+3. **Deferred compression state**: For LeanVec indexes below their training threshold, the pending buffer and training data are serialized alongside the index metadata.
 
 ### Configuration
 
@@ -501,8 +507,10 @@ if(SVS_PRO)
     FetchContent_MakeAvailable(svs_pro)
     list(APPEND CMAKE_PREFIX_PATH "${svs_pro_SOURCE_DIR}")
     find_package(svs_pro REQUIRED)
-    # Ensure allocator override propagates to all SVS PRO translation units
-    target_compile_definitions(svs_pro INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)
+    # Note: VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES cannot be applied retroactively
+    # to pre-compiled objects in the tarball. Memory accounting for SVS PRO uses
+    # get_memory_usage() polling via UpdateReportedMemory() after each mutation.
+    # See Future Considerations -- Memory Accounting.
 endif()
 ```
 
@@ -532,14 +540,26 @@ Rather than shipping raw pre-compiled C++ objects, Intel can build `libsvs_c_api
 # Combine all SVS C++ objects into a single relocatable object
 ld -r -o svs_combined.o svs_private/*.o
 
-# Localize all hidden C++ internals; expose only the C API exports (svs_c_* symbols)
-objcopy --localize-hidden --strip-unneeded svs_combined.o svs_c_api.o
+# Localize all hidden C++ internals, then apply explicit allowlist
+# keeping only svs_c_* symbols as globally visible
+objcopy --localize-hidden svs_combined.o svs_localized.o
+objcopy --keep-global-symbols=<(nm -g --defined-only svs_localized.o \
+    | awk '$3 ~ /^svs_c_/ {print $3}') \
+    --strip-unneeded svs_localized.o svs_c_api.o
 
 # Package as a static library
 ar rcs libsvs_c_api.a svs_c_api.o
+
+# Verify: fail the build if any non-allowlisted global symbol remains
+LEAKED=$(nm -g --defined-only svs_c_api.o | awk '$3 !~ /^svs_c_/' | grep -v ' U ')
+if [ -n "$LEAKED" ]; then
+    echo "ERROR: non-allowlisted global symbols in libsvs_c_api.a:" >&2
+    echo "$LEAKED" >&2
+    exit 1
+fi
 ```
 
-This produces a static library where all C++ mangled symbols (template instantiations, STL types, internal methods) are localized and stripped from the visible symbol table. Only the `svs_c_*` C API exports remain, eliminating the symbol conflict risk.
+This produces a static library where all C++ mangled symbols (template instantiations, STL types, internal methods) are localized and stripped from the visible symbol table. The explicit `--keep-global-symbols` allowlist ensures only `svs_c_*` C API exports remain; the `nm` verification step fails the build if any non-allowlisted symbol leaks through, making the guarantee enforceable in CI.
 
 **On LTO:** If `libsvs_c_api.a` is built directly from C++ sources (rather than from a pre-compiled shared-library tarball package), the compiler performs source-level optimization across the full `index -> dataset -> distance` call chain at SVS build time. LTO at the `libsearch.so` link step is then not needed for SVS code paths -- the performance-critical inlining is already baked into the static library. The hardened `libsvs_c_api.a` can then be linked into `libsearch.so` as an opaque pre-compiled artifact without LTO participation.
 
@@ -584,7 +604,7 @@ valkey-cli MODULE LOADEX /usr/lib/valkey/libsearch.so
 
 Rather than statically linking proprietary backends into `libsearch.so`, `libsearch.so` dynamically links a separate `libsvs_c_api.so` whose implementation can be swapped without recompiling `libsearch.so`:
 
-```
+```text
 valkey-server
   \-- MODULE LOAD libsearch.so
          +-- statically links: gRPC, Abseil, Protobuf, hnswlib, ICU, snowball, ...

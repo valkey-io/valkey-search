@@ -10,11 +10,11 @@ Status: Proposed
 The existing English-only Full-Text Search (FTS) feature is extended to support
 11 additional languages: French, German, Spanish, Italian, Portuguese,
 Russian, Swedish, Turkish, Dutch, Indonesian, and Arabic. The current
-English Lexer class is replaced with a `LanguageProcessor` — a
-composable pipeline of segmenters, token filters, and query tokenizers — so
-that per-language behavior is expressed as a
-composition of standalone primitives. The pipeline is wired to Snowball's
-per-language stemmers, punctuation sourced from the Unicode Common Locale Data Repository,
+English Lexer class is replaced with a polymorphic `Language` interface —
+each language is a first-class, self-contained object implementing
+segmentation, normalization, stemming, and stop-word filtering. The
+implementation (`SnowballLanguage`) is wired to Snowball's per-language
+stemmers, punctuation sourced from the Unicode Common Locale Data Repository,
 Apache Lucene-derived stop words, and ICU-backed Unicode normalization and case
 folding. The feature is gated on module version 1.3 so that mixed-version
 clusters fail closed for non-English index metadata.
@@ -57,43 +57,74 @@ workloads:
   query terms is what makes results consistent across users regardless
   of how the same word was entered.
 
-The design deliberately treats the pipeline as an extension point:
+The design deliberately treats the `Language` interface as an extension point:
 adding future languages (including CJK, which require different
-segmenters and do not need stemming) is a composition change, not a
+segmenters and do not need stemming) is a new `Language` subclass, not a
 change to the ingestion or query hot paths.
 
 ## Design considerations
 
 Text handling was previously a single monolithic `Lexer` class with
 hard-coded English tokenization, ASCII-only punctuation, and English
-Snowball stemming. This is replaced with a `LanguageProcessor` — a
-pipeline built from three pluggable primitive types.
+Snowball stemming. This is replaced with a polymorphic **`Language`**
+interface. Callers program to `Language*`; the concrete type is selected
+once at index-creation time and shared, immutably, across every index
+using that language.
 
-- **`Segmenter`** — splits a text span into tokens (1→N). The default
-  implementation `PunctuationSegmenter` is used by all 12 Snowball
-  languages and parameterized per-language via a `PunctuationSet` sourced
-  from the Unicode Common Locale Data Repository (CLDR) v46.
-- **`TokenFilter`** — transforms or drops a token (1→1 or 1→0). Default
-  implementations `NormalizeCaseFoldFilter` (Unicode NFC + case fold,
-  locale-aware for Turkish dotless-I) and `StopWordFilter` (per-language
-  default lists sourced from Apache Lucene) are shared across all 12
-  Snowball languages and parameterized per-language via their inputs
-  (locale, stop-word set).
-- **`Stemmer` / `QueryTokenizer`** — accessors stored on the processor
-  for callers that need them outside the ingestion loop (stem-map
-  building, delete path, query-time word extraction). `SnowballStemFilter`
-  is per-language (one `sb_stemmer` per language); `PunctuationQueryTokenizer`
-  is shared across Snowball languages and delegates word-boundary
-  detection to `PunctuationSegmenter::IsPunctuation()`.
+- **`Language`** is the strategy interface. It exposes data accessors
+  (`GetDefaultPunctuation`, `GetDefaultStopWords`, `GetNormalizationForm`,
+  `CaseFoldLocale`, `Name`, `Id`) and behavioral methods (`Tokenize`,
+  `TokenizeWithStemMap`, `NormalizeInPlace`,
+  `IsStopWord`, `GetStemmer`, `GetPunctuationSet`, `IsSupported`,
+  `MinRequiredVersion`).
+- **`SnowballLanguage`** is the shared base for all punctuation-segmented,
+  Snowball-stemmed languages. It implements the entire segmentation
+  algorithm once via a private `SegmentInternal` method (parameterized by
+  `handle_escapes` / `filter_stop_words`), driving `Tokenize` and
+  `TokenizeWithStemMap`. Concrete subclasses only supply data (punctuation
+  string, stop-word list, normalization form, locale, stemmer algorithm
+  name). At construction it normalizes each stop word through the *same*
+  `NormalizeCaseFoldFilter` used for tokens (NFC/NFKC + locale-aware
+  casefold), so stop-word matching is Unicode-consistent with the tokens
+  it filters.
+- **`LanguageRegistry`** is a process-wide singleton holding one shared,
+  immutable `Language` instance per enum value; callers never construct
+  concrete languages directly. `LANGUAGE_UNSPECIFIED` maps to English.
+  Unrecognized language enum values are rejected loudly rather than
+  falling back to English, preventing older module versions from
+  incorrectly indexing data they cannot tokenize.
+- **`CustomizedLanguage`** decorates a base language with FT.CREATE
+  `PUNCTUATION` / `STOPWORDS` overrides, delegating normalization, locale,
+  version gating, and stemming to the base.
+- **`SnowballStemFilter`** adapts the external `libstemmer` C API to the
+  `Stemmer` interface, using a thread-local `sb_stemmer` cache keyed by
+  language enum to avoid mutex contention on ingestion threads. Exposes
+  `GetStemRoot()` for single-word stemming (delete path, query expansion)
+  and `BuildStemMap()` for ingestion-time batch stem→surface-form mapping.
+- **`PunctuationSet`** (ASCII `std::bitset<128>` + non-ASCII
+  `flat_hash_set<uint32_t>`) is built by `BuildPunctuationSet()` in
+  `language.h`. It seeds from the per-language punctuation string and also
+  adds Unicode whitespace codepoints (U+00A0, U+2000–200A, U+202F,
+  U+3000, etc.) as word boundaries, ensuring that non-breaking spaces and
+  typographic whitespace in French, Arabic, and other scripts are correctly
+  treated as delimiters. The ASCII bitset preserves the `main`-branch O(1)
+  punctuation lookup for the common (English/ASCII) case; codepoint
+  decoding is triggered only by a non-ASCII lead byte.
 
-Segmenters run sequentially (each further splits the previous output),
-then every surviving token is threaded through the filter chain. As the 
-LanguageProcessor is intended to be stateless, stemming is deliberately 
-not part of the ingestion pipeline — tokens are indexed in their 
-normalized-but-unstemmed form and the stemmer is invoked separately 
-when a stem-map or query expansion is needed. This keeps the ingestion 
-path oblivious to language while preserving the ability to query-expand 
-via stem roots at read time.
+Language instances are immutable, stateless, and shared — heavyweight
+members (`PunctuationSet`, stop-word hash set, normalizer) exist once per
+language, not once per index. Two indexes using the same language share
+the same `Language*`; there is no per-index mutable language state, so
+cross-contamination is impossible by construction.
+
+Stemming is deliberately **not** part of the ingestion segmentation pass —
+tokens are indexed in their normalized-but-unstemmed form; the stemmer is
+invoked separately when a stem-map (ingestion) or query expansion is
+needed. During ingestion, `TokenizeWithStemMap()` first collects all tokens
+via `SegmentInternal`, then invokes `SnowballStemFilter::BuildStemMap()` as
+a second pass over the collected token vector. This two-pass design
+resolves the stemmer once (avoiding per-token thread-local hash lookups)
+and allocates only for unique stems rather than every token.
 
 ### Ingestion pipeline
 
@@ -102,55 +133,70 @@ Input text
     │
     ▼
 ┌────────────────────────────┐
-│ Segment()                  │
-│   PunctuationSegmenter     │  UTF-8 codepoint aware; per-language
-│   text → [tokens]          │  punctuation set (e.g. Arabic, French,
-│                            │  German, ...)
-└────────────────────────────┘
-    │
-    ▼
-┌────────────────────────────┐
-│ ApplyFilters()             │
-│   NormalizeCaseFoldFilter  │  token → token (NFC + Unicode
-│                            │  casefold; locale-aware for Turkish)
-│   StopWordFilter           │  token → token | ∅
+│ SnowballLanguage::Tokenize │  UTF-8 validation, then:
+│  (SegmentInternal loop)    │   • NormalizeInPlace on the full input text
+│                            │     (NFC/NFKC + casefold) — ensures that
+│                            │     compatibility mappings (e.g. NFKC:
+│                            │     U+FF0C fullwidth comma → U+002C) are
+│                            │     visible to the delimiter scanner
+│                            │   • codepoint-aware segmentation loop:
+│                            │     - ASCII fast path (lead < 0x80): byte-level
+│                            │       bitset punctuation check, no UTF-8 decode
+│                            │     - non-ASCII (lead >= 0x80): decode one
+│                            │       codepoint via Scanner, check against the
+│                            │       per-language non-ASCII punctuation set
+│                            │       (includes Unicode whitespace: U+00A0,
+│                            │       U+2000–200A, U+202F, U+3000, etc.)
+│                            │     - stop-word filter per token
 └────────────────────────────┘
     │
     ▼
 Indexed tokens  ──┐
-                  │  (separately) GetStemmer()->BuildStemMap()
-                  ▼           stem_root → {surface_forms}
-             Stem map
+                  │  (ingestion-with-stemming path)
+                  ▼
+        TokenizeWithStemMap(): BuildStemMap() second pass
+                  ▼
+        stem_root → {surface_forms}   (one stemmer resolution,
+                                       allocates only for unique stems)
 ```
 
 ### Query pipeline
 
 Query grammar characters (`@`, `(`, `)`, `|`, `"`, `*`, `%`, `-`, `\`) are
-handled by the parser, and word-boundary detection is delegated to a
-pluggable `QueryTokenizer` bound to the index's language:
+handled directly by `FilterParser`, whose overall flow is kept as close to
+upstream `main` as possible. The only language-aware hooks are:
+
+- punctuation checks via a cached `PunctuationSet&` obtained once at
+  function entry (`language.GetPunctuationSet()`), used directly in the
+  byte-level inner loop — no virtual dispatch per character;
+- non-ASCII word-boundary detection via `IsNonAsciiDelimiter()`, a helper
+  that decodes the codepoint at the current position and checks it against
+  the language's `PunctuationSet`, invoked only when a lead byte `>= 0x80`
+  is encountered;
+- normalization via `language.NormalizeInPlace()`;
+- stop-word checks via `language.IsStopWord()`.
 
 ```
 Query expression
     │
     ▼
-┌────────────────────────────────────────────────────┐
-│ FilterParser walks query syntax chars              │
-│   Word extraction → QueryTokenizer                 │
-│     PunctuationQueryTokenizer (Snowball languages) │
-│     [future] CJK-specific tokenizers               │
-│   Escape handling → \<char>                        │
-└────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ FilterParser walks query syntax chars (byte-level)      │
+│   ASCII punctuation → cached PunctuationSet.Contains    │
+│   non-ASCII lead    → IsNonAsciiDelimiter(PunctuationSet)│
+│   escape handling   → \<char>                            │
+└────────────────────────────────────────────────────────┘
     │
     ├── Regular term ──────────────────────┐
-    │   NormalizeCaseFoldFilter            │
-    │   StopWordFilter (if stop → drop)    │
-    │   Stemmer.GetStemRoot()              │→ TermPredicate
-    │                                      │
-    ├── Wildcard / Fuzzy ──────────────────┤
-    │   NormalizeCaseFoldFilter only       │→ Prefix/Suffix/FuzzyPredicate
-    │                                      │
-    └── Exact phrase (quoted) ─────────────┘
-        NormalizeCaseFoldFilter only        → TermPredicate(exact=true)
+    │   language.NormalizeInPlace()         │
+    │   language.IsStopWord() → drop        │
+    │   Stemmer.GetStemRoot()               │→ TermPredicate
+    │                                       │
+    ├── Wildcard / Fuzzy ───────────────────┤
+    │   language.NormalizeInPlace() only     │→ Prefix/Suffix/FuzzyPredicate
+    │                                       │
+    └── Exact phrase (quoted) ──────────────┘
+        language.NormalizeInPlace() only     → TermPredicate(exact=true)
 ```
 
 `Fuzzy` DP is codepoint-aware so `MINSTEMSIZE` and edit distance work
@@ -160,13 +206,31 @@ edge compression decodes correctly. `Proximity` and `OrProximity` operate
 on word-level positions in an already-tokenized stream and are unaffected
 by multi-byte handling.
 
+### Per-language data ownership
+
+Each language's punctuation set and stop-word list live in that language's
+own header (`languages/french.h` defines French punctuation and French
+stop words). There is no shared composition with common constants — each
+language defines its complete, flat data set independently. Duplication
+across languages is intentional: each language is self-contained and
+independently modifiable, which is also what future non-Snowball languages
+(CJK) require.
+
+Stop-word sets are not built by a shared helper: `SnowballLanguage`
+normalizes each stop word through its own `NormalizeCaseFoldFilter` at
+construction, so the set matches the language's normalization form and
+casefold locale.
+
 ### Version gating and cluster safety
 
 Multi-language support ships behind a `MetadataVersion` bump to `1.3`.
-Non-English languages are gated by a version check so mixed-version clusters 
-fail closed: nodes running a module version < 1.3 will reject index metadata carrying a
-non-English `LANGUAGE`. English and unspecified language values remain
-accepted on all versions for backward compatibility.
+Non-English languages are gated by a version check so mixed-version clusters
+fail closed: nodes running a module version < 1.3 will reject index metadata
+carrying a non-English `LANGUAGE`. English and unspecified language values
+remain accepted on all versions for backward compatibility. Additionally,
+the registry rejects unrecognized language enum values at index creation
+time rather than silently falling back to English, ensuring that older
+module versions cannot incorrectly index data they cannot tokenize.
 
 ## Compatibility divergences
 
@@ -275,8 +339,8 @@ can supply it explicitly via `STOPWORDS`.
 
 ### 4. Per-language default punctuation
 
-`PunctuationSegmenter` applies per-language default punctuation sets
-sourced from Unicode CLDR v46 (`src/indexes/text/punctuation.h`).
+`PunctuationSet` applies per-language default punctuation sets
+sourced from Unicode CLDR v46 (defined in each `languages/*.h` header).
 RediSearch's tokenization [documentation](https://redis.io/docs/latest/develop/ai/search-and-query/advanced-concepts/escaping/) does not indicate that language-specific
 default punctuation is applied.
 
@@ -361,6 +425,39 @@ FT.SEARCH idx2 "%حر%" DIALECT 2
  → Valkey:     0 results
 ```
 
+### 7. Unicode whitespace treated as word boundaries
+
+`BuildPunctuationSet()` seeds Unicode White_Space codepoints (U+00A0
+NO-BREAK SPACE, U+2000–200A general-punctuation spaces, U+202F NARROW
+NO-BREAK SPACE, U+3000 IDEOGRAPHIC SPACE, etc.) as token delimiters via
+ICU's `\\p{White_Space}` property. RediSearch only splits on ASCII
+whitespace (space, tab, newline) despite documentation stating "all
+whitespace separates tokens."
+
+This matters most for French typography (NBSP before `:` `;` `!` `?` and
+inside `« »`), Arabic text with non-breaking spaces, and CJK text with
+ideographic spaces.
+
+```
+FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA body TEXT NOSTEM
+HSET doc:space body "hello world"              # ASCII space (U+0020)
+HSET doc:nbsp body "hello\xc2\xa0world"        # NO-BREAK SPACE (U+00A0)
+HSET doc:enquad body "hello\xe2\x80\x80world"  # EN QUAD (U+2000)
+HSET doc:ideographic body "hello\xe3\x80\x80world"  # IDEOGRAPHIC SPACE (U+3000)
+
+FT.SEARCH idx "@body:hello" NOCONTENT
+  → RediSearch: 1 result (doc:space only — NBSP, EN QUAD, IDEOGRAPHIC SPACE
+                           are NOT treated as delimiters)
+  → Valkey:     4 results (all Unicode whitespace splits tokens)
+```
+
+We choose to break on all Unicode whitespace because in
+practice, NBSP and typographic spaces appear in web-sourced content (French
+typography, copy-pasted HTML, CMS output) as incidental formatting rather
+than intentional word-joining. Treating them as delimiters means users do not
+need to know whether their source data contains U+0020 or U+00A0 for queries
+to match, which is the more useful default for a search system.
+
 ### Future extension for multi-language indexes
 
 An index in this release holds text in a single language, and there is no
@@ -373,9 +470,9 @@ and related [comments](https://github.com/valkey-io/valkey-rfc/pull/24/changes#r
 1. **`LANGUAGE_FIELD` in `FT.CREATE`.** A future release can add a
    `LANGUAGE_FIELD` clause to `FT.CREATE` naming a document field whose
    value marks each document's language. Ingestion would then route each
-   document through the corresponding `LanguageProcessor`. Queries
+   document through the corresponding `Language` implementation. Queries
    would need a `LANGUAGE` argument on `FT.SEARCH` to select the
-   processor used at query time.
+   language used at query time.
 2. **`FILTER` in `FT.CREATE`.** Rather than allowing multiple languages
    into one index, a `FILTER` clause on `FT.CREATE` (an arbitrary
    expression evaluated against each document's fields) can restrict

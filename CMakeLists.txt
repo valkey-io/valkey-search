@@ -24,6 +24,7 @@ endif()
 # Options
 option(BUILD_UNIT_TESTS "Build valkey-search unit tests" ON)
 option(WITH_SUBMODULES_SYSTEM "Use system submodules" OFF)
+option(ENABLE_SVS "Enable Intel(R) Scalable Vector Search (SVS) support" OFF)
 
 set(SAN_BUILD
     ""

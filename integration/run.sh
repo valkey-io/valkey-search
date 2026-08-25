@@ -2,6 +2,7 @@
 
 # Find the rood folder
 ROOT_DIR=$(readlink -f $(readlink -f $(dirname $0))/..)
+export ROOT_DIR
 
 . ${ROOT_DIR}/scripts/common.rc
 setup_valkey_server

@@ -1,0 +1,7 @@
+# Compiled test binaries (built by build_test.sh)
+hnsw/test_*
+!hnsw/test_*.cc
+!hnsw/test_*.h
+svs/test_*
+!svs/test_*.cc
+!svs/test_*.h

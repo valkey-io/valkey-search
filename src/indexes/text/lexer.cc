@@ -88,7 +88,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   if (stemming_enabled) {
     CHECK(stem_mappings) << "stem_mappings must not be null";
   }
-  if (!IsValidUtf8(text)) {
+  if (!utils::IsValidUtf8(text)) {
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
@@ -171,11 +171,6 @@ sb_stemmer* Lexer::GetStemmer() const {
     return raw_ptr;
   }
   return it->second.get();
-}
-
-// UTF-8 validation using Scanner
-bool Lexer::IsValidUtf8(absl::string_view text) const {
-  return valkey_search::utils::IsValidUtf8(text);
 }
 
 void Lexer::NormalizeLowerCaseInPlace(std::string& str) const {

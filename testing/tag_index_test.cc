@@ -68,6 +68,26 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
 }
 
+TEST_F(TagIndexTest, InvalidUtf8IsNotIndexed) {
+  const std::string invalid_utf8 = "invalid\xC3";
+
+  EXPECT_FALSE(index->AddRecord("key1", invalid_utf8).value());
+  EXPECT_FALSE(index->IsTracked("key1"));
+  EXPECT_EQ(index->GetUnTrackedKeyCount(), 1);
+
+  EXPECT_TRUE(index->AddRecord("key2", "valid").value());
+  EXPECT_FALSE(index->ModifyRecord("key2", invalid_utf8).value());
+  EXPECT_FALSE(index->IsTracked("key2"));
+  EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+  EXPECT_EQ(index->GetUnTrackedKeyCount(), 2);
+
+  auto parsed_tags = FilterParser::ParseQueryTags("valid").value();
+  query::TagPredicate predicate(index.get(), alias, identifier, "valid",
+                                parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_EQ(entries_fetcher->Size(), 0);
+}
+
 TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
   EXPECT_TRUE(index->AddRecord("key1", "tag1").value());
   EXPECT_TRUE(index->AddRecord("key2", "tag2").value());

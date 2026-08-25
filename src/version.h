@@ -13,13 +13,13 @@
 //
 // Set the module version to the current release
 //
-constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 2, 0);
+constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 2, 1);
 
 /* The release stage is used in order to provide release status information.
  * In unstable branch the status is always "dev".
  * During release process the status will be set to rc1,rc2...rcN.
  * When the version is released the status will be "ga". */
-#define MODULE_RELEASE_STAGE "rc2"
+#define MODULE_RELEASE_STAGE "dev"
 
 //
 // Set the minimum acceptable server version

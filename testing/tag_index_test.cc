@@ -71,12 +71,14 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
 TEST_F(TagIndexTest, InvalidUtf8IsNotIndexed) {
   const std::string invalid_utf8 = "invalid\xC3";
 
-  EXPECT_FALSE(index->AddRecord("key1", invalid_utf8).value());
+  EXPECT_EQ(index->AddRecordResult("key1", invalid_utf8).value(),
+            RecordResult::kInvalidData);
   EXPECT_FALSE(index->IsTracked("key1"));
   EXPECT_EQ(index->GetUnTrackedKeyCount(), 1);
 
   EXPECT_TRUE(index->AddRecord("key2", "valid").value());
-  EXPECT_FALSE(index->ModifyRecord("key2", invalid_utf8).value());
+  EXPECT_EQ(index->ModifyRecordResult("key2", invalid_utf8).value(),
+            RecordResult::kInvalidData);
   EXPECT_FALSE(index->IsTracked("key2"));
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
   EXPECT_EQ(index->GetUnTrackedKeyCount(), 2);

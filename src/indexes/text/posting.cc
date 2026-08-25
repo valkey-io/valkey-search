@@ -130,6 +130,13 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
 
+  CHECK(current_->second != nullptr)
+      << "Posting list contains a key with no FlatPositionMap";
+
+  // When querying all fields (~0ULL), any non-zero position mask will match,
+  // and every key in the posting list has at least one position entry.
+  if (field_mask == ~0ULL) return true;
+
   FlatPositionMap* flat_map = current_->second;
 
   // Check all positions for this key to see if any of the requested fields are

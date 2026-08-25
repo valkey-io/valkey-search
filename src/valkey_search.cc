@@ -62,8 +62,8 @@ uint32_t ValkeySearch::GetHNSWBlockSize() const {
   return options::GetHNSWBlockSize().GetValue();
 }
 
-void ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
-  options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
+absl::Status ValkeySearch::SetHNSWBlockSize(uint32_t block_size) {
+  return options::GetHNSWBlockSize().SetValueOrLog(block_size, WARNING);
 }
 
 void ModuleInfo(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
@@ -479,6 +479,12 @@ static vmsdk::info_field::Integer hnsw_create_exceptions_count(
     "hnswlib", "hnsw_create_exceptions_count",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return Metrics::GetStats().hnsw_create_exceptions_cnt;
+    }));
+
+static vmsdk::info_field::Integer hnsw_duplicate_label_on_load_count(
+    "hnswlib", "hnsw_duplicate_label_on_load_count",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return Metrics::GetStats().hnsw_duplicate_label_on_load_cnt;
     }));
 
 static vmsdk::info_field::Integer string_interning_store_size(

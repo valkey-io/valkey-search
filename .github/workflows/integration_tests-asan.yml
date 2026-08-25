@@ -1,15 +1,21 @@
 name: Integration tests ASAN
 
 on:
-  pull_request: # This triggers the workflow for pull requests
+  pull_request:
     branches:
-      - main    # Run tests for pull requests targeting the "main" branch
-      - fulltext
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
   push:
     branches:
-      - main    # Optional: Run tests for direct pushes to "main"
-      - fulltext
-  workflow_dispatch: # allow manual triggering
+      - main
+      - "[0-9].[0-9]"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+  workflow_dispatch:
 
 concurrency:
   group: integration-tests-asan-${{ github.head_ref || github.ref }}

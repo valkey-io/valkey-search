@@ -6,7 +6,6 @@ OrProximityIterator::OrProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
                         kProximityTermsInlineCapacity>&& iters)
     : iters_(std::move(iters)),
-      current_key_(),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       key_set_(),
@@ -40,7 +39,7 @@ const Key& OrProximityIterator::CurrentKey() const {
 void OrProximityIterator::InsertValidKeyIterator(size_t idx) {
   auto& iter = iters_[idx];
   if (!iter->DoneKeys()) {
-    key_set_.emplace(iter->CurrentKey(), idx);
+    key_set_.push_back_unsorted(iter->CurrentKey(), idx);
   }
 }
 
@@ -56,17 +55,16 @@ bool OrProximityIterator::FindMinimumKey() {
     current_field_mask_ = 0ULL;
     return false;
   }
-  current_key_ = key_set_.begin()->first;
+  key_set_.heapify();
+  current_key_ = key_set_.min().first;
   current_key_indices_.clear();
   // Collect all iterators with minimum key.
-  // key_set_ is sorted, so all matching keys are consecutive
-  // and we stop when we find a different key.
-  for (auto it = key_set_.begin();
-       it != key_set_.end() && it->first == current_key_;) {
-    current_key_indices_.push_back(it->second);
-    it = key_set_.erase(it);
+  // Extract all iterators with minimum key from the heap.
+  while (!key_set_.empty() && key_set_.min().first == current_key_) {
+    current_key_indices_.push_back(key_set_.min().second);
+    key_set_.pop_min();
   }
-  pos_set_ = {};
+  pos_set_.clear();
   current_position_ = std::nullopt;
   NextPosition();
   return true;
@@ -90,7 +88,7 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
   if (current_key_ && current_key_ >= target_key) {
     return true;
   }
-  // Clear set and seek all iterators to target_key or beyond.
+  // Clear queue and seek all iterators to target_key or beyond.
   key_set_.clear();
   for (size_t i = 0; i < iters_.size(); ++i) {
     if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() < target_key) {
@@ -115,7 +113,7 @@ const PositionRange& OrProximityIterator::CurrentPosition() const {
 
 void OrProximityIterator::InsertValidPositionIterator(size_t idx) {
   if (!iters_[idx]->DonePositions()) {
-    pos_set_.emplace(iters_[idx]->CurrentPosition().start, idx);
+    pos_set_.push_back_unsorted(iters_[idx]->CurrentPosition().start, idx);
   }
 }
 
@@ -140,15 +138,14 @@ bool OrProximityIterator::NextPosition() {
     current_field_mask_ = 0ULL;
     return false;
   }
-  Position min_pos = pos_set_.begin()->first;
+  pos_set_.heapify();
+  Position min_pos = pos_set_.min().first;
   current_pos_indices_.clear();
   // Collect all iterators at minimum position.
-  // pos_set_ is sorted, so all iterators on the position are consecutive
-  // and we stop when we find a different position.
-  for (auto it = pos_set_.begin();
-       it != pos_set_.end() && it->first == min_pos;) {
-    current_pos_indices_.push_back(it->second);
-    it = pos_set_.erase(it);
+  // Extract all iterators at minimum position from the heap.
+  while (!pos_set_.empty() && pos_set_.min().first == min_pos) {
+    current_pos_indices_.push_back(pos_set_.min().second);
+    pos_set_.pop_min();
   }
   current_position_ = iters_[current_pos_indices_[0]]->CurrentPosition();
   current_field_mask_ = 0ULL;

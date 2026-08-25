@@ -37,5 +37,6 @@ extend-ignore-re = [
     "nghi",
     "bubu",
     "Teser",
-    "hel"
+    "hel",
+    "eit_.*"
 ]

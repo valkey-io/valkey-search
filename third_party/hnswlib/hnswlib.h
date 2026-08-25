@@ -17,6 +17,11 @@
 #endif
 
 #define USE_PREFETCH
+// Always enable SimSIMD distance kernels. Defined here (before space_l2.h /
+// space_ip.h / stop_condition.h test `#if defined(USE_SIMSIMD)`, all of which
+// include this header first) rather than via a build flag. SimSIMD does its
+// own runtime CPU-feature dispatch, so this stays portable.
+#define USE_SIMSIMD
 #ifndef NO_MANUAL_VECTORIZATION
 #if (defined(__SSE__) || _M_IX86_FP > 0 || defined(_M_AMD64) || defined(_M_X64))
 #define USE_SSE

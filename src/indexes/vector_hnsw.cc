@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
@@ -33,10 +32,12 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
+#include "src/query/search.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -109,28 +110,24 @@ template <typename T>
 void VectorHNSW<T>::TrackVector(uint64_t internal_id,
                                 const InternedStringPtr &vector) {
   absl::MutexLock lock(&tracked_vectors_mutex_);
-  tracked_vectors_.push_back(vector);
+  tracked_vectors_[internal_id] = vector;
 }
 
 template <typename T>
 bool VectorHNSW<T>::IsVectorMatch(uint64_t internal_id,
                                   const InternedStringPtr &vector) {
-  absl::ReaderMutexLock lock(&resize_mutex_);
-  {
-    std::unique_lock<std::mutex> lock_label(
-        algo_->getLabelOpMutex(internal_id));
-    auto id = hnswlib_helpers::GetInternalId(algo_.get(), internal_id);
-    if (!id.has_value()) {
-      return false;
-    }
-    char *data_ptrv = algo_->getDataByInternalId(*id);
-    size_t dim = *((size_t *)algo_->dist_func_param_);
-    absl::string_view record(data_ptrv, dim * sizeof(T));
-    return vector->Str() == record;
+  absl::ReaderMutexLock lock(&tracked_vectors_mutex_);
+  auto it = tracked_vectors_.find(internal_id);
+  if (it == tracked_vectors_.end()) {
+    return false;
   }
+  return it->second == vector;
 }
-// UnTrackVector does not delete the vector in VectorHNSW, as vectors are never
-// physically removed from the graph—only marked as deleted.
+
+// UnTrackVector is a no-op for HNSW because deleted nodes still participate
+// in graph routing. On key modification, the same internal_id is reused, so
+// TrackVector overwrites the map entry in-place (fixing the unbounded growth
+// the old deque had on repeated modifications).
 template <typename T>
 void VectorHNSW<T>::UnTrackVector(uint64_t internal_id) {}
 
@@ -152,14 +149,15 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     // initial_cap needs to be provided to retain the original initial_cap if
     // the index being loaded is empty.
 
-    RDBChunkInputStream input(std::move(iter));
-    VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(input, index->space_.get(),
-                                vector_index_proto.initial_cap(), index.get()));
-    // ef_runtime is not persisted in the index contents
-    index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     index->algo_->allow_replace_deleted_ =
         options::GetHNSWAllowReplaceDeleted().GetValue();
+    RDBChunkInputStream input(std::move(iter));
+    VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
+        input, index->space_.get(), vector_index_proto.initial_cap(),
+        index.get(), vector_index_proto.hnsw_algorithm().m(),
+        options::GetHNSWValidationEnable().GetValue()));
+    // ef_runtime is not persisted in the index contents
+    index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
@@ -277,10 +275,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(uint64_t internal_id,
                                              absl::string_view record) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
-    // TODO - an alternative approach is to call HierarchicalNSW::updatePoint.
-    // The concern with calling updatePoint is that it might have implications
-    // on the search accuracy. Need to revisit this in the future.
-    algo_->markDelete(internal_id);
+    // addPoint() routes an existing label to an in-place update.
     algo_->addPoint((T *)record.data(), internal_id,
                     algo_->allow_replace_deleted_);
   } catch (const std::exception &e) {
@@ -320,12 +315,6 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime, bool enable_partial_results) {
-  if (!IsValidSizeVector(query)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "Error parsing vector similarity query: query vector blob size (",
-        query.size(), ") does not match index's expected size (",
-        dimensions_ * GetDataTypeSize(), ")."));
-  }
   auto perform_search = [this, count, &filter, enable_partial_results,
                          &ef_runtime,
                          &cancellation_token](absl::string_view query)
@@ -336,8 +325,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
       auto res = algo_->searchKnn((T *)query.data(), count, ef_runtime,
                                   filter.get(), &cancel_condition);
       if (!enable_partial_results && cancellation_token->IsCancelled()) {
-        return absl::CancelledError(
-            "Search operation cancelled due to timeout");
+        return absl::CancelledError(query::kTimeoutMsg);
       }
       return res;
     } catch (const std::exception &e) {

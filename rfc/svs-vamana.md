@@ -33,7 +33,7 @@ The valkey-search module currently provides two vector indexing algorithms: FLAT
 | Graph structure | None | Multi-layer skip-list graph | Single-level Vamana graph with alpha-pruning |
 | Compression | None | None | FP16, SQ8, LVQ (4/8-bit), LeanVec |
 | Platform | Any | Any | x86_64 Linux (primary); ARM64: no planned Intel SVS optimization; submodule approach removes hard x86 binary constraint |
-| Dynamic updates | N/A | Supported | In progress (thread-safe add/remove) |
+| Dynamic updates | Supported | Supported | In progress (thread-safe add/remove) |
 | Memory overhead | Vectors only | Vectors + graph | Vectors + graph; LVQ/LeanVec compression backends reduce vector storage |
 
 ### Deployment Architecture and Linking Model
@@ -79,7 +79,7 @@ SVS is added as a git submodule under `third_party/svs/` and compiled as an obje
 **Build/packaging:**
 - SVS added as `git submodule` under `third_party/svs/` (same pattern as hnswlib)
 - `cmake --build` compiles SVS sources alongside valkey-search; no pre-built artifact needed
-- `ENABLE_SVS=ON` (will default to ON on x86_64 Linux) pulls and builds the submodule automatically
+- SVS submodule is built automatically on x86_64 Linux with no separate compile flag required
 - LVQ/LeanVec proprietary compression: see Future Considerations section
 
 #### Alternative Approaches Considered
@@ -123,8 +123,8 @@ The compression transition uses **copy semantics** to avoid blocking concurrent 
 2. Capability check -- valkey-search verifies the target compression type is built in:
    - FP16/SQ8: always available in the open-source submodule build (this RFC)
    - LVQ/LeanVec: require proprietary backends outside the scope of this RFC; `FT.CREATE` with these types returns an error unless a future proprietary build is loaded
-3. Clone with new storage -- a new index is built with compressed storage, copying the graph structure from the existing index. Searches continue against the original uncompressed index during this phase.
-4. Atomic swap -- once the compressed index is ready, valkey-search atomically swaps the index pointer. The old uncompressed storage is freed.
+3. Clone with new storage -- a compressed index is built from a snapshot of the source index. Mutations that complete on the source index after the snapshot is taken are journaled. Searches continue against the original uncompressed index during this phase.
+4. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the journaled mutations into the compressed index to bring it fully up to date, atomically swaps the index pointer, and releases the lock. The old uncompressed storage is freed.
 5. Memory accounting update -- the freed memory is reflected in `FT.INFO` and per-index byte counters.
 
 **Hard constraint:** Searches must never block for more than ~10ms during the transition. The copy-then-swap approach ensures this -- 2x peak memory during the overlap window is acceptable.
@@ -136,7 +136,7 @@ The compression transition uses **copy semantics** to avoid blocking concurrent 
 - **x86_64 Linux** (current): submodule build. Optimal with AVX-512; functional with AVX2 at reduced throughput. All open-source compression backends available.
 - **ARM64**: Intel SVS does not have planned ARM-specific optimization work. The submodule approach removes the hard x86 constraint of the prior pre-built binary -- ARM64 compatibility would depend on valkey-search's existing `simsimd` layer (NEON/SVE/DotProd) rather than SVS-specific ARM work, which is an improvement over the prior model where the pre-built binary was x86-only.
 
-The `ENABLE_SVS` CMake flag (currently defaults to OFF) controls whether SVS is compiled into valkey-search. Phase 1 will default it to ON on x86_64 Linux.
+SVS is compiled into valkey-search unconditionally on x86_64 Linux. No separate compile flag is required.
 
 ### Comparison with Vector Search in Other Systems
 
@@ -207,7 +207,7 @@ In the open-source submodule build (this RFC), baseline, FP16, and SQ8 types are
 #### Example
 
 ```
-FT.CREATE my_index SCHEMA vec VECTOR SVS 18
+FT.CREATE my_index SCHEMA vec VECTOR SVS 20
     TYPE FLOAT32
     DIM 768
     DISTANCE_METRIC COSINE
@@ -264,7 +264,7 @@ The SVS runtime v0.4.0 provides `save()` / `load()` APIs that serialize the comp
 
 | Configuration | Scope | Default | Description |
 |---------------|-------|---------|-------------|
-| `ENABLE_SVS` | Build-time (CMake) | OFF (will default to ON on x86_64 Linux) | Whether to compile SVS support into valkey-search |
+| SVS submodule | Build-time | Always ON (x86_64 Linux) | SVS is compiled unconditionally on x86_64 Linux; no separate flag |
 
 ### Module API
 
@@ -303,11 +303,12 @@ SVS's concurrency model integrates directly with valkey-search's existing reader
 
 **Current state (PoC):** SVS internally manages its own OpenMP thread pool. The `--svs-omp-threads` module option sets the OMP thread count per-search-thread via `omp_set_num_threads`. valkey-search's reader/writer pools do not coordinate with OMP -- this creates thread over-subscription risk on high-core machines. This is a PoC artifact.
 
-**Target state (post-submodule integration):** SVS is compiled without OpenMP. All parallelism is driven by valkey-search's existing reader/writer pools via a `svs_threadpool_interface` C struct registered at index construction via `svs_index_builder_set_threadpool_custom()`.
+**Target state (post-submodule integration):** SVS is compiled without OpenMP. The `svs_threadpool_interface` C struct is registered at index construction via `svs_index_builder_set_threadpool_custom()`.
 
-The C API threadpool interface (defined in `svs/c/svs_c.h`, production form from PR #363):
+**Alignment with Valkey's concurrency model:** Valkey's threading contract requires that neither query nor mutation operations spawn sub-threads -- only the thread that invoked the operation executes it. This applies to SVS exactly as it does to HNSW: a reader thread executes a search to completion on that thread alone; a writer thread executes a graph mutation to completion on that thread alone. SVS's internal graph parallelism (parallel candidate evaluation, parallel distance computation) is therefore not available in this integration. The `svs_threadpool_interface` adapter implements this constraint directly:
+
 ```c
-// Ops vtable -- versioned for forward compatibility
+// Ops vtable -- versioned for forward compatibility (PR #363)
 struct svs_threadpool_interface_ops {
     uint32_t version;
     size_t struct_size;
@@ -316,38 +317,41 @@ struct svs_threadpool_interface_ops {
                          void (*func)(void* svs_param, size_t i),
                          void* svs_param,
                          size_t n,
-                         svs_error_h out_err);   // error propagation added in PR #363
+                         svs_error_h out_err);
 };
 
-// Interface -- ops is now a pointer (not embedded by value)
 struct svs_threadpool_interface { struct svs_threadpool_interface_ops* ops; void* self; };
 typedef struct svs_threadpool_interface svs_threadpool_t;
-
-// Initialization macros (use these; do not fill fields manually)
-// SVS_INIT_THREADPOOL_OPS(size_func, parallel_for_func)
-// SVS_MAKE_INTERFACE(user_ptr, vtable_ptr)
 ```
 
-valkey-search implements a thin C-struct adapter with:
-- `self` -> pointer to valkey-search's thread pool
-- `size()` -> returns the vCPU-derived thread count
-- `parallel_for()` -> submits N work items to the pool, blocks until completion, returns `false` + sets `out_err` on failure
+valkey-search implements the adapter as follows, consistent with the no-sub-threading contract:
+- `size()` -> returns `1`; SVS treats the index as single-threaded
+- `parallel_for()` -> executes all N work items sequentially on the **calling thread**; no sub-threads spawned
 
-**Who controls what:**
-- valkey-search owns all thread pools; SVS never creates or manages its own threads
-- `svs_index_set_num_threads()` is explicitly rejected for CUSTOM pools -- the pool's own `size()` governs thread count; SVS has no authority to resize it
-- Thread counts are controlled by valkey-search's vCPU-derived pool sizing and existing configuration knobs (`reader-threads`, `writer-threads`); no SVS-specific configuration is required
+```c
+size_t svs_tp_size(void* self) { return 1; }
 
-**Thread pool breakdown by operation:**
+bool svs_tp_parallel_for(void* self,
+                          void (*func)(void* svs_param, size_t i),
+                          void* svs_param, size_t n,
+                          svs_error_h out_err) {
+    for (size_t i = 0; i < n; i++) func(svs_param, i);
+    return true;
+}
+```
 
-| Operation | Thread pool | Notes |
-|-----------|-------------|-------|
-| KNN search / graph traversal | Reader thread pool | Per-query; dispatched by valkey-search's search dispatcher |
-| Add / graph mutation (flush) | Writer thread pool | Batched; under exclusive index lock |
+**Thread model by operation:**
+
+| Operation | Executing thread | Notes |
+|-----------|-----------------|-------|
+| KNN search / graph traversal | The reader thread that picked up the query | No sub-threading; single-threaded per Valkey model |
+| Add / graph mutation (flush) | The writer thread that picked up the mutation | No sub-threading; serialized above index level for same key |
 | Save / Load (RDB) | Caller thread | Single-threaded stream I/O |
-| Deferred compression transition (clone phase) | Writer thread pool | Atomic swap is single-threaded |
+| Deferred compression transition | Writer thread | Atomic swap is single-threaded |
 
-**Trigger semantics:** Search tasks are dispatched to the reader pool by valkey-search's search dispatcher, exactly as with HNSW. Graph mutations (add/remove during flush) run under the writer thread pool's exclusive lock. SVS receives work items through `parallel_for` callbacks; it does not observe or react to Valkey phase transitions directly.
+**Concurrency between operations:** The reader/writer phase gate enforced by valkey-search's index lock ensures the no-concurrent-reads-and-writes guarantee independently of SVS -- SVS does not need to enforce this itself. Multiple reader threads may execute independent queries concurrently (on separate index reads); multiple writer threads may execute independent mutations concurrently, with same-key mutations serialized at the level above the index as per Valkey's mutation contract.
+
+**Trade-off:** Disabling SVS's internal graph parallelism means per-query latency does not benefit from multi-core parallelism within a single search. Throughput scales horizontally through Valkey's reader pool (multiple concurrent queries on separate threads), consistent with how HNSW behaves today. See Known Gaps.
 
 #### Memory Accounting
 
@@ -374,7 +378,7 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 ### Testing
 
 - **Functional tests**: FT.CREATE with ALGORITHM SVS_VAMANA -> insert vectors -> FT.SEARCH verifies recall >= 0.95
-- **Platform tests**: Verify SVS functions on x86_64 Linux; graceful fallback when ENABLE_SVS=OFF
+- **Platform tests**: Verify SVS functions correctly on x86_64 Linux
 - **Compression backend tests**: All compression types produce functional indexes with expected recall
 - **RDB round-trip tests**: BGSAVE -> restart -> FT.SEARCH verifies index integrity and recall
 - **Deferred compression tests**: Threshold triggers training/compression transition; search works throughout
@@ -409,13 +413,13 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 
 | Phase | Feature | Priority | Owner | Description |
 |-------|---------|----------|-------|-------------|
-| 1 | ENABLE_SVS=ON default | High | Intel (contributor) | CMake flag defaults to ON on x86_64 Linux |
+| 1 | SVS always-on (x86_64 Linux) | High | Intel (contributor) | SVS submodule compiled unconditionally on x86_64 Linux; no compile flag |
 | 2 | RDB persistence | Critical | Intel (contributor) | Save/load SVS indexes across server restarts |
 | 3 | Dispatch latency sampling | Medium | Intel (contributor) | Per-query latency metrics at dispatch layer |
 | 4 | Partial results on timeout | Medium | Intel (contributor) | Return best results found so far when search times out |
 | 5 | SVS submodule integration | Blocked (on Intel SVS C API) | Intel (contributor) | Replace pre-built runtime with static submodule under `third_party/svs/`; remove OpenMP; integrate C API threadpool |
 | 6 | Proprietary compression path | Low (follow-on) | Intel + community decision | LVQ/LeanVec distribution model (build flag, dynamic .so, or standalone build); see Future Considerations |
-| 7 | Deferred compression | Medium | Intel (contributor) | Copy-semantic transition orchestration with non-blocking swap |
+| 7 | Deferred compression | Medium | Intel (contributor) | Copy-semantic transition orchestration with non-blocking swap; once the compressed clone is nearly caught up, route incoming mutations to the new index before the final pointer swap to minimize divergence at cutover |
 
 ### Known Gaps
 
@@ -478,7 +482,11 @@ RUN set -eux; \
 **2. `valkey-search/build.sh`** -- forward the flag to CMake:
 
 ```sh
-cmake ... ${SVS_PRO:+-DSVS_PRO=ON} ...
+case "${SVS_PRO}" in
+  1|ON) SVS_PRO_FLAG="-DSVS_PRO=ON" ;;
+  *)    SVS_PRO_FLAG="" ;;
+esac
+cmake ... ${SVS_PRO_FLAG} ...
 ```
 
 **3. `valkey-search/CMakeLists.txt`** -- when `SVS_PRO=ON`, fetch the SVS release tarball from GitHub using the established SVS FetchContent pattern (see [SVS C++ quickstart](https://intel.github.io/ScalableVectorSearch/start_cpp.html)):

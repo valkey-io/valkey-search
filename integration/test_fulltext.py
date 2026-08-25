@@ -2574,6 +2574,47 @@ class TestFullTextDebugMode(ValkeySearchTestCaseDebugMode):
         
         print("\nCleanup verification passed!")
 
+    def test_text_index_memory_submodule_stats(self):
+        """Verify text index memory sub-component stats return to zero."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "memidx", "ON", "HASH", "PREFIX", "1", "m:",
+            "SCHEMA", "content", "TEXT"
+        )
+        import time
+        time.sleep(2)
+
+        info = IndexingTestHelper.get_ft_info(client, "memidx").parsed_data
+        assert info["text_postings_memory_bytes"] == 0
+        assert info["text_position_memory_bytes"] == 0
+
+        client.execute_command("HSET", "m:1", "content", "hello world foo bar")
+        client.execute_command("HSET", "m:2", "content", "alpha beta gamma delta")
+        client.execute_command("HSET", "m:3", "content", "hello world again today")
+        time.sleep(2)
+
+        info = IndexingTestHelper.get_ft_info(client, "memidx").parsed_data
+        assert info["text_postings_memory_bytes"] > 0
+        assert info["text_position_memory_bytes"] > 0
+        assert info["text_index_total_memory_bytes"] == (
+            info["text_postings_memory_bytes"] +
+            info["text_position_memory_bytes"] +
+            info["text_rax_tree_memory_bytes"]
+        )
+
+        client.execute_command("DEL", "m:1")
+        client.execute_command("DEL", "m:2")
+        client.execute_command("DEL", "m:3")
+        time.sleep(2)
+
+        info = IndexingTestHelper.get_ft_info(client, "memidx").parsed_data
+        assert info["text_postings_memory_bytes"] == 0, \
+            f"Expected 0, got {info['text_postings_memory_bytes']}"
+        assert info["text_position_memory_bytes"] == 0, \
+            f"Expected 0, got {info['text_position_memory_bytes']}"
+
+        client.execute_command("FT.DROPINDEX", "memidx")
+
 class TestFullTextCluster(ValkeySearchClusterTestCaseDebugMode):
 
     @pytest.mark.skip(reason="This test is designed to run for an extended period with high concurrency to detect crashes. It is not suitable for regular test runs and should be run manually when needed.")

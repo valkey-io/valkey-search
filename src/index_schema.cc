@@ -1193,6 +1193,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
                    // key-value pairs = 8 items)
+    arrSize += 8;  // text memory sub-component stats (4 key-value pairs = 8 items)
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -1236,6 +1237,24 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
+  if (text_index_schema_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "text_postings_memory_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        static_cast<long long>(text_index_schema_->GetPostingsMemoryUsage()));
+    ValkeyModule_ReplyWithSimpleString(ctx, "text_position_memory_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        static_cast<long long>(text_index_schema_->GetPositionMemoryUsage()));
+    ValkeyModule_ReplyWithSimpleString(ctx, "text_rax_tree_memory_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx,
+        static_cast<long long>(text_index_schema_->GetRadixTreeMemoryUsage()));
+    ValkeyModule_ReplyWithSimpleString(ctx, "text_index_total_memory_bytes");
+    ValkeyModule_ReplyWithLongLong(
+        ctx, static_cast<long long>(
+                 text_index_schema_->GetTotalTextIndexMemoryUsage()));
+  }
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(

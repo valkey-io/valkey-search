@@ -187,19 +187,6 @@ bool SnowballLanguage::IsStopWord(absl::string_view word) const {
 
 Stemmer* SnowballLanguage::GetStemmer() const { return stemmer_.get(); }
 
-absl::StatusOr<std::vector<std::string>> SnowballLanguage::QueryTokenize(
-    absl::string_view text_span) const {
-  if (!utils::Scanner::IsValidUtf8(text_span)) {
-    return absl::InvalidArgumentError("Invalid UTF-8");
-  }
-  std::vector<std::string> tokens;
-  SegmentInternal(text_span, /*handle_escapes=*/false,
-                  /*filter_stop_words=*/false, [&tokens](std::string&& token) {
-                    tokens.push_back(std::move(token));
-                  });
-  return tokens;
-}
-
 bool SnowballLanguage::IsSupported() const {
   return kModuleVersion >= MinRequiredVersion();
 }

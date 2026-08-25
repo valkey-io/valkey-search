@@ -344,41 +344,6 @@ TEST_F(SnowballLanguageTest, TokenizeWithStemMapNoEntryWhenStemMatchesToken) {
   EXPECT_FALSE(stem_map.contains("run"));
 }
 
-// --- QueryTokenize: normalizes but does NOT filter stop words ---
-
-TEST_F(SnowballLanguageTest, QueryTokenizeKeepsStopWords) {
-  auto result = english_.QueryTokenize("THE cat AND dog");
-  ASSERT_TRUE(result.ok());
-  EXPECT_EQ(*result, std::vector<std::string>({"the", "cat", "and", "dog"}));
-}
-
-TEST_F(SnowballLanguageTest, QueryTokenizeSplitsOnPunctuation) {
-  auto result = english_.QueryTokenize("hello,world!test");
-  ASSERT_TRUE(result.ok());
-  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world", "test"}));
-}
-
-TEST_F(SnowballLanguageTest, QueryTokenizeInvalidUtf8) {
-  auto result = english_.QueryTokenize("\xFF\xFE");
-  EXPECT_FALSE(result.ok());
-}
-
-TEST_F(SnowballLanguageTest, QueryTokenizeDoesNotHandleEscapes) {
-  // Backslash is punctuation in English, so it acts as a word boundary.
-  // QueryTokenize does NOT handle escape sequences — backslash splits tokens.
-  auto result = english_.QueryTokenize("hello\\,world");
-  ASSERT_TRUE(result.ok());
-  // Backslash splits "hello" from ",world". Comma then splits further.
-  EXPECT_EQ(*result, std::vector<std::string>({"hello", "world"}));
-}
-
-TEST_F(SnowballLanguageTest, QueryTokenizeNoStopWordFiltering) {
-  // All tokens preserved, even stop words
-  auto result = english_.QueryTokenize("the and is are");
-  ASSERT_TRUE(result.ok());
-  EXPECT_EQ(*result, std::vector<std::string>({"the", "and", "is", "are"}));
-}
-
 // --- IsQueryDelimiter ---
 
 TEST_F(SnowballLanguageTest, AsciiPunctuationIsDelimiter) {
@@ -481,17 +446,6 @@ TEST_F(SnowballLanguageTest, ArabicNbspSplitsAfterNfkc) {
     EXPECT_EQ(token.find("\xc2\xa0"), std::string::npos)
         << "Token contains NBSP bytes: " << token;
   }
-}
-
-TEST_F(SnowballLanguageTest, ArabicQueryTokenizeNfkcFullwidthComma) {
-  // Query path must also normalize before split to match indexed content.
-  auto result = arabic_.QueryTokenize(
-      "abc\xef\xbc\x8c"
-      "def");
-  ASSERT_TRUE(result.ok());
-  ASSERT_EQ(result->size(), 2);
-  EXPECT_EQ((*result)[0], "abc");
-  EXPECT_EQ((*result)[1], "def");
 }
 
 TEST_F(SnowballLanguageTest, FrenchNfcPreservesFullwidthComma) {
@@ -635,18 +589,6 @@ TEST_F(SnowballLanguageTest, FrenchNarrowNBSPTreatedAsWordBoundary) {
   }
   EXPECT_TRUE(found_mot1) << "Expected 'mot1' split by NNBSP";
   EXPECT_TRUE(found_mot2) << "Expected 'mot2' split by NNBSP";
-}
-
-TEST_F(SnowballLanguageTest, QueryTokenizeSplitsOnNBSP) {
-  TestFrenchLanguage french;
-  // Query path must also split on NBSP so queries match indexed content.
-  auto result = french.QueryTokenize(
-      "dit\xc2\xa0"
-      "bonjour");
-  ASSERT_TRUE(result.ok());
-  ASSERT_EQ(result->size(), 2);
-  EXPECT_EQ((*result)[0], "dit");
-  EXPECT_EQ((*result)[1], "bonjour");
 }
 
 TEST_F(SnowballLanguageTest, IdeographicSpaceSplitsTokens) {

@@ -172,10 +172,6 @@ class Language {
   /// Returns the stemmer, or nullptr if this language has no stemming.
   virtual Stemmer* GetStemmer() const = 0;
 
-  /// Query-path tokenization of a text span.
-  virtual absl::StatusOr<std::vector<std::string>> QueryTokenize(
-      absl::string_view text_span) const = 0;
-
   /// Whether this language is usable with the current module version.
   virtual bool IsSupported() const = 0;
 

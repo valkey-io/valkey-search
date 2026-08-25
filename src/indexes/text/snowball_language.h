@@ -44,9 +44,6 @@ class SnowballLanguage : public Language {
   bool IsStopWord(absl::string_view word) const override;
   Stemmer* GetStemmer() const override;
 
-  absl::StatusOr<std::vector<std::string>> QueryTokenize(
-      absl::string_view text_span) const override;
-
   bool IsSupported() const override;
 
   /// Returns the libstemmer algorithm name (e.g., "english", "french").
@@ -59,9 +56,9 @@ class SnowballLanguage : public Language {
                    absl::string_view stemmer_algorithm);
 
  private:
-  /// Core segmentation loop shared by Tokenize, TokenizeWithStemMap, and
-  /// QueryTokenize. Calls `on_token` for each segmented+normalized token that
-  /// passes optional stop-word filtering.
+  /// Core segmentation loop shared by Tokenize and TokenizeWithStemMap.
+  /// Calls `on_token` for each segmented+normalized token that passes optional
+  /// stop-word filtering.
   template <typename TokenCallback>
   void SegmentInternal(absl::string_view text, bool handle_escapes,
                        bool filter_stop_words, TokenCallback on_token) const;

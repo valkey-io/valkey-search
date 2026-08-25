@@ -38,7 +38,6 @@ class SnowballLanguage : public Language {
       absl::string_view text, uint32_t min_stem_size,
       InProgressStemMap& stem_mappings) const override;
 
-  bool IsQueryDelimiter(uint32_t codepoint) const override;
   const PunctuationSet& GetPunctuationSet() const override;
   void NormalizeInPlace(std::string& token) const override;
   bool IsStopWord(absl::string_view word) const override;

@@ -167,7 +167,7 @@ TEST(CaseFoldInPlaceTest, TurkishDottedAndDotlessILocaleIndependent) {
 
 // =============================================================================
 // NormalizeCaseFoldFilter — direct unit tests for the standalone class.
-// Exercises NormalizeInPlace() and Apply() across edge cases.
+// Exercises NormalizeInPlace() across edge cases.
 // =============================================================================
 
 TEST(NormalizeCaseFoldFilterTest, EmptyString) {
@@ -175,16 +175,6 @@ TEST(NormalizeCaseFoldFilterTest, EmptyString) {
   std::string token;
   filter.NormalizeInPlace(token);
   EXPECT_EQ(token, "");
-}
-
-TEST(NormalizeCaseFoldFilterTest, ApplyReturnsTrueAlways) {
-  NormalizeCaseFoldFilter filter;
-  std::string token = "hello";
-  EXPECT_TRUE(filter.Apply(token));
-  EXPECT_EQ(token, "hello");
-
-  std::string empty;
-  EXPECT_TRUE(filter.Apply(empty));
 }
 
 TEST(NormalizeCaseFoldFilterTest, AsciiLowering) {

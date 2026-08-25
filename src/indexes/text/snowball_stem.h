@@ -31,8 +31,7 @@ class SnowballStemFilter : public Stemmer {
   /// The enum is used as the thread-local cache key (O(1) integer hash).
   /// The algorithm name is passed to libstemmer's sb_stemmer_new().
   SnowballStemFilter(data_model::Language language,
-                     absl::string_view algorithm_name,
-                     uint32_t default_min_stem_size = 0);
+                     absl::string_view algorithm_name);
 
   /// Stemmer interface
   std::string GetStemRoot(absl::string_view token,
@@ -42,13 +41,9 @@ class SnowballStemFilter : public Stemmer {
                     uint32_t min_stem_size,
                     InProgressStemMap& stem_mappings) const override;
 
-  /// Get the algorithm name this filter was configured with.
-  const std::string& GetAlgorithmName() const { return algorithm_name_; }
-
  private:
   data_model::Language language_;
   std::string algorithm_name_;
-  uint32_t default_min_stem_size_;
 
   sb_stemmer* GetStemmer() const;
   std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,

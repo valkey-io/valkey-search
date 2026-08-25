@@ -344,24 +344,6 @@ TEST_F(SnowballLanguageTest, TokenizeWithStemMapNoEntryWhenStemMatchesToken) {
   EXPECT_FALSE(stem_map.contains("run"));
 }
 
-// --- IsQueryDelimiter ---
-
-TEST_F(SnowballLanguageTest, AsciiPunctuationIsDelimiter) {
-  EXPECT_TRUE(english_.IsQueryDelimiter(','));
-  EXPECT_TRUE(english_.IsQueryDelimiter(' '));
-  EXPECT_TRUE(english_.IsQueryDelimiter('\t'));
-}
-
-TEST_F(SnowballLanguageTest, LettersAreNotDelimiters) {
-  EXPECT_FALSE(english_.IsQueryDelimiter('a'));
-  EXPECT_FALSE(english_.IsQueryDelimiter('Z'));
-}
-
-TEST_F(SnowballLanguageTest, MultiBytePunctuationPerLanguage) {
-  EXPECT_TRUE(turkish_.IsQueryDelimiter(0x2013));   // EN DASH in Turkish
-  EXPECT_FALSE(english_.IsQueryDelimiter(0x2013));  // Not in English
-}
-
 // --- NormalizeInPlace ---
 
 TEST_F(SnowballLanguageTest, NormalizeAscii) {
@@ -767,7 +749,8 @@ TEST_P(NonAsciiPunctuationTest, SplitBehavior) {
   const auto& tc = GetParam();
   NonAsciiPunctuationLanguage lang(tc);
 
-  EXPECT_EQ(lang.IsQueryDelimiter(tc.punct_codepoint), tc.expect_split);
+  EXPECT_EQ(lang.GetPunctuationSet().Contains(tc.punct_codepoint),
+            tc.expect_split);
 
   auto result = lang.Tokenize(tc.input);
   ASSERT_TRUE(result.ok());

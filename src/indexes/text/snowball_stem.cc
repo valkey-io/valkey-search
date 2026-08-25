@@ -31,11 +31,8 @@ thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 }  // namespace
 
 SnowballStemFilter::SnowballStemFilter(data_model::Language language,
-                                       absl::string_view algorithm_name,
-                                       uint32_t default_min_stem_size)
-    : language_(language),
-      algorithm_name_(algorithm_name),
-      default_min_stem_size_(default_min_stem_size) {}
+                                       absl::string_view algorithm_name)
+    : language_(language), algorithm_name_(algorithm_name) {}
 
 sb_stemmer* SnowballStemFilter::GetStemmer() const {
   auto it = stemmers_.find(language_);

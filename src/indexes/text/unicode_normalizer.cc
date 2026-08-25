@@ -130,11 +130,6 @@ NormalizeCaseFoldFilter::NormalizeCaseFoldFilter(NormalizationForm form,
                                                  const std::string &locale)
     : norm_form_(form), locale_(locale) {}
 
-bool NormalizeCaseFoldFilter::Apply(std::string &token) const {
-  NormalizeInPlace(token);
-  return true;
-}
-
 void NormalizeCaseFoldFilter::NormalizeInPlace(std::string &token) const {
   if (!locale_.empty()) {
     token = UnicodeNormalizer::Normalize(token, norm_form_);

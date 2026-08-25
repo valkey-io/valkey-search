@@ -72,12 +72,7 @@ class NormalizeCaseFoldFilter {
       NormalizationForm form = NormalizationForm::NFC,
       const std::string& locale = "");
 
-  /// Normalize a token in place and return true (token is always kept).
-  /// Provided for compatibility with filter-chain callers.
-  bool Apply(std::string& token) const;
-
   void NormalizeInPlace(std::string& token) const;
-  NormalizationForm GetNormForm() const { return norm_form_; }
 
  private:
   NormalizationForm norm_form_;

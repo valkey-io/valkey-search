@@ -169,10 +169,6 @@ absl::StatusOr<std::vector<std::string>> SnowballLanguage::TokenizeWithStemMap(
   return tokens;
 }
 
-bool SnowballLanguage::IsQueryDelimiter(uint32_t codepoint) const {
-  return punct_set_.Contains(codepoint);
-}
-
 const PunctuationSet& SnowballLanguage::GetPunctuationSet() const {
   return punct_set_;
 }

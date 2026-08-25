@@ -156,9 +156,6 @@ class Language {
       absl::string_view text, uint32_t min_stem_size,
       InProgressStemMap& stem_mappings) const = 0;
 
-  /// Returns true if the codepoint is a word boundary in query text.
-  virtual bool IsQueryDelimiter(uint32_t codepoint) const = 0;
-
   /// Direct access to the punctuation set for hot-loop usage in the filter
   /// parser. Avoids virtual dispatch per character.
   virtual const PunctuationSet& GetPunctuationSet() const = 0;

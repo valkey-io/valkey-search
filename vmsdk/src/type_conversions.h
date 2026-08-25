@@ -8,6 +8,8 @@
 #ifndef VMSDK_SRC_TYPE_CONVERSIONS_H_
 #define VMSDK_SRC_TYPE_CONVERSIONS_H_
 
+#include <valkey/valkey_module.h>
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -24,7 +26,6 @@
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
 

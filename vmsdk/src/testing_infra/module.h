@@ -8,6 +8,10 @@
 #ifndef VMSDK_SRC_TESTING_INFRA_MODULE
 #define VMSDK_SRC_TESTING_INFRA_MODULE
 
+#include <valkey/module_sdk/log.h>
+#include <valkey/module_sdk/utils.h>
+#include <valkey/valkey_module.h>
+
 #include <atomic>
 #include <cstdarg>
 #include <cstdint>
@@ -26,10 +30,7 @@
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "vmsdk/src/log.h"
-#include "vmsdk/src/type_conversions.h"
-#include "vmsdk/src/utils.h"
-#include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "type_conversions.h"
 
 class MockValkeyModule {
  public:
@@ -1521,6 +1522,21 @@ inline long long TestValkeyModule_Milliseconds() {
 // TestValkeyModule_Init initializes the module API function table with mock
 // implementations of functions to prevent segmentation faults when
 // executing tests and to allow validation of Valkey module API calls.
+namespace {
+// Marks this binary's initial process thread as vmsdk's "main thread" at
+// static-init time, i.e. before main() runs -- unlike the
+// absl::call_once(..., TrackCurrentAsMainThread) below in
+// TestValkeyModule_Init(), which only fires once some test's SetUp() runs
+// and so never fires under e.g. --gtest_list_tests. Without this, any
+// info_field left registered at process exit finds no main thread was ever
+// marked and CHECK-fails in its destructor. TrackCurrentAsMainThread() is
+// safe to call again from this same thread once a real test's SetUp() runs.
+struct MainThreadTracker {
+  MainThreadTracker() { vmsdk::TrackCurrentAsMainThread(); }
+};
+const MainThreadTracker kMainThreadTracker;
+}  // namespace
+
 inline void TestValkeyModule_Init() {
   ValkeyModule_Log = &TestValkeyModule_Log;
   ValkeyModule_LogIOError = &TestValkeyModule_LogIOError;

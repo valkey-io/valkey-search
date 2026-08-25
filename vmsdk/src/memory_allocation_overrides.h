@@ -16,11 +16,7 @@
 
 #include "vmsdk/src/memory_allocation.h"
 
-#if defined(__clang__)
 #define WEAK_SYMBOL __attribute__((weak))
-#else
-#define WEAK_SYMBOL
-#endif
 
 extern "C" {
 // NOLINTNEXTLINE
@@ -121,12 +117,14 @@ void UseValkeyAlloc();
 // safe in single-threaded or testing environments.
 void ResetValkeyAlloc();
 
-struct DisableRawSystemAllocatorReporting {
-};  // Pass this (or void) to DISABLE reporting
-// RawSystemAllocator implements an allocator that will not go through
-// the SystemAllocTracker, for use by the SystemAllocTracker to prevent
-// infinite recursion when tracking pointers.
-template <typename T, typename Tag = void>
+// RawSystemAllocator allocates directly from the real system malloc/free,
+// without reporting through ReportAllocMemorySize/ReportFreeMemorySize. It
+// exists for data structures that are themselves part of the memory-tracking
+// machinery (e.g. SystemAllocTracker's own bookkeeping sets, ShardedAtomic's
+// node list): if they reported their own internal allocations, that would
+// either recurse back into the tracker or inflate the tracked byte count with
+// bookkeeping overhead unrelated to what's actually being tracked.
+template <typename T>
 struct RawSystemAllocator {
   // NOLINTNEXTLINE
   typedef T value_type;
@@ -136,18 +134,10 @@ struct RawSystemAllocator {
   constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
   // NOLINTNEXTLINE
   T* allocate(std::size_t n) {
-    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportAllocMemorySize(n * sizeof(T));
-    }
     return static_cast<T*>(__real_malloc(n * sizeof(T)));
   }
   // NOLINTNEXTLINE
-  void deallocate(T* p, std::size_t) {
-    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportFreeMemorySize(sizeof(T));
-    }
-    __real_free(p);
-  }
+  void deallocate(T* p, std::size_t) { __real_free(p); }
 };
 
 }  // namespace vmsdk

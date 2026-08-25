@@ -109,23 +109,35 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   size_t AddRecordAttribute(absl::string_view identifier,
                             absl::string_view alias,
                             indexes::IndexerType data_type) {
+    // Reserve the alias slot up front (defaulting to index 0) so we can tell
+    // "brand new alias" apart from "alias already pointed elsewhere" below.
+    std::string alias_str(alias);
+    auto [alias_itr, alias_is_new] =
+        record_indexes_by_alias_.try_emplace(alias_str);
+
     auto identifier_itr = record_indexes_by_identifier_.find(identifier);
-    auto alias_itr = record_indexes_by_alias_.find(alias);
-    if (identifier_itr != record_indexes_by_identifier_.end() &&
-        alias_itr != record_indexes_by_alias_.end()) {
-      assert(identifier_itr->second == alias_itr->second);
-      return identifier_itr->second;
+    size_t index;
+    if (identifier_itr != record_indexes_by_identifier_.end()) {
+      index = identifier_itr->second;
+    } else {
+      std::string idstr(identifier);
+      index = record_info_by_index_.size();
+      record_indexes_by_identifier_.emplace(idstr, index);
+      record_info_by_index_.push_back(AttributeRecordInfo{
+          .identifier_ = idstr, .alias_ = alias_str, .data_type_ = data_type});
     }
-    assert(identifier_itr == record_indexes_by_identifier_.end());
-    assert(alias_itr == record_indexes_by_alias_.end());
-    size_t new_index = record_info_by_index_.size();
-    record_indexes_by_identifier_.emplace(std::string(identifier), new_index);
-    record_indexes_by_alias_.emplace(std::string(alias), new_index);
-    record_info_by_index_.push_back(
-        AttributeRecordInfo{.identifier_ = std::string(identifier),
-                            .alias_ = std::string(alias),
-                            .data_type_ = data_type});
-    return new_index;
+
+    // (Re)point the alias at this identifier's slot. If it previously
+    // pointed elsewhere, break that relationship -- RediSearch allows an
+    // alias to be re-bound (e.g. `LOAD 2 n1 n2 AS n1`), shadowing whatever
+    // it used to refer to.
+    if (alias_itr->second != index) {
+      if (!alias_is_new) {
+        record_info_by_index_[alias_itr->second].alias_.clear();
+      }
+      alias_itr->second = index;
+    }
+    return index;
   }
 
   struct {

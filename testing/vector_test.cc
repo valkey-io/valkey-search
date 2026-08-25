@@ -1295,6 +1295,25 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   EXPECT_FALSE(algo.isMarkedDeleted(1));
 }
 
+TEST_F(VectorIndexTest, HnswHandlesEmptyNeighborLists) {
+  hnswlib::L2Space space{1};
+  hnswlib::HierarchicalNSW<float> algo(&space, 2, 2, 10);
+  float entry = 0.0f;
+  float point = 1.0f;
+  float update = 2.0f;
+  algo.addPoint(&entry, 0, 1);
+  auto *links = algo.get_linklist_at_level(0, 0);
+  algo.setListCount(links, 0);
+  reinterpret_cast<hnswlib::tableint *>(links + 1)[0] = algo.max_elements_;
+  EXPECT_NO_THROW(algo.searchBaseLayer(0, &point, 0));
+  algo.addPoint(&point, 1);
+  algo.element_levels_[1] = 0;
+  links = algo.get_linklist_at_level(0, 1);
+  algo.setListCount(links, 0);
+  reinterpret_cast<hnswlib::tableint *>(links + 1)[0] = algo.max_elements_;
+  EXPECT_NO_THROW(algo.updatePoint(&update, 1, 1.0));
+}
+
 // ---- Happy path ----------------------------------------------------------
 TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {
   auto golden = BuildGoldenChunks({}, kGoldenMax);

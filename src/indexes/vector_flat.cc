@@ -11,13 +11,10 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
-#include <queue>
 #include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -34,7 +31,6 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
-#include "src/utils/string_interning.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -62,7 +58,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
                           attribute_identifier, attribute_data_type));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
-    index->algo_ = std::make_unique<hnswlib::BruteforceSearch<T>>(
+    index->algo_ = std::make_unique<FlatIndex>(
         index->space_.get(), vector_index_proto.initial_cap());
     return index;
   } catch (const std::exception &e) {
@@ -73,27 +69,17 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
 }
 
 template <typename T>
-void VectorFlat<T>::TrackVector(uint64_t internal_id,
-                                const InternedStringPtr &vector) {
-  absl::MutexLock lock(&tracked_vectors_mutex_);
-  tracked_vectors_[internal_id] = vector;
-}
-
-template <typename T>
 bool VectorFlat<T>::IsVectorMatch(uint64_t internal_id,
-                                  const InternedStringPtr &vector) {
-  absl::MutexLock lock(&tracked_vectors_mutex_);
-  auto it = tracked_vectors_.find(internal_id);
-  if (it == tracked_vectors_.end()) {
+                                  absl::string_view vector) {
+  std::unique_lock<std::mutex> index_lock(algo_->index_lock);
+  auto found = algo_->dict_external_to_internal.find(internal_id);
+  if (found == algo_->dict_external_to_internal.end()) {
     return false;
   }
-  return it->second->Str() == vector->Str();
-}
-
-template <typename T>
-void VectorFlat<T>::UnTrackVector(uint64_t internal_id) {
-  absl::MutexLock lock(&tracked_vectors_mutex_);
-  tracked_vectors_.erase(internal_id);
+  const char *stored_vec =
+      algo_->GetDataPtrByInternalId(found->second)->GetRawVector();
+  absl::string_view record(stored_vec, dimensions_ * sizeof(T));
+  return vector == record;
 }
 
 template <typename T>
@@ -110,11 +96,14 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
         attribute_data_type->ToProto()));
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
-    index->algo_ =
-        std::make_unique<hnswlib::BruteforceSearch<T>>(index->space_.get());
+    index->algo_ = std::make_unique<FlatIndex>(index->space_.get());
     RDBChunkInputStream input(std::move(iter));
+    auto generator = [allocator = index->GetVectorAllocator()](
+                         absl::string_view vector_data) {
+      return VectorRecord(StringInternStore::Intern(vector_data, allocator));
+    };
     VMSDK_RETURN_IF_ERROR(
-        index->algo_->LoadIndex(input, index->space_.get(), index.get()));
+        index->algo_->LoadIndex(input, index->space_.get(), generator));
     return index;
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
@@ -161,7 +150,9 @@ absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
 
-      algo_->addPoint((T *)record.data(), internal_id);
+      algo_->addPoint(
+          VectorRecord(StringInternStore::Intern(record, GetVectorAllocator())),
+          internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
       std::string error_msg = e.what();
@@ -191,7 +182,10 @@ absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
 
   memcpy((*algo_->data_)[found->second] + algo_->data_ptr_size_, &internal_id,
          sizeof(hnswlib::labeltype));
-  *(char **)((*algo_->data_)[found->second]) = (char *)record.data();
+
+  VectorRecord *stored_vector = algo_->GetDataPtrByInternalId(found->second);
+  *stored_vector =
+      VectorRecord(StringInternStore::Intern(record, GetVectorAllocator()));
 
   return absl::OkStatus();
 }
@@ -225,32 +219,38 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
-  auto perform_search = [this, count, &filter,
-                         &cancellation_token](absl::string_view query)
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
-    absl::ReaderMutexLock lock(&resize_mutex_);
-    try {
-      CancelCondition canceler(cancellation_token);
-      return algo_->searchKnn(
-          (T *)query.data(),
-          std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
-          filter.get(), &canceler);
-    } catch (const std::exception &e) {
-      Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
-          1, std::memory_order_relaxed);
-      return absl::InternalError(e.what());
-    }
-  };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
-    VMSDK_ASSIGN_OR_RETURN(
-        auto search_result,
-        perform_search(absl::string_view((const char *)norm_record.data(),
-                                         norm_record.size())));
-    return CreateReply(search_result);
+  if (!IsValidSizeVector(query)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Error parsing vector similarity query: query vector blob size (",
+        query.size(), ") does not match index's expected size (",
+        dimensions_ * GetDataTypeSize(), ")."));
   }
-  VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
-  return CreateReply(search_result);
+  std::vector<char> norm_record;
+  if (normalize_) {
+    norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+    query =
+        absl::string_view((const char *)norm_record.data(), norm_record.size());
+  }
+
+  try {
+    CancelCondition canceler(cancellation_token);
+    VectorRecord embedding(
+        StringInternStore::Intern(query, GetVectorAllocator()));
+    auto res = algo_->searchKnn(
+        embedding,
+        std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
+        filter.get(), &canceler);
+
+    // if (cancellation_token->IsCancelled()) {
+    //   return absl::CancelledError("Search operation cancelled due to
+    //   timeout");
+    // }
+    return CreateReply(res);
+  } catch (const std::exception &e) {
+    Metrics::GetStats().flat_search_exceptions_cnt.fetch_add(
+        1, std::memory_order_relaxed);
+    return absl::InternalError(e.what());
+  }
 }
 
 template <typename T>
@@ -263,10 +263,11 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
+  VectorRecord query_vector(
+      StringInternStore::Intern(query, GetVectorAllocator()));
   return (std::pair<float, hnswlib::labeltype>){
-      algo_->fstdistfunc_((T *)query.data(),
-                          *(char **)(*algo_->data_)[search->second],
-                          algo_->dist_func_param_),
+      algo_->EvaluateDistance(query_vector,
+                              *algo_->GetDataPtrByInternalId(search->second)),
       internal_id};
 }
 
@@ -318,7 +319,12 @@ template <typename T>
 absl::Status VectorFlat<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  return algo_->SaveIndex(chunked_out);
+  auto serializer = [vector_size =
+                         GetVectorDataSize()](const VectorRecord &record) {
+    return std::vector<char>(record.GetRawVector(),
+                             record.GetRawVector() + vector_size);
+  };
+  return algo_->SaveIndex(chunked_out, serializer);
 }
 
 template class VectorFlat<float>;

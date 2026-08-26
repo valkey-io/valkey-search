@@ -96,26 +96,41 @@ jobs:
             // is absent, the ledger is disabled and selection falls back to a
             // PR-number rotation, so assignment keeps working either way.
             const LEDGER_VAR = 'REVIEWER_ASSIGNMENT_LEDGER';
-            const ledgerApi = process.env.LEDGER_TOKEN
-              ? require('@actions/github').getOctokit(process.env.LEDGER_TOKEN)
-              : null;
+            // The variables API is called with the PAT directly over fetch —
+            // GITHUB_TOKEN is rejected there, and github-script's Octokit is
+            // bound to GITHUB_TOKEN, so a plain request is the simplest way to
+            // use a different credential.
+            const ledgerToken = process.env.LEDGER_TOKEN;
+            const ledgerFetch = (method, path, valueObj) => fetch(
+              'https://api.github.com' + path,
+              {
+                method,
+                headers: {
+                  'Authorization': 'Bearer ' + ledgerToken,
+                  'Accept': 'application/vnd.github+json',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                  'Content-Type': 'application/json',
+                },
+                body: valueObj ? JSON.stringify(valueObj) : undefined,
+              });
+            const varPath = '/repos/' + owner + '/' + repo + '/actions/variables';
             let ledger = null;
             let ledgerExists = false;
-            if (!ledgerApi) {
+            if (!ledgerToken) {
               core.info('REVIEWER_LEDGER_TOKEN not set — using PR-number rotation instead of the assignment-count ledger.');
             } else {
               try {
-                const { data } = await ledgerApi.request(
-                  'GET /repos/{owner}/{repo}/actions/variables/{name}',
-                  { owner, repo, name: LEDGER_VAR });
-                ledger = JSON.parse(data.value);
-                ledgerExists = true;
-              } catch (e) {
-                if (e.status === 404) {
+                const res = await ledgerFetch('GET', varPath + '/' + LEDGER_VAR);
+                if (res.status === 404) {
                   ledger = pools.seedCounts || {};
+                } else if (res.ok) {
+                  ledger = JSON.parse((await res.json()).value);
+                  ledgerExists = true;
                 } else {
-                  core.warning('Could not read ' + LEDGER_VAR + ': ' + e.message + ' — falling back to rotation.');
+                  core.warning('Could not read ' + LEDGER_VAR + ' (HTTP ' + res.status + ') — falling back to rotation.');
                 }
+              } catch (e) {
+                core.warning('Could not read ' + LEDGER_VAR + ': ' + e.message + ' — falling back to rotation.');
               }
             }
             if (ledger) {
@@ -133,9 +148,13 @@ jobs:
               }
               if (!ledgerExists) {
                 try {
-                  await ledgerApi.request('POST /repos/{owner}/{repo}/actions/variables',
-                    { owner, repo, name: LEDGER_VAR, value: JSON.stringify(ledger) });
-                  ledgerExists = true;
+                  const res = await ledgerFetch('POST', varPath,
+                    { name: LEDGER_VAR, value: JSON.stringify(ledger) });
+                  if (res.ok) {
+                    ledgerExists = true;
+                  } else {
+                    core.warning('Could not create ' + LEDGER_VAR + ' (HTTP ' + res.status + ').');
+                  }
                 } catch (e) {
                   core.warning('Could not create ' + LEDGER_VAR + ': ' + e.message);
                 }
@@ -198,12 +217,13 @@ jobs:
               if (assigned.includes(firstPass)) ledger.firstPass[firstPass] += 1;
               if (assigned.includes(maintainer)) ledger.maintainers[maintainer] += 1;
               try {
-                if (ledgerExists) {
-                  await ledgerApi.request('PATCH /repos/{owner}/{repo}/actions/variables/{name}',
-                    { owner, repo, name: LEDGER_VAR, value: JSON.stringify(ledger) });
-                } else {
-                  await ledgerApi.request('POST /repos/{owner}/{repo}/actions/variables',
-                    { owner, repo, name: LEDGER_VAR, value: JSON.stringify(ledger) });
+                const res = ledgerExists
+                  ? await ledgerFetch('PATCH', varPath + '/' + LEDGER_VAR,
+                      { name: LEDGER_VAR, value: JSON.stringify(ledger) })
+                  : await ledgerFetch('POST', varPath,
+                      { name: LEDGER_VAR, value: JSON.stringify(ledger) });
+                if (!res.ok) {
+                  core.warning('Could not update ' + LEDGER_VAR + ' (HTTP ' + res.status + ').');
                 }
               } catch (e) {
                 core.warning('Could not update ' + LEDGER_VAR + ': ' + e.message);

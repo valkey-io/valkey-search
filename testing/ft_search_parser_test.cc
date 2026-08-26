@@ -161,6 +161,9 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
+    VMSDK_EXPECT_OK(index_schema->AddIndex(
+        "__score", "id3",
+        std::make_shared<indexes::Numeric>(numeric_index_proto)));
   }
   args.push_back(
       ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
@@ -279,6 +282,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->k, 0);
       EXPECT_FALSE(search_params.value()->ef.has_value());
       EXPECT_TRUE(search_params.value()->attribute_alias.empty());
+      EXPECT_EQ(search_params.value()->score_as.get(), nullptr);
     }
     EXPECT_EQ(search_params.value()->no_content,
               no_content || test_case.no_content);
@@ -1132,6 +1136,39 @@ INSTANTIATE_TEST_SUITE_P(
             .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
             .with_sort_keys = true,
+        },
+        {
+            // Adding WITHSCORES must not change how SORTBY resolves.
+            .test_name = "sortby_schema_field_named_score_with_withscores",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES",
+            .vector_query = false,
+            .sortby_parameters_str = "SORTBY __score ASC",
+            .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+            .with_scores = true,
+        },
+        {
+            .test_name = "sortby_schema_field_named_score_no_withscores",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+            .sortby_parameters_str = "SORTBY __score DESC",
+            .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

@@ -67,6 +67,7 @@ struct SendReplyTestInput {
   std::string score_as;
   query::LimitParameter limit;
   std::vector<TestReturnAttribute> return_attributes;
+  bool with_scores{false};
 };
 
 struct SendReplyTestCase {
@@ -188,6 +189,7 @@ void SendReplyTest::DoSendReplyTest(
   parameters->k = 20;
   parameters->limit = input.limit;
   parameters->no_content = no_content;
+  parameters->with_scores = input.with_scores;
   for (const auto &return_attribute : input.return_attributes) {
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
@@ -240,6 +242,31 @@ INSTANTIATE_TEST_SUITE_P(
                 "6\r\nvalue1\r\n",
             .expected_output_no_content =
                 "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
+        },
+        {
+            // Pure vector KNN + WITHSCORES emits a score of 0
+            .test_name = "pure_vector_with_scores_reports_zero",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 0, .number = 10},
+                    .with_scores = true,
+                },
+            .expected_output =
+                "*7\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n*6\r\n$10\r\nscore_as_"
+                "1\r\n$16\r\n0.00999999977648\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$3\r\ndef\r\n$1\r\n0\r\n*6\r\n$"
+                "10\r\nscore_as_1\r\n$14\r\n0.019999999553\r\n$"
+                "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*5\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n$3\r\ndef\r\n$1\r\n0\r\n",
         },
         {
             .test_name = "external_id_not_found",

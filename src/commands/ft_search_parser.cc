@@ -278,15 +278,6 @@ absl::Status SearchCommand::PostParseQueryString() {
     }
   }
 
-  // For non-vector queries with WITHSCORES, set a default score_as if not
-  // already set by the vector query parsing path.
-  // NOTE: score_as is not currently consumed by SerializeNonVectorNeighbors
-  // (which uses ReplyScoreTopLevel directly), but is retained for future use
-  // when scorer integration is implemented.
-  if (with_scores && IsNonVectorQuery() && !score_as) {
-    score_as = vmsdk::MakeUniqueValkeyString("__score");
-  }
-
   return absl::OkStatus();
 }
 

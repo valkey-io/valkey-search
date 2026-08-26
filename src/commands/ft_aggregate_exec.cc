@@ -39,15 +39,15 @@ DEV_INTEGER_COUNTER(agg_stats, agg_sort_by_records);
 namespace valkey_search {
 namespace aggregate {
 
-expr::Value Attribute::GetValue(expr::Expression::EvalContext& ctx,
-                                const expr::Expression::Record& record) const {
-  auto rec = reinterpret_cast<const Record&>(record);
+expr::Value Attribute::GetValue(expr::Expression::EvalContext &ctx,
+                                const expr::Expression::Record &record) const {
+  auto rec = reinterpret_cast<const Record &>(record);
   return rec.fields_.at(record_index_);
 };
 
 expr::Expression::EvalContext ctx;
 
-std::ostream& operator<<(std::ostream& os, const RecordSet& rs) {
+std::ostream &operator<<(std::ostream &os, const RecordSet &rs) {
   os << "<RecordSet> " << rs.size() << "\n";
   for (size_t i = 0; i < rs.size(); ++i) {
     os << i << ": ";
@@ -58,8 +58,8 @@ std::ostream& operator<<(std::ostream& os, const RecordSet& rs) {
   return os;
 }
 
-void Record::Dump(std::ostream& os,
-                  const AggregateParameters* agg_params) const {
+void Record::Dump(std::ostream &os,
+                  const AggregateParameters *agg_params) const {
   os << '[';
   for (size_t i = 0; i < fields_.size(); ++i) {
     if (!fields_[i].IsNil()) {
@@ -74,14 +74,14 @@ void Record::Dump(std::ostream& os,
   }
   if (!extra_fields_.empty()) {
     os << " Extra:" << extra_fields_.size() << ' ';
-    for (const auto& [field, value] : extra_fields_) {
+    for (const auto &[field, value] : extra_fields_) {
       os << " " << field << ":" << value;
     }
   }
   os << ']';
 }
 
-absl::Status Limit::Execute(RecordSet& records) const {
+absl::Status Limit::Execute(RecordSet &records) const {
   DBG << "Executing LIMIT with offset: " << offset_ << " and limit: " << limit_
       << "\n";
   agg_limit_stages.Increment();
@@ -96,24 +96,24 @@ absl::Status Limit::Execute(RecordSet& records) const {
   return absl::OkStatus();
 }
 
-void SetField(Record& record, Attribute& dest, expr::Value value) {
+void SetField(Record &record, Attribute &dest, expr::Value value) {
   if (record.fields_.size() <= dest.record_index_) {
     record.fields_.resize(dest.record_index_ + 1);
   }
   record.fields_[dest.record_index_] = value;
 }
 
-absl::Status Apply::Execute(RecordSet& records) const {
+absl::Status Apply::Execute(RecordSet &records) const {
   DBG << "Executing APPLY with expr: " << *expr_ << "\n";
   agg_apply_stages.Increment();
   agg_apply_records.Increment(records.size());
-  for (auto& r : records) {
+  for (auto &r : records) {
     SetField(*r, *name_, expr_->Evaluate(ctx, *r));
   }
   return absl::OkStatus();
 }
 
-absl::Status Filter::Execute(RecordSet& records) const {
+absl::Status Filter::Execute(RecordSet &records) const {
   DBG << "Executing FILTER with expr: " << *expr_ << "\n";
   agg_filter_stages.Increment();
   agg_filter_input_records.Increment(records.size());
@@ -132,9 +132,9 @@ absl::Status Filter::Execute(RecordSet& records) const {
 
 template <typename T>
 struct SortFunctor {
-  const absl::InlinedVector<SortBy::SortKey, 4>* sortkeys_;
-  bool operator()(const T& l, const T& r) const {
-    for (auto& sk : *sortkeys_) {
+  const absl::InlinedVector<SortBy::SortKey, 4> *sortkeys_;
+  bool operator()(const T &l, const T &r) const {
+    for (auto &sk : *sortkeys_) {
       auto lvalue = sk.expr_->Evaluate(ctx, *l);
       auto rvalue = sk.expr_->Evaluate(ctx, *r);
       auto cmp = expr::Compare(lvalue, rvalue);
@@ -152,15 +152,15 @@ struct SortFunctor {
   }
 };
 
-absl::Status SortBy::Execute(RecordSet& records) const {
+absl::Status SortBy::Execute(RecordSet &records) const {
   DBG << "Executing SORTBY with sortkeys: " << sortkeys_.size() << "\n";
   agg_sort_by_stages.Increment();
   agg_sort_by_records.Increment(records.size());
   if (records.size() > max_) {
     // Sadly std::priority_queue can't operate on unique_ptr's. so we need an
     // extra copy
-    SortFunctor<Record*> sorter{&sortkeys_};
-    std::priority_queue<Record*, std::vector<Record*>, SortFunctor<Record*>>
+    SortFunctor<Record *> sorter{&sortkeys_};
+    std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
         heap(sorter);
     for (auto i = 0; i < max_; ++i) {
       heap.push(records.pop_front().release());
@@ -181,7 +181,7 @@ absl::Status SortBy::Execute(RecordSet& records) const {
   return absl::OkStatus();
 }
 
-absl::Status GroupBy::Execute(RecordSet& records) const {
+absl::Status GroupBy::Execute(RecordSet &records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
 
@@ -201,26 +201,26 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
     // Skip them?
-    for (auto& g : groups_) {
+    for (auto &g : groups_) {
       k.keys_.emplace_back(g->GetValue(ctx, *record));
     }
     DBG << "Record: " << *record << " GroupKey: " << k << "\n";
     auto [group_it, inserted] = groups.try_emplace(std::move(k));
     if (inserted) {
       DBG << "Was inserted, now have " << groups.size() << " groups\n";
-      for (auto& reducer : reducers_) {
+      for (auto &reducer : reducers_) {
         group_it->second.emplace_back(reducer->MakeInstance());
       }
     }
     for (auto i = 0; i < reducers_.size(); ++i) {
       ArgVector args;
-      for (auto& nargs : reducers_[i]->args_) {
+      for (auto &nargs : reducers_[i]->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
       group_it->second[i]->ProcessRecord(args);
     }
   }
-  for (auto& group : groups) {
+  for (auto &group : groups) {
     DBG << "Making record for group " << group.first << "\n";
     RecordPtr record = std::make_unique<Record>(record_field_count);
     CHECK(groups_.size() == group.first.keys_.size());
@@ -241,13 +241,13 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
 
 class Count : public GroupBy::ReducerInstance {
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override { count_++; }
+  void ProcessRecord(const ArgVector &values) override { count_++; }
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (values[0].IsNil()) {
       return;
     }
@@ -266,14 +266,14 @@ class Min : public GroupBy::ReducerInstance {
 
 struct ReducerInstanceVector : GroupBy::ReducerInstance {
   std::vector<ArgVector> collected_values_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     collected_values_.push_back(values);
   }
 };
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (values[0].IsNil()) {
       return;
     }
@@ -288,7 +288,7 @@ class Max : public GroupBy::ReducerInstance {
 
 class Sum : public GroupBy::ReducerInstance {
   double sum_{0};
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
@@ -300,7 +300,7 @@ class Sum : public GroupBy::ReducerInstance {
 class Avg : public GroupBy::ReducerInstance {
   double sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
@@ -315,7 +315,7 @@ class Avg : public GroupBy::ReducerInstance {
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
@@ -347,7 +347,7 @@ class FirstValue : public GroupBy::ReducerInstance {
     is_desc_ = is_desc;
   }
 
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (!is_sorted_) {
       // Simple mode: first record wins unconditionally, including nil.
       if (!seen_first_) {
@@ -357,7 +357,7 @@ class FirstValue : public GroupBy::ReducerInstance {
       return;
     }
     // Sorted mode: args layout is [return_field, sort_field].
-    const expr::Value& comparison_val = values[1];
+    const expr::Value &comparison_val = values[1];
     if (comparison_val.IsNil()) {
       return;
     }
@@ -379,7 +379,7 @@ class FirstValue : public GroupBy::ReducerInstance {
 
 class CountDistinct : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> values_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (!values[0].IsNil()) {
       values_.insert(values[0]);
     }
@@ -392,7 +392,7 @@ class CountDistinct : public GroupBy::ReducerInstance {
 class ToList : public GroupBy::ReducerInstance {
   absl::flat_hash_set<expr::Value> unique_values_;
   std::vector<expr::Value> ordered_values_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (values[0].IsNil()) {
       return;
     }
@@ -400,7 +400,7 @@ class ToList : public GroupBy::ReducerInstance {
     // its individual elements rather than the array as a whole.
     if (values[0].IsArray()) {
       auto arr = values[0].GetArray();
-      for (const auto& elem : *arr) {
+      for (const auto &elem : *arr) {
         if (elem.IsNil()) {
           continue;
         }
@@ -431,8 +431,8 @@ struct BasicReducer : GroupBy::Reducer {
 
 template <typename T, size_t min_nargs = 0, size_t max_nargs = 0>
 absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
-    std::string_view name, AggregateParameters& parameters,
-    vmsdk::ArgsIterator& itr) {
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
   std::unique_ptr<BasicReducer<T>> r = std::make_unique<BasicReducer<T>>();
   r->name_ = name;
 
@@ -459,7 +459,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
                                             vmsdk::ToStringView(alias), true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
     // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
     // "__generated_alias" + reducer + comma-joined args with the leading '@'
@@ -471,7 +471,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
           auto name = absl::StrCat(
               "__generated_alias", r->name_,
               absl::StrJoin(arg_texts, ",",
-                            [](std::string* out, absl::string_view arg) {
+                            [](std::string *out, absl::string_view arg) {
                               absl::StrAppend(out, absl::StripPrefix(arg, "@"));
                             }));
           absl::AsciiStrToLower(&name);
@@ -484,7 +484,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
@@ -508,8 +508,8 @@ struct FirstValueReducer : GroupBy::Reducer {
 // nargs=1: simple mode, nargs=3: sorted (default ASC), nargs=4: sorted with
 // explicit direction.
 absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
-    std::string_view name, AggregateParameters& parameters,
-    vmsdk::ArgsIterator& itr) {
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
   auto r = std::make_unique<FirstValueReducer>();
   r->name_ = name;
 
@@ -566,7 +566,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
                                             vmsdk::ToStringView(alias), true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
     // TODO(https://github.com/valkey-io/valkey-search/issues/965): Workaround
     // for memory allocator issue causing ostringstream to crash.
@@ -584,7 +584,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));

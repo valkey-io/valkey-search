@@ -5,6 +5,7 @@ compile_commands.json
 .clangd
 .devcontainer/devcontainer.json
 .devcontainer/._devcontainer.json
+.ssh-agent*.sock
 .codelite/
 .cache/
 build-*

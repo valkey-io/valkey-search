@@ -106,11 +106,6 @@ jobs:
             // label to deliberately force a fresh assignment.
             const MARKER_LABEL = 'auto-assigned-reviewers';
             if ((pr.labels || []).some(l => l.name === MARKER_LABEL)) return;
-            // Also skip if a pool member is already a requested reviewer — covers
-            // PRs opened before the marker label existed.
-            const existing = new Set((pr.requested_reviewers || []).map(r => r.login));
-            const inRotation = [...firstPassPool, ...maintainerPool];
-            if (inRotation.some(login => existing.has(login))) return;
 
             // Lifetime assignment counts live in a repository variable so each
             // new PR goes to the eligible pool member with the fewest

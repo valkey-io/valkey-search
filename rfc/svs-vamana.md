@@ -191,7 +191,7 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
 | COMPRESSION | enum | NONE | See compression table | Storage backend for vector data |
 | LEANVEC_DIMS | int | -- | >0 and <DIM | Target dimensionality after LeanVec projection. Required for LEANVEC variants. |
 | LEANVEC_TRAINING_THRESHOLD | int | 10000 | >=1 | Number of vectors to buffer before training the LeanVec projection |
-| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | **KEEP**: retain original FP32 vectors; `reconstruct_at()` returns full precision; `IsVectorMatch` compares the stored vector exactly; `ModifyRecord` performs remove+add using the supplied data. **DROP**: do not retain original vectors; reduces memory footprint; `ModifyRecord` still performs remove+add using the supplied data unchanged; `reconstruct_at()` returns the lossy stored representation (precision depends on compression type); `IsVectorMatch` uses `get_distance()` with a per-dimension epsilon to approximate identity -- this may misclassify near-threshold vectors under IP and COSINE metrics where the self-distance is not zero. |
+| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | Whether SVS retains the original FP32 vectors alongside its compressed representation. **KEEP**: exact FP32 bytes preserved inside the SVS index; required for full-precision RDB round-trips (Phase 2) after VectorRegistry bytes are no longer available post-restart; prerequisite for a future user-visible vector reconstruction API. **DROP**: only the compressed representation is stored; lower memory footprint; reconstruction uses SVS's approximate decompressed value (lossy for FP16/SQ8/LVQ/LeanVec). Note: the VectorRegistry (PR #1316) holds exact raw bytes for live Valkey keys, but those are not persisted across server restarts. |
 
 #### Compression Types
 
@@ -283,9 +283,10 @@ The SVS C API (`svs/c/svs_c.h`, production path post-PR-#363) provides the prima
 - All open-source storage backends (FP32, FP16, SQ8)
 - Thread-safe concurrent operations via the custom threadpool interface
 - `save()` / `load()` for persistence
-- `reconstruct_at()` for exact vector retrieval
 - `get_distance()` for pairwise distance computation
 - `get_memory_usage()` for per-index byte attribution (see Memory Accounting)
+
+Note: `reconstruct_at()` (retrieve a stored vector from the index) is not exposed as user-visible surface area in this RFC. The `VectorRegistry` (PR #1316) owns the canonical raw vector bytes for the duration of each key's lifetime, making index-level vector retrieval unnecessary for current use cases. Exposing approximate vector reconstruction is deferred to a future RFC that will require changes to the Valkey core and JSON module and will apply uniformly to all vector index types.
 
 #### C API Operations
 
@@ -302,6 +303,8 @@ The production C API (`include/svs/c/svs_c.h` -- note: path changed from `c_api/
 - Clone with recompression: `svs_index_clone_dynamic()` for deferred compression transitions
 
 valkey-search calls `svs_index_build_dynamic`, `svs_index_search_topk`, `svs_index_dynamic_add_points`, etc. directly via statically linked symbols. All graph construction, search, add/remove, and persistence operations go through this interface.
+
+**VectorRecord integration (PR #1316):** `AddRecordImpl` and `ModifyRecordImpl` receive `std::shared_ptr<const VectorRecord>&&` -- an immutable record holding raw vector bytes and a precomputed `reciprocal_magnitude_`. The `VectorRegistry` owns the canonical raw bytes for each `(db_num, key, attribute)` tuple for as long as the key exists in Valkey; the SVS index does not need to maintain its own copy.
 
 #### Thread Ownership
 
@@ -422,7 +425,8 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 
 | Feature | Description |
 |---------|-------------|
-| Runtime v0.4.0 integration | save/load, reconstruct_at, get_distance, thread-safe add |
+| Runtime v0.4.0 integration | save/load, get_distance, thread-safe add |
+| VectorRegistry integration | PR #1316 merged: VectorExternalizer replaced by VectorRegistry; `AddRecordImpl`/`ModifyRecordImpl` now receive `shared_ptr<const VectorRecord>&&`; raw vector bytes owned by registry for key lifetime; `IsVectorMatch` removed from codebase; `RAW_VECTOR_STORAGE` parameter removed |
 | Memory accounting | Per-index delta reporting via `DynamicVamanaIndex::get_memory_usage()` (SVS C++ runtime API); deltas reported to Valkey through `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize` after each mutation (`UpdateReportedMemory()`, svs-memory-reporting branch) |
 | Metrics suite | Full SVS-specific metrics in metrics framework |
 | Basic index operations | Create, add, search, remove functional |
@@ -681,6 +685,7 @@ A fourth possibility -- Intel building the entire `libsearch.so` (valkey-search 
 
 - [Intel Scalable Vector Search -- GitHub](https://github.com/intel/ScalableVectorSearch)
 - [Intel SVS Documentation](https://intel.github.io/ScalableVectorSearch/)
+- [valkey-search PR #1316 -- VectorRegistry for memory sharing](https://github.com/valkey-io/valkey-search/pull/1316)
 - [Valkey PR #4128 -- VM_AllocateExternalMemory (pending merge)](https://github.com/valkey-io/valkey/pull/4128)
 - [SVS PR #326 -- Deferred Compression](https://github.com/intel/ScalableVectorSearch/pull/326)
 - [SVS PR #352 -- C API Filtered TopK Search](https://github.com/intel/ScalableVectorSearch/pull/352)

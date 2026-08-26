@@ -18,6 +18,18 @@ TEXT_SCHEMA = {
     'numeric': ['price']
 }
 
+# Scoring compatibility configuration
+SCORING_SCHEMA = {
+    'text': ['title', 'body'],
+    'tag': ['t1'],
+    'numeric': ['n1'],
+    'vector': ['v1'],
+}
+
+SCORING_DATASETS = {
+    'scoring': {'schema': SCORING_SCHEMA},
+}
+
 TEXT_DATASETS = {
     'pure text': {
         'schema': TEXT_SCHEMA,
@@ -185,9 +197,21 @@ SCHEMA_FLAGS = {
     "text": {
         "default": "WITHSUFFIXTRIE",
         "nostem": "WITHSUFFIXTRIE NOSTEM",
+        "docscore": "WITHSUFFIXTRIE NOSTEM",
     },
     "tag": "",
     "numeric": "",
+    "vector": f"FLAT 6 TYPE FLOAT32 DIM {VECTOR_DIM} DISTANCE_METRIC L2",
+}
+
+# Index-level attributes per scoring schema variant. JSON requires the JSONPath
+# form of SCORE_FIELD; the bare attribute name is accepted and silently ignored,
+# leaving every document on the index-level SCORE.
+SCHEMA_INDEX_ATTRS = {
+    "default": {"hash": "", "json": ""},
+    "nostem": {"hash": "", "json": ""},
+    "docscore": {"hash": "SCORE 0.5 SCORE_FIELD boost",
+                 "json": "SCORE 0.5 SCORE_FIELD $.boost"},
 }
 
 def _build_field_schema(field: str, field_type: str, schema_type: str, for_json: bool = False) -> str:
@@ -205,6 +229,19 @@ def _build_field_schema(field: str, field_type: str, schema_type: str, for_json:
     if for_json:
         return f"$.{field} AS {field_def}"
     return field_def
+
+def _build_scoring_create(key_type: str, schema_type: str) -> str:
+    """Build the FT.CREATE for one scoring schema variant."""
+    parts = [
+        _build_field_schema(field, field_type, schema_type,
+                            for_json=(key_type == "json"))
+        for field_type in ("text", "tag", "numeric", "vector")
+        for field in SCORING_SCHEMA[field_type]
+    ]
+    on = "HASH" if key_type == "hash" else "JSON"
+    head = f"FT.CREATE {key_type}_idx1 ON {on} PREFIX 1 {key_type}:"
+    attrs = SCHEMA_INDEX_ATTRS[schema_type][key_type]
+    return " ".join(p for p in [head, attrs, "SCHEMA", *parts] if p)
 
 def unbytes(b):
     if isinstance(b, bytes):
@@ -1308,10 +1345,27 @@ def compute_return_data_sets():
     }
 
 
+def compute_scoring_data_sets(dataset_name, schema_type="default"):
+    """Build the scoring index for each key type. Documents are not generated yet."""
+    if dataset_name not in SCORING_DATASETS:
+        raise ValueError(f"Unknown dataset: {dataset_name}. "
+                         f"Available: {list(SCORING_DATASETS.keys())}")
+
+    data = {dataset_name: {}}
+    for key_type in ["hash", "json"]:
+        data[dataset_name][CREATES_KEY(key_type)] = [
+            _build_scoring_create(key_type, schema_type)
+        ]
+        data[dataset_name][SETS_KEY(key_type)] = []
+    return data
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        if data_set in HYBRID_DATASETS:
+        if data_set in SCORING_DATASETS:
+            data_source = "scoring"
+        elif data_set in HYBRID_DATASETS:
             data_source = "hybrid"
         elif data_set in TEXT_DATASETS:
             data_source = "text"
@@ -1329,6 +1383,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "scoring":
+            data = compute_scoring_data_sets(data_set, schema_type=schema_type)
         case "hybrid":
             data = compute_hybrid_data_sets()
         case "filter":

@@ -226,6 +226,14 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "(@title:{dogs}) => { $weight: 2.0; ",
             .parse_success = false,
         },
+        // A bare term (no parentheses) accepts a QMA block, matching
+        // RediSearch. The weight attaches to the bare term.
+        {
+            .test_name = "bare_term_qma_weight",
+            .filter = "@title:{dogs} => { $weight: 2 }",
+            .parse_success = true,
+            .expected_weight = 2.0f,
+        },
     }),
     [](const TestParamInfo<QMAParserTestCase> &info) {
       return info.param.test_name;

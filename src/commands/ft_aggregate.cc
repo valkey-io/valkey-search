@@ -279,13 +279,13 @@ absl::Status CreateRecordsFromNeighbors(
         if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
             by_alias != parameters.record_indexes_by_alias_.end()) {
           record_index = by_alias->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         } else if (auto by_identifier =
                        parameters.record_indexes_by_identifier_.find(name);
                    by_identifier !=
                    parameters.record_indexes_by_identifier_.end()) {
           record_index = by_identifier->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         }
 
         if (record_index) {

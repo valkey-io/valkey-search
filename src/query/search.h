@@ -88,7 +88,7 @@ struct ReturnAttribute {
   vmsdk::UniqueValkeyString alias;
 };
 
-inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
+inline std::ostream &operator<<(std::ostream &os, const ReturnAttribute &r) {
   os << vmsdk::ToStringView(r.identifier.get());
   if (r.alias) {
     os << "[alias: " << vmsdk::ToStringView(r.alias.get()) << ']';
@@ -115,23 +115,23 @@ struct SearchResult {
 
   // Constructor with automatic trimming based on query requirements
   SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
-               const SearchParameters& parameters,
+               const SearchParameters &parameters,
                bool trim_offset_in_background = false);
   // Constructor for borrowed results — trims then materializes survivors.
   SearchResult(size_t total_count,
                std::vector<indexes::BorrowedNeighbor> borrowed,
-               const SearchParameters& parameters,
+               const SearchParameters &parameters,
                bool trim_offset_in_background = false);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
-      const SearchParameters& parameters,
+      const SearchParameters &parameters,
       std::optional<size_t> override_size = std::nullopt) const;
 
   SearchResult();
 
  private:
   template <typename T>
-  void TrimResults(std::vector<T>& vec, const SearchParameters& parameters,
+  void TrimResults(std::vector<T> &vec, const SearchParameters &parameters,
                    bool trim_offset_in_background);
 };
 
@@ -183,12 +183,12 @@ namespace detail {
 class SearchParametersInFlightGuard {
  public:
   SearchParametersInFlightGuard();
-  SearchParametersInFlightGuard(const SearchParametersInFlightGuard&);
-  SearchParametersInFlightGuard(SearchParametersInFlightGuard&&) noexcept;
-  SearchParametersInFlightGuard& operator=(
-      const SearchParametersInFlightGuard&) = default;
-  SearchParametersInFlightGuard& operator=(
-      SearchParametersInFlightGuard&&) noexcept = default;
+  SearchParametersInFlightGuard(const SearchParametersInFlightGuard &);
+  SearchParametersInFlightGuard(SearchParametersInFlightGuard &&) noexcept;
+  SearchParametersInFlightGuard &operator=(
+      const SearchParametersInFlightGuard &) = default;
+  SearchParametersInFlightGuard &operator=(
+      SearchParametersInFlightGuard &&) noexcept = default;
   ~SearchParametersInFlightGuard();
 };
 }  // namespace detail
@@ -291,7 +291,7 @@ struct SearchParameters {
   SearchParameters(uint64_t timeout_ms, cancel::Token token, uint32_t db_num)
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
-  SearchParameters(SearchParameters&&) = default;
+  SearchParameters(SearchParameters &&) = default;
 
  private:
   // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.
@@ -309,44 +309,44 @@ struct SerializationRange {
   static SerializationRange All() {
     return {0, std::numeric_limits<size_t>::max()};
   }
-  auto operator<=>(const SerializationRange& other) const = default;
+  auto operator<=>(const SerializationRange &other) const = default;
 };
 
 // Callback to be called when the search is done.
 using SearchResponseCallback =
     absl::AnyInvocable<void(absl::Status, std::unique_ptr<SearchParameters>)>;
 
-absl::Status Search(SearchParameters& parameters, SearchMode search_mode);
+absl::Status Search(SearchParameters &parameters, SearchMode search_mode);
 
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
-                         vmsdk::ThreadPool* thread_pool,
+                         vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
-    const SearchParameters& parameters);
+    const SearchParameters &parameters);
 
 class Predicate;
 // Defined in the header to support testing
 size_t EvaluateFilterAsPrimary(
-    const SearchParameters& parameters, const Predicate* predicate,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
+    const SearchParameters &parameters, const Predicate *predicate,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     bool negate);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase* vector_index, const SearchParameters& parameters);
+    indexes::VectorBase *vector_index, const SearchParameters &parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
-    const SearchParameters& parameters,
-    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    indexes::VectorBase* vector_index, size_t qualified_entries);
+    const SearchParameters &parameters,
+    std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
+    indexes::VectorBase *vector_index, size_t qualified_entries);
 
-bool QueryHasTextPredicate(const SearchParameters& parameters);
+bool QueryHasTextPredicate(const SearchParameters &parameters);
 
 // Check if no results should be returned based on limit parameters
-bool ShouldReturnNoResults(const SearchParameters& parameters);
+bool ShouldReturnNoResults(const SearchParameters &parameters);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

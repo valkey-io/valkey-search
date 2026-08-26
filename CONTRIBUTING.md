@@ -133,15 +133,21 @@ labels or reviewers to confirm.
 ### Automatic reviewer assignment
 
 When a pull request is opened, or an existing draft is marked ready for review, a first-pass
-reviewer and a maintainer are requested automatically from the rotation in
+reviewer and a maintainer are requested automatically from the pools in
 [`.github/reviewer-pools.json`](.github/reviewer-pools.json). The bot leaves a comment
 naming both.
 
+Each pool member's lifetime assignment count is tracked in the `REVIEWER_ASSIGNMENT_LEDGER`
+repository variable, and every new pull request goes to the eligible member with the fewest
+assignments — so review load stays evenly distributed no matter who authors PRs or how
+review speed varies. The author is never assigned to their own pull request; being skipped
+as the author keeps their count low, so they are simply first in line for the next one.
+
 The first-pass reviewer does the detailed review and drives the feedback loop; the
-maintainer then does the final review and merges. The author is never assigned to their own
-pull request. Use `/reviewer` and `/remove-reviewer` to adjust the assignment, and edit
-`.github/reviewer-pools.json` to change the rotation itself — every entry in it needs
-collaborator access, since a review cannot be requested from a non-collaborator.
+maintainer then does the final review and merges. Use `/reviewer` and `/remove-reviewer` to
+adjust the assignment, and edit `.github/reviewer-pools.json` to change the pools — every
+entry in it needs collaborator access, since a review cannot be requested from a
+non-collaborator. A newly added member starts at their pool's current minimum count.
 
 ## Code of conduct
 

@@ -35,7 +35,8 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-  # Round-robin a first-pass reviewer and a maintainer onto each new PR
+  # Assign a first-pass reviewer and a maintainer to each new PR, picking the
+  # pool member with the fewest lifetime assignments
   auto-assign-reviewers:
     if: |
       github.event_name == 'pull_request_target' &&
@@ -77,9 +78,64 @@ jobs:
             const inRotation = [...firstPassPool, ...maintainerPool];
             if (inRotation.some(login => existing.has(login))) return;
 
-            // Rotate on the PR number so the choice is deterministic and needs no
-            // stored state. Skips the author, who cannot review their own PR.
-            const pick = (pool, disallowed) => {
+            // Lifetime assignment counts live in a repository variable so each
+            // new PR goes to the eligible pool member with the fewest
+            // assignments; ties break by pool order. Skipping the author leaves
+            // their count low, so they are first in line for the next PR they
+            // can take — skipped turns are repaid rather than lost. The variable
+            // is created on first use, seeded from seedCounts in
+            // reviewer-pools.json.
+            const LEDGER_VAR = 'REVIEWER_ASSIGNMENT_LEDGER';
+            let ledger = null;
+            let ledgerExists = false;
+            try {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/actions/variables/{name}',
+                { owner, repo, name: LEDGER_VAR });
+              ledger = JSON.parse(data.value);
+              ledgerExists = true;
+            } catch (e) {
+              if (e.status === 404) {
+                ledger = pools.seedCounts || {};
+              } else {
+                core.warning('Could not read ' + LEDGER_VAR + ': ' + e.message);
+              }
+            }
+            if (ledger) {
+              // Every pool member gets an entry; someone new to a pool starts
+              // at that pool's minimum so they blend into the distribution
+              // instead of absorbing every PR until they catch up.
+              for (const [key, pool] of [['firstPass', firstPassPool], ['maintainers', maintainerPool]]) {
+                const counts = (ledger[key] && typeof ledger[key] === 'object') ? ledger[key] : {};
+                const known = pool.filter(l => Number.isFinite(counts[l]));
+                const floor = known.length ? Math.min(...known.map(l => counts[l])) : 0;
+                for (const login of pool) {
+                  if (!Number.isFinite(counts[login])) counts[login] = floor;
+                }
+                ledger[key] = counts;
+              }
+              if (!ledgerExists) {
+                try {
+                  await github.request('POST /repos/{owner}/{repo}/actions/variables',
+                    { owner, repo, name: LEDGER_VAR, value: JSON.stringify(ledger) });
+                  ledgerExists = true;
+                } catch (e) {
+                  core.warning('Could not create ' + LEDGER_VAR + ': ' + e.message);
+                }
+              }
+            }
+
+            const pick = (pool, counts, disallowed) => {
+              let best = null;
+              for (const candidate of pool) {
+                if (disallowed.has(candidate)) continue;
+                if (best === null || counts[candidate] < counts[best]) best = candidate;
+              }
+              return best;
+            };
+            // Without a readable ledger, rotate on the PR number instead so
+            // assignment never silently stops.
+            const fallbackPick = (pool, disallowed) => {
               for (let step = 0; step < pool.length; step++) {
                 const candidate = pool[(pr.number + step) % pool.length];
                 if (!disallowed.has(candidate)) return candidate;
@@ -88,8 +144,12 @@ jobs:
             };
 
             const author = pr.user.login;
-            const firstPass = pick(firstPassPool, new Set([author]));
-            const maintainer = pick(maintainerPool, new Set([author, firstPass]));
+            const firstPass = ledger
+              ? pick(firstPassPool, ledger.firstPass, new Set([author]))
+              : fallbackPick(firstPassPool, new Set([author]));
+            const maintainer = ledger
+              ? pick(maintainerPool, ledger.maintainers, new Set([author, firstPass]))
+              : fallbackPick(maintainerPool, new Set([author, firstPass]));
             if (!firstPass || !maintainer) {
               core.warning('No eligible reviewer for #' + pr.number);
               return;
@@ -115,6 +175,23 @@ jobs:
                 core.warning('Could not request review from ' + login + ': ' + e.message);
               }
             }
+
+            // Count only the assignments that actually landed, then persist.
+            if (ledger && assigned.length > 0) {
+              if (assigned.includes(firstPass)) ledger.firstPass[firstPass] += 1;
+              if (assigned.includes(maintainer)) ledger.maintainers[maintainer] += 1;
+              try {
+                if (ledgerExists) {
+                  await github.request('PATCH /repos/{owner}/{repo}/actions/variables/{name}',
+                    { owner, repo, name: LEDGER_VAR, value: JSON.stringify(ledger) });
+                } else {
+                  await github.request('POST /repos/{owner}/{repo}/actions/variables',
+                    { owner, repo, name: LEDGER_VAR, value: JSON.stringify(ledger) });
+                }
+              } catch (e) {
+                core.warning('Could not update ' + LEDGER_VAR + ': ' + e.message);
+              }
+            }
             if (assigned.length === 0) return;
 
             const lines = ['**Reviewers for this PR**', ''];
@@ -133,8 +210,9 @@ jobs:
                 'please follow up with a final review and help to merge the change in.'
               );
             }
-            lines.push('', '<sub>Assigned automatically from the reviewer rotation in ' +
-                       '`.github/reviewer-pools.json`. Use `/reviewer` or `/remove-reviewer` to adjust.</sub>');
+            lines.push('', '<sub>Assigned automatically to the least-assigned members of the ' +
+                       'reviewer pools in `.github/reviewer-pools.json`. Use `/reviewer` or ' +
+                       '`/remove-reviewer` to adjust.</sub>');
 
             await github.rest.issues.createComment({
               owner,

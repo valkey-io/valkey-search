@@ -1,5 +1,5 @@
 {
-  "_comment": "Reviewer rotation for auto-assignment on new PRs. Every entry must have collaborator access, otherwise a review cannot be requested from them. Edit this file to change the rotation; no workflow change is needed.",
+  "_comment": "Reviewer pools for auto-assignment on new PRs. Every entry must have collaborator access, otherwise a review cannot be requested from them. Edit this file to change the pools; no workflow change is needed.",
   "firstPass": [
     "mnunberg1",
     "Aksha1812",
@@ -8,12 +8,31 @@
     "mohanrajendran",
     "VoletiRam",
     "neerajr0",
-    "zackcam"
+    "chinguyen21"
   ],
   "maintainers": [
     "allenss-amazon",
     "BCathcart",
     "yairgott",
     "KarthikSubbarao"
-  ]
+  ],
+  "_seedCountsComment": "Used once, to initialize the assignment-count ledger (the REVIEWER_ASSIGNMENT_LEDGER repository variable) the first time the workflow runs. These are the per-person totals from the one-time assignment of the existing open PRs, so the ledger starts from the real distribution. After initialization the ledger is maintained by the workflow and this map is ignored. A pool member missing from the ledger later (e.g. added to a pool above) starts at the lowest count in their pool.",
+  "seedCounts": {
+    "firstPass": {
+      "mnunberg1": 10,
+      "Aksha1812": 8,
+      "boda26": 9,
+      "Frank-Gu-81": 9,
+      "mohanrajendran": 9,
+      "VoletiRam": 8,
+      "neerajr0": 9,
+      "chinguyen21": 9
+    },
+    "maintainers": {
+      "allenss-amazon": 16,
+      "BCathcart": 19,
+      "yairgott": 17,
+      "KarthikSubbarao": 19
+    }
+  }
 }

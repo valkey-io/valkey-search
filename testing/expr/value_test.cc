@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <random>
 
 #include "gtest/gtest.h"
@@ -1352,6 +1353,21 @@ TEST_F(ValueTest, NestedArray_MixedTypesRecursive) {
   EXPECT_TRUE(inner2.IsArray());
   EXPECT_TRUE(inner2.GetArrayElement(0).IsBool());
   EXPECT_TRUE(inner2.GetArrayElement(1).IsDouble());
+}
+
+// Regression for #1262: large integers must round-trip without precision loss.
+TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
+  EXPECT_EQ(FormatDouble(20260201.0), "20260201");
+  EXPECT_EQ(FormatDouble(20260202.0), "20260202");
+  EXPECT_EQ(FormatDouble(202602011234.0), "202602011234");
+  EXPECT_EQ(FormatDouble(1.0), "1");
+  EXPECT_EQ(FormatDouble(0.5), "0.5");
+  EXPECT_EQ(FormatDouble(0.0), "0");
+  EXPECT_EQ(FormatDouble(-20260201.0), "-20260201");
+  EXPECT_EQ(FormatDouble(-0.5), "-0.5");
+  EXPECT_EQ(FormatDouble(std::numeric_limits<double>::max()),
+            "1.7976931348623157e+308");
+  EXPECT_EQ(Value(20260201.0).AsString().value(), "20260201");
 }
 
 }  // namespace valkey_search::expr

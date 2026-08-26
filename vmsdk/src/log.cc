@@ -9,14 +9,13 @@
 
 #include <cerrno>
 #include <cstddef>
-#include <fstream>
 #include <optional>
 #include <string>
-#include <unordered_map>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
+#include "absl/log/internal/log_message.h"
 #include "absl/log/log_entry.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"

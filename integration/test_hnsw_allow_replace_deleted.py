@@ -242,17 +242,6 @@ class TestHNSWDuplicateLabelRDBLoad(ValkeySearchTestCaseCommon):
         )
         return server, client, os.path.join(testdir, f"logfile_{port}")
 
-    # The duplicate-label RDB fixture leaves a slot pointing at a vector that
-    # tracked_vectors_ no longer owns, which ASAN reports as a use-after-free.
-    # The shared memory feature (vectors owned by the index rather than tracked
-    # separately) removes the dangling pointer entirely and will resolve this.
-    # See https://github.com/valkey-io/valkey-search/issues/1282
-    @pytest.mark.skipif(
-        os.environ.get("SAN_BUILD", "no") == "address",
-        reason="Dangling vector pointer on duplicate-label RDB load trips ASAN; "
-               "fixed by the shared memory feature. "
-               "See https://github.com/valkey-io/valkey-search/issues/1282",
-    )
     def test_load_rdb_with_duplicate_label(self):
         server, client, logfile = self._start_server(
             "hnsw_dup_label_rdb", search_module_args="--debug-mode yes")

@@ -38,6 +38,9 @@ while [ $# -gt 0 ]; do
     BUILD_CONFIG="debug"
     LOG_INFO "Testing in debug mode"
     ;;
+  --test-errors-stdout)
+    shift || true
+    ;;
   --asan)
     shift || true
     SAN_SUFFIX="-asan"

@@ -174,6 +174,15 @@ function setup_valkey_server() {
   VALKEY_VERSION="${VALKEY_VERSION:=9.1}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
+  
+  local version_stamp_file="${VALKEY_SERVER_HOME_DIR}/.valkey_version_stamp"
+  if [ -d "${VALKEY_SERVER_HOME_DIR}" ]; then
+    if [ ! -f "${version_stamp_file}" ] || [ "$(cat "${version_stamp_file}")" != "${VALKEY_VERSION}" ]; then
+      LOG_INFO "Stale Valkey version detected (needed ${VALKEY_VERSION}). Wiping ${VALKEY_SERVER_HOME_DIR} and rebuilding..."
+      rm -rf "${VALKEY_SERVER_HOME_DIR}"
+    fi
+  fi
+
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
     LOG_INFO "Cloning valkey-server@${VALKEY_VERSION} into ${VALKEY_SERVER_HOME_DIR}"
     git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
@@ -233,6 +242,7 @@ function setup_valkey_server() {
   cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
   make -j$(num_proc)
   popd >/dev/null
+  echo "${VALKEY_VERSION}" > "${version_stamp_file}"
   export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
   export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
   LOG_INFO "VALKEY_SERVER_PATH => ${VALKEY_SERVER_PATH}"

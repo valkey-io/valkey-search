@@ -1,6 +1,7 @@
 """Integration tests for full-text query blocking on in-flight mutations."""
 
 import struct
+import time
 from valkey.client import Valkey
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import (
@@ -234,6 +235,8 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
         search_thread.join()
+        # Give the background writer thread some time to complete and release the IndexSchema reference
+        time.sleep(0.2)
 
         # Expect search to error
         assert search_err[0] is not None
@@ -285,6 +288,7 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
 
         # Complete the search
         client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
         search_thread.join()
 

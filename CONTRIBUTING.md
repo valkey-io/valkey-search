@@ -109,6 +109,7 @@ Collaborators can use the following commands in PR and issue comments to help do
 | `/remove-reviewer <usernames>`| PR only     | Withdraws a pending review request from one or more users.                                              |
 | `/resolves <issue-number>`    | PR only     | Appends `Resolves #<N>` to the PR body, linking the issue and auto-closing it on merge.                 |
 | `/rerun`                      | PR only     | Re-runs all failed or timed-out CI jobs for the PR's current head commit.                               |
+| `/duplicates`                 | PR or issue | Finds likely duplicate issues or pull requests and reports them.                                        |
 
 The label and reviewer commands accept a comma-separated list, so several items can be
 handled in one comment. The command must be the first thing in the comment, and each
@@ -116,7 +117,7 @@ command goes in its own comment.
 
 **Example usage:**
 
-```
+```text
 /label bug, documentation
 /remove-label good first issue
 /reviewer allenss-amazon, BCathcart

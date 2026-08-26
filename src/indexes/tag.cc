@@ -315,6 +315,15 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
   return std::nullopt;
 }
 
+std::optional<absl::string_view> Tag::GetRawTagString(
+    const InternedStringPtr& key) const {
+  if (auto it = tracked_tags_by_keys_.find(key);
+      it != tracked_tags_by_keys_.end()) {
+    return *it->second.raw_tag_string;
+  }
+  return std::nullopt;
+}
+
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
@@ -389,8 +398,9 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
   size_t total = 0;
 
   auto collect_slot = [&](void* slot) {
-    if (slot == nullptr) return;
-    if (!seen.insert(slot).second) return;
+    if (slot == nullptr || !seen.insert(slot).second) {
+      return;
+    }
     matched_slots.push_back(slot);
     auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
     total += bag.size();

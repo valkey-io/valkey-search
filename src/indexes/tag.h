@@ -94,6 +94,10 @@ class Tag : public IndexBase {
       const InternedStringPtr& key,
       bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // Returns the raw tag string for `key`, or nullopt if `key` is not tracked.
+  std::optional<absl::string_view> GetRawTagString(
+      const InternedStringPtr& key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated
   // queries, also walks an extras vector of untracked keys.

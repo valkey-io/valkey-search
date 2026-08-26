@@ -369,6 +369,20 @@ A prerequisite for this to work: the SVS CMake target must be set up with `targe
 
 Note: the prior runtime model (`libsvs_runtime.so.0.4.0`) had genuinely opaque memory accounting because it predates the `get_memory_usage()` API and has its own PLT entries. The submodule approach does not share this limitation.
 
+**Pending: Valkey PR #4128 -- `ValkeyModule_AllocateExternalMemory`:** This in-progress Valkey core PR introduces a pair of module APIs for accounting memory that bypasses `zmalloc`:
+
+```c
+int ValkeyModule_AllocateExternalMemory(size_t bytes);  // report allocation
+int ValkeyModule_FreeExternalMemory(size_t bytes);      // report deallocation
+```
+
+The counter flows into `zmalloc_used_memory()` and therefore into `used_memory`, `maxmemory` enforcement, and OOM detection. This is directly relevant to SVS in two cases that `__wrap_malloc` cannot cover:
+
+- **`mmap`-backed storage:** If SVS uses `mmap` for huge-page-aligned index regions (which can reduce vector search latency by ~30% per community benchmarks by enabling alignment control and lazy population that `ValkeyModule_Alloc` cannot provide), those allocations bypass `__wrap_malloc` entirely. `ValkeyModule_AllocateExternalMemory` provides the accounting path.
+- **Proprietary pre-built objects:** For builds where SVS allocations cross a PLT boundary, `ValkeyModule_AllocateExternalMemory(delta)` / `ValkeyModule_FreeExternalMemory(delta)` called after each mutating operation replaces the `UpdateReportedMemory()` polling workaround with an officially-supported Valkey API.
+
+Note: the final API name is still under discussion in the PR (candidates include `AllocateExternalMemory` and `IncrExternalMemory`). An open concern about the external counter being included in `used_memory_dataset` calculations has not yet been resolved. The PR has one MEMBER approval and is awaiting TSC vote before merge.
+
 #### Proprietary Compression (LVQ, LeanVec)
 
 LVQ and LeanVec backends are out of scope for this RFC. Three distribution approaches -- a valkey-bundle build flag (`SVS_PRO`), a separate Intel-optimized image, and a standalone user build -- are evaluated in the Future Considerations section, including the community concerns and engineering trade-offs for each.
@@ -465,7 +479,9 @@ The SVS submodule will face the same requirement: its CMake target must be set u
 
 **Sanitizer build gap:** `memory_allocation_overrides.h` explicitly disables all overrides under `SAN_BUILD` (the `#ifdef SAN_BUILD` guard). This means ASAN/TSAN test runs do not exercise the tracked-allocator path -- allocator bypass bugs that would only manifest in production builds are not caught by sanitizer CI runs. Any integration test that validates memory accounting must run in a non-sanitizer Release build.
 
-**For proprietary compression builds (all alternatives):** If LVQ/LeanVec backends are compiled from source (e.g., via the tarball download pattern), the same `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` mechanism applies and must be explicitly set on the SVS PRO CMake target. If any component is provided as a pre-built binary object, the PLT boundary problem from the prior pre-built runtime model re-emerges for that component -- allocations from pre-built objects cannot be intercepted at link time, and `get_memory_usage()` polling becomes the only tracking mechanism for those allocations.
+**For proprietary compression builds (all alternatives):** If LVQ/LeanVec backends are compiled from source (e.g., via the tarball download pattern), the same `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` mechanism applies and must be explicitly set on the SVS PRO CMake target. If any component is provided as a pre-built binary object, the PLT boundary problem from the prior pre-built runtime model re-emerges for that component -- allocations from pre-built objects cannot be intercepted at link time.
+
+Once [Valkey PR #4128](https://github.com/valkey-io/valkey/pull/4128) merges, the preferred accounting path for pre-built objects is `ValkeyModule_AllocateExternalMemory(delta)` / `ValkeyModule_FreeExternalMemory(delta)` called after each mutating operation -- replacing the `UpdateReportedMemory()` / `get_memory_usage()` polling pattern with an officially-supported Valkey module API. Until PR #4128 merges, `get_memory_usage()` polling remains the only available mechanism.
 
 ### Alternative A: valkey-bundle Build Flag (Preferred Starting Point)
 
@@ -665,6 +681,7 @@ A fourth possibility -- Intel building the entire `libsearch.so` (valkey-search 
 
 - [Intel Scalable Vector Search -- GitHub](https://github.com/intel/ScalableVectorSearch)
 - [Intel SVS Documentation](https://intel.github.io/ScalableVectorSearch/)
+- [Valkey PR #4128 -- VM_AllocateExternalMemory (pending merge)](https://github.com/valkey-io/valkey/pull/4128)
 - [SVS PR #326 -- Deferred Compression](https://github.com/intel/ScalableVectorSearch/pull/326)
 - [SVS PR #352 -- C API Filtered TopK Search](https://github.com/intel/ScalableVectorSearch/pull/352)
 - [SVS PR #305 -- C API Threadpool Getter/Setter](https://github.com/intel/ScalableVectorSearch/pull/305)

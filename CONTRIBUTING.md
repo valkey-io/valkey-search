@@ -143,6 +143,12 @@ assignments — so review load stays evenly distributed no matter who authors PR
 review speed varies. The author is never assigned to their own pull request; being skipped
 as the author keeps their count low, so they are simply first in line for the next one.
 
+> **Maintainer setup:** the built-in `GITHUB_TOKEN` cannot access the Actions variables API,
+> so the ledger requires a fine-grained personal access token with **Variables: read and
+> write** on this repository, stored as the `REVIEWER_LEDGER_TOKEN` secret. Without it the
+> job still assigns reviewers, but falls back to a PR-number rotation (roughly even over time,
+> without the exact-count guarantee).
+
 The first-pass reviewer does the detailed review and drives the feedback loop; the
 maintainer then does the final review and merges. Use `/reviewer` and `/remove-reviewer` to
 adjust the assignment, and edit `.github/reviewer-pools.json` to change the pools — every

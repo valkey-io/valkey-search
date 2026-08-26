@@ -110,6 +110,7 @@ Collaborators can use the following commands in PR and issue comments to help do
 | `/resolves <issue-number>`    | PR only     | Appends `Resolves #<N>` to the PR body, linking the issue and auto-closing it on merge.                 |
 | `/rerun`                      | PR only     | Re-runs all failed or timed-out CI jobs for the PR's current head commit.                               |
 | `/duplicates`                 | PR or issue | Finds likely duplicate issues or pull requests and reports them.                                        |
+| `/assign-reviewers`           | PR only     | Runs automatic reviewer assignment on demand (see below). No-op if the PR is already assigned.          |
 
 The label and reviewer commands accept a comma-separated list, so several items can be
 handled in one comment. The command must be the first thing in the comment, and each
@@ -162,6 +163,13 @@ maintainer then does the final review and merges. Use `/reviewer` and `/remove-r
 adjust the assignment, and edit `.github/reviewer-pools.json` to change the pools — every
 entry in it needs collaborator access, since a review cannot be requested from a
 non-collaborator. A newly added member starts at their pool's current minimum count.
+
+Once a PR has been auto-assigned it is tagged with the `auto-assigned-reviewers` label, so
+re-opening it, toggling draft/ready, or removing the requested reviewers will not reassign.
+To request a fresh set of reviewers, **remove the `auto-assigned-reviewers` label and comment
+`/assign-reviewers`** — the same selection logic runs again and picks the next
+least-assigned members. `/assign-reviewers` also works on PRs opened before automatic
+assignment existed, so they can be backfilled with a single comment.
 
 ## Code of conduct
 

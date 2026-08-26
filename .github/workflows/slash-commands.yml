@@ -8,6 +8,8 @@ name: Slash Commands
 #   /resolves <issue-number>   — append "Resolves #N" to the PR body
 #   /rerun                     — re-run all failed CI jobs for this PR
 #   /duplicates                — find potential duplicate issues/PRs
+#   /assign-reviewers          — (re)assign reviewers now; remove the
+#                                auto-assigned-reviewers label first to reassign
 #
 # The label and reviewer commands accept a comma-separated list, e.g. `/label bug, docs`.
 
@@ -57,11 +59,24 @@ jobs:
           # the job cannot keep counts and falls back to a PR-number rotation.
           LEDGER_TOKEN: ${{ secrets.REVIEWER_LEDGER_TOKEN }}
         with:
-          script: |
-            const pr = context.payload.pull_request;
-            if (pr.draft) return;
-
+          script: &assign_script |
             const { owner, repo } = context.repo;
+
+            // Resolve the PR from either trigger. pull_request_target carries it
+            // directly; the /assign-reviewers command arrives as an issue_comment,
+            // so fetch it and only proceed for that command.
+            let pr = context.payload.pull_request;
+            if (!pr) {
+              if (!context.payload.issue || !context.payload.issue.pull_request) return;
+              if (!/^\/assign-reviewers\b/.test((context.payload.comment.body || '').trim())) return;
+              const { data } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: context.payload.issue.number,
+              });
+              pr = data;
+            }
+            if (pr.draft) return;
 
             let pools;
             try {
@@ -287,6 +302,26 @@ jobs:
             } catch (e) {
               core.warning('Could not add ' + MARKER_LABEL + ' label: ' + e.message);
             }
+
+  # Manually (re)assign reviewers via the /assign-reviewers comment command.
+  # Useful to backfill PRs opened before auto-assignment existed. Runs the exact
+  # same script as auto-assign-reviewers (shared YAML anchor); remove the
+  # auto-assigned-reviewers label first to force a fresh assignment.
+  assign-reviewers-command:
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/assign-reviewers')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: reviewer-assignment-ledger
+      cancel-in-progress: false
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          LEDGER_TOKEN: ${{ secrets.REVIEWER_LEDGER_TOKEN }}
+        with:
+          script: *assign_script
 
   # Auto-check for duplicates when an issue or PR is opened
   check-duplicates:

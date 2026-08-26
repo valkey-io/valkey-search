@@ -485,6 +485,25 @@ jobs:
 
             if (!/^\/(label|remove-label|reviewer|remove-reviewer|resolves|rerun|duplicates)\b/.test(body)) return;
 
+            // Only repository collaborators (write access or above) may run
+            // commands — they mutate labels, reviewers, and the PR body. Checked
+            // with GITHUB_TOKEN, which can read collaborator permissions.
+            let permission = 'none';
+            try {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: commenter,
+              });
+              permission = data.permission;
+            } catch (e) {
+              core.warning('Could not check permission for ' + commenter + ': ' + e.message);
+            }
+            if (permission !== 'admin' && permission !== 'write') {
+              core.info('Ignoring command from ' + commenter + ' (permission: ' + permission + ').');
+              return;
+            }
+
             // Split a comma-separated command argument into unique, non-empty items.
             const parseItems = (raw, stripAt) => {
               const seen = new Set();

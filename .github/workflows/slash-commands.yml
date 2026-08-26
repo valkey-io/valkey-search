@@ -87,9 +87,11 @@ jobs:
             // new PR goes to the eligible pool member with the fewest
             // assignments; ties break by pool order. Skipping the author leaves
             // their count low, so they are first in line for the next PR they
-            // can take — skipped turns are repaid rather than lost. The variable
-            // is created on first use, seeded from seedCounts in
-            // reviewer-pools.json.
+            // can take — skipped turns are repaid rather than lost. To start the
+            // counts from the current PR distribution, create the variable once
+            // before first use (see CONTRIBUTING.md); otherwise everyone starts
+            // at zero. An optional "seedCounts" map in reviewer-pools.json is
+            // also honored on first use if present.
             //
             // The variables API is not reachable with GITHUB_TOKEN, so a
             // dedicated PAT (REVIEWER_LEDGER_TOKEN) is used for it. If the secret

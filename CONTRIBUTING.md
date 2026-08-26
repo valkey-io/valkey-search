@@ -148,6 +148,13 @@ as the author keeps their count low, so they are simply first in line for the ne
 > write** on this repository, stored as the `REVIEWER_LEDGER_TOKEN` secret. Without it the
 > job still assigns reviewers, but falls back to a PR-number rotation (roughly even over time,
 > without the exact-count guarantee).
+>
+> Optionally, to start the counts from the current PR distribution rather than from zero,
+> create the variable once before the first run:
+>
+> ```bash
+> gh variable set REVIEWER_ASSIGNMENT_LEDGER --body '{"firstPass":{...},"maintainers":{...}}'
+> ```
 
 The first-pass reviewer does the detailed review and drives the feedback loop; the
 maintainer then does the final review and merges. Use `/reviewer` and `/remove-reviewer` to

@@ -154,9 +154,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(parameters.query, parameters.k,
-                                   parameters.cancellation_token,
-                                   std::move(inline_filter));
+    auto res = vector_flat->Search(
+        parameters.query, parameters.k, parameters.cancellation_token,
+        std::move(inline_filter), parameters.enable_partial_results);
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
     return res;
@@ -462,17 +462,16 @@ CalcBestMatchingPrefilteredKeys(
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    query_magnitude =
-        1.0f / indexes::CalcMagnitude(
-                   reinterpret_cast<const float *>(parameters.query.data()),
-                   parameters.query.size() / sizeof(float));
+    query_magnitude = indexes::CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(parameters.query.data()),
+        parameters.query.size() / sizeof(float));
   }
   auto results_appender =
       [&results, &parameters, vector_index, query_magnitude](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
     return vector_index->AddPrefilteredKey(parameters.query, query_magnitude,
-                                           parameters.k, key, results,
+                                           key, parameters.k, results,
                                            top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
@@ -541,9 +540,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
           break;
         }
         case indexes::IndexerType::kNumeric: {
-          auto numeric_index =
+          auto *numeric_index =
               dynamic_cast<indexes::Numeric *>(attribute_info.index);
-          auto numeric = numeric_index->GetValue(neighbor.external_id);
+          const auto *numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
                 vmsdk::MakeUniqueValkeyString(expr::FormatDouble(*numeric));
@@ -553,7 +552,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
-          auto vector_index =
+          const auto *vector_index =
               dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
           auto vector =
               vector_index->GetVectorDuringSearch(neighbor.external_id);
@@ -637,7 +636,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       fetch_limited = true;
       return false;
     }
-    borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f});
+    borrowed.push_back(
+        {.key = BorrowedInternedStringPtr(key), .distance = 0.0f});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -670,7 +670,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
           nonvector_results_fetched_limited_count.Increment();
           break;
         }
-        borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f});
+        borrowed.push_back(
+            {.key = BorrowedInternedStringPtr(key), .distance = 0.0f});
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           break;
@@ -697,7 +698,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     vmsdk::ReaderMutexLock &lock) {
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
     return absl::InvalidArgumentError(

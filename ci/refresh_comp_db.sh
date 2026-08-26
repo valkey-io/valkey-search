@@ -5,18 +5,18 @@ ROOT_DIR=$(readlink -f $(dirname $(readlink -f $0))/..)
 
 # Regenerating compile_commands.json is done by running `cmake` (build is not required)
 cd ${ROOT_DIR}
-${ROOT_DIR}/ci/build_ubuntu.sh --skip-prepare-env --no-build --configure
+${ROOT_DIR}/ci/build_ubuntu.sh --no-build --configure
 
-# Create a relative symlink to the newest generated compilation database (.build-debug or .build-release)
-latest_db=$(ls -t .build-*/compile_commands.json 2>/dev/null | head -n 1)
-if [ -n "$latest_db" ]; then
-    # Replace devcontainer paths (/workspaces/...) with ROOT_DIR so IDE indexers on the host can resolve headers and symbols
-    sed -i "s|/workspaces/[^/]*|${ROOT_DIR}|g" "$latest_db"
-    ln -sf "$latest_db" compile_commands.json
-    echo "Updated compile_commands.json symlink and host paths -> $latest_db"
-    
-    # Restart active clangd language servers so IDEs immediately pick up the updated compilation database
-    if command -v pkill >/dev/null 2>&1; then
-        pkill -f clangd 2>/dev/null || true
-    fi
+# Detect host OS workspace directory if running inside container
+HOST_DIR=$(awk -v target="${ROOT_DIR}" '$5 == target {print $4}' /proc/self/mountinfo 2>/dev/null || true)
+if [ -z "${HOST_DIR}" ]; then
+  HOST_DIR="${ROOT_DIR}"
+fi
+
+# Ensure compile_commands.json root symlink is relative
+ln -sf .build-release/compile_commands.json ${ROOT_DIR}/compile_commands.json
+
+# Map container workspace path (${ROOT_DIR}) to host workspace path (${HOST_DIR}) in compile_commands.json
+if [ -f "${ROOT_DIR}/.build-release/compile_commands.json" ]; then
+  sed -i "s|${ROOT_DIR}|${HOST_DIR}|g" "${ROOT_DIR}/.build-release/compile_commands.json" 2>/dev/null || true
 fi

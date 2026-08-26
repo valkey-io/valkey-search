@@ -154,7 +154,7 @@ function build_and_run_tests() {
     local DEPS_DIR=/opt/valkey-search-deps${san_suffix}
     local CMAKE_DIR=${DEPS_DIR}/lib/cmake
     # Let CMake find <Package>-config.cmake files by updating the CMAKE_PREFIX_PATH variable
-    export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${DEPS_DIR}
+    export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${CMAKE_DIR}/benchmark:${DEPS_DIR}
     # enable core dumps if building and sudo is available without password
     if [[ "${BUILD_SH_ARGS}" != *"--no-build"* ]] && sudo -n true 2>/dev/null; then
         echo Enabling core dumps
@@ -167,11 +167,7 @@ function build_and_run_tests() {
         export CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_UNIT_TESTS=OFF"
     fi
 
-    local system_modules_flag="--use-system-modules"
-    if ! command -v grpc_cpp_plugin >/dev/null 2>&1 && [ ! -f "${DEPS_DIR}/bin/grpc_cpp_plugin" ]; then
-        system_modules_flag=""
-    fi
-    (cd ${ROOT_DIR} && ./build.sh ${system_modules_flag} --test-errors-stdout ${BUILD_SH_ARGS})
+    (cd ${ROOT_DIR} && ./build.sh --test-errors-stdout ${BUILD_SH_ARGS})
 }
 
 # Write a success or error message on exit

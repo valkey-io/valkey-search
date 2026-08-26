@@ -139,37 +139,22 @@ reviewer and a maintainer are requested automatically from the pools in
 [`.github/reviewer-pools.json`](.github/reviewer-pools.json). The bot leaves a comment
 naming both.
 
-Each pool member's lifetime assignment count is tracked in the `REVIEWER_ASSIGNMENT_LEDGER`
-repository variable, and every new pull request goes to the eligible member with the fewest
-assignments — so review load stays evenly distributed no matter who authors PRs or how
-review speed varies. The author is never assigned to their own pull request; being skipped
-as the author keeps their count low, so they are simply first in line for the next one.
-
-> **Maintainer setup:** the built-in `GITHUB_TOKEN` cannot access the Actions variables API,
-> so the ledger requires a fine-grained personal access token with **Variables: read and
-> write** on this repository, stored as the `REVIEWER_LEDGER_TOKEN` secret. Without it the
-> job still assigns reviewers, but falls back to a PR-number rotation (roughly even over time,
-> without the exact-count guarantee).
->
-> Optionally, to start the counts from the current PR distribution rather than from zero,
-> create the variable once before the first run:
->
-> ```bash
-> gh variable set REVIEWER_ASSIGNMENT_LEDGER --body '{"firstPass":{...},"maintainers":{...}}'
-> ```
+Assignments are balanced across each pool, so review load stays evenly distributed no matter
+who authors pull requests or how quickly people review. The author is never assigned to their
+own pull request.
 
 The first-pass reviewer does the detailed review and drives the feedback loop; the
 maintainer then does the final review and merges. Use `/reviewer` and `/remove-reviewer` to
 adjust the assignment, and edit `.github/reviewer-pools.json` to change the pools — every
 entry in it needs collaborator access, since a review cannot be requested from a
-non-collaborator. A newly added member starts at their pool's current minimum count.
+non-collaborator.
 
 Once a PR has been auto-assigned it is tagged with the `auto-assigned-reviewers` label, so
 re-opening it, toggling draft/ready, or removing the requested reviewers will not reassign.
 To request a fresh set of reviewers, **remove the `auto-assigned-reviewers` label and comment
-`/assign-reviewers`** — the same selection logic runs again and picks the next
-least-assigned members. `/assign-reviewers` also works on PRs opened before automatic
-assignment existed, so they can be backfilled with a single comment.
+`/assign-reviewers`** — the same selection runs again and picks the next reviewers.
+`/assign-reviewers` also works on PRs opened before automatic assignment existed, so they can
+be backfilled with a single comment.
 
 ## Code of conduct
 

@@ -595,10 +595,7 @@ void TrackRecord(const Key &key, const Attribute &attribute,
   }
   auto *vector_base =
       dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get());
-  if (vector_base && record &&
-      !vector_base->IsValidSizeVector(vmsdk::ToStringView(record))) {
-    record = nullptr;
-  }
+
   VectorRegistry::Instance().Track(
       key,
       vector_base ? vector_base->GetInternedAttributeIdentifier()

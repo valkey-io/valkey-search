@@ -143,7 +143,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
         flat_algorithm_proto.release());
     auto index = indexes::VectorFlat<float>::Create(
                      vector_index_proto, "attribute_identifier_1",
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                      .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));

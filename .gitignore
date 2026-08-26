@@ -2,8 +2,10 @@ __pycache__/
 resolved_deps.py
 *.swp
 compile_commands.json
+.clangd
 .devcontainer/devcontainer.json
 .devcontainer/._devcontainer.json
+.ssh-agent*.sock
 .codelite/
 .cache/
 build-*
@@ -22,3 +24,4 @@ env/
 .venv/
 .env/
 .build_log
+integration/module/*.so

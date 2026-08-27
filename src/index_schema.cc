@@ -846,6 +846,25 @@ void IndexSchema::ProcessMultiQueue() {
   Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
   Metrics::GetStats().ingest_total_batches++;
 
+  if (ABSL_PREDICT_FALSE(mutations_thread_pool_->IsSuspended())) {
+    // The writer pool is suspended for the lifetime of a fork child (see
+    // ValkeySearch::AtForkPrepare/AfterForkParent) and is only resumed from
+    // the main thread. Scheduling onto it here and blocking on it below
+    // would deadlock the main thread waiting on itself, so drain the queue
+    // synchronously on the calling thread instead.
+    while (!multi_mutations_keys.empty()) {
+      auto key = multi_mutations_keys.front();
+      multi_mutations_keys.pop_front();
+      {
+        absl::MutexLock lock(&stats_.mutex_);
+        ++stats_.mutation_queue_size_;
+      }
+      ProcessSingleMutationAsync(detached_ctx_.get(), /*from_backfill=*/false,
+                                 key, /*delay_capturer=*/nullptr);
+    }
+    return;
+  }
+
   absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);
   while (!multi_mutations_keys.empty()) {

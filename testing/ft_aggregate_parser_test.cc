@@ -228,6 +228,12 @@ static std::vector<TestStage> TestStages{
     {"GROUPBY 1 @n1 REDUCE COUNT 0", "GROUPBY @n1 COUNT() => COUNT()"},
     {"GROUPBY 1 @n1 REDUCE COUNT 0 AS Y", "GROUPBY @n1 COUNT() => Y"},
     {"GROUPBY 1 @n1 REDUCE MIN 1 @n2 as Z", "GROUPBY @n1 MIN(@n2) => Z"},
+    {"GROUPBY 1 @n1 REDUCE TOLIST 1 @n2",
+     "GROUPBY @n1 TOLIST(@n2) => TOLIST(@n2)"},
+    {"GROUPBY 1 @n1 REDUCE TOLIST 1 @n2 AS items",
+     "GROUPBY @n1 TOLIST(@n2) => items"},
+    {"GROUPBY 1 @n1 REDUCE TOLIST 0", nullptr},
+    {"GROUPBY 1 @n1 REDUCE TOLIST 2 @n1 @n2", nullptr},
     {"apply", nullptr},
     {"apply x", nullptr},
     {"apply @n1", nullptr},
@@ -282,6 +288,43 @@ TEST_F(AggregateTest, StageParserTest) {
       }
     }
   }
+}
+
+// TestStages above covers the legacy auto-generated REDUCE name, which is what
+// the default emulate-release selects. Both forms have to stay reachable; see
+// COMPATIBILITY.md.
+TEST_F(AggregateTest, DefaultReducerAliasFollowsEmulateRelease) {
+  // Mixed-case field: the compatible form lowercases the args too, not just
+  // the reducer name.
+  fake_index.fields_["N3"] = indexes::IndexerType::kNumeric;
+  auto dump = [&](absl::string_view stage) {
+    auto argv = vmsdk::ToValkeyStringVector(stage);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.timeout_ms = 0;
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    std::ostringstream os;
+    if (parser.Parse(params, itr).ok() && !params.stages_.empty()) {
+      params.stages_[0]->Dump(os);
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+    return os.str();
+  };
+
+  const auto saved = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MIN 1 @n2"),
+            "GROUPBY @n1 MIN(@n2) => MIN(@n2)");
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE COUNT 0"),
+            "GROUPBY @n1 COUNT() => __generated_aliascount");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MAX 1 @N3"),
+            "GROUPBY @n1 MAX(@N3) => __generated_aliasmaxn3");
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
 TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {

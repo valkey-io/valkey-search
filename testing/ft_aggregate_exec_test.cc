@@ -6,6 +6,9 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
+#include <algorithm>
+#include <random>
+
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -66,6 +69,7 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     fakeIndex.fields_ = {
         {"n1", indexes::IndexerType::kNumeric},
         {"n2", indexes::IndexerType::kNumeric},
+        {"n3", indexes::IndexerType::kNumeric},
     };
     vmsdk::ValkeyTest::SetUp();
   }
@@ -93,7 +97,37 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     EXPECT_TRUE(result.ok()) << " Status is: " << result << "\n";
 
     // Free the allocated ValkeyModuleStrings to avoid memory leaks
-    for (auto* str : argv) {
+    for (auto *str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
+    return params;
+  }
+
+  // Helper for FirstValue tests that need n3 attribute
+  std::unique_ptr<AggregateParameters> MakeStagesWithN3(
+      absl::string_view test) {
+    auto argv = vmsdk::ToValkeyStringVector(test);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    auto params = std::make_unique<AggregateParameters>(0);
+    params->parse_vars_.index_interface_ = &fakeIndex;
+    EXPECT_EQ(
+        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
+        0);
+    EXPECT_EQ(
+        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
+        1);
+    EXPECT_EQ(
+        params->AddRecordAttribute("n3", "n3", indexes::IndexerType::kNumeric),
+        2);
+
+    auto parser = CreateAggregateParser();
+
+    auto result = parser.Parse(*params, itr);
+    EXPECT_TRUE(result.ok()) << " Status is: " << result << "\n";
+
+    // Free the allocated ValkeyModuleStrings to avoid memory leaks
+    for (auto *str : argv) {
       ValkeyModule_FreeString(nullptr, str);
     }
     return params;
@@ -104,13 +138,13 @@ TEST_F(AggregateExecTest, LimitTest) {
   std::cerr << "LimitTest\n";
   auto param = MakeStages("LIMIT 1 2");
   auto records = MakeData(4);
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 2);
   std::cerr << "Results:\n";
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_EQ(*records[0], *RecordNOfM(1, 4));
@@ -121,13 +155,13 @@ TEST_F(AggregateExecTest, FilterTest) {
   std::cerr << "FilterTest\n";
   auto param = MakeStages("FILTER @n1==1");
   auto records = MakeData(4);
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 1);
   std::cerr << "Results:\n";
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_EQ(*records[0], *RecordNOfM(1, 4));
@@ -137,13 +171,13 @@ TEST_F(AggregateExecTest, ApplyTest) {
   std::cerr << "ApplyTest\n";
   auto param = MakeStages("APPLY @n1+1 as fred");
   auto records = MakeData(2);
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
   EXPECT_EQ(records.size(), 2);
   std::cerr << "Results:\n";
-  for (auto& r : records) {
+  for (auto &r : records) {
     std::cerr << *r << "\n";
   }
   auto r0 = RecordNOfM(0, 2);
@@ -179,7 +213,7 @@ TEST_F(AggregateExecTest, SortTest) {
 
   };
   for (auto do_max : {false, true}) {
-    for (auto& tc : testcases) {
+    for (auto &tc : testcases) {
       std::string text = tc.text_;
       size_t input_count = tc.order_.size();
       auto order = tc.order_;
@@ -192,13 +226,13 @@ TEST_F(AggregateExecTest, SortTest) {
       std::cerr << "SortTest: " << text << "\n";
       auto param = MakeStages(text);
       auto records = MakeData(input_count);
-      for (auto& r : records) {
+      for (auto &r : records) {
         std::cerr << *r << "\n";
       }
       EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
       EXPECT_EQ(records.size(), order.size());
       std::cerr << "Results:\n";
-      for (auto& r : records) {
+      for (auto &r : records) {
         std::cerr << *r << "\n";
       }
       if (!do_max || tc.ordered) {
@@ -221,17 +255,17 @@ TEST_F(AggregateExecTest, GroupTest) {
       {"groupby 2 @n1 @n2", 2, 2},
       {"groupby 1 @n2", 2, 1},
   };
-  for (auto& tc : testcases) {
+  for (auto &tc : testcases) {
     std::cerr << "GroupTest: " << tc.text_ << "\n";
     auto param = MakeStages(tc.text_);
     auto records = MakeData(tc.m);
-    for (auto& r : records) {
+    for (auto &r : records) {
       std::cerr << *r << "\n";
     }
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
     EXPECT_EQ(records.size(), tc.num_groups);
     std::cerr << "Results:\n";
-    for (auto& r : records) {
+    for (auto &r : records) {
       std::cerr << *r << "\n";
     }
   }
@@ -252,11 +286,11 @@ TEST_F(AggregateExecTest, ReducerTest) {
       {"groupby 1 @n2 reduce stddev 1 @n1", 4, {1.2909944487358056}},
       {"groupby 1 @n2 reduce count_distinct 1 @n1", 4, {4}},
       {"groupby 1 @n2 reduce avg 1 @n1", 4, {1.5}}};
-  for (auto& tc : testcases) {
+  for (auto &tc : testcases) {
     std::cerr << "GroupTest: " << tc.text_ << "\n";
     auto param = MakeStages(tc.text_);
     auto records = MakeData(tc.m);
-    for (auto& r : records) {
+    for (auto &r : records) {
       std::cerr << *r << "\n";
     }
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
@@ -269,6 +303,86 @@ TEST_F(AggregateExecTest, ReducerTest) {
     }
   }
 }
+TEST_F(AggregateExecTest, ToListReducerTest) {
+  // Basic collection: 4 distinct values (0, 1, 2, 3) grouped by n2
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce tolist 1 @n1 as items");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto &result = record->fields_.at(2);
+    EXPECT_TRUE(result.IsArray());
+    EXPECT_EQ(result.ArraySize(), 4);
+  }
+  // Deduplication: multiple records in the same group with repeated reducer
+  // values — TOLIST must return each distinct value exactly once.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce tolist 1 @n2 as items");
+    // All 5 records share n1=0 (one group). n2 values: 1, 2, 1, 3, 2.
+    // Expected distinct set after dedup: {1, 2, 3} → ArraySize == 3.
+    RecordSet records(nullptr);
+    for (double n2 : {1.0, 2.0, 1.0, 3.0, 2.0}) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(0.0);  // n1 = 0 (group key)
+      rec->fields_[1] = expr::Value(n2);   // n2 = reducer field
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    // Only one group (all records share n1=0)
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto &result = record->fields_.at(2);
+    EXPECT_TRUE(result.IsArray());
+    // Duplicates (1 and 2) collapsed → 3 distinct values
+    EXPECT_EQ(result.ArraySize(), 3);
+  }
+  // Array flattening: if the reducer field value is itself an array, its
+  // elements are collected individually (one level of flattening).
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce tolist 1 @n1 as items");
+    // Two records share n2=0 (one group). n1 is an array [10.0, 20.0] for
+    // the first and [20.0, 30.0] for the second.
+    // After one-level flatten + dedup: {10, 20, 30} → ArraySize == 3.
+    RecordSet records(nullptr);
+    auto make_array_record = [](std::vector<double> elems, double group_key) {
+      auto rec = std::make_unique<Record>(2);
+      std::vector<expr::Value> arr;
+      arr.reserve(elems.size());
+      for (double e : elems) {
+        arr.emplace_back(e);
+      }
+      rec->fields_[0] = expr::Value(std::move(arr));  // n1 = array
+      rec->fields_[1] = expr::Value(group_key);       // n2 = group key
+      return rec;
+    };
+    records.emplace_back(make_array_record({10.0, 20.0}, 0.0));
+    records.emplace_back(make_array_record({20.0, 30.0}, 0.0));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto &result = record->fields_.at(2);
+    EXPECT_TRUE(result.IsArray());
+    // Elements: 10, 20 (from first record) + 30 (new from second; 20 deduped)
+    EXPECT_EQ(result.ArraySize(), 3);
+  }
+  // TOLIST alongside another reducer in the same GROUPBY
+  {
+    auto param =
+        MakeStages("groupby 1 @n2 reduce tolist 1 @n1 as items reduce count 0");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    // First reducer output (index 2) is the TOLIST vector
+    EXPECT_TRUE(record->fields_.at(2).IsArray());
+    EXPECT_EQ(record->fields_.at(2).ArraySize(), 4);
+    // Second reducer output (index 3) is the COUNT double
+    EXPECT_TRUE(record->fields_.at(3).IsDouble());
+    EXPECT_NEAR(*(record->fields_.at(3).AsDouble()), 4.0, .001);
+  }
+}
+
 /*
 TEST_F(AggregateExecTest, testHash) {
   GroupKey key1({expr::Value(1.0), expr::Value(2.0)});
@@ -285,5 +399,228 @@ TEST_F(AggregateExecTest, testHash) {
   }));
 }
 */
+
+TEST_F(AggregateExecTest, FirstValueReducerTest) {
+  struct Testcase {
+    std::string text_;
+    size_t m;
+    std::vector<double> values_;
+    bool should_succeed;
+  };
+  Testcase testcases[]{
+      // Simple mode: returns first record's value.
+      {"groupby 1 @n2 reduce first_value 1 @n1", 4, {0}, true},
+      // Sorted ASC: returns value from record with minimum comparison value.
+      {"groupby 1 @n2 reduce first_value 3 @n1 BY @n1", 4, {0}, true},
+      // Sorted ASC explicit: same result.
+      {"groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC", 4, {0}, true},
+      // Sorted DESC: returns value from record with maximum comparison value.
+      {"groupby 1 @n2 reduce first_value 4 @n1 BY @n1 DESC", 4, {3}, true},
+      // Case-insensitive BY keyword.
+      {"groupby 1 @n2 reduce first_value 3 @n1 by @n1", 4, {0}, true},
+      // Case-insensitive direction.
+      {"groupby 1 @n2 reduce first_value 4 @n1 BY @n1 desc", 4, {3}, true},
+      // Invalid: nargs=2 (BY with no sort field) — parse error.
+      {"groupby 1 @n2 reduce first_value 2 @n1 BY", 4, {}, false},
+      // Invalid: unrecognised keyword instead of BY — parse error.
+      {"groupby 1 @n2 reduce first_value 3 @n1 WITH @n1", 4, {}, false},
+      // Invalid: unrecognised direction — parse error.
+      {"groupby 1 @n2 reduce first_value 4 @n1 BY @n1 UP", 4, {}, false},
+  };
+
+  for (auto &tc : testcases) {
+    std::cerr << "FirstValueReducerTest: " << tc.text_ << "\n";
+    if (!tc.should_succeed) {
+      // Parse errors are now surfaced at parse time, not execution time.
+      auto argv = vmsdk::ToValkeyStringVector(tc.text_);
+      vmsdk::ArgsIterator itr(argv.data(), argv.size());
+      auto params = std::make_unique<AggregateParameters>(0);
+      params->parse_vars_.index_interface_ = &fakeIndex;
+      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
+      auto parser = CreateAggregateParser();
+      auto result = parser.Parse(*params, itr);
+      EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
+      for (auto *str : argv) ValkeyModule_FreeString(nullptr, str);
+      continue;
+    }
+    auto param = MakeStages(tc.text_);
+    auto records = MakeData(tc.m);
+    auto status = param->stages_[0]->Execute(records);
+    EXPECT_TRUE(status.ok()) << tc.text_ << ": " << status;
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    std::cerr << "Result: " << *record << "\n";
+    for (size_t i = 0; i < tc.values_.size(); ++i) {
+      EXPECT_TRUE(record->fields_.at(i + 2).IsDouble());
+      EXPECT_NEAR(*(record->fields_.at(i + 2).AsDouble()), tc.values_[i], .001);
+    }
+  }
+}
+
+TEST_F(AggregateExecTest, FirstValueReducerEdgeCasesTest) {
+  // Empty group produces no results.
+  {
+    std::cerr << "FirstValueReducerEdgeCasesTest: empty group\n";
+    auto param = MakeStages("groupby 1 @n2 reduce first_value 1 @n1");
+    RecordSet empty_records(nullptr);
+    EXPECT_TRUE(param->stages_[0]->Execute(empty_records).ok());
+    EXPECT_EQ(empty_records.size(), 0);
+  }
+
+  // All nil comparison values: result is nil.
+  {
+    std::cerr << "FirstValueReducerEdgeCasesTest: all nil comparison values\n";
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
+    RecordSet records(nullptr);
+    for (size_t i = 0; i < 4; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value();
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto result = records.pop_front();
+    std::cerr << "Result: " << *result << "\n";
+    EXPECT_TRUE(result->fields_.at(2).IsNil());
+  }
+
+  // Nil return value is preserved when that record has the optimal comparison.
+  {
+    std::cerr << "FirstValueReducerEdgeCasesTest: nil return value preserved\n";
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n2 ASC");
+    RecordSet records(nullptr);
+    // Same group key (n2=1.0) ties on the BY comparison, first-encountered
+    // wins, so r1's nil n1 must be preserved rather than overwritten by r2.
+    auto r1 = std::make_unique<Record>(2);
+    r1->fields_[0] = expr::Value();
+    r1->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(r1));
+    auto r2 = std::make_unique<Record>(2);
+    r2->fields_[0] = expr::Value(100.0);
+    r2->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(r2));
+    EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    std::cerr << "Results:\n";
+    for (auto &rec : records) {
+      std::cerr << *rec << "\n";
+    }
+    // The single group (n2=1.0) should have its first_value result be nil.
+    auto &rec = records.front();
+    ASSERT_TRUE(rec->fields_.at(1).IsDouble());
+    EXPECT_EQ(*rec->fields_.at(1).AsDouble(), 1.0);
+    EXPECT_TRUE(rec->fields_.at(2).IsNil());
+  }
+
+  // Tie-breaking: first encountered record wins (ASC).
+  {
+    std::cerr << "FirstValueReducerEdgeCasesTest: tie-breaking ASC\n";
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
+    RecordSet records(nullptr);
+    for (double v : {10.0, 10.0, 50.0}) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(v);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto result = records.pop_front();
+    std::cerr << "Result: " << *result << "\n";
+    EXPECT_NEAR(*result->fields_.at(2).AsDouble(), 10.0, 0.001);
+  }
+
+  // Tie-breaking: first encountered record wins (DESC).
+  {
+    std::cerr << "FirstValueReducerEdgeCasesTest: tie-breaking DESC\n";
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 DESC");
+    RecordSet records(nullptr);
+    for (double v : {50.0, 100.0, 100.0}) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(v);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto result = records.pop_front();
+    std::cerr << "Result: " << *result << "\n";
+    EXPECT_NEAR(*result->fields_.at(2).AsDouble(), 100.0, 0.001);
+  }
+
+  // Mixed nil/non-nil comparison values: nils are skipped.
+  {
+    std::cerr << "FirstValueReducerEdgeCasesTest: mixed nil/non-nil\n";
+    auto param =
+        MakeStages("groupby 1 @n2 reduce first_value 4 @n1 BY @n1 ASC");
+    RecordSet records(nullptr);
+    // nil, 50, nil, 100 — minimum non-nil is 50.
+    for (auto v : {std::optional<double>{}, std::optional<double>{50.0},
+                   std::optional<double>{}, std::optional<double>{100.0}}) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = v ? expr::Value(*v) : expr::Value();
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto result = records.pop_front();
+    std::cerr << "Result: " << *result << "\n";
+    EXPECT_NEAR(*result->fields_.at(2).AsDouble(), 50.0, 0.001);
+  }
+
+  // Simple mode: a nil first record's value must be returned, not skipped.
+  {
+    std::cerr
+        << "FirstValueReducerEdgeCasesTest: simple mode nil first value\n";
+    auto param = MakeStages("groupby 1 @n2 reduce first_value 1 @n1");
+    RecordSet records(nullptr);
+    // First record's @n1 is nil; subsequent records have non-nil values.
+    // The reducer must return nil (the first record's value) and not let later
+    // records overwrite it.
+    auto r1 = std::make_unique<Record>(2);
+    r1->fields_[0] = expr::Value();
+    r1->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(r1));
+    for (double v : {50.0, 100.0}) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(v);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto result = records.pop_front();
+    std::cerr << "Result: " << *result << "\n";
+    EXPECT_TRUE(result->fields_.at(2).IsNil());
+  }
+}
+
+TEST_F(AggregateExecTest, FirstValueReducerAscDescDistinctOutputTest) {
+  std::cerr << "FirstValueReducerAscDescDistinctOutputTest\n";
+  // Two opposite-direction reducers without AS must get distinct output slots.
+  auto param = MakeStages(
+      "groupby 1 @n2 "
+      "reduce first_value 4 @n1 BY @n1 ASC "
+      "reduce first_value 4 @n1 BY @n1 DESC");
+  auto records = MakeData(4);
+  auto status = param->stages_[0]->Execute(records);
+  EXPECT_TRUE(status.ok()) << status;
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_NEAR(*record->fields_.at(2).AsDouble(), 0.0, .001);
+  ASSERT_GE(record->fields_.size(), 4u);
+  EXPECT_TRUE(record->fields_.at(3).IsDouble());
+  EXPECT_NEAR(*record->fields_.at(3).AsDouble(), 3.0, .001);
+}
+
 }  // namespace aggregate
 }  // namespace valkey_search

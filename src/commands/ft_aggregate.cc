@@ -86,7 +86,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       VMSDK_ASSIGN_OR_RETURN(auto indexer,
                              params.index_schema->GetIndex(identifier));
       auto indexer_type = indexer->GetIndexerType();
-      if (indexer->IsVectorIndex()) {
+      if (indexes::IsVectorIndex(indexer)) {
         return absl::InvalidArgumentError(
             absl::StrCat("Loading of vector fields is not supported (field `",
                          identifier, "`)"));
@@ -167,10 +167,10 @@ void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
   if (value.IsArray()) {
     SerializeArrayToResp(ctx, value.GetArray());
   } else if (value.IsBool()) {
-    auto value_sv = value.AsStringView();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
   } else if (value.IsDouble()) {
-    auto value_str = value.AsString();
+    // IsDouble() guarantees AsString() returns a value.
+    auto value_str = *value.AsString();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
   } else if (value.IsString()) {
     auto value_sv = value.GetStringView();
@@ -198,35 +198,14 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
 
   if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    auto value_sv = value.AsStringView();
+    // Guarded by IsNil() check above; AsStringView always succeeds here.
+    auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
-    char double_storage[50];
-    std::string_view value_view;
-    if (name == "$") {
-      value_view = value.AsStringView();
-    } else {
-      switch (indexer_type) {
-        case indexes::IndexerType::kTag:
-        case indexes::IndexerType::kText:
-        case indexes::IndexerType::kNone: {
-          value_view = value.AsStringView();
-          break;
-        }
-        case indexes::IndexerType::kNumeric: {
-          auto dble = value.AsDouble();
-          if (!dble) {
-            return false;
-          }
-          auto double_size =
-              snprintf(double_storage, sizeof(double_storage), "%.11g", *dble);
-          value_view = std::string_view(double_storage, double_size);
-          break;
-        }
-        default:
-          CHECK(false) << " Received type " << int(indexer_type);
-      }
+    if (name != "$") {
+      indexes::AssertValidIndexerType(indexer_type);
     }
+    std::string_view value_view = *value.AsStringView();
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     if (dialect == 2) {
       ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),

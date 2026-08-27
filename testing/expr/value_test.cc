@@ -7,9 +7,13 @@
 #include "src/expr/value.h"
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 #include <random>
 
 #include "gtest/gtest.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
@@ -17,8 +21,41 @@ namespace valkey_search::expr {
 
 class ValueTest : public vmsdk::ValkeyTest {
  protected:
-  void SetUp() override { vmsdk::ValkeyTest::SetUp(); }
-  void TearDown() override { vmsdk::ValkeyTest::TearDown(); }
+  // Save+restore the default emulate-release so tests that flip it
+  // (to exercise both the legacy and fixed VALKEY_SEARCH_COMPATIBILITY_FIX
+  // branches) don't bleed state to subsequent tests. Note: debug-mode
+  // defaults to true in the unit-test environment (no ParseAndLoadArgv
+  // flips it to false), so SetValue past kModuleVersion is permitted.
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    auto ok = options::GetEmulateRelease().SetValue(saved_emulate_release_);
+    ASSERT_TRUE(ok.ok()) << ok.message();
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  // RAII wrapper: pins emulate-release for the duration of its scope and
+  // restores the value that was in effect when the scope started. Nestable.
+  class ScopedEmulateRelease {
+   public:
+    explicit ScopedEmulateRelease(vmsdk::ValkeyVersion v)
+        : prev_(options::GetEmulateRelease().GetValue()) {
+      auto ok = options::GetEmulateRelease().SetValue(v);
+      EXPECT_TRUE(ok.ok()) << ok.message();
+    }
+    ~ScopedEmulateRelease() {
+      auto ok = options::GetEmulateRelease().SetValue(prev_);
+      EXPECT_TRUE(ok.ok()) << ok.message();
+    }
+
+   private:
+    vmsdk::ValkeyVersion prev_;
+  };
+
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+
   Value pos_inf = Value(std::numeric_limits<double>::infinity());
   Value neg_inf = Value(-std::numeric_limits<double>::infinity());
   Value pos_zero = Value(0.0);
@@ -56,7 +93,7 @@ TEST_F(ValueTest, TypesTest) {
       {Value({Value(1.0), Value(2.0)}), false, false, false, false, true},
       {Value({}), false, false, false, false, true}};
 
-  for (auto& c : t) {
+  for (auto &c : t) {
     EXPECT_EQ(c.v.IsNil(), c.is_nil) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsBool(), c.is_bool) << "Value is " << c.v;
     EXPECT_EQ(c.v.IsDouble(), c.is_double) << "Value is " << c.v;
@@ -107,7 +144,7 @@ TEST_F(ValueTest, Compare_test) {
       {Value(std::string("a")), Value(std::string("aa")), Ordering::kLESS},
       {Value(std::string("0.0")), Value(std::string("0.00")), Ordering::kLESS}};
 
-  for (auto& c : t) {
+  for (auto &c : t) {
     EXPECT_EQ(c.result, Compare(c.l, c.r)) << "l = " << c.l << " r = " << c.r;
     switch (c.result) {
       case Ordering::kUNORDERED:
@@ -137,7 +174,7 @@ TEST_F(ValueTest, Compare_floating_point) {
       {neg_inf, min_neg, max_neg, pos_zero, min_pos, max_pos, pos_inf},
   };
 
-  for (auto& number_line : number_lines) {
+  for (auto &number_line : number_lines) {
     for (auto i = 0; i < number_line.size(); ++i) {
       EXPECT_EQ(Compare(number_line[i], number_line[i]), Ordering::kEQUAL);
       EXPECT_EQ(number_line[i], number_line[i]);
@@ -206,7 +243,7 @@ TEST_F(ValueTest, add) {
 
   };
 
-  for (auto& tc : test_cases) {
+  for (auto &tc : test_cases) {
     EXPECT_EQ(FuncAdd(tc.l, tc.r), tc.result) << tc.l << '+' << tc.r;
     EXPECT_EQ(FuncAdd(tc.r, tc.l), tc.result) << tc.r << '+' << tc.l;
   }
@@ -249,14 +286,17 @@ TEST_F(ValueTest, case_test) {
       {"aBc", "abc", "ABC"},
       {"\xe2\x82\xac", "\xe2\x82\xac", "\xe2\x82\xac"},
   };
-  for (auto& [in, lower, upper] : testcases) {
+  for (auto &[in, lower, upper] : testcases) {
     EXPECT_EQ(Value(lower), FuncLower(Value(in)));
     EXPECT_EQ(Value(upper), FuncUpper(Value(in)));
   }
 }
 
 TEST_F(ValueTest, timetest) {
-  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT)
+  // 1739565015 corresponds to Fri Feb 14 2025 20:30:15 (GMT). This value
+  // is positive, finite, and post-epoch, so all VALKEY_SEARCH_COMPATIBILITY
+  // _FIX guards in the date functions evaluate to the same answer on both
+  // branches EXCEPT FuncMonth (which has a tm_mday=0-vs-1 off-by-one fix).
   Value ts(double(1739565015));
   EXPECT_EQ(FuncYear(ts), Value(2025));
   EXPECT_EQ(FuncDayofmonth(ts), Value(14));
@@ -265,13 +305,129 @@ TEST_F(ValueTest, timetest) {
   EXPECT_EQ(FuncMonthofyear(ts), Value(1));
 
   EXPECT_EQ(FuncTimefmt(ts, Value("%c")), Value("Fri Feb 14 20:30:15 2025"));
-  EXPECT_EQ(FuncTimefmt(ts, Value("")), Value(""));
   EXPECT_EQ(FuncParsetime(Value("Fri Feb 14 20:30:15 2025"), Value("%c")), ts);
 
   EXPECT_EQ(FuncMinute(ts), Value(1739565000));
   EXPECT_EQ(FuncHour(ts), Value(1739563200));
   EXPECT_EQ(FuncDay(ts), Value(1739491200));
-  EXPECT_EQ(FuncMonth(ts), Value(1738281600));
+
+  // FuncMonth differs across the compatibility branches:
+  //   legacy (pre-1.2.1): tm_mday=0 → mktime rolls back to last day of
+  //     previous month, returning Jan 31 2025 00:00:00 UTC = 1738281600.
+  //   fixed (>= 1.2.1):  tm_mday=1 → first day of the month, returning
+  //     Feb  1 2025 00:00:00 UTC = 1738368000.
+  // Default emulate-release in tests is 1.0.0 (legacy).
+  EXPECT_EQ(FuncMonth(ts), Value(1738281600))
+      << "default (pre-1.2.1) emulate-release should run legacy FuncMonth";
+  {
+    ScopedEmulateRelease s({1, 2, 1});
+    EXPECT_EQ(FuncMonth(ts), Value(1738368000))
+        << "emulate-release >= 1.2.1 should run the off-by-one fix";
+  }
+}
+
+// Walk every COMPATIBILITY_FIX site in value.cc through both branches and
+// verify the result actually differs as documented. Pin emulate-release
+// explicitly per phase rather than relying on the runtime default.
+TEST_F(ValueTest, CompatibilityFixGates) {
+  // Force the legacy branch first — explicit pin (don't rely on default).
+  ScopedEmulateRelease legacy_scope({1, 0, 0});
+
+  // --- asbool_string_truthy ---------------------------------------------
+  // FuncLand(string, true): the new branch promotes non-empty strings to
+  // true, so true && "a" == true (1); legacy: true && "a" == false (0).
+  Value s_a(std::string("a"));
+  EXPECT_EQ(FuncLand(Value(true), s_a), Value(false)) << "legacy AsBool";
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_EQ(FuncLand(Value(true), s_a), Value(true))
+        << "fix: non-empty truthy";
+  }
+
+  // --- numeric_unary_nan_on_unparsable ---------------------------------
+  // abs("a"): legacy → Nil; fix → NaN.
+  // std::isnan is unreliable under -ffast-math, so do a bit-pattern check
+  // (same approach as the IsNan helper in value.cc).
+  auto is_nan_bits = [](double d) {
+    uint64_t bits;
+    std::memcpy(&bits, &d, sizeof(bits));
+    constexpr uint64_t kExp = 0x7FF0000000000000ull;
+    constexpr uint64_t kMant = 0x000FFFFFFFFFFFFFull;
+    return (bits & kExp) == kExp && (bits & kMant) != 0;
+  };
+  {
+    auto legacy = FuncAbs(s_a);
+    EXPECT_TRUE(legacy.IsNil()) << "legacy abs(\"a\") should be Nil";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    auto fixed = FuncAbs(s_a);
+    ASSERT_TRUE(fixed.IsDouble());
+    EXPECT_TRUE(is_nan_bits(fixed.AsDouble().value()))
+        << "fix abs(\"a\") should be NaN";
+  }
+
+  // --- lower_non_string_to_nil / upper_non_string_to_nil ----------------
+  // lower(0) / upper(0): legacy passes through ("0"); fix → Nil.
+  Value zero(0.0);
+  {
+    auto l = FuncLower(zero);
+    ASSERT_TRUE(l.IsString());
+    EXPECT_EQ(l.AsStringView().value(), "0")
+        << "legacy lower(0) passes through";
+    auto u = FuncUpper(zero);
+    ASSERT_TRUE(u.IsString());
+    EXPECT_EQ(u.AsStringView().value(), "0");
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncLower(zero).IsNil()) << "fix lower(0) → Nil";
+    EXPECT_TRUE(FuncUpper(zero).IsNil()) << "fix upper(0) → Nil";
+  }
+
+  // --- timefmt_empty_format_to_nil --------------------------------------
+  // timefmt(0, ""): legacy → ""; fix → Nil.
+  {
+    auto t = FuncTimefmt(zero, Value(""));
+    ASSERT_TRUE(t.IsString());
+    EXPECT_EQ(t.AsStringView().value(), "") << "legacy timefmt(_, \"\") → \"\"";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncTimefmt(zero, Value("")).IsNil())
+        << "fix timefmt(_, \"\") → Nil";
+  }
+
+  // --- parsetime_format_mismatch_to_nil ---------------------------------
+  // parsetime("","a"): strptime returns NULL. Legacy uses the zero-tm and
+  // returns the constant -2209075200; fix → Nil.
+  {
+    auto p = FuncParsetime(Value(""), Value("a"));
+    ASSERT_TRUE(p.IsDouble());
+    EXPECT_EQ(p.AsDouble().value(), -2209075200.0)
+        << "legacy parsetime on format-mismatch falls back to zero-tm";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncParsetime(Value(""), Value("a")).IsNil())
+        << "fix parsetime on format-mismatch → Nil";
+  }
+
+  // --- date_fn_negative_ts_to_nil ---------------------------------------
+  // hour(-1): legacy computes -3600 (one second before epoch, rounded);
+  // fix → Nil. Spot-check one date function; the gate is shared by all
+  // nine via DateNegativeTsReturnsNil.
+  Value neg_one(-1.0);
+  {
+    auto h = FuncHour(neg_one);
+    ASSERT_TRUE(h.IsDouble());
+    EXPECT_EQ(h.AsDouble().value(), -3600.0)
+        << "legacy hour(-1) computes the pre-epoch rounded value";
+  }
+  {
+    ScopedEmulateRelease scope({1, 2, 1});
+    EXPECT_TRUE(FuncHour(neg_one).IsNil()) << "fix hour(-1) → Nil";
+  }
 }
 
 TEST_F(ValueTest, ArrayConstruction) {
@@ -338,12 +494,11 @@ TEST_F(ValueTest, ArrayTypeChecking) {
   Value three_elem({Value(1.0), Value(2.0), Value(3.0)});
   EXPECT_EQ(three_elem.ArraySize(), 3);
 
-  // Test ArraySize() on scalar values (should CHECK-fail, so we just verify
-  // IsArray() is false)
-  EXPECT_FALSE(Value().IsArray());
-  EXPECT_FALSE(Value(true).IsArray());
-  EXPECT_FALSE(Value(42.0).IsArray());
-  EXPECT_FALSE(Value(std::string("test")).IsArray());
+  // Test ArraySize() on scalar values (should return 0)
+  EXPECT_EQ(Value().ArraySize(), 0);
+  EXPECT_EQ(Value(true).ArraySize(), 0);
+  EXPECT_EQ(Value(42.0).ArraySize(), 0);
+  EXPECT_EQ(Value(std::string("test")).ArraySize(), 0);
 
   // Test IsEmptyArray()
   EXPECT_TRUE(empty_vec.IsEmptyArray());
@@ -425,45 +580,71 @@ TEST_F(ValueTest, ArrayAccessors) {
 }
 
 TEST_F(ValueTest, vector_arithmetic) {
-  // Arithmetic on arrays returns Nil with per-function error messages
+  // Test vector-scalar addition
   Value vec1({Value(1.0), Value(2.0), Value(3.0)});
   Value scalar(5.0);
-
-  // Test vector-scalar addition returns error
   Value result1 = FuncAdd(vec1, scalar);
-  ASSERT_TRUE(result1.IsNil());
-  EXPECT_EQ(result1.GetNil().GetReason(), "Add requires numeric operands");
+  ASSERT_TRUE(result1.IsArray());
+  EXPECT_EQ(result1.ArraySize(), 3);
+  EXPECT_EQ(result1.GetArrayElement(0).GetDouble(), 6.0);
+  EXPECT_EQ(result1.GetArrayElement(1).GetDouble(), 7.0);
+  EXPECT_EQ(result1.GetArrayElement(2).GetDouble(), 8.0);
 
-  // Test scalar-vector addition returns error
+  // Test scalar-vector addition
   Value result2 = FuncAdd(scalar, vec1);
-  ASSERT_TRUE(result2.IsNil());
-  EXPECT_EQ(result2.GetNil().GetReason(), "Add requires numeric operands");
+  ASSERT_TRUE(result2.IsArray());
+  EXPECT_EQ(result2.ArraySize(), 3);
+  EXPECT_EQ(result2.GetArrayElement(0).GetDouble(), 6.0);
+  EXPECT_EQ(result2.GetArrayElement(1).GetDouble(), 7.0);
+  EXPECT_EQ(result2.GetArrayElement(2).GetDouble(), 8.0);
 
-  // Test vector-vector addition returns error
+  // Test vector-vector addition
   Value vec2({Value(10.0), Value(20.0), Value(30.0)});
   Value result3 = FuncAdd(vec1, vec2);
-  ASSERT_TRUE(result3.IsNil());
-  EXPECT_EQ(result3.GetNil().GetReason(), "Add requires numeric operands");
+  ASSERT_TRUE(result3.IsArray());
+  EXPECT_EQ(result3.ArraySize(), 3);
+  EXPECT_EQ(result3.GetArrayElement(0).GetDouble(), 11.0);
+  EXPECT_EQ(result3.GetArrayElement(1).GetDouble(), 22.0);
+  EXPECT_EQ(result3.GetArrayElement(2).GetDouble(), 33.0);
 
-  // Test vector-scalar subtraction returns error
+  // Test vector-scalar subtraction
   Value result4 = FuncSub(vec1, Value(1.0));
-  ASSERT_TRUE(result4.IsNil());
-  EXPECT_EQ(result4.GetNil().GetReason(), "Subtract requires numeric operands");
+  ASSERT_TRUE(result4.IsArray());
+  EXPECT_EQ(result4.ArraySize(), 3);
+  EXPECT_EQ(result4.GetArrayElement(0).GetDouble(), 0.0);
+  EXPECT_EQ(result4.GetArrayElement(1).GetDouble(), 1.0);
+  EXPECT_EQ(result4.GetArrayElement(2).GetDouble(), 2.0);
 
-  // Test vector-scalar multiplication returns error
+  // Test vector-scalar multiplication
   Value result5 = FuncMul(vec1, Value(2.0));
-  ASSERT_TRUE(result5.IsNil());
-  EXPECT_EQ(result5.GetNil().GetReason(), "Multiply requires numeric operands");
+  ASSERT_TRUE(result5.IsArray());
+  EXPECT_EQ(result5.ArraySize(), 3);
+  EXPECT_EQ(result5.GetArrayElement(0).GetDouble(), 2.0);
+  EXPECT_EQ(result5.GetArrayElement(1).GetDouble(), 4.0);
+  EXPECT_EQ(result5.GetArrayElement(2).GetDouble(), 6.0);
 
-  // Test vector-scalar division returns error
+  // Test vector-scalar division
   Value result6 = FuncDiv(vec1, Value(2.0));
-  ASSERT_TRUE(result6.IsNil());
-  EXPECT_EQ(result6.GetNil().GetReason(), "Divide requires numeric operands");
+  ASSERT_TRUE(result6.IsArray());
+  EXPECT_EQ(result6.ArraySize(), 3);
+  EXPECT_EQ(result6.GetArrayElement(0).GetDouble(), 0.5);
+  EXPECT_EQ(result6.GetArrayElement(1).GetDouble(), 1.0);
+  EXPECT_EQ(result6.GetArrayElement(2).GetDouble(), 1.5);
 
-  // Test vector-scalar power returns error
+  // Test vector-scalar power
   Value result7 = FuncPower(vec1, Value(2.0));
-  ASSERT_TRUE(result7.IsNil());
-  EXPECT_EQ(result7.GetNil().GetReason(), "Power requires numeric operands");
+  ASSERT_TRUE(result7.IsArray());
+  EXPECT_EQ(result7.ArraySize(), 3);
+  EXPECT_EQ(result7.GetArrayElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result7.GetArrayElement(1).GetDouble(), 4.0);
+  EXPECT_EQ(result7.GetArrayElement(2).GetDouble(), 9.0);
+
+  // Test length mismatch error
+  Value vec3({Value(1.0), Value(2.0)});
+  Value result8 = FuncAdd(vec1, vec3);
+  ASSERT_TRUE(result8.IsNil());
+  std::string error_msg = result8.GetNil().GetReason();
+  EXPECT_EQ(error_msg, "Length mismatch: vectors have lengths 3 and 2");
 }
 
 TEST_F(ValueTest, ArrayComparison_EqualArrays) {
@@ -511,6 +692,95 @@ TEST_F(ValueTest, ArrayComparison_EqualArrays) {
   EXPECT_TRUE(nested1 == nested2);
 }
 
+TEST_F(ValueTest, ArrayComparison_DifferingElements) {
+  // Test vectors differing in first element
+  Value vec1({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec2({Value(2.0), Value(2.0), Value(3.0)});
+  EXPECT_EQ(Compare(vec1, vec2), Ordering::kLESS);
+  EXPECT_EQ(Compare(vec2, vec1), Ordering::kGREATER);
+  EXPECT_TRUE(vec1 < vec2);
+  EXPECT_TRUE(vec2 > vec1);
+  EXPECT_FALSE(vec1 == vec2);
+  EXPECT_TRUE(vec1 != vec2);
+
+  // Test vectors differing in middle element
+  Value vec3({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec4({Value(1.0), Value(5.0), Value(3.0)});
+  EXPECT_EQ(Compare(vec3, vec4), Ordering::kLESS);
+  EXPECT_EQ(Compare(vec4, vec3), Ordering::kGREATER);
+  EXPECT_TRUE(vec3 < vec4);
+  EXPECT_TRUE(vec4 > vec3);
+
+  // Test vectors differing in last element
+  Value vec5({Value(1.0), Value(2.0), Value(3.0)});
+  Value vec6({Value(1.0), Value(2.0), Value(10.0)});
+  EXPECT_EQ(Compare(vec5, vec6), Ordering::kLESS);
+  EXPECT_EQ(Compare(vec6, vec5), Ordering::kGREATER);
+  EXPECT_TRUE(vec5 < vec6);
+  EXPECT_TRUE(vec6 > vec5);
+
+  // Test vectors with string elements differing
+  Value str_vec1({Value(std::string("a")), Value(std::string("b"))});
+  Value str_vec2({Value(std::string("a")), Value(std::string("c"))});
+  EXPECT_EQ(Compare(str_vec1, str_vec2), Ordering::kLESS);
+  EXPECT_EQ(Compare(str_vec2, str_vec1), Ordering::kGREATER);
+  EXPECT_TRUE(str_vec1 < str_vec2);
+
+  // Test vectors with negative numbers
+  Value neg_vec1({Value(-5.0), Value(2.0)});
+  Value neg_vec2({Value(-3.0), Value(2.0)});
+  EXPECT_EQ(Compare(neg_vec1, neg_vec2), Ordering::kLESS);
+  EXPECT_EQ(Compare(neg_vec2, neg_vec1), Ordering::kGREATER);
+
+  // Test nested vectors differing in inner elements
+  Value nested1(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  Value nested2(
+      {Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(5.0)})});
+  EXPECT_EQ(Compare(nested1, nested2), Ordering::kLESS);
+  EXPECT_EQ(Compare(nested2, nested1), Ordering::kGREATER);
+}
+
+TEST_F(ValueTest, ArrayComparison_DifferingLength) {
+  // Test shorter vector vs longer vector (same prefix)
+  Value short_vec({Value(1.0), Value(2.0)});
+  Value long_vec({Value(1.0), Value(2.0), Value(3.0)});
+  EXPECT_EQ(Compare(short_vec, long_vec), Ordering::kLESS);
+  EXPECT_EQ(Compare(long_vec, short_vec), Ordering::kGREATER);
+  EXPECT_TRUE(short_vec < long_vec);
+  EXPECT_TRUE(long_vec > short_vec);
+  EXPECT_FALSE(short_vec == long_vec);
+  EXPECT_TRUE(short_vec != long_vec);
+
+  // Test empty vector vs non-empty vector
+  Value empty({});
+  Value non_empty({Value(1.0)});
+  EXPECT_EQ(Compare(empty, non_empty), Ordering::kLESS);
+  EXPECT_EQ(Compare(non_empty, empty), Ordering::kGREATER);
+  EXPECT_TRUE(empty < non_empty);
+  EXPECT_TRUE(non_empty > empty);
+
+  // Test vectors of different lengths with different first elements
+  Value vec1({Value(5.0)});
+  Value vec2({Value(1.0), Value(2.0), Value(3.0)});
+  // First element differs (5.0 > 1.0), so length doesn't matter
+  EXPECT_EQ(Compare(vec1, vec2), Ordering::kGREATER);
+  EXPECT_EQ(Compare(vec2, vec1), Ordering::kLESS);
+
+  // Test vectors where shorter has larger elements
+  Value short_large({Value(10.0), Value(20.0)});
+  Value long_small({Value(10.0), Value(20.0), Value(1.0)});
+  // All common elements equal, so shorter < longer
+  EXPECT_EQ(Compare(short_large, long_small), Ordering::kLESS);
+  EXPECT_EQ(Compare(long_small, short_large), Ordering::kGREATER);
+
+  // Test nested vectors with different lengths
+  Value nested_short({Value({Value(1.0)})});
+  Value nested_long({Value({Value(1.0)}), Value({Value(2.0)})});
+  EXPECT_EQ(Compare(nested_short, nested_long), Ordering::kLESS);
+  EXPECT_EQ(Compare(nested_long, nested_short), Ordering::kGREATER);
+}
+
 TEST_F(ValueTest, ArrayComparison_ArrayVsScalar) {
   // Test vector vs scalar comparisons (should be UNORDERED)
   Value vec({Value(1.0), Value(2.0), Value(3.0)});
@@ -522,18 +792,23 @@ TEST_F(ValueTest, ArrayComparison_ArrayVsScalar) {
   // Array vs double
   EXPECT_EQ(Compare(vec, scalar_double), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_double, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_double);   // UNORDERED treated as equal by ==
+  EXPECT_FALSE(vec != scalar_double);  // UNORDERED not treated as != by !=
 
   // Array vs string
   EXPECT_EQ(Compare(vec, scalar_string), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_string, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_string);
 
   // Array vs bool
   EXPECT_EQ(Compare(vec, scalar_bool), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_bool, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_bool);
 
   // Array vs nil
   EXPECT_EQ(Compare(vec, scalar_nil), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_nil, vec), Ordering::kUNORDERED);
+  EXPECT_TRUE(vec == scalar_nil);
 
   // Empty vector vs scalar
   Value empty_vec({});
@@ -577,6 +852,180 @@ TEST_F(ValueTest, ArraySerializationTest) {
   EXPECT_TRUE(vec3.GetArrayElement(0).IsDouble());
   EXPECT_TRUE(vec3.GetArrayElement(1).IsString());
   EXPECT_TRUE(vec3.GetArrayElement(2).IsBool());
+}
+
+// Test vector deserialization from RESP format
+// Note: Full testing requires ValkeyModuleCallReply mocks, which would be
+// done in integration tests. This test verifies the function signature exists.
+TEST_F(ValueTest, ArrayDeserializationSignatureTest) {
+  // Verify the deserialization function is declared and can be called
+  // with nullptr (will return Nil)
+  Value result = DeserializeValueFromResp(nullptr);
+  EXPECT_TRUE(result.IsNil());
+}
+
+// Array-specific function tests
+
+TEST_F(ValueTest, FuncArrayLen_ValidArray) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncArrayLen(vec);
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncArrayLen_EmptyArray) {
+  Value vec = Value(std::vector<Value>{});
+  Value result = FuncArrayLen(vec);
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 0.0);
+}
+
+TEST_F(ValueTest, FuncArrayLen_NotAArray) {
+  Value scalar = Value(42.0);
+  Value result = FuncArrayLen(scalar);
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "vectorlen: operand is not a vector");
+}
+
+TEST_F(ValueTest, FuncArrayAt_ValidIndex) {
+  Value vec = Value({Value(10.0), Value(20.0), Value(30.0)});
+  Value result = FuncArrayAt(vec, Value(1.0));
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 20.0);
+}
+
+TEST_F(ValueTest, FuncArrayAt_FirstElement) {
+  Value vec = Value({Value("first"), Value("second"), Value("third")});
+  Value result = FuncArrayAt(vec, Value(0.0));
+  EXPECT_TRUE(result.IsString());
+  EXPECT_EQ(*result.AsString(), "first");
+}
+
+TEST_F(ValueTest, FuncArrayAt_LastElement) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncArrayAt(vec, Value(2.0));
+  EXPECT_TRUE(result.IsDouble());
+  EXPECT_EQ(result.GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncArrayAt_IndexOutOfBounds) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncArrayAt(vec, Value(10.0));
+  EXPECT_TRUE(result.IsNil());
+  std::string reason = result.GetNil().GetReason();
+  EXPECT_EQ(reason,
+            std::string("Index out of bounds: index 10, vector length 3"));
+}
+
+TEST_F(ValueTest, FuncArrayAt_NegativeIndex) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncArrayAt(vec, Value(-1.0));
+  EXPECT_TRUE(result.IsNil());
+  std::string reason = result.GetNil().GetReason();
+  EXPECT_EQ(reason, "Index out of bounds: index -1, vector length 3");
+}
+
+TEST_F(ValueTest, FuncArrayAt_NotAArray) {
+  Value scalar = Value(42.0);
+  Value result = FuncArrayAt(scalar, Value(0.0));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(),
+            "vectorat: first operand is not a vector");
+}
+
+TEST_F(ValueTest, FuncArrayAt_InvalidIndex) {
+  Value vec = Value({Value(1.0), Value(2.0), Value(3.0)});
+  Value result = FuncArrayAt(vec, Value("not a number"));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "vectorat: index is not an integer");
+}
+
+TEST_F(ValueTest, FuncIsArray_Array) {
+  Value vec = Value({Value(1.0), Value(2.0)});
+  Value result = FuncIsArray(vec);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_TRUE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncIsArray_EmptyArray) {
+  Value vec = Value(std::vector<Value>{});
+  Value result = FuncIsArray(vec);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_TRUE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncIsArray_Scalar) {
+  Value scalar = Value(42.0);
+  Value result = FuncIsArray(scalar);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_FALSE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncIsArray_String) {
+  Value str = Value("hello");
+  Value result = FuncIsArray(str);
+  EXPECT_TRUE(result.IsBool());
+  EXPECT_FALSE(result.GetBool());
+}
+
+TEST_F(ValueTest, FuncFlatten_SingleLevel) {
+  Value nested =
+      Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
+  Value result = FuncFlatten(nested, Value(1.0));
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 4);
+  EXPECT_EQ(result.GetArrayElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetArrayElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetArrayElement(2).GetDouble(), 3.0);
+  EXPECT_EQ(result.GetArrayElement(3).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_MultiLevel) {
+  Value nested =
+      Value({Value({Value({Value(1.0), Value(2.0)}), Value(3.0)}), Value(4.0)});
+  Value result = FuncFlatten(nested, Value(2.0));
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 4);
+  EXPECT_EQ(result.GetArrayElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetArrayElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetArrayElement(2).GetDouble(), 3.0);
+  EXPECT_EQ(result.GetArrayElement(3).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_DepthZero) {
+  Value nested = Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
+  Value result = FuncFlatten(nested, Value(0.0));
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 2);
+  EXPECT_TRUE(result.GetArrayElement(0).IsArray());
+  EXPECT_EQ(result.GetArrayElement(1).GetDouble(), 3.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_MixedScalarsAndArrays) {
+  Value mixed =
+      Value({Value(1.0), Value({Value(2.0), Value(3.0)}), Value(4.0)});
+  Value result = FuncFlatten(mixed, Value(1.0));
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 4);
+  EXPECT_EQ(result.GetArrayElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(result.GetArrayElement(1).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetArrayElement(2).GetDouble(), 3.0);
+  EXPECT_EQ(result.GetArrayElement(3).GetDouble(), 4.0);
+}
+
+TEST_F(ValueTest, FuncFlatten_NotAArray) {
+  Value scalar = Value(42.0);
+  Value result = FuncFlatten(scalar, Value(1.0));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(),
+            "flatten: first operand is not a vector");
+}
+
+TEST_F(ValueTest, FuncFlatten_InvalidDepth) {
+  Value vec = Value({Value(1.0), Value(2.0)});
+  Value result = FuncFlatten(vec, Value("not a number"));
+  EXPECT_TRUE(result.IsNil());
+  EXPECT_EQ(result.GetNil().GetReason(), "flatten: depth is not an integer");
 }
 
 // Nested vector construction tests
@@ -725,50 +1174,113 @@ TEST_F(ValueTest, NestedArray_EmptyInnerArrays) {
 // Operations on nested vectors tests
 
 TEST_F(ValueTest, NestedArray_ScalarFunctionRecursiveApplication) {
-  // Redis compatibility: lower/upper on arrays returns nil
+  // Test that scalar functions recursively apply to nested elements
+  // Create nested vector of strings: [["HELLO", "WORLD"], ["FOO", "BAR"]]
   Value nested =
       Value({Value({Value(std::string("HELLO")), Value(std::string("WORLD"))}),
              Value({Value(std::string("FOO")), Value(std::string("BAR"))})});
 
+  // Apply FuncLower - should recursively lowercase all strings
   Value result = FuncLower(nested);
-  EXPECT_TRUE(result.IsNil());
 
-  Value result2 = FuncUpper(nested);
-  EXPECT_TRUE(result2.IsNil());
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 2);
+
+  // Verify first inner vector
+  Value inner1 = result.GetArrayElement(0);
+  EXPECT_TRUE(inner1.IsArray());
+  EXPECT_EQ(inner1.ArraySize(), 2);
+  EXPECT_EQ(*inner1.GetArrayElement(0).AsString(), "hello");
+  EXPECT_EQ(*inner1.GetArrayElement(1).AsString(), "world");
+
+  // Verify second inner vector
+  Value inner2 = result.GetArrayElement(1);
+  EXPECT_TRUE(inner2.IsArray());
+  EXPECT_EQ(inner2.ArraySize(), 2);
+  EXPECT_EQ(*inner2.GetArrayElement(0).AsString(), "foo");
+  EXPECT_EQ(*inner2.GetArrayElement(1).AsString(), "bar");
 }
 
 TEST_F(ValueTest, NestedArray_MathFunctionRecursiveApplication) {
-  // Math functions on arrays return Nil (can't convert to double)
+  // Test that math functions recursively apply to nested elements
+  // Create nested vector: [[1.5, 2.7], [3.2, 4.9]]
   Value nested =
       Value({Value({Value(1.5), Value(2.7)}), Value({Value(3.2), Value(4.9)})});
 
+  // Apply FuncFloor - should recursively floor all numbers
   Value result = FuncFloor(nested);
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "floor couldn't convert to a double");
 
-  Value result2 = FuncCeil(nested);
-  EXPECT_TRUE(result2.IsNil());
-  EXPECT_EQ(result2.GetNil().GetReason(), "ceil couldn't convert to a double");
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 2);
+
+  // Verify first inner vector
+  Value inner1 = result.GetArrayElement(0);
+  EXPECT_TRUE(inner1.IsArray());
+  EXPECT_EQ(inner1.ArraySize(), 2);
+  EXPECT_EQ(inner1.GetArrayElement(0).GetDouble(), 1.0);
+  EXPECT_EQ(inner1.GetArrayElement(1).GetDouble(), 2.0);
+
+  // Verify second inner vector
+  Value inner2 = result.GetArrayElement(1);
+  EXPECT_TRUE(inner2.IsArray());
+  EXPECT_EQ(inner2.ArraySize(), 2);
+  EXPECT_EQ(inner2.GetArrayElement(0).GetDouble(), 3.0);
+  EXPECT_EQ(inner2.GetArrayElement(1).GetDouble(), 4.0);
 }
 
 TEST_F(ValueTest, NestedArray_ThreeLevelRecursiveApplication) {
-  // Math functions on nested arrays return Nil (can't convert to double)
+  // Test recursive application on 3-level nested vector
+  // Create: [[[1.1, 2.2]], [[3.3, 4.4]]]
   Value nested = Value({Value({Value({Value(1.1), Value(2.2)})}),
                         Value({Value({Value(3.3), Value(4.4)})})});
 
+  // Apply FuncCeil - should recursively ceil all numbers
   Value result = FuncCeil(nested);
-  EXPECT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "ceil couldn't convert to a double");
+
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 2);
+
+  // Navigate to innermost vectors and verify
+  Value level2_1 = result.GetArrayElement(0);
+  EXPECT_TRUE(level2_1.IsArray());
+  Value level3_1 = level2_1.GetArrayElement(0);
+  EXPECT_TRUE(level3_1.IsArray());
+  EXPECT_EQ(level3_1.GetArrayElement(0).GetDouble(), 2.0);
+  EXPECT_EQ(level3_1.GetArrayElement(1).GetDouble(), 3.0);
+
+  Value level2_2 = result.GetArrayElement(1);
+  EXPECT_TRUE(level2_2.IsArray());
+  Value level3_2 = level2_2.GetArrayElement(0);
+  EXPECT_TRUE(level3_2.IsArray());
+  EXPECT_EQ(level3_2.GetArrayElement(0).GetDouble(), 4.0);
+  EXPECT_EQ(level3_2.GetArrayElement(1).GetDouble(), 5.0);
 }
 
 TEST_F(ValueTest, NestedArray_ArithmeticWithScalar) {
-  // Arithmetic on nested arrays returns Nil
+  // Test arithmetic operations on nested vectors with scalar
+  // Create nested vector: [[1, 2], [3, 4]]
   Value nested =
       Value({Value({Value(1.0), Value(2.0)}), Value({Value(3.0), Value(4.0)})});
 
+  // Add scalar to nested vector
   Value result = FuncAdd(nested, Value(10.0));
-  ASSERT_TRUE(result.IsNil());
-  EXPECT_EQ(result.GetNil().GetReason(), "Add requires numeric operands");
+
+  EXPECT_TRUE(result.IsArray());
+  EXPECT_EQ(result.ArraySize(), 2);
+
+  // Verify first inner vector
+  Value inner1 = result.GetArrayElement(0);
+  EXPECT_TRUE(inner1.IsArray());
+  EXPECT_EQ(inner1.ArraySize(), 2);
+  EXPECT_EQ(inner1.GetArrayElement(0).GetDouble(), 11.0);
+  EXPECT_EQ(inner1.GetArrayElement(1).GetDouble(), 12.0);
+
+  // Verify second inner vector
+  Value inner2 = result.GetArrayElement(1);
+  EXPECT_TRUE(inner2.IsArray());
+  EXPECT_EQ(inner2.ArraySize(), 2);
+  EXPECT_EQ(inner2.GetArrayElement(0).GetDouble(), 13.0);
+  EXPECT_EQ(inner2.GetArrayElement(1).GetDouble(), 14.0);
 }
 
 TEST_F(ValueTest, NestedArray_ElementAccess) {
@@ -787,24 +1299,39 @@ TEST_F(ValueTest, NestedArray_ElementAccess) {
   Value elem = row2.GetArrayElement(1);
   EXPECT_TRUE(elem.IsDouble());
   EXPECT_EQ(elem.GetDouble(), 5.0);
+
+  // Test FuncArrayAt on nested structure
+  Value row2_via_func = FuncArrayAt(nested, Value(1.0));
+  EXPECT_TRUE(row2_via_func.IsArray());
+  EXPECT_EQ(row2_via_func.ArraySize(), 3);
+
+  Value elem_via_func = FuncArrayAt(row2_via_func, Value(1.0));
+  EXPECT_TRUE(elem_via_func.IsDouble());
+  EXPECT_EQ(elem_via_func.GetDouble(), 5.0);
 }
 
 TEST_F(ValueTest, NestedArray_ArrayLenOnNestedStructure) {
-  // Test ArraySize on nested vectors
+  // Test FuncArrayLen on nested vectors
   // Create: [[1, 2], [3, 4, 5]]
   Value nested = Value({Value({Value(1.0), Value(2.0)}),
                         Value({Value(3.0), Value(4.0), Value(5.0)})});
 
   // Get length of outer vector
-  EXPECT_EQ(nested.ArraySize(), 2);
+  Value outer_len = FuncArrayLen(nested);
+  EXPECT_TRUE(outer_len.IsDouble());
+  EXPECT_EQ(outer_len.GetDouble(), 2.0);
 
   // Get length of first inner vector
   Value inner1 = nested.GetArrayElement(0);
-  EXPECT_EQ(inner1.ArraySize(), 2);
+  Value inner1_len = FuncArrayLen(inner1);
+  EXPECT_TRUE(inner1_len.IsDouble());
+  EXPECT_EQ(inner1_len.GetDouble(), 2.0);
 
   // Get length of second inner vector
   Value inner2 = nested.GetArrayElement(1);
-  EXPECT_EQ(inner2.ArraySize(), 3);
+  Value inner2_len = FuncArrayLen(inner2);
+  EXPECT_TRUE(inner2_len.IsDouble());
+  EXPECT_EQ(inner2_len.GetDouble(), 3.0);
 }
 
 TEST_F(ValueTest, NestedArray_MixedTypesRecursive) {
@@ -826,6 +1353,21 @@ TEST_F(ValueTest, NestedArray_MixedTypesRecursive) {
   EXPECT_TRUE(inner2.IsArray());
   EXPECT_TRUE(inner2.GetArrayElement(0).IsBool());
   EXPECT_TRUE(inner2.GetArrayElement(1).IsDouble());
+}
+
+// Regression for #1262: large integers must round-trip without precision loss.
+TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
+  EXPECT_EQ(FormatDouble(20260201.0), "20260201");
+  EXPECT_EQ(FormatDouble(20260202.0), "20260202");
+  EXPECT_EQ(FormatDouble(202602011234.0), "202602011234");
+  EXPECT_EQ(FormatDouble(1.0), "1");
+  EXPECT_EQ(FormatDouble(0.5), "0.5");
+  EXPECT_EQ(FormatDouble(0.0), "0");
+  EXPECT_EQ(FormatDouble(-20260201.0), "-20260201");
+  EXPECT_EQ(FormatDouble(-0.5), "-0.5");
+  EXPECT_EQ(FormatDouble(std::numeric_limits<double>::max()),
+            "1.7976931348623157e+308");
+  EXPECT_EQ(Value(20260201.0).AsString().value(), "20260201");
 }
 
 }  // namespace valkey_search::expr

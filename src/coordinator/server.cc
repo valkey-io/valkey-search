@@ -35,6 +35,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/latency_sampler.h"
@@ -49,14 +50,15 @@ namespace valkey_search::coordinator {
 
 CONTROLLED_SIZE_T(ForceRemoteFailCount, 0);
 CONTROLLED_SIZE_T(ForceIndexNotFoundError, 0);
+CONTROLLED_BOOLEAN(ForceServerQueueDepthExceeded, false);
 
-grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
-    grpc::CallbackServerContext* context,
-    const GetGlobalMetadataRequest* request,
-    GetGlobalMetadataResponse* response) {
+grpc::ServerUnaryReactor *Service::GetGlobalMetadata(
+    grpc::CallbackServerContext *context,
+    const GetGlobalMetadataRequest *request,
+    GetGlobalMetadataResponse *response) {
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
-  grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
+  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
   if (!MetadataManager::IsInitialized()) {
     reactor->Finish(grpc::Status(grpc::StatusCode::INTERNAL,
                                  "MetadataManager is not initialized"));
@@ -68,7 +70,7 @@ grpc::ServerUnaryReactor* Service::GetGlobalMetadata(
   }
   vmsdk::RunByMain([reactor, response,
                     latency_sample = std::move(latency_sample)]() mutable {
-    response->set_allocated_metadata(const_cast<GlobalMetadata*>(
+    response->set_allocated_metadata(const_cast<GlobalMetadata *>(
         MetadataManager::Instance().GetGlobalMetadata().release()));
     reactor->Finish(grpc::Status::OK);
     Metrics::GetStats().coordinator_server_get_global_metadata_success_cnt++;
@@ -94,15 +96,15 @@ void RecordSearchMetrics(bool failure,
   }
 }
 
-void SerializeNeighbors(SearchIndexPartitionResponse* response,
-                        const std::vector<indexes::Neighbor>& neighbors) {
-  for (const auto& neighbor : neighbors) {
-    auto* neighbor_proto = response->add_neighbors();
+void SerializeNeighbors(SearchIndexPartitionResponse *response,
+                        const std::vector<indexes::Neighbor> &neighbors) {
+  for (const auto &neighbor : neighbors) {
+    auto *neighbor_proto = response->add_neighbors();
     neighbor_proto->set_key(std::move(*neighbor.external_id));
     neighbor_proto->set_score(neighbor.distance);
     if (neighbor.attribute_contents) {
-      const auto& attribute_contents = neighbor.attribute_contents.value();
-      for (const auto& [identifier, record] : attribute_contents) {
+      const auto &attribute_contents = neighbor.attribute_contents.value();
+      for (const auto &[identifier, record] : attribute_contents) {
         auto contents = neighbor_proto->add_attribute_contents();
         contents->set_identifier(identifier);
         contents->set_content(vmsdk::ToStringView(record.value.get()));
@@ -116,8 +118,8 @@ void SerializeNeighbors(SearchIndexPartitionResponse* response,
 // response.
 class RemoteResponderSearch : public query::SearchParameters {
  public:
-  SearchIndexPartitionResponse* response;
-  grpc::ServerUnaryReactor* reactor;
+  SearchIndexPartitionResponse *response;
+  grpc::ServerUnaryReactor *reactor;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   size_t total_count;
   void QueryCompleteBackground(
@@ -143,7 +145,7 @@ class RemoteResponderSearch : public query::SearchParameters {
     }
     if (cancellation_token->IsCancelled()) {
       reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                       "Search operation cancelled due to timeout"});
+                       std::string(query::kTimeoutMsg)});
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
@@ -172,8 +174,8 @@ grpc::Status Service::PerformSlotConsistencyCheck(
 }
 
 grpc::Status Service::PerformIndexConsistencyCheck(
-    const IndexFingerprintVersion& expected_fingerprint_version,
-    const std::shared_ptr<IndexSchema>& schema) {
+    const IndexFingerprintVersion &expected_fingerprint_version,
+    const std::shared_ptr<IndexSchema> &schema) {
   if (schema->GetFingerprint() != expected_fingerprint_version.fingerprint() ||
       schema->GetVersion() != expected_fingerprint_version.version()) {
     return {grpc::StatusCode::FAILED_PRECONDITION, "Slot fingerprint mismatch"};
@@ -183,8 +185,8 @@ grpc::Status Service::PerformIndexConsistencyCheck(
 
 void Service::EnqueueSearchRequest(
     std::unique_ptr<RemoteResponderSearch> search_operation,
-    vmsdk::ThreadPool* reader_thread_pool, ValkeyModuleCtx* detached_ctx,
-    SearchIndexPartitionResponse* response, grpc::ServerUnaryReactor* reactor,
+    vmsdk::ThreadPool *reader_thread_pool, ValkeyModuleCtx *detached_ctx,
+    SearchIndexPartitionResponse *response, grpc::ServerUnaryReactor *reactor,
     std::unique_ptr<vmsdk::StopWatch> latency_sample) {
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
@@ -204,14 +206,14 @@ void Service::EnqueueSearchRequest(
 
 DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
 
-grpc::ServerUnaryReactor* Service::SearchIndexPartition(
-    grpc::CallbackServerContext* context,
-    const SearchIndexPartitionRequest* request,
-    SearchIndexPartitionResponse* response) {
+grpc::ServerUnaryReactor *Service::SearchIndexPartition(
+    grpc::CallbackServerContext *context,
+    const SearchIndexPartitionRequest *request,
+    SearchIndexPartitionResponse *response) {
   search_index_rpc_requests.Increment();
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
-  grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
+  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
   auto StatusWrapper = [&]() -> absl::Status {
     auto search_operation = std::make_unique<RemoteResponderSearch>();
     VMSDK_RETURN_IF_ERROR(GRPCSearchRequestToParameters(
@@ -231,6 +233,15 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
           PerformSlotConsistencyCheck(request->slot_fingerprint())));
     }
     // Consistency checks passed, now enqueue the search
+    // Server-side queue depth check: reject partition requests when the reader
+    // thread pool is overloaded. Without this, coordinators keep sending work
+    // to an already-saturated node while its pair in the shard sits idle.
+    auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
+    if (configured_limit > 0 && (ForceServerQueueDepthExceeded.GetValue() ||
+                                 reader_thread_pool_->QueueSize() >=
+                                     static_cast<size_t>(configured_limit))) {
+      return absl::ResourceExhaustedError(query::kQueueDepthMsg);
+    }
     EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
                          detached_ctx_.get(), response, reactor,
                          std::move(latency_sample));
@@ -246,7 +257,7 @@ grpc::ServerUnaryReactor* Service::SearchIndexPartition(
 
 std::pair<grpc::Status, coordinator::InfoIndexPartitionResponse>
 Service::GenerateInfoResponse(
-    const coordinator::InfoIndexPartitionRequest& request) {
+    const coordinator::InfoIndexPartitionRequest &request) {
   vmsdk::VerifyMainThread();
   uint32_t db_num = request.db_num();
   std::string index_name = request.index_name();
@@ -329,8 +340,8 @@ Service::GenerateInfoResponse(
   response.set_mutation_queue_size(data.mutation_queue_size);
   response.set_recent_mutations_queue_delay(data.recent_mutations_queue_delay);
   response.set_state(data.state);
-  for (const auto& [alias, attr] : schema->GetAttributes()) {
-    auto* attr_info = response.add_attributes();
+  for (const auto &[alias, attr] : schema->GetAttributes()) {
+    auto *attr_info = response.add_attributes();
     attr_info->set_identifier(attr.GetIdentifier());
     attr_info->set_alias(alias);
     attr_info->set_user_indexed_memory(schema->GetSize(alias));
@@ -339,13 +350,13 @@ Service::GenerateInfoResponse(
   return std::make_pair(grpc::Status::OK, response);
 }
 
-grpc::ServerUnaryReactor* Service::InfoIndexPartition(
-    grpc::CallbackServerContext* context,
-    const InfoIndexPartitionRequest* request,
-    InfoIndexPartitionResponse* response) {
+grpc::ServerUnaryReactor *Service::InfoIndexPartition(
+    grpc::CallbackServerContext *context,
+    const InfoIndexPartitionRequest *request,
+    InfoIndexPartitionResponse *response) {
   GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
-  grpc::ServerUnaryReactor* reactor = context->DefaultReactor();
+  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
   // simulate grpc failure for testing only
   if (ForceRemoteFailCount.GetValue() > 0) {
     ForceRemoteFailCount.Decrement();
@@ -369,7 +380,7 @@ ServerImpl::ServerImpl(std::unique_ptr<Service> coordinator_service,
       port_(port) {}
 
 std::unique_ptr<Server> ServerImpl::Create(
-    ValkeyModuleCtx* ctx, vmsdk::ThreadPool* reader_thread_pool,
+    ValkeyModuleCtx *ctx, vmsdk::ThreadPool *reader_thread_pool,
     uint16_t port) {
   std::string server_address = absl::StrCat("[::]:", port);
   grpc::EnableDefaultHealthCheckService(true);
@@ -393,7 +404,7 @@ std::unique_ptr<Server> ServerImpl::Create(
     for (size_t attempt = 2; attempt <= 10; ++attempt) {
       std::string lsof_cmd =
           "lsof -i :" + std::to_string(port) + " 2>/dev/null";
-      FILE* pipe = popen(lsof_cmd.c_str(), "r");
+      FILE *pipe = popen(lsof_cmd.c_str(), "r");
       if (pipe) {
         char buffer[256];
         VMSDK_LOG(WARNING, ctx)

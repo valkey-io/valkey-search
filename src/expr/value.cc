@@ -6,12 +6,14 @@
 
 #include "src/expr/value.h"
 
+#include <charconv>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
 
 #include "src/utils/scanner.h"
+#include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // #define DBG std::cerr
@@ -31,6 +33,11 @@ static bool IsNan(const double& d) {
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }
 
+static bool IsInf(const double& d) {
+  uint64_t v = *(uint64_t*)&d;
+  return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
+}
+
 Value::Value(double d) { value_ = d; }
 
 bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
@@ -47,8 +54,10 @@ bool Value::IsString() const {
 bool Value::IsArray() const { return std::holds_alternative<Array>(value_); }
 
 size_t Value::ArraySize() const {
-  CHECK(IsArray());
-  return std::get<Array>(value_)->size();
+  if (auto vec_ptr = std::get_if<Array>(&value_)) {
+    return (*vec_ptr)->size();
+  }
+  return 0;
 }
 
 bool Value::IsEmptyArray() const {
@@ -87,31 +96,37 @@ std::string FormatDouble(double d) {
       return "nan";
     }
   } else {
-    char storage[50];
-    size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
-    return {storage, output_chars};
+    char storage[32];
+    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d);
+    return {storage, ptr};
   }
 }
 
 std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;
-  } else if (auto result = std::get_if<double>(&value_)) {
+  }
+  if (auto result = std::get_if<double>(&value_)) {
     if (IsNan(*result)) {
       return true;
     }
     return !(*result == 0.0);
-  } else {
-    return false;
   }
-  /* if (std::get_if<absl::string_view>(&value_)) {
-    auto dble = AsDouble();
-    if (dble) {
-      return dble != 0.0;
-    }
-    return std::nullopt;
-  };
-  return std::nullopt; */
+  // 1.2.1 fix: non-empty strings are truthy (matches Redisearch). Pre-1.2.1
+  // every non-numeric value (Nil, both string variants) evaluated to false.
+  // Both string variants share the same counter via a common literal.
+  absl::string_view sv;
+  if (auto p = std::get_if<absl::string_view>(&value_)) {
+    sv = *p;
+  } else if (auto p = std::get_if<std::string>(&value_)) {
+    sv = *p;
+  } else {
+    return false;  // Nil
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "asbool_string_truthy",
+      [&] { return !sv.empty(); },  // new: JS-style truthiness
+      [&] { return false; });       // legacy: always false
 }
 
 std::optional<double> Value::AsDouble() const {
@@ -144,26 +159,26 @@ std::optional<int64_t> Value::AsInteger() const {
   return std::nullopt;
 }
 
-absl::string_view Value::AsStringView() const {
+std::optional<absl::string_view> Value::AsStringView() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result ? "1" : "0";
   } else if (auto result = std::get_if<double>(&value_)) {
     if (!storage_) {
       storage_ = FormatDouble(*result);
     }
-    return *storage_;
+    return absl::string_view(*storage_);
   } else if (auto result = std::get_if<absl::string_view>(&value_)) {
     return *result;
   } else if (auto result = std::get_if<std::string>(&value_)) {
-    return *result;
+    return absl::string_view(*result);
   } else {
-    CHECK(false);
+    return std::nullopt;
   }
 }
 
-std::string Value::AsString() const {
+std::optional<std::string> Value::AsString() const {
   if (auto result = std::get_if<bool>(&value_)) {
-    return *result ? "1" : "0";
+    return std::string(*result ? "1" : "0");
   } else if (auto result = std::get_if<double>(&value_)) {
     return FormatDouble(*result);
   } else if (auto result = std::get_if<absl::string_view>(&value_)) {
@@ -173,7 +188,7 @@ std::string Value::AsString() const {
   } else if (auto result = std::get_if<Value::Array>(&value_)) {
     return "";
   } else {
-    CHECK(false);
+    return std::nullopt;
   }
 }
 
@@ -205,7 +220,8 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
     return os << "Dble(" << std::setprecision(10) << v.AsDouble().value()
               << ")";
   } else if (v.IsString()) {
-    return os << "'" << v.AsStringView() << "'";
+    // IsString() guarantees AsStringView() succeeds.
+    return os << "'" << *v.AsStringView() << "'";
   }
   CHECK(false);
 }
@@ -272,13 +288,17 @@ Ordering Compare(const Value& l, const Value& r) {
 
   // Array comparisons
   if (l.IsArray() && r.IsArray()) {
+    // Lexicographic comparison for array-array
     auto lvec = l.GetArray();
     auto rvec = r.GetArray();
 
+    // Compare element-by-element until mismatch found
     size_t min_size = std::min(lvec->size(), rvec->size());
-    if (min_size > 0) {
-      // Match RediSearch behavior by only comparing first elements
-      return Compare((*lvec)[0], (*rvec)[0]);
+    for (size_t i = 0; i < min_size; ++i) {
+      Ordering cmp = Compare((*lvec)[i], (*rvec)[i]);
+      if (cmp != Ordering::kEQUAL) {
+        return cmp;
+      }
     }
 
     // All elements equal, compare by length
@@ -301,61 +321,224 @@ Ordering Compare(const Value& l, const Value& r) {
     return CompareDoubles(ld.value(), rd.value());
   }
 
-  return CompareStrings(l.AsStringView(), r.AsStringView());
+  // Nil cases were filtered above; both sides have a string representation.
+  return CompareStrings(*l.AsStringView(), *r.AsStringView());
+}
+
+// Vector error message generation functions
+
+static std::string MakeLengthMismatchError(size_t length1, size_t length2) {
+  return "Length mismatch: vectors have lengths " + std::to_string(length1) +
+         " and " + std::to_string(length2);
+}
+
+static std::string MakeIndexOutOfBoundsError(int64_t index, size_t length) {
+  return "Index out of bounds: index " + std::to_string(index) +
+         ", vector length " + std::to_string(length);
+}
+
+static std::string MakeElementError(size_t index, const std::string& reason) {
+  return "Element error at index " + std::to_string(index) + ": " + reason;
+}
+
+// Vector operation helper functions
+
+Value ApplyToElements(const Value::Array vec,
+                      std::function<Value(const Value&)> func) {
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec->size());
+
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result = func((*vec)[i]);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
+}
+
+Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
+                      std::function<Value(const Value&, const Value&)> func,
+                      bool scalar_on_left) {
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec->size());
+
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result =
+        scalar_on_left ? func(scalar, (*vec)[i]) : func((*vec)[i], scalar);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
+}
+
+Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
+                       std::function<Value(const Value&, const Value&)> func) {
+  if (vec1->size() != vec2->size()) {
+    std::string error_msg = MakeLengthMismatchError(vec1->size(), vec2->size());
+    return Value(Value::Nil(error_msg));
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec1->size());
+
+  for (size_t i = 0; i < vec1->size(); ++i) {
+    Value elem_result = func((*vec1)[i], (*vec2)[i]);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
 }
 
 Value FuncAdd(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() + rv.value());
-  } else {
-    return Value(Value::Nil("Add requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() + rv.value());
+    } else {
+      return Value(Value::Nil("Add requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncAdd, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncAdd, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncAdd);
 }
 
 Value FuncSub(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() - rv.value());
-  } else {
-    return Value(Value::Nil("Subtract requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() - rv.value());
+    } else {
+      return Value(Value::Nil("Subtract requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncSub, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncSub, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncSub);
 }
 
 Value FuncMul(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() * rv.value());
-  } else {
-    return Value(Value::Nil("Multiply requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() * rv.value());
+    } else {
+      return Value(Value::Nil("Multiply requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncMul, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncMul, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncMul);
 }
 
 Value FuncDiv(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    if (rv.value() == 0) {
-      return Value(std::nan(""));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      if (rv.value() == 0) {
+        return Value(std::nan(""));
+      } else {
+        return Value(lv.value() / rv.value());
+      }
     } else {
-      return Value(lv.value() / rv.value());
+      return Value(Value::Nil("Divide requires numeric operands"));
     }
-  } else {
-    return Value(Value::Nil("Divide requires numeric operands"));
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncDiv, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncDiv, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncDiv);
 }
 
 Value FuncPower(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(std::pow(lv.value(), rv.value()));
-  } else {
-    return Value(Value::Nil("Power requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(std::pow(lv.value(), rv.value()));
+    } else {
+      return Value(Value::Nil("Power requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncPower, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncPower, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncPower);
 }
 
 Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
@@ -394,97 +577,176 @@ Value FuncLand(const Value& l, const Value& r) {
   }
 }
 
+// Shared "AsDouble failed" return path for unary numeric functions.
+// Pre-1.2.1 path: always returns Nil. 1.2.1 fix: returns NaN for inputs
+// that aren't Nil (typically a non-numeric string like "a"), matching
+// Redisearch's NaN-on-coercion-failure semantics. Nil-typed inputs still
+// propagate as Nil regardless of emulate-release, so layered expressions
+// like `abs(@missing_field)` keep clean Nil propagation.
+static Value NumericUnaryNil(const Value& o, const char* fname) {
+  if (o.IsNil()) {
+    return Value(Value::Nil(fname));
+  }
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "numeric_unary_nan_on_unparsable",
+      [&] { return Value(std::nan("")); },        // new: NaN propagation
+      [&] { return Value(Value::Nil(fname)); });  // legacy: Nil
+}
+
 Value FuncFloor(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncFloor);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("floor couldn't convert to a double"));
+    return NumericUnaryNil(o, "floor couldn't convert to a double");
   }
   return Value(std::floor(*d));
 }
 
 Value FuncCeil(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncCeil);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("ceil couldn't convert to a double"));
+    return NumericUnaryNil(o, "ceil couldn't convert to a double");
   }
   return Value(std::ceil(*d));
 }
 
 Value FuncAbs(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncAbs);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("abs couldn't convert to a double"));
+    return NumericUnaryNil(o, "abs couldn't convert to a double");
   }
   return Value(std::abs(*d));
 }
 
 Value FuncLog(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncLog);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("log couldn't convert to a double"));
+    return NumericUnaryNil(o, "log couldn't convert to a double");
   }
   return Value(std::log(*d));
 }
 
 Value FuncLog2(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncLog2);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("log2 couldn't convert to a double"));
+    return NumericUnaryNil(o, "log2 couldn't convert to a double");
   }
   return Value(std::log2(*d));
 }
 
 Value FuncExp(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncExp);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("exp couldn't convert to a double"));
+    return NumericUnaryNil(o, "exp couldn't convert to a double");
   }
   return Value(std::exp(*d));
 }
 
 Value FuncSqrt(const Value& o) {
+  if (o.IsArray()) {
+    return ApplyToElements(o.GetArray(), FuncSqrt);
+  }
   auto d = o.AsDouble();
   if (!d) {
-    return Value(Value::Nil("sqrt couldn't convert to a double"));
+    return NumericUnaryNil(o, "sqrt couldn't convert to a double");
   }
   return Value(std::sqrt(*d));
 }
 
 Value FuncStrlen(const Value& o) {
   if (o.IsArray()) {
-    return Value();
+    return ApplyToElements(o.GetArray(), FuncStrlen);
   }
-  return Value(double(o.AsStringView().size()));
+  auto os = o.AsStringView();
+  if (!os) {
+    return Value(Value::Nil("strlen: operand has no string representation"));
+  }
+  return Value(double(os->size()));
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
-  if (l.IsArray() || r.IsArray()) {
-    return Value();
+  bool l_is_vec = l.IsArray();
+  bool r_is_vec = r.IsArray();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetArray(), r, FuncStartswith, false);
   }
+
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetArray(), l, FuncStartswith, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetArray(), r.GetArray(), FuncStartswith);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
-  if (rs.size() > ls.size()) {
+  if (!ls || !rs) {
+    return Value(
+        Value::Nil("startswith: operand has no string representation"));
+  }
+  if (rs->size() > ls->size()) {
     return Value(false);
   } else {
-    return Value(ls.substr(0, rs.size()) == rs);
+    return Value(ls->substr(0, rs->size()) == *rs);
   }
 }
 
 Value FuncContains(const Value& l, const Value& r) {
-  if (l.IsArray() || r.IsArray()) {
-    return Value();
+  bool l_is_vec = l.IsArray();
+  bool r_is_vec = r.IsArray();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetArray(), r, FuncContains, false);
   }
 
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetArray(), l, FuncContains, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetArray(), r.GetArray(), FuncContains);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
+  if (!ls || !rs) {
+    return Value(Value::Nil("contains: operand has no string representation"));
+  }
   size_t count = 0;
   size_t pos = 0;
-  if (rs.size() == 0) {
-    return Value(double(ls.size() + 1));
+  if (rs->size() == 0) {
+    return Value(double(ls->size() + 1));
   } else {
-    while ((pos = ls.find(rs, pos)) != std::string::npos) {
+    while ((pos = ls->find(*rs, pos)) != std::string::npos) {
       count++;
-      pos += rs.size();
+      pos += rs->size();
     }
     return Value(double(count));
   }
@@ -492,25 +754,29 @@ Value FuncContains(const Value& l, const Value& r) {
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
-    return Value(Value::Nil("Invalid type for substr. Expected string"));
+    return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
   }
 
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
+  if (!ls) {
+    return Value(Value::Nil("substr: source has no string representation"));
+  }
   if (offset_p && length_p) {
-    int64_t offset = *offset_p >= 0 ? *offset_p : *offset_p + ls.size();
-    if (offset > ls.size() || offset < 0 || *length_p == 0) {
+    int64_t offset = *offset_p >= 0 ? *offset_p : *offset_p + ls->size();
+    if (offset > static_cast<int64_t>(ls->size()) || offset < 0 ||
+        *length_p == 0) {
       return Value("");
     } else {
       if (*length_p >= 0) {
-        return Value(std::string(ls.substr(offset, *length_p)));
+        return Value(std::string(ls->substr(offset, *length_p)));
       } else {
-        int64_t len = (ls.size() - offset) + *length_p;
+        int64_t len = (ls->size() - offset) + *length_p;
         if (len < 0) {
           return Value("");
         } else {
-          return Value(std::string(ls.substr(offset, len)));
+          return Value(std::string(ls->substr(offset, len)));
         }
       }
     }
@@ -521,12 +787,23 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 
 Value FuncLower(const Value& o) {
   if (o.IsArray()) {
-    return Value();
+    return ApplyToElements(o.GetArray(), FuncLower);
+  }
+  // 1.2.1 fix: refuse non-string inputs (matches Redisearch — lower(0) → Nil).
+  // Pre-1.2.1: passed numeric/bool through via AsStringView, returning
+  // their string form unchanged.
+  if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 2, 1, "lower_non_string_to_nil",
+                           [] { return true; }, [] { return false; })) {
+    return Value(Value::Nil("lower: operand is not a string"));
   }
   auto os = o.AsStringView();
+  if (!os) {
+    return Value(Value::Nil("lower: operand has no string representation"));
+  }
   std::string result;
-  result.reserve(os.size());
-  utils::Scanner in(os);
+  result.reserve(os->size());
+  utils::Scanner in(*os);
   for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
        utf8 = in.NextUtf8()) {
     if (utf8 < 0x80) {
@@ -539,12 +816,21 @@ Value FuncLower(const Value& o) {
 
 Value FuncUpper(const Value& o) {
   if (o.IsArray()) {
-    return Value();
+    return ApplyToElements(o.GetArray(), FuncUpper);
+  }
+  // See FuncLower above for rationale.
+  if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 2, 1, "upper_non_string_to_nil",
+                           [] { return true; }, [] { return false; })) {
+    return Value(Value::Nil("upper: operand is not a string"));
   }
   auto os = o.AsStringView();
+  if (!os) {
+    return Value(Value::Nil("upper: operand has no string representation"));
+  }
   std::string result;
-  result.reserve(os.size());
-  utils::Scanner in(os);
+  result.reserve(os->size());
+  utils::Scanner in(*os);
   for (auto utf8 = in.NextUtf8(); utf8 != utils::Scanner::kEOF;
        utf8 = in.NextUtf8()) {
     if (utf8 < 0x80) {
@@ -555,41 +841,104 @@ Value FuncUpper(const Value& o) {
   return Value(std::move(result));
 }
 
+// 1.2.1 fix shared by all date functions: pre-epoch (negative) timestamps
+// return Nil instead of computing a (negative) calendar value. Returns true
+// when the new (Nil) behavior should be taken; false to fall through to the
+// legacy path. Single counter for all date functions.
+static bool DateNegativeTsReturnsNil() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "date_fn_negative_ts_to_nil", [] { return true; },
+      [] { return false; });
+}
+
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
   std::string result;
   for (auto& v : values) {
-    result.append(v.AsStringView());
+    auto s = v.AsStringView();
+    if (!s) {
+      return Value(Value::Nil("concat: operand has no string representation"));
+    }
+    result.append(*s);
   }
   return Value(std::move(result));
 }
 
-#define TIME_FUNCTION(funcname, field, adjustment)        \
-  Value funcname(const Value& timestamp) {                \
-    auto ts = timestamp.AsDouble();                       \
-    if (!ts) {                                            \
-      return Value(Value::Nil("timestamp not a number")); \
-    }                                                     \
-    time_t time = (time_t) * ts;                          \
-    struct ::tm tm;                                       \
-    gmtime_r(&time, &tm);                                 \
-    return Value(double(tm.field + (adjustment)));        \
+// Macro for the date-component extractors that still depend on gmtime_r.
+// Guards: timestamp must be a finite number. The negative-timestamp guard
+// is the 1.2.1 fix (gated via DateNegativeTsReturnsNil); the finite guard
+// is always-on UB hardening — restoring it under emulate-release would
+// re-introduce UB at the (time_t) cast / gmtime_r partial-write on
+// overflow.
+#define TIME_FUNCTION(funcname, field, adjustment)               \
+  Value funcname(const Value& timestamp) {                       \
+    auto ts = timestamp.AsDouble();                              \
+    if (!ts) {                                                   \
+      return Value(Value::Nil("timestamp not a number"));        \
+    }                                                            \
+    if (IsNan(*ts) || IsInf(*ts)) {                              \
+      return Value(Value::Nil("timestamp is not finite"));       \
+    }                                                            \
+    if (*ts < 0 && DateNegativeTsReturnsNil()) {                 \
+      return Value(Value::Nil("timestamp is before the epoch")); \
+    }                                                            \
+    time_t time = (time_t) * ts;                                 \
+    struct ::tm tm;                                              \
+    gmtime_r(&time, &tm);                                        \
+    return Value(double(tm.field + (adjustment)));               \
   }
 
-TIME_FUNCTION(FuncDayofweek, tm_wday, 0)
 TIME_FUNCTION(FuncDayofmonth, tm_mday, 0)
 TIME_FUNCTION(FuncDayofyear, tm_yday, 0)
 TIME_FUNCTION(FuncMonthofyear, tm_mon, 0)
 TIME_FUNCTION(FuncYear, tm_year, 1900)
+
+// Pure-arithmetic dayofweek: avoids gmtime_r entirely. Jan 1 1970 (ts=0)
+// was a Thursday — POSIX day index 4 (0=Sun..6=Sat).
+Value FuncDayofweek(const Value& o) {
+  auto tsd = o.AsDouble();
+  if (!tsd) {
+    return Value(Value::Nil("dayofweek: timestamp not a number"));
+  }
+  // Always-on UB hardening: pure-arithmetic implementation propagates
+  // NaN/inf into UB at the int64 cast below, so refuse them here.
+  if (IsNan(*tsd) || IsInf(*tsd)) {
+    return Value(Value::Nil("dayofweek: timestamp is not finite"));
+  }
+  // 1.2.1 fix: pre-epoch → Nil.
+  if (*tsd < 0 && DateNegativeTsReturnsNil()) {
+    return Value(Value::Nil("dayofweek: timestamp is before the epoch"));
+  }
+  int64_t days = static_cast<int64_t>(std::floor(*tsd / 86400.0));
+  // Floored modulo: works correctly even when the < 0 guard is relaxed.
+  int64_t r = ((days + 4) % 7 + 7) % 7;
+  return Value(double(r));
+}
 
 Value FuncTimefmt(const Value& ts, const Value& fmt) {
   auto timestampd = ts.AsDouble();
   if (!timestampd) {
     return Value(Value::Nil("timefmt: timestamp was not a number"));
   }
-  auto fmtstr = fmt.AsStringView();
-  if (fmtstr.empty()) {
-    return Value("");
+  if (IsInf(*timestampd)) {
+    return Value(Value::Nil("timefmt: timestamp is not finite"));
   }
+  // Note: unlike the component extractors (month/day/hour/…), timefmt
+  // happily formats pre-epoch (negative) timestamps to match Redisearch.
+  auto fmtstr = fmt.AsStringView();
+  if (!fmtstr) {
+    return Value(Value::Nil("timefmt: format has no string representation"));
+  }
+  if (fmtstr->empty()) {
+    // 1.2.1 fix: empty format → Nil (matches Redisearch).
+    // Pre-1.2.1: returned an empty string as a fast-path.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 2, 1, "timefmt_empty_format_to_nil",
+        [] { return Value(Value::Nil("timefmt: empty format string")); },
+        [] { return Value(""); });
+  }
+  // strftime needs a NUL-terminated format string. AsStringView() may return
+  // a view into storage that isn't NUL-terminated (e.g. a substring), so copy.
+  std::string fmt_z(*fmtstr);
   struct tm tm;
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
@@ -597,8 +946,8 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
-  while ((result_bytes = strftime(result.data(), result.size(),
-                                  fmt.AsStringView().data(), &tm)) == 0) {
+  while ((result_bytes = strftime(result.data(), result.size(), fmt_z.c_str(),
+                                  &tm)) == 0) {
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);
@@ -608,38 +957,219 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
 Value FuncParsetime(const Value& str, const Value& fmt) {
   auto timestr = str.AsString();  // Ensure 0 terminated
   auto fmtstr = fmt.AsString();
-  struct tm tm;
-  ::strptime(timestr.data(), fmtstr.data(), &tm);
+  if (!timestr || !fmtstr) {
+    return Value(Value::Nil("parsetime: operand has no string representation"));
+  }
+  // Zero-init is always-on: reverting it would restore an uninitialized-tm
+  // read (UB). Without zero-init the result was nondeterministic, so no
+  // user could have depended on it.
+  struct tm tm = {};
+  char* res = ::strptime(timestr->data(), fmtstr->data(), &tm);
+  if (res == nullptr) {
+    // 1.2.1 fix: strptime returning NULL → Nil (matches Redisearch).
+    // Pre-1.2.1: ignored the NULL return and fed the zeroed tm to mktime,
+    // producing a constant -2209075200 (Dec 31 1899 UTC). That happened to
+    // line up with how Redisearch handles _successful_ no-op parses, but
+    // differs for failed parses.
+    if (VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 2, 1, "parsetime_format_mismatch_to_nil", [] { return true; },
+            [] { return false; })) {
+      return Value(Value::Nil("parsetime: format mismatch"));
+    }
+  }
   tm.tm_isdst = -1;  // Don't try to figure out DST, just use UTC
   return Value(double(::mktime(&tm)));
 }
 
-#define TIME_ROUND(func, zero_day, zero_hour, zero_minute)        \
-  Value func(const Value& o) {                                    \
-    auto tsd = o.AsDouble();                                      \
-    if (!tsd) {                                                   \
-      return Value(Value::Nil(#func ": timestamp not a number")); \
-    }                                                             \
-    time_t ts = (time_t)(*tsd);                                   \
-    struct tm tm;                                                 \
-    gmtime_r(&ts, &tm);                                           \
-    tm.tm_sec = 0;                                                \
-    if (zero_day) {                                               \
-      tm.tm_mday = 0;                                             \
-    }                                                             \
-    if (zero_hour) {                                              \
-      tm.tm_hour = 0;                                             \
-    }                                                             \
-    if (zero_minute) {                                            \
-      tm.tm_min = 0;                                              \
-    }                                                             \
-    return Value(double(::mktime(&tm)));                          \
+// Month-rounding: still needs gmtime_r/mktime because month boundaries
+// are not a fixed period (28/29/30/31 days). The finite guard is always-on
+// UB hardening; the negative-ts guard is the 1.2.1 fix.
+Value FuncMonth(const Value& o) {
+  auto tsd = o.AsDouble();
+  if (!tsd) {
+    return Value(Value::Nil("month: timestamp not a number"));
+  }
+  if (IsNan(*tsd) || IsInf(*tsd)) {
+    return Value(Value::Nil("month: timestamp is not finite"));
+  }
+  if (*tsd < 0 && DateNegativeTsReturnsNil()) {
+    return Value(Value::Nil("month: timestamp is before the epoch"));
+  }
+  time_t ts = (time_t)(*tsd);
+  struct tm tm;
+  gmtime_r(&ts, &tm);
+  tm.tm_sec = 0;
+  tm.tm_min = 0;
+  tm.tm_hour = 0;
+  // 1.2.1 fix: tm_mday=1 (first day of the month, matches Redisearch).
+  // Pre-1.2.1: tm_mday=0 which mktime rolls back to the last day of the
+  // previous month — off by 86400 seconds.
+  tm.tm_mday = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "month_mday_off_by_one",
+      [] { return 1; },   // new: first of the month
+      [] { return 0; });  // legacy: rolled back one day
+  return Value(double(::mktime(&tm)));
+}
+
+// Fixed-period rounding: pure arithmetic, no gmtime_r/mktime, no UB on
+// non-finite inputs. Matches Redisearch's arithmetic-style implementation
+// (which is why minute(+inf) returns NaN there).
+//
+// `notnum`, `notfinite`, `negative` are static-storage string literals
+// supplied by each caller — Value::Nil holds a non-owning const char*.
+static Value RoundToPeriod(const Value& o, double period, const char* notnum,
+                           const char* notfinite, const char* negative) {
+  auto tsd = o.AsDouble();
+  if (!tsd) {
+    return Value(Value::Nil(notnum));
+  }
+  if (IsNan(*tsd) || IsInf(*tsd)) {
+    return Value(Value::Nil(notfinite));
+  }
+  // 1.2.1 fix: pre-epoch → Nil.
+  if (*tsd < 0 && DateNegativeTsReturnsNil()) {
+    return Value(Value::Nil(negative));
+  }
+  // floor (not trunc) so negative timestamps still round correctly when
+  // the < 0 guard is relaxed under emulate-release < 1.2.1.
+  return Value(std::floor(*tsd / period) * period);
+}
+
+Value FuncDay(const Value& o) {
+  return RoundToPeriod(o, 86400.0, "day: timestamp not a number",
+                       "day: timestamp is not finite",
+                       "day: timestamp is before the epoch");
+}
+Value FuncHour(const Value& o) {
+  return RoundToPeriod(o, 3600.0, "hour: timestamp not a number",
+                       "hour: timestamp is not finite",
+                       "hour: timestamp is before the epoch");
+}
+Value FuncMinute(const Value& o) {
+  return RoundToPeriod(o, 60.0, "minute: timestamp not a number",
+                       "minute: timestamp is not finite",
+                       "minute: timestamp is before the epoch");
+}
+
+// Vector-specific functions
+
+Value FuncArrayLen(const Value& vec) {
+  if (!vec.IsArray()) {
+    return Value(Value::Nil("vectorlen: operand is not a vector"));
+  }
+  return Value(static_cast<double>(vec.ArraySize()));
+}
+
+Value FuncArrayAt(const Value& vec, const Value& index) {
+  if (!vec.IsArray()) {
+    return Value(Value::Nil("vectorat: first operand is not a vector"));
   }
 
-TIME_ROUND(FuncMonth, true, true, true)
-TIME_ROUND(FuncDay, false, true, true)
-TIME_ROUND(FuncHour, false, false, true)
-TIME_ROUND(FuncMinute, false, false, false)
+  auto idx = index.AsInteger();
+  if (!idx) {
+    return Value(Value::Nil("vectorat: index is not an integer"));
+  }
+
+  size_t vec_size = vec.ArraySize();
+  if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
+    return Value(Value::Nil(MakeIndexOutOfBoundsError(*idx, vec_size)));
+  }
+
+  return vec.GetArrayElement(static_cast<size_t>(*idx));
+}
+
+Value FuncIsArray(const Value& val) { return Value(val.IsArray()); }
+
+Value FuncFlatten(const Value& vec, const Value& depth) {
+  if (!vec.IsArray()) {
+    return Value(Value::Nil("flatten: first operand is not a vector"));
+  }
+
+  auto depth_int = depth.AsInteger();
+  if (!depth_int) {
+    return Value(Value::Nil("flatten: depth is not an integer"));
+  }
+
+  if (*depth_int <= 0) {
+    return vec;
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  auto input_vec = vec.GetArray();
+
+  for (const auto& elem : *input_vec) {
+    if (elem.IsArray() && *depth_int > 0) {
+      // Recursively flatten nested vectors
+      Value flattened =
+          FuncFlatten(elem, Value(static_cast<double>(*depth_int - 1)));
+      if (flattened.IsNil()) {
+        return flattened;  // Propagate error
+      }
+      auto flattened_vec = flattened.GetArray();
+      result->insert(result->end(), flattened_vec->begin(),
+                     flattened_vec->end());
+    } else {
+      result->push_back(elem);
+    }
+  }
+
+  return Value(result);
+}
+
+Value DeserializeValueFromResp(ValkeyModuleCallReply* reply) {
+  if (reply == nullptr) {
+    return Value(Value::Nil("null reply"));
+  }
+
+  int reply_type = ValkeyModule_CallReplyType(reply);
+
+  switch (reply_type) {
+    case VALKEYMODULE_REPLY_NULL: {
+      return Value(Value::Nil("null"));
+    }
+
+    case VALKEYMODULE_REPLY_INTEGER: {
+      long long val = ValkeyModule_CallReplyInteger(reply);
+      return Value(static_cast<double>(val));
+    }
+
+    case VALKEYMODULE_REPLY_STRING: {
+      size_t len;
+      const char* str = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (str == nullptr) {
+        return Value(Value::Nil("invalid string"));
+      }
+      return Value(std::string(str, len));
+    }
+
+    case VALKEYMODULE_REPLY_ARRAY: {
+      size_t array_len = ValkeyModule_CallReplyLength(reply);
+      auto vec = std::make_shared<std::vector<Value>>();
+      vec->reserve(array_len);
+
+      for (size_t i = 0; i < array_len; ++i) {
+        ValkeyModuleCallReply* elem =
+            ValkeyModule_CallReplyArrayElement(reply, i);
+        vec->push_back(DeserializeValueFromResp(elem));
+      }
+
+      return Value(vec);
+    }
+
+    case VALKEYMODULE_REPLY_ERROR: {
+      size_t len;
+      const char* err = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (err == nullptr) {
+        return Value(Value::Nil("error"));
+      }
+      return Value(Value::Nil(err));
+    }
+
+    default: {
+      return Value(Value::Nil("unsupported reply type"));
+    }
+  }
+}
 
 }  // namespace expr
 }  // namespace valkey_search

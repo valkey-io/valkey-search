@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -37,8 +36,8 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/metrics.h"
 #include "src/query/predicate.h"
-#include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -478,15 +477,16 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
             CreateHNSWVectorIndexProto(kVectorDimensions, distance_metric, 1000,
                                        10, 300, 30),
             "vector_attribute_identifier",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
   } else {
-    vector_index = indexes::VectorFlat<float>::Create(
-                       CreateFlatVectorIndexProto(kVectorDimensions,
-                                                  distance_metric, 1000, 250),
-                       "vector_attribute_identifier",
-                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
-                       .value();
+    vector_index =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(kVectorDimensions, distance_metric, 1000,
+                                       250),
+            "vector_attribute_identifier",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
   }
   VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
                                          kVectorAttributeAlias, vector_index));
@@ -992,7 +992,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto vector_index =
             indexes::VectorHNSW<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, vector_index));
@@ -1005,7 +1005,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto flat_index =
             indexes::VectorFlat<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, flat_index));

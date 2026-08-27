@@ -6,10 +6,12 @@
 
 #include "src/expr/value.h"
 
+#include <charconv>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
 
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
@@ -104,11 +106,23 @@ std::string FormatDouble(double d) {
     } else {
       return "nan";
     }
-  } else {
-    char storage[50];
-    size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
-    return {storage, output_chars};
   }
+  char storage[32];
+  // Redisearch renders integral values in fixed notation; shortest-round-trip
+  // to_chars would shorten 1700000000 to "1.7e+09". Above 2^53 integrality is
+  // an artifact of the binary representation, and the fixed expansion of a
+  // value like 1e300 would not fit storage, so cap the fixed path at 1e17 --
+  // still well past epoch microseconds. Everything else keeps to_chars so that
+  // 12+ significant digits survive (#1262).
+  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
+                                   std::chars_format::fixed, 0);
+    CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
+                             << d << ": " << std::make_error_code(ec).message();
+    return {storage, ptr};
+  }
+  auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d);
+  return {storage, ptr};
 }
 
 std::optional<bool> Value::AsBool() const {

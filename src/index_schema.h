@@ -53,7 +53,7 @@ namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
 
-inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+inline absl::Status GenerateIndexNotFoundError(int db_num,
                                                absl::string_view name) {
   return absl::NotFoundError(absl::StrFormat(
       "Index with name '%s' not found in database %d", name, db_num));
@@ -174,7 +174,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
 
   inline const std::string &GetName() const { return name_; }
-  inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline int GetDBNum() const { return db_num_; }
   inline const std::optional<uint16_t> &GetSingleSlotNumber() const {
     return single_slot_number_;
   }
@@ -279,8 +279,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   void MarkAsDestructing();
   bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
-  void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                     indexes::VectorBase *vector_index);
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -348,7 +346,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
   }
 
@@ -421,7 +419,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::vector<std::string> subscribed_key_prefixes_;
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
-  uint32_t db_num_{0};
+  int db_num_{0};
   std::optional<uint16_t> single_slot_number_;
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
   std::string punctuation_;
@@ -457,7 +455,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // For proper sequencing and thread-safety, we separate reads/writes into
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
-  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
 
   struct BackfillJob {
     BackfillJob() = delete;
@@ -476,11 +474,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
-  absl::flat_hash_map<std::string, indexes::VectorBase *>
-      vector_externalizer_subscriptions_;
-  void VectorExternalizer(const Key &key,
-                          absl::string_view attribute_identifier,
-                          vmsdk::UniqueValkeyString &record);
 
   mutable Stats stats_;
 
@@ -509,17 +502,24 @@ class IndexSchema : public KeyspaceEventSubscription,
   bool ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
                                 vmsdk::UniqueValkeyString data,
-                                indexes::DeletionType deletion_type);
+                                indexes::DeletionType deletion_type)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   // Removes the key from every attribute index (and the schema-level text
   // index). Used to implement the Redisearch-compatible behavior of dropping
   // the entire key when any field contains invalid data.
-  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key);
+  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
+  // Checks if a key is known to the schema: in db_key_info_, in-flight in the
+  // mutation tracker, or tracked/untracked by any underlying index.
+  // REQUIRES: Valkey Main Thread.
+  bool IsKeyTracked(const Key &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   bool InTrackedMutationRecords(const Key &key,
                                 const std::string &identifier) const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
@@ -572,8 +572,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
+  FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoadWithVectorSharing);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
+  friend class IndexSchemaFriendTest;
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
+  FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);

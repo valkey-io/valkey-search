@@ -52,9 +52,13 @@ class PostingTest : public ValkeySearchTest {
   void InsertKeyWithPositionMap(const InternedStringPtr& key,
                                 PositionMap&& pos_map, size_t num_fields = 5,
                                 uint32_t doc_len = 0) {
+    uint32_t tf = 0;
+    for (const auto& [_, field_mask] : pos_map) {
+      tf += field_mask.CountSetFields();
+    }
     // Create FlatPositionMap from PositionMap
     FlatPositionMap* flat_map = FlatPositionMap::Create(pos_map, num_fields);
-    postings_->InsertKey(key, flat_map, doc_len);
+    postings_->InsertKey(key, flat_map, tf, doc_len);
   }
 };
 

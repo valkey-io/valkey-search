@@ -485,7 +485,6 @@ size_t Tag::GetUnTrackedKeyCount() const {
 
 size_t Tag::GetTagValueDocCount(absl::string_view value) const {
   std::string norm = Normalize(value);
-  absl::MutexLock lock(&index_mutex_);
   void* slot = nullptr;
   if (raxFind(tree_, reinterpret_cast<unsigned char*>(norm.data()), norm.size(),
               &slot) != 1) {

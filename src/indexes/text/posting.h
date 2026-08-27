@@ -70,10 +70,10 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
-// Btree value: the position map pointer plus mirrors of the key's (immutable)
-// term frequency and document length, co-located so the scoring hot path reads
-// them straight off the merge iterator instead of chasing into the separately
-// allocated FlatPositionMap block (tf) or the per-key scoring map (doc_len).
+// Btree value: the position map pointer plus the key's (immutable) term
+// frequency and document length, co-located so the scoring hot path reads them
+// straight off the merge iterator instead of decoding the separately allocated
+// FlatPositionMap block (tf) or probing the per-key scoring map (doc_len).
 struct PostingValue {
   FlatPositionMap* map;
   uint32_t tf;
@@ -92,8 +92,11 @@ struct Postings {
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Insert the key with FlatPositionMap and the key's document length.
-  void InsertKey(const Key& key, FlatPositionMap* flat_map, uint32_t doc_len);
+  // Insert the key with FlatPositionMap, the key's term frequency for this term
+  // and its document length. tf must equal the total field occurrences in
+  // flat_map; the caller already computes it while building the position map.
+  void InsertKey(const Key& key, FlatPositionMap* flat_map, uint32_t tf,
+                 uint32_t doc_len);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key, TextIndexMetadata* metadata);

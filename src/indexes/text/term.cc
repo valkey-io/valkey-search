@@ -39,9 +39,7 @@ TermIterator::TermIterator(
     const auto stats = text_index_schema_->GetIndexScoringStats();
     if (stats.total_docs > 0) {
       scorer_ = scorer;
-      // total_docs and num_doc_contain_term_ come from separate,
-      // independently-locked counters and can be transiently out of sync, so
-      // clamp to keep dt <= total_docs (matches ResolveLeaves in search.cc).
+      // clamp to keep dt <= total_docs
       idf_ = scorer_->PrecomputeIDF(
           {stats.total_docs,
            std::min(num_doc_contain_term_, stats.total_docs)});
@@ -69,7 +67,7 @@ float TermIterator::GetScore() const {
   }
 
   // F is document-wide: sum the term frequency across every word/field
-  // iterator currently positioned on this key (§5.2).
+  // iterator currently positioned on this key
   uint32_t term_frequency = 0;
   for (size_t idx : current_key_indices_) {
     term_frequency += key_iterators_[idx].GetTermFrequency();

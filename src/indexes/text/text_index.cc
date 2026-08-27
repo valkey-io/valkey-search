@@ -37,7 +37,7 @@ static void FreeStemParentsCallback(void *target) {
 
 InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
                                        const InternedStringPtr &key,
-                                       FlatPositionMap *flat_map,
+                                       FlatPositionMap *flat_map, uint32_t tf,
                                        uint32_t doc_len,
                                        TextIndexMetadata *metadata) {
   InvasivePtr<Postings> postings;
@@ -48,7 +48,7 @@ InvasivePtr<Postings> AddKeyToPostings(InvasivePtr<Postings> existing_postings,
     postings = InvasivePtr<Postings>::Make();
   }
 
-  postings->InsertKey(key, flat_map, doc_len);
+  postings->InsertKey(key, flat_map, tf, doc_len);
   return postings;
 }
 
@@ -235,7 +235,8 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
                                 std::string(token.rbegin(), token.rend()))
                           : std::nullopt;
 
-    // Update metadata from PositionMap
+    // Update metadata from PositionMap. token_freq is this key's term frequency
+    // for this token, so it also seeds the posting entry below.
     metadata_.total_positions += pos_map.size();
     uint32_t token_freq = 0;
     for (const auto &[_, field_mask] : pos_map) {
@@ -262,7 +263,7 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
       bool is_new_word = !existing;
 
       updated_target = AddKeyToPostings(std::move(existing), key, flat_map,
-                                        doc_len, &metadata_);
+                                        token_freq, doc_len, &metadata_);
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);

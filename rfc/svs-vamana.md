@@ -70,7 +70,7 @@ SVS is added as a git submodule under `third_party/svs/` and compiled as an obje
 **Advantages over the prior pre-built runtime model:**
 
 - **Automatic memory tracking:** All SVS C and C++ allocations route through `vmsdk::__wrap_malloc` and the global `operator new` overloads that valkey-search already maintains. These wrappers intercept at link time -- no wrapper boilerplate, no custom allocator interface. SVS memory is immediately visible in `used_memory` and `FT.INFO`.
-- **Removes x86 binary constraint:** The pre-built runtime binary was x86-only by definition. Statically linking SVS from source removes this hard constraint -- ARM64 compatibility becomes architecturally possible via valkey-search's existing `simsimd` layer without requiring ARM-specific optimization work from the Intel.
+- **Removes x86 binary constraint:** The pre-built runtime binary was x86-only by definition. Statically linking SVS from source removes this hard constraint on the deployment artifact. ARM64 is architecturally possible from this integration -- valkey-search's `simsimd` layer already provides ARM distance kernels and the SVS submodule build is not intrinsically x86-only -- but this release does not ship an ARM64 build or an SVS_VAMANA ARM64 smoke test, and no ARM64 target is exercised in CI. Adopters that need ARM64 will need to enable the build, validate an SVS_VAMANA create/add/search/delete cycle on their target, and confirm behavior for their workload before relying on it.
 - **Single self-contained binary:** `libsearch.so` distributes cleanly with no `LD_LIBRARY_PATH` dependencies or runtime `.so` discovery.
 - **Hermetic symbol isolation:** Statically linked SVS symbols remain hidden via `-Wl,--version-script`, eliminating any risk of symbol collision with other Valkey modules.
 - **Unified concurrency:** SVS indexing and search routines are scheduled on valkey-search's existing thread pools (see Thread Ownership section).
@@ -128,12 +128,13 @@ The compression transition uses **copy semantics** to avoid blocking concurrent 
 2. Capability check -- valkey-search verifies the target compression type is built in:
    - FP16/SQ8: always available in the open-source submodule build (this RFC)
    - LVQ/LeanVec: require proprietary backends outside the scope of this RFC; `FT.CREATE` with these types returns an error unless a future proprietary build is loaded
-3. Clone with new storage -- a compressed index is built from a snapshot of the source index. Mutations that complete on the source index after the snapshot is taken are journaled. Searches continue against the original uncompressed index during this phase.
-4. Pre-lock catch-up -- without holding the exclusive lock, valkey-search drains the bulk of the journal into the compressed index. New mutations arriving during this phase continue to be journaled. This step repeats until the remaining journal tail is small enough that replaying it under the lock will complete within the latency bound.
-5. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the bounded remaining journal tail into the compressed index, atomically swaps the index pointer, and releases the lock. The old uncompressed storage is freed.
-6. Memory accounting update -- the freed memory is reflected in `FT.INFO` and per-index byte counters.
+3. Memory admission -- before allocating the clone, valkey-search reserves the projected clone footprint against the tracked-allocator budget. If the reservation would push `used_memory` past `maxmemory` (accounting for the ~2x overlap window), the transition is aborted: the original index is retained, no swap occurs, `FT.INFO` reflects the abort, and searches continue uninterrupted against the uncompressed index.
+4. Clone with new storage -- a compressed index is built from a snapshot of the source index. Mutations that complete on the source index after the snapshot is taken are journaled. Searches continue against the original uncompressed index during this phase.
+5. Pre-lock catch-up -- without holding the exclusive lock, valkey-search drains the bulk of the journal into the compressed index. New mutations arriving during this phase continue to be journaled. This step repeats until the remaining journal tail is small enough that replaying it under the lock will complete within the latency bound.
+6. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the bounded remaining journal tail into the compressed index, atomically swaps the index pointer, and releases the lock. The old uncompressed storage is freed.
+7. Memory accounting update -- the freed memory is reflected in `FT.INFO` and per-index byte counters.
 
-**Hard constraint:** Searches must never block for more than ~10ms during the transition. The pre-lock catch-up phase (step 4) ensures the journal tail replayed under the lock in step 5 is small enough to satisfy this bound. 2x peak memory during the overlap window is acceptable.
+**Hard constraint:** Searches must never block for more than ~10ms during the transition. The pre-lock catch-up phase (step 5) ensures the journal tail replayed under the lock in step 6 is small enough to satisfy this bound. 2x peak memory during the overlap window is acceptable, but only up to the memory-admission bound in step 3.
 
 **Fallback behavior:** If the target compression is unavailable at `FT.CREATE` time (LVQ/LeanVec requested), the command returns an error immediately. Deferred compression transitions within the open-source build target FP16 or SQ8 only.
 
@@ -185,13 +186,13 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
 | DISTANCE_METRIC | enum | -- | L2, IP, COSINE | Distance function for similarity computation |
 | INITIAL_CAP | int | 10240 | -- | Initial capacity hint for memory pre-allocation |
 | GRAPH_MAX_DEGREE | int | 64 | >=2 | Maximum out-degree of each node in the Vamana graph |
-| CONSTRUCTION_WINDOW_SIZE | int | 128 | >=1 | Candidate window size during graph construction |
+| CONSTRUCTION_WINDOW_SIZE | int | 128 | >= GRAPH_MAX_DEGREE | Candidate window size during graph construction. Must be at least GRAPH_MAX_DEGREE so pruning has enough candidates to select GRAPH_MAX_DEGREE edges per node; values below GRAPH_MAX_DEGREE are rejected at `FT.CREATE`. |
 | SEARCH_WINDOW_SIZE | int | 10 | >=1 | Beam width during greedy graph search |
-| ALPHA | float | 1.2 | >0.0; <=1.0 for IP/COSINE | Graph pruning parameter controlling edge diversity |
+| ALPHA | float | 1.2 (L2); 0.95 (IP/COSINE) | L2: `>= 1.0`; IP/COSINE: `< 1.0`. Valid range enforced against the pinned SVS runtime. | Graph pruning parameter controlling edge diversity. For L2, alpha > 1.0 biases the pruner to retain more diverse edges (1.2 is the SVS-recommended default). For IP/COSINE, alpha < 1.0 is required because the metric is a similarity (larger = closer) rather than a distance; 0.95 is the SVS-recommended default. `FT.CREATE` rejects out-of-range values per metric at parse time. |
 | COMPRESSION | enum | NONE | See compression table | Storage backend for vector data |
 | LEANVEC_DIMS | int | -- | >0 and <DIM | Target dimensionality after LeanVec projection. Required for LEANVEC variants. |
 | LEANVEC_TRAINING_THRESHOLD | int | 10000 | >=1 | Number of vectors to buffer before training the LeanVec projection |
-| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | Whether SVS retains the original FP32 vectors alongside its compressed representation. **KEEP**: exact FP32 bytes preserved inside the SVS index; required for full-precision RDB round-trips (Phase 2) after VectorRegistry bytes are no longer available post-restart; prerequisite for a future user-visible vector reconstruction API. **DROP**: only the compressed representation is stored; lower memory footprint; reconstruction uses SVS's approximate decompressed value (lossy for FP16/SQ8/LVQ/LeanVec). Note: the VectorRegistry (PR #1316) holds exact raw bytes for live Valkey keys, but those are not persisted across server restarts. |
+| RAW_VECTOR_STORAGE | enum | KEEP | KEEP, DROP | Whether SVS retains the original FP32 vectors alongside its compressed representation. **KEEP**: exact FP32 bytes preserved inside the SVS index; supports a future user-visible vector reconstruction API without a source-key round-trip. **DROP**: only the compressed representation is stored; lower memory footprint; reconstruction uses SVS's approximate decompressed value (lossy for FP16/SQ8/LVQ/LeanVec). Note: the `VectorRegistry` (PR #1316) holds exact raw bytes for every live Valkey key holding a tracked vector; on RDB load, valkey-search re-opens each key and re-populates the registry via `LoadTrackedKeys` -> `VectorRegistry::Instance().Track` (`vector_base.cc:449-464`), so raw bytes are available after restart for as long as the source key exists in Valkey. `RAW_VECTOR_STORAGE=KEEP` therefore duplicates registry bytes for the live-key case; its primary value is scenarios where the source key is deleted but the SVS entry has not yet been evicted, and future APIs that need in-index reconstruction. |
 
 #### Compression Types
 
@@ -254,7 +255,7 @@ FT.SEARCH my_index "*=>[KNN 10 @vec $query_vec]" PARAMS 2 query_vec <blob>
 
 The recall/latency trade-off is controlled by `SEARCH_WINDOW_SIZE` set at index creation time.
 
-**Hybrid (filtered) queries** -- combining KNN with scalar predicate filters (tag, numeric, text) -- are supported via `svs_index_search_topk` (SVS PR #352, interface updated for production in PR #363). The SVS filter interface (`svs_id_filter_t`) passes an `is_member(id)` callback and a `filter_rate()` function pointer; valkey-search populates the latter from its existing qualified-entry-count estimate in `search.cc`, which also governs the pre-filter FLAT fallback used by both HNSW and SVS (`planner.cc:21-46`, threshold `0.001 * N`).
+**Hybrid (filtered) queries** -- combining KNN with scalar predicate filters (tag, numeric, text) -- are supported via `svs_index_search_topk` (SVS PR #352, interface updated for production in PR #363). The SVS filter interface (`svs_id_filter_t`) passes an `is_member(id)` callback and a `filter_rate()` function pointer that returns the expected selectivity as a fraction in `[0.0, 1.0]` (used by SVS for initial batch sizing as roughly `max(K, 200, 1/filter_rate)`). valkey-search populates `filter_rate()` from its existing qualified-entry-count estimate, converted to a fraction of the tracked vector count -- `static_cast<float>(qualified_entries) / vector_index->GetTrackedKeyCount()` -- guarding zero-sized indexes (return `1.0` or short-circuit before entering the vector index) and clamping the result to `[0.0, 1.0]` to cover estimator overshoot on unioned predicates. The same qualified-entry-count estimate also governs the pre-filter FLAT fallback used by both HNSW and SVS (`planner.cc:21-46`, threshold `0.001 * N`).
 
 The behavioral difference between the two backends at query time is where the filter is applied:
 
@@ -269,8 +270,8 @@ Neither backend implements true edge-gated inline filtering (FilteredDiskANN-sty
 
 The SVS C API provides `save()` / `load()` APIs that serialize the complete DynamicVamana index (graph, vector data, metadata) to a stream.
 
-1. **Save**: An `RDBOstreamAdapter` wraps RDB chunk I/O as a `std::streambuf`, buffering at 4MB boundaries.
-2. **Load**: An `RDBIstreamAdapter` provides the input stream for `DynamicVamanaIndex::load()`. The index is reconstructed with all graph edges, vector data, and compression state intact.
+1. **Save**: An `RDBOstreamAdapter` wraps RDB chunk I/O as a `std::streambuf`, buffering at 4MB boundaries. The SVS-index blob is stored alongside the existing `tracked_key_metadata` records that `VectorBase::SaveTrackedKeys` already emits (internal_id, magnitude, key-attribute identity); no change to that side of the on-disk format.
+2. **Load**: An `RDBIstreamAdapter` provides the input stream for `DynamicVamanaIndex::load()`. The index is reconstructed with all graph edges, vector data, and compression state intact. Immediately before restoring per-key index references, valkey-search runs the existing `LoadTrackedKeys` flow (`vector_base.cc:436-472`) which, for each persisted `(internal_id, key)` pair, re-opens the current key with the module data type, validates the vector payload, and calls `VectorRegistry::Instance().Track` to re-populate the registry. Missing or altered payloads short-circuit the load with a `DataLossError` (`vector_base.cc:460-462`), giving deterministic failure rather than silent divergence between the SVS graph and the live keyspace. The graph itself is loaded only after `VectorRegistry` re-registration completes, so per-node distance recomputation during any post-load consistency check has canonical raw bytes to reference.
 3. **Deferred compression state**: For LeanVec indexes below their training threshold, the pending buffer and training data are serialized alongside the index metadata.
 
 ### Configuration
@@ -297,7 +298,7 @@ Note: `reconstruct_at()` (retrieve a stored vector from the index) is not expose
 
 #### C API Operations
 
-**C API status:** The SVS C API is implemented on the `dev/c-api` branch. PR #363 ("Refactor C API to be ready for the main branch", approved 2026-08-17, open) is the production-readiness refactor that lands on `dev/c-api` before that branch merges to `main`. The submodule pin should target a commit post-PR-#363 merge.
+**C API status:** The SVS C API is implemented on the `dev/c-api` branch. PR #363 ("Refactor C API to be ready for the main branch", approved 2026-08-17, open) is the production-readiness refactor that lands on `dev/c-api` before that branch merges to `main`. The submodule pin is a specific immutable commit SHA (not a branch or tag) drawn from the SVS `main` history after PR #363 merges; the exact SHA is TBD until then and is captured in `third_party/svs`'s gitlink at update time. A CI validation gate accompanies every SVS pin bump: it (a) confirms the required `svs_*` symbols are present in the compiled artifact (`svs_index_build_dynamic`, `svs_index_search_topk`, `svs_index_dynamic_add_points`, `svs_index_dynamic_delete_points`, `svs_index_clone_dynamic`, `svs_index_get_memory_usage`, `svs_get_version`, `svs_get_version_string`), and (b) verifies the versioned struct ABI layout (leading `uint32_t version` + `size_t struct_size` fields on `svs_threadpool_interface_ops`, `svs_id_filter_interface_ops`, `svs_memory_breakdown`) so a mismatched pin fails the build rather than crashing at runtime.
 
 **Forward-compatibility contract (PR #363):** All vtable structs (`svs_threadpool_interface_ops`, `svs_id_filter_interface_ops`, `svs_memory_breakdown`) include `uint32_t version` and `size_t struct_size` as leading fields. The library only writes fields up to the caller-provided `struct_size`, enabling forward compatibility with older compiled binaries. The `svs_get_version()` / `svs_get_version_string()` functions allow valkey-search to verify the linked SVS version at startup. Error codes and `svs_data_type` values carry explicit stability contracts ("existing values are never changed; new values only appended").
 
@@ -456,7 +457,7 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 
 | Gap | Impact | Status | Mitigation |
 |-----|--------|--------|------------|
-| Filter-aware traversal length | HNSW's per-visited-node filter check (`hnswalg.h:550-578`) lets selective predicates extend traversal until `ef` filter-passing candidates are found; SVS's batched post-traversal filter (`filtered_search.hpp:189-218`) runs unfiltered `greedy_search`, applies the filter to the returned batch, and refills. On filters more selective than the `filter_rate` hint, SVS returns an **empty result set** (`svs_c.h:444-446`), where HNSW returns partial results. | Planned upstream contribution to SVS: (a) plumb the predicate through `greedy_search` so filter-passing candidates drive the search-buffer's full-condition, or (b) replace the empty-result early-exit in `filtered_search.hpp` with a partial-result return. Either closes the parity gap. | Pre-filter FLAT fallback (`planner.cc:21-46`, threshold `0.001 * N`) sits above the vector index and handles worst-case selective predicates identically for HNSW and SVS via exact brute-force scan (`vector_base.cc:510-532`); `filter_rate` populated from the same qualified-entry-count estimate. Edge-gated inline filtering (FilteredDiskANN-style) is a separate research-scale change deferred to Future Considerations -- neither backend implements it today. |
+| Filter-aware traversal length | HNSW's per-visited-node filter check (`hnswalg.h:550-578`) lets selective predicates extend traversal until `ef` filter-passing candidates are found; SVS's batched post-traversal filter (`filtered_search.hpp:189-218`) runs unfiltered `greedy_search`, applies the filter to the returned batch, and refills. As a secondary symptom, on filters more selective than the `filter_rate` hint SVS returns an **empty result set** (`svs_c.h:444-446`), where HNSW returns partial results. | Planned upstream contribution to SVS: plumb the predicate through `greedy_search` so filter-passing candidates drive the search-buffer's full-condition -- this is what makes traversal length filter-aware and directly closes the parity gap. A separate, smaller upstream ask -- replacing the empty-result early-exit in `filtered_search.hpp` with a partial-result return -- addresses the empty-result symptom but does not change traversal length; it is worth landing regardless as a semantic fix. | Pre-filter FLAT fallback (`planner.cc:21-46`, threshold `0.001 * N`) sits above the vector index and handles worst-case selective predicates identically for HNSW and SVS via exact brute-force scan (`vector_base.cc:510-532`); `filter_rate` populated from the same qualified-entry-count estimate. Edge-gated inline filtering (FilteredDiskANN-style) is a separate research-scale change deferred to Future Considerations -- neither backend implements it today. |
 | OMP thread over-subscription (PoC) | OpenMP threads conflict with valkey-search's reader/writer pools on high-core machines | Resolved by Phase 5 (submodule + C API threadpool) | Set `--svs-omp-threads 1` to minimize interference; Phase 5 removes OMP entirely |
 | LVQ / LeanVec unavailable | Proprietary compression backends not included in the open-source build | Follow-on (Phase 6) -- see Future Considerations | FP32/FP16/SQ8 cover the majority of use cases; `FT.CREATE` with LVQ/LeanVec returns a clear error |
 
@@ -533,7 +534,11 @@ if(SVS_PRO)
     FetchContent_Declare(svs_pro URL "${SVS_PRO_URL}")
     FetchContent_MakeAvailable(svs_pro)
     list(APPEND CMAKE_PREFIX_PATH "${svs_pro_SOURCE_DIR}")
-    find_package(svs_pro REQUIRED)
+    # SVS exports its CMake package as `svs` (see SVS C++ quickstart);
+    # `svs_pro` above is only the FetchContent handle for the download.
+    find_package(svs REQUIRED)
+    # Link the exported SVS targets into libsearch.so.
+    # target_link_libraries(search PRIVATE svs::svs svs::svs_shared_library)
     # Note: VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES cannot be applied retroactively
     # to pre-compiled objects in the tarball. Memory accounting for SVS PRO uses
     # get_memory_usage() polling via UpdateReportedMemory() after each mutation.
@@ -630,10 +635,17 @@ docker cp .build-release/libsearch.so \
     <container>:/usr/lib/valkey/libsearch.so
 docker restart <container>
 
-# 3b. Replace in a running server (live reload)
+# 3b. Replace on a running server (server restart)
+#     Note: live MODULE UNLOAD / MODULE LOADEX is NOT supported for
+#     valkey-search. The module registers a custom Valkey data type via
+#     ValkeyModule_CreateDataType (src/rdb_serialization.cc:315); Valkey
+#     retains references to the type descriptor, so unloading and reloading
+#     the module invalidates in-memory index handles and can crash the
+#     server. Supported paths are a server restart or rolling replacement:
 cp .build-release/libsearch.so /usr/lib/valkey/libsearch.so
-valkey-cli MODULE UNLOAD search
-valkey-cli MODULE LOADEX /usr/lib/valkey/libsearch.so
+systemctl restart valkey                                # single-node
+# or, for a cluster: replace libsearch.so on each shard's replicas first,
+# fail over, then replace on the former primaries (rolling replacement).
 ```
 
 **Pros:** No valkey-bundle changes; user controls their build; useful as a developer preview path.

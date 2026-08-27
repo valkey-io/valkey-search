@@ -38,7 +38,7 @@ class ObjName;
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
 // Enum for attribute metrics
-enum class AttributeType { ALL, TEXT, TAG, NUMERIC, VECTOR };
+enum class AttributeType : std::uint8_t { ALL, TEXT, TAG, NUMERIC, VECTOR };
 
 class SchemaManager {
  public:
@@ -56,12 +56,12 @@ class SchemaManager {
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::Status ImportIndexSchema(std::shared_ptr<IndexSchema> index_schema)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  absl::Status RemoveIndexSchema(uint32_t db_num, absl::string_view name)
+  absl::Status RemoveIndexSchema(int db_num, absl::string_view name)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
   absl::StatusOr<std::shared_ptr<IndexSchema>> GetIndexSchema(
-      uint32_t db_num, absl::string_view name) const
+      int db_num, absl::string_view name) const
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
-  absl::flat_hash_set<std::string> GetIndexSchemasInDB(uint32_t db_num) const;
+  absl::flat_hash_set<std::string> GetIndexSchemasInDB(int db_num) const;
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;
@@ -104,7 +104,7 @@ class SchemaManager {
                           uint64_t subevent, void *data)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
-  void PopulateFingerprintVersionFromMetadata(uint32_t db_num,
+  void PopulateFingerprintVersionFromMetadata(int db_num,
                                               absl::string_view name,
                                               uint64_t fingerprint,
                                               uint32_t version);
@@ -140,7 +140,7 @@ class SchemaManager {
       ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
   absl::StatusOr<std::shared_ptr<IndexSchema>> RemoveIndexSchemaInternal(
-      uint32_t db_num, absl::string_view name)
+      int db_num, absl::string_view name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   void SubscribeToServerEventsIfNeeded();
@@ -150,8 +150,8 @@ class SchemaManager {
   // is created through copying out the state at the time of the call. Due to
   // this copy - this should not be used in performance critical paths like
   // FT.SEARCH.
-  absl::flat_hash_set<std::string> GetIndexSchemasInDBInternal(uint32_t db_num)
-      const ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+  absl::flat_hash_set<std::string> GetIndexSchemasInDBInternal(int db_num) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   mutable absl::Mutex db_to_index_schemas_mutex_;
   absl::flat_hash_map<
@@ -163,7 +163,7 @@ class SchemaManager {
       uint32_t, absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>>
       staged_db_to_index_schemas_;
   absl::StatusOr<std::shared_ptr<IndexSchema>> LookupInternal(
-      uint32_t db_num, absl::string_view name) const
+      int db_num, absl::string_view name) const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
   vmsdk::MainThreadAccessGuard<bool> staging_indices_due_to_repl_load_ = false;
 

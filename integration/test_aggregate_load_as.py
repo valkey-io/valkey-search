@@ -2,7 +2,7 @@
 
 Honoring `AS <alias>` in the LOAD clause (and accepting a JSON path as the
 loaded field) is a compatibility fix gated behind `search.emulate-release`
->= 1.3 (see COMPATIBILITY.md). These tests run under debug-mode so the
+>= 1.3.0 (see COMPATIBILITY.md). These tests run under debug-mode so the
 emulate-release ceiling can be lifted to the (as yet unreleased) fix version.
 """
 
@@ -126,7 +126,7 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
         assert rows(reply)[0] == {"$.price": b"10"}
 
     def test_load_as_disabled_in_legacy_release(self):
-        """Emulating a pre-1.2.1 release preserves the legacy behavior:
+        """Emulating a pre-1.3.0 release preserves the legacy behavior:
         AS is treated as an (unknown) field name and JSON paths are rejected."""
         client = self._client(emulate_release=LEGACY_RELEASE)
         self._make_hash(client)

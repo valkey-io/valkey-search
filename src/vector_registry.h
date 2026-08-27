@@ -9,17 +9,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <utility>
 
 #include "absl/base/no_destructor.h"
-#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
-#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/sharded_atomic.h"
@@ -29,7 +25,12 @@ namespace valkey_search {
 
 class VectorRegistry {
  public:
-  static VectorRegistry &Instance() { return *InstancePtr(); }
+  static VectorRegistry &Instance() {
+    if (!InstancePtr()) {
+      InstancePtr() = new VectorRegistry();
+    }
+    return *InstancePtr();
+  }
   static void Construct(ValkeyModuleCtx *ctx) {
     Destruct();
     InstancePtr() = new VectorRegistry();
@@ -46,38 +47,19 @@ class VectorRegistry {
   VectorRegistry(const VectorRegistry &) = delete;
   VectorRegistry &operator=(const VectorRegistry &) = delete;
 
-  // Registers or updates a vector record in the registry for deduplication and
-  // external sharing. If vector is nullptr, untracks and removes the record
-  // from the registry for the given key and attribute. Returns the shared
-  // VectorRecord pointer (reusing existing instance if payload matches).
-  std::shared_ptr<indexes::VectorRecord> Track(
-      const InternedStringPtr &key,
-      const InternedStringPtr &attribute_identifier, ValkeyModuleString *vector,
-      Allocator *allocator,
-      const data_model::AttributeDataType &attribute_data_type, int db_num)
-      ABSL_LOCKS_EXCLUDED(mutex_);
-
-  // Retrieves the tracked VectorRecord and raw payload byte size for a given
-  // key and attribute. Increments lookup_record_hits if found, or
-  // lookup_record_misses if not present.
-  std::pair<std::shared_ptr<indexes::VectorRecord>, size_t> LookupRecord(
-      const InternedStringPtr &key,
-      const InternedStringPtr &interned_attribute_identifier, int db_num) const
-      ABSL_LOCKS_EXCLUDED(mutex_);
-
-  // Batch untracks a map of keys if the registry holds the last remaining
-  // reference to each vector record.
-  void BatchUntrackIfUnused(const InternedStringPtr &attribute_identifier,
-                            InternedStringHashMap<indexes::TrackedKeyMetadata>
-                                &&tracked_metadata_by_key,
-                            int db_num) ABSL_LOCKS_EXCLUDED(mutex_);
+  // Registers or deduplicates a vector record in the registry.
+  // Returns VectorRecordWithSize. If hash_vector_sharing_ is false,
+  // constructs a VectorRecord directly.
+  indexes::VectorRecordWithSize DedupOrConstruct(
+      const InternedStringPtr &key, ValkeyModuleString *vector,
+      const data_model::AttributeDataType &attribute_data_type, int db_num,
+      const indexes::VectorBase *vector_base);
 
   struct Stats {
     size_t entry_cnt;
     vmsdk::ShardedAtomic<uint64_t> hash_sharing_errors;
     vmsdk::ShardedAtomic<uint64_t> hash_sharing_hits;
-    vmsdk::ShardedAtomic<uint64_t> lookup_record_hits;
-    vmsdk::ShardedAtomic<uint64_t> lookup_record_misses;
+    vmsdk::ShardedAtomic<uint64_t> dedup_cnt;
   };
   const Stats &GetStats() const;
 
@@ -85,15 +67,9 @@ class VectorRegistry {
 
   bool IsSharingActive() const { return hash_vector_sharing_; }
 
-  // Untracks a vector record entry from the registry if the registry holds the
-  // sole remaining reference (use_count == 1).
-  void UntrackIfUnused(const InternedStringPtr &key,
-                       const InternedStringPtr &interned_attribute_identifier,
-                       int db_num) ABSL_LOCKS_EXCLUDED(mutex_);
-
  private:
   struct RegistryKey {
-    int db_num;
+    int db_num{0};
     InternedStringPtr key;
     InternedStringPtr attribute_identifier;
 
@@ -108,34 +84,14 @@ class VectorRegistry {
     }
   };
 
-  struct RegistryValue {
-    std::shared_ptr<indexes::VectorRecord> vector_record;
-    size_t vector_record_size{0};
-  };
   // Map to track active vector records.
-  absl::flat_hash_map<RegistryKey, RegistryValue> tracked_vectors_
-      ABSL_GUARDED_BY(mutex_);
-  // Cache the last untracked vector to safely handle Valkey RENAME operations.
-  // When Valkey executes RENAME, it fires two sequential events on the main
-  // thread:
-  // 1. A 'del' for the source key (which drops the VectorRecord).
-  // 2. A 'rename_to' (treated as a 'set') for the destination key.
-  // By caching the shared_ptr during the 'del' phase, we prevent the memory
-  // from being freed prematurely (or being freed in a background worker thread
-  // before the main thread can reclaim it). When the subsequent 'set' phase
-  // arrives, we can reuse this cached pointer if the bytes match perfectly,
-  // preventing ASAN heap-use-after-free and preserving the vector reference.
-  struct LastUntracked {
-    std::shared_ptr<indexes::VectorRecord> record;
-    size_t size{0};
-  };
-  LastUntracked last_untracked_ ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<RegistryKey, indexes::VectorRecordWithSize>
+      tracked_vectors_;
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
-  mutable absl::Mutex mutex_;
 
   VectorRegistry() = default;
   ~VectorRegistry() = default;
@@ -152,16 +108,10 @@ class VectorRegistry {
       absl::string_view attribute_identifier,
       const indexes::VectorRecord *vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
-
-  // Reverts external shared vector references in the Valkey engine back to
-  // standard string values prior to untracking.
-  void DetachFromValkey(const RegistryKey &search_key)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
-  // Helper method that checks use_count and untracks an entry while mutex_ is
-  // held.
-  void LockFreeUntrackIfUnused(const RegistryKey &search_key)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  bool IsEraseTrackedRecordSafe(
+      int db_num, const InternedStringPtr &key, absl::string_view vector_str,
+      absl::string_view attribute_identifier,
+      const data_model::AttributeDataType &attribute_data_type);
 };
 
 }  // namespace valkey_search

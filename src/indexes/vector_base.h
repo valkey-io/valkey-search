@@ -43,6 +43,7 @@ enum class QueryOperations : uint64_t;
 }
 
 namespace valkey_search::indexes {
+
 constexpr float kDefaultMagnitude = 1.0f;
 
 class VectorRecord {
@@ -70,6 +71,15 @@ class VectorRecord {
 
   const float reciprocal_magnitude_;
   char data_[0];  // flexible array member
+};
+
+struct VectorRecordWithSize {
+  std::shared_ptr<VectorRecord> vector_record;
+  size_t size{0};
+
+  bool operator==(const VectorRecordWithSize &other) const = default;
+  bool operator==(std::nullptr_t) const { return vector_record == nullptr; }
+  bool operator!=(std::nullptr_t) const { return vector_record != nullptr; }
 };
 
 float CalcReciprocalMagnitude(const float *src, size_t size);
@@ -170,18 +180,19 @@ struct TrackedKeyMetadata {
 class VectorBase : public IndexBase {
  public:
   ~VectorBase() override;
-  absl::StatusOr<indexes::RecordResult> AddRecord(
-      const InternedStringPtr &key, absl::string_view record) override
+  absl::StatusOr<indexes::RecordResult> AddRecord(const InternedStringPtr &key,
+                                                  AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
                                     indexes::DeletionType deletion_type =
                                         indexes::DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<indexes::RecordResult> ModifyRecord(
-      const InternedStringPtr &key, absl::string_view record) override
+      const InternedStringPtr &key, AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
+  int GetDBNum() const { return db_num_; }
   std::unique_ptr<data_model::Index> ToProto() const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
@@ -231,10 +242,13 @@ class VectorBase : public IndexBase {
   virtual size_t GetLabelCount() const { return 0; }
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
   int GetDimensions() const { return dimensions_; }
-  vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
+  vmsdk::UniqueValkeyString NormalizeStringAttribute(
+      vmsdk::UniqueValkeyString attribute) const override;
+  bool IsValidSizeVector(size_t size) const {
+    return size == GetVectorDataSize();
+  }
   bool IsValidSizeVector(absl::string_view record) const {
-    return record.size() == GetVectorDataSize();
+    return IsValidSizeVector(record.size());
   }
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
@@ -308,9 +322,9 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr &key,
-                                      float magnitude,
-                                      const VectorRecord *vector_record)
+  absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
+                                         float magnitude,
+                                         const VectorRecord *vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -330,8 +344,6 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float query_magnitude) const;
-  std::shared_ptr<const VectorRecord> GetOrConstructVectorRecord(
-      const InternedStringPtr &key, absl::string_view record) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

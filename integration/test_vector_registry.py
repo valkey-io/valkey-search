@@ -142,8 +142,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         assert stats["entry_cnt"] == 0
         assert stats["hash_sharing_errors"] == 0
         assert stats["hash_sharing_hits"] == 0
-        assert stats["lookup_record_hits"] == 0
-        assert stats["lookup_record_misses"] == 0
 
         # 2. Ingest a vector and verify increments
         key1 = "doc:1"
@@ -154,34 +152,25 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 1
-        # LookupRecord is called exactly once during AddRecord for the new document
-        assert stats["lookup_record_hits"] == 1
-        assert stats["lookup_record_misses"] == 0
 
         # 3. Update document with the EXACT SAME vector
         client.hset(key1, mapping={"vec": vec_bytes1})
 
         # Since HSET overwrites the reference with a raw string,
-        # Track reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
-        # AddRecord also calls LookupRecord (Hit).
+        # DedupOrConstruct reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 2
-        assert stats["lookup_record_hits"] == 2
-        assert stats["lookup_record_misses"] == 0
 
         # 4. Update document with a DIFFERENT vector
         vec_data2 = [3.0] * dim
         vec_bytes2 = float_to_bytes(vec_data2)
         client.hset(key1, mapping={"vec": vec_bytes2})
 
-        # Track sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
-        # AddRecord calls LookupRecord (Hit).
+        # DedupOrConstruct sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 3
-        assert stats["lookup_record_hits"] == 3
-        assert stats["lookup_record_misses"] == 0
 
         # 5. Delete the document and verify drop in entry count
         client.delete(key1)

@@ -482,10 +482,12 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
-      std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
       index_schema.value()->SetDbMutationSequenceNumber(interned_key, i);
       index_schema.value()->SetIndexMutationSequenceNumber(interned_key, i);
-      VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(index.value().get());
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_base, interned_key, vector));
     }
   }
   const std::string index_name = "my_index";
@@ -775,7 +777,10 @@ class FTSearchMaxLimitTest
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
 
-      VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(index.value().get());
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_base, interned_key, vector));
     }
   }
 

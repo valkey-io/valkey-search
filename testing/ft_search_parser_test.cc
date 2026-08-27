@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -36,6 +37,11 @@
 namespace valkey_search {
 
 namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+
 using testing::TestParamInfo;
 using testing::ValuesIn;
 
@@ -54,7 +60,7 @@ const std::vector<std::pair<bool, absl::string_view>> kLimitOptions = {
     {true, "LIMIT 10 5"}, {false, "LIMIT -10 5"}, {false, "LIMIT 10 -5"},
 };
 
-struct FTSearchParserTestCase {
+struct FTSearchParserTestCase {  // NOLINT
   std::string test_name;
   bool success{false};
   absl::string_view params_str;
@@ -83,7 +89,13 @@ struct FTSearchParserTestCase {
 };
 
 class FTSearchParserTest
-    : public ValkeySearchTestWithParam<FTSearchParserTestCase> {};
+    : public ValkeySearchTestWithParam<FTSearchParserTestCase> {
+ protected:
+  void TearDown() override {
+    SchemaManager::InitInstance(nullptr);
+    ValkeySearchTestWithParam<FTSearchParserTestCase>::TearDown();
+  }
+};
 
 std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
     const std::vector<float> &floats) {
@@ -98,18 +110,21 @@ std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
 }
 
 void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
+                              const std::shared_ptr<IndexSchema> &index_schema,
                               size_t dialect_itr, size_t limit_itr,
                               bool add_end_unexpected_param, bool no_content,
                               std::optional<uint64_t> timeout_ms) {
-  std::cerr << test_case.test_name
-            << " - dialect: " << kDialectOptions[dialect_itr].second
-            << ", limit: " << kLimitOptions[limit_itr].second
-            << ", add_end_unexpected_param: " << add_end_unexpected_param
-            << ", no_content: " << no_content;
-  if (timeout_ms.has_value()) {
-    std::cerr << ", timeout_ms: " << timeout_ms.value();
+  if (IsVerbose()) {
+    std::cerr << test_case.test_name
+              << " - dialect: " << kDialectOptions[dialect_itr].second
+              << ", limit: " << kLimitOptions[limit_itr].second
+              << ", add_end_unexpected_param: " << add_end_unexpected_param
+              << ", no_content: " << no_content;
+    if (timeout_ms.has_value()) {
+      std::cerr << ", timeout_ms: " << timeout_ms.value();
+    }
+    std::cerr << "\n";
   }
-  std::cerr << "\n";
 
   std::vector<float> floats = {0.1, 0.2, 0.3};
   if (test_case.query_blob_num_floats.has_value()) {
@@ -117,48 +132,6 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
   std::vector<ValkeyModuleString *> args;
   const std::string key_str = "my_schema_name";
-  ValkeyModuleCtx fake_ctx;
-  SchemaManager::InitInstance(
-      std::make_unique<TestableSchemaManager>(&fake_ctx));
-  auto index_schema = CreateIndexSchema(key_str, &fake_ctx).value();
-  EXPECT_CALL(
-      *kMockValkeyModule,
-      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
-      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
-      .Times(::testing::AnyNumber())
-      .WillRepeatedly([&index_schema](absl::string_view field) {
-        return index_schema->IndexSchema::GetIdentifier(field);
-      });
-  if (test_case.vector_query) {
-    // Vector index setup
-    data_model::VectorIndex vector_index_proto;
-    vector_index_proto.set_dimension_count(3);
-    vector_index_proto.set_initial_cap(100);
-    vector_index_proto.set_vector_data_type(
-        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
-    auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
-    flat_algorithm_proto->set_block_size(100);
-    vector_index_proto.set_allocated_flat_algorithm(
-        flat_algorithm_proto.release());
-    auto index = indexes::VectorFlat<float>::Create(
-                     vector_index_proto, "attribute_identifier_1",
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
-                     .value();
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex(test_case.attribute_alias, "id1", index));
-  } else {
-    // Non Vector index setup
-    data_model::NumericIndex numeric_index_proto;
-    auto numeric_index =
-        std::make_shared<indexes::Numeric>(numeric_index_proto);
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex("attribute_identifier_1", "id1", numeric_index));
-    data_model::TagIndex tag_index_proto;
-    auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
-  }
   args.push_back(
       ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
   args.push_back(ValkeyModule_CreateString(nullptr, test_case.filter_str.data(),
@@ -221,11 +194,13 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
   auto &schema_manager = SchemaManager::Instance();
 
-  std::cerr << "Executing cmd: ";
-  for (auto &a : args) {
-    std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
+  if (IsVerbose()) {
+    std::cerr << "Executing cmd: ";
+    for (auto &a : args) {
+      std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
+    }
+    std::cerr << "\n";
   }
-  std::cerr << "\n";
 
   // Repro semantics of command startup
   vmsdk::ArgsIterator itr{&args[0], int(args.size())};
@@ -310,8 +285,10 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                 test_case.sortby_order);
     }
   } else {
-    std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
-              << "` Because: " << search_params.status().message() << "\n";
+    if (IsVerbose()) {
+      std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
+                << "` Because: " << search_params.status().message() << "\n";
+    }
     if (!test_case.expected_error_message.empty() &&
         !search_params.status().message().starts_with(
             test_case.expected_error_message)) {
@@ -331,8 +308,10 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
             "`DIALEC"));
       } else {
         EXPECT_TRUE(add_end_unexpected_param || !test_case.success);
-        std::cerr << "Status Message: " << search_params.status().message()
-                  << "\n";
+        if (IsVerbose()) {
+          std::cerr << "Status Message: " << search_params.status().message()
+                    << "\n";
+        }
         EXPECT_TRUE(search_params.status().message().starts_with(
             "Error parsing vector similarity parameters"));
       }
@@ -343,10 +322,59 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
 }
 
+std::shared_ptr<IndexSchema> SetupIndexSchemaForTestCase(
+    const FTSearchParserTestCase &test_case, ValkeyModuleCtx *ctx) {
+  const std::string key_str = "my_schema_name";
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(ctx));
+  auto index_schema = CreateIndexSchema(key_str, ctx).value();
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber())
+      .WillRepeatedly(
+          [schema_ptr = index_schema.get()](absl::string_view field) {
+            return schema_ptr->IndexSchema::GetIdentifier(field);
+          });
+  if (test_case.vector_query) {
+    // Vector index setup
+    data_model::VectorIndex vector_index_proto;
+    vector_index_proto.set_dimension_count(3);
+    vector_index_proto.set_initial_cap(100);
+    vector_index_proto.set_vector_data_type(
+        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+    auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
+    flat_algorithm_proto->set_block_size(100);
+    vector_index_proto.set_allocated_flat_algorithm(
+        flat_algorithm_proto.release());
+    auto index = indexes::VectorFlat<float>::Create(
+                     vector_index_proto, "attribute_identifier_1",
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                     .value();
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+  } else {
+    // Non Vector index setup
+    data_model::NumericIndex numeric_index_proto;
+    auto numeric_index =
+        std::make_shared<indexes::Numeric>(numeric_index_proto);
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_identifier_1", "id1", numeric_index));
+    data_model::TagIndex tag_index_proto;
+    auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
+  }
+  return index_schema;
+}
+
 TEST_P(FTSearchParserTest, Parse) {
   const FTSearchParserTestCase &test_case = GetParam();
+  auto index_schema = SetupIndexSchemaForTestCase(test_case, &fake_ctx_);
   if (!test_case.success || !test_case.search_parameters_str.empty()) {
-    DoVectorSearchParserTest(test_case, 0, 0, false, false, std::nullopt);
+    DoVectorSearchParserTest(test_case, index_schema, 0, 0, false, false,
+                             std::nullopt);
     return;
   }
   for (size_t dialect_itr = 0; dialect_itr < kDialectOptions.size();
@@ -355,16 +383,16 @@ TEST_P(FTSearchParserTest, Parse) {
       for (bool add_end_unexpected_param : {false, true}) {
         for (bool no_content : {false, true}) {
           for (uint64_t timeout_ms : {100, 200}) {
-            DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
-                                     add_end_unexpected_param, no_content,
-                                     timeout_ms);
+            DoVectorSearchParserTest(test_case, index_schema, dialect_itr,
+                                     limit_itr, add_end_unexpected_param,
+                                     no_content, timeout_ms);
           }
-          DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
-                                   add_end_unexpected_param, no_content,
-                                   std::nullopt);
-          DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
-                                   add_end_unexpected_param, no_content,
-                                   query::kMaxTimeoutMs + 1);
+          DoVectorSearchParserTest(test_case, index_schema, dialect_itr,
+                                   limit_itr, add_end_unexpected_param,
+                                   no_content, std::nullopt);
+          DoVectorSearchParserTest(test_case, index_schema, dialect_itr,
+                                   limit_itr, add_end_unexpected_param,
+                                   no_content, query::kMaxTimeoutMs + 1);
         }
       }
     }

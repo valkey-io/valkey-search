@@ -6,12 +6,19 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
-#include <algorithm>
-#include <random>
+#include <cstdlib>
+#include <iostream>
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "vmsdk/src/testing_infra/utils.h"
+
+namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+}  // namespace
 
 namespace valkey_search {
 namespace aggregate {
@@ -21,7 +28,9 @@ struct FakeIndexInterface : public IndexInterface {
   absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view fld_name) const override {
     std::string field_name(fld_name);
-    std::cout << "Fake make reference " << field_name << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake make reference " << field_name << "\n";
+    }
     auto itr = fields_.find(field_name);
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -32,13 +41,17 @@ struct FakeIndexInterface : public IndexInterface {
   }
   absl::StatusOr<std::string> GetIdentifier(
       absl::string_view alias) const override {
-    std::cout << "Fake get identifier for " << alias << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get identifier for " << alias << "\n";
+    }
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto type, GetFieldType(alias));
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(
       absl::string_view identifier) const override {
-    std::cout << "Fake get alias for " << identifier << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get alias for " << identifier << "\n";
+    }
     auto itr = fields_.find(std::string(identifier));
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -441,7 +454,9 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
-      for (auto *str : argv) ValkeyModule_FreeString(nullptr, str);
+      for (auto *str : argv) {
+        ValkeyModule_FreeString(nullptr, str);
+      }
       continue;
     }
     auto param = MakeStages(tc.text_);

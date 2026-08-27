@@ -137,7 +137,7 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
   }
   for (const auto &neighbor : expected_neighbors) {
     EXPECT_CALL(data_type,
-                FetchAllRecords(
+                FetchAllAttributes(
                     &fake_ctx, std::make_optional(parameters.attribute_alias),
                     testing::_, absl::string_view(*neighbor.external_id),
                     expected_fetched_identifiers))
@@ -210,12 +210,12 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
     return data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
   });
 
-  // Mock FetchAllRecords to return different sized content
+  // Mock FetchAllAttributes to return different sized content
   EXPECT_CALL(
       data_type,
-      FetchAllRecords(&fake_ctx, std::make_optional(parameters.attribute_alias),
-                      testing::_, absl::string_view("small_content_id"),
-                      testing::_))
+      FetchAllAttributes(
+          &fake_ctx, std::make_optional(parameters.attribute_alias), testing::_,
+          absl::string_view("small_content_id"), testing::_))
       .WillOnce([](ValkeyModuleCtx *ctx,
                    const std::optional<std::string> &query_attribute_alias,
                    ValkeyModuleKey *open_key, absl::string_view key,
@@ -234,9 +234,9 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 
   EXPECT_CALL(
       data_type,
-      FetchAllRecords(&fake_ctx, std::make_optional(parameters.attribute_alias),
-                      testing::_, absl::string_view("large_content_id"),
-                      testing::_))
+      FetchAllAttributes(
+          &fake_ctx, std::make_optional(parameters.attribute_alias), testing::_,
+          absl::string_view("large_content_id"), testing::_))
       .WillOnce([test_size_limit](
                     ValkeyModuleCtx *ctx,
                     const std::optional<std::string> &query_attribute_alias,
@@ -255,7 +255,7 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
       });
 
   EXPECT_CALL(data_type,
-              FetchAllRecords(
+              FetchAllAttributes(
                   &fake_ctx, std::make_optional(parameters.attribute_alias),
                   testing::_, absl::string_view("many_fields_id"), testing::_))
       .WillOnce([](ValkeyModuleCtx *ctx,
@@ -598,7 +598,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplySelectsCorrectDB) {
 
     // Expect fetch
     EXPECT_CALL(data_type,
-                FetchAllRecords(
+                FetchAllAttributes(
                     &fake_ctx, std::make_optional(parameters.attribute_alias),
                     testing::_, absl::string_view("key"), testing::_))
         .WillOnce(testing::Return(RecordsMap{}));
@@ -646,7 +646,7 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
         .WillOnce(testing::Return(VALKEYMODULE_OK));
 
     EXPECT_CALL(data_type,
-                FetchAllRecords(
+                FetchAllAttributes(
                     &fake_ctx, std::make_optional(parameters.attribute_alias),
                     testing::_, absl::string_view("key"), expected_identifiers))
         .WillOnce(testing::Return(RecordsMap{}));

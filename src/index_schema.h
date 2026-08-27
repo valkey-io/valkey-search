@@ -28,6 +28,7 @@
 #include "absl/time/time.h"
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
+#include "src/attribute_data.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
@@ -254,12 +255,10 @@ class IndexSchema : public KeyspaceEventSubscription,
                                   const Key &key,
                                   vmsdk::StopWatch *delay_capturer);
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
+  using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {
-    struct AttributeData {
-      vmsdk::UniqueValkeyString data;
-      indexes::DeletionType deletion_type{indexes::DeletionType::kNone};
-    };
-    std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
+    using AttributeData = valkey_search::AttributeData;
+    MutatedAttributes attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
@@ -270,8 +269,6 @@ class IndexSchema : public KeyspaceEventSubscription,
     bool from_multi{false};
     float document_score{kDefaultDocumentScore};
   };
-  using MutatedAttributes =
-      absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
   vmsdk::TimeSlicedMRMWMutex &GetTimeSlicedMutex()
       ABSL_LOCK_RETURNED(time_sliced_mutex_) {
     return time_sliced_mutex_;
@@ -501,8 +498,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // caller may use to drop the whole key (Redisearch-compatible behavior).
   bool ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
-                                vmsdk::UniqueValkeyString data,
-                                indexes::DeletionType deletion_type)
+                                AttributeData &&data)
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   // Removes the key from every attribute index (and the schema-level text
   // index). Used to implement the Redisearch-compatible behavior of dropping

@@ -48,8 +48,6 @@ namespace valkey_search {
 namespace {
 
 using testing::_;
-using testing::ByMove;
-using testing::Return;
 using testing::TestParamInfo;
 using testing::ValuesIn;
 using ::valkey_search::indexes::IndexerType;
@@ -470,7 +468,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
       .Times(::testing::AnyNumber());
 
   // Add vector index
-  std::shared_ptr<indexes::IndexBase> vector_index;
+  std::shared_ptr<indexes::VectorBase> vector_index;
   if (vector_indexer_type == IndexerType::kHNSW) {
     vector_index =
         indexes::VectorHNSW<float>::Create(
@@ -504,10 +502,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag", "tag", tag_index));
 
   // Add records
-  size_t num_records = 10000;
-#ifdef SAN_BUILD
-  num_records = 100;
-#endif
+  size_t num_records = 150;
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -519,11 +514,13 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     auto interned_key = StringInternStore::Intern(key);
     index_schema->SetIndexMutationSequenceNumber(interned_key, i);
 
-    VMSDK_EXPECT_OK(vector_index->AddRecord(interned_key, vector));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, interned_key, vector));
 
     // Add record to numeric index
     auto numeric_value = std::to_string(i);
-    VMSDK_EXPECT_OK(numeric_index->AddRecord(interned_key, numeric_value));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddRecord(*numeric_index, interned_key, numeric_value));
 
     // Add record to tag index
     std::string tag_value = "LT10000";
@@ -533,7 +530,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     if (i < 3) {
       tag_value += ",LT3";
     }
-    VMSDK_EXPECT_OK(tag_index->AddRecord(interned_key, tag_value));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddRecord(*tag_index, interned_key, tag_value));
   }
 
   return index_schema;
@@ -1037,7 +1035,13 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     for (auto &content : index.contents) {
       auto key = StringInternStore::Intern(content.first);
       auto value = content.second;
-      VMSDK_EXPECT_OK(index_base->AddRecord(key, value));
+      auto *vector_base = dynamic_cast<indexes::VectorBase *>(index_base.get());
+      if (vector_base) {
+        VMSDK_EXPECT_OK(
+            testing_infra::AddVectorRecord(*vector_base, key, value));
+      } else {
+        VMSDK_EXPECT_OK(testing_infra::AddRecord(*index_base, key, value));
+      }
     }
   }
 

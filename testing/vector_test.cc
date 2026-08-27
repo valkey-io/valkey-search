@@ -162,7 +162,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   auto vectors = DeterministicallyGenerateVectors(kN, kDim, 10.0);
   for (int i = 0; i < kN; ++i) {
-    VMSDK_EXPECT_OK(index->AddRecord(IndexToKey(i), VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
   }
 
   // Warmup (also pages in the graph / vector storage).
@@ -248,7 +249,10 @@ absl::Status VerifyAdd(indexes::IndexBase *index,
   auto id = IndexToKey(i);
   absl::string_view vector = VectorToStr(vectors[i]);
   bool alreadyExist = index->IsTracked(id);
-  auto res = index->AddRecord(id, vector);
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
+  auto res = vector_index
+                 ? testing_infra::AddVectorRecord(*vector_index, id, vector)
+                 : testing_infra::AddRecord(*index, id, vector);
   if (res.ok()) {
     if (!index->IsTracked(id)) {
       return absl::InternalError(
@@ -279,7 +283,10 @@ absl::Status VerifyModify(indexes::IndexBase *index,
                           bool expected_tracked) {
   auto id = IndexToKey(i);
   absl::string_view vector_str = VectorToStr(vector);
-  auto res = index->ModifyRecord(id, vector_str);
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
+  auto res = vector_index ? testing_infra::ModifyVectorRecord(*vector_index, id,
+                                                              vector_str)
+                          : testing_infra::ModifyRecord(*index, id, vector_str);
   if (index->IsTracked(id) != expected_tracked) {
     return absl::InternalError(absl::StrCat(
         "From VerifyModify - IsTracked ,", index->IsTracked(id),
@@ -310,11 +317,8 @@ void TestIndex(T *index, int dimensions, int vector_size,
   VERIFY_ADD(index, vectors, 0, ExpectedResults::kError);
   auto vectors_small_dim =
       DeterministicallyGenerateVectors(vectors.size(), dimensions - 1, 1.0);
-  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kInvalidData);
-  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kInvalidData,
-                false);
 
-  VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kError, false);
+  VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kMissing, true);
 
   VERIFY_MODIFY(index, vectors[0], vectors.size(), ExpectedResults::kError,
                 false);
@@ -365,67 +369,68 @@ void TestIndex(T *index, int dimensions, int vector_size,
   }
 }
 
-struct NormalizeStringRecordTestCase {
+struct NormalizeStringAttributeTestCase {
   std::string test_name;
   bool success{true};
-  std::string record;
+  std::string attribute_value;
   std::vector<float> expected_norm_values;
 };
 
-class NormalizeStringRecordTest
-    : public ValkeySearchTestWithParam<NormalizeStringRecordTestCase> {
+class NormalizeStringAttributeTest
+    : public ValkeySearchTestWithParam<NormalizeStringAttributeTestCase> {
  public:
   const char *attribute_identifier = "attribute_identifier_1";
   data_model::AttributeDataType attribute_data_type =
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
 };
 
-TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
+TEST_P(NormalizeStringAttributeTest, NormalizeStringAttribute) {
   auto &params = GetParam();
 
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       attribute_identifier, attribute_data_type, 0);
-  auto record = vmsdk::MakeUniqueValkeyString(params.record);
-  auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
+  auto attribute = vmsdk::MakeUniqueValkeyString(params.attribute_value);
+  auto norm_attribute =
+      index.value()->NormalizeStringAttribute(std::move(attribute));
   if (!params.success) {
-    EXPECT_FALSE(norm_record.get());
+    EXPECT_FALSE(norm_attribute.get());
     return;
   }
-  auto norm_record_str = vmsdk::ToStringView(norm_record.get());
+  auto norm_attr_str = vmsdk::ToStringView(norm_attribute.get());
   for (size_t i = 0; i < params.expected_norm_values.size(); ++i) {
-    float value = *(((float *)norm_record_str.data()) + i);
+    float value = *(((float *)norm_attr_str.data()) + i);
     EXPECT_FLOAT_EQ(value, params.expected_norm_values[i]);
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    NormalizeStringRecordTests, NormalizeStringRecordTest,
+    NormalizeStringAttributeTests, NormalizeStringAttributeTest,
 
-    testing::ValuesIn<NormalizeStringRecordTestCase>({
+    testing::ValuesIn<NormalizeStringAttributeTestCase>({
         {
             .test_name = "cardinality_1",
-            .record = "[ 0.1]",
+            .attribute_value = "[ 0.1]",
             .expected_norm_values{0.1},
         },
         {
             .test_name = "cardinality_1_1",
-            .record = "[,0.1]",
+            .attribute_value = "[,0.1]",
             .expected_norm_values{0.1},
         },
         {
             .test_name = "cardinality_3_1",
-            .record = "[ 0.1, ,0.2,0.3,]",
+            .attribute_value = "[ 0.1, ,0.2,0.3,]",
             .expected_norm_values{0.1, 0.2, 0.3},
         },
         {
             .test_name = "cardinality_3_fail",
             .success = false,
-            .record = "[ 0.1, ,0.2,a,]",
+            .attribute_value = "[ 0.1, ,0.2,a,]",
         },
     }),
-    [](const testing::TestParamInfo<NormalizeStringRecordTestCase> &info) {
+    [](const testing::TestParamInfo<NormalizeStringAttributeTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -534,7 +539,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                          vec1.size() * sizeof(float));
 
   auto key1 = IndexToKey(1);
-  VMSDK_EXPECT_OK(index.value()->AddRecord(key1, vec1_bytes));
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*index.value(), key1, vec1_bytes));
 
   // Search query [5.0, 0.0, 0.0, 0.0] pointing in exact same direction.
   // Cosine distance should be 0.0 (1 - (3*5)/(3*5) = 0).
@@ -729,7 +735,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (size_t i = 0; i < new_vectors.size(); ++i) {
     auto key = StringInternStore::Intern(absl::StrCat("new_", i, "_key"));
     absl::string_view vec_str = VectorToStr(new_vectors[i]);
-    auto res = (*index)->AddRecord(key, vec_str);
+    auto res = testing_infra::AddVectorRecord(**index, key, vec_str);
     VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
     EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
   }

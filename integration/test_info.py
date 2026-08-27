@@ -41,8 +41,6 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_string_interning_store_size",
             "search_vector_registry_entry_cnt",
             "search_vector_registry_shared_externally_cnt",
-            "search_vector_registry_get_record_hits",
-            "search_vector_registry_get_record_misses",
             "search_vector_registry_shared_externally_errors",
             "search_vector_registry_sharing_active",
             "search_number_of_attributes",
@@ -167,8 +165,6 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "writer_suspension_expired_cnt",
             "vector_registry_entry_cnt",
             "vector_registry_shared_externally_cnt",
-            "vector_registry_get_record_hits",
-            "vector_registry_get_record_misses",
             "vector_registry_shared_externally_errors",
             "vector_registry_sharing_active",
         }

@@ -24,6 +24,10 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search {
+class AttributeData;
+}  // namespace valkey_search
+
 namespace valkey_search::indexes {
 enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
 
@@ -75,11 +79,11 @@ class IndexBase {
   // was skipped. All three return an error status if there is an unexpected
   // failure.
   virtual absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
-                                                 absl::string_view data) = 0;
+                                                 AttributeData &&data) = 0;
   virtual absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
                                             DeletionType deletion_type) = 0;
   virtual absl::StatusOr<RecordResult> ModifyRecord(
-      const InternedStringPtr &key, absl::string_view data) = 0;
+      const InternedStringPtr &key, AttributeData &&data) = 0;
   virtual int RespondWithInfo(ValkeyModuleCtx *ctx) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
@@ -96,7 +100,7 @@ class IndexBase {
   virtual absl::Status ForEachUnTrackedKey(
       absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
 
-  virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
+  virtual vmsdk::UniqueValkeyString NormalizeStringAttribute(
       vmsdk::UniqueValkeyString input) const {
     return input;
   }

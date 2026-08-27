@@ -171,8 +171,8 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
     def test_backfill_json(self, algo: str, mixed: bool):
         """Backfill of a JSON index over all three vector-field states.
 
-        JSON vectors are not registered (FM-5), so the registry must stay
-        empty while the index itself still fills correctly.
+        JSON vectors are registered and deduplicated in VectorRegistry,
+        while engine hash sharing is skipped.
         """
         index = self.build_index(key_type=KeyDataType.JSON, algo=algo, mixed=mixed)
         self.write_all_field_states(index, mixed)
@@ -180,11 +180,14 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
 
         assert self.knn_hits(index) == 1, "only the valid document indexes"
         assert (
-            self.registry_stat("entry_cnt") == 0
-        ), "JSON vectors cannot be shared and must not be registered"
+            self.registry_stat("entry_cnt") == 1
+        ), "JSON valid vector is tracked and deduplicated in VectorRegistry"
         if mixed:
             assert self.search_count(index, "@num:[5 20]") == 3
             assert self.search_count(index, "@tag:{a}") == 3
+
+        index.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 
     # ---- ingestion -------------------------------------------------------
 
@@ -330,36 +333,31 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
     # ---- RDB load with sharing on ---------------------------------------
 
     @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
-    def test_fm5_json_vectors_stay_unregistered_across_reload(self, algo: str):
-        """FM-5: an RDB load registers JSON vectors that ingestion does not.
-
-        Ingestion skips registration for JSON -- a JSON vector is stored as
-        text and cannot be shared with the engine -- but LoadTrackedKeys
-        normalizes the record first and then calls Track unconditionally.
-
-        Expected: entry_cnt stays 0 across the reload.
-        Observed: it jumps to the indexed-document count. Those entries are
-        never refreshed by later ingestion, and they make JSON indexes reach
-        the DetachFromValkeyHash path behind FM-1.
+    def test_json_vectors_registered_and_retained_across_reload(self, algo: str):
+        """JSON vectors are registered and deduplicated in VectorRegistry,
+        and their registration is preserved across RDB reload without engine sharing.
         """
         index = self.build_index(key_type=KeyDataType.JSON, algo=algo, mixed=True)
         index.create(self.client, wait_for_backfill=True)
         self.write_all_field_states(index, mixed=True)
         self.wait_for_docs(index, 3)
-        assert self.registry_stat("entry_cnt") == 0
+        assert self.registry_stat("entry_cnt") == 1
 
         self.client.execute_command("DEBUG", "RELOAD")
         waiters.wait_for_equal(
             lambda: index.info(self.client).num_docs, 3
         )
 
-        # The index survives the reload intact.
+        # The index survives the reload intact and stays registered.
         assert self.knn_hits(index) == 1
         assert self.search_count(index, "@num:[5 20]") == 3
         assert self.search_count(index, "@tag:{a}") == 3
         assert (
-            self.registry_stat("entry_cnt") == 0
-        ), "RDB load registered JSON vectors that ingestion never registers"
+            self.registry_stat("entry_cnt") == 1
+        ), "RDB load registered JSON vector safely in VectorRegistry"
+
+        index.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 
     @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
     def test_fm6_rdb_reload_reshares_hash_vectors(self, algo: str):
@@ -737,7 +735,410 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         self.client.copy("str_source", doc2, replace=True)
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_multi_index_sharing_and_drop_one_by_one(self, algo: str):
+        """Verify that multiple indexes tracking the same vector field share entries
+        and dropping indexes sequentially cleans up only on the last drop."""
+        idx_a = self.build_index(name="idx_a", algo=algo)
+        idx_b = self.build_index(name="idx_b", algo=algo)
+        idx_a.create(self.client, wait_for_backfill=True)
+        idx_b.create(self.client, wait_for_backfill=True)
 
+        count = 20
+        for i in range(count):
+            self.write_key(idx_a, str(i), [float(i + j) for j in range(DIM)])
+
+        self.wait_for_docs(idx_a, count)
+        self.wait_for_docs(idx_b, count)
+        assert self.registry_stat("entry_cnt") == count
+
+        # Drop the first index; second index is still referencing all entries
+        idx_a.drop(self.client)
+        # Entry count in registry must remain intact because idx_b is still active
+        assert self.registry_stat("entry_cnt") == count
+        self.wait_for_docs(idx_b, count)
+        assert self.knn_hits(idx_b) > 0
+
+        # Drop the second index; all entries must be completely detached and untracked
+        idx_b.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_multi_index_flushdb_cleanup(self, algo: str):
+        """Verify that FLUSHDB completely cleans up registry entries across multiple indexes."""
+        idx_a = self.build_index(name="flush_a", algo=algo)
+        idx_b = self.build_index(name="flush_b", algo=algo)
+        idx_a.create(self.client, wait_for_backfill=True)
+        idx_b.create(self.client, wait_for_backfill=True)
+
+        count = 15
+        for i in range(count):
+            self.write_key(idx_a, str(i), [float(i + j) for j in range(DIM)])
+
+        self.wait_for_docs(idx_a, count)
+        self.wait_for_docs(idx_b, count)
+        assert self.registry_stat("entry_cnt") == count
+
+        self.client.flushdb()
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+        assert len(self.client.execute_command("FT._LIST")) == 0
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_multi_index_concurrent_ingest_and_drop(self, algo: str):
+        """Verify thread safety during concurrent ingestion while dropping an index."""
+        import threading
+
+        idx_a = self.build_index(name="conc_a", algo=algo)
+        idx_b = self.build_index(name="conc_b", algo=algo)
+        idx_a.create(self.client, wait_for_backfill=True)
+        idx_b.create(self.client, wait_for_backfill=True)
+
+        errors = []
+
+        def worker_ingest():
+            try:
+                for i in range(50):
+                    vec = [float(i + j) for j in range(DIM)]
+                    self.client.hset(f"doc:conc_{i}", "vec", float_to_bytes(vec))
+            except Exception as e:
+                errors.append(e)
+
+        t = threading.Thread(target=worker_ingest)
+        t.start()
+
+        # Concurrently drop index A while worker is writing
+        idx_a.drop(self.client)
+
+        t.join()
+        assert not errors, f"Ingestion worker encountered errors: {errors}"
+
+        # Wait for index B to finish indexing all 50 keys
+        self.wait_for_docs(idx_b, 50)
+        assert self.registry_stat("entry_cnt") == 50
+
+        # Drop index B
+        idx_b.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_multi_index_json_sharing_and_drop_one_by_one(self, algo: str):
+        """Verify that multiple JSON indexes tracking the same vector field share entries
+        and dropping indexes sequentially cleans up only on the last drop."""
+        idx_a = self.build_index(name="json_a", key_type=KeyDataType.JSON, algo=algo)
+        idx_b = self.build_index(name="json_b", key_type=KeyDataType.JSON, algo=algo)
+        idx_a.create(self.client, wait_for_backfill=True)
+        idx_b.create(self.client, wait_for_backfill=True)
+
+        initial_hits = self.registry_stat("shared_externally_cnt")
+        count = 10
+        for i in range(count):
+            self.write_key(idx_a, str(i), [float(i + j) for j in range(DIM)])
+
+        self.wait_for_docs(idx_a, count)
+        self.wait_for_docs(idx_b, count)
+        assert self.registry_stat("entry_cnt") == count
+        # Engine hash sharing must not be invoked for JSON
+        assert self.registry_stat("shared_externally_cnt") == initial_hits
+
+        # Drop first index; second index still active
+        idx_a.drop(self.client)
+        assert self.registry_stat("entry_cnt") == count
+        self.wait_for_docs(idx_b, count)
+        assert self.knn_hits(idx_b) > 0
+
+        # Drop second index; entry_cnt cleans up to 0
+        idx_b.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_multi_index_payload_modification_lifecycle(self, algo: str):
+        """Verify that updating a vector payload preserves tracking across multiple schemas."""
+        idx_a = self.build_index(name="mod_a", algo=algo)
+        idx_b = self.build_index(name="mod_b", algo=algo)
+        idx_a.create(self.client, wait_for_backfill=True)
+        idx_b.create(self.client, wait_for_backfill=True)
+
+        count = 10
+        for i in range(count):
+            self.write_key(idx_a, str(i), [float(i + j) for j in range(DIM)])
+        self.wait_for_docs(idx_a, count)
+        self.wait_for_docs(idx_b, count)
+        assert self.registry_stat("entry_cnt") == count
+
+        # Overwrite payload with new vector values
+        for i in range(count):
+            self.write_key(idx_a, str(i), [float((i + j) * 2) for j in range(DIM)])
+
+        # Drop index A; index B must still retain all entries
+        idx_a.drop(self.client)
+        assert self.registry_stat("entry_cnt") == count
+        self.wait_for_docs(idx_b, count)
+        assert self.knn_hits(idx_b) > 0
+
+        # Drop index B; entries clean up to 0
+        idx_b.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_hash_vs_json_sharing_hits_isolation(self, algo: str):
+        """Verify that HASH indexes use engine StringRef sharing while JSON indexes do not,
+        and both register in VectorRegistry."""
+        idx_hash = self.build_index(name="hash_iso", key_type=KeyDataType.HASH, algo=algo)
+        idx_json = self.build_index(name="json_iso", key_type=KeyDataType.JSON, algo=algo)
+        idx_hash.create(self.client, wait_for_backfill=True)
+        idx_json.create(self.client, wait_for_backfill=True)
+
+        count = 10
+        for i in range(count):
+            self.write_key(idx_hash, f"hash_{i}", [float(i + j) for j in range(DIM)])
+        self.wait_for_docs(idx_hash, count)
+        assert self.registry_stat("entry_cnt") == count
+        hits_after_hash = self.registry_stat("shared_externally_cnt")
+        assert hits_after_hash > 0, "HASH indexes must share strings with the engine"
+
+        for i in range(count):
+            self.write_key(idx_json, f"json_{i}", [float(i + j) for j in range(DIM)])
+        self.wait_for_docs(idx_json, count)
+        assert self.registry_stat("entry_cnt") == count * 2
+        # Engine hash sharing hits must not change on JSON ingestion
+        assert self.registry_stat("shared_externally_cnt") == hits_after_hash
+
+        # Drop HASH index
+        idx_hash.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), count, timeout=10)
+
+        # Drop JSON index
+        idx_json.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    def test_random_chaos_lifecycle_and_registry_drain(self):
+        """Perform randomized mutations, invalid payloads, non-vector updates,
+        deletions, and concurrent index create/drop cycles, then verify all registry
+        entries drain to 0 on teardown."""
+        import random
+        import threading
+
+        rng = random.Random(42)
+        active_indexes = {}
+        index_counter = 0
+        key_pool = [f"chaos_key_{i}" for i in range(25)]
+        algos = ["HNSW", "FLAT"]
+
+        # Start with two initial HASH indexes
+        for _ in range(2):
+            name = f"chaos_idx_{index_counter}"
+            idx = self.build_index(
+                name=name,
+                key_type=KeyDataType.HASH,
+                algo=rng.choice(algos)
+            )
+            idx.create(self.client, wait_for_backfill=True)
+            active_indexes[name] = idx
+            index_counter += 1
+
+        stop_event = threading.Event()
+        errors = []
+
+        def worker_mutations():
+            try:
+                cl = self.client
+                while not stop_event.is_set():
+                    k = rng.choice(key_pool)
+                    action = rng.choice(["valid", "invalid", "modify", "del", "other"])
+                    if action == "valid":
+                        vec = [rng.random() for _ in range(DIM)]
+                        cl.hset(f"doc:{k}", "vec", float_to_bytes(vec))
+                    elif action == "invalid":
+                        cl.hset(f"doc:{k}", "vec", b"invalid_short_payload")
+                    elif action == "modify":
+                        vec = [rng.random() * 2.0 for _ in range(DIM)]
+                        cl.hset(f"doc:{k}", "vec", float_to_bytes(vec))
+                    elif action == "del":
+                        cl.delete(f"doc:{k}")
+                    elif action == "other":
+                        cl.hset(f"doc:{k}", "tag", f"val_{rng.randint(0, 10)}")
+            except Exception as e:
+                errors.append(e)
+
+        t = threading.Thread(target=worker_mutations)
+        t.start()
+
+        # Main thread performs schema creations and drops concurrently
+        for _ in range(12):
+            if len(active_indexes) > 1 and rng.random() < 0.45:
+                drop_name, drop_idx = active_indexes.popitem()
+                drop_idx.drop(self.client)
+            elif len(active_indexes) < 4:
+                name = f"chaos_idx_{index_counter}"
+                idx = self.build_index(
+                    name=name,
+                    key_type=KeyDataType.HASH,
+                    algo=rng.choice(algos)
+                )
+                idx.create(self.client, wait_for_backfill=False)
+                active_indexes[name] = idx
+                index_counter += 1
+
+        stop_event.set()
+        t.join()
+        assert not errors, f"Worker thread encountered errors: {errors}"
+
+        # Teardown: Drop all remaining index schemas
+        for name, idx in list(active_indexes.items()):
+            idx.drop(self.client)
+            del active_indexes[name]
+
+        # Verify VectorRegistry drains to 0
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+        assert len(self.client.execute_command("FT._LIST")) == 0
+
+    def test_registry_ownership_collision(self):
+        """
+        Test that an incompatible schema does not erase the registry entry
+        of a compatible schema.
+        """
+        import struct
+        import time
+        from valkeytestframework.util import waiters
+        r = self.client
+
+        # Create a vector of 128 dimensions (512 bytes)
+        vec128 = struct.pack('128f', *[0.1]*128)
+        r.hset('doc1', mapping={'vec': vec128})
+
+        # Create Schema A which perfectly matches the vector
+        r.execute_command('FT.CREATE', 'idx1', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '128', 'DISTANCE_METRIC', 'L2')
+        
+        # Wait for background indexer
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+
+        # Create Schema B which expects 256 dimensions
+        r.execute_command('FT.CREATE', 'idx2', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '256', 'DISTANCE_METRIC', 'L2')
+
+        # Wait for Schema B's background indexer to finish scanning the keyspace
+        from utils import IndexingTestHelper
+        IndexingTestHelper.wait_for_backfill_complete_on_node(r, 'idx2')
+
+        # If the bug exists, Schema B's background scan erased the registry entry.
+        # So we verify it remains safely tracked for Schema A.
+        assert self.registry_stat("entry_cnt") == 1
+        
+        # Finally, dropping the compatible schema should safely untrack it.
+        r.execute_command('FT.DROPINDEX', 'idx1')
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    def test_registry_vector_modification_single_schema(self):
+        """
+        1. Single schema: Modifying a vector from valid to invalid size, and back to valid size.
+        """
+        import struct
+        from valkeytestframework.util import waiters
+        r = self.client
+
+        r.execute_command('FT.CREATE', 'idx1', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '128', 'DISTANCE_METRIC', 'L2')
+
+        vec128 = struct.pack('128f', *[0.1]*128)
+        vec256 = struct.pack('256f', *[0.1]*256)
+        
+        def hits1():
+            return r.execute_command('FT.SEARCH', 'idx1', '*=>[KNN 100 @vec $q]', 'PARAMS', '2', 'q', vec128, 'DIALECT', '2')[0]
+
+        # Valid size
+        r.hset('doc1', mapping={'vec': vec128})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+        waiters.wait_for_equal(hits1, 1, timeout=10)
+
+        # Modify to invalid size
+        r.hset('doc1', mapping={'vec': vec256})
+        waiters.wait_for_equal(hits1, 0, timeout=10)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+        # Modify back to valid size
+        r.hset('doc1', mapping={'vec': vec128})
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+        waiters.wait_for_equal(hits1, 1, timeout=10)
+
+        # Cleanup
+        r.execute_command('FT.DROPINDEX', 'idx1')
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    def test_registry_vector_modification_different_dims(self):
+        """
+        2. Two schemas, different dimensions: Initially indexed by one, then modified to fit the other.
+        """
+        import struct
+        from valkeytestframework.util import waiters
+        r = self.client
+
+        r.execute_command('FT.CREATE', 'idx1', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '128', 'DISTANCE_METRIC', 'L2')
+        r.execute_command('FT.CREATE', 'idx2', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '256', 'DISTANCE_METRIC', 'L2')
+
+        vec128 = struct.pack('128f', *[0.1]*128)
+        vec256 = struct.pack('256f', *[0.2]*256)
+        
+        def hits1():
+            return r.execute_command('FT.SEARCH', 'idx1', '*=>[KNN 100 @vec $q]', 'PARAMS', '2', 'q', vec128, 'DIALECT', '2')[0]
+        def hits2():
+            return r.execute_command('FT.SEARCH', 'idx2', '*=>[KNN 100 @vec $q]', 'PARAMS', '2', 'q', vec256, 'DIALECT', '2')[0]
+
+        # Initially 128 (indexed by idx1, rejected by idx2)
+        r.hset('doc1', mapping={'vec': vec128})
+        waiters.wait_for_equal(hits1, 1, timeout=10)
+        waiters.wait_for_equal(hits2, 0, timeout=10)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+
+        # Modify to 256 (rejected by idx1, indexed by idx2)
+        r.hset('doc1', mapping={'vec': vec256})
+        waiters.wait_for_equal(hits2, 1, timeout=10)
+        waiters.wait_for_equal(hits1, 0, timeout=10)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+
+        # Cleanup
+        r.execute_command('FT.DROPINDEX', 'idx1')
+        r.execute_command('FT.DROPINDEX', 'idx2')
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    def test_registry_vector_modification_same_dims(self):
+        """
+        3. Two schemas, same dimensions: Modifying vector from valid to invalid size and back.
+        """
+        import struct
+        from valkeytestframework.util import waiters
+        r = self.client
+
+        r.execute_command('FT.CREATE', 'idx1', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '128', 'DISTANCE_METRIC', 'L2')
+        r.execute_command('FT.CREATE', 'idx2', 'SCHEMA', 'vec', 'VECTOR', 'FLAT', '6', 'TYPE', 'FLOAT32', 'DIM', '128', 'DISTANCE_METRIC', 'IP')
+
+        vec128 = struct.pack('128f', *[0.1]*128)
+        vec256 = struct.pack('256f', *[0.2]*256)
+
+        def hits1():
+            return r.execute_command('FT.SEARCH', 'idx1', '*=>[KNN 100 @vec $q]', 'PARAMS', '2', 'q', vec128, 'DIALECT', '2')[0]
+        def hits2():
+            return r.execute_command('FT.SEARCH', 'idx2', '*=>[KNN 100 @vec $q]', 'PARAMS', '2', 'q', vec128, 'DIALECT', '2')[0]
+
+        # Valid size
+        r.hset('doc1', mapping={'vec': vec128})
+        waiters.wait_for_equal(hits1, 1, timeout=10)
+        waiters.wait_for_equal(hits2, 1, timeout=10)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+
+        # Modify to invalid size
+        r.hset('doc1', mapping={'vec': vec256})
+        waiters.wait_for_equal(hits1, 0, timeout=10)
+        waiters.wait_for_equal(hits2, 0, timeout=10)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+        # Modify back to valid size
+        r.hset('doc1', mapping={'vec': vec128})
+        waiters.wait_for_equal(hits1, 1, timeout=10)
+        waiters.wait_for_equal(hits2, 1, timeout=10)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 1, timeout=10)
+
+        # Cleanup
+        r.execute_command('FT.DROPINDEX', 'idx1')
+        r.execute_command('FT.DROPINDEX', 'idx2')
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 class TestVectorRegistryPersistence(ValkeySearchTestCaseDebugMode):
     """Save on one server, load on another.
 

@@ -32,6 +32,7 @@ Usage: build.sh [options...]
     --clean                           Clean the current build configuration (debug or release).
     --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
     --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --test-verbose                    Enable verbose test output (sets TEST_VERBOSE=1).
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
     --run-integration-tests[=pattern] Run integration tests.
@@ -44,10 +45,22 @@ Usage: build.sh [options...]
 Example usage:
 
     # Build the release configuration, run cmake if needed
-    build.sh
+    ./build.sh
 
     # Force run cmake and build the debug configuration
-    build.sh --configure --debug
+    ./build.sh --configure --debug
+
+    # Build debug version and run all unit tests
+    ./build.sh --debug --run-tests
+
+    # Run a specific unit test suite
+    ./build.sh --debug --run-tests=query_test
+
+    # Run unit tests matching a regex pattern
+    ./build.sh --debug --run-tests="index.*"
+
+    # Run unit tests with verbose debug traces enabled
+    ./build.sh --debug --run-tests --test-verbose
 
 EOF
 }
@@ -146,6 +159,11 @@ while [ $# -gt 0 ]; do
         shift || true
         VERBOSE_ARGS="-v"
         echo "Verbose build: true"
+        ;;
+    --test-verbose)
+        export TEST_VERBOSE=1
+        shift || true
+        echo "Verbose test output: true"
         ;;
     --help | -h)
         print_usage
@@ -317,40 +335,6 @@ function format() {
     printf "Applied clang-format\n"
 }
 
-function print_test_prefix() {
-    printf "${BOLD_PINK}Running:${RESET} $1"
-}
-
-function print_test_ok() {
-    printf " ... ${GREEN}ok${RESET}\n"
-}
-
-function print_test_summary() {
-    printf "${BLUE}Test output can be found here:${RESET} ${TEST_OUTPUT_FILE}\n"
-}
-
-function print_test_error_and_exit() {
-    printf " ... ${RED}failed${RESET}\n"
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        # Only dump the failed test's output, not the entire accumulated log
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}"
-        else
-            printf "${RED}No test output produced (test crashed or was terminated).${RESET}\n"
-        fi
-    fi
-
-    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
-    # running the remainder of the tests
-    if [[ "${SAN_BUILD}" == "no" ]]; then
-        print_test_summary
-        exit 1
-    else
-        # Make sure to exit the script with an error
-        EXIT_CODE=1
-    fi
-}
-
 function check_tool() {
     local tool_name=$1
     local message=$2
@@ -463,9 +447,6 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     fi
 fi
 
-TESTS_DIR=${BUILD_DIR}/tests
-TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
-
 check_and_clean_on_branch_change
 
 printf "Checking if configure is required..."
@@ -496,37 +477,30 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
-function run_single_test() {
-    local test_exec="$1"
-    echo "==> Running executable: ${test_exec}" >> "${TEST_OUTPUT_FILE}"
-    echo "" >> "${TEST_OUTPUT_FILE}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_prefix "${test_exec}"
-    if "${test_exec}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1; then
-        cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
-        print_test_ok
-    else
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
-        fi
-        print_test_error_and_exit
+if [ -n "${RUN_TEST}" ]; then
+    test_filter=""
+    if [[ "${RUN_TEST}" != "all" ]]; then
+        test_filter="-R ${RUN_TEST}"
     fi
-}
-
-if [[ "${RUN_TEST}" == "all" ]]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    while read -r test; do
-        run_single_test "${test}"
-    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
-elif [ ! -z "${RUN_TEST}" ]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    run_single_test "${TESTS_DIR}/${RUN_TEST}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
+    test_jobs=${JOBS:-$(num_proc)}
+    printf "${BOLD_PINK}Running unit tests (-j ${test_jobs})...${RESET}\n"
+    set -o pipefail
+    if ! GTEST_COLOR=yes CLICOLOR_FORCE=1 ctest --test-dir "${BUILD_DIR}" ${test_filter} -j ${test_jobs} --output-on-failure 2>&1 | tee "${BUILD_DIR}/tests.out"; then
+        EXIT_CODE=1
+        if [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
+            sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
+            printf "\n${RED}======================= FAILED TEST DETAILS =======================${RESET}\n"
+            grep -E -B 1 -A 8 ": Failure" "${BUILD_DIR}/Testing/Temporary/LastTest.log" || true
+            printf "${RED}===================================================================${RESET}\n"
+        fi
+    elif [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
+        sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
+    fi
+    if [ -f "${BUILD_DIR}/tests.out" ]; then
+        sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/tests.out"
+    fi
+    printf "\n${BLUE}Test output can be found in:${RESET} ${BUILD_DIR}/tests.out\n"
+    printf "${BLUE}Detailed CTest logs can be found in:${RESET} ${BUILD_DIR}/Testing/Temporary/LastTest.log\n\n"
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     params=""
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then

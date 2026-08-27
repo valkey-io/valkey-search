@@ -59,7 +59,8 @@ class IndexTeser : public T {
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    auto res = T::AddRecord(interned_key, data);
+    auto res = T::AddRecord(interned_key,
+                            AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     if (!res.ok()) {
       return res.status();
     }
@@ -68,7 +69,8 @@ class IndexTeser : public T {
   absl::StatusOr<indexes::RecordResult> AddRecordResult(
       absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    return T::AddRecord(interned_key, data);
+    return T::AddRecord(interned_key,
+                        AttributeData(vmsdk::MakeUniqueValkeyString(data)));
   }
   absl::StatusOr<bool> RemoveRecord(
       absl::string_view key,
@@ -79,7 +81,8 @@ class IndexTeser : public T {
   absl::StatusOr<bool> ModifyRecord(absl::string_view key,
                                     absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    auto res = T::ModifyRecord(interned_key, data);
+    auto res = T::ModifyRecord(
+        interned_key, AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     if (!res.ok()) {
       return res.status();
     }
@@ -88,7 +91,8 @@ class IndexTeser : public T {
   absl::StatusOr<indexes::RecordResult> ModifyRecordResult(
       absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    return T::ModifyRecord(interned_key, data);
+    return T::ModifyRecord(interned_key,
+                           AttributeData(vmsdk::MakeUniqueValkeyString(data)));
   }
   bool IsTracked(absl::string_view key) const {
     auto interned_key = StringInternStore::Intern(key);
@@ -96,20 +100,112 @@ class IndexTeser : public T {
   }
 };
 
-class MockIndex : public indexes::IndexBase {
+namespace testing_infra {
+
+inline AttributeData MakeAttributeData(vmsdk::UniqueValkeyString str) {
+  return AttributeData(std::move(str));
+}
+
+inline AttributeData MakeAttributeData(absl::string_view sv) {
+  return AttributeData(vmsdk::MakeUniqueValkeyString(sv));
+}
+
+inline AttributeData MakeAttributeData(indexes::VectorBase &index,
+                                       const InternedStringPtr &key,
+                                       absl::string_view data) {
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return AttributeData(std::move(vec));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    AttributeData &&data) {
+  return index.AddRecord(key, std::move(data));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    vmsdk::UniqueValkeyString str) {
+  return index.AddRecord(key, AttributeData(std::move(str)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  return index.AddRecord(key,
+                         AttributeData(vmsdk::MakeUniqueValkeyString(data)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddVectorRecord(
+    indexes::VectorBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return index.AddRecord(key, AttributeData(std::move(vec)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    AttributeData &&data) {
+  return index.ModifyRecord(key, std::move(data));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    vmsdk::UniqueValkeyString str) {
+  return index.ModifyRecord(key, AttributeData(std::move(str)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  return index.ModifyRecord(key,
+                            AttributeData(vmsdk::MakeUniqueValkeyString(data)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyVectorRecord(
+    indexes::VectorBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return index.ModifyRecord(key, AttributeData(std::move(vec)));
+}
+
+}  // namespace testing_infra
+
+class MockIndex : public indexes::VectorBase {
  public:
-  MockIndex() : indexes::IndexBase(indexes::IndexerType::kNone) {}
-  MockIndex(indexes::IndexerType type) : indexes::IndexBase(type) {}
+  MockIndex(int dimensions = 4, absl::string_view attribute_name = "vec",
+            int db_num = 0)
+      : indexes::VectorBase(indexes::IndexerType::kVector, dimensions,
+                            data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                            attribute_name, db_num) {
+    ON_CALL(*this, GetDataTypeSize)
+        .WillByDefault(testing::Return(sizeof(float)));
+  }
+  MockIndex(indexes::IndexerType type, int dimensions = 4,
+            absl::string_view attribute_name = "vec", int db_num = 0)
+      : indexes::VectorBase(type, dimensions,
+                            data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                            attribute_name, db_num) {
+    ON_CALL(*this, GetDataTypeSize)
+        .WillByDefault(testing::Return(sizeof(float)));
+  }
   MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, AddRecord,
-              (const InternedStringPtr &key, absl::string_view data),
-              (override));
+              (const InternedStringPtr &key, AttributeData &&data), (override));
   MOCK_METHOD(absl::StatusOr<bool>, RemoveRecord,
               (const InternedStringPtr &key,
                indexes::DeletionType deletion_type),
               (override));
   MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, ModifyRecord,
-              (const InternedStringPtr &key, absl::string_view data),
-              (override));
+              (const InternedStringPtr &key, AttributeData &&data), (override));
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
               (const, override));
   MOCK_METHOD(int, RespondWithInfo, (ValkeyModuleCtx * ctx), (const, override));
@@ -131,6 +227,42 @@ class MockIndex : public indexes::IndexBase {
       (absl::AnyInvocable<absl::Status(const InternedStringPtr &key)> fn),
       (const, override));
   MOCK_METHOD(uint32_t, GetMutationWeight, (), (const, override));
+  MOCK_METHOD(size_t, GetCapacity, (), (const, override));
+  MOCK_METHOD(absl::Status, RemoveRecordImpl, (uint64_t internal_id),
+              (override));
+  absl::Status ModifyRecordImpl(
+      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+    return absl::OkStatus();
+  }
+  absl::Status AddRecordImpl(
+      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+    return absl::OkStatus();
+  }
+  MOCK_METHOD(int, RespondWithInfoImpl, (ValkeyModuleCtx * ctx),
+              (const, override));
+  MOCK_METHOD(size_t, GetDataTypeSize, (), (const, override));
+  MOCK_METHOD(void, ToProtoImpl, (data_model::VectorIndex *),
+              (const, override));
+  absl::Status SaveIndexImpl(RDBChunkOutputStream) const override {
+    return absl::OkStatus();
+  }
+  std::shared_ptr<const indexes::VectorRecord> &GetVectorLockFree(
+      uint64_t) const override {
+    static std::shared_ptr<const indexes::VectorRecord> p;
+    return p;
+  }
+  std::shared_ptr<const indexes::VectorRecord> &GetVector(
+      uint64_t) const override {
+    static std::shared_ptr<const indexes::VectorRecord> p;
+    return p;
+  }
+  float ComputeDistance(absl::string_view, const indexes::VectorRecord *,
+                        float) const override {
+    return 0.0f;
+  }
+  std::optional<hnswlib::tableint> GetAlgoIdLockFree(uint64_t) const override {
+    return std::nullopt;
+  }
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
@@ -146,12 +278,12 @@ class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
 
 class MockAttributeDataType : public AttributeDataType {
  public:
-  MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetRecord,
+  MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetAttribute,
               (ValkeyModuleCtx * ctx, ValkeyModuleKey *open_key,
                absl::string_view key, absl::string_view identifier),
               (override, const));
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
-  MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
+  MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllAttributes,
               (ValkeyModuleCtx * ctx,
                const std::optional<std::string> &query_attribute_name,
                ValkeyModuleKey *open_key, absl::string_view key,
@@ -160,7 +292,7 @@ class MockAttributeDataType : public AttributeDataType {
   MOCK_METHOD((data_model::AttributeDataType), ToProto, (), (override, const));
   MOCK_METHOD((std::string), ToString, (), (override, const));
   MOCK_METHOD((bool), IsProperType, (ValkeyModuleKey * key), (override, const));
-  MOCK_METHOD(bool, RecordsProvidedAsString, (), (override, const));
+  MOCK_METHOD(bool, AttributesProvidedAsString, (), (override, const));
 };
 
 class FakeSafeRDB : public SafeRDB {
@@ -272,9 +404,11 @@ class MockIndexSchema : public IndexSchema {
       index_schema_proto.set_score_field(score_field);
     }
     // NOLINTNEXTLINE
-    auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
-        ctx, index_schema_proto, std::move(attribute_data_type),
-        mutations_thread_pool));
+    auto res = std::shared_ptr<MockIndexSchema>(
+        new MockIndexSchema(ctx, index_schema_proto,
+                            std::move(attribute_data_type),
+                            mutations_thread_pool),
+        vmsdk::DestructByMainThread<MockIndexSchema>{});
     VMSDK_RETURN_IF_ERROR(res->Init(ctx));
     return res;
   }
@@ -538,6 +672,34 @@ class UnitTestSearchParameters : public query::SearchParameters {
     CHECK(false);
   }
 };
+
+namespace testing_infra {
+
+inline std::shared_ptr<indexes::VectorRecord> MakeVectorRecord(
+    absl::string_view raw_vector_bytes) {
+  float reciprocal_mag = indexes::CalcReciprocalMagnitude(
+      reinterpret_cast<const float *>(raw_vector_bytes.data()),
+      raw_vector_bytes.size() / sizeof(float));
+  return indexes::VectorRecord::Construct(raw_vector_bytes, reciprocal_mag);
+}
+
+inline AttributeData MakeStringAttributeData(absl::string_view str) {
+  return AttributeData(vmsdk::MakeUniqueValkeyString(str));
+}
+
+inline AttributeData MakeVectorAttributeData(
+    const InternedStringPtr &key, const InternedStringPtr &attribute_identifier,
+    absl::string_view raw_vector_bytes, int db_num = 0) {
+  return AttributeData(indexes::VectorRecordWithSize{
+      MakeVectorRecord(raw_vector_bytes), raw_vector_bytes.size()});
+}
+
+inline AttributeData MakeDeletionAttributeData(
+    indexes::DeletionType del = indexes::DeletionType::kRecord) {
+  return AttributeData(del);
+}
+
+}  // namespace testing_infra
 
 }  // namespace valkey_search
 

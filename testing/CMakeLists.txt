@@ -45,19 +45,15 @@ target_link_libraries(testing_common_coordinator INTERFACE util)
 target_link_libraries(testing_common_coordinator INTERFACE client)
 target_link_libraries(testing_common_coordinator INTERFACE client_pool)
 
-# 1. Commands Test Suite - consolidates FT command related tests
+# 1. Commands Test Suite - consolidates FT command execution tests
 set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc)
 
 add_executable(commands_test ${COMMANDS_TEST_SOURCES})
 target_include_directories(commands_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -69,6 +65,43 @@ target_link_libraries(commands_test PRIVATE commands)
 target_link_libraries(commands_test PRIVATE vmsdklib)
 finalize_test_flags(commands_test)
 
+# Commands Parser Test Suite - dedicated suite for aggregate and create command parsing tests
+set(COMMANDS_PARSER_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc)
+
+add_executable(commands_parser_test ${COMMANDS_PARSER_TEST_SOURCES})
+target_include_directories(commands_parser_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(commands_parser_test PRIVATE testing_common_base)
+target_link_libraries(commands_parser_test PRIVATE testing_common_coordinator)
+target_link_libraries(commands_parser_test PRIVATE ft_create_parser)
+target_link_libraries(commands_parser_test PRIVATE ft_search_parser)
+target_link_libraries(commands_parser_test PRIVATE commands)
+target_link_libraries(commands_parser_test PRIVATE vmsdklib)
+finalize_test_flags(commands_parser_test)
+
+# FT.SEARCH Parser Test Suite - dedicated suite for FT.SEARCH command parsing tests
+add_executable(ft_search_parser_test ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc)
+target_include_directories(ft_search_parser_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(ft_search_parser_test PRIVATE testing_common_base)
+target_link_libraries(ft_search_parser_test PRIVATE testing_common_coordinator)
+target_link_libraries(ft_search_parser_test PRIVATE ft_create_parser)
+target_link_libraries(ft_search_parser_test PRIVATE ft_search_parser)
+target_link_libraries(ft_search_parser_test PRIVATE commands)
+target_link_libraries(ft_search_parser_test PRIVATE vmsdklib)
+finalize_test_flags(ft_search_parser_test)
+
+# Filter Test Suite - dedicated suite for filter expression evaluation and parsing
+add_executable(filter_test ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+target_include_directories(filter_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(filter_test PRIVATE testing_common_base)
+target_link_libraries(filter_test PRIVATE testing_common_coordinator)
+target_link_libraries(filter_test PRIVATE ft_create_parser)
+target_link_libraries(filter_test PRIVATE ft_search_parser)
+target_link_libraries(filter_test PRIVATE commands)
+target_link_libraries(filter_test PRIVATE vmsdklib)
+finalize_test_flags(filter_test)
+
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
@@ -76,10 +109,7 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/posting_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/text_test.cc)
 
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
 target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -87,6 +117,19 @@ target_link_libraries(indexes_test PRIVATE testing_common_base)
 target_link_libraries(indexes_test PRIVATE text)
 target_link_libraries(indexes_test PRIVATE hnswlib_vmsdk)
 finalize_test_flags(indexes_test)
+
+# Vector Index Test Suite - dedicated suite for vector index and registry tests
+set(VECTOR_INDEX_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc)
+
+add_executable(vector_index_test ${VECTOR_INDEX_TEST_SOURCES})
+target_include_directories(vector_index_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vector_index_test PRIVATE testing_common_base)
+target_link_libraries(vector_index_test PRIVATE text)
+target_link_libraries(vector_index_test PRIVATE hnswlib_vmsdk)
+finalize_test_flags(vector_index_test)
 
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES

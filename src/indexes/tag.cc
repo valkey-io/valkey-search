@@ -26,6 +26,7 @@
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -105,8 +106,10 @@ void Tag::DeindexTagForKey(absl::string_view tag,
 }
 
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
-                                            absl::string_view data) {
-  auto interned_data = StringInternStore::Intern(data);
+                                            AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto interned_data =
+      StringInternStore::Intern(vmsdk::ToStringView(str.get()));
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
@@ -206,8 +209,10 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 }
 
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
-                                               absl::string_view data) {
-  auto interned_data = StringInternStore::Intern(data);
+                                               AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto interned_data =
+      StringInternStore::Intern(vmsdk::ToStringView(str.get()));
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
@@ -389,8 +394,9 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
   size_t total = 0;
 
   auto collect_slot = [&](void *slot) {
-    if (slot == nullptr) return;
-    if (!seen.insert(slot).second) return;
+    if (!slot || !seen.insert(slot).second) {
+      return;
+    }
     matched_slots.push_back(slot);
     auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
     total += bag.size();

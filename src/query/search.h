@@ -104,6 +104,7 @@ inline std::ostream &operator<<(std::ostream &os, const ReturnAttribute &r) {
 // Wrapper for search results that trims the neighbor deque based on query type
 
 struct SearchParameters;
+class SingleDocumentScorer;
 struct SerializationRange;
 
 //
@@ -228,6 +229,17 @@ struct SearchParameters {
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
+  // Recompute scorer pre-built by Search() on the background thread while the
+  // search's reader lock is held, for non-vector queries whose reply may need
+  // a main-thread score recompute (see response_generator.cc VerifyFilter).
+  // Pre-building here (a) captures the SAME corpus snapshot (total_docs,
+  // per-term IDF, avg_doc_len) the other candidates were scored with, so a
+  // recomputed score is scale-consistent with the carried scores, and (b)
+  // spares the main thread a reader-lock acquisition that could stall behind
+  // an active writer phase. Null when the query cannot need a recompute (or
+  // for paths that skip Search()); the reply path then falls back to lazy
+  // main-thread construction.
+  std::unique_ptr<SingleDocumentScorer> recompute_scorer;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
@@ -381,24 +393,36 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 //
 // All document-independent inputs (posting lists, per-term IDF, corpus stats)
 // are resolved ONCE at construction, so scoring N mutated documents in a reply
-// costs one resolve instead of N. Construct lazily on the first document that
-// needs a recompute and reuse for the rest of the reply.
+// costs one resolve instead of N. The preferred construction site is the
+// background thread at the end of Search(), while the search's reader lock is
+// still held (LockPolicy::kLockAlreadyHeld): the snapshot then matches the
+// corpus state the other candidates were scored with, and the main thread
+// avoids a reader-lock acquisition. The reply path falls back to lazy
+// main-thread construction (LockPolicy::kAcquireLock) when no pre-built
+// scorer was carried.
 //
-// The constructor and Score() each acquire the index reader lock internally,
-// so callers must NOT already hold it: TimeSlicedMRMWMutex is non-reentrant
-// and a nested acquire can deadlock in SwitchWithWait() when the inverse mode
-// is waiting and the time quota is exceeded. Used by the main-thread
-// content-fetch revalidation path (response_generator.cc VerifyFilter) where a
-// document mutated between scoring and fetch needs a fresh, scale-consistent
-// score. Score() returns
+// With kAcquireLock the constructor acquires the index reader lock
+// internally; Score() ALWAYS acquires it. Callers of either must NOT already
+// hold the lock in those cases: TimeSlicedMRMWMutex is non-reentrant and a
+// nested acquire can deadlock in SwitchWithWait() when the inverse mode is
+// waiting and the time quota is exceeded. With kLockAlreadyHeld the caller
+// asserts it holds the reader lock for the duration of construction only.
+// Used by the main-thread content-fetch revalidation path
+// (response_generator.cc VerifyFilter) where a document mutated between
+// scoring and fetch needs a fresh, scale-consistent score. Score() returns
 // nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
 // ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
 // never a drop.
 class SingleDocumentScorer {
  public:
-  SingleDocumentScorer(const IndexSchema &index_schema,
-                       const Predicate *root_predicate,
-                       const indexes::scoring::Scorer *scorer);
+  enum class LockPolicy {
+    kAcquireLock,
+    kLockAlreadyHeld,
+  };
+  SingleDocumentScorer(const IndexSchema& index_schema,
+                       const Predicate* root_predicate,
+                       const indexes::scoring::Scorer* scorer,
+                       LockPolicy lock_policy = LockPolicy::kAcquireLock);
   ~SingleDocumentScorer();
   SingleDocumentScorer(const SingleDocumentScorer &) = delete;
   SingleDocumentScorer &operator=(const SingleDocumentScorer &) = delete;

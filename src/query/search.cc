@@ -1049,16 +1049,19 @@ struct SingleDocumentScorer::State {
 
 SingleDocumentScorer::SingleDocumentScorer(
     const IndexSchema &index_schema, const Predicate *root_predicate,
-    const indexes::scoring::Scorer *scorer)
+    const indexes::scoring::Scorer *scorer, LockPolicy lock_policy)
     : state_(new State{index_schema, root_predicate, scorer}) {
   CHECK(root_predicate != nullptr);
   CHECK(scorer != nullptr);
 
-  // Runs on the main thread during content fetch, outside the background
-  // search's reader lock, so acquire our own to read index_key_info_ /
-  // text-index metadata safely against background mutations.
-  vmsdk::ReaderMutexLock lock(
-      &const_cast<IndexSchema &>(index_schema).GetTimeSlicedMutex());
+  // Reading index_key_info_ / text-index metadata requires the reader lock.
+  // Preferred site is the background thread inside Search(), which already
+  // holds it (kLockAlreadyHeld); the lazy main-thread fallback acquires its
+  // own (kAcquireLock).
+  std::optional<vmsdk::ReaderMutexLock> lock;
+  if (lock_policy == LockPolicy::kAcquireLock) {
+    lock.emplace(&const_cast<IndexSchema &>(index_schema).GetTimeSlicedMutex());
+  }
 
   // Source EVERY scoring input exactly as ScoreTextQuery does so a recomputed
   // score is on the same scale as the shard-side score:
@@ -1487,6 +1490,22 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
     size_t total_count = borrowed.size();
     parameters.search_result =
         SearchResult(total_count, std::move(borrowed), parameters);
+    // Pre-build the recompute scorer while this thread still holds the reader
+    // lock: the reply path may need to re-score documents mutated between now
+    // and the main-thread content fetch, and the snapshot taken here (corpus
+    // stats, per-term IDF) matches the corpus the surviving candidates were
+    // just scored with. Skipped when no reply-side recompute can happen: no
+    // predicate (match-all), no results, or a NOCONTENT reply.
+    const Predicate *root_predicate =
+        parameters.filter_parse_results.root_predicate.get();
+    if (root_predicate != nullptr &&
+        !parameters.search_result.neighbors.empty() &&
+        parameters.GetContentProcessing() != kNoContent) {
+      parameters.recompute_scorer = std::make_unique<SingleDocumentScorer>(
+          *parameters.index_schema, root_predicate,
+          indexes::scoring::GetScorer(parameters.scorer),
+          SingleDocumentScorer::LockPolicy::kLockAlreadyHeld);
+    }
   } else {
     VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                            DoSearchVector(parameters, search_mode, lock));

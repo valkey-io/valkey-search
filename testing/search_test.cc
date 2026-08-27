@@ -1846,6 +1846,42 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
 }
 
+// Search() pre-builds the recompute scorer on the background thread while the
+// search's reader lock is still held (LockPolicy::kLockAlreadyHeld). Pin that
+// construction mode: built under a caller-held reader lock, then scored after
+// the lock is released (Score() acquires its own), it must land on the same
+// scale as the extra-step path.
+TEST_F(ScoreTextQueryTestBase, RecomputeScorerConstructibleUnderHeldLock) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "hello world", "red"},
+      {"d2", "hello there", "blue"},
+  });
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@text:hello @color:{red}";
+
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
+
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  std::unique_ptr<query::SingleDocumentScorer> document_scorer;
+  {
+    // Simulate the Search() construction site: the reader lock is already
+    // held, so the constructor must not try to acquire it again.
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    document_scorer = std::make_unique<query::SingleDocumentScorer>(
+        *schema, parsed.value().root_predicate.get(), scorer,
+        query::SingleDocumentScorer::LockPolicy::kLockAlreadyHeld);
+  }
+  // Score() acquires the reader lock itself; the lock above is released.
+  auto recomputed = document_scorer->Score(StringInternStore::Intern("d1"));
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
 // A query that omits SCORER picks up the `default-scorer` config.
 // Needs the fixture: UnitTestSearchParameters reaches ValkeyModule_Milliseconds
 // via cancel::Make, and the mock module only lives between SetUp and TearDown.

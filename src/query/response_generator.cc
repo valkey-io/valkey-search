@@ -193,18 +193,26 @@ FilterVerification VerifyFilter(
     if (!result.matches || !recompute_score) {
       return {result.matches, std::nullopt};
     }
-    // The document-independent scoring inputs (posting lists, IDF, corpus
-    // stats) are resolved once per reply: construct the scorer lazily on the
-    // first mutated document and reuse it for every later one.
-    if (!document_scorer) {
-      document_scorer = std::make_unique<query::SingleDocumentScorer>(
-          *parameters.index_schema, predicate,
-          indexes::scoring::GetScorer(parameters.scorer));
+    // Prefer the scorer Search() pre-built on the background thread under the
+    // search's reader lock: its corpus snapshot matches the state the carried
+    // scores were computed against, and no main-thread lock acquisition was
+    // needed for it. Fall back to lazy main-thread construction (resolved
+    // once per reply, reused for every later mutated document) for paths that
+    // did not pre-build one.
+    const query::SingleDocumentScorer *scorer =
+        parameters.recompute_scorer.get();
+    if (scorer == nullptr) {
+      if (!document_scorer) {
+        document_scorer = std::make_unique<query::SingleDocumentScorer>(
+            *parameters.index_schema, predicate,
+            indexes::scoring::GetScorer(parameters.scorer));
+      }
+      scorer = document_scorer.get();
     }
     // nullopt (empty corpus / ScoreNode non-match) degrades to 0 rather than
     // dropping the already-admitted document. Carry the value on the
     // EvaluationResult (meaningful when matches == true) and hand it back.
-    result.score = document_scorer->Score(n.external_id).value_or(0.0f);
+    result.score = scorer->Score(n.external_id).value_or(0.0f);
     return {true, result.score};
   };
 
@@ -449,9 +457,10 @@ void ProcessNeighborsForReply(
   // such recompute means the carried scores are no longer globally ordered, so
   // the survivors must be re-ranked below (non-vector queries only).
   bool any_score_recomputed = false;
-  // Lazily built by VerifyFilter on the first mutated document and reused for
-  // the rest of the reply, so leaf resolution runs once instead of once per
-  // recomputed document.
+  // Fallback recompute scorer, lazily built by VerifyFilter on the first
+  // mutated document and reused for the rest of the reply. Only used when
+  // Search() did not pre-build parameters.recompute_scorer on the background
+  // thread (the preferred, lock-free-on-main-thread path).
   std::unique_ptr<query::SingleDocumentScorer> document_scorer;
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,

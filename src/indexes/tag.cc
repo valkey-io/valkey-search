@@ -316,7 +316,7 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
 }
 
 bool Tag::ContainsKey(absl::string_view value,
-                      const InternedStringPtr& key) const {
+                      BorrowedInternedStringPtr key) const {
   // Lock-free by the same read-side invariant GetValue relies on: the index is
   // not mutated while the time-sliced mutex is held in read mode.
   std::string norm = Normalize(value);

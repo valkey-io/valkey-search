@@ -93,7 +93,10 @@ class IndexSchema : public KeyspaceEventSubscription,
     float document_score{kDefaultDocumentScore};
   };
 
-  using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+  // Transparent functors so GetDocumentScore() can probe with a borrowed key.
+  using IndexKeyInfoMap =
+      absl::flat_hash_map<Key, IndexKeyInfo, InternedStringPtrHash,
+                          InternedStringPtrEq>;
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;
@@ -187,7 +190,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline bool HasScoreField() const { return score_field_.has_value(); }
   float GetDocumentScore(BorrowedInternedStringPtr key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    auto itr = index_key_info_.find(key.AsInternedRef());
+    auto itr = index_key_info_.find(key);
     if (itr == index_key_info_.end()) {
       return score_;
     }

@@ -101,7 +101,8 @@ class Tag : public IndexBase {
   // against that value's posting bag. Lock-free like GetValue, relying on the
   // read-side invariant that the index is not mutated while the time-sliced
   // mutex is held in read mode.
-  bool ContainsKey(absl::string_view value, const InternedStringPtr& key) const
+  // Borrowed key: the only caller is the scoring walk, which holds the lock.
+  bool ContainsKey(absl::string_view value, BorrowedInternedStringPtr key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots

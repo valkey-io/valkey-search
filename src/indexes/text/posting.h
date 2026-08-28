@@ -152,15 +152,18 @@ struct Postings {
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, PostingValue>* key_map_;
-    absl::btree_map<Key, PostingValue>::const_iterator current_;
-    absl::btree_map<Key, PostingValue>::const_iterator end_;
+    const absl::btree_map<Key, PostingValue, InternedStringPtrLess>* key_map_;
+    absl::btree_map<Key, PostingValue, InternedStringPtrLess>::const_iterator
+        current_;
+    absl::btree_map<Key, PostingValue, InternedStringPtrLess>::const_iterator
+        end_;
   };
 
  private:
   // Cache tf in PostingValue to avoid a map lookup
   // PostValue should be removed and restored if no extra-step
-  absl::btree_map<Key, PostingValue> key_to_positions_;
+  // Transparent comparator so LookupKey() can probe with a borrowed key.
+  absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

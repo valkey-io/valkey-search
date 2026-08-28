@@ -144,7 +144,7 @@ class TextIndexSchema {
   // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
   // callers wrap their key in a BorrowedInternedStringPtr.
   uint32_t GetKeyDocLen(BorrowedInternedStringPtr key) const {
-    auto itr = per_key_scoring_info_.find(key.AsInternedRef());
+    auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
   }
 
@@ -225,7 +225,10 @@ class TextIndexSchema {
   // flat_hash_map (not node_hash_map): KeyScoringInfo is 8 bytes and needs no
   // pointer stability, so storing it inline avoids a per-document cache miss on
   // the GetKeyDocLen() scoring hot path.
-  absl::flat_hash_map<Key, KeyScoringInfo> per_key_scoring_info_;
+  // Transparent functors so GetKeyDocLen() can probe with a borrowed key.
+  absl::flat_hash_map<Key, KeyScoringInfo, InternedStringPtrHash,
+                      InternedStringPtrEq>
+      per_key_scoring_info_;
 
   // Prevent concurrent mutations to per-key text index map and scoring info
   mutable std::mutex per_key_text_indexes_mutex_;

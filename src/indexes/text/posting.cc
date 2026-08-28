@@ -89,7 +89,7 @@ size_t Postings::GetTotalTermFrequency() const {
 
 std::optional<PostingValue> Postings::LookupKey(
     BorrowedInternedStringPtr key) const {
-  auto it = key_to_positions_.find(key.AsInternedRef());
+  auto it = key_to_positions_.find(key);
   if (it == key_to_positions_.end()) {
     return std::nullopt;
   }

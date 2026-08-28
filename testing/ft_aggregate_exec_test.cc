@@ -86,7 +86,7 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
         params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
         0);
     EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
+        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
         1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;

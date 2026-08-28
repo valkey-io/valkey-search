@@ -78,7 +78,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
       if (identifier == vmsdk::ToStringView(params.score_as.get())) {
         if (renamed) {
-          apply_rename(params.record_indexes_by_identifier_.at(identifier));
+          apply_rename(params.record_indexes_by_alias_.at(identifier));
         }
         continue;
       }
@@ -296,49 +296,43 @@ absl::Status CreateRecordsFromNeighbors(
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       bool should_drop_record = false;
 
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
-        auto value = vmsdk::ToStringView(records_map_value.value.get());
-        std::optional<size_t> record_index;
-
-        // Find the record index by alias or identifier
-        if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
-            by_alias != parameters.record_indexes_by_alias_.end()) {
-          record_index = by_alias->second;
-          assert(record_index < rec->fields_.size());
-        } else if (auto by_identifier =
-                       parameters.record_indexes_by_identifier_.find(name);
-                   by_identifier !=
-                   parameters.record_indexes_by_identifier_.end()) {
-          record_index = by_identifier->second;
-          assert(record_index < rec->fields_.size());
+      // 1/ Each column pulls its own value out of the fetched records, keyed
+      //    by the identifier that column sources. Columns whose identifier was
+      //    not fetched (__key, the score, and columns synthesized by a later
+      //    pipeline stage) are left as they are.
+      for (size_t i = 0; i < rec->fields_.size(); ++i) {
+        const auto &info = parameters.record_info_by_index_[i];
+        auto itr = n.attribute_contents->find(info.identifier_);
+        if (itr == n.attribute_contents->end()) {
+          continue;
         }
-
-        if (record_index) {
-          // Process the field value based on its type
-          indexes::IndexerType indexer_type =
-              parameters.record_info_by_index_[*record_index].data_type_;
-          auto processed_value =
-              ProcessFieldValue(value, indexer_type, data_type);
-
-          if (processed_value.ok()) {
-            rec->fields_[*record_index] = std::move(*processed_value);
-          } else {
-            // For JSON unquote failures, drop the entire record
-            if (indexer_type != indexes::IndexerType::kNumeric) {
-              should_drop_record = true;
-              break;
-            }
-            // For numeric failures, skip the field but continue with the record
-          }
-        } else {
-          // Add as extra field
-          rec->extra_fields_.push_back(
-              std::make_pair(std::string(name), expr::Value(value)));
+        auto processed_value = ProcessFieldValue(
+            vmsdk::ToStringView(itr->second.value.get()), info.data_type_,
+            data_type);
+        if (processed_value.ok()) {
+          rec->fields_[i] = std::move(*processed_value);
+        } else if (info.data_type_ != indexes::IndexerType::kNumeric) {
+          // For JSON unquote failures, drop the entire record
+          should_drop_record = true;
+          break;
         }
+        // For numeric failures, skip the field but continue with the record
       }
 
       if (should_drop_record) {
         continue;  // Skip adding this record to the set
+      }
+
+      // 2/ Anything fetched that no column sources is passed through as an
+      //    extra field. This is how LOAD * surfaces the contents of a key,
+      //    since it builds no columns of its own.
+      for (auto &[name, records_map_value] : *n.attribute_contents) {
+        if (parameters.record_identifiers_.contains(name)) {
+          continue;
+        }
+        rec->extra_fields_.push_back(std::make_pair(
+            std::string(name),
+            expr::Value(vmsdk::ToStringView(records_map_value.value.get()))));
       }
     }
 

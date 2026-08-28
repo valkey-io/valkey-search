@@ -8,6 +8,7 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_AGGREGATE_PARSER_H
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "src/commands/commands.h"
@@ -112,8 +113,16 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   //
   // Maps attribute names to their index in the Record.
   //
-  absl::flat_hash_map<std::string, size_t> record_indexes_by_identifier_;
   absl::flat_hash_map<std::string, size_t> record_indexes_by_alias_;
+  //
+  // The set of identifiers sourced by some column of the Record. Used during
+  // the RecordsMap -> Record conversion to tell a fetched field that feeds a
+  // column from one that must be passed through as an extra field. A column
+  // finds its own value by identifier, so no identifier -> index map is
+  // needed -- and unlike such a map this stays correct when several columns
+  // source the same identifier.
+  //
+  absl::flat_hash_set<std::string> record_identifiers_;
   //
   // Maps indexes in a record into metadata for that index
   //
@@ -122,18 +131,13 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   size_t AddRecordAttribute(absl::string_view identifier,
                             absl::string_view alias,
                             indexes::IndexerType data_type) {
-    auto identifier_itr = record_indexes_by_identifier_.find(identifier);
     auto alias_itr = record_indexes_by_alias_.find(alias);
-    if (identifier_itr != record_indexes_by_identifier_.end() &&
-        alias_itr != record_indexes_by_alias_.end()) {
-      assert(identifier_itr->second == alias_itr->second);
-      return identifier_itr->second;
+    if (alias_itr != record_indexes_by_alias_.end()) {
+      return alias_itr->second;
     }
-    assert(identifier_itr == record_indexes_by_identifier_.end());
-    assert(alias_itr == record_indexes_by_alias_.end());
     size_t new_index = record_info_by_index_.size();
-    record_indexes_by_identifier_.emplace(std::string(identifier), new_index);
     record_indexes_by_alias_.emplace(std::string(alias), new_index);
+    record_identifiers_.emplace(std::string(identifier));
     record_info_by_index_.push_back(
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),

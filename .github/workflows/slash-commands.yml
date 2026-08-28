@@ -57,7 +57,7 @@ jobs:
           # A fine-grained PAT with "Variables: read and write" for this repo.
           # GITHUB_TOKEN cannot access the variables API, so without this secret
           # the job cannot keep counts and falls back to a PR-number rotation.
-          LEDGER_TOKEN: ${{ secrets.REVIEWER_LEDGER_TOKEN }}
+          LEDGER_TOKEN: ${{ secrets.SEARCH_REVIEWER_LEDGER_TOKEN }}
         with:
           script: &assign_script |
             const { owner, repo } = context.repo;
@@ -118,7 +118,7 @@ jobs:
             // also honored on first use if present.
             //
             // The variables API is not reachable with GITHUB_TOKEN, so a
-            // dedicated PAT (REVIEWER_LEDGER_TOKEN) is used for it. If the secret
+            // dedicated PAT (SEARCH_REVIEWER_LEDGER_TOKEN) is used for it. If the secret
             // is absent, the ledger is disabled and selection falls back to a
             // PR-number rotation, so assignment keeps working either way.
             const LEDGER_VAR = 'REVIEWER_ASSIGNMENT_LEDGER';
@@ -143,7 +143,7 @@ jobs:
             let ledger = null;
             let ledgerExists = false;
             if (!ledgerToken) {
-              core.info('REVIEWER_LEDGER_TOKEN not set — using PR-number rotation instead of the assignment-count ledger.');
+              core.info('SEARCH_REVIEWER_LEDGER_TOKEN not set — using PR-number rotation instead of the assignment-count ledger.');
             } else {
               try {
                 const res = await ledgerFetch('GET', varPath + '/' + LEDGER_VAR);
@@ -314,7 +314,7 @@ jobs:
     steps:
       - uses: actions/github-script@v7
         env:
-          LEDGER_TOKEN: ${{ secrets.REVIEWER_LEDGER_TOKEN }}
+          LEDGER_TOKEN: ${{ secrets.SEARCH_REVIEWER_LEDGER_TOKEN }}
         with:
           script: *assign_script
 

@@ -22,7 +22,6 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
-#include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/thread_monitoring.h"
@@ -60,6 +59,9 @@ class ThreadPool {
   void JoinTerminatedWorkers();
 
   absl::Status MarkForStop(StopMode stop_mode);
+  /// Suspend all workers until `ResumeWorkers` is called. On success no task
+  /// is running and none can start, but a worker may still hold `queue_mutex_`,
+  /// so a fork child must not touch the pool.
   absl::Status SuspendWorkers();
   bool IsSuspended() const {
     absl::MutexLock lock(&queue_mutex_);
@@ -140,8 +142,18 @@ class ThreadPool {
   void IncrThreadCountBy(size_t count);
   void DecrThreadCountBy(size_t count, bool sync);
 
-  inline void AwaitSuspensionCleared()
+  inline void AwaitSuspensionCleared(const Thread& thread)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
+  /// True once every running worker is parked in AwaitSuspensionCleared.
+  inline bool AllWorkersSuspended() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
+    return suspended_workers_ == active_workers_;
+  }
+  /// True once every parked worker has left AwaitSuspensionCleared.
+  inline bool NoWorkerSuspended() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
+    return suspended_workers_ == 0;
+  }
   inline bool QueueReady() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
     for (const auto& queue : priority_tasks_) {
       if (!queue.empty()) {
@@ -163,8 +175,10 @@ class ThreadPool {
   std::string name_prefix_;
   std::optional<StopMode> stop_mode_ ABSL_GUARDED_BY(queue_mutex_);
   bool started_{false};
-  std::unique_ptr<absl::BlockingCounter> blocking_refcount_;
   bool suspend_workers_ ABSL_GUARDED_BY(queue_mutex_){false};
+  /// Counts of running and suspended workers, updated by the workers.
+  size_t active_workers_ ABSL_GUARDED_BY(queue_mutex_){0};
+  size_t suspended_workers_ ABSL_GUARDED_BY(queue_mutex_){0};
 
   // Suspend and resume are mutually exclusive.
   mutable absl::Mutex suspend_resume_mutex_;
@@ -185,6 +199,7 @@ class ThreadPool {
   std::atomic<double> recent_avg_wait_time_{0.0};
 
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
+  FRIEND_TEST(ThreadPoolTest, RepeatedResizeWhileSuspended);
 };
 
 }  // namespace vmsdk

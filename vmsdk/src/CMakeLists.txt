@@ -48,6 +48,9 @@ set(VMSDKLIB_SRCS
 valkey_search_add_static_library(vmsdklib "${VMSDKLIB_SRCS}")
 target_include_directories(vmsdklib PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_include_directories(vmsdklib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/status)
+if(ENABLE_SVS)
+  target_compile_definitions(vmsdklib PUBLIC ENABLE_SVS)
+endif()
 target_link_libraries(vmsdklib INTERFACE hdrhistogram_c)
 
 if(APPLE)

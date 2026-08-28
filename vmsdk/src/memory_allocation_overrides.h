@@ -8,6 +8,8 @@
 #ifndef VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 #define VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 
+#include <sys/mman.h>
+
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -23,21 +25,33 @@
 #endif
 
 extern "C" {
+// Use glibc's internal symbols directly to avoid circular resolution when
+// we export malloc/free from this module (for SVS RTLD_DEEPBIND support).
+extern void* __libc_malloc(size_t);
+extern void __libc_free(void*);
+extern void* __libc_calloc(size_t, size_t);
+extern void* __libc_realloc(void*, size_t);
+extern void* __libc_memalign(size_t, size_t);
+
 // NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_malloc)(size_t) = malloc;
+WEAK_SYMBOL void* (*__real_malloc)(size_t) = __libc_malloc;
 // NOLINTNEXTLINE
-WEAK_SYMBOL void (*__real_free)(void*) = free;
+WEAK_SYMBOL void (*__real_free)(void*) = __libc_free;
 // NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_calloc)(size_t, size_t) = calloc;
+WEAK_SYMBOL void* (*__real_calloc)(size_t, size_t) = __libc_calloc;
 // NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_realloc)(void*, size_t) = realloc;
+WEAK_SYMBOL void* (*__real_realloc)(void*, size_t) = __libc_realloc;
 // NOLINTNEXTLINE
-WEAK_SYMBOL void* (*__real_aligned_alloc)(size_t, size_t) = aligned_alloc;
+WEAK_SYMBOL void* (*__real_aligned_alloc)(size_t, size_t) = __libc_memalign;
 // NOLINTNEXTLINE
 WEAK_SYMBOL int (*__real_posix_memalign)(void**, size_t,
                                          size_t) = posix_memalign;
 // NOLINTNEXTLINE
 WEAK_SYMBOL void* (*__real_valloc)(size_t) = valloc;
+// NOLINTNEXTLINE
+WEAK_SYMBOL void* (*__real_mmap)(void*, size_t, int, int, int, off_t) = mmap;
+// NOLINTNEXTLINE
+WEAK_SYMBOL int (*__real_munmap)(void*, size_t) = munmap;
 // NOLINTNEXTLINE
 __attribute__((weak)) size_t empty_usable_size(void* ptr) noexcept;
 }  // extern "C"

@@ -1025,6 +1025,13 @@ void ValkeySearch::AtForkPrepare() {
       utility_thread_pool_ == nullptr) {
     return;
   }
+#ifdef ENABLE_SVS
+  // Pre-serialize SVS indexes before suspending pools. SVS save() uses
+  // OpenMP internally — calling it after pool suspension can segfault
+  // because suspended threads hold SVS-internal state. The WriterMutexLock
+  // in PreSerializeForRDB() ensures exclusive access to SVS.
+  SchemaManager::Instance().PreSerializeSVSIndexes();
+#endif
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
   auto status = writer_thread_pool_->SuspendWorkers();
   VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend writer "
@@ -1050,6 +1057,9 @@ void ValkeySearch::AfterForkParent() {
   if (reader_thread_pool_ == nullptr) {
     return;
   }
+#ifdef ENABLE_SVS
+  SchemaManager::Instance().ClearSVSPreSerializedData();
+#endif
   auto status = reader_thread_pool_->ResumeWorkers();
   Metrics::GetStats().reader_worker_thread_pool_resumed_cnt++;
   VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "

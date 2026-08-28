@@ -123,6 +123,14 @@ class SchemaManager {
   absl::Status ShowIndexSchemas(ValkeyModuleCtx *ctx,
                                 vmsdk::ArgsIterator &itr) const;
 
+#ifdef ENABLE_SVS
+  // Pre-fork SVS serialization: serialize all SVS indexes to in-memory
+  // buffers so the forked BGSAVE child avoids calling into the SVS runtime.
+  void PreSerializeSVSIndexes() ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+  void ClearSVSPreSerializedData()
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+#endif
+
  private:
   absl::Status RemoveAll()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);

@@ -223,9 +223,14 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
             case data_model::VECTOR_DATA_TYPE_FLOAT32: {
               VMSDK_ASSIGN_OR_RETURN(
                   auto index,
-                  indexes::VectorSVS<float>::Create(
-                      index.vector_index(), attribute.identifier(),
-                      index_schema->GetAttributeDataType().ToProto()));
+                  (iter.has_value())
+                      ? indexes::VectorSVS<float>::LoadFromRDB(
+                            ctx, &index_schema->GetAttributeDataType(),
+                            index.vector_index(), attribute.identifier(),
+                            std::move(*iter))
+                      : indexes::VectorSVS<float>::Create(
+                            index.vector_index(), attribute.identifier(),
+                            index_schema->GetAttributeDataType().ToProto()));
               index_schema->SubscribeToVectorExternalizer(
                   attribute.identifier(), index.get());
               return index;

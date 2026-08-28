@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -88,6 +89,12 @@ class VectorSVS : public VectorBase {
       data_model::AttributeDataType attribute_data_type)
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  static absl::StatusOr<std::shared_ptr<VectorSVS<T>>> LoadFromRDB(
+      ValkeyModuleCtx* ctx, const AttributeDataType* attribute_data_type,
+      const data_model::VectorIndex& vector_index_proto,
+      absl::string_view attribute_identifier,
+      SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
   ~VectorSVS() override;
 
   size_t GetDataTypeSize() const override { return sizeof(T); }
@@ -103,6 +110,12 @@ class VectorSVS : public VectorBase {
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<unsigned> search_window_size = std::nullopt)
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+
+  // Pre-fork RDB serialization: serialize SVS graph to an in-memory buffer
+  // so the forked BGSAVE child only writes raw bytes (SVS runtime is not
+  // fork-safe).
+  void PreSerializeForRDB() ABSL_LOCKS_EXCLUDED(index_mutex_);
+  void ClearPreSerializedData() ABSL_LOCKS_EXCLUDED(index_mutex_);
 
  protected:
   absl::Status AddRecordImpl(uint64_t internal_id,
@@ -147,7 +160,13 @@ class VectorSVS : public VectorBase {
   absl::Status TrainAndBuildLeanVecIndex()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
 
-  // SVS index (owned, destroyed via DynamicVamanaIndex::destroy)
+  // Ensure svs_index_ is initialized. Called from AddRecordImpl to handle
+  // the empty-restore path (LoadFromRDB with has_graph_data=0), where
+  // svs_index_ is null until the first mutation.
+  absl::Status EnsureSVSIndex() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
+
+  // SVS index (owned, destroyed via DynamicVamanaIndex::destroy).
+  // Non-null after Create() or after the first Add on an empty-restored index.
   svs::runtime::v0::DynamicVamanaIndex* svs_index_
       ABSL_GUARDED_BY(index_mutex_){nullptr};
   SVSBuildConfig build_config_;
@@ -182,6 +201,16 @@ class VectorSVS : public VectorBase {
   size_t last_reported_svs_memory_ ABSL_GUARDED_BY(index_mutex_){0};
 
   void UpdateReportedMemory() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
+
+  // Pre-serialized SVS graph data for fork-safe RDB persistence.
+  // Populated in AtForkPrepare, consumed in SaveIndexImpl (forked child),
+  // cleared in AfterForkParent.
+  mutable std::optional<std::string> pre_serialized_snapshot_
+      ABSL_GUARDED_BY(index_mutex_);
+  // Set permanently after save() causes SIGABRT. Prevents subsequent save()
+  // calls on potentially-corrupted SVS runtime state. Mutable so it can be
+  // set from the const SaveIndexImpl (foreground SAVE path).
+  mutable std::atomic<bool> serialize_disabled_{false};
 };
 
 }  // namespace valkey_search::indexes

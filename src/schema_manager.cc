@@ -32,7 +32,11 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/index_base.h"
 #include "src/metrics.h"
+#ifdef ENABLE_SVS
+#include "src/indexes/vector_svs.h"
+#endif
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
@@ -882,5 +886,37 @@ static vmsdk::info_field::Integer total_active_write_threads(
       }
       return (unsigned long)0;
     }));
+
+#ifdef ENABLE_SVS
+void SchemaManager::PreSerializeSVSIndexes() {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      for (const auto &[attr_name, attr] : schema->GetAttributes()) {
+        if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kSVS) {
+          auto *svs_index =
+              static_cast<indexes::VectorSVS<float> *>(attr.GetIndex().get());
+          svs_index->PreSerializeForRDB();
+        }
+      }
+    }
+  }
+}
+
+void SchemaManager::ClearSVSPreSerializedData() {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  for (const auto &[db_num, schema_map] : db_to_index_schemas_) {
+    for (const auto &[name, schema] : schema_map) {
+      for (const auto &[attr_name, attr] : schema->GetAttributes()) {
+        if (attr.GetIndex()->GetIndexerType() == indexes::IndexerType::kSVS) {
+          auto *svs_index =
+              static_cast<indexes::VectorSVS<float> *>(attr.GetIndex().get());
+          svs_index->ClearPreSerializedData();
+        }
+      }
+    }
+  }
+}
+#endif
 
 }  // namespace valkey_search

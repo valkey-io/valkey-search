@@ -301,6 +301,13 @@ void* __wrap_aligned_alloc(size_t __alignment, size_t __size) noexcept {
       }
   }
 
+  if (ABSL_PREDICT_FALSE(__alignment > 16)) {
+    auto ptr = vmsdk::PerformAndTrackAlignedAlloc(
+        __alignment, __size, __real_aligned_alloc, empty_usable_size);
+    vmsdk::SystemAllocTracker::GetInstance().TrackPointer(ptr);
+    return ptr;
+  }
+
   return vmsdk::PerformAndTrackMalloc(AlignSize(__size, __alignment),
                                       ValkeyModule_Alloc,
                                       ValkeyModule_MallocUsableSize);
@@ -322,6 +329,20 @@ int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES {
 void* __wrap_valloc(size_t size) noexcept {
   return __wrap_aligned_alloc(sysconf(_SC_PAGESIZE), size);
 }
+
+void* __wrap_mmap(void* addr, size_t length, int prot, int flags, int fd,
+                  off_t offset) noexcept {
+  return __real_mmap(addr, length, prot, flags, fd, offset);
+}
+
+int __wrap_munmap(void* addr, size_t length) noexcept {
+  return __real_munmap(addr, length);
+}
+
+
+// SVS allocator export disabled - SVS must use glibc natively.
+// Exporting allocators causes SVS add() to crash because jemalloc is
+// stricter than glibc about heap metadata validation.
 
 }  // extern "C"
 

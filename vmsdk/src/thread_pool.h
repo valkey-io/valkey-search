@@ -142,14 +142,16 @@ class ThreadPool {
   void IncrThreadCountBy(size_t count);
   void DecrThreadCountBy(size_t count, bool sync);
 
-  inline void AwaitSuspensionCleared(const Thread& thread)
+  /// Wait while the pool is suspended, unless `thread` is already retired.
+  /// Returns true if the worker waited.
+  inline bool AwaitSuspensionCleared(const Thread& thread)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
-  /// True once every running worker is parked in AwaitSuspensionCleared.
+  /// True once every running worker is waiting in AwaitSuspensionCleared.
   inline bool AllWorkersSuspended() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
     return suspended_workers_ == active_workers_;
   }
-  /// True once every parked worker has left AwaitSuspensionCleared.
+  /// True once every waiting worker has left AwaitSuspensionCleared.
   inline bool NoWorkerSuspended() const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
     return suspended_workers_ == 0;

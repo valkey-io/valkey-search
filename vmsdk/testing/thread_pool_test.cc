@@ -313,7 +313,7 @@ TEST_F(ThreadPoolTest, ResizeWhileSuspended) {
   thread_pool.Resize(2);
   thread_pool.Resize(8);
 
-  // Workers created during the suspension must park before taking a task.
+  // Workers created during the suspension must wait before taking a task.
   absl::Notification notification;
   EXPECT_TRUE(thread_pool.Schedule([&notification]() { notification.Notify(); },
                                    ThreadPool::Priority::kHigh));

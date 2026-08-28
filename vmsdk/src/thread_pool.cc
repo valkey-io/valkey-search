@@ -222,10 +222,10 @@ absl::Status ThreadPool::ResumeWorkers() {
   return absl::OkStatus();
 }
 
-void ThreadPool::AwaitSuspensionCleared(const Thread &thread)
+bool ThreadPool::AwaitSuspensionCleared(const Thread &thread)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
   if (!suspend_workers_ || thread.IsShutdown()) {
-    return;
+    return false;
   }
   // Wait per worker so a worker retired by Resize can exit during suspension;
   // otherwise it stays blocked until resume while resizes add replacements.
@@ -236,6 +236,7 @@ void ThreadPool::AwaitSuspensionCleared(const Thread &thread)
   ++suspended_workers_;
   queue_mutex_.Await(absl::Condition(&suspension_cleared));
   --suspended_workers_;
+  return true;
 }
 
 void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
@@ -247,8 +248,8 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
     absl::AnyInvocable<void()> task;
     {
       absl::MutexLock lock(&queue_mutex_);
-      AwaitSuspensionCleared(*thread);
-      if (suspend_workers_ && thread->IsShutdown()) {
+      const bool was_suspended = AwaitSuspensionCleared(*thread);
+      if ((was_suspended || suspend_workers_) && thread->IsShutdown()) {
         // A worker retired during suspension exits immediately; queued tasks
         // are left to the remaining workers.
         --active_workers_;

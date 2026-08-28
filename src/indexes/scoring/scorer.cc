@@ -15,16 +15,29 @@
 
 namespace valkey_search::indexes::scoring {
 
-// Hand-rolled inf check via the raw IEEE-754 bits: the build uses -ffast-math
-// (implies -ffinite-math-only), under which the compiler assumes no inf/NaN and
-// folds std::isinf to a constant false. Inspecting the bit pattern is immune to
-// that assumption.
-bool IsInf(float f) {
-  static constexpr uint32_t kExponentMask = 0x7F800000U;
-  static constexpr uint32_t kMantissaMask = 0x007FFFFFU;
+namespace {
+constexpr uint32_t kExponentMask = 0x7F800000U;
+constexpr uint32_t kMantissaMask = 0x007FFFFFU;
+
+uint32_t FloatBits(float f) {
   uint32_t bits;
   std::memcpy(&bits, &f, sizeof(bits));
+  return bits;
+}
+}  // namespace
+
+// Hand-rolled inf/NaN checks via the raw IEEE-754 bits: the build uses
+// -ffast-math (implies -ffinite-math-only), under which the compiler assumes no
+// inf/NaN and folds std::isinf/std::isnan (and idioms like `f != f`) to a
+// constant. Inspecting the bit pattern is immune to that assumption.
+bool IsInf(float f) {
+  const uint32_t bits = FloatBits(f);
   return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) == 0;
+}
+
+bool IsNaN(float f) {
+  const uint32_t bits = FloatBits(f);
+  return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0;
 }
 
 const Scorer* GetScorer(ScorerType type) {

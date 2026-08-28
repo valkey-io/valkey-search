@@ -635,6 +635,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
+// Final guard before a score reaches Neighbor.score.
+// IsNaN (not std::isnan) because the build uses -ffast-math.
+float SanitizeScore(float score) {
+  return indexes::scoring::IsNaN(score) ? 0.0f : score;
+}
+
 // A term leaf's posting lists resolved once per query. A term matches via its
 // original word plus any stem variants that stem to the same root (mirroring
 // TermPredicate::Evaluate), so a leaf can resolve to several posting lists. The
@@ -987,8 +993,8 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     const float document_score = score_ctx.has_score_field
                                      ? index_schema.GetDocumentScore(key)
                                      : score_ctx.default_document_score;
-    const float final_score =
-        scorer->ComposeDocumentScore(resolved_score, document_score);
+    const float final_score = SanitizeScore(
+        scorer->ComposeDocumentScore(resolved_score, document_score));
     scored.push_back({candidate.key, 0.0f, final_score});
   }
 
@@ -1110,7 +1116,8 @@ std::optional<float> SingleDocumentScorer::Score(
       score_ctx.has_score_field
           ? state_->index_schema.GetDocumentScore(borrowed_key)
           : score_ctx.default_document_score;
-  return state_->scorer->ComposeDocumentScore(*sum, document_score);
+  return SanitizeScore(
+      state_->scorer->ComposeDocumentScore(*sum, document_score));
 }
 
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(

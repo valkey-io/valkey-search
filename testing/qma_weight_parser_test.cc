@@ -210,6 +210,15 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "(@title:{dogs}) => { $weight: NaN; }",
             .parse_success = false,
         },
+        // A value above FLT_MAX would narrow to inf in SetWeight and then
+        // produce a NaN score wherever it met a zero document score.
+        {
+            .test_name = "weight_overflows_float",
+            .filter = "(@title:{dogs}) => { $weight: "
+                      "999999999999999999999999999999999999999999; }",
+            .parse_success = false,
+            .expected_error_substr = "finite",
+        },
         {
             .test_name = "weight_missing_value_semicolon",
             .filter = "(@title:{dogs}) => { $weight: ; }",

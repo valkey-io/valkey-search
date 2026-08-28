@@ -10,12 +10,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -1758,6 +1760,59 @@ TEST_F(ScoreTextQueryTestBase, TextLessIndexScoresZeroNotNan) {
   ASSERT_TRUE(score.has_value());
   EXPECT_FALSE(std::isnan(*score));
   EXPECT_FLOAT_EQ(*score, 0.0f);
+}
+
+// A scorer that hands back NaN, to drive the scoring boundary directly. Scorer
+// is a public virtual seam, so a NaN there is reachable regardless of what
+// BM25STD itself can produce. std::isnan/std::nanf are unusable under
+// -ffast-math, so build the NaN from its bit pattern and classify it with the
+// codebase's own bit-pattern check.
+class NaNScorer : public indexes::scoring::Scorer {
+ public:
+  static float MakeNaN() {
+    static constexpr uint32_t kQuietNaNBits = 0x7FC00000U;
+    float value;
+    std::memcpy(&value, &kQuietNaNBits, sizeof(value));
+    return value;
+  }
+  std::string_view Name() const override { return "NANTEST"; }
+  indexes::scoring::ScorerType Type() const override {
+    return indexes::scoring::ScorerType::kBm25Std;
+  }
+  bool NeedsDocumentLength() const override { return false; }
+  float PrecomputeIDF(const indexes::scoring::IdfInput &) const override {
+    return 1.0f;
+  }
+  float ScoreLeaf(const indexes::scoring::LeafScoreInput &) const override {
+    return 1.0f;
+  }
+  float ComposeDocumentScore(float, float) const override { return MakeNaN(); }
+};
+
+// A NaN must never reach Neighbor.score: SearchResult::TrimResults sorts on
+// that field, and NaN compares false against everything, which violates strict
+// weak ordering and makes std::sort undefined behavior rather than merely
+// misordered.
+TEST_F(ScoreTextQueryTestBase, NaNScoreIsClampedBeforeReachingNeighbor) {
+  ASSERT_TRUE(indexes::scoring::IsNaN(NaNScorer::MakeNaN()))
+      << "test cannot construct a NaN; the clamp assertion below is vacuous";
+  auto schema = BuildTextTagSchema({{"d1", "hello world", "red"}});
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, "@text:hello", options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+
+  auto interned = StringInternStore::Intern("d1");
+  std::vector<indexes::BorrowedNeighbor> cands{
+      {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+  NaNScorer nan_scorer;
+  {
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    query::ScoreTextQuery(*schema, parsed.value().root_predicate.get(),
+                          &nan_scorer, cands);
+  }
+  ASSERT_EQ(cands.size(), 1u);
+  EXPECT_FALSE(indexes::scoring::IsNaN(cands[0].score));
+  EXPECT_FLOAT_EQ(cands[0].score, 0.0f);
 }
 
 // The recompute path (SingleDocumentScorer) must land on the same scale as the

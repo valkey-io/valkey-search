@@ -980,6 +980,12 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
   if (value <= 0.0) {
     return absl::InvalidArgumentError("Weight must be a positive number");
   }
+  // SetWeight narrows to float, so a value above FLT_MAX would become inf and
+  // then produce a NaN score wherever it meets a zero document score. Reject it
+  // here instead.
+  if (value > static_cast<double>(std::numeric_limits<float>::max())) {
+    return absl::InvalidArgumentError("Weight must be a finite number");
+  }
   // Consume optional semicolon
   Match(';');
   if (!Match('}')) {

@@ -226,6 +226,58 @@ class TestQueryParser(ValkeySearchTestCaseBase):
         result = client.execute_command("FT.SEARCH", "idx1", 'con*+ | word1!!')
         assert result[0] == 2
 
+    def test_text_field_scoped_group(self):
+        """
+        A parenthesized group after a text field modifier, @f:(a|b|c), scopes
+        the whole group to that field: it is shorthand for @f:a | @f:b | @f:c.
+        Before #1214 the parser only accepted [ ] (numeric) and { } (tag) after
+        a field modifier, so @f:(...) fell through to bare-token parsing, broke
+        on the '(', and was rejected as "Invalid Query Syntax".
+
+        These assertions pin the operators inside the group (| is OR, space is
+        AND) and, crucially, that the field scope is actually applied to every
+        term inside -- a term in the group must not leak into other fields.
+        Cross-checked against RediSearch on redis-stack-server; the results
+        below are identical on both engines.
+        """
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "grpidx", "ON", "HASH", "SCHEMA",
+            "f1", "TEXT", "f2", "TEXT")
+        client.execute_command("HSET", "d1", "f1", "foo")
+        client.execute_command("HSET", "d2", "f1", "bar")
+        client.execute_command("HSET", "d3", "f1", "baz")
+        client.execute_command("HSET", "d4", "f1", "qux")
+        # d5 holds "foo" in f2, not f1 -- it exists to catch the group leaking
+        # its scope to the wrong field.
+        client.execute_command("HSET", "d5", "f2", "foo")
+
+        # '|' inside the group is OR, scoped to f1: matches foo, bar, baz.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo|bar|baz)", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"d1", b"d2", b"d3"}
+
+        # A single term in parentheses is equivalent to the bare @f1:foo.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo)", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"d1"
+        # The scope is real: "foo" here targets f1 only, so d5 (f2=foo) is not
+        # matched even though it contains the same term.
+        assert b"d5" not in result[1:]
+
+        # A space inside the group is AND: no document has both foo and bar in
+        # f1, so the group matches nothing.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo bar)", "NOCONTENT")
+        assert result[0] == 0
+
+        # An empty group is a syntax error, not a silent match-all/match-none.
+        with pytest.raises(ResponseError):
+            client.execute_command(
+                "FT.SEARCH", "grpidx", "@f1:()", "NOCONTENT")
+
     def test_tag_min_prefix_length_config(self):
         """
         Test that search.tag-min-prefix-length dynamically controls TAG wildcard

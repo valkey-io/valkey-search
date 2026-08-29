@@ -64,7 +64,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       // pipeline stages (APPLY/SORTBY/FILTER).
       auto apply_rename = [&](size_t record_index) {
         params.record_info_by_index_[record_index].output_name_ = alias;
-        params.record_indexes_by_alias_.emplace(alias, record_index);
+        params.record_indexes_by_alias_[alias] = record_index;
       };
       //
       // Skip loading of the score and the key, we always get those...
@@ -98,15 +98,18 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
-        record_index = params.AddRecordAttribute(*schema_identifier, identifier,
-                                                 indexer_type);
+        record_index = params.AddRecordAttribute(
+            *schema_identifier, identifier,
+            renamed ? alias : *schema_identifier, indexer_type);
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
-        record_index = params.AddRecordAttribute(identifier, identifier,
-                                                 indexes::IndexerType::kNone);
+        record_index =
+            params.AddRecordAttribute(identifier, identifier,
+                                      renamed ? alias : identifier,
+                                      indexes::IndexerType::kNone);
       }
       if (renamed) {
         apply_rename(record_index);
@@ -125,10 +128,11 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
   // Ensure that key is first value if it gets included...
-  CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
+  CHECK(AddRecordAttribute("__key", "__key", "__key",
+                           indexes::IndexerType::kNone) == kKeyColumn);
   auto score_sv = vmsdk::ToStringView(score_as.get());
-  CHECK(AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone) ==
-        1);
+  CHECK(AddRecordAttribute(score_sv, score_sv, score_sv,
+                           indexes::IndexerType::kNone) == kScoreColumn);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -227,17 +231,14 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
   std::optional<std::string> vector_identifier;
 
   if (parameters.load_key) {
-    key_index = parameters.AddRecordAttribute("__key", "__key",
-                                              indexes::IndexerType::kNone);
+    key_index = AggregateParameters::kKeyColumn;
   }
   if (parameters.IsVectorQuery()) {
     VMSDK_ASSIGN_OR_RETURN(
         vector_identifier,
         parameters.index_schema->GetIdentifier(parameters.attribute_alias));
 
-    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                 indexes::IndexerType::kNone);
+    scores_index = AggregateParameters::kScoreColumn;
   }
 
   query::ProcessNeighborsForReply(

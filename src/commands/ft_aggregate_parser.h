@@ -128,23 +128,55 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   //
   std::vector<AttributeRecordInfo> record_info_by_index_;
 
+  // A column is identified by the name it is emitted under, NOT by the field
+  // it reads: one LOAD clause may name the same field several times under
+  // different output names, and each of those needs a column of its own.
+  // Collapsing on the identifier instead would leave only the last-registered
+  // output name, silently dropping the others.
+  //
+  // `record_indexes_by_alias_` can hold a name a column used to be emitted
+  // under before a rename, so a hit is only a match when the column still
+  // emits that name.
   size_t AddRecordAttribute(absl::string_view identifier,
                             absl::string_view alias,
+                            absl::string_view output_name,
                             indexes::IndexerType data_type) {
-    auto alias_itr = record_indexes_by_alias_.find(alias);
-    if (alias_itr != record_indexes_by_alias_.end()) {
-      return alias_itr->second;
+    if (auto itr = record_indexes_by_alias_.find(output_name);
+        itr != record_indexes_by_alias_.end() &&
+        record_info_by_index_[itr->second].output_name_ == output_name) {
+      return itr->second;
     }
     size_t new_index = record_info_by_index_.size();
+    // The attribute name keeps resolving to the first column that carried it;
+    // the output name always resolves to the column that emits it.
     record_indexes_by_alias_.emplace(std::string(alias), new_index);
+    record_indexes_by_alias_[std::string(output_name)] = new_index;
     record_identifiers_.emplace(std::string(identifier));
     record_info_by_index_.push_back(
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),
-                            .output_name_ = std::string(identifier),
+                            .output_name_ = std::string(output_name),
                             .data_type_ = data_type});
     return new_index;
   }
+
+  // Adds a column reading the same field as `source` but emitted under
+  // `output_name`. Used when one LOAD clause renames a field that an earlier
+  // entry in the same clause has already claimed an output name for.
+  size_t AddRecordAttributeAlias(size_t source, absl::string_view output_name) {
+    AttributeRecordInfo info = record_info_by_index_[source];
+    info.output_name_ = std::string(output_name);
+    size_t new_index = record_info_by_index_.size();
+    record_info_by_index_.push_back(std::move(info));
+    record_indexes_by_alias_[std::string(output_name)] = new_index;
+    return new_index;
+  }
+
+  // __key and the score are seeded as the first two columns by ParseCommand so
+  // that later stages can find them even after a LOAD ... AS rename has
+  // changed the name they are emitted under.
+  static constexpr size_t kKeyColumn = 0;
+  static constexpr size_t kScoreColumn = 1;
 
   struct {
     // Variables here are only used during parsing and are cleared at the end.

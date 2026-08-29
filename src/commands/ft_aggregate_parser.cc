@@ -7,6 +7,7 @@
 #include "src/commands/ft_aggregate_parser.h"
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -62,6 +63,11 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         // a rename is involved (see below); two plain loads of the same field
         // keep their long-standing de-duplicating behavior.
         absl::flat_hash_map<std::string, bool> claimed_names;
+        // Columns this LOAD clause has already assigned an output name to. A
+        // later entry naming the same field cannot reuse one of these -- it
+        // would overwrite the earlier entry's output name -- so it gets a
+        // column of its own reading the same field.
+        absl::flat_hash_set<size_t> claimed_columns;
         while (consumed < cnt) {
           std::string load;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
@@ -129,10 +135,14 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
             auto ref = parameters.MakeReference(identifier, false);
             if (ref.ok()) {
               if (auto *attr = dynamic_cast<Attribute *>(ref->get())) {
-                parameters.record_info_by_index_[attr->record_index_]
-                    .output_name_ = alias;
-                parameters.record_indexes_by_alias_.emplace(
-                    alias, attr->record_index_);
+                size_t index = attr->record_index_;
+                if (claimed_columns.contains(index)) {
+                  index = parameters.AddRecordAttributeAlias(index, alias);
+                } else {
+                  parameters.record_info_by_index_[index].output_name_ = alias;
+                  parameters.record_indexes_by_alias_[alias] = index;
+                }
+                claimed_columns.insert(index);
               }
             }
           }
@@ -363,11 +373,12 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   if (identifier.ok()) {
     // DBG << "Adding Record Attribute: " << name << " with alias "
     //     << identifier.value() << "\n";
-    new_index = AddRecordAttribute(*identifier, name, fieldType);
+    new_index = AddRecordAttribute(*identifier, name, *identifier, fieldType);
   } else {
     // DBG << "Adding Record Attribute: " << name
     //     << " with synthetic alias (no index schema)\n";
-    new_index = AddRecordAttribute(name, name, indexes::IndexerType::kNone);
+    new_index =
+        AddRecordAttribute(name, name, name, indexes::IndexerType::kNone);
   }
   return std::make_unique<Attribute>(name, new_index);
 }

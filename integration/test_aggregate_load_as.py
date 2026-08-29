@@ -195,6 +195,56 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
         assert len(result) == 1
         assert result[0] == {"price": b"10"}
 
+    def test_same_field_under_two_output_names(self):
+        """One LOAD clause may name the same field more than once under
+        different output names; each name gets its own column, all reading the
+        same source field. Verified against RediSearch, which emits a column
+        per name.
+
+        Cases involving a field loaded *without* a rename are asserted on HASH
+        only: on JSON the un-renamed entry is emitted under the schema
+        identifier (`$.price`) rather than the attribute name, which is a
+        separate pre-existing defect and not what this test is about."""
+        both = ((self._make_hash, "idx_hash"), (self._make_json, "idx_json"))
+        hash_only = ((self._make_hash, "idx_hash"),)
+        cases = [
+            # Two renames of the same field -- no default output name involved,
+            # so this holds for both key types.
+            (both, ("LOAD", "6", "@price", "AS", "a", "@price", "AS", "b"),
+             {"a": b"10", "b": b"10"}),
+            # Plain load plus a rename of the same field.
+            (hash_only, ("LOAD", "4", "@price", "@price", "AS", "b"),
+             {"price": b"10", "b": b"10"}),
+            # ... and the same pair in the opposite order.
+            (hash_only, ("LOAD", "4", "@price", "AS", "a", "@price"),
+             {"a": b"10", "price": b"10"}),
+        ]
+        for targets, load, expected in cases:
+            for make, idx in targets:
+                client = self._client()
+                client.execute_command("FLUSHALL", "SYNC")
+                make(client)
+                reply = client.execute_command(
+                    "FT.AGGREGATE", idx, "@price:[-inf inf]", *load,
+                )
+                result = rows(reply)
+                assert len(result) == 1, f"{idx} {load}"
+                assert result[0] == expected, f"{idx} {load}"
+
+    def test_same_field_under_two_output_names_in_apply(self):
+        """Both output names of a doubly-loaded field resolve independently in
+        a later pipeline stage."""
+        client = self._client()
+        self._make_hash(client)
+        reply = client.execute_command(
+            "FT.AGGREGATE", "idx_hash", "@price:[-inf inf]",
+            "LOAD", "6", "@price", "AS", "a", "@price", "AS", "b",
+            "APPLY", "@a+@b", "AS", "s",
+        )
+        result = rows(reply)
+        assert len(result) == 1
+        assert result[0] == {"a": b"10", "b": b"10", "s": b"20"}
+
     def test_rename_key_field(self):
         """`__key` may be renamed via AS, and the alias is usable downstream."""
         client = self._client()

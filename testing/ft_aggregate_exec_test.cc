@@ -83,10 +83,10 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
+        params->AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric),
         0);
     EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
+        params->AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric),
         1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
@@ -112,13 +112,13 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
+        params->AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric),
         0);
     EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
+        params->AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric),
         1);
     EXPECT_EQ(
-        params->AddRecordAttribute("n3", "n3", indexes::IndexerType::kNumeric),
+        params->AddRecordAttribute("n3", "n3", "n3", indexes::IndexerType::kNumeric),
         2);
 
     auto parser = CreateAggregateParser();
@@ -436,8 +436,8 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       vmsdk::ArgsIterator itr(argv.data(), argv.size());
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-      params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";

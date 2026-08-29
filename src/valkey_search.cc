@@ -1044,21 +1044,21 @@ void ValkeySearch::AtForkPrepare() {
   }
   Metrics::GetStats().worker_thread_pool_suspend_cnt++;
   auto status = writer_thread_pool_->SuspendWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend writer "
-                                 "worker thread pool returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "At prepare fork callback, suspend writer "
+                        "worker thread pool returned message: "
+                     << status.message();
   status = reader_thread_pool_->SuspendWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend reader "
-                                 "worker thread pool returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "At prepare fork callback, suspend reader "
+                        "worker thread pool returned message: "
+                     << status.message();
   status = utility_thread_pool_->SuspendWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend utility "
-                                 "worker thread pool returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "At prepare fork callback, suspend utility "
+                        "worker thread pool returned message: "
+                     << status.message();
   status = coordinator::GRPCSuspender::Instance().Suspend();
-  VMSDK_LOG(WARNING, nullptr) << "At prepare fork callback, suspend gRPC "
-                                 "returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "At prepare fork callback, suspend gRPC "
+                        "returned message: "
+                     << status.message();
 }
 
 void ValkeySearch::AfterForkParent() {
@@ -1069,18 +1069,18 @@ void ValkeySearch::AfterForkParent() {
   }
   auto status = reader_thread_pool_->ResumeWorkers();
   Metrics::GetStats().reader_worker_thread_pool_resumed_cnt++;
-  VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume reader "
-                                 "worker thread pool returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "After fork parent callback, resume reader "
+                        "worker thread pool returned message: "
+                     << status.message();
   status = utility_thread_pool_->ResumeWorkers();
-  VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume utility "
-                                 "worker thread pool returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "After fork parent callback, resume utility "
+                        "worker thread pool returned message: "
+                     << status.message();
   writer_thread_pool_suspend_watch_ = vmsdk::StopWatch();
   status = coordinator::GRPCSuspender::Instance().Resume();
-  VMSDK_LOG(WARNING, nullptr) << "After fork parent callback, resume gRPC "
-                                 "returned message: "
-                              << status.message();
+  VMSDK_LOG(WARNING) << "After fork parent callback, resume gRPC "
+                        "returned message: "
+                     << status.message();
 }
 
 void ValkeySearch::OnServerCronCallback(ValkeyModuleCtx *ctx,
@@ -1188,16 +1188,14 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
       options::GetThreadPoolWaitTimeSamples().GetValue());
   utility_thread_pool_->StartWorkers();
 
-  VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
-                         << options::GetUseCoordinator().GetValue()
-                         << ", IsCluster: " << IsCluster();
+  VMSDK_LOG(NOTICE) << "use_coordinator: "
+                    << options::GetUseCoordinator().GetValue()
+                    << ", IsCluster: " << IsCluster();
 
-  VMSDK_LOG(NOTICE, ctx) << "Reader workers count: "
-                         << reader_thread_pool_->Size();
-  VMSDK_LOG(NOTICE, ctx) << "Writer workers count: "
-                         << writer_thread_pool_->Size();
-  VMSDK_LOG(NOTICE, ctx) << "Utility workers count: "
-                         << utility_thread_pool_->Size();
+  VMSDK_LOG(NOTICE) << "Reader workers count: " << reader_thread_pool_->Size();
+  VMSDK_LOG(NOTICE) << "Writer workers count: " << writer_thread_pool_->Size();
+  VMSDK_LOG(NOTICE) << "Utility workers count: "
+                    << utility_thread_pool_->Size();
 
   if (options::GetUseCoordinator().GetValue() && IsCluster()) {
     client_pool_ = std::make_unique<coordinator::ClientPool>(
@@ -1236,13 +1234,13 @@ void ValkeySearch::ResumeWriterThreadPool(ValkeyModuleCtx *ctx,
     Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt++;
   }
   Metrics::GetStats().writer_worker_thread_pool_resumed_cnt++;
-  VMSDK_LOG(WARNING, ctx) << msg
-                          << ". Resuming writer "
-                             "worker thread pool returned message: "
-                          << status.message() << " Suspend duration: "
-                          << FormatDuration(writer_thread_pool_suspend_watch_
-                                                .value_or(vmsdk::StopWatch())
-                                                .Duration());
+  VMSDK_LOG(WARNING) << msg
+                     << ". Resuming writer "
+                        "worker thread pool returned message: "
+                     << status.message() << " Suspend duration: "
+                     << FormatDuration(writer_thread_pool_suspend_watch_
+                                           .value_or(vmsdk::StopWatch())
+                                           .Duration());
   writer_thread_pool_suspend_watch_ = std::nullopt;
 }
 
@@ -1269,12 +1267,11 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
       ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS |
                VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD |
                VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED);
-  VMSDK_LOG(NOTICE, ctx) << "Json "
-                         << (IsJsonModuleSupported(ctx) ? "" : "not ")
-                         << "supported!";
+  VMSDK_LOG(NOTICE) << "Json " << (IsJsonModuleSupported(ctx) ? "" : "not ")
+                    << "supported!";
   VectorRegistry::Construct(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
-  VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
+  VMSDK_LOG(DEBUG) << "Search module completed initialization!";
   return absl::OkStatus();
 }
 
@@ -1318,7 +1315,7 @@ ValkeySearch::GetOrRefreshClusterMap(ValkeyModuleCtx *ctx) {
       !current_map || !current_map->IsConsistent() ||
       std::chrono::steady_clock::now() > current_map->GetExpirationTime();
   if (needs_refresh) {
-    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1) << "Creating a new cluster map";
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, 1) << "Creating a new cluster map";
     auto new_map = vmsdk::cluster_map::ClusterMap::CreateNewClusterMap(ctx);
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"

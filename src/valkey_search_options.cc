@@ -195,7 +195,7 @@ static auto log_level =
         .WithModifyCallback([](int value) {
           auto res = ValidateLogLevel(value);
           if (!res.ok()) {
-            VMSDK_LOG(WARNING, nullptr)
+            VMSDK_LOG(WARNING)
                 << "Invalid value: '" << value << "' provided to enum: '"
                 << kLogLevel << "'. " << res.message();
             return;
@@ -205,7 +205,7 @@ static auto log_level =
           auto log_level_str = kLogLevelNames[value];
           res = vmsdk::InitLogging(nullptr, log_level_str.data());
           if (!res.ok()) {
-            VMSDK_LOG(WARNING, nullptr)
+            VMSDK_LOG(WARNING)
                 << "Failed to initialize log with new value: " << log_level_str
                 << ". " << res.message();
           }

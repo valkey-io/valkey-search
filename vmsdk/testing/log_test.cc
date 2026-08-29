@@ -48,6 +48,13 @@ class LogTest : public vmsdk::ValkeyTest {
   void SetUp() override {
     SetSinkFormatter(nullptr);
     ValkeyTest::SetUp();
+    ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
+        .WillByDefault([](ValkeyModuleCtx* ctx) { return ctx; });
+  }
+
+  void TearDown() override {
+    ShutdownLogging();
+    ValkeyTest::TearDown();
   }
 };
 
@@ -59,16 +66,15 @@ TEST_F(LogTest, WithInitValue) {
       *kMockValkeyModule,
       Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING), testing::_))
       .Times(6);
-  VMSDK_LOG(NOTICE, &ctx) << "s1, expected" << stream_eval_cnt;
+  VMSDK_LOG(NOTICE) << "s1, expected" << stream_eval_cnt;
   for (int i = 0; i < 9; ++i) {
-    VMSDK_LOG_EVERY_N(VERBOSE, &ctx, 5) << "s2, expected " << stream_eval_cnt;
+    VMSDK_LOG_EVERY_N(VERBOSE, 5) << "s2, expected " << stream_eval_cnt;
   }
   for (int i = 0; i < 5; ++i) {
-    VMSDK_LOG_EVERY_N_SEC(VERBOSE, &ctx, 0.1)
-        << "s2, expected " << stream_eval_cnt;
+    VMSDK_LOG_EVERY_N_SEC(VERBOSE, 0.1) << "s2, expected " << stream_eval_cnt;
     absl::SleepFor(absl::Milliseconds(50));
   }
-  VMSDK_LOG(DEBUG, &ctx) << "s3, not expected! " << stream_eval_cnt;
+  VMSDK_LOG(DEBUG) << "s3, not expected! " << stream_eval_cnt;
   EXPECT_EQ(stream_eval_cnt.cnt_, 6);
 }
 std::atomic<int> custom_formatter_used;
@@ -85,18 +91,13 @@ TEST_F(LogTest, SinkOptions) {
   {
     ThreadPool thread_pool("test-pool-", 5);
     thread_pool.StartWorkers();
-    ValkeyModuleCtx fake_ctxes[10];
-    for (auto& fake_ctxe : fake_ctxes) {
-      EXPECT_CALL(*kMockValkeyModule,
-                  Log(&fake_ctxe, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING),
-                      testing::_));
-    }
-    for (auto& fake_ctxe : fake_ctxes) {
-      thread_pool.Schedule(
-          [&fake_ctxes, &fake_ctxe]() mutable {
-            VMSDK_LOG(NOTICE, &fake_ctxe) << "s1, expected";
-          },
-          ThreadPool::Priority::kHigh);
+    EXPECT_CALL(
+        *kMockValkeyModule,
+        Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING), testing::_))
+        .Times(10);
+    for (int i = 0; i < 10; ++i) {
+      thread_pool.Schedule([]() { VMSDK_LOG(NOTICE) << "s1, expected"; },
+                           ThreadPool::Priority::kHigh);
     }
     thread_pool.JoinWorkers();
   }
@@ -132,9 +133,9 @@ TEST_F(LogTest, WithoutInitValue) {
   EXPECT_CALL(
       *kMockValkeyModule,
       Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_NOTICE), testing::_));
-  VMSDK_LOG(NOTICE, &ctx) << "s1, expected" << stream_eval_cnt;
-  VMSDK_LOG(DEBUG, &ctx) << "s2, not expected! " << stream_eval_cnt;
-  VMSDK_LOG(DEBUG, &ctx) << "s3, not expected! " << stream_eval_cnt;
+  VMSDK_LOG(NOTICE) << "s1, expected" << stream_eval_cnt;
+  VMSDK_LOG(DEBUG) << "s2, not expected! " << stream_eval_cnt;
+  VMSDK_LOG(DEBUG) << "s3, not expected! " << stream_eval_cnt;
   EXPECT_EQ(stream_eval_cnt.cnt_, 1);
 }
 
@@ -153,9 +154,9 @@ TEST_F(LogTest, WithoutInitValueConfigGetError) {
   EXPECT_CALL(
       *kMockValkeyModule,
       Log(&ctx, testing::StrEq(VALKEYMODULE_LOGLEVEL_NOTICE), testing::_));
-  VMSDK_LOG(NOTICE, &ctx) << "s1, expected" << stream_eval_cnt;
-  VMSDK_LOG(DEBUG, &ctx) << "s2, not expected! " << stream_eval_cnt;
-  VMSDK_LOG(DEBUG, &ctx) << "s3, not expected! " << stream_eval_cnt;
+  VMSDK_LOG(NOTICE) << "s1, expected" << stream_eval_cnt;
+  VMSDK_LOG(DEBUG) << "s2, not expected! " << stream_eval_cnt;
+  VMSDK_LOG(DEBUG) << "s3, not expected! " << stream_eval_cnt;
   EXPECT_EQ(stream_eval_cnt.cnt_, 1);
 }
 

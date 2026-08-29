@@ -155,7 +155,7 @@ void ThreadPool::JoinWorkers() {
         hung.push_back(t->name);
       }
     });
-    VMSDK_LOG(WARNING, nullptr)
+    VMSDK_LOG(WARNING)
         << "ThreadPool shutdown timed out after 5s waiting for workers to exit;"
         << " hung threads: " << absl::StrJoin(hung, ", ");
     CHECK(false) << "ThreadPool shutdown timeout: " << hung.size()

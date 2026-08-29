@@ -285,32 +285,28 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   //
   // Put the stats into the log
   //
-  VMSDK_LOG(NOTICE, ctx) << "<<<< Start InternStringPool Stats >>>>>";
-  VMSDK_LOG(NOTICE, ctx) << "Inline Total: " << stats.inline_total_stats_;
-  VMSDK_LOG(NOTICE, ctx) << "OutOfLine Total: "
-                         << stats.out_of_line_total_stats_;
-  VMSDK_LOG(NOTICE, ctx) << "ByRefCount Buckets: "
-                         << stats.by_ref_stats_.size();
+  VMSDK_LOG(NOTICE) << "<<<< Start InternStringPool Stats >>>>>";
+  VMSDK_LOG(NOTICE) << "Inline Total: " << stats.inline_total_stats_;
+  VMSDK_LOG(NOTICE) << "OutOfLine Total: " << stats.out_of_line_total_stats_;
+  VMSDK_LOG(NOTICE) << "ByRefCount Buckets: " << stats.by_ref_stats_.size();
   for (auto &hist : stats.by_ref_stats_) {
     if (hist.first > 0) {
-      VMSDK_LOG(NOTICE, ctx)
-          << "InlineRef: " << hist.first << " " << hist.second;
+      VMSDK_LOG(NOTICE) << "InlineRef: " << hist.first << " " << hist.second;
     } else {
-      VMSDK_LOG(NOTICE, ctx)
-          << "OutOfLineRef: " << -hist.first << " " << hist.second;
+      VMSDK_LOG(NOTICE) << "OutOfLineRef: " << -hist.first << " "
+                        << hist.second;
     }
   }
-  VMSDK_LOG(NOTICE, ctx) << "BySize Buckets: " << stats.by_size_stats_.size();
+  VMSDK_LOG(NOTICE) << "BySize Buckets: " << stats.by_size_stats_.size();
   for (auto &hist : stats.by_size_stats_) {
     if (hist.first > 0) {
-      VMSDK_LOG(NOTICE, ctx)
-          << "InlineSize: " << hist.first << " " << hist.second;
+      VMSDK_LOG(NOTICE) << "InlineSize: " << hist.first << " " << hist.second;
     } else {
-      VMSDK_LOG(NOTICE, ctx)
-          << "OutOfLineSize: " << -hist.first << " " << hist.second;
+      VMSDK_LOG(NOTICE) << "OutOfLineSize: " << -hist.first << " "
+                        << hist.second;
     }
   }
-  VMSDK_LOG(NOTICE, ctx) << "<<<< End InternStringPool Stats >>>>>";
+  VMSDK_LOG(NOTICE) << "<<<< End InternStringPool Stats >>>>>";
   return absl::OkStatus();
 }
 
@@ -373,7 +369,7 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     msg += ' ';
     msg += vmsdk::ToStringView(argv[i]);
   }
-  VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
+  VMSDK_LOG(WARNING) << "FT._DEBUG: " << msg;
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();  // Skip the command name
   std::string keyword;

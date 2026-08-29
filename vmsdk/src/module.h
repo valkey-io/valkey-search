@@ -15,6 +15,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -24,7 +25,7 @@
   int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
                           int argc) {                                       \
     if (!vmsdk::verifyLoadedOnlyOnce()) {                                   \
-      VMSDK_LOG(NOTICE, ctx) << "Module cannot be loaded more than once";   \
+      VMSDK_LOG(NOTICE) << "Module cannot be loaded more than once";        \
       return VALKEYMODULE_ERR;                                              \
     }                                                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
@@ -43,6 +44,7 @@
     if (options.on_unload.has_value()) {                                    \
       options.on_unload.value()(ctx, options);                              \
     }                                                                       \
+    vmsdk::ShutdownLogging();                                               \
     return VALKEYMODULE_OK;                                                 \
   }                                                                         \
   }                                                                         \

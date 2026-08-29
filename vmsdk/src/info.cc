@@ -105,8 +105,8 @@ void DoSections(ValkeyModuleInfoCtx* ctx, int for_crash_report) {
   //
   for (auto& [section, section_info] : section_map) {
     if (section_info.handled_) {
-      VMSDK_LOG(DEBUG, nullptr)
-          << "Skipping Section " << section << " as it was already handled";
+      VMSDK_LOG(DEBUG) << "Skipping Section " << section
+                       << " as it was already handled";
       section_info.handled_ = false;
       continue;
     }
@@ -142,7 +142,7 @@ void DoSections(ValkeyModuleInfoCtx* ctx, int for_crash_report) {
 void DoSection(ValkeyModuleInfoCtx* ctx, absl::string_view section,
                int for_crash_report) {
   if (ValkeyModule_InfoAddSection(ctx, section.data()) == VALKEYMODULE_ERR) {
-    VMSDK_LOG(DEBUG, nullptr) << "Info Section " << section << " Skipped";
+    VMSDK_LOG(DEBUG) << "Info Section " << section << " Skipped";
     return;
   }
   // Find the section without a memory allocation....
@@ -179,31 +179,29 @@ bool Validate(ValkeyModuleCtx* ctx) {
   SectionMap& section_map = GetSectionMap();
   for (auto& [section, section_info] : section_map) {
     if (!IsValidName(section)) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Invalid characters in section name: " << section;
+      VMSDK_LOG(WARNING) << "Invalid characters in section name: " << section;
       failed = true;
     }
     for (auto& [name, info] : section_info.fields_) {
       if (name != info->GetName()) {
-        VMSDK_LOG(WARNING, ctx) << "Map corruption";
+        VMSDK_LOG(WARNING) << "Map corruption";
         return true;
       }
       if (!(info->GetFlags() ^ (Flags::kDeveloper | Flags::kApplication))) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Missing App/Dev for Section:" << section << " Name:" << name;
+        VMSDK_LOG(WARNING) << "Missing App/Dev for Section:" << section
+                           << " Name:" << name;
         failed = true;
       }
       if (!IsValidName(name)) {
-        VMSDK_LOG(WARNING, ctx)
-            << "Invalid characters in info field name: " << name;
+        VMSDK_LOG(WARNING) << "Invalid characters in info field name: " << name;
         failed = true;
       }
       if (unique_names.contains(name)) {
-        VMSDK_LOG(WARNING, ctx) << "Non-unique name: " << name;
+        VMSDK_LOG(WARNING) << "Non-unique name: " << name;
         failed = true;
       }
-      VMSDK_LOG(DEBUG, ctx)
-          << "Defined Info Field: " << name << " Flags:" << info->GetFlags();
+      VMSDK_LOG(DEBUG) << "Defined Info Field: " << name
+                       << " Flags:" << info->GetFlags();
     }
   }
   return !failed;
@@ -281,9 +279,8 @@ void String::Dump(ValkeyModuleInfoCtx* ctx) const {
     std::string s = (*compute_string_func_)();
     ValkeyModule_InfoAddFieldCString(ctx, GetName().data(), s.data());
   } else {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Invalid state for Info String: " << GetSection() << "/"
-        << GetName();
+    VMSDK_LOG(WARNING) << "Invalid state for Info String: " << GetSection()
+                       << "/" << GetName();
   }
 }
 
@@ -297,9 +294,8 @@ void String::Reply(ValkeyModuleCtx* ctx) const {
     std::string s = (*compute_string_func_)();
     ValkeyModule_ReplyWithCString(ctx, s.data());
   } else {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Invalid state for Info String: " << GetSection() << "/"
-        << GetName();
+    VMSDK_LOG(WARNING) << "Invalid state for Info String: " << GetSection()
+                       << "/" << GetName();
   }
 }
 
@@ -329,8 +325,8 @@ static absl::flat_hash_map<Units, absl::string_view> kUnitsToString{
 static size_t DumpNames(ValkeyModuleCtx* ctx,
                         const vmsdk::module::Options& options,
                         const Base* field) {
-  VMSDK_LOG(WARNING, ctx) << "Dumping Info Field: " << field->GetSection()
-                          << "/" << field->GetName();
+  VMSDK_LOG(WARNING) << "Dumping Info Field: " << field->GetSection() << "/"
+                     << field->GetName();
   ValkeyModule_ReplyWithCString(ctx, "Section");
   ValkeyModule_ReplyWithCString(ctx, field->GetSection().data());
   std::string external_name = options.name + "." + field->GetName();

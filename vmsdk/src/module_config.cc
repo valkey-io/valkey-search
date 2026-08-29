@@ -181,8 +181,8 @@ absl::Status ModuleConfigManager::UpdateConfigFromKeyVal(
         absl::StrFormat("Unknown command line argument: `%s`", key));
   }
   // update the configuration entry
-  VMSDK_LOG(NOTICE, ctx) << "Parsed command line argument: " << key << " -> "
-                         << value;
+  VMSDK_LOG(NOTICE) << "Parsed command line argument: " << key << " -> "
+                    << value;
   VMSDK_RETURN_IF_ERROR(where->second->FromString(value));
   return absl::OkStatus();
 }

@@ -109,7 +109,7 @@ class FanoutOperationBase {
           this->OnResponse(resp, target);
         } else {
           ++Metrics::GetStats().info_fanout_fail_cnt;
-          VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << "Local node error, status code: " << status.error_code();
           this->OnError(status, resp.error_type(), target);
         }
@@ -122,7 +122,7 @@ class FanoutOperationBase {
       auto client = client_pool_->GetClient(client_address);
       if (!client) {
         ++Metrics::GetStats().info_fanout_fail_cnt;
-        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
             << "Found invalid client on target " << client_address;
         this->OnError(grpc::Status(grpc::StatusCode::INTERNAL, ""),
                       coordinator::FanoutErrorType::COMMUNICATION_ERROR,
@@ -137,7 +137,7 @@ class FanoutOperationBase {
               this->OnResponse(resp, target);
             } else {
               ++Metrics::GetStats().info_fanout_fail_cnt;
-              VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+              VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
                   << "InvokeRemoteRpc error on target " << client_address
                   << ", status code: " << status.error_code();
               // if grpc failed, the response is invalid, so we need to manually
@@ -224,10 +224,10 @@ class FanoutOperationBase {
       for (const vmsdk::cluster_map::NodeInfo& target :
            index_name_error_nodes) {
         if (target.is_local) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << INDEX_NAME_ERROR_LOG_PREFIX
               << absl::StrCat(target.socket_address.primary_endpoint, ":",
                               coordinator::GetCoordinatorPort(
@@ -241,10 +241,10 @@ class FanoutOperationBase {
       for (const vmsdk::cluster_map::NodeInfo& target :
            communication_error_nodes) {
         if (target.is_local) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << COMMUNICATION_ERROR_LOG_PREFIX
               << absl::StrCat(target.socket_address.primary_endpoint, ":",
                               coordinator::GetCoordinatorPort(
@@ -258,10 +258,10 @@ class FanoutOperationBase {
       for (const vmsdk::cluster_map::NodeInfo& target :
            inconsistent_state_error_nodes) {
         if (target.is_local) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX << "LOCAL NODE";
         } else {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << INCONSISTENT_STATE_ERROR_LOG_PREFIX
               << absl::StrCat(target.socket_address.primary_endpoint, ":",
                               coordinator::GetCoordinatorPort(

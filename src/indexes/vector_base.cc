@@ -293,7 +293,7 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
                                         std::optional<uint64_t> internal_id) {
   auto res = UnTrackKey(key);
   if (!res.ok()) {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
         << "While processing error, failed to untrack the key "
            "with id: "
         << (internal_id.has_value() ? std::to_string(internal_id.value())
@@ -303,7 +303,7 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
   if (internal_id.has_value()) {
     auto remove_vector_res = RemoveRecordImpl(internal_id.value());
     if (!remove_vector_res.ok()) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+      VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
           << "While processing error, failed to remove vector with id: "
           << internal_id.value() << ": " << remove_vector_res.message();
     }

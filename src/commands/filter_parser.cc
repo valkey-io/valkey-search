@@ -460,9 +460,9 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
         PrintPredicateTree(results.root_predicate.get(), 0);
     size_t chunk_size = 500;
     for (size_t i = 0; i < tree_output.length(); i += chunk_size) {
-      VMSDK_LOG(DEBUG, nullptr)
-          << "Parsed QuerySyntaxTree (Part " << (i / chunk_size + 1) << "):\n"
-          << tree_output.substr(i, chunk_size);
+      VMSDK_LOG(DEBUG) << "Parsed QuerySyntaxTree (Part "
+                       << (i / chunk_size + 1) << "):\n"
+                       << tree_output.substr(i, chunk_size);
     }
   }
   return results;

@@ -101,7 +101,7 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
   // During shutdown the event loop is no longer processing one-shot
   // callbacks.
   if (IsShuttingDown()) {
-    VMSDK_LOG(DEBUG, nullptr) << "RunByMain: dropping callback during shutdown";
+    VMSDK_LOG(DEBUG) << "RunByMain: dropping callback during shutdown";
     return VALKEYMODULE_OK;
   }
   auto call_by_main = new absl::AnyInvocable<void()>(std::move(fn));
@@ -243,7 +243,7 @@ std::ostream &operator<<(std::ostream &os, const JsonQuotedStringView &s) {
             // Start of 2 byte sequence
             itr++;
             if (itr == s.view_.end() || ((*itr) & 0b11000000) != 0b10000000) {
-              VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+              VMSDK_LOG(DEBUG) << "Invalid Json Encode";
               codepoint = 0xFFFF;
             } else {
               codepoint = ((c & 0b11111) << 6) | ((*itr) & 0b00111111);
@@ -252,13 +252,13 @@ std::ostream &operator<<(std::ostream &os, const JsonQuotedStringView &s) {
             // Start of 3 byte sequence
             ++itr;
             if (itr == s.view_.end() || ((*itr) & 0b11000000) != 0b10000000) {
-              VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+              VMSDK_LOG(DEBUG) << "Invalid Json Encode";
               codepoint = 0xffff;
             } else {
               unsigned char d = *itr;
               ++itr;
               if (itr == s.view_.end() || ((*itr) & 0b11000000) != 0b10000000) {
-                VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+                VMSDK_LOG(DEBUG) << "Invalid Json Encode";
                 codepoint = 0xFFFF;
               } else {
                 codepoint = ((c & 0b00001111) << 12) | ((d & 0b00111111) << 6) |
@@ -266,7 +266,7 @@ std::ostream &operator<<(std::ostream &os, const JsonQuotedStringView &s) {
               }
             }
           } else {
-            VMSDK_LOG(DEBUG, nullptr) << "Invalid Json Encode";
+            VMSDK_LOG(DEBUG) << "Invalid Json Encode";
             codepoint = 0xFFFF;
           }
           os << "\\u" << std::hex << std::setfill('0') << std::setw(4)
@@ -288,7 +288,7 @@ std::optional<std::string> JsonUnquote(absl::string_view sv) {
     } else {
       ++itr;
       if (itr == sv.end()) {
-        VMSDK_LOG(DEBUG, nullptr) << "Invalid JSON (\\ at end)";
+        VMSDK_LOG(DEBUG) << "Invalid JSON (\\ at end)";
         return std::nullopt;
       }
       switch (*itr) {
@@ -321,7 +321,7 @@ std::optional<std::string> JsonUnquote(absl::string_view sv) {
           for (auto unichar = 0; unichar < 4; ++unichar) {
             itr++;
             if (itr == sv.end()) {
-              VMSDK_LOG(DEBUG, nullptr) << "Invalid JSON (Short unicode)";
+              VMSDK_LOG(DEBUG) << "Invalid JSON (Short unicode)";
               return std::nullopt;
             }
             char c = *itr;
@@ -332,8 +332,7 @@ std::optional<std::string> JsonUnquote(absl::string_view sv) {
             } else if (c >= 'A' && c <= 'F') {
               unicode = (unicode << 4) | (*itr - 'A' + 10);
             } else {
-              VMSDK_LOG(DEBUG, nullptr)
-                  << "Invalid JSON (invalid unicode char)";
+              VMSDK_LOG(DEBUG) << "Invalid JSON (invalid unicode char)";
               return std::nullopt;
             }
           }

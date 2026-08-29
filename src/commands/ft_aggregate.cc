@@ -106,10 +106,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
-        record_index =
-            params.AddRecordAttribute(identifier, identifier,
-                                      renamed ? alias : identifier,
-                                      indexes::IndexerType::kNone);
+        record_index = params.AddRecordAttribute(identifier, identifier,
+                                                 renamed ? alias : identifier,
+                                                 indexes::IndexerType::kNone);
       }
       if (renamed) {
         apply_rename(record_index);
@@ -303,15 +302,21 @@ absl::Status CreateRecordsFromNeighbors(
       //    by the identifier that column sources. Columns whose identifier was
       //    not fetched (__key, the score, and columns synthesized by a later
       //    pipeline stage) are left as they are.
+      //
+      //    The record was sized from record_info_by_index_, so indexing it by
+      //    a field index is in range. CHECK rather than assert: asserts are
+      //    compiled out of release builds, which is how the slot-bookkeeping
+      //    corruption in #1251 went undetected into an out-of-bounds write.
+      CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
       for (size_t i = 0; i < rec->fields_.size(); ++i) {
         const auto &info = parameters.record_info_by_index_[i];
         auto itr = n.attribute_contents->find(info.identifier_);
         if (itr == n.attribute_contents->end()) {
           continue;
         }
-        auto processed_value = ProcessFieldValue(
-            vmsdk::ToStringView(itr->second.value.get()), info.data_type_,
-            data_type);
+        auto processed_value =
+            ProcessFieldValue(vmsdk::ToStringView(itr->second.value.get()),
+                              info.data_type_, data_type);
         if (processed_value.ok()) {
           rec->fields_[i] = std::move(*processed_value);
         } else if (info.data_type_ != indexes::IndexerType::kNumeric) {

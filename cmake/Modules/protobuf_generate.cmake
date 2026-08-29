@@ -52,7 +52,7 @@ function(valkey_search_create_proto_grpc_library PROTO_PATH TARGET_NAME)
                                        GEN_H_REQUIRED)
   _valkey_search_is_proto_gen_required(${PROTO_PATH} ${GEN_FILE_CC}
                                        GEN_CC_REQUIRED)
-  if(${GEN_CC_REQUIRED} OR ${GEN_FILE_H})
+  if(GEN_CC_REQUIRED OR GEN_H_REQUIRED)
     message(STATUS "Generating files from ${PROTO_PATH} (gRPC)")
     execute_process(
       COMMAND ${protoc_EXE} --grpc_out=${PROTO_OUT_DIR} -I${CMAKE_SOURCE_DIR}
@@ -101,7 +101,7 @@ function(valkey_search_create_proto_library PROTO_PATH TARGET_NAME)
                                        GEN_H_REQUIRED)
   _valkey_search_is_proto_gen_required(${PROTO_PATH} ${GEN_FILE_CC}
                                        GEN_CC_REQUIRED)
-  if(${GEN_CC_REQUIRED} OR ${GEN_FILE_H})
+  if(GEN_CC_REQUIRED OR GEN_H_REQUIRED)
     message(STATUS "Generating files from ${PROTO_PATH}")
     execute_process(
       COMMAND ${protoc_EXE} --cpp_out=${PROTO_OUT_DIR} -I${CMAKE_SOURCE_DIR}

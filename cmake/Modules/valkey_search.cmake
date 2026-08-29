@@ -1,20 +1,26 @@
 # Determine if we are building in Release or Debug mode
-if(CMAKE_BUILD_TYPE MATCHES Release)
+# Classify the build. Use exact matches (STREQUAL), not `MATCHES Release`,
+# which would misclassify RelWithDebInfo and MinSizeRel.
+if(CMAKE_BUILD_TYPE STREQUAL "Release"
+   OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"
+   OR CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
   set(VALKEY_SEARCH_DEBUG_BUILD 0)
   set(VALKEY_SEARCH_RELEASE_BUILD 1)
-  message(STATUS "Building in release mode")
+  message(STATUS "Building in release mode (${CMAKE_BUILD_TYPE})")
 else()
   set(VALKEY_SEARCH_DEBUG_BUILD 1)
   set(VALKEY_SEARCH_RELEASE_BUILD 0)
-  message(STATUS "Building in debug mode")
+  message(STATUS "Building in debug mode (${CMAKE_BUILD_TYPE})")
 endif()
 
-if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")
-  message(STATUS "Current platform is x86_64")
+# Select target ISA from the target processor (CMAKE_SYSTEM_PROCESSOR), not the
+# host, so cross-compilation emits code for the right architecture.
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+  message(STATUS "Target processor: ${CMAKE_SYSTEM_PROCESSOR} (x86)")
   set(VALKEY_SEARCH_IS_ARM 0)
   set(VALKEY_SEARCH_IS_X86 1)
 else()
-  message(STATUS "Current platform is aarch64")
+  message(STATUS "Target processor: ${CMAKE_SYSTEM_PROCESSOR} (non-x86, generic path)")
   set(VALKEY_SEARCH_IS_ARM 1)
   set(VALKEY_SEARCH_IS_X86 0)
 endif()
@@ -22,10 +28,7 @@ endif()
 # Check for compiler compatibility
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   # We require GCC v12 and later
-  string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" GCC_VERSION_MATCH
-               ${CMAKE_CXX_COMPILER_VERSION})
-  set(GCC_MAJOR_VERSION ${CMAKE_MATCH_1})
-  if(GCC_MAJOR_VERSION LESS 12)
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 12)
     message(
       FATAL_ERROR
         "Minimum GCC required is 12 and later. Your GCC version is ${CMAKE_CXX_COMPILER_VERSION}"
@@ -33,10 +36,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   # We require Clang v16 and later
-  string(REGEX MATCH "^([0-9]+)\\.([0-9]+)\\.([0-9]+)" CLANG_VERSION_MATCH
-               ${CMAKE_CXX_COMPILER_VERSION})
-  set(CLANG_MAJOR_VERSION ${CMAKE_MATCH_1})
-  if(CLANG_MAJOR_VERSION LESS 16)
+  if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
     message(
       FATAL_ERROR
         "Minimum Clang required is 16 and later. Your Clang version is ${CMAKE_CXX_COMPILER_VERSION}"
@@ -44,7 +44,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
   endif()
 else()
   message(
-    WARN
+    WARNING
     "Using unknown compiler ${CMAKE_CXX_COMPILER_ID}. Version: ${CMAKE_CXX_COMPILER_VERSION}"
   )
 endif()
@@ -134,7 +134,6 @@ function(valkey_search_target_update_compile_flags TARGET)
   elseif(VALKEY_SEARCH_DEBUG_BUILD)
     target_compile_options(${TARGET} PRIVATE -O0)
     target_compile_options(${TARGET} PRIVATE -fno-omit-frame-pointer)
-    target_compile_definitions(${TARGET} PRIVATE NDEBUG)
     target_compile_options(${TARGET} PRIVATE -fno-lto)
   else()
     # Release build, dump both IR & obj so we can defer the lto to the link time

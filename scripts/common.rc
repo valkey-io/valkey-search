@@ -219,55 +219,58 @@ function setup_valkey_server() {
       LOG_INFO "Forcing libstdc++ into valkey-server DT_NEEDED for reliable ASAN __cxa_throw interception (LDFLAGS: ${LDFLAGS})"
     fi
 
-    # Temporary workaround until these are merged into core upstream.
-    # Each patch is guarded: skip if already applied (the clone is cached and
-    # reused), and fail loudly if neither the pre- nor post-patch marker is
-    # found -- that means upstream drifted and the sed silently matched nothing
-    # (sed exits 0 either way), which would otherwise produce a confusing TSAN
-    # build failure much later.
-    # apply_tsan_patch <file> <already-applied-marker> <expected-source> <sed-script>
-    apply_tsan_patch() {
-      local file="$1" applied_marker="$2" expected="$3" sed_script="$4"
-      if grep -qF "${applied_marker}" "${file}"; then
-        LOG_INFO "TSAN patch already applied to $(basename "${file}")"
-        return 0
-      fi
-      if ! grep -qF "${expected}" "${file}"; then
-        LOG_ERROR "TSAN patch target not found in ${file}. Upstream valkey may have drifted; the patch needs updating."
-        exit 1
-      fi
-      sed -i "${sed_script}" "${file}"
-      if ! grep -qF "${applied_marker}" "${file}"; then
-        LOG_ERROR "TSAN patch failed to apply to ${file} (marker absent after sed)."
-        exit 1
-      fi
-    }
+    # These three patches are needed only for thread-sanitizer (TSAN) builds.
+    # Do not run them for address-sanitizer (ASAN) builds.
+    if [[ "${SAN_BUILD}" == "thread" ]]; then
+      # Temporary workaround until these are merged into core upstream.
+      # Each patch is guarded: skip if already applied (the clone is cached and
+      # reused), and fail loudly if the text it expects to patch is missing --
+      # that means upstream drifted and the sed matched nothing (sed exits 0
+      # either way), which would otherwise fail the TSAN build much later.
+      # apply_tsan_patch <file> <already-applied-marker> <expected-source> <sed-script>
+      apply_tsan_patch() {
+        local file="$1" applied_marker="$2" expected="$3" sed_script="$4"
+        if grep -qF "${applied_marker}" "${file}"; then
+          LOG_INFO "TSAN patch already applied to $(basename "${file}")"
+          return 0
+        fi
+        if ! grep -qF "${expected}" "${file}"; then
+          LOG_ERROR "TSAN patch target not found in ${file}. Upstream valkey may have drifted; the patch needs updating."
+          exit 1
+        fi
+        sed -i "${sed_script}" "${file}"
+        if ! grep -qF "${applied_marker}" "${file}"; then
+          LOG_ERROR "TSAN patch failed to apply to ${file} (marker absent after sed)."
+          exit 1
+        fi
+      }
 
-    # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.
-    # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/util.c#L640-L642
-    apply_tsan_patch \
-      "${VALKEY_SERVER_HOME_DIR}/src/util.c" \
-      'no_sanitize("thread"), used)) static int (*string2ll_resolver' \
-      'no_sanitize_address, used)) static int (*string2ll_resolver' \
-      's/__attribute__((no_sanitize_address, used)) static int (\*string2ll_resolver/__attribute__((no_sanitize_address, no_sanitize("thread"), used)) static int (*string2ll_resolver/'
+      # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.
+      # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/util.c#L640-L642
+      apply_tsan_patch \
+        "${VALKEY_SERVER_HOME_DIR}/src/util.c" \
+        'no_sanitize("thread"), used)) static int (*string2ll_resolver' \
+        'no_sanitize_address, used)) static int (*string2ll_resolver' \
+        's/__attribute__((no_sanitize_address, used)) static int (\*string2ll_resolver/__attribute__((no_sanitize_address, no_sanitize("thread"), used)) static int (*string2ll_resolver/'
 
-    # 2. RTLD_DEEPBIND is incompatible with TSAN; exclude it like ASAN already does.
-    # https://github.com/valkey-io/valkey/blame/ab3c953b80289d88991095f53c1235fc2f8b44d6/src/module.c#L12548
-    apply_tsan_patch \
-      "${VALKEY_SERVER_HOME_DIR}/src/module.c" \
-      '!defined(VALKEY_ADDRESS_SANITIZER) && !defined(VALKEY_THREAD_SANITIZER) && __has_include(<dlfcn.h>)' \
-      '!defined(VALKEY_ADDRESS_SANITIZER) && __has_include(<dlfcn.h>)' \
-      's/!defined(VALKEY_ADDRESS_SANITIZER) \&\& __has_include(<dlfcn.h>)/!defined(VALKEY_ADDRESS_SANITIZER) \&\& !defined(VALKEY_THREAD_SANITIZER) \&\& __has_include(<dlfcn.h>)/'
+      # 2. RTLD_DEEPBIND is incompatible with TSAN; exclude it like ASAN already does.
+      # https://github.com/valkey-io/valkey/blame/ab3c953b80289d88991095f53c1235fc2f8b44d6/src/module.c#L12548
+      apply_tsan_patch \
+        "${VALKEY_SERVER_HOME_DIR}/src/module.c" \
+        '!defined(VALKEY_ADDRESS_SANITIZER) && !defined(VALKEY_THREAD_SANITIZER) && __has_include(<dlfcn.h>)' \
+        '!defined(VALKEY_ADDRESS_SANITIZER) && __has_include(<dlfcn.h>)' \
+        's/!defined(VALKEY_ADDRESS_SANITIZER) \&\& __has_include(<dlfcn.h>)/!defined(VALKEY_ADDRESS_SANITIZER) \&\& !defined(VALKEY_THREAD_SANITIZER) \&\& __has_include(<dlfcn.h>)/'
 
-    # 3. Define VALKEY_THREAD_SANITIZER via __SANITIZE_THREAD__ (mirrors VALKEY_ADDRESS_SANITIZER pattern).
-    # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/config.h#L175-L181
-    if ! grep -q 'VALKEY_THREAD_SANITIZER' "${VALKEY_SERVER_HOME_DIR}/src/config.h"; then
-      if ! grep -q '^#if defined(__SANITIZE_ADDRESS__)' "${VALKEY_SERVER_HOME_DIR}/src/config.h"; then
-        LOG_ERROR "TSAN patch anchor '#if defined(__SANITIZE_ADDRESS__)' not found in config.h. Upstream valkey may have drifted."
-        exit 1
+      # 3. Define VALKEY_THREAD_SANITIZER via __SANITIZE_THREAD__ (mirrors VALKEY_ADDRESS_SANITIZER pattern).
+      # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/config.h#L175-L181
+      if ! grep -q 'VALKEY_THREAD_SANITIZER' "${VALKEY_SERVER_HOME_DIR}/src/config.h"; then
+        if ! grep -q '^#if defined(__SANITIZE_ADDRESS__)' "${VALKEY_SERVER_HOME_DIR}/src/config.h"; then
+          LOG_ERROR "TSAN patch anchor '#if defined(__SANITIZE_ADDRESS__)' not found in config.h. Upstream valkey may have drifted."
+          exit 1
+        fi
+        sed -i '/^#if defined(__SANITIZE_ADDRESS__)/i #if defined(__SANITIZE_THREAD__)\n#define VALKEY_THREAD_SANITIZER 1\n#endif\n' \
+          "${VALKEY_SERVER_HOME_DIR}/src/config.h"
       fi
-      sed -i '/^#if defined(__SANITIZE_ADDRESS__)/i #if defined(__SANITIZE_THREAD__)\n#define VALKEY_THREAD_SANITIZER 1\n#endif\n' \
-        "${VALKEY_SERVER_HOME_DIR}/src/config.h"
     fi
   fi
 

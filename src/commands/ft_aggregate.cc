@@ -277,9 +277,11 @@ absl::Status CreateRecordsFromNeighbors(
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
   for (auto &n : neighbors) {
-    // One slot per record column. A LOAD ... AS rename adds an extra entry to
-    // record_indexes_by_alias_ (alias -> existing column) without adding a
-    // column, so size by record_info_by_index_ rather than the alias map.
+    // One slot per record column. Not record_indexes_by_alias_.size(): that
+    // map holds a name per resolvable alias, which is neither an over- nor an
+    // under-count of the columns (a rename adds a key without adding a column;
+    // two columns reading one field add a column per output name). Size by the
+    // column table itself.
     auto rec =
         std::make_unique<Record>(parameters.record_info_by_index_.size());
 

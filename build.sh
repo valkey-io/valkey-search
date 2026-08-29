@@ -17,6 +17,7 @@ ARGV=$@
 EXIT_CODE=0
 INTEG_RETRIES=1
 JOBS=""
+TEST_PATTERN=""
 CMAKE_GENERATOR=${CMAKE_GENERATOR:-"Ninja"}
 
 echo "Root directory: ${ROOT_DIR}"
@@ -182,12 +183,6 @@ export SAN_BUILD
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
-if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
-  BUILD_TOOL="ninja"
-else
-  BUILD_TOOL="make -j$(num_proc)"
-fi
-
 function build_icu_if_needed() {
     printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
     
@@ -242,7 +237,7 @@ function build_icu_if_needed() {
     printf "Building ICU static libraries...\n"
     
     # Build with static data mode (output saved to log file)
-    if ! make PKGDATA_MODE=static -j$(num_proc) >> "${ICU_LOG}" 2>&1; then
+    if ! make PKGDATA_MODE=static -j"${JOBS:-$(num_proc)}" >> "${ICU_LOG}" 2>&1; then
         printf "${RED}ICU build failed. See ${ICU_LOG}${RESET}\n"
         tail -50 "${ICU_LOG}"
         exit 1
@@ -396,12 +391,18 @@ function check_and_clean_on_branch_change() {
     if [ -d "${BUILD_DIR}" ] && [ -f "${branch_stamp}" ] && [ "$(cat "${branch_stamp}")" != "${current_branch}" ]; then
         printf "${BOLD_PINK}Notice: Branch changed from $(cat "${branch_stamp}") to ${current_branch}. Cleaning stale protobuf artifacts...${RESET}\n"
         rm -f "${BUILD_DIR}"/src/*.pb.* 2>/dev/null || true
+        # The .pb.* files are generated at CMake configure time (not by a build
+        # rule), so deleting them requires a reconfigure to regenerate them.
+        RUN_CMAKE="yes"
     fi
     mkdir -p "${BUILD_DIR}"
     echo "${current_branch}" > "${branch_stamp}"
 }
 
-# If any of the CMake files is newer than our "build.ninja" file, force "cmake" before building
+# Configure is required only when the user explicitly asks (--configure) or
+# when the build tree does not exist yet. Once configured, Ninja/Make re-run
+# CMake automatically whenever a CMakeLists.txt or included .cmake file changes,
+# so there is no need to scan the tree ourselves.
 function is_configure_required() {
     if [[ "${BUILD_TOOL}" =~ ninja ]]; then
       local top_level_build_file=${BUILD_DIR}/build.ninja
@@ -416,20 +417,11 @@ function is_configure_required() {
     fi
 
     if [ ! -f "${top_level_build_file}" ] || [ ! -f "${BUILD_DIR}/CMakeCache.txt" ]; then
+        # No build tree yet: the generator cannot bootstrap itself.
         echo "yes"
         return
     fi
 
-    local build_file_lastmodified=$(get_file_last_modified "${top_level_build_file}")
-    local IFS=$'\n'
-    local cmake_files=$(find "${ROOT_DIR}" -name "CMakeLists.txt" -o -name "*.cmake" | grep -v "\.build-")
-    for cmake_file in $cmake_files; do
-        local cmake_file_modified=$(get_file_last_modified "${cmake_file}")
-        if [ "${cmake_file_modified}" -gt "${build_file_lastmodified}" ]; then
-            echo "yes"
-            return
-        fi
-    done
     echo "no"
 }
 
@@ -465,6 +457,20 @@ fi
 
 TESTS_DIR=${BUILD_DIR}/tests
 TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
+
+# Handle --clean directly: run the build tool's clean target against an existing
+# build directory and exit, without running ICU setup, configure, or a build.
+if [[ "${CMAKE_TARGET}" == "clean" ]]; then
+    if [ -d "${BUILD_DIR}" ]; then
+        printf "${BOLD_PINK}Cleaning${RESET} ${BUILD_DIR}\n"
+        cd "${BUILD_DIR}"
+        ${BUILD_TOOL} clean
+        cd "${ROOT_DIR}"
+    else
+        printf "Nothing to clean: ${BUILD_DIR} does not exist\n"
+    fi
+    exit 0
+fi
 
 check_and_clean_on_branch_change
 

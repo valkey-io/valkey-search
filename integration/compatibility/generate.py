@@ -488,6 +488,98 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Load by JSON path without a rename: emitted under the path.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
 
+    def test_aggregate_json_field_names(self, key_type, dialect):
+        """Field names in the reply must be the user-facing name, not the
+        schema identifier. Only JSON can distinguish the two (its schema is
+        `$.n1 AS n1 ...`); HASH is run too so both are held to one expectation.
+
+        See issue #1243. Row alignment follows the harness rules: queries with
+        neither GROUPBY nor SORTBY are aligned on `@__key`, so it is loaded;
+        GROUPBY aligns on the grouped fields; GROUPBY and SORTBY are never
+        combined (the harness rejects that pairing outright).
+        """
+        self.setup_data("sortable numbers", key_type)
+
+        # --- LOAD: the loaded field's own name.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1")
+
+        # --- APPLY: both the source name and the computed name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as computed"
+        )
+        # APPLY writing back over the loaded field's own name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as n1"
+        )
+        # APPLY over a field that was never LOADed.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key apply @n1*2 as doubled"
+        )
+        # APPLY over a tag field, so the name survives a string stage too.
+        self.check(dialect,
+            f'ft.aggregate {key_type}_idx1 * load 2 @__key @t1 apply upper(@t1) as shout'
+        )
+
+        # --- FILTER: names of the records that survive.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 filter @n1<@n2"
+        )
+
+        # --- GROUPBY: the grouping key is emitted under its own name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @t1 groupby 1 @t1 reduce count 0 as cnt"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Grouping on two fields.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @t2 groupby 2 @t1 @t2 reduce count 0 as cnt"
+        )
+        # NOTE: `groupby 1 @t1` with no LOAD of @t1 is deliberately omitted.
+        # Redisearch auto-loads the grouped field (15 groups, each emitting
+        # t1 and cnt); valkey-search collapses everything into one group and
+        # emits only cnt. That is a separate defect from #1243, and it makes
+        # the harness raise KeyError on the missing sort key rather than
+        # report a mismatch, which would abort the whole replay.
+        # REDUCE with no AS clause: the generated name must not embed a path.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1"
+        )
+        # TOLIST over a JSON-pathed field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # A reducer feeding a later APPLY, so the reducer's name is re-read.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply @total+1 as bumped"
+        )
+
+        # --- SORTBY does not rename what it sorts on.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 sortby 2 @n1 asc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 4 @n1 asc @n2 desc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @t1 sortby 2 @t1 asc"
+        )
+
+        # --- LIMIT after the names are established.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 sortby 2 @n1 asc limit 0 3"
+        )
+
+        # --- Multi-stage pipelines, end to end.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply @n1+10 as bumped filter @bumped>0"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply @n1+10 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
+        )
+
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):
         self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]

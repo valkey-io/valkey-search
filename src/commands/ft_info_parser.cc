@@ -132,9 +132,9 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
   switch (scope) {
     case InfoScope::kPrimary: {
       if (is_loading || inside_multi_exec) {
-        VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
-                                      "multi/exec or lua script, skip "
-                                      "fanout operation";
+        VMSDK_LOG(NOTICE) << "The server is loading AOF or inside "
+                             "multi/exec or lua script, skip "
+                             "fanout operation";
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::primary_info_fanout::PrimaryInfoFanoutOperation(
@@ -146,9 +146,9 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
     }
     case InfoScope::kCluster: {
       if (is_loading || inside_multi_exec) {
-        VMSDK_LOG(NOTICE, nullptr) << "The server is loading AOF or inside "
-                                      "multi/exec or lua script, skip "
-                                      "fanout operation";
+        VMSDK_LOG(NOTICE) << "The server is loading AOF or inside "
+                             "multi/exec or lua script, skip "
+                             "fanout operation";
         index_schema->RespondWithInfo(ctx);
       } else {
         auto op = new query::cluster_info_fanout::ClusterInfoFanoutOperation(
@@ -160,7 +160,7 @@ absl::Status InfoCommand::Execute(ValkeyModuleCtx *ctx) {
     }
     case InfoScope::kLocal:
     default:
-      VMSDK_LOG(DEBUG, ctx) << "Using Local Scope";
+      VMSDK_LOG(DEBUG) << "Using Local Scope";
       index_schema->RespondWithInfo(ctx);
       break;
   }

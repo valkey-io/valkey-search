@@ -259,7 +259,7 @@ bool IsJsonModuleSupported(ValkeyModuleCtx *ctx) {
   // the JSON shared API. Otherwise, invoking commands via ValkeyModule_Call
   // from a replica will result in a MOVED response.
   if (!json_get && ValkeySearch::Instance().IsCluster()) {
-    VMSDK_LOG(WARNING, ctx)
+    VMSDK_LOG(WARNING)
         << "Note: When cluster mode is enabled, valkey-search requires "
            "valkey-json version 1.02 or higher for proper JSON support.";
   }

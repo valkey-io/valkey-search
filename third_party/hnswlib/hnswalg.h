@@ -935,7 +935,7 @@ class HierarchicalNSW
           absl::StrCat("HNSW index load validation failed: ", msg));
     }
     // Validation disabled: don't fail the load, but log (throttled) the defect.
-    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
         << "HNSW load validation is disabled; ignoring detected index "
            "corruption: "
         << msg;

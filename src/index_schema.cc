@@ -139,7 +139,7 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
   scan_ctx = vmsdk::MakeUniqueValkeyDetachedThreadSafeContext(ctx);
   ValkeyModule_SelectDb(scan_ctx.get(), db_num);
   db_size = ValkeyModule_DbSize(scan_ctx.get());
-  VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+  VMSDK_LOG_EVERY_N_SEC(NOTICE, 1)
       << "Starting backfill for index schema in DB " << db_num << ": "
       << vmsdk::config::RedactIfNeeded(name) << " (size: " << db_size << ")";
 }
@@ -271,11 +271,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
     // since we are skipping it.
-    VMSDK_LOG(DEBUG, ctx) << "Index "
-                          << vmsdk::config::RedactIfNeeded(
-                                 index_schema_proto.name())
-                          << " created with skip_initial_scan. "
-                             "Marking backfill as done.";
+    VMSDK_LOG(DEBUG) << "Index "
+                     << vmsdk::config::RedactIfNeeded(index_schema_proto.name())
+                     << " created with skip_initial_scan. "
+                        "Marking backfill as done.";
     res->backfill_job_.Get()->MarkScanAsDone();
   }
   return res;
@@ -347,7 +346,7 @@ absl::Status IndexSchema::Init(ValkeyModuleCtx *ctx) {
 }
 
 IndexSchema::~IndexSchema() {
-  VMSDK_LOG_EVERY_N_SEC(NOTICE, detached_ctx_.get(), 1)
+  VMSDK_LOG_EVERY_N_SEC(NOTICE, 1)
       << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
       << " dropped from DB " << db_num_;
 
@@ -522,11 +521,11 @@ void TrackResults(
   }
   // Separate errors and successes so that they log on different timers.
   if (ABSL_PREDICT_TRUE(status.ok())) {
-    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 5)
+    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), 5)
         << operation_str
         << " succeeded with result: " << status.status().ToString();
   } else {
-    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), 1)
         << operation_str
         << " failed with result: " << status.status().ToString();
   }
@@ -550,7 +549,7 @@ void TrackResults(
     ++counter.skipped_cnt;
   }
   if (ABSL_PREDICT_FALSE(!status.ok())) {
-    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(GetLogSeverity(status.ok()), 1)
         << operation_str
         << " failed with result: " << status.status().ToString();
   }
@@ -859,9 +858,9 @@ void IndexSchema::ProcessMultiQueue() {
 void IndexSchema::EnqueueMultiMutation(const Key &key) {
   auto &multi_mutations_keys = multi_mutations_keys_.Get();
   multi_mutations_keys.push_back(key);
-  VMSDK_LOG(DEBUG, nullptr) << "Enqueueing multi mutation for key: "
-                            << vmsdk::config::RedactIfNeeded(key->Str())
-                            << " Size is now " << multi_mutations_keys.size();
+  VMSDK_LOG(DEBUG) << "Enqueueing multi mutation for key: "
+                   << vmsdk::config::RedactIfNeeded(key->Str())
+                   << " Size is now " << multi_mutations_keys.size();
   if (multi_mutations_keys.size() >= mutations_thread_pool_->Size() &&
       !schedule_multi_exec_processing_.Get()) {
     schedule_multi_exec_processing_.Get() = true;
@@ -1065,7 +1064,7 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
   }
 
   if (StopBackfill.GetValue()) {
-    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1) << "Backfill stopped by request";
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, 1) << "Backfill stopped by request";
     return 0;
   }
 
@@ -1094,7 +1093,7 @@ uint32_t IndexSchema::PerformBackfill(ValkeyModuleCtx *ctx,
     if (!ValkeyModule_Scan(backfill_job->scan_ctx.get(),
                            backfill_job->cursor.get(), BackfillScanCallback,
                            reinterpret_cast<void *>(this))) {
-      VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+      VMSDK_LOG_EVERY_N_SEC(NOTICE, 1)
           << "Index schema " << vmsdk::config::RedactIfNeeded(name_)
           << " finished backfill. Scanned " << backfill_job->scanned_key_count
           << " keys in "
@@ -1343,8 +1342,8 @@ static absl::Status SaveSupplementalSection(
   rdb_save_sections.Increment();
   auto header = std::make_unique<data_model::SupplementalContentHeader>();
   header->set_type(type);
-  VMSDK_LOG(DEBUG, nullptr) << "Writing supplemental section type "
-                            << data_model::SupplementalContentType_Name(type);
+  VMSDK_LOG(DEBUG) << "Writing supplemental section type "
+                   << data_model::SupplementalContentType_Name(type);
   init(*header);
   auto header_str = header->SerializeAsString();
   VMSDK_RETURN_IF_ERROR(rdb->SaveStringBuffer(header_str));
@@ -1358,16 +1357,15 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
   int flags = ValkeyModule_GetContextFlags(nullptr);
   bool is_bgsave = (flags & VALKEYMODULE_CTX_FLAGS_IS_CHILD) != 0;
   if (options::GetDrainMutationQueueOnSave().GetValue() && !is_bgsave) {
-    VMSDK_LOG(NOTICE, nullptr)
-        << "Draining mutation queue before RDB save for index "
-        << vmsdk::config::RedactIfNeeded(name_);
+    VMSDK_LOG(NOTICE) << "Draining mutation queue before RDB save for index "
+                      << vmsdk::config::RedactIfNeeded(name_);
     DrainMutationQueue(detached_ctx_.get());
   }
 
-  VMSDK_LOG(NOTICE, nullptr)
-      << "Starting RDB save for index schema: "
-      << vmsdk::config::RedactIfNeeded(name_) << " Saving in version "
-      << (RDBWriteV2() ? "2" : "1") << " format";
+  VMSDK_LOG(NOTICE) << "Starting RDB save for index schema: "
+                    << vmsdk::config::RedactIfNeeded(name_)
+                    << " Saving in version " << (RDBWriteV2() ? "2" : "1")
+                    << " format";
 
   auto index_schema_proto = ToProto();
   auto rdb_section = std::make_unique<data_model::RDBSection>();
@@ -1392,14 +1390,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
       << vmsdk::config::RedactIfNeeded(this->name_)
       << " in DB: " << this->db_num_ << " to RDB";
 
-  VMSDK_LOG(NOTICE, nullptr)
-      << "Starting to save " << attributes_.size() << " attributes.";
+  VMSDK_LOG(NOTICE) << "Starting to save " << attributes_.size()
+                    << " attributes.";
 
   for (const auto &attribute_ref : GetSortedAttributes()) {
     const auto &attribute = attribute_ref.get();
-    VMSDK_LOG(DEBUG, nullptr)
-        << "Starting to save attribute: "
-        << vmsdk::config::RedactIfNeeded(attribute.second.GetAlias());
+    VMSDK_LOG(DEBUG) << "Starting to save attribute: "
+                     << vmsdk::config::RedactIfNeeded(
+                            attribute.second.GetAlias());
     // Note that the serialized attribute proto is also stored as part of the
     // serialized index schema proto above. We store here again to avoid any
     // dependencies on the ordering of multiple attributes.
@@ -1435,9 +1433,8 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
           rdb_save_backfilling_indexes.Increment(int(IsBackfillInProgress()));
           header.mutable_mutation_queue_header()->set_backfilling(
               IsBackfillInProgress());
-          VMSDK_LOG(DEBUG, nullptr)
-              << "RDB: Saving Index Extension Backfill = "
-              << header.mutation_queue_header().backfilling();
+          VMSDK_LOG(DEBUG) << "RDB: Saving Index Extension Backfill = "
+                           << header.mutation_queue_header().backfilling();
         },
         std::bind_front(&IndexSchema::SaveIndexExtension, this)));
   }
@@ -1480,10 +1477,10 @@ absl::Status IndexSchema::ValidateIndex() const {
                                     : cnt == oracle_key_count) {
       continue;
     }
-    VMSDK_LOG(WARNING, nullptr)
-        << "Index validation failed for index "
-        << vmsdk::config::RedactIfNeeded(name) << " expected key count "
-        << oracle_key_count << " got " << cnt;
+    VMSDK_LOG(WARNING) << "Index validation failed for index "
+                       << vmsdk::config::RedactIfNeeded(name)
+                       << " expected key count " << oracle_key_count << " got "
+                       << cnt;
     //
     // Ok, do a detailed comparison
     //
@@ -1493,10 +1490,11 @@ absl::Status IndexSchema::ValidateIndex() const {
     auto smaller_name = (cnt > oracle_key_count) ? oracle_name : name;
     auto key_check = [&](const Key &key) {
       if (!smaller_index->IsTracked(key) && !smaller_index->IsUnTracked(key)) {
-        VMSDK_LOG(WARNING, nullptr)
-            << "Key found in " << vmsdk::config::RedactIfNeeded(larger_name)
-            << " not found in " << vmsdk::config::RedactIfNeeded(smaller_name)
-            << ": " << vmsdk::config::RedactIfNeeded(key->Str());
+        VMSDK_LOG(WARNING) << "Key found in "
+                           << vmsdk::config::RedactIfNeeded(larger_name)
+                           << " not found in "
+                           << vmsdk::config::RedactIfNeeded(smaller_name)
+                           << ": " << vmsdk::config::RedactIfNeeded(key->Str());
         status = absl::InternalError(
             absl::StrCat("Key found in ", larger_name, " not found in ",
                          smaller_name, ": ", key->Str()));
@@ -1534,7 +1532,7 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   size_t key_count = db_key_info_.Get().size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(key_count));
   rdb_save_keys.Increment(key_count);
-  VMSDK_LOG(NOTICE, nullptr) << "Writing Index Extension, keys = " << key_count;
+  VMSDK_LOG(NOTICE) << "Writing Index Extension, keys = " << key_count;
   for (const auto &[key, _] : db_key_info_.Get()) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
@@ -1552,9 +1550,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
                                            [](const auto &entry) {
                                              return !entry.second.from_backfill;
                                            });
-  VMSDK_LOG(NOTICE, nullptr)
-      << "Writing mutation queue records = " << count
-      << " Total queue:" << tracked_mutated_records_.size();
+  VMSDK_LOG(NOTICE) << "Writing mutation queue records = " << count
+                    << " Total queue:" << tracked_mutated_records_.size();
   VMSDK_RETURN_IF_ERROR(out.SaveObject(count));
   rdb_save_mutation_entries.Increment(count);
   for (const auto &[key, value] : tracked_mutated_records_) {
@@ -1573,8 +1570,8 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   VMSDK_RETURN_IF_ERROR(
       out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
   rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
-                            << multi_mutations_keys_.Get().size();
+  VMSDK_LOG(DEBUG) << "Writing Multi/Exec Queue, records = "
+                   << multi_mutations_keys_.Get().size();
   for (const auto &key : multi_mutations_keys_.Get()) {
     CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
@@ -1592,7 +1589,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   Metrics::GetStats().rdb_restore_current_index_keys_total = key_count;
   Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
 
-  VMSDK_LOG(NOTICE, ctx) << "Loading Index Extension, keys = " << key_count;
+  VMSDK_LOG(NOTICE) << "Loading Index Extension, keys = " << key_count;
 
   const size_t max_queue_size =
       options::GetMaxMutationQueueSizeOnRestore().GetValue();
@@ -1620,7 +1617,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
         current_queue_size = GetMutatedRecordsSize();
 
         // Log periodically to show progress
-        VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 30)
+        VMSDK_LOG_EVERY_N_SEC(NOTICE, 30)
             << "RDB restore backpressure: waiting for mutation queue to drain. "
             << "Queue size: " << current_queue_size << ", Progress: " << i
             << "/" << key_count << " keys loaded";
@@ -1643,7 +1640,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
   }
 
   if (Metrics::GetStats().rdb_restore_backpressure_wait_cycles > 0) {
-    VMSDK_LOG(NOTICE, ctx)
+    VMSDK_LOG(NOTICE)
         << "RDB restore completed with backpressure. Total wait cycles: "
         << Metrics::GetStats().rdb_restore_backpressure_wait_cycles
         << " (max queue size: " << max_queue_size << ")";
@@ -1654,7 +1651,7 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
       ValkeySearch::Instance().GetWriterThreadPool()->SuspendWorkers());
   auto reload_queues = [&]() -> absl::Status {
     VMSDK_ASSIGN_OR_RETURN(size_t count, input.LoadObject<size_t>());
-    VMSDK_LOG(NOTICE, ctx) << "Loading Mutation Entries, entries = " << count;
+    VMSDK_LOG(NOTICE) << "Loading Mutation Entries, entries = " << count;
     rdb_load_mutation_entries.Increment(count);
     for (size_t i = 0; i < count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
@@ -1667,8 +1664,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
     }
     VMSDK_ASSIGN_OR_RETURN(size_t multi_count, input.LoadObject<size_t>());
     rdb_load_multi_exec_entries.Increment(multi_count);
-    VMSDK_LOG(NOTICE, ctx) << "Loading Multi/Exec Entries, entries = "
-                           << multi_count;
+    VMSDK_LOG(NOTICE) << "Loading Multi/Exec Entries, entries = "
+                      << multi_count;
     for (size_t i = 0; i < multi_count; ++i) {
       VMSDK_ASSIGN_OR_RETURN(auto keyname_str, input.LoadString());
       auto keyname = StringInternStore::Intern(keyname_str);
@@ -1687,8 +1684,8 @@ absl::Status IndexSchema::LoadIndexExtension(ValkeyModuleCtx *ctx,
 static absl::Status SkipSupplementalContent(
     SupplementalContentIter &supplemental_iter, std::string_view reason) {
   rdb_load_sections_skipped.Increment();
-  VMSDK_LOG(NOTICE, nullptr)
-      << "Skipping supplemental content section (" << reason << ")";
+  VMSDK_LOG(NOTICE) << "Skipping supplemental content section (" << reason
+                    << ")";
   auto chunk_it = supplemental_iter.IterateChunks();
   while (chunk_it.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk_result, chunk_it.Next());
@@ -1740,9 +1737,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
             SUPPLEMENTAL_CONTENT_INDEX_CONTENT: {
           const auto &attribute =
               supplemental_content->index_content_header().attribute();
-          VMSDK_LOG(DEBUG, nullptr)
-              << "Loading Index Content for attribute: "
-              << vmsdk::config::RedactIfNeeded(attribute.alias());
+          VMSDK_LOG(DEBUG) << "Loading Index Content for attribute: "
+                           << vmsdk::config::RedactIfNeeded(attribute.alias());
           VMSDK_ASSIGN_OR_RETURN(
               std::shared_ptr<indexes::IndexBase> index,
               IndexFactory(ctx, index_schema.get(), attribute,
@@ -1755,9 +1751,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
             SUPPLEMENTAL_CONTENT_KEY_TO_ID_MAP: {
           const auto &attribute =
               supplemental_content->key_to_id_map_header().attribute();
-          VMSDK_LOG(DEBUG, nullptr)
-              << "Loading Key to ID Map Content for attribute: "
-              << vmsdk::config::RedactIfNeeded(attribute.alias());
+          VMSDK_LOG(DEBUG) << "Loading Key to ID Map Content for attribute: "
+                           << vmsdk::config::RedactIfNeeded(attribute.alias());
           VMSDK_ASSIGN_OR_RETURN(
               auto index, index_schema->GetIndex(attribute.alias()),
               _ << "Key to ID mapping found before index definition.");
@@ -1773,7 +1768,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
         }
         case data_model::SupplementalContentType::
             SUPPLEMENTAL_CONTENT_INDEX_EXTENSION: {
-          VMSDK_LOG(DEBUG, nullptr) << "Loading Mutation Queue";
+          VMSDK_LOG(DEBUG) << "Loading Mutation Queue";
           if (!RDBReadV2()) {
             VMSDK_RETURN_IF_ERROR(
                 SkipSupplementalContent(supplemental_iter, "mutation queue"));
@@ -1783,7 +1778,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                   ctx, RDBChunkInputStream(supplemental_iter.IterateChunks())));
               if (!supplemental_content->mutation_queue_header()
                        .backfilling()) {
-                VMSDK_LOG(DEBUG, ctx) << "Backfill suppressed.";
+                VMSDK_LOG(DEBUG) << "Backfill suppressed.";
                 index_schema->backfill_job_.Get()->MarkScanAsDone();
               } else {
                 rdb_load_backfilling_indexes.Increment();
@@ -1796,16 +1791,16 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
           break;
         }
         default:
-          VMSDK_LOG(NOTICE, ctx) << "Unknown supplemental content type: "
-                                 << supplemental_content->type();
+          VMSDK_LOG(NOTICE) << "Unknown supplemental content type: "
+                            << supplemental_content->type();
           VMSDK_RETURN_IF_ERROR(
               SkipSupplementalContent(supplemental_iter, "unknown type"));
           break;
       }
     }
   }
-  VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
-                         << index_schema->GetAttributeCount() << " attributes";
+  VMSDK_LOG(NOTICE) << "Loaded index schema with "
+                    << index_schema->GetAttributeCount() << " attributes";
   std::move(mark_destructing_on_error)
       .Cancel();  // Don't mark for destruction since no error has been returned
   return index_schema;
@@ -1845,10 +1840,9 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
         break;
       }
     }
-    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 10)
-        << "Draining Mutation Queue for index "
-        << vmsdk::config::RedactIfNeeded(name_)
-        << ", entries remaining: " << queue_size;
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, 10) << "Draining Mutation Queue for index "
+                                      << vmsdk::config::RedactIfNeeded(name_)
+                                      << ", entries remaining: " << queue_size;
     auto start = std::chrono::steady_clock::now();
     while (std::chrono::steady_clock::now() - start < yield_duration) {
       ValkeyModule_Yield(ctx, VALKEYMODULE_YIELD_FLAG_CLIENTS, nullptr);
@@ -1861,13 +1855,12 @@ void IndexSchema::DrainMutationQueue(ValkeyModuleCtx *ctx) const {
 void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   if (loaded_v2_) {
     loaded_v2_ = false;
-    VMSDK_LOG(NOTICE, ctx) << "RDB load completed, "
-                           << " Mutation Queue contains "
-                           << GetMutatedRecordsSize() << " entries."
-                           << (backfill_job_.Get().has_value() &&
-                                       !backfill_job_.Get()->IsScanDone()
-                                   ? " Backfill still required."
-                                   : " Backfill not needed.");
+    VMSDK_LOG(NOTICE) << "RDB load completed, " << " Mutation Queue contains "
+                      << GetMutatedRecordsSize() << " entries."
+                      << (backfill_job_.Get().has_value() &&
+                                  !backfill_job_.Get()->IsScanDone()
+                              ? " Backfill still required."
+                              : " Backfill not needed.");
     if (options::GetDrainMutationQueueOnLoad().GetValue()) {
       DrainMutationQueue(ctx);
     }
@@ -1897,26 +1890,23 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
       key_size++;
       return absl::OkStatus();
     });
-    VMSDK_LOG(DEBUG, ctx) << "Deleting " << stale_entries
-                          << " stale entries of " << key_size
-                          << " total keys for {Index: "
-                          << vmsdk::config::RedactIfNeeded(name_)
-                          << ", Attribute: "
-                          << vmsdk::config::RedactIfNeeded(attribute.first)
-                          << "}";
+    VMSDK_LOG(DEBUG) << "Deleting " << stale_entries << " stale entries of "
+                     << key_size << " total keys for {Index: "
+                     << vmsdk::config::RedactIfNeeded(name_) << ", Attribute: "
+                     << vmsdk::config::RedactIfNeeded(attribute.first) << "}";
   }
-  VMSDK_LOG(NOTICE, ctx) << "Deleting " << deletion_attributes.size()
-                         << " stale entries for {Index: "
-                         << vmsdk::config::RedactIfNeeded(name_) << "}";
+  VMSDK_LOG(NOTICE) << "Deleting " << deletion_attributes.size()
+                    << " stale entries for {Index: "
+                    << vmsdk::config::RedactIfNeeded(name_) << "}";
 
   for (auto &[key, attributes] : deletion_attributes) {
     auto interned_key = StringInternStore::Intern(key);
     ProcessMutation(ctx, attributes, interned_key, true, true);
   }
-  VMSDK_LOG(NOTICE, ctx) << "Scanned index schema "
-                         << vmsdk::config::RedactIfNeeded(name_)
-                         << " for stale entries in "
-                         << absl::FormatDuration(stop_watch.Duration());
+  VMSDK_LOG(NOTICE) << "Scanned index schema "
+                    << vmsdk::config::RedactIfNeeded(name_)
+                    << " for stale entries in "
+                    << absl::FormatDuration(stop_watch.Duration());
 }
 
 vmsdk::BlockedClientCategory IndexSchema::GetBlockedCategoryFromProto() const {
@@ -2081,7 +2071,7 @@ void IndexSchema::MarkAsDestructing() {
   absl::MutexLock lock(&mutated_records_mutex_);
   auto status = keyspace_event_manager_->RemoveSubscription(this);
   if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx_.get())
+    VMSDK_LOG(WARNING)
         << "Failed to remove keyspace event subscription for index "
            "schema "
         << vmsdk::config::RedactIfNeeded(name_) << ": " << status.message();
@@ -2196,9 +2186,8 @@ CONTROLLED_INT(override_min_version, -1);
 absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     const google::protobuf::Any &metadata) {
   if (override_min_version.GetValue() != -1) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Overriding index schema semantic version to "
-        << override_min_version.GetValue();
+    VMSDK_LOG(WARNING) << "Overriding index schema semantic version to "
+                       << override_min_version.GetValue();
     return vmsdk::ValkeyVersion(override_min_version.GetValue());
   }
   auto unpacked = std::make_unique<data_model::IndexSchema>();

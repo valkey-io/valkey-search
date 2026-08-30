@@ -468,8 +468,8 @@ EvaluationResult ComposedPredicate::EvaluateWithContext(Evaluator &evaluator,
         query_field_mask &= result.filter_iterator->QueryFieldMask();
         iterators.push_back(std::move(result.filter_iterator));
       }
-      VMSDK_LOG(DEBUG, nullptr)
-          << "Inline evaluate AND predicate child: " << result.matches;
+      VMSDK_LOG(DEBUG) << "Inline evaluate AND predicate child: "
+                       << result.matches;
     }
     // Proximity check: Only if slop/inorder set and both sides have
     // iterators. This ensures we only check proximity for text predicates,

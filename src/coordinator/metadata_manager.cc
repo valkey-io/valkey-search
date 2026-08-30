@@ -172,7 +172,7 @@ absl::Status MetadataManager::TriggerCallbacks(
         obj_name, entry.has_content() ? &entry.content() : nullptr,
         entry.fingerprint(), entry.version());
   }
-  VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 10)
+  VMSDK_LOG_EVERY_N_SEC(WARNING, 10)
       << "No type registered for: " << type_name << ", skipping callback";
   return absl::OkStatus();
 }
@@ -322,7 +322,7 @@ void MetadataManager::RegisterType(absl::string_view type_name,
               .fingerprint_callback = std::move(fingerprint_callback),
               .update_callback = std::move(callback),
               .min_version_callback = std::move(min_version_callback)}});
-  VMSDK_LOG(DEBUG, nullptr) << "Registering type: " << type_name;
+  VMSDK_LOG(DEBUG) << "Registering type: " << type_name;
   CHECK(insert_result.second) << "Type already registered: " << type_name;
 }
 
@@ -333,7 +333,7 @@ void MetadataManager::BroadcastMetadata(ValkeyModuleCtx *ctx) {
 void MetadataManager::BroadcastMetadata(
     ValkeyModuleCtx *ctx, const GlobalMetadataVersionHeader &version_header) {
   if (is_loading_.Get()) {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
         << "Skipping send of metadata header due to loading";
     return;
   }
@@ -351,7 +351,7 @@ void MetadataManager::DelayHandleClusterMessage(
     std::unique_ptr<GlobalMetadataVersionHeader> header) {
   if (PauseHandleClusterMessage.GetValue()) {
     Metrics::GetStats().pause_handle_cluster_message_round_cnt++;
-    VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 2)
+    VMSDK_LOG_EVERY_N_SEC(DEBUG, 2)
         << "DEBUG: Paused round is "
         << Metrics::GetStats().pause_handle_cluster_message_round_cnt;
     std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
@@ -378,8 +378,7 @@ void MetadataManager::HandleClusterMessage(ValkeyModuleCtx *ctx,
     std::string sender_id_str(sender_id, VALKEYMODULE_NODE_ID_LEN);
     DelayHandleClusterMessage(ctx, sender_id_str.c_str(), std::move(header));
   } else {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
-        << "Unsupported message type: " << type;
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 10) << "Unsupported message type: " << type;
   }
 }
 
@@ -387,7 +386,7 @@ void MetadataManager::HandleBroadcastedMetadata(
     ValkeyModuleCtx *ctx, const char *sender_id,
     std::unique_ptr<GlobalMetadataVersionHeader> header) {
   if (is_loading_.Get()) {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 10)
         << "Ignoring incoming metadata message due to loading...";
     return;
   }
@@ -399,7 +398,7 @@ void MetadataManager::HandleBroadcastedMetadata(
   }
 
   if (header->top_level_min_version() > kModuleVersion.ToInt()) {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 10)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 10)
         << "Ignoring incoming metadata message from "
         << std::string(sender_id, VALKEYMODULE_NODE_ID_LEN)
         << " due to minimum version requirement of "
@@ -419,7 +418,7 @@ void MetadataManager::HandleBroadcastedMetadata(
     if (header->top_level_fingerprint() == top_level_fingerprint) {
       return;
     }
-    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
         << "Got conflicting contents from " << sender_id_str << " for version "
         << top_level_version
         << ": have "
@@ -429,7 +428,7 @@ void MetadataManager::HandleBroadcastedMetadata(
         << ". Retrieving full "
            "GlobalMetadata.";
   } else {
-    VMSDK_LOG_EVERY_N_SEC(NOTICE, ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, 1)
         << "Got newer version from " << sender_id_str << ": have "
         << top_level_version << ", got " << header->top_level_version()
         << ". Retrieving full GlobalMetadata.";
@@ -441,7 +440,7 @@ void MetadataManager::HandleBroadcastedMetadata(
   if (ValkeyModule_GetClusterNodeInfo(ctx, sender_id_str.c_str(), node_ip,
                                       nullptr, &node_port,
                                       nullptr) != VALKEYMODULE_OK) {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
         << "Failed to get cluster node info for node " << sender_id
         << " broadcasting "
            "version "
@@ -456,7 +455,7 @@ void MetadataManager::HandleBroadcastedMetadata(
   client->GetGlobalMetadata(
       [address, this](grpc::Status s, GetGlobalMetadataResponse &response) {
         if (!s.ok()) {
-          VMSDK_LOG_EVERY_N_SEC(WARNING, detached_ctx_.get(), 1)
+          VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
               << "Failed to get GlobalMetadata from " << address
               << ", Error code: " << s.error_code();
           return;
@@ -465,17 +464,17 @@ void MetadataManager::HandleBroadcastedMetadata(
                           schema = std::unique_ptr<GlobalMetadata>(
                               response.release_metadata()),
                           address = std::move(address)] {
-          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, 1)
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();
           auto &metadata_manager = MetadataManager::Instance();
           auto status = metadata_manager.ReconcileMetadata(*schema, address);
           if (!status.ok()) {
-            VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 1)
+            VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
                 << "Failed to reconcile schemas: " << status.message();
             return;
           }
-          VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
+          VMSDK_LOG_EVERY_N_SEC(DEBUG, 1)
               << "Successfully reconciled schemas! New GlobalMetadata: "
               << metadata_manager.GetGlobalMetadata()->DebugString();
         });
@@ -487,11 +486,10 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
                                                 bool trigger_callbacks,
                                                 bool prefer_incoming) {
   if (proposed.version_header().top_level_version() > kModuleVersion.ToInt()) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Proposed GlobalMetadata from " << source
-        << " requires minimum version "
-        << proposed.version_header().top_level_version()
-        << ", current version is " << kModuleVersion.ToString();
+    VMSDK_LOG(WARNING) << "Proposed GlobalMetadata from " << source
+                       << " requires minimum version "
+                       << proposed.version_header().top_level_version()
+                       << ", current version is " << kModuleVersion.ToString();
     return absl::InternalError(absl::StrCat(
         "Proposed GlobalMetadata from ", source, " requires minimum version ",
         proposed.version_header().top_level_version(), ", current version is ",
@@ -561,7 +559,7 @@ absl::Status MetadataManager::ReconcileMetadata(const GlobalMetadata &proposed,
         auto obj_name = ObjName::Decode(id);
         auto result = TriggerCallbacks(type_name, obj_name, proposed_entry);
         if (!result.ok()) {
-          VMSDK_LOG(WARNING, detached_ctx_.get())
+          VMSDK_LOG(WARNING)
               << "Failed during reconciliation callback: %s"
               << result.message().data() << " for type " << type_name << ", id "
               << vmsdk::config::RedactIfNeeded(id) << " from " << source;
@@ -645,14 +643,13 @@ absl::Status MetadataManager::SaveMetadata(ValkeyModuleCtx *ctx, SafeRDB *rdb,
   if (!DoesGlobalMetadataContainEntry(metadata_.Get())) {
     // Auxsave2 will ensure nothing is written to the aux section if we write
     // nothing.
-    VMSDK_LOG(NOTICE, ctx)
+    VMSDK_LOG(NOTICE)
         << "Skipping aux metadata for MetadataManager since there is no "
            "content";
     return absl::OkStatus();
   }
 
-  VMSDK_LOG(NOTICE, ctx)
-      << "Saving aux metadata for MetadataManager to aux RDB";
+  VMSDK_LOG(NOTICE) << "Saving aux metadata for MetadataManager to aux RDB";
   data_model::RDBSection section;
   std::string serialized_metadata;
   section.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
@@ -731,8 +728,7 @@ void MetadataManager::OnServerCronCallback(
 void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   // Only on loading ended do we apply the staged changes.
   if (staging_metadata_due_to_repl_load_.Get()) {
-    VMSDK_LOG(NOTICE, ctx)
-        << "Applying staged metadata at the end of RDB loading";
+    VMSDK_LOG(NOTICE) << "Applying staged metadata at the end of RDB loading";
 
     // Clear the local metadata, then use ReconcileMetadata to recompute
     // fingerprints in case encoding has changed.
@@ -741,8 +737,8 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                                     /*trigger_callbacks=*/false,
                                     /*prefer_incoming=*/true);
     if (!status.ok()) {
-      VMSDK_LOG(WARNING, ctx)
-          << "Failed to apply staged metadata: %s" << status.message().data();
+      VMSDK_LOG(WARNING) << "Failed to apply staged metadata: %s"
+                         << status.message().data();
     }
     staged_metadata_ = GlobalMetadata();
     staging_metadata_due_to_repl_load_ = false;
@@ -767,14 +763,13 @@ void MetadataManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
 }
 
 void MetadataManager::OnReplicationLoadStart(ValkeyModuleCtx *ctx) {
-  VMSDK_LOG(NOTICE, ctx) << "Staging metadata during RDB load due to "
-                            "replication, will apply on loading finished";
+  VMSDK_LOG(NOTICE) << "Staging metadata during RDB load due to "
+                       "replication, will apply on loading finished";
   staging_metadata_due_to_repl_load_ = true;
 }
 
 void MetadataManager::OnLoadingStarted(ValkeyModuleCtx *ctx) {
-  VMSDK_LOG(NOTICE, ctx)
-      << "Loading started, stopping incoming metadata updates";
+  VMSDK_LOG(NOTICE) << "Loading started, stopping incoming metadata updates";
   is_loading_ = true;
 }
 
@@ -822,7 +817,7 @@ void MetadataManager::RegisterForClusterMessages(ValkeyModuleCtx *ctx) {
 absl::Status MetadataManager::ShowMetadata(
     ValkeyModuleCtx *ctx, [[maybe_unused]] vmsdk::ArgsIterator &itr) const {
   auto metadata = metadata_.Get().DebugString();
-  VMSDK_LOG(DEBUG, ctx) << "Metadata: " << metadata;
+  VMSDK_LOG(DEBUG) << "Metadata: " << metadata;
   ValkeyModule_ReplyWithStringBuffer(ctx, metadata.data(), metadata.size());
   return absl::OkStatus();
 }
@@ -884,7 +879,7 @@ ObjName ObjName::Decode(absl::string_view encoded) {
         front_tag.remove_prefix(1);
       }
       if (!front_tag.empty()) {
-        VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 10)
+        VMSDK_LOG_EVERY_N_SEC(NOTICE, 10)
             << "Ignoring extended index name metadata";
       }
       if (!db_num_str.empty()) {
@@ -893,9 +888,8 @@ ObjName ObjName::Decode(absl::string_view encoded) {
                 encoded.substr(hash_tag->size() + 2)};
       }
     }
-    VMSDK_LOG_EVERY_N(WARNING, nullptr, 10)
-        << "Found invalid encoded index name: "
-        << vmsdk::config::RedactIfNeeded(encoded);
+    VMSDK_LOG_EVERY_N(WARNING, 10) << "Found invalid encoded index name: "
+                                   << vmsdk::config::RedactIfNeeded(encoded);
   }
   // Assume 8/1.0 encoding.
   return {0, encoded};

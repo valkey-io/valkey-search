@@ -163,8 +163,8 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       auto rdb_section_count, rdb->LoadUnsigned(),
       _ << "IO error reading RDB section count from RDB. Failing RDB load.");
 
-  VMSDK_LOG(NOTICE, ctx) << "Loading RDB from version: " << rdb_version
-                         << " with " << rdb_section_count << " sections.";
+  VMSDK_LOG(NOTICE) << "Loading RDB from version: " << rdb_version << " with "
+                    << rdb_section_count << " sections.";
 
   // Initialize restore progress tracking
   auto rdb_load_start = absl::Now();
@@ -185,9 +185,8 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       VMSDK_RETURN_IF_ERROR(load_callback(ctx, std::move(section),
                                           it.IterateSupplementalContent()));
     } else {
-      VMSDK_LOG(WARNING, ctx)
-          << "Ignoring unknown RDB section with type "
-          << data_model::RDBSectionType_Name(section->type());
+      VMSDK_LOG(WARNING) << "Ignoring unknown RDB section with type "
+                         << data_model::RDBSectionType_Name(section->type());
       // Need to consume all supplemental data
       auto supp_it = it.IterateSupplementalContent();
       while (supp_it.HasNext()) {
@@ -225,7 +224,7 @@ int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
     return VALKEYMODULE_OK;
   }
   Metrics::GetStats().rdb_load_failure_cnt++;
-  VMSDK_LOG_EVERY_N_SEC(WARNING, ctx.get(), 0.1)
+  VMSDK_LOG_EVERY_N_SEC(WARNING, 0.1)
       << "Failed to load ValkeySearch aux section from RDB: "
       << result.message();
   return VALKEYMODULE_ERR;
@@ -251,9 +250,9 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
     return absl::OkStatus();
   }
 
-  VMSDK_LOG(NOTICE, ctx) << "Saving " << rdb_section_count
-                         << " ValkeySearch RDB sections with minimum version "
-                         << vmsdk::ValkeyVersion(min_version).ToString();
+  VMSDK_LOG(NOTICE) << "Saving " << rdb_section_count
+                    << " ValkeySearch RDB sections with minimum version "
+                    << vmsdk::ValkeyVersion(min_version).ToString();
 
   // Save the header
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_version.ToInt()));
@@ -281,7 +280,7 @@ void AuxSaveCallback(ValkeyModuleIO *rdb, int when) {
     return;
   }
   Metrics::GetStats().rdb_save_failure_cnt++;
-  VMSDK_LOG_EVERY_N_SEC(WARNING, ctx, 0.1)
+  VMSDK_LOG_EVERY_N_SEC(WARNING, 0.1)
       << "Failed to save ValkeySearch aux section to RDB: " << result.message();
 }
 

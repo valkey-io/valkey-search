@@ -141,7 +141,7 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
     if (block_size_ == 0) {
       return absl::InternalError("Cannot resize FLAT index: block_size is 0");
     }
-    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+    VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
         << "Resizing FLAT Index, current size: " << GetCapacity()
         << ", expand by: " << block_size_;
     algo_->resizeIndex(GetCapacity() + block_size_);

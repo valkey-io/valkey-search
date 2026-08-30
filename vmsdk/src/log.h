@@ -44,10 +44,6 @@ void SetSinkFormatter(LogFormatterFunc formatter);
 class ValkeyLogSink : public absl::LogSink {
  public:
   void Send(const absl::LogEntry& entry) override;
-  void SetContext(ValkeyModuleCtx* ctx) { ctx_ = ctx; }
-
- private:
-  ValkeyModuleCtx* ctx_{nullptr};
 };
 
 class ValkeyIOLogSink : public absl::LogSink {
@@ -62,22 +58,32 @@ class ValkeyIOLogSink : public absl::LogSink {
 absl::Status InitLogging(
     ValkeyModuleCtx* ctx,
     std::optional<std::string> log_level_str = std::nullopt);
+// Releases the detached context owned by the logging subsystem. This must run
+// on the main thread after all module worker threads have stopped.
+void ShutdownLogging();
+
+// Stops associating logs with the module without releasing the detached
+// context. This is safe to call during module unload while callbacks may
+// still be finishing.
+void DisableLoggingContext();
+
+// Returns the module-scoped detached context established during initialization.
+// It is nullptr before initialization, so early load failures retain the
+// server's generic "module" log prefix.
+ValkeyModuleCtx* GetLoggingContext();
 
 static thread_local ValkeyLogSink log_sink;
 static thread_local ValkeyIOLogSink io_log_sink;
 
 }  // namespace vmsdk
 
-#define VMSDK_LOG(log_level, ctx)  \
-  vmsdk::log_sink.SetContext(ctx); \
+#define VMSDK_LOG(log_level) \
   VLOG(static_cast<int>(log_level)).ToSinkOnly(&vmsdk::log_sink)
 
-#define VMSDK_LOG_EVERY_N(log_level, ctx, n) \
-  vmsdk::log_sink.SetContext(ctx);           \
+#define VMSDK_LOG_EVERY_N(log_level, n) \
   VLOG_EVERY_N(static_cast<int>(log_level), n).ToSinkOnly(&vmsdk::log_sink)
 
-#define VMSDK_LOG_EVERY_N_SEC(log_level, ctx, n) \
-  vmsdk::log_sink.SetContext(ctx);               \
+#define VMSDK_LOG_EVERY_N_SEC(log_level, n) \
   VLOG_EVERY_N_SEC(static_cast<int>(log_level), n).ToSinkOnly(&vmsdk::log_sink)
 
 #define VMSDK_IO_LOG(log_level, module_io)   \

@@ -192,9 +192,8 @@ class ConfigBase : public Registerable {
   absl::Status SetValueOrLog(T value, LogLevel log_level) {
     auto res = Validate(value);
     if (!res.ok()) {
-      VMSDK_LOG(log_level, nullptr)
-          << "Failed to update configuration entry: " << GetName() << ". "
-          << res.message();
+      VMSDK_LOG(log_level) << "Failed to update configuration entry: "
+                           << GetName() << ". " << res.message();
       return res;
     }
 

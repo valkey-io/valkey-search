@@ -137,7 +137,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
         text_index_schema, parameters.filter_parse_results.query_operations);
-    VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
+    VMSDK_LOG(DEBUG) << "Performing vector search with inline filter";
   }
   if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
     auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
@@ -567,7 +567,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
                       nullptr, vector->data(), vector->size()));
             }
           } else {
-            VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+            VMSDK_LOG_EVERY_N_SEC(WARNING, 1)
                 << "Failed to get vector value during fetching through index "
                    "contents: "
                 << vector.status();
@@ -715,9 +715,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
 
   // Query planner makes the decision for pre-filtering vs inline-filtering.
   if (UsePreFiltering(qualified_entries, vector_index)) {
-    VMSDK_LOG(DEBUG, nullptr)
-        << "Using pre-filter query execution, qualified entries="
-        << qualified_entries;
+    VMSDK_LOG(DEBUG) << "Using pre-filter query execution, qualified entries="
+                     << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
     std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
@@ -1091,9 +1090,9 @@ absl::Status query::SearchParameters::PreParseQueryString() {
                      options::GetQueryStringBytes(), " bytes."));
   }
   auto filter_expression = absl::string_view(parse_vars.query_string);
-  VMSDK_LOG(DEBUG, nullptr)
-      << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
-      << "'";
+  VMSDK_LOG(DEBUG) << "Query: '"
+                   << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
+                   << "'";
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;
   absl::string_view vector_filter;

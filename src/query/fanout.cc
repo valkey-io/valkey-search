@@ -117,7 +117,7 @@ struct SearchPartitionResultsTracker {
       if (should_cancel) {
         parameters->cancellation_token->Cancel();
       }
-      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, 1)
           << "Error during handling of FT.SEARCH on node " << address
           << ", Error code: " << status.error_code();
       return;
@@ -259,7 +259,7 @@ class LocalResponderSearch : public query::SearchParameters {
         tracker->AddResults(search_result.neighbors);
         tracker->AddTotalCount(search_result.total_count);
       }
-      VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
+      VMSDK_LOG_EVERY_N_SEC(DEBUG, 1)
           << "Error during local handling of the search operation";
     }
     // Stash `self` (the LocalResponderSearch) in the tracker so that its

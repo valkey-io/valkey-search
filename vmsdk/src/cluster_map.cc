@@ -228,7 +228,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   ValkeyModuleCallReply* primary_endpoint_reply =
       ValkeyModule_CallReplyArrayElement(node_arr, 0);
   if (!primary_endpoint_reply) {
-    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    VMSDK_LOG(WARNING) << "Invalid node primary endpoint";
     return std::nullopt;
   }
 
@@ -256,7 +256,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
       (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
        (node_primary_endpoint_len == 1 &&
         node_primary_endpoint_char[0] == '?'))) {
-    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    VMSDK_LOG(WARNING) << "Invalid node primary endpoint";
     return std::nullopt;
   }
 
@@ -316,10 +316,9 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   if (it != socket_addr_to_node_map_.end()) {
     // socket address already seen - check if it's the same node
     if (it->second != node_id_str) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Socket address " << it->first.primary_endpoint << ":"
-          << it->first.port << " collision between nodes " << node_id_str
-          << " and " << it->second;
+      VMSDK_LOG(WARNING) << "Socket address " << it->first.primary_endpoint
+                         << ":" << it->first.port << " collision between nodes "
+                         << node_id_str << " and " << it->second;
       this->is_consistent_ = false;
     }
   } else {
@@ -413,8 +412,8 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
       ValkeyModule_CallReplyArrayElement(slot_range, 2);
   auto primary_node_opt = ParseNodeInfo(primary_node_arr, my_node_id, true);
   if (!primary_node_opt.has_value()) {
-    VMSDK_LOG(WARNING, nullptr) << "Dropping slot range [" << start << "-"
-                                << end << "] due to invalid primary node";
+    VMSDK_LOG(WARNING) << "Dropping slot range [" << start << "-" << end
+                       << "] due to invalid primary node";
     is_consistent_ = false;
     return false;
   }
@@ -428,8 +427,8 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
         ValkeyModule_CallReplyArrayElement(slot_range, j);
     auto replica_opt = ParseNodeInfo(replica_node_arr, my_node_id, false);
     if (!replica_opt.has_value()) {
-      VMSDK_LOG(WARNING, nullptr) << "Skipping invalid replica in slot range ["
-                                  << start << "-" << end << "]";
+      VMSDK_LOG(WARNING) << "Skipping invalid replica in slot range [" << start
+                         << "-" << end << "]";
       is_consistent_ = false;
       return false;
     }
@@ -465,7 +464,7 @@ bool ClusterMap::ProcessSlotRange(ValkeyModuleCallReply* slot_range,
 
     // check shard consistency between existing and new one
     if (!IsExistingShardConsistent(shard_it->second, primary_node, replicas)) {
-      VMSDK_LOG(WARNING, nullptr)
+      VMSDK_LOG(WARNING)
           << "Inconsistency shard info found on existing slot ranges!";
       is_consistent_ = false;
     }
@@ -502,9 +501,8 @@ bool ClusterMap::CheckClusterMapFull() {
         << "Slot " << start_slot << " overlaps with previous range ending at "
         << (expected_next - 1);
     if (start_slot != expected_next) {
-      VMSDK_LOG(WARNING, nullptr)
-          << "Slot gap found: slots " << expected_next << " to "
-          << (start_slot - 1) << " are not covered";
+      VMSDK_LOG(WARNING) << "Slot gap found: slots " << expected_next << " to "
+                         << (start_slot - 1) << " are not covered";
       return false;
     }
     expected_next = range_and_shard.first + 1;
@@ -512,10 +510,9 @@ bool ClusterMap::CheckClusterMapFull() {
   }
   // Verify we processed all entries in the map
   if (entries_processed != slot_to_shard_map_.size()) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Slot map inconsistency: processed " << entries_processed
-        << " entries but map contains " << slot_to_shard_map_.size()
-        << " entries";
+    VMSDK_LOG(WARNING) << "Slot map inconsistency: processed "
+                       << entries_processed << " entries but map contains "
+                       << slot_to_shard_map_.size() << " entries";
     return false;
   }
   return expected_next == kNumSlots;
@@ -619,14 +616,14 @@ std::shared_ptr<ClusterMap> ClusterMap::CreateNewClusterMap(
 
 // debug only, print out cluster map
 void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
-  VMSDK_LOG(NOTICE, nullptr) << "=== Cluster Map Created ===";
-  VMSDK_LOG(NOTICE, nullptr) << "is_consistent_: " << map->is_consistent_;
-  VMSDK_LOG(NOTICE, nullptr)
-      << "cluster_slots_fingerprint_: " << map->cluster_slots_fingerprint_;
+  VMSDK_LOG(NOTICE) << "=== Cluster Map Created ===";
+  VMSDK_LOG(NOTICE) << "is_consistent_: " << map->is_consistent_;
+  VMSDK_LOG(NOTICE) << "cluster_slots_fingerprint_: "
+                    << map->cluster_slots_fingerprint_;
 
   // Print owned slots using slot_to_shard_map_
   size_t owned_count = map->owned_slots_.count();
-  VMSDK_LOG(NOTICE, nullptr) << "owned_slots_ count: " << owned_count;
+  VMSDK_LOG(NOTICE) << "owned_slots_ count: " << owned_count;
   if (owned_count > 0) {
     std::string owned_ranges;
     for (const auto& [start_slot, range_and_shard] : map->slot_to_shard_map_) {
@@ -655,18 +652,18 @@ void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
       }
     }
     if (!owned_ranges.empty()) {
-      VMSDK_LOG(NOTICE, nullptr) << "owned_slots_ ranges: " << owned_ranges;
+      VMSDK_LOG(NOTICE) << "owned_slots_ ranges: " << owned_ranges;
     }
   }
 
   // Print shards
-  VMSDK_LOG(NOTICE, nullptr) << "shards_ count: " << map->shards_.size();
+  VMSDK_LOG(NOTICE) << "shards_ count: " << map->shards_.size();
   for (const auto& [shard_id, shard_info] : map->shards_) {
-    VMSDK_LOG(NOTICE, nullptr) << "Shard ID: " << shard_id;
-    VMSDK_LOG(NOTICE, nullptr)
-        << "  owned_slots count: " << shard_info.owned_slots.size();
-    VMSDK_LOG(NOTICE, nullptr)
-        << "  slots_fingerprint: " << shard_info.slots_fingerprint;
+    VMSDK_LOG(NOTICE) << "Shard ID: " << shard_id;
+    VMSDK_LOG(NOTICE) << "  owned_slots count: "
+                      << shard_info.owned_slots.size();
+    VMSDK_LOG(NOTICE) << "  slots_fingerprint: "
+                      << shard_info.slots_fingerprint;
 
     // Simplified slot range printing using slot_to_shard_map_
     if (!shard_info.owned_slots.empty()) {
@@ -680,67 +677,65 @@ void ClusterMap::PrintClusterMap(std::shared_ptr<ClusterMap> map) {
               std::to_string(start_slot) + "-" + std::to_string(end_slot);
         }
       }
-      VMSDK_LOG(NOTICE, nullptr) << "  slot ranges: " << slot_ranges;
+      VMSDK_LOG(NOTICE) << "  slot ranges: " << slot_ranges;
     }
 
     // Print primary node info
     if (shard_info.primary.has_value()) {
       const auto& primary = shard_info.primary.value();
-      VMSDK_LOG(NOTICE, nullptr) << "  Primary Node:";
-      VMSDK_LOG(NOTICE, nullptr) << "    node_id: " << primary.node_id;
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    role: " << (primary.is_primary ? "Primary" : "Replica");
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    location: " << (primary.is_local ? "Local" : "Remote");
-      VMSDK_LOG(NOTICE, nullptr) << "    primary_endpoint: "
-                                 << primary.socket_address.primary_endpoint;
-      VMSDK_LOG(NOTICE, nullptr) << "    port: " << primary.socket_address.port;
+      VMSDK_LOG(NOTICE) << "  Primary Node:";
+      VMSDK_LOG(NOTICE) << "    node_id: " << primary.node_id;
+      VMSDK_LOG(NOTICE) << "    role: "
+                        << (primary.is_primary ? "Primary" : "Replica");
+      VMSDK_LOG(NOTICE) << "    location: "
+                        << (primary.is_local ? "Local" : "Remote");
+      VMSDK_LOG(NOTICE) << "    primary_endpoint: "
+                        << primary.socket_address.primary_endpoint;
+      VMSDK_LOG(NOTICE) << "    port: " << primary.socket_address.port;
       if (!primary.additional_network_metadata.empty()) {
-        VMSDK_LOG(NOTICE, nullptr) << "    additional_network_metadata:";
+        VMSDK_LOG(NOTICE) << "    additional_network_metadata:";
         for (const auto& [key, value] : primary.additional_network_metadata) {
-          VMSDK_LOG(NOTICE, nullptr) << "      " << key << ": " << value;
+          VMSDK_LOG(NOTICE) << "      " << key << ": " << value;
         }
       } else {
-        VMSDK_LOG(NOTICE, nullptr) << "additional_network_metadata is empty";
+        VMSDK_LOG(NOTICE) << "additional_network_metadata is empty";
       }
     } else {
-      VMSDK_LOG(NOTICE, nullptr) << "  Primary Node: (none)";
+      VMSDK_LOG(NOTICE) << "  Primary Node: (none)";
     }
 
     // Print replica nodes info
-    VMSDK_LOG(NOTICE, nullptr)
-        << "  Replicas count: " << shard_info.replicas.size();
+    VMSDK_LOG(NOTICE) << "  Replicas count: " << shard_info.replicas.size();
     for (size_t i = 0; i < shard_info.replicas.size(); ++i) {
       const auto& replica = shard_info.replicas[i];
-      VMSDK_LOG(NOTICE, nullptr) << "  Replica[" << i << "]:";
-      VMSDK_LOG(NOTICE, nullptr) << "    node_id: " << replica.node_id;
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    role: " << (replica.is_primary ? "Primary" : "Replica");
-      VMSDK_LOG(NOTICE, nullptr)
-          << "    location: " << (replica.is_local ? "Local" : "Remote");
-      VMSDK_LOG(NOTICE, nullptr) << "    primary_endpoint: "
-                                 << replica.socket_address.primary_endpoint;
-      VMSDK_LOG(NOTICE, nullptr) << "    port: " << replica.socket_address.port;
+      VMSDK_LOG(NOTICE) << "  Replica[" << i << "]:";
+      VMSDK_LOG(NOTICE) << "    node_id: " << replica.node_id;
+      VMSDK_LOG(NOTICE) << "    role: "
+                        << (replica.is_primary ? "Primary" : "Replica");
+      VMSDK_LOG(NOTICE) << "    location: "
+                        << (replica.is_local ? "Local" : "Remote");
+      VMSDK_LOG(NOTICE) << "    primary_endpoint: "
+                        << replica.socket_address.primary_endpoint;
+      VMSDK_LOG(NOTICE) << "    port: " << replica.socket_address.port;
       if (!replica.additional_network_metadata.empty()) {
-        VMSDK_LOG(NOTICE, nullptr) << "    additional_network_metadata:";
+        VMSDK_LOG(NOTICE) << "    additional_network_metadata:";
         for (const auto& [key, value] : replica.additional_network_metadata) {
-          VMSDK_LOG(NOTICE, nullptr) << "      " << key << ": " << value;
+          VMSDK_LOG(NOTICE) << "      " << key << ": " << value;
         }
       } else {
-        VMSDK_LOG(NOTICE, nullptr) << "additional_network_metadata is empty";
+        VMSDK_LOG(NOTICE) << "additional_network_metadata is empty";
       }
     }
   }
 
   // Print pre-computed target lists (unchanged)
-  VMSDK_LOG(NOTICE, nullptr)
-      << "primary_targets_ count: " << map->primary_targets_.size();
-  VMSDK_LOG(NOTICE, nullptr)
-      << "replica_targets_ count: " << map->replica_targets_.size();
-  VMSDK_LOG(NOTICE, nullptr)
-      << "all_targets_ count: " << map->all_targets_.size();
+  VMSDK_LOG(NOTICE) << "primary_targets_ count: "
+                    << map->primary_targets_.size();
+  VMSDK_LOG(NOTICE) << "replica_targets_ count: "
+                    << map->replica_targets_.size();
+  VMSDK_LOG(NOTICE) << "all_targets_ count: " << map->all_targets_.size();
 
-  VMSDK_LOG(NOTICE, nullptr) << "=== End Cluster Map ===";
+  VMSDK_LOG(NOTICE) << "=== End Cluster Map ===";
 }
 
 }  // namespace cluster_map

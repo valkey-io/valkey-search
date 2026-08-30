@@ -254,10 +254,10 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
       // thread is reading/writing during resize
       auto block_size = ValkeySearch::Instance().GetHNSWBlockSize();
       algo_->resizeIndex(algo_->getMaxElements() + block_size);
-      VMSDK_LOG(WARNING, nullptr)
-          << "Resizing HNSW Index, current size: " << max_elements
-          << ", expand by: " << block_size << ", resize time took: "
-          << absl::FormatDuration(stop_watch.Duration());
+      VMSDK_LOG(WARNING) << "Resizing HNSW Index, current size: "
+                         << max_elements << ", expand by: " << block_size
+                         << ", resize time took: "
+                         << absl::FormatDuration(stop_watch.Duration());
     }
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_add_exceptions_cnt;

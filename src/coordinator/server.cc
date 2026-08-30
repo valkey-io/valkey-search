@@ -197,8 +197,8 @@ void Service::EnqueueSearchRequest(
                          query::SearchMode::kRemote);
 
   if (!status.ok()) {
-    VMSDK_LOG(WARNING, detached_ctx)
-        << "Failed to enqueue search request: " << status.message();
+    VMSDK_LOG(WARNING) << "Failed to enqueue search request: "
+                       << status.message();
     RecordSearchMetrics(true, nullptr);
     reactor->Finish(ToGrpcStatus(status));
   }
@@ -294,9 +294,8 @@ Service::GenerateInfoResponse(
         "Index fingerprint/version or slot fingerprint mismatch");
     response.set_error_type(
         coordinator::FanoutErrorType::INCONSISTENT_STATE_ERROR);
-    VMSDK_LOG_EVERY_N_SEC(NOTICE, nullptr, 1)
-        << "Fingerprint, version or slot "
-           "fingerprint mismatch at server.cc";
+    VMSDK_LOG_EVERY_N_SEC(NOTICE, 1) << "Fingerprint, version or slot "
+                                        "fingerprint mismatch at server.cc";
     grpc::Status error_status(
         grpc::StatusCode::FAILED_PRECONDITION,
         "Cluster not in a consistent state, please retry.");
@@ -399,47 +398,44 @@ std::unique_ptr<Server> ServerImpl::Create(
   builder.AddChannelArgument(GRPC_ARG_TCP_TX_ZEROCOPY_ENABLED, 1);
   auto server = builder.BuildAndStart();
   if (server == nullptr) {
-    VMSDK_LOG(WARNING, ctx)
-        << "Failed to start Coordinator Server on port " << port;
+    VMSDK_LOG(WARNING) << "Failed to start Coordinator Server on port " << port;
     for (size_t attempt = 2; attempt <= 10; ++attempt) {
       std::string lsof_cmd =
           "lsof -i :" + std::to_string(port) + " 2>/dev/null";
       FILE *pipe = popen(lsof_cmd.c_str(), "r");
       if (pipe) {
         char buffer[256];
-        VMSDK_LOG(WARNING, ctx)
-            << "Diagnosing other usage with this shell command:";
-        VMSDK_LOG(WARNING, ctx) << ">> lsof -i: " << port;
+        VMSDK_LOG(WARNING) << "Diagnosing other usage with this shell command:";
+        VMSDK_LOG(WARNING) << ">> lsof -i: " << port;
         while (fgets(buffer, sizeof(buffer), pipe)) {
           std::string line(buffer);
           if (!line.empty() && line.back() == '\n') {
             line.pop_back();
           }
-          VMSDK_LOG(WARNING, ctx) << ">> " << line;
+          VMSDK_LOG(WARNING) << ">> " << line;
         }
-        VMSDK_LOG(WARNING, ctx) << ">> <end of lsof output>";
+        VMSDK_LOG(WARNING) << ">> <end of lsof output>";
         pclose(pipe);
       } else {
-        VMSDK_LOG(WARNING, ctx) << "Could not check port " << port << " usage";
+        VMSDK_LOG(WARNING) << "Could not check port " << port << " usage";
       }
       std::this_thread::sleep_for(
           std::chrono::milliseconds(100 * attempt));  // backoff
-      VMSDK_LOG(WARNING, ctx)
-          << "Retrying to start Coordinator Server (attempt " << attempt << ")";
+      VMSDK_LOG(WARNING) << "Retrying to start Coordinator Server (attempt "
+                         << attempt << ")";
       server = builder.BuildAndStart();
       if (server != nullptr) {
-        VMSDK_LOG(NOTICE, ctx)
-            << "Successfully started Coordinator Server on " << server_address
-            << " after " << attempt << " attempts";
+        VMSDK_LOG(NOTICE) << "Successfully started Coordinator Server on "
+                          << server_address << " after " << attempt
+                          << " attempts";
         break;
       }
     }
-    VMSDK_LOG(WARNING, ctx)
-        << "Failed to start Coordinator Server on " << server_address;
+    VMSDK_LOG(WARNING) << "Failed to start Coordinator Server on "
+                       << server_address;
     return nullptr;
   }
-  VMSDK_LOG(NOTICE, ctx) << "Coordinator Server listening on "
-                         << server_address;
+  VMSDK_LOG(NOTICE) << "Coordinator Server listening on " << server_address;
   return std::unique_ptr<Server>(
       new ServerImpl(std::move(coordinator_service), std::move(server), port));
 }

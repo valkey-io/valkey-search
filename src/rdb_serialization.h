@@ -189,7 +189,7 @@ class SupplementalContentChunkIter {
   bool HasNext() const { return !done_; }
   ~SupplementalContentChunkIter() {
     if (!done_) {
-      VMSDK_LOG(WARNING, nullptr)
+      VMSDK_LOG(WARNING)
           << "SupplementalContentChunkIter was not fully iterated";
       DCHECK(done_);
     }
@@ -225,7 +225,7 @@ class SupplementalContentIter {
   }
   ~SupplementalContentIter() {
     if (remaining_ > 0) {
-      VMSDK_LOG(WARNING, nullptr)
+      VMSDK_LOG(WARNING)
           << "SupplementalContentIter was not fully iterated. remaining_ == "
           << remaining_;
       DCHECK(remaining_ == 0);
@@ -273,7 +273,7 @@ class RDBSectionIter {
   bool HasNext() { return remaining_ > 0; }
   ~RDBSectionIter() {
     if (remaining_ > 0) {
-      VMSDK_LOG(WARNING, nullptr)
+      VMSDK_LOG(WARNING)
           << "RDBSectionIter was not fully iterated. remaining_ == "
           << remaining_;
       DCHECK(remaining_ == 0);
@@ -343,7 +343,7 @@ class RDBChunkOutputStream : public hnswlib::OutputStream {
     if (!closed_) {
       auto status = Close();
       if (!status.ok()) {
-        VMSDK_LOG(WARNING, nullptr)
+        VMSDK_LOG(WARNING)
             << "Failed to write final chunk on closing output stream: "
             << status.message();
       }

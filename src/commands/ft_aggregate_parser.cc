@@ -87,17 +87,15 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
           bool renamed = false;
           auto &index = *parameters.parse_vars_.index_interface_;
 
-          // Accepting a JSON path as the LOAD field is a compatibility fix
-          // introduced in 1.3.0; before it the path is left unresolved and the
-          // load fails. Consult the macro only once the entry is known to be a
-          // path that resolves, so the usage counter tracks entries that
-          // actually depend on the fix rather than every LOAD entry.
+          // If the entry is a schema identifier (e.g. a JSON path) rather than
+          // an attribute name, resolve it so the field can be fetched. This is
+          // not gated on emulate-release: without it the path is left
+          // unresolved and the load fails outright ("Index field `$.price`
+          // does not exist"), so the old behavior is unusable and there is no
+          // user base for SemVer to protect.
           if (!index.GetFieldType(identifier).ok()) {
             if (auto resolved = index.GetAlias(identifier); resolved.ok()) {
-              VALKEY_SEARCH_COMPATIBILITY_FIX(
-                  1, 3, 0, "ft_aggregate_load_json_path",
-                  [&]() -> void { identifier = *std::move(resolved); },
-                  []() -> void {});
+              identifier = *std::move(resolved);
             }
           }
 

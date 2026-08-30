@@ -1,9 +1,13 @@
 """Integration tests for the FT.AGGREGATE LOAD ... AS rename clause.
 
-Honoring `AS <alias>` in the LOAD clause (and accepting a JSON path as the
-loaded field) is a compatibility fix gated behind `search.emulate-release`
->= 1.3.0 (see COMPATIBILITY.md). These tests run under debug-mode so the
-emulate-release ceiling can be lifted to the (as yet unreleased) fix version.
+Honoring `AS <alias>` in the LOAD clause is a compatibility fix gated behind
+`search.emulate-release` >= 1.3.0 (see COMPATIBILITY.md). These tests run under
+debug-mode so the emulate-release ceiling can be lifted to the (as yet
+unreleased) fix version.
+
+Accepting a JSON path as the loaded field is deliberately not gated: before it
+was supported such a load failed outright, so there is no prior behavior to
+preserve.
 """
 
 import pytest
@@ -126,8 +130,10 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
         assert rows(reply)[0] == {"$.price": b"10"}
 
     def test_load_as_disabled_in_legacy_release(self):
-        """Emulating a pre-1.3.0 release preserves the legacy behavior:
-        AS is treated as an (unknown) field name and JSON paths are rejected."""
+        """Emulating a pre-1.3.0 release preserves the legacy behavior: AS is
+        treated as an (unknown) field name. Both commands below still fail for
+        that reason -- the JSON-path form resolves its path even here, but then
+        trips over `AS` as an unknown field."""
         client = self._client(emulate_release=LEGACY_RELEASE)
         self._make_hash(client)
         with pytest.raises(valkey.exceptions.ResponseError):

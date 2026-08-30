@@ -44,6 +44,21 @@ constexpr absl::string_view kSlopParam{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
 
+std::string OutputNameFor(absl::string_view written_name,
+                          absl::string_view schema_identifier) {
+  // Equal on a HASH index, and for a load written as the identifier itself.
+  // Nothing to choose between, so nothing to gate or count either.
+  if (written_name == schema_identifier) {
+    return std::string(written_name);
+  }
+  // Both column-creating call sites route through this one invocation so the
+  // compatibility counter has a single registration site.
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "aggregate_json_field_names",
+      [&]() -> std::string { return std::string(written_name); },
+      [&]() -> std::string { return std::string(schema_identifier); });
+}
+
 std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
   return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
       [](AggregateParameters &parameters,
@@ -393,7 +408,8 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   if (identifier.ok()) {
     // DBG << "Adding Record Attribute: " << name << " with alias "
     //     << identifier.value() << "\n";
-    new_index = AddRecordAttribute(*identifier, name, *identifier, fieldType);
+    new_index = AddRecordAttribute(*identifier, name,
+                                   OutputNameFor(name, *identifier), fieldType);
   } else {
     // DBG << "Adding Record Attribute: " << name
     //     << " with synthetic alias (no index schema)\n";

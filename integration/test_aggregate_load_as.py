@@ -109,23 +109,32 @@ class TestAggregateLoadAs(ValkeySearchTestCaseDebugMode):
         assert result[0] == {"cost": b"10", "c2": b"11"}
 
     def test_load_json_without_rename_still_appears(self):
-        """A loaded JSON field without a rename still appears in the output.
-
-        valkey-search emits it under its identifier (the JSON path), matching
-        existing behavior; the AS parsing change must not regress this.
+        """A loaded JSON field without a rename still appears in the output,
+        named by the field token as the query wrote it (issue #1243): `@price`
+        comes back as `price`, a JSON path comes back as the path.
         """
         client = self._client()
         self._make_json(client)
-        # By alias.
+        # By attribute name.
         reply = client.execute_command(
             "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", "LOAD", "1", "@price",
         )
         result = rows(reply)
         assert len(result) == 1
-        assert result[0] == {"$.price": b"10"}
-        # By path (no rename) -- also emitted under the path.
+        assert result[0] == {"price": b"10"}
+        # By path (no rename) -- emitted under the path, as written.
         reply = client.execute_command(
             "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", "LOAD", "1", "$.price",
+        )
+        assert rows(reply)[0] == {"$.price": b"10"}
+
+    def test_json_field_names_gated_by_release(self):
+        """The #1243 naming fix is gated: emulating a pre-1.3.0 release keeps
+        the old behavior of naming the column by the schema identifier."""
+        client = self._client(emulate_release=LEGACY_RELEASE)
+        self._make_json(client)
+        reply = client.execute_command(
+            "FT.AGGREGATE", "idx_json", "@price:[-inf inf]", "LOAD", "1", "@price",
         )
         assert rows(reply)[0] == {"$.price": b"10"}
 

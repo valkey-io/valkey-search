@@ -100,7 +100,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
         record_index = params.AddRecordAttribute(
             *schema_identifier, identifier,
-            renamed ? alias : *schema_identifier, indexer_type);
+            renamed ? alias : OutputNameFor(alias, *schema_identifier),
+            indexer_type);
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),

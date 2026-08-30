@@ -81,10 +81,17 @@ def json_load(s):
         return None
 
 def parse_field(x, key_type):
+    """Normalize a field name from a reply.
+
+    This deliberately does NOT strip a leading "$.". Doing so used to hide
+    issue #1243: on a JSON index valkey-search emitted the schema identifier
+    ($.n1) where Redisearch emits the attribute name (n1), and stripping the
+    prefix made the two compare equal.
+    """
     if isinstance(x, bytes):
         return parse_field(x.decode("utf-8"), key_type)
     if isinstance(x, str):
-        return x[2::] if x.startswith("$.") else x
+        return x
     if isinstance(x, int):
         return x
     print("Unknown type ", type(x))

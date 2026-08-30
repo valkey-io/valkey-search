@@ -39,6 +39,17 @@ using ArgVector = absl::InlinedVector<expr::Value, 4>;
 // the command (with any leading '@' stripped); `alias` is the output name.
 // When the LOAD clause has no `AS` alias for the entry, `alias == identifier`.
 // Member names mirror query::ReturnAttribute (identifier + alias).
+// The name a record column is emitted under in the FT.AGGREGATE reply.
+//
+// Redisearch echoes the field token as the query wrote it: `@price` comes back
+// as `price`, a JSON path `$.price` comes back as `$.price`. valkey-search
+// used to emit the schema identifier instead, so on a JSON index -- where the
+// identifier is the path and the attribute name is not -- every column came
+// back as `$.price`. See issue #1243. Corrected in 1.3.0, gated because the
+// old naming is well-defined and an application may be reading it.
+std::string OutputNameFor(absl::string_view written_name,
+                          absl::string_view schema_identifier);
+
 struct LoadField {
   // The field to fetch. A JSON path is resolved to its attribute name here.
   std::string identifier;

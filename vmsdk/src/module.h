@@ -44,7 +44,7 @@
     if (options.on_unload.has_value()) {                                    \
       options.on_unload.value()(ctx, options);                              \
     }                                                                       \
-    vmsdk::ShutdownLogging();                                               \
+    vmsdk::DisableLoggingContext();                                         \
     return VALKEYMODULE_OK;                                                 \
   }                                                                         \
   }                                                                         \

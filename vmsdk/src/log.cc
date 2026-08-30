@@ -7,11 +7,13 @@
 
 #include "vmsdk/src/log.h"
 
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <optional>
 #include <string>
 
+#include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
@@ -55,7 +57,11 @@ struct SinkOptions {
 };
 
 static SinkOptions sink_options;
-static UniqueValkeyDetachedThreadSafeContext logging_context;
+// Keep ownership alive after module unload: an asynchronous callback may have
+// already loaded the context pointer before logging is disabled.
+static absl::NoDestructor<UniqueValkeyDetachedThreadSafeContext>
+    logging_context;
+static std::atomic<ValkeyModuleCtx *> active_logging_context{nullptr};
 
 LogFormatterFunc GetSinkFormatter() { return sink_options.formatter; }
 void SetSinkFormatter(LogFormatterFunc formatter) {
@@ -108,8 +114,10 @@ absl::Status InitLogging(ValkeyModuleCtx *ctx,
                          std::optional<std::string> log_level_str) {
   // A detached context preserves the module identity for logs emitted from
   // worker threads and is valid for the module's full lifetime.
-  if (ctx != nullptr && logging_context == nullptr) {
-    logging_context = MakeUniqueValkeyDetachedThreadSafeContext(ctx);
+  if (ctx != nullptr && *logging_context == nullptr) {
+    *logging_context = MakeUniqueValkeyDetachedThreadSafeContext(ctx);
+    active_logging_context.store(logging_context->get(),
+                                 std::memory_order_release);
   }
   if (!log_level_str.has_value()) {
     auto engine_log_level = FetchEngineLogLevel(ctx);
@@ -137,9 +145,18 @@ absl::Status InitLogging(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-void ShutdownLogging() { logging_context.reset(); }
+void ShutdownLogging() {
+  active_logging_context.store(nullptr, std::memory_order_release);
+  logging_context->reset();
+}
 
-ValkeyModuleCtx *GetLoggingContext() { return logging_context.get(); }
+void DisableLoggingContext() {
+  active_logging_context.store(nullptr, std::memory_order_release);
+}
+
+ValkeyModuleCtx *GetLoggingContext() {
+  return active_logging_context.load(std::memory_order_acquire);
+}
 
 const char *ReportedLogLevel(int log_level) {
   if (sink_options.log_level_specified) {

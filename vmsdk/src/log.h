@@ -62,6 +62,11 @@ absl::Status InitLogging(
 // on the main thread after all module worker threads have stopped.
 void ShutdownLogging();
 
+// Stops associating logs with the module without releasing the detached
+// context. This is safe to call during module unload while callbacks may
+// still be finishing.
+void DisableLoggingContext();
+
 // Returns the module-scoped detached context established during initialization.
 // It is nullptr before initialization, so early load failures retain the
 // server's generic "module" log prefix.

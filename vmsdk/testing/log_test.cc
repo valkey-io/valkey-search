@@ -77,6 +77,18 @@ TEST_F(LogTest, WithInitValue) {
   VMSDK_LOG(DEBUG) << "s3, not expected! " << stream_eval_cnt;
   EXPECT_EQ(stream_eval_cnt.cnt_, 6);
 }
+
+TEST_F(LogTest, DisabledContextFallsBackToGenericModuleLog) {
+  ValkeyModuleCtx ctx;
+  VMSDK_EXPECT_OK(InitLogging(&ctx, "NOTICE"));
+  DisableLoggingContext();
+
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      Log(nullptr, testing::StrEq(VALKEYMODULE_LOGLEVEL_WARNING), testing::_));
+  VMSDK_LOG(NOTICE) << "logged while unloading";
+}
+
 std::atomic<int> custom_formatter_used;
 std::string CustomSinkFormatter(const absl::LogEntry& entry) {
   ++custom_formatter_used;

@@ -58,7 +58,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       const std::string &identifier = load.identifier;
       const std::string &alias = load.alias;  // output name (== identifier
                                               // when there is no AS clause)
-      const bool renamed = alias != identifier;
+      const bool renamed = load.renamed;
       // Apply a LOAD ... AS rename to an attribute already present in the
       // record table: emit it under `alias` and let `@alias` resolve in later
       // pipeline stages (APPLY/SORTBY/FILTER).

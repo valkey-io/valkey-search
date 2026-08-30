@@ -11,6 +11,8 @@
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/valkey_search_options.h"
@@ -77,45 +79,63 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
                 "Empty argument in LOAD clause not allowed");
           }
           std::string identifier = load[0] == '@' ? load.substr(1) : load;
+          // `identifier` is what gets fetched; `alias` is the name the column
+          // is emitted under, and defaults to the field token exactly as
+          // written. Resolving a JSON path below rewrites the former and must
+          // leave the latter alone.
           std::string alias = identifier;
+          bool renamed = false;
+          auto &index = *parameters.parse_vars_.index_interface_;
+
+          // Accepting a JSON path as the LOAD field is a compatibility fix
+          // introduced in 1.3.0; before it the path is left unresolved and the
+          // load fails. Consult the macro only once the entry is known to be a
+          // path that resolves, so the usage counter tracks entries that
+          // actually depend on the fix rather than every LOAD entry.
+          if (!index.GetFieldType(identifier).ok()) {
+            if (auto resolved = index.GetAlias(identifier); resolved.ok()) {
+              VALKEY_SEARCH_COMPATIBILITY_FIX(
+                  1, 3, 0, "ft_aggregate_load_json_path",
+                  [&]() -> void { identifier = *std::move(resolved); },
+                  []() -> void {});
+            }
+          }
+
           // Honoring `AS <alias>` in the LOAD clause is a compatibility fix
-          // introduced in 1.3. Older emulated releases treat `AS` as just
-          // another field name (the legacy behavior preserved below).
-          absl::Status as_status = VALKEY_SEARCH_COMPATIBILITY_FIX(
-              1, 3, 0, "ft_aggregate_load_as",
-              [&]() -> absl::Status {
-                // If the entry is a schema identifier (e.g. a JSON path) rather
-                // than an alias, resolve it to the alias so it can be fetched.
-                // With no AS clause the default output name then remains the
-                // identifier, matching how single-field loads already behave.
-                auto &index = *parameters.parse_vars_.index_interface_;
-                if (!index.GetFieldType(identifier).ok()) {
-                  if (auto resolved = index.GetAlias(identifier);
-                      resolved.ok()) {
-                    identifier = *std::move(resolved);
-                    alias = identifier;
-                  }
-                }
-                if (consumed < cnt && itr.PopIfNextIgnoreCase(kAsParam)) {
-                  ++consumed;
-                  std::string rename;
-                  if (consumed >= cnt) {
-                    return absl::InvalidArgumentError(
-                        "`AS` argument to LOAD clause is missing/invalid");
-                  }
-                  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, rename));
-                  ++consumed;
-                  if (rename.empty()) {
-                    return absl::InvalidArgumentError(
-                        "`AS` argument to LOAD clause is missing/invalid");
-                  }
-                  alias = std::move(rename);
-                }
-                return absl::OkStatus();
-              },
-              []() -> absl::Status { return absl::OkStatus(); });
-          VMSDK_RETURN_IF_ERROR(as_status);
-          const bool renamed = alias != identifier;
+          // introduced in 1.3.0. Older emulated releases treat `AS` as just
+          // another field name, so the legacy branch consumes nothing and the
+          // keyword falls through to be parsed as the next field.
+          //
+          // Peek rather than pop: the macro is entered only when the next word
+          // really is `AS`, so the usage counter counts uses of the keyword
+          // instead of incrementing once per loaded field.
+          auto next_word = itr.GetStringView();
+          if (consumed < cnt && next_word.ok() &&
+              absl::EqualsIgnoreCase(*next_word, kAsParam)) {
+            VMSDK_ASSIGN_OR_RETURN(
+                renamed,
+                VALKEY_SEARCH_COMPATIBILITY_FIX(
+                    1, 3, 0, "ft_aggregate_load_as",
+                    [&]() -> absl::StatusOr<bool> {
+                      itr.Next();  // consume the `AS` keyword
+                      ++consumed;
+                      if (consumed >= cnt) {
+                        return absl::InvalidArgumentError(
+                            "`AS` argument to LOAD clause is missing/invalid");
+                      }
+                      std::string rename;
+                      VMSDK_RETURN_IF_ERROR(
+                          vmsdk::ParseParamValue(itr, rename));
+                      ++consumed;
+                      if (rename.empty()) {
+                        return absl::InvalidArgumentError(
+                            "`AS` argument to LOAD clause is missing/invalid");
+                      }
+                      alias = std::move(rename);
+                      return true;
+                    },
+                    []() -> absl::StatusOr<bool> { return false; }));
+          }
           // Intentionally stricter than RediSearch (which keeps the first claim
           // of a name and silently drops the rest): reject a LOAD clause that
           // names the same output twice when an `AS` rename is involved. Left
@@ -146,8 +166,10 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
               }
             }
           }
-          parameters.loads_.emplace_back(LoadField{
-              .identifier = std::move(identifier), .alias = std::move(alias)});
+          parameters.loads_.emplace_back(
+              LoadField{.identifier = std::move(identifier),
+                        .alias = std::move(alias),
+                        .renamed = renamed});
         }
         return absl::OkStatus();
       });

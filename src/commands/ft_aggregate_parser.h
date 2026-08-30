@@ -40,8 +40,15 @@ using ArgVector = absl::InlinedVector<expr::Value, 4>;
 // When the LOAD clause has no `AS` alias for the entry, `alias == identifier`.
 // Member names mirror query::ReturnAttribute (identifier + alias).
 struct LoadField {
+  // The field to fetch. A JSON path is resolved to its attribute name here.
   std::string identifier;
+  // The name the column is emitted under: the field token as written, or the
+  // `AS` argument when one was given.
   std::string alias;
+  // Whether `alias` came from an `AS` clause. Recorded rather than derived
+  // from `alias != identifier`, which no longer implies a rename now that a
+  // resolved JSON path leaves the two legitimately different.
+  bool renamed{false};
 };
 
 struct IndexInterface {

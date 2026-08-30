@@ -512,7 +512,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as n1"
         )
-        # APPLY over a field that was never LOADed.
+        # APPLY over a field that is not named in the LOAD clause.
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 1 @__key apply @n1*2 as doubled"
         )

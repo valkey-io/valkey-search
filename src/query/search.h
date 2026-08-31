@@ -365,10 +365,10 @@ size_t FindVectorDelimiter(absl::string_view expr);
 // For each TermPredicate leaf, looks up each candidate's term frequency
 // and feeds the scorer. Writes scores into candidates in-place. Sorting and
 // trimming to the requested limit happen later in SearchResult::TrimResults.
-void ScoreTextQuery(const IndexSchema& index_schema,
-                    const Predicate* root_predicate,
-                    const indexes::scoring::Scorer* scorer,
-                    std::vector<indexes::BorrowedNeighbor>& candidates);
+void ScoreTextQuery(const IndexSchema &index_schema,
+                    const Predicate *root_predicate,
+                    const indexes::scoring::Scorer *scorer,
+                    std::vector<indexes::BorrowedNeighbor> &candidates);
 
 // Recomputes composed relevance scores for single already-matched documents by
 // walking the predicate tree through the exact same Scorer seam ScoreTextQuery
@@ -396,14 +396,14 @@ void ScoreTextQuery(const IndexSchema& index_schema,
 // never a drop.
 class SingleDocumentScorer {
  public:
-  SingleDocumentScorer(const IndexSchema& index_schema,
-                       const Predicate* root_predicate,
-                       const indexes::scoring::Scorer* scorer);
+  SingleDocumentScorer(const IndexSchema &index_schema,
+                       const Predicate *root_predicate,
+                       const indexes::scoring::Scorer *scorer);
   ~SingleDocumentScorer();
-  SingleDocumentScorer(const SingleDocumentScorer&) = delete;
-  SingleDocumentScorer& operator=(const SingleDocumentScorer&) = delete;
+  SingleDocumentScorer(const SingleDocumentScorer &) = delete;
+  SingleDocumentScorer &operator=(const SingleDocumentScorer &) = delete;
 
-  std::optional<float> Score(const InternedStringPtr& key) const;
+  std::optional<float> Score(const InternedStringPtr &key) const;
 
  private:
   struct State;

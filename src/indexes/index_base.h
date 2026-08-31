@@ -133,7 +133,7 @@ class EntriesFetcherIteratorBase {
   virtual ~EntriesFetcherIteratorBase() = default;
 
   // Returns the underlying TextIterator if available, nullptr otherwise.
-  virtual const text::TextIterator* GetTextIterator() const { return nullptr; }
+  virtual const text::TextIterator *GetTextIterator() const { return nullptr; }
 };
 
 class EntriesFetcherBase {

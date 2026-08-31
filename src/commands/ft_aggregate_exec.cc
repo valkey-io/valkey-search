@@ -14,6 +14,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -528,28 +529,26 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
-    // No AS clause: mirror the generic reducer parser's default alias so
-    // RANDOM_SAMPLE stays consistent under search.emulate-release. String
-    // concatenation avoids the issue #965 ostringstream crash.
+    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+    // "__generated_alias" + reducer + comma-joined args with the leading '@'
+    // stripped, lowercasing the whole thing; the legacy form is
+    // "REDUCER(args)". See COMPATIBILITY.md.
+    const std::vector<absl::string_view> alias_args{field_text, size_text};
     std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "aggregate_reducer_default_alias",
         [&] {
-          std::string name("__generated_alias");
-          name += r->name_;
-          name += absl::StripPrefix(field_text, "@");
-          name += ',';
-          name += absl::StripPrefix(size_text, "@");
+          auto name = absl::StrCat(
+              "__generated_alias", r->name_,
+              absl::StrJoin(alias_args, ",",
+                            [](std::string *out, absl::string_view arg) {
+                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                            }));
           absl::AsciiStrToLower(&name);
           return name;
         },
         [&] {
-          std::string name(r->name_);
-          name += '(';
-          name += field_text;
-          name += ',';
-          name += size_text;
-          name += ')';
-          return name;
+          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
+                              ")");
         });
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));

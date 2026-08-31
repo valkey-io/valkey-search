@@ -33,7 +33,7 @@ bool IsNan(const double& d) {
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) != 0);
 }
 
-bool IsInf(const double& d) {
+static bool IsInf(const double& d) {
   uint64_t v = *(uint64_t*)&d;
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
 }

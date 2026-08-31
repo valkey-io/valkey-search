@@ -528,14 +528,29 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     r->output_ =
         std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
   } else {
-    // Workaround for memory allocator issue causing ostringstream to crash
-    // (see https://github.com/valkey-io/valkey-search/issues/965).
-    std::string default_name(r->name_);
-    default_name += '(';
-    default_name += field_text;
-    default_name += ',';
-    default_name += size_text;
-    default_name += ')';
+    // No AS clause: mirror the generic reducer parser's default alias so
+    // RANDOM_SAMPLE stays consistent under search.emulate-release. String
+    // concatenation avoids the issue #965 ostringstream crash.
+    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_reducer_default_alias",
+        [&] {
+          std::string name("__generated_alias");
+          name += r->name_;
+          name += absl::StripPrefix(field_text, "@");
+          name += ',';
+          name += absl::StripPrefix(size_text, "@");
+          absl::AsciiStrToLower(&name);
+          return name;
+        },
+        [&] {
+          std::string name(r->name_);
+          name += '(';
+          name += field_text;
+          name += ',';
+          name += size_text;
+          name += ')';
+          return name;
+        });
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =

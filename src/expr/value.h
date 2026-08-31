@@ -233,7 +233,7 @@ Value FuncFlatten(const Value &vec, const Value &depth);
 expr::Value DeserializeValueFromResp(ValkeyModuleCallReply *reply);
 
 // Returns true if d is NaN. Safe under -ffast-math (bitwise check).
-bool IsNan(const double& d);
+bool IsNan(const double &d);
 
 }  // namespace expr
 }  // namespace valkey_search

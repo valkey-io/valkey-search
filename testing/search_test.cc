@@ -1847,7 +1847,9 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
 }
 
 // A query that omits SCORER picks up the `default-scorer` config.
-TEST(ScorerConfigTest, DefaultScorerSeedsSearchParameters) {
+// Needs the fixture: UnitTestSearchParameters reaches ValkeyModule_Milliseconds
+// via cancel::Make, and the mock module only lives between SetUp and TearDown.
+TEST_F(ValkeySearchTest, DefaultScorerSeedsSearchParameters) {
   auto &config = options::GetDefaultScorer();
   const int original = config.GetValue();
   for (const auto &[name, expected] : *indexes::scoring::kScorerByStr) {

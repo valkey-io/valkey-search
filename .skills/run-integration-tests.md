@@ -21,7 +21,7 @@ top-level integration harnesses:
 
    Use `--no-system-modules` again only after cleaning or reconfiguring an
    incomplete build. Otherwise reuse the configured build without it.
-   Classify dependency failures before test execution as environment failures.
+   Classify dependency failures by source before test execution. Treat stale or externally misconfigured dependencies as environment failures. Treat missing dependencies in newly generated bundles as packaging/build failures.
    Newly generated dependency bundles should contain all dependencies required
    by the selected build. Regenerate an existing incomplete bundle; use the
    fallback command only until that is done.

@@ -585,6 +585,7 @@ class Quantile : public GroupBy::ReducerInstance {
     auto d = val.AsDouble();
     if (!d) return false;
     if (expr::IsNan(*d)) return false;
+    if (expr::IsInf(*d)) return false;
 
     buffer_.push_back(*d);
     n_++;

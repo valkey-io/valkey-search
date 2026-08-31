@@ -147,7 +147,7 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto parser = CreateAggregateParser();
     auto status = parser.Parse(params, itr);
 
-    for (auto* str : argv) {
+    for (auto *str : argv) {
       ValkeyModule_FreeString(nullptr, str);
     }
     return status;
@@ -676,7 +676,7 @@ TEST_F(AggregateExecTest, FirstValueReducerAscDescDistinctOutputTest) {
 }
 
 // Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Array).
-static std::vector<expr::Value> GetSampleArray(const expr::Value& value) {
+static std::vector<expr::Value> GetSampleArray(const expr::Value &value) {
   EXPECT_TRUE(value.IsArray()) << "Expected vector Value";
   if (!value.IsArray()) {
     return {};
@@ -686,9 +686,9 @@ static std::vector<expr::Value> GetSampleArray(const expr::Value& value) {
 }
 
 // Checks that every element in `sample` appears in `allowed`.
-static void ExpectAllElementsIn(const std::vector<expr::Value>& sample,
-                                const std::vector<std::string>& allowed) {
-  for (const auto& elem : sample) {
+static void ExpectAllElementsIn(const std::vector<expr::Value> &sample,
+                                const std::vector<std::string> &allowed) {
+  for (const auto &elem : sample) {
     std::string elem_str = elem.AsString().value();
     EXPECT_TRUE(std::find(allowed.begin(), allowed.end(), elem_str) !=
                 allowed.end())
@@ -874,7 +874,7 @@ TEST_F(AggregateExecTest, RandomSampleGroupByTest) {
     }
     EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
     EXPECT_EQ(records.size(), 3);
-    for (auto& rec : records) {
+    for (auto &rec : records) {
       auto sample = GetSampleArray(rec->fields_.at(2));
       EXPECT_EQ(sample.size(), 2);
     }

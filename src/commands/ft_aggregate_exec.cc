@@ -257,7 +257,7 @@ class RandomSample : public GroupBy::ReducerInstance {
     samples_->reserve(sample_size_);
   }
 
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (values[0].IsNil()) return;
     // Reservoir sampling algorithm (Algorithm R)
     seen_count_++;
@@ -277,7 +277,7 @@ class RandomSample : public GroupBy::ReducerInstance {
  private:
   // Thread-local RNG shared across all RandomSample instances in a query,
   // avoiding per-instance std::random_device overhead.
-  static std::mt19937& Rng() {
+  static std::mt19937 &Rng() {
     thread_local std::mt19937 rng(std::random_device{}());
     return rng;
   }
@@ -474,8 +474,8 @@ struct RandomSampleReducer : GroupBy::Reducer {
 // base Reducer::operator<< produces a correct auto-alias), then evaluates the
 // sample-size arg at parse time to validate it.
 absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
-    std::string_view name, AggregateParameters& parameters,
-    vmsdk::ArgsIterator& itr) {
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
   auto r = std::make_unique<RandomSampleReducer>();
   r->name_ = name;
 
@@ -526,7 +526,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
                                             vmsdk::ToStringView(alias), true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
     // No AS clause: mirror the generic reducer parser's default alias so
     // RANDOM_SAMPLE stays consistent under search.emulate-release. String
@@ -554,7 +554,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));

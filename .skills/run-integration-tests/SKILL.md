@@ -1,3 +1,8 @@
+---
+name: run-integration-tests
+description: Run and diagnose Valkey Search C++ and Python integration harnesses, including standalone, cluster/coordinator, vector-search, stability, and compatibility tests. Use when building, selecting, executing, or troubleshooting integration tests in a valkey-search checkout.
+---
+
 # Run Integration Tests
 
 Run and diagnose the Valkey Search integration suites. The repository has two
@@ -21,10 +26,12 @@ top-level integration harnesses:
 
    Use `--no-system-modules` again only after cleaning or reconfiguring an
    incomplete build. Otherwise reuse the configured build without it.
-   Classify dependency failures before test execution as environment failures.
-   Newly generated dependency bundles should contain all dependencies required
-   by the selected build. Regenerate an existing incomplete bundle; use the
-   fallback command only until that is done.
+   Classify dependency failures before test execution by source: missing
+   dependencies in newly generated repository-owned bundles are packaging/build
+   failures, while stale or externally misconfigured dependencies are
+   environment failures. Newly generated dependency bundles should contain all
+   dependencies required by the selected build. Regenerate an existing
+   incomplete bundle; use the fallback command only until that is done.
 
 2. Inspect the requested test and identify its harness and mode:
    standalone CMD, cluster CME, C++ vector-search, or C++ stability.

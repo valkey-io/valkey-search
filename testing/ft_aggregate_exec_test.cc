@@ -20,7 +20,7 @@
 namespace valkey_search {
 namespace aggregate {
 
-static double CalculateGKQuantile(const std::vector<double>& sorted_values,
+static double CalculateGKQuantile(const std::vector<double> &sorted_values,
                                   double quantile) {
   size_t n = sorted_values.size();
   if (n == 0) return std::numeric_limits<double>::quiet_NaN();
@@ -875,7 +875,7 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
         << "Iteration " << iteration << ": quantile=" << quantile
         << " should be rejected at parse time";
 
-    for (auto* str : argv) {
+    for (auto *str : argv) {
       ValkeyModule_FreeString(nullptr, str);
     }
   }
@@ -1039,7 +1039,7 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
        "nargs=4 (way too many arguments)"},
   };
 
-  for (const auto& tc : testcases) {
+  for (const auto &tc : testcases) {
     std::cerr << "Testing: " << tc.description << "\n";
 
     auto argv = vmsdk::ToValkeyStringVector(tc.query);
@@ -1072,7 +1072,7 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
     }
 
     // Free the allocated ValkeyModuleStrings to avoid memory leaks
-    for (auto* str : argv) {
+    for (auto *str : argv) {
       ValkeyModule_FreeString(nullptr, str);
     }
   }
@@ -1385,7 +1385,7 @@ TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {
   std::cerr << "QuantileInstrumentationPathCoverage\n";
 
   // Create a QuantileReducer via the factory to inspect stats after execution.
-  QuantileStats* stats = nullptr;
+  QuantileStats *stats = nullptr;
   auto reducer = MakeQuantileReducer(0.5, stats);
   ASSERT_NE(stats, nullptr);
 

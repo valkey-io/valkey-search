@@ -18,8 +18,8 @@
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "src/commands/ft_aggregate_parser.h"
-#include "src/valkey_search_options.h"
 #include "src/expr/value.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/info.h"
 
 // #define DBG std::cerr
@@ -444,12 +444,12 @@ class Quantile : public GroupBy::ReducerInstance {
   // Borrowed from the owning QuantileReducer, lifetime guaranteed because
   // ReducerInstances are created and destroyed within GroupBy::Execute while
   // the Reducer outlives that scope.
-  QuantileStats* stats_{nullptr};
+  QuantileStats *stats_{nullptr};
 
  public:
   void SetQuantile(double q) { quantile_ = q; }
-  void SetStats(QuantileStats* stats) { stats_ = stats; }
-  const QuantileStats& GetStats() const { return *stats_; }
+  void SetStats(QuantileStats *stats) { stats_ = stats; }
+  const QuantileStats &GetStats() const { return *stats_; }
 
  private:
   // Calculate maximum allowed error for a given rank
@@ -523,8 +523,8 @@ class Quantile : public GroupBy::ReducerInstance {
     // nearest live parent to the right.
     size_t parent_idx = samples_.size() - 1;
     for (int i = static_cast<int>(samples_.size()) - 2; i >= 0; --i) {
-      Sample& curr = samples_[i];
-      Sample& parent = samples_[parent_idx];
+      Sample &curr = samples_[i];
+      Sample &parent = samples_[parent_idx];
       double g_curr = curr.g;
 
       if (curr.g + parent.g + parent.delta <=
@@ -543,7 +543,7 @@ class Quantile : public GroupBy::ReducerInstance {
     // Remove merged samples (g == 0)
     size_t before = samples_.size();
     samples_.erase(std::remove_if(samples_.begin(), samples_.end(),
-                                  [](const Sample& s) { return s.g == 0; }),
+                                  [](const Sample &s) { return s.g == 0; }),
                    samples_.end());
     stats_->samples_merged += before - samples_.size();
     stats_->compress_count++;
@@ -579,7 +579,7 @@ class Quantile : public GroupBy::ReducerInstance {
   }
 
   // Try to insert a single value. Returns true if it was numeric.
-  bool InsertValue(const expr::Value& val) {
+  bool InsertValue(const expr::Value &val) {
     if (val.IsNil()) return false;
 
     auto d = val.AsDouble();
@@ -596,7 +596,7 @@ class Quantile : public GroupBy::ReducerInstance {
     return true;
   }
 
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     InsertValue(values[0]);
   }
 
@@ -800,8 +800,8 @@ struct QuantileReducer : GroupBy::Reducer {
 // Syntax: QUANTILE <nargs> <field> <quantile_value>
 // The quantile value must be a numeric literal in [0.0, 1.0].
 absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
-    std::string_view name, AggregateParameters& parameters,
-    vmsdk::ArgsIterator& itr) {
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
   auto r = std::make_unique<QuantileReducer>();
   r->name_ = name;
 
@@ -841,7 +841,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
                                             vmsdk::ToStringView(alias), true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   } else {
     // Workaround for memory allocator issue causing ostringstream to crash.
     // See https://github.com/valkey-io/valkey-search/issues/965
@@ -854,7 +854,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     VMSDK_ASSIGN_OR_RETURN(auto output,
                            parameters.MakeReference(default_name, true));
     r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute*>(output.release()));
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
@@ -874,7 +874,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
 };
 
 std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
-    double quantile, QuantileStats*& stats_out) {
+    double quantile, QuantileStats *&stats_out) {
   auto r = std::make_unique<QuantileReducer>();
   r->quantile_ = quantile;
   stats_out = &r->stats_;

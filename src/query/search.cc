@@ -361,6 +361,7 @@ size_t EvaluateFilterAsPrimary(
       AppendQueue(entries_fetchers, best_fetchers);
       return min_size;
     } else {
+      // TODO: optimize with eliminate BuildTextIterator for OR in followup PR
       // All-text OR: build a single OrProximityIterator so a doc matching
       // multiple branches is scored on the sum of those branches (and any group
       // weight applies). Falls back to per-child fetchers when the OR mixes in

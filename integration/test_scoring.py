@@ -437,6 +437,30 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, with_numeric = search(client, IDX_MAIN, "hello @cat:{a} @rank:[0 100]")
         assert with_numeric == pytest.approx(text_and_tag, abs=SCORE_ABS_TOL)
 
+        # ORing them admits either branch and sums only the branches a doc
+        # matches, so doc:2 (no `a` tag) keeps its text score alone.
+        keys, text_or_tag = search(client, IDX_MAIN, "hello | @cat:{a}")
+        assert keys == ["doc:3", "doc:1", "doc:2"]
+        assert text_or_tag == pytest.approx({
+            "doc:3": 2.234903, "doc:1": 1.492684, "doc:2": 0.650739,
+        }, abs=SCORE_ABS_TOL)
+        assert text_or_tag == pytest.approx(
+            {k: hello[k] + cat_a.get(k, 0.0) for k in hello},
+            abs=SCORE_ABS_TOL)
+
+        # Weights compound across a mixed OR just as they do for text-only
+        # branches: each doc scores 3 * (4 * text_leaf + 2 * tag_leaf).
+        keys, weighted_or = search(
+            client, IDX_MAIN,
+            "((hello)=>{$weight:4} | (@cat:{a})=>{$weight:2})=>{$weight:3}")
+        assert keys == ["doc:3", "doc:1", "doc:2"]
+        assert weighted_or == pytest.approx({
+            "doc:3": 19.255288, "doc:1": 12.860543, "doc:2": 7.808872,
+        }, abs=SCORE_ABS_TOL)
+        assert weighted_or == pytest.approx(
+            {k: 3 * (4 * hello[k] + 2 * cat_a.get(k, 0.0)) for k in hello},
+            abs=SCORE_ABS_TOL)
+
         # Same docs, same tag query, but a schema without a TEXT field: the leaf
         # that scored 1.260592 / 0.841945 above degenerates to a well-defined 0,
         # where the reference returns nan instead. Numerics stay 0 either way.

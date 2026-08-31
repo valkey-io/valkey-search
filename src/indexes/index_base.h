@@ -14,6 +14,7 @@
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -29,6 +30,18 @@ class TextIterator;
 
 namespace valkey_search::indexes {
 enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
+
+inline bool IsVectorIndex(IndexerType type) {
+  return type == IndexerType::kVector || type == IndexerType::kHNSW ||
+         type == IndexerType::kFlat;
+}
+
+inline void AssertValidIndexerType(IndexerType type) {
+  CHECK(type == IndexerType::kTag || type == IndexerType::kText ||
+        type == IndexerType::kNone || type == IndexerType::kNumeric ||
+        type == IndexerType::kVector)
+      << "Unexpected indexer type: " << static_cast<int>(type);
+}
 
 enum class DeletionType {
   kRecord,      // The record was deleted from the index.
@@ -65,13 +78,13 @@ class IndexBase {
   // or invalid data). Remove returns true if a record was removed, false if it
   // was skipped. All three return an error status if there is an unexpected
   // failure.
-  virtual absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+  virtual absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
                                                  absl::string_view data) = 0;
-  virtual absl::StatusOr<bool> RemoveRecord(const InternedStringPtr& key,
+  virtual absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
                                             DeletionType deletion_type) = 0;
   virtual absl::StatusOr<RecordResult> ModifyRecord(
-      const InternedStringPtr& key, absl::string_view data) = 0;
-  virtual int RespondWithInfo(ValkeyModuleCtx* ctx) const = 0;
+      const InternedStringPtr &key, absl::string_view data) = 0;
+  virtual int RespondWithInfo(ValkeyModuleCtx *ctx) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
 
@@ -79,13 +92,13 @@ class IndexBase {
 
   virtual size_t GetTrackedKeyCount() const = 0;
   virtual size_t GetUnTrackedKeyCount() const = 0;
-  virtual bool IsTracked(const InternedStringPtr& key) const = 0;
-  virtual bool IsUnTracked(const InternedStringPtr& key) const = 0;
-  virtual void UnTrack(const InternedStringPtr& key) = 0;
+  virtual bool IsTracked(const InternedStringPtr &key) const = 0;
+  virtual bool IsUnTracked(const InternedStringPtr &key) const = 0;
+  virtual void UnTrack(const InternedStringPtr &key) = 0;
   virtual absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
   virtual absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn) const = 0;
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const = 0;
 
   virtual vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString input) const {
@@ -95,17 +108,28 @@ class IndexBase {
   /// Returns the mutation weight for this index type
   virtual uint32_t GetMutationWeight() const = 0;
 
-  virtual bool IsVectorIndex() const { return false; }
-
  private:
   IndexerType indexer_type_{IndexerType::kNone};
 };
+
+inline bool IsVectorIndex(const IndexBase &index) {
+  return IsVectorIndex(index.GetIndexerType());
+}
+
+inline bool IsVectorIndex(const IndexBase *index) {
+  return index != nullptr && IsVectorIndex(index->GetIndexerType());
+}
+
+template <typename T>
+inline bool IsVectorIndex(const std::shared_ptr<T> &index) {
+  return index != nullptr && IsVectorIndex(index->GetIndexerType());
+}
 
 class EntriesFetcherIteratorBase {
  public:
   virtual bool Done() const = 0;
   virtual void Next() = 0;
-  virtual const InternedStringPtr& operator*() const = 0;
+  virtual const InternedStringPtr &operator*() const = 0;
   virtual ~EntriesFetcherIteratorBase() = default;
 
   // Returns the underlying TextIterator if available, nullptr otherwise.

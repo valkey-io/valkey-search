@@ -12,8 +12,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
-#include <cstdint>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -33,6 +31,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
+#include "src/expr/value.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/scoring/scorer.h"
@@ -166,9 +165,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
     auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
     auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(parameters.query, parameters.k,
-                                   parameters.cancellation_token,
-                                   std::move(inline_filter));
+    auto res = vector_flat->Search(
+        parameters.query, parameters.k, parameters.cancellation_token,
+        std::move(inline_filter), parameters.enable_partial_results);
     Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
         std::move(latency_sample));
     return res;
@@ -260,7 +259,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       // The Composed AND only has non text predicates, return null
       // to have the caller handle it.
-      if (iterators.empty()) return {nullptr, 0};
+      if (iterators.empty()) {
+        return {nullptr, 0};
+      }
       bool skip_positional = !child_require_positions;
       size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
       return {std::make_unique<indexes::text::ProximityIterator>(
@@ -285,7 +286,9 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       }
       // If the Composed OR has any non text predicate, we cannot
       // build a text iterator.
-      if (iterators.empty() || has_non_text) return {nullptr, 0};
+      if (iterators.empty() || has_non_text) {
+        return {nullptr, 0};
+      }
       return {std::make_unique<indexes::text::OrProximityIterator>(
                   std::move(iterators), composed_predicate->GetWeight()),
               total_size};
@@ -491,18 +494,18 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  std::vector<char> normalized_vec;
-  absl::string_view query = parameters.query;
+  float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
-    normalized_vec = indexes::NormalizeEmbedding(
-        parameters.query, vector_index->GetDataTypeSize());
-    query = absl::string_view(normalized_vec.data(), normalized_vec.size());
+    query_magnitude = indexes::CalcReciprocalMagnitude(
+        reinterpret_cast<const float *>(parameters.query.data()),
+        parameters.query.size() / sizeof(float));
   }
   auto results_appender =
-      [&results, &parameters, vector_index, query](
+      [&results, &parameters, vector_index, query_magnitude](
           const InternedStringPtr &key,
           absl::flat_hash_set<const char *> &top_keys) -> bool {
-    return vector_index->AddPrefilteredKey(query, parameters.k, key, results,
+    return vector_index->AddPrefilteredKey(parameters.query, query_magnitude,
+                                           key, parameters.k, results,
                                            top_keys);
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
@@ -571,21 +574,22 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
           break;
         }
         case indexes::IndexerType::kNumeric: {
-          auto numeric_index =
+          auto *numeric_index =
               dynamic_cast<indexes::Numeric *>(attribute_info.index);
-          auto numeric = numeric_index->GetValue(neighbor.external_id);
+          const auto *numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
             attribute_value =
-                vmsdk::MakeUniqueValkeyString(absl::StrCat(*numeric));
+                vmsdk::MakeUniqueValkeyString(expr::FormatDouble(*numeric));
           }
           break;
         }
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
-          auto vector_index =
-              dynamic_cast<indexes::VectorBase *>(attribute_info.index);
-          auto vector = vector_index->GetValue(neighbor.external_id);
+          const auto *vector_index =
+              dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
+          auto vector =
+              vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
@@ -1174,7 +1178,9 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       fetch_limited = true;
       return false;
     }
-    borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
+    borrowed.push_back({.key = BorrowedInternedStringPtr(key),
+                        .distance = 0.0f,
+                        .score = 0.0f});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -1207,7 +1213,9 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
           nonvector_results_fetched_limited_count.Increment();
           break;
         }
-        borrowed.push_back({BorrowedInternedStringPtr(key), 0.0f, 0.0f});
+        borrowed.push_back({.key = BorrowedInternedStringPtr(key),
+                            .distance = 0.0f,
+                            .score = 0.0f});
         // Set the per-document relevance score when scoring is enabled.
         // Only used by pure text queries
         if (iterator_scoring_enabled) {
@@ -1258,7 +1266,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     vmsdk::ReaderMutexLock &lock) {
   VMSDK_ASSIGN_OR_RETURN(auto index, parameters.index_schema->GetIndex(
                                          parameters.attribute_alias));
-  auto vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   if (index->GetIndexerType() != indexes::IndexerType::kHNSW &&
       index->GetIndexerType() != indexes::IndexerType::kFlat) {
     return absl::InvalidArgumentError(
@@ -1334,7 +1342,9 @@ SearchResult::SearchResult(size_t total_count,
     : total_count(total_count),
       is_limited_with_buffer(false),
       is_offsetted(false) {
-  if (ShouldReturnNoResults(parameters)) return;
+  if (ShouldReturnNoResults(parameters)) {
+    return;
+  }
   if (!parameters.RequiresCompleteResults()) {
     TrimResults(borrowed, parameters, trim_offset_in_background);
   }
@@ -1460,7 +1470,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   if (parameters.cancellation_token->IsCancelled()) {
     return absl::OkStatus();
   }
-  vmsdk::ReaderMutexLock lock(&parameters.index_schema->GetTimeSlicedMutex());
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
   ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
   // coming from the coordinator

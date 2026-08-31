@@ -146,7 +146,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
         flat_algorithm_proto.release());
     auto index = indexes::VectorFlat<float>::Create(
                      vector_index_proto, "attribute_identifier_1",
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                      .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
@@ -1167,6 +1167,37 @@ INSTANTIATE_TEST_SUITE_P(
             .vector_query = false,
             .sortby_parameters_str = "SORTBY __score DESC",
             .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
+        },
+        {
+            // SORTBY on the KNN score alias is accepted even though the alias
+            // is not an index field: it is a synthesized reply field.
+            .test_name = "sortby_vector_score_asc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test ASC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+        },
+        {
+            // Descending on the score alias is supported too: ApplySorting
+            // compares Neighbor.distance directly rather than relying on the
+            // natural KNN order.
+            .test_name = "sortby_vector_score_desc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test DESC",
+            .sortby_field = "as_test",
             .sortby_order = query::SortOrder::kDescending,
             .sortby_enabled = true,
         },

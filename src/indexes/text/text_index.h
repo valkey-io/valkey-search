@@ -8,27 +8,35 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_INDEX_H_
 
+#include <absl/container/inlined_vector.h>
+#include <absl/status/statusor.h>
+
 #include <atomic>
 #include <bitset>
 #include <cctype>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "absl/base/thread_annotations.h"
-#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_map.h"
-#include "absl/container/flat_hash_set.h"
 #include "absl/container/node_hash_map.h"
-#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "rax/rax.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
+#include "src/utils/string_interning.h"
+#include "vmsdk/src/memory_tracker.h"
 
 struct sb_stemmer;
 
@@ -82,7 +90,7 @@ class TextIndex {
   void MutateTarget(
       absl::string_view word, const InvasivePtr<Postings> &target,
       const std::optional<std::string> &reverse_word = std::nullopt,
-      item_count_op op = NONE);
+      item_count_op operation = NONE);
 
  private:
   Rax prefix_tree_;
@@ -287,7 +295,9 @@ class TextIndexSchema {
   // Locking-enabled version of GetTrackedKeyCount.
   size_t GetTrackedKeyCount(bool lock) {
     std::optional<std::lock_guard<std::mutex>> per_key_guard;
-    if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+    if (lock) {
+      per_key_guard.emplace(per_key_text_indexes_mutex_);
+    }
     return GetTrackedKeyCount();
   }
 

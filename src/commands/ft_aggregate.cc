@@ -251,8 +251,11 @@ absl::Status CreateRecordsFromNeighbors(
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
   for (auto &n : neighbors) {
+    // Not record_indexes_by_alias_.size(): that undercounts once an alias has
+    // been re-bound (shadowed) to a new slot, leaving later slots out of
+    // bounds.
     auto rec =
-        std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
+        std::make_unique<Record>(parameters.record_info_by_index_.size());
 
     // Set key field if requested
     if (parameters.load_key) {
@@ -276,13 +279,13 @@ absl::Status CreateRecordsFromNeighbors(
         if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
             by_alias != parameters.record_indexes_by_alias_.end()) {
           record_index = by_alias->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         } else if (auto by_identifier =
                        parameters.record_indexes_by_identifier_.find(name);
                    by_identifier !=
                    parameters.record_indexes_by_identifier_.end()) {
           record_index = by_identifier->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         }
 
         if (record_index) {

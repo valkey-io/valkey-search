@@ -4,17 +4,18 @@ from valkey_search_test_case import (
     ValkeySearchClusterTestCase,
 )
 from valkeytestframework.conftest import resource_port_tracker
-from valkeytestframework.util import waiters
 from indexes import Index, Text
 import os
+import platform
+import shutil
 import zipfile
-import subprocess
 import pytest
 
 index = Index(
     "test_rdb_load_1_0_0_idx",
     [Text("t")],
 )
+
 
 def _start_server_with_search_module_v1_0(test_case, testdir, dbfilename):
     """Start a valkey server the valkey-search module 1.0.0, loading an existing RDB."""
@@ -23,9 +24,20 @@ def _start_server_with_search_module_v1_0(test_case, testdir, dbfilename):
     # Unzip the 1.0.0 module binary, overwriting if it already exists
     module_dir = os.path.join(os.path.dirname(__file__), "module")
     zip_path = os.path.join(module_dir, "1.0.0-libsearch.so.zip")
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(module_dir)
     module_path = os.path.join(module_dir, "1.0.0-libsearch.so")
+    module_members = {
+        "x86_64": "1.0.0-libsearch.so",
+        "aarch64": "1.0.0-libsearch-aarch64.so",
+        "arm64": "1.0.0-libsearch-aarch64.so",
+    }
+    module_member = module_members.get(platform.machine())
+    if module_member is None:
+        pytest.skip(
+            "1.0.0 module fixture is unavailable for {}".format(platform.machine())
+        )
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        with zf.open(module_member) as source, open(module_path, "wb") as target:
+            shutil.copyfileobj(source, target)
     os.chmod(module_path, 0o755)
 
     # start the server using 1.0.0 search module
@@ -71,8 +83,12 @@ def do_rdb_load_on_module_v1_0(test_case, client, server):
     # The server is expected to fail with certain error message
     # Wait for error message to appear in logs
     try:
-        test_case.wait_for_logfile(logfile, "Failed to load ValkeySearch aux section from RDB")
-        test_case.wait_for_logfile(logfile, "require minimum version")
+        expected_messages = (
+            "Failed to load ValkeySearch aux section from RDB",
+            "require minimum version",
+        )
+        for expected_message in expected_messages:
+            test_case.wait_for_logfile(logfile, expected_message)
         print("Server with search version 1.0.0 correctly failed to load RDB from newer version.")
     finally:
         if os.path.exists(module_path):

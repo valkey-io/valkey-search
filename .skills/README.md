@@ -19,9 +19,9 @@ Create a markdown file in this directory with:
 | Skill | Description |
 |-------|-------------|
 | [stale-prs.md](stale-prs.md) | Find open PRs that haven't been updated in 30+ days |
+| [run-integration-tests.md](run-integration-tests.md) | Run and diagnose the C++ and Python integration harnesses, including standalone and cluster modes |
 
 ## TODO
 
-- How to run integration tests
 - How to unit test
 - Build + load module on server

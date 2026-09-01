@@ -960,7 +960,7 @@ typedef void (*ValkeyModuleScanKeyCB)(ValkeyModuleKey *key,
                                       ValkeyModuleString *value,
                                       void *privdata);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
-typedef int (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
+typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef ValkeyModuleString *(*ValkeyModuleConfigGetStringFunc)(const char *name,
                                                                void *privdata);
 typedef long long (*ValkeyModuleConfigGetNumericFunc)(const char *name,

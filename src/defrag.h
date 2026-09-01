@@ -27,9 +27,10 @@
 //   * It runs on the main thread, inside the core defrag cycle, and is given a
 //     deadline. ValkeyModule_DefragShouldStop() reports when that deadline has
 //     passed; the callback is expected to poll it and return promptly.
-//   * It is given a cursor that persists across invocations
+//   * It is given a cursor that persists across invocations within a cycle
 //     (ValkeyModule_DefragCursorGet / ...Set), so work can be split over many
-//     calls instead of blocking the main thread once.
+//     calls instead of blocking the main thread once. Core discards the cursor
+//     when a cycle ends or is aborted, so the next cycle starts again from 0.
 //   * The cursor doubles as the "am I done" signal, the same convention every
 //     other scanner in defrag.c uses:
 //         cursor != 0  -> more work remains, call me again
@@ -72,9 +73,9 @@ void ResetStats();
 // The global defrag callback core invokes. Exposed (rather than kept static) so
 // it can be unit tested directly without standing up a full module load.
 //
-// Returns 0; the "more work" signal for global callbacks travels through the
-// cursor, not the return value (see the contract above).
-int OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx);
+// The "more work" signal travels through the cursor, not a return value: core
+// types this callback as returning void (see the contract above).
+void OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx);
 
 // Register OnGlobalDefragCallback with core.
 //

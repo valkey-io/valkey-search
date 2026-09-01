@@ -44,7 +44,7 @@ void ResetStats() {
   completed_passes.store(0, std::memory_order_relaxed);
 }
 
-int OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx) {
+void OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx) {
   callback_invocations.fetch_add(1, std::memory_order_relaxed);
 
   // Step 1: recover where the previous invocation stopped. On the first call of
@@ -71,7 +71,7 @@ int OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx) {
     // cursor non-zero so core calls us again. resume_from + 1 keeps it non-zero
     // even at position 0, which matters because 0 means "done".
     ValkeyModule_DefragCursorSet(ctx, resume_from + 1);
-    return 0;
+    return;
   }
 
   // Step 3: the pass is complete. Resetting the cursor to 0 is what tells core
@@ -79,7 +79,6 @@ int OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx) {
   // rescheduling the global defrag stage forever.
   ValkeyModule_DefragCursorSet(ctx, 0);
   completed_passes.fetch_add(1, std::memory_order_relaxed);
-  return 0;
 }
 
 bool RegisterGlobalDefragCallback(ValkeyModuleCtx *ctx) {

@@ -1,6 +1,7 @@
 name: Slash Commands
 
-# Supported comment commands (available to all users):
+# Supported comment commands (repository collaborators and maintainers only —
+# comments from other users are ignored with a short reply):
 #   /label <names>             — add one or more labels from the allowlist
 #   /remove-label <names>      — remove one or more labels
 #   /reviewer <logins>         — request a review from one or more users
@@ -306,7 +307,8 @@ jobs:
     if: |
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request != null &&
-      startsWith(github.event.comment.body, '/assign-reviewers')
+      startsWith(github.event.comment.body, '/assign-reviewers') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     concurrency:
       group: reviewer-assignment-ledger
@@ -535,6 +537,23 @@ jobs:
             const commenter = context.payload.comment.user.login;
 
             if (!/^\/(label|remove-label|reviewer|remove-reviewer|resolves|rerun|duplicates)\b/.test(body)) return;
+
+            // Least privilege: these commands change labels, reviewers, the PR
+            // body and CI, so restrict them to repo collaborators and maintainers.
+            // author_association is OWNER/MEMBER for maintainers and COLLABORATOR
+            // for added collaborators; CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR and NONE
+            // (unknown or new contributors) are turned away. Collaborators are
+            // added by maintainers, so this tracks the repo's own access list.
+            const PRIVILEGED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+            if (!PRIVILEGED_ASSOCIATIONS.has(context.payload.comment.author_association)) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: 'Slash commands are limited to repository collaborators and maintainers.',
+              });
+              return;
+            }
 
             // Split a comma-separated command argument into unique, non-empty items.
             const parseItems = (raw, stripAt) => {

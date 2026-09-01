@@ -315,6 +315,25 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
   return std::nullopt;
 }
 
+bool Tag::ContainsKey(absl::string_view value,
+                      BorrowedInternedStringPtr key) const {
+  // Lock-free by the same read-side invariant GetValue relies on: the index is
+  // not mutated while the time-sliced mutex is held in read mode.
+  std::string norm = Normalize(value);
+  void *slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+              norm.size(), &slot) != 1) {
+    return false;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to test membership, then
+  // Release to leave the live storage planted in the rax slot (mirrors
+  // Tag::GetTagValueDocCount / Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  bool found = bag.contains(key);
+  (void)bag.Release();
+  return found;
+}
+
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
@@ -462,6 +481,21 @@ size_t Tag::GetTrackedKeyCount() const {
 size_t Tag::GetUnTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
   return untracked_keys_.size();
+}
+
+size_t Tag::GetTagValueDocCount(absl::string_view value) const {
+  std::string norm = Normalize(value);
+  void *slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+              norm.size(), &slot) != 1) {
+    return 0;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to read size, then Release to
+  // leave the live storage planted in the rax slot (mirrors Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  size_t count = bag.size();
+  (void)bag.Release();
+  return count;
 }
 
 bool Tag::IsTracked(const InternedStringPtr &key) const {

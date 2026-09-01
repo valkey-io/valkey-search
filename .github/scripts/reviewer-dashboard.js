@@ -431,6 +431,10 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push('');
   L.push(`_Auto-updated every ~15 min from **${targetLabel}** open PRs. Last run: **${now}**._`);
   L.push('');
+  if (opts.dropPriority || opts.leanQueue || opts.compact) {
+    L.push('_⚠️ Some sections are trimmed to keep this issue under GitHub’s 65,536-character limit — the per-person queue and legend are preserved first._');
+    L.push('');
+  }
 
   // Mermaid: PRs by priority (compact labels).
   L.push('```mermaid');
@@ -441,31 +445,6 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push(`    "P4/none" : ${byPri[4] + byPri.none}`);
   L.push('```');
   L.push('');
-
-  // Release-scope issues with no open PR — the gap that's hard to see from the
-  // PR list alone (an issue in the release with nothing being merged toward it).
-  const relLabel = opts.releaseLabel;
-  if (relLabel) {
-    const relIssues = (opts.issues || []).slice()
-      .sort((a, b) => (Number(b.blocker) - Number(a.blocker)) || (b.daysIdle - a.daysIdle) || (a.number - b.number));
-    L.push(`## 🚩 \`${relLabel}\` issues with no open PR`);
-    L.push('');
-    if (!relIssues.length) {
-      L.push(`_Every open \`${relLabel}\` issue has a PR in flight. 🎉_`);
-    } else {
-      L.push(`_${relIssues.length} open \`${relLabel}\` issue(s) have no PR that closes them (🔴 = release blocker) — nothing is being merged toward them yet._`);
-      L.push('');
-      L.push('| Issue | Title | Labels | Assignee | Idle |');
-      L.push('|-------|-------|--------|----------|:----:|');
-      for (const it of relIssues) {
-        const t = (it.blocker ? '🔴 ' : '') + esc(it.title);
-        const labels = it.labels.length ? it.labels.map(l => `\`${esc(l)}\``).join(' ') : '—';
-        const who = it.assignees.length ? it.assignees.map(mention).join(', ') : '—';
-        L.push(`| [#${it.number}](${it.url}) | ${t} | ${labels} | ${who} | ${it.daysIdle}d |`);
-      }
-    }
-    L.push('');
-  }
 
   // How to edit (the whole point: no write access needed) — always visible.
   L.push('## ✍️ How to update this board');
@@ -498,7 +477,7 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push('');
 
   // Column legend — one collapsible per column, each state on its own line so
-  // there's no run-on sentence to parse.
+  // there's no run-on sentence to parse. Always rendered.
   L.push('## ℹ️ Legend');
   L.push('');
   L.push('_Expand a column to see what each symbol means. AI reviewers (CodeRabbit, Greptile, …) are excluded from every count._');
@@ -551,10 +530,13 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   // Your queue: expand your name to see your PRs, split by how you were added.
   // (In-issue heading anchors are unreliable, so this uses inline collapsibles
   // instead of jump links — expand right here.)
+  // Per-person view — the primary section. It is preserved through every size
+  // tier; only as an absolute last resort (opts.compact) is it replaced by a
+  // pointer. Before that, opts.leanQueue trims it to just awaiting rows.
   if (!opts.compact) {
-  L.push('## 🔎 Your queue');
+  L.push('<details open><summary><h2>🔎 Your queue (per person)</h2></summary>');
   L.push('');
-  L.push('_Expand your name to see your PRs. 🤖 = auto-assigned to you · ✋ = requested by hand · 🙋 = you `/claim`ed it. **Reviewed** ✅ = you approved it on GitHub **or** ran `/reviewed`. **Awaiting you** = the rest._');
+  L.push(`_Expand your name to see your PRs${opts.leanQueue ? ' still **awaiting you**' : ''}. 🤖 = auto-assigned to you · ✋ = requested by hand · 🙋 = you \`/claim\`ed it. **Reviewed** ✅ = you approved it on GitHub **or** ran \`/reviewed\`. **Awaiting you** = the rest._`);
   L.push('');
   for (const login of reviewerOrder) {
     const m = reviewerPRs.get(login);
@@ -564,10 +546,14 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     // GitHub is enough, no separate /reviewed needed.
     const reviewedBy = it => it.status === 'Approved' || !!(state.reviewed[it.pr.number] && state.reviewed[it.pr.number][login]);
     const awaiting = items.filter(it => !reviewedBy(it)).length;
+    // Lean mode: show only rows still awaiting this person, and skip anyone
+    // with nothing left — keeps the primary view alive when near the limit.
+    if (opts.leanQueue && !awaiting) continue;
     const autoN = items.filter(it => it.auto).length;
     const manualN = items.filter(it => it.manual).length;
     const claimN = items.filter(it => it.claim).length;
-    items.sort((a, b) => bucket(priorityOf(state, a.pr.number)) - bucket(priorityOf(state, b.pr.number)) || a.pr.number - b.pr.number);
+    const shown = (opts.leanQueue ? items.filter(it => !reviewedBy(it)) : items)
+      .sort((a, b) => bucket(priorityOf(state, a.pr.number)) - bucket(priorityOf(state, b.pr.number)) || a.pr.number - b.pr.number);
     const bits = [`${awaiting} awaiting you`, `🤖 ${autoN} auto`, `✋ ${manualN} manual`];
     if (claimN) bits.push(`🙋 ${claimN} claimed`);
     L.push(`<details><summary><b>${mention(login)}</b> — ${bits.join(' · ')}</summary>`);
@@ -576,7 +562,7 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     L.push('');
     L.push('| PR | Title | How | Priority | Checks | Reviewed |');
     L.push('|----|-------|:--:|:--------:|:------:|:--------:|');
-    for (const it of items) {
+    for (const it of shown) {
       const p = priorityOf(state, it.pr.number);
       const how = [it.auto ? '🤖' : '', it.manual ? '✋' : '', it.claim ? '🙋' : ''].filter(Boolean).join('') || '—';
       L.push(`| ${prLink(it.pr)} | ${esc(it.pr.title)} | ${how} | ${p == null ? '—' : 'P' + p} | ${ciCell(it.pr)} | ${reviewedBy(it) ? '✅' : '☐'} |`);
@@ -584,30 +570,46 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     L.push('');
     L.push('</details>');
   }
+  L.push('</details>');
   } else {
-    L.push('## 🔎 Your queue');
+    L.push('<details open><summary><h2>🔎 Your queue (per person)</h2></summary>');
     L.push('');
-    L.push('_Per-reviewer queues are hidden to keep this issue under GitHub’s 65,536-character limit. Use the **review-requested** filter on the Pulls tab to find your PRs._');
+    L.push(`_Per-reviewer queues are hidden to keep this issue under GitHub’s 65,536-character limit. Use the [**review-requested** filter](https://github.com/${targetLabel}/pulls?q=is%3Aopen+is%3Apr+review-requested%3A%40me) on the Pulls tab to find your PRs._`);
+    L.push('</details>');
   }
   L.push('');
 
-  // Priority-grouped tables (overall triage view) — each collapsible. P1 is
-  // open by default (blockers up front); the rest collapse to keep it short.
-  const groups = [[1, 'P1 — launch blocker'], [2, 'P2'], [3, 'P3'], [4, 'P4 / unset']];
-  for (const [g, title] of groups) {
-    const rows = prs.filter(pr => bucket(priorityOf(state, pr.number)) === g)
-      .sort((a, b) => a.number - b.number);
-    if (!rows.length) continue;
-    L.push(`<details${g === 1 ? ' open' : ''}><summary><b>${title}</b> · ${rows.length}</summary>`);
+  // Per-PR view: priority-grouped tables (overall triage) — each group is
+  // collapsible, wrapped in one outer section. Dropped (with a pointer) only
+  // after the legend when trimming for size; the per-person view outlives it.
+  if (!opts.dropPriority) {
+    L.push('<details open><summary><h2>📋 By priority (per PR)</h2></summary>');
     L.push('');
-    L.push('| PR | Title | Stage | Checks | Author | First-pass | Maintainer | Other | Notes |');
-    L.push('|----|-------|:-----:|:------:|--------|-----------|-----------|-------|-------|');
-    for (const pr of rows) {
-      const n = pr.number;
-      const note = state.notes[n] ? esc(state.notes[n]) : '—';
-      const title2 = esc(pr.title) + (pr.stale ? ` ⏳${pr.daysIdle}d` : '');
-      L.push(`| ${prLink(pr)} | ${title2} | ${stageCell(pr, state)} | ${ciCell(pr)} | ${mention(pr.author)} | ${reviewerCell(pr.firstPass)} | ${reviewerCell(pr.maintainers)} | ${reviewerCell(pr.other)} | ${note} |`);
+    const groups = [[1, 'P1 — launch blocker'], [2, 'P2'], [3, 'P3'], [4, 'P4 / unset']];
+    for (const [g, title] of groups) {
+      const rows = prs.filter(pr => bucket(priorityOf(state, pr.number)) === g)
+        .sort((a, b) => a.number - b.number);
+      if (!rows.length) continue;
+      L.push(`<details${g === 1 ? ' open' : ''}><summary><b>${title}</b> · ${rows.length}</summary>`);
+      L.push('');
+      L.push('| PR | Title | Stage | Checks | Author | First-pass | Maintainer | Other | Notes |');
+      L.push('|----|-------|:-----:|:------:|--------|-----------|-----------|-------|-------|');
+      for (const pr of rows) {
+        const n = pr.number;
+        const note = state.notes[n] ? esc(state.notes[n]) : '—';
+        const title2 = esc(pr.title) + (pr.stale ? ` ⏳${pr.daysIdle}d` : '');
+        L.push(`| ${prLink(pr)} | ${title2} | ${stageCell(pr, state)} | ${ciCell(pr)} | ${mention(pr.author)} | ${reviewerCell(pr.firstPass)} | ${reviewerCell(pr.maintainers)} | ${reviewerCell(pr.other)} | ${note} |`);
+      }
+      L.push('');
+      L.push('</details>');
+      L.push('');
     }
+    L.push('</details>');
+    L.push('');
+  } else {
+    L.push('<details open><summary><h2>📋 By priority (per PR)</h2></summary>');
+    L.push('');
+    L.push(`_The per-PR priority tables are omitted to keep this issue under GitHub’s 65,536-character limit. [Open all PRs, newest first →](https://github.com/${targetLabel}/pulls?q=${encodeURIComponent('is:open is:pr sort:updated-desc')})_`);
     L.push('');
     L.push('</details>');
     L.push('');
@@ -618,6 +620,34 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     L.push('<details><summary>🕓 <b>Recent activity</b></summary>');
     L.push('');
     for (const line of state.log) L.push(`- ${line}`);
+    L.push('');
+    L.push('</details>');
+    L.push('');
+  }
+
+  // Per-issue view: release-scope issues with no open PR — the gap that's hard
+  // to see from the PR list alone (a release issue nothing is being merged
+  // toward). Rendered last, after the per-person and per-PR views.
+  const relLabel = opts.releaseLabel;
+  if (relLabel) {
+    const relIssues = (opts.issues || []).slice()
+      .sort((a, b) => (Number(b.blocker) - Number(a.blocker)) || (b.daysIdle - a.daysIdle) || (a.number - b.number));
+    L.push(`<details open><summary><h2>🚩 <code>${relLabel}</code> issues with no open PR · ${relIssues.length}</h2></summary>`);
+    L.push('');
+    if (!relIssues.length) {
+      L.push(`_Every open \`${relLabel}\` issue has a PR in flight. 🎉_`);
+    } else {
+      L.push(`_${relIssues.length} open \`${relLabel}\` issue(s) have no PR that closes them (🔴 = release blocker) — nothing is being merged toward them yet._`);
+      L.push('');
+      L.push('| Issue | Title | Labels | Assignee | Idle |');
+      L.push('|-------|-------|--------|----------|:----:|');
+      for (const it of relIssues) {
+        const t = (it.blocker ? '🔴 ' : '') + esc(it.title);
+        const labels = it.labels.length ? it.labels.map(l => `\`${esc(l)}\``).join(' ') : '—';
+        const who = it.assignees.length ? it.assignees.map(mention).join(', ') : '—';
+        L.push(`| [#${it.number}](${it.url}) | ${t} | ${labels} | ${who} | ${it.daysIdle}d |`);
+      }
+    }
     L.push('');
     L.push('</details>');
     L.push('');
@@ -722,10 +752,28 @@ module.exports = async ({ github, context, core }) => {
   // still succeeds and never silently fails every run.
   const targetLabel = `${readOwner}/${readRepo}`;
   const renderOpts = { issues: noPrIssues, releaseLabel };
-  let body = renderBody(prs, state, pools, now, targetLabel, renderOpts);
-  if (body.length > GH_BODY_MAX) {
-    core.warning(`Body ${body.length} > ${GH_BODY_MAX} chars — rendering compact (per-reviewer queues omitted).`);
-    body = renderBody(prs, state, pools, now, targetLabel, { ...renderOpts, compact: true });
+  // Size tiers (only ever needed when a repo has an unusually large number of
+  // open PRs). The per-person queue and the legend are always kept. Trim the
+  // per-PR tables first, then the queue as a last resort:
+  //   1. full → 2. drop per-PR tables →
+  //   3. + lean queue (awaiting rows only) → 4. drop queue (last resort).
+  const tiers = [
+    {},
+    { dropPriority: true },
+    { dropPriority: true, leanQueue: true },
+    { dropPriority: true, leanQueue: true, compact: true },
+  ];
+  // GitHub enforces the 65,536 limit by Unicode code point, not UTF-16 code
+  // unit, so measure code points — otherwise the board's emoji (each an astral
+  // pair) inflate the count and trigger trimming well before the real limit.
+  const bodyLen = s => [...s].length;
+  let body, tier = 0;
+  for (; tier < tiers.length; tier++) {
+    body = renderBody(prs, state, pools, now, targetLabel, { ...renderOpts, ...tiers[tier] });
+    if (bodyLen(body) <= GH_BODY_MAX) break;
+  }
+  if (tier > 0) {
+    core.warning(`Body over ${GH_BODY_MAX} chars — applied trim tier ${tier} (${JSON.stringify(tiers[Math.min(tier, tiers.length - 1)])}); final ${bodyLen(body)} chars.`);
   }
   // Persist BEFORE deleting/posting comments. If this throws, we abort here and
   // no command comment is lost — the next scheduled run reprocesses it.

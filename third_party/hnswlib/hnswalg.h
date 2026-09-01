@@ -1026,10 +1026,6 @@ class HierarchicalNSW
                   "empty index has a non-trivial max_level");
       } else {
         loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
-        // max_level is not bounded by element count: HNSW node levels are
-        // random and independent. An inconsistent max_level is caught by the
-        // entry-point invariant (element_levels_[enterpoint_node_] == maxlevel_)
-        // in the global pass below.
         loadCheck(enterpoint_node_ < target_element_count,
                   "enterpoint_node is out of range");
       }

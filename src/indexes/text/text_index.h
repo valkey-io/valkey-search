@@ -12,6 +12,8 @@
 #include <absl/status/statusor.h>
 
 #include <atomic>
+#include <bitset>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -54,6 +56,8 @@ struct TextIndexMetadata {
   std::atomic<uint64_t> total_positions{0};
   std::atomic<uint64_t> num_unique_terms{0};
   std::atomic<uint64_t> total_term_frequency{0};
+  std::atomic<uint64_t> total_doc_len{
+      0};  // Sum of all doc_lens for avg_doc_len
 
   // Memory pools for text index components
   MemoryPool posting_memory_pool_{0};
@@ -103,7 +107,13 @@ class TextIndexSchema {
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           bool suffix);
-  void CommitKeyData(const InternedStringPtr &key);
+  // Commits staged key data into the text index structures.
+  // Returns the document length and norm (max term frequency).
+  struct CommitResult {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+  CommitResult CommitKeyData(const InternedStringPtr &key);
   void DeleteKeyData(const InternedStringPtr &key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
@@ -114,6 +124,42 @@ class TextIndexSchema {
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
+
+  // Index-wide, query-invariant scoring inputs. avg_doc_len is 0 for an empty
+  // index, which callers treat as "scoring disabled".
+  struct IndexScoringStats {
+    uint32_t total_docs = 0;
+    float avg_doc_len = 0.0f;
+  };
+  // BM25's N must be ALL indexed docs (IndexSchema::GetIndexKeyInfoSize()),
+  // matching the extra-step path and Redis, not just text-bearing keys.
+  // IndexSchema wires that count in via SetTotalDocsProvider (TextIndexSchema
+  // cannot see index_key_info_); GetTrackedKeyCount is the fallback if unset.
+  void SetTotalDocsProvider(std::function<uint32_t()> provider) {
+    total_docs_provider_ = std::move(provider);
+  }
+  IndexScoringStats GetIndexScoringStats() const {
+    const uint32_t total_docs =
+        total_docs_provider_ ? total_docs_provider_() : GetTrackedKeyCount();
+    const float avg_doc_len =
+        total_docs > 0
+            ? static_cast<float>(metadata_.total_doc_len.load()) / total_docs
+            : 0.0f;
+    return {total_docs, avg_doc_len};
+  }
+
+  // Takes a borrowed key so neither scoring path (post-filter walk in
+  // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
+  // callers wrap their key in a BorrowedInternedStringPtr.
+  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key) const {
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
+  }
+
+  uint32_t GetKeyNorm(const InternedStringPtr &key) const {
+    auto itr = per_key_scoring_info_.find(key);
+    return itr != per_key_scoring_info_.end() ? itr->second.norm : 0;
+  }
 
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
@@ -177,8 +223,23 @@ class TextIndexSchema {
   //
   absl::node_hash_map<Key, TextIndex> per_key_text_indexes_;
 
-  // Prevent concurrent mutations to per-key text index map
-  std::mutex per_key_text_indexes_mutex_;
+  // Per-key scoring metadata (doc_len and norm), populated alongside
+  // per_key_text_indexes_ during CommitKeyData/DeleteKeyData.
+  struct KeyScoringInfo {
+    uint32_t doc_len{0};
+    uint32_t norm{0};
+  };
+
+  // flat_hash_map (not node_hash_map): KeyScoringInfo is 8 bytes and needs no
+  // pointer stability, so storing it inline avoids a per-document cache miss on
+  // the GetKeyDocLen() scoring hot path.
+  // Transparent functors so GetKeyDocLen() can probe with a borrowed key.
+  absl::flat_hash_map<Key, KeyScoringInfo, InternedStringPtrHash,
+                      InternedStringPtrEq>
+      per_key_scoring_info_;
+
+  // Prevent concurrent mutations to per-key text index map and scoring info
+  mutable std::mutex per_key_text_indexes_mutex_;
 
   Lexer lexer_;
 
@@ -210,6 +271,10 @@ class TextIndexSchema {
   // Schema-level stem field mask (mirrored from
   // IndexSchema::stem_text_field_mask_)
   uint64_t stem_text_field_mask_ = 0;
+
+  // Returns the total indexed doc count (all docs, not just text-bearing) for
+  // BM25's N. Wired by IndexSchema via SetTotalDocsProvider.
+  std::function<uint32_t()> total_docs_provider_;
 
  public:
   // FT.INFO stats for text index

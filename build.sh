@@ -490,7 +490,7 @@ if [ -n "${RUN_TEST}" ]; then
         if [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
             sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
             printf "\n${RED}======================= FAILED TEST DETAILS =======================${RESET}\n"
-            grep -E -B 1 -A 8 ": Failure" "${BUILD_DIR}/Testing/Temporary/LastTest.log" || true
+            grep -E -B 2 -A 25 -i "(: Failure|==[0-9]+==ERROR: |SUMMARY: .*Sanitizer|\[  FAILED  \]|Check failed:|Assertion \`.*\' failed)" "${BUILD_DIR}/Testing/Temporary/LastTest.log" || true
             printf "${RED}===================================================================${RESET}\n"
         fi
     elif [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then

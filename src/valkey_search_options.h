@@ -61,6 +61,9 @@ const config::Boolean &GetSkipCorruptedInternalUpdateEntries();
 /// Return the log level
 config::Enum &GetLogLevel();
 
+/// Return the scorer FT.SEARCH uses when the query omits SCORER
+config::Enum &GetDefaultScorer();
+
 /// Return the configuration entry for HNSW allow_replace_deleted flag
 const config::Boolean &GetHNSWAllowReplaceDeleted();
 
@@ -159,6 +162,9 @@ config::Number &GetMutationWeightTag();
 /// Return the recursion depth of the query string from FT.SEARCH and
 /// FT.AGGREGATE commands
 config::Number &GetQueryStringDepth();
+
+/// Return the configuration entry for vector unshare batch size
+config::Number &GetVectorUnshareBatchSize();
 
 /// Return the configuration entry that controls compatibility-bug emulation.
 /// See COMPATIBILITY.md for the semantics.

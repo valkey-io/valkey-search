@@ -33,6 +33,7 @@
 #include "src/utils/cancel.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // Note that the ordering matters here - we want to minimize the memory

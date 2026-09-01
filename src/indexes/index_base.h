@@ -28,6 +28,10 @@ namespace valkey_search {
 class AttributeData;
 }  // namespace valkey_search
 
+namespace valkey_search::indexes::text {
+class TextIterator;
+}  // namespace valkey_search::indexes::text
+
 namespace valkey_search::indexes {
 enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
 
@@ -108,6 +112,8 @@ class IndexBase {
   /// Returns the mutation weight for this index type
   virtual uint32_t GetMutationWeight() const = 0;
 
+  virtual void OnSwapDB(int new_db_num) {}
+
  private:
   IndexerType indexer_type_{IndexerType::kNone};
 };
@@ -131,6 +137,9 @@ class EntriesFetcherIteratorBase {
   virtual void Next() = 0;
   virtual const InternedStringPtr &operator*() const = 0;
   virtual ~EntriesFetcherIteratorBase() = default;
+
+  // Returns the underlying TextIterator if available, nullptr otherwise.
+  virtual const text::TextIterator *GetTextIterator() const { return nullptr; }
 };
 
 class EntriesFetcherBase {

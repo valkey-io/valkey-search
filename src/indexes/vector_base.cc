@@ -50,6 +50,7 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -139,6 +140,31 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
     return query::EvaluationResult(false);
   }
   return predicate.Evaluate(*text_index_, *key_, require_positions);
+}
+
+VectorBase::VectorBase(IndexerType indexer_type, int dimensions,
+                       data_model::AttributeDataType attribute_data_type,
+                       absl::string_view attribute_identifier, int db_num)
+    : IndexBase(indexer_type),
+      db_num_(db_num),
+      dimensions_(dimensions),
+      attribute_identifier_(attribute_identifier),
+      interned_attribute_identifier_(
+          StringInternStore::Intern(attribute_identifier)),
+      attribute_data_type_(attribute_data_type)
+#ifndef SAN_BUILD
+      ,
+      vector_allocator_(CREATE_UNIQUE_PTR(
+          FixedSizeAllocator, sizeof(VectorRecord) + dimensions * sizeof(float),
+          true))
+#endif  // !SAN_BUILD
+{
+}
+
+VectorBase::~VectorBase() {
+  vmsdk::VerifyMainThread();
+  VectorRegistry::Instance().RemoveIndexKeys(
+      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
 }
 
 template <typename T>
@@ -238,7 +264,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Insert in desc order.
+    // Insert in desc order. Will need an update with score in the future
     ret.emplace_back(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
@@ -565,8 +591,6 @@ absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   return absl::OkStatus();
 }
-
-VectorBase::~VectorBase() = default;
 
 template void VectorBase::Init<float>(
     int dimensions, data_model::DistanceMetric distance_metric,

@@ -18,6 +18,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
@@ -149,18 +150,61 @@ class PredicateEvaluator : public query::Evaluator {
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
 
-bool VerifyFilter(const query::SearchParameters &parameters,
-                  const RecordsMap &records, const indexes::Neighbor &n) {
+// Result of a main-thread content-fetch revalidation of a neighbor.
+struct FilterVerification {
+  bool matches{false};
+  // Present only when the neighbor was reached via the mutation-walk
+  // (db_seq != sequence_number) for a NON-vector query: the document's score
+  // recomputed through the same Scorer seam ScoreTextQuery uses, so it is on
+  // the same scale as the shard-side score. nullopt on the fast (no-mutation)
+  // path and for vector queries, whose Neighbor.score is a KNN distance that
+  // must never be overwritten.
+  std::optional<float> recomputed_score;
+};
+
+FilterVerification VerifyFilter(
+    const query::SearchParameters &parameters, const RecordsMap &records,
+    const indexes::Neighbor &n,
+    std::unique_ptr<query::SingleDocumentScorer> &document_scorer) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
-    return true;
+    return {true, std::nullopt};
   }
   auto db_seq =
       parameters.index_schema->GetDbMutationSequenceNumber(n.external_id);
   if (db_seq == n.sequence_number) {
-    return true;
+    return {true, std::nullopt};
   }
   predicate_revalidation.Increment();
+
+  // The document changed between shard-side scoring and this content fetch, so
+  // its carried Neighbor.score is stale. Besides re-checking membership, for a
+  // non-vector query recompute the relevance score through the SAME Scorer seam
+  // ScoreTextQuery uses (search.cc: ResolveLeaves -> ScoreNode ->
+  // Scorer::ComposeDocumentScore). Text leaves are scored via Scorer::ScoreLeaf
+  // (never TextIterator::GetScore) and numeric/tag leaves via 1.0 * weight,
+  // identical to ScoreNode. Vector queries are skipped because there
+  // Neighbor.score is a KNN distance, not a relevance score.
+  const bool recompute_score = parameters.IsNonVectorQuery();
+  auto recompute = [&](EvaluationResult &result) -> FilterVerification {
+    if (!result.matches || !recompute_score) {
+      return {result.matches, std::nullopt};
+    }
+    // The document-independent scoring inputs (posting lists, IDF, corpus
+    // stats) are resolved once per reply: construct the scorer lazily on the
+    // first mutated document and reuse it for every later one.
+    if (!document_scorer) {
+      document_scorer = std::make_unique<query::SingleDocumentScorer>(
+          *parameters.index_schema, predicate,
+          indexes::scoring::GetScorer(parameters.scorer));
+    }
+    // nullopt (empty corpus / ScoreNode non-match) degrades to 0 rather than
+    // dropping the already-admitted document. Carry the value on the
+    // EvaluationResult (meaningful when matches == true) and hand it back.
+    result.score = document_scorer->Score(n.external_id).value_or(0.0f);
+    return {true, result.score};
+  };
+
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
@@ -172,12 +216,12 @@ bool VerifyFilter(const query::SearchParameters &parameters,
         records, text_index, n.external_id,
         parameters.filter_parse_results.query_operations);
     EvaluationResult result = predicate->Evaluate(evaluator);
-    return result.matches;
+    return recompute(result);
   }
   PredicateEvaluator evaluator(
       records, parameters.filter_parse_results.query_operations);
   EvaluationResult result = predicate->Evaluate(evaluator);
-  return result.matches;
+  return recompute(result);
 }
 
 // Check if this node owns the slot for the given key in cluster mode
@@ -196,7 +240,9 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier,
+    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
   identifiers.insert(kJsonRootElementQuery);
@@ -248,8 +294,13 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     }
     return content;
   }
-  if (!VerifyFilter(parameters, content, neighbor)) {
+  auto verification =
+      VerifyFilter(parameters, content, neighbor, document_scorer);
+  if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
+  }
+  if (out_recomputed_score != nullptr && verification.recomputed_score) {
+    *out_recomputed_score = verification.recomputed_score;
   }
   RecordsMap return_content;
   static const vmsdk::UniqueValkeyString kJsonRootElementQueryPtr =
@@ -279,13 +330,16 @@ absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier,
+    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier);
+                                  neighbor, vector_identifier, document_scorer,
+                                  out_recomputed_score);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
   for (const auto &return_attribute : parameters.return_attributes) {
@@ -333,8 +387,13 @@ absl::StatusOr<RecordsMap> GetContent(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  if (!VerifyFilter(parameters, content, neighbor)) {
+  auto verification =
+      VerifyFilter(parameters, content, neighbor, document_scorer);
+  if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
+  }
+  if (out_recomputed_score != nullptr && verification.recomputed_score) {
+    *out_recomputed_score = verification.recomputed_score;
   }
   if (parameters.return_attributes.empty()) {
     return content;
@@ -382,6 +441,15 @@ void ProcessNeighborsForReply(
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
       options::GetMaxSearchResultFieldsCount().GetValue();
+  // Set when a neighbor's score was recomputed on the main thread because its
+  // document mutated between shard-side scoring and this content fetch. Any
+  // such recompute means the carried scores are no longer globally ordered, so
+  // the survivors must be re-ranked below (non-vector queries only).
+  bool any_score_recomputed = false;
+  // Lazily built by VerifyFilter on the first mutated document and reused for
+  // the rest of the reply, so leaf resolution runs once instead of once per
+  // recomputed document.
+  std::unique_ptr<query::SingleDocumentScorer> document_scorer;
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -395,10 +463,18 @@ void ProcessNeighborsForReply(
       // Skip this neighbor - we don't own its slot.
       continue;
     }
-    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
-                              vector_identifier);
+    std::optional<float> recomputed_score;
+    auto content =
+        GetContent(ctx, attribute_data_type, parameters, neighbor,
+                   vector_identifier, document_scorer, &recomputed_score);
     if (!content.ok()) {
       continue;
+    }
+    // Apply the fresh, scale-consistent score (non-vector only; VerifyFilter
+    // never recomputes for vector queries, whose score is a KNN distance).
+    if (recomputed_score.has_value()) {
+      neighbor.score = *recomputed_score;
+      any_score_recomputed = true;
     }
 
     // Check content size before assigning
@@ -441,6 +517,32 @@ void ProcessNeighborsForReply(
                        return !neighbor.attribute_contents.has_value();
                      }),
       neighbors.end());
+
+  // Re-rank survivors when any score was recomputed: a document mutated
+  // between shard-side scoring and this content fetch, so VerifyFilter
+  // recomputed its score through the same Scorer seam (SingleDocumentScorer)
+  // and wrote it to Neighbor.score. That fresh score can reorder the survivors
+  // relative to the stale ones. The general ordering of merged cluster results
+  // is handled earlier in SearchResult::TrimResults; this block only handles
+  // post-recompute reordering, which happens after that sort.
+  // Only for non-vector queries: for KNN, Neighbor.score holds the distance
+  // (lower is better) and results already arrive ascending, so a descending
+  // re-sort would reverse the correct order, and VerifyFilter never recomputes
+  // for vector queries. Skipped when SORTBY is present (explicit ordering
+  // wins).
+  if (any_score_recomputed && !neighbors.empty() &&
+      parameters.IsNonVectorQuery() &&
+      !parameters.sortby_parameter.has_value()) {
+    std::stable_sort(
+        neighbors.begin(), neighbors.end(),
+        [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+          if (a.score != b.score) {
+            return a.score > b.score;
+          }
+          // Tie-break on key ascending for a deterministic result order
+          return a.external_id->Str() < b.external_id->Str();
+        });
+  }
 }
 
 }  // namespace valkey_search::query

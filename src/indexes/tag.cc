@@ -24,6 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
+#include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/type_conversions.h"
@@ -108,8 +109,14 @@ void Tag::DeindexTagForKey(absl::string_view tag,
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
                                             AttributeData &&data) {
   auto str = data.ConsumeString();
-  auto interned_data =
-      StringInternStore::Intern(vmsdk::ToStringView(str.get()));
+  auto data_sv = vmsdk::ToStringView(str.get());
+  if (!utils::IsValidUtf8(data_sv)) {
+    absl::MutexLock lock(&index_mutex_);
+    untracked_keys_.insert(key);
+    return RecordResult::kInvalidData;
+  }
+
+  auto interned_data = StringInternStore::Intern(data_sv);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
@@ -211,8 +218,14 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                AttributeData &&data) {
   auto str = data.ConsumeString();
-  auto interned_data =
-      StringInternStore::Intern(vmsdk::ToStringView(str.get()));
+  auto data_sv = vmsdk::ToStringView(str.get());
+  if (!utils::IsValidUtf8(data_sv)) {
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+    return RecordResult::kInvalidData;
+  }
+
+  auto interned_data = StringInternStore::Intern(data_sv);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
@@ -318,6 +331,25 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
     return ParseRecordTags(*it->second.raw_tag_string, separator_);
   }
   return std::nullopt;
+}
+
+bool Tag::ContainsKey(absl::string_view value,
+                      BorrowedInternedStringPtr key) const {
+  // Lock-free by the same read-side invariant GetValue relies on: the index is
+  // not mutated while the time-sliced mutex is held in read mode.
+  std::string norm = Normalize(value);
+  void *slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+              norm.size(), &slot) != 1) {
+    return false;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to test membership, then
+  // Release to leave the live storage planted in the rax slot (mirrors
+  // Tag::GetTagValueDocCount / Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  bool found = bag.contains(key);
+  (void)bag.Release();
+  return found;
 }
 
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
@@ -468,6 +500,21 @@ size_t Tag::GetTrackedKeyCount() const {
 size_t Tag::GetUnTrackedKeyCount() const {
   absl::MutexLock lock(&index_mutex_);
   return untracked_keys_.size();
+}
+
+size_t Tag::GetTagValueDocCount(absl::string_view value) const {
+  std::string norm = Normalize(value);
+  void *slot = nullptr;
+  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
+              norm.size(), &slot) != 1) {
+    return 0;
+  }
+  // The slot's 8 bytes ARE the bag storage; adopt to read size, then Release to
+  // leave the live storage planted in the rax slot (mirrors Tag::Search).
+  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
+  size_t count = bag.size();
+  (void)bag.Release();
+  return count;
 }
 
 bool Tag::IsTracked(const InternedStringPtr &key) const {

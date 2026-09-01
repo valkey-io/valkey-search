@@ -565,6 +565,17 @@ void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
   ProcessKeyspaceNotification(ctx, key, false);
 }
 
+std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
+  std::vector<const indexes::VectorBase *> result;
+  for (const auto &[_, attr] : attributes_) {
+    auto index = attr.GetIndex();
+    if (index && indexes::IsVectorIndex(index)) {
+      result.push_back(static_cast<const indexes::VectorBase *>(index.get()));
+    }
+  }
+  return result;
+}
+
 namespace {
 
 void AppendMutatedAttribute(
@@ -578,9 +589,6 @@ void AppendMutatedAttribute(
   if (indexes::IsVectorIndex(index)) {
     auto *vector_base = dynamic_cast<indexes::VectorBase *>(index.get());
     if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
-      if (deletion_type == indexes::DeletionType::kNone) {
-        deletion_type = indexes::DeletionType::kIdentifier;
-      }
       VectorRegistry::Instance().DedupOrConstruct(
           key, nullptr, attribute_data_type, db_num, vector_base);
       mutated_attributes[alias] = AttributeData(deletion_type);
@@ -593,9 +601,6 @@ void AppendMutatedAttribute(
     return;
   }
   if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
-    if (deletion_type == indexes::DeletionType::kNone) {
-      deletion_type = indexes::DeletionType::kIdentifier;
-    }
     mutated_attributes[alias] = AttributeData(deletion_type);
     return;
   }
@@ -699,27 +704,27 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
-    // front
+    // front. DeleteKeyData also decrements total_doc_len internally.
     text_index_schema_->DeleteKeyData(key);
   }
-  bool all_deletes = true;
+  bool all_records_deleted = true;
   bool invalid_data = false;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {
       continue;
     }
-    if (attribute_data_itr.second.deletion_type ==
-        indexes::DeletionType::kNone) {
-      all_deletes = false;
+    if (attribute_data_itr.second.deletion_type !=
+        indexes::DeletionType::kRecord) {
+      all_records_deleted = false;
     }
     if (ProcessAttributeMutation(ctx, itr->second, key,
                                  std::move(attribute_data_itr.second))) {
       invalid_data = true;
     }
   }
-  CHECK(!all_deletes || !invalid_data);
-  if (all_deletes) {
+  CHECK(!all_records_deleted || !invalid_data);
+  if (all_records_deleted) {
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
     absl::MutexLock lock(&mutated_records_mutex_);
@@ -727,7 +732,8 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
-    // updates to all Text attributes in one operation for efficiency
+    // updates to all Text attributes in one operation for efficiency.
+    // CommitKeyData stores doc_len/norm in TextIndexSchema internally.
     text_index_schema_->CommitKeyData(key);
   }
 
@@ -1806,7 +1812,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
 }
 
 bool IndexSchema::IsInCurrentDB(ValkeyModuleCtx *ctx) const {
-  return ValkeyModule_GetSelectedDb(ctx) == db_num_;
+  return IsInDB(ValkeyModule_GetSelectedDb(ctx));
 }
 
 void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
@@ -1820,6 +1826,11 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     return;
   }
   db_num_ = db_to_swap_to;
+  for (auto &[_, attribute] : attributes_) {
+    if (attribute.GetIndex()) {
+      attribute.GetIndex()->OnSwapDB(db_to_swap_to);
+    }
+  }
   auto &backfill_job = backfill_job_.Get();
   if (IsBackfillInProgress() && !backfill_job->IsScanDone()) {
     ValkeyModule_SelectDb(backfill_job->scan_ctx.get(), db_to_swap_to);
@@ -1870,7 +1881,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   // Clean up any potentially stale index entries that can arise from
   // pending record deletions being lost during RDB save.
   vmsdk::StopWatch stop_watch;
-  ValkeyModule_SelectDb(ctx, db_num_);  // Make sure we are in the right DB.
+  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num_);
   absl::flat_hash_map<std::string, MutatedAttributes> deletion_attributes;
   for (const auto &attribute : attributes_) {
     const auto &index = attribute.second.GetIndex();
@@ -1971,10 +1982,11 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
-  if (itr->second.attributes.empty()) {
+  if (!itr->second.attributes.has_value()) {
     return false;
   }
-  if (itr->second.attributes.find(identifier) == itr->second.attributes.end()) {
+  if (itr->second.attributes->find(identifier) ==
+      itr->second.attributes->end()) {
     return false;
   }
   return true;
@@ -2007,7 +2019,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
   auto [itr, inserted] =
       tracked_mutated_records_.insert({key, DocumentMutation{}});
   if (ABSL_PREDICT_TRUE(inserted)) {
-    itr->second.attributes = std::move(mutated_attributes);
+    itr->second.attributes = MutatedAttributes();
+    itr->second.attributes.value() = std::move(mutated_attributes);
     itr->second.from_backfill = from_backfill;
     itr->second.from_multi = from_multi;
     itr->second.sequence_number = sequence_number;
@@ -2015,7 +2028,7 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     // Allocate memory buffer proportional to data size and mutation weights
     // Buffer is freed when the mutation record is erased.
     itr->second.weighted_buffer.resize(
-        ComputeWeightedBufferSize(itr->second.attributes));
+        ComputeWeightedBufferSize(itr->second.attributes.value()));
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -2032,14 +2045,17 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.from_multi = from_multi;
   }
 
+  if (!itr->second.attributes.has_value()) {
+    itr->second.attributes = MutatedAttributes();
+  }
   for (auto &mutated_attribute : mutated_attributes) {
-    itr->second.attributes[mutated_attribute.first] =
+    itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
   // Allocate memory buffer proportional to data size and mutation weights
   // Buffer is freed when the mutation record is erased.
   itr->second.weighted_buffer.resize(
-      ComputeWeightedBufferSize(itr->second.attributes));
+      ComputeWeightedBufferSize(itr->second.attributes.value()));
 
   if (ABSL_PREDICT_TRUE(block_client) &&
       ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
@@ -2079,7 +2095,30 @@ void IndexSchema::MarkAsDestructing() {
   }
 
   backfill_job_.Get()->MarkScanAsDone();
+
+  absl::flat_hash_map<indexes::VectorBase *, std::vector<InternedStringPtr>>
+      pending_keys_by_index;
+  for (auto &[key, mutation] : tracked_mutated_records_) {
+    if (mutation.attributes) {
+      for (const auto &[alias, attr_data] : *mutation.attributes) {
+        if (attr_data.IsVector()) {
+          auto it = attributes_.find(alias);
+          if (it != attributes_.end()) {
+            auto *vb = dynamic_cast<indexes::VectorBase *>(
+                it->second.GetIndex().get());
+            if (vb) {
+              pending_keys_by_index[vb].push_back(key);
+            }
+          }
+        }
+      }
+    }
+  }
   tracked_mutated_records_.clear();
+  for (auto &[vb, keys] : pending_keys_by_index) {
+    VectorRegistry::Instance().RemoveIndexKeys(
+        db_num_, vb->GetInternedAttributeIdentifier(), keys);
+  }
   is_destructing_ = true;
 }
 
@@ -2097,7 +2136,7 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
     }
     itr->second.consume_in_progress = true;
     // Delete this tracked document if no additional mutations were tracked
-    if (itr->second.attributes.empty()) {
+    if (!itr->second.attributes.has_value()) {
       queries_to_notify = std::move(itr->second.waiting_queries);
       tracked_mutated_records_.erase(itr);
       // Will notify after releasing lock
@@ -2106,7 +2145,8 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
       key_info.mutation_sequence_number_ = itr->second.sequence_number;
       key_info.document_score = itr->second.document_score;
       // Track entry is now first consumed
-      auto mutated_attributes = std::move(itr->second.attributes);
+      auto mutated_attributes = std::move(itr->second.attributes.value());
+      itr->second.attributes = std::nullopt;
       return mutated_attributes;
     }
   }

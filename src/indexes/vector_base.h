@@ -80,6 +80,12 @@ struct VectorRecordWithSize {
   bool operator==(const VectorRecordWithSize &other) const = default;
   bool operator==(std::nullptr_t) const { return vector_record == nullptr; }
   bool operator!=(std::nullptr_t) const { return vector_record != nullptr; }
+
+  bool operator==(absl::string_view bytes) const {
+    return vector_record != nullptr && size == bytes.size() &&
+           std::memcmp(vector_record->GetRawVector(), bytes.data(), size) == 0;
+  }
+  bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
 };
 
 float CalcReciprocalMagnitude(const float *src, size_t size);
@@ -90,11 +96,15 @@ std::vector<char> NormalizeVector(absl::string_view record,
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
 
+// Default score value used when no scorer has been applied yet.
+inline constexpr float kDefaultScore = 0.0f;
+
 // Lightweight result entry used during non-vector search collection.
 // Trivially destructible — destroying a vector of 10K of these is a no-op.
 struct BorrowedNeighbor {
   BorrowedInternedStringPtr key;
   float distance;
+  float score;
 };
 static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");
@@ -102,26 +112,38 @@ static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
+  float score;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), sequence_number(0) {}
+  Neighbor() : distance(0.0f), score(kDefaultScore), sequence_number(0) {}
   Neighbor(const InternedStringPtr &external_id, float distance)
-      : external_id(external_id), distance(distance), sequence_number(0) {}
+      : external_id(external_id),
+        distance(distance),
+        score(distance),
+        sequence_number(0) {}
+  Neighbor(const InternedStringPtr &external_id, float distance, float score)
+      : external_id(external_id),
+        distance(distance),
+        score(score),
+        sequence_number(0) {}
   Neighbor(const InternedStringPtr &external_id, float distance,
            std::optional<RecordsMap> &&attribute_contents)
       : external_id(external_id),
         distance(distance),
+        score(distance),
         sequence_number(0),
         attribute_contents(std::move(attribute_contents)) {}
   Neighbor(Neighbor &&other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
+        score(other.score),
         sequence_number(other.sequence_number),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor &operator=(Neighbor &&other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
+      score = other.score;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
     }
@@ -129,7 +151,7 @@ struct Neighbor {
   }
   friend std::ostream &operator<<(std::ostream &os, const Neighbor &n) {
     os << "Key: " << n.external_id->Str() << " Dist: " << n.distance
-       << " Seq: " << n.sequence_number;
+       << " Score: " << n.score << " Seq: " << n.sequence_number;
     if (n.attribute_contents.has_value()) {
       os << ' ' << *n.attribute_contents;
     } else {
@@ -179,7 +201,6 @@ struct TrackedKeyMetadata {
 
 class VectorBase : public IndexBase {
  public:
-  ~VectorBase() override;
   absl::StatusOr<indexes::RecordResult> AddRecord(const InternedStringPtr &key,
                                                   AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -193,6 +214,7 @@ class VectorBase : public IndexBase {
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
   int GetDBNum() const { return db_num_; }
+  void OnSwapDB(int new_db_num) override { db_num_ = new_db_num; }
   std::unique_ptr<data_model::Index> ToProto() const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
@@ -253,26 +275,15 @@ class VectorBase : public IndexBase {
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }
+  ~VectorBase() override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  data_model::AttributeDataType GetAttributeDataType() const {
+    return attribute_data_type_;
+  }
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions,
              data_model::AttributeDataType attribute_data_type,
-             absl::string_view attribute_identifier, int db_num)
-      : IndexBase(indexer_type),
-        db_num_(db_num),
-        dimensions_(dimensions),
-        attribute_identifier_(attribute_identifier),
-        interned_attribute_identifier_(
-            StringInternStore::Intern(attribute_identifier)),
-        attribute_data_type_(attribute_data_type)
-#ifndef SAN_BUILD
-        ,
-        vector_allocator_(CREATE_UNIQUE_PTR(
-            FixedSizeAllocator,
-            sizeof(VectorRecord) + dimensions * sizeof(float), true))
-#endif  // !SAN_BUILD
-  {
-  }
+             absl::string_view attribute_identifier, int db_num);
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

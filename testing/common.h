@@ -274,10 +274,22 @@ class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
               (ValkeyModuleCtx * ctx, int type, const char *event,
                ValkeyModuleString *key),
               (override));
+  std::vector<const indexes::VectorBase *> GetVectorIndexes() const override {
+    return vector_indexes_;
+  }
+  bool IsInDB(int db_num) const override {
+    return db_num_ == -1 || db_num_ == db_num;
+  }
+  std::vector<const indexes::VectorBase *> vector_indexes_;
+  int db_num_{-1};
 };
 
 class MockAttributeDataType : public AttributeDataType {
  public:
+  MockAttributeDataType() {
+    ON_CALL(*this, IsProperType(testing::_))
+        .WillByDefault(testing::Return(true));
+  }
   MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetAttribute,
               (ValkeyModuleCtx * ctx, ValkeyModuleKey *open_key,
                absl::string_view key, absl::string_view identifier),
@@ -386,12 +398,13 @@ class MockIndexSchema : public IndexSchema {
       data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
       std::string punctuation = ".", bool with_offsets = true,
       const std::vector<std::string> &stop_words = {}, float score = 1.0,
-      const std::string &score_field = "") {
+      const std::string &score_field = "", int db_num = 0) {
     if (mutations_thread_pool == nullptr) {
       mutations_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
     }
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
+    index_schema_proto.set_db_num(db_num);
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
     index_schema_proto.set_language(language);
@@ -573,11 +586,11 @@ std::unordered_map<std::string, std::string> ToStringMap(const RecordsMap &map);
 
 struct NeighborTest {
   std::string external_id;
-  float distance;
+  float score;
   std::optional<std::unordered_map<std::string, std::string>>
       attribute_contents;
   bool operator==(const NeighborTest &other) const {
-    return external_id == other.external_id && distance == other.distance &&
+    return external_id == other.external_id && score == other.score &&
            attribute_contents == other.attribute_contents;
   }
 };

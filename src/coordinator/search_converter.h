@@ -10,7 +10,6 @@
 
 #include <memory>
 
-#include "absl/status/statusor.h"
 #include "grpcpp/server_context.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/query/search.h"
@@ -29,6 +28,10 @@ std::optional<query::SortByParameter> SortByFromGRPC(
 
 void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
                   SearchIndexPartitionRequest* request);
+
+coordinator::Scorer ScorerToGRPC(indexes::scoring::ScorerType scorer);
+
+indexes::scoring::ScorerType ScorerFromGRPC(coordinator::Scorer scorer);
 
 }  // namespace valkey_search::coordinator
 

@@ -1781,6 +1781,8 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
 
   VMSDK_EXPECT_OK(
       index_schema->AddIndex("attribute", "identifier", mock_index));
+  EXPECT_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillRepeatedly(Return(1));
   EXPECT_CALL(*kMockValkeyModule, SelectDb(testing::_, testing::_))
       .WillRepeatedly(Return(1));  // So backfill job can be created.
   EXPECT_CALL(*kMockValkeyModule, SelectDb(&fake_ctx_, 0)).WillOnce(Return(1));
@@ -2092,12 +2094,12 @@ TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
   EXPECT_TRUE(consumed.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
 
-  // Verify our reading of the state: entry present, attributes empty.
+  // Verify our reading of the state: entry present, attributes disengaged.
   {
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
-    EXPECT_TRUE(itr->second.attributes.empty());
+    EXPECT_FALSE(itr->second.attributes.has_value());
   }
 
   // The crash: without the fix this dereferences a disengaged optional.
@@ -2136,10 +2138,11 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         index_schema->ConsumeTrackedMutatedAttribute(key, true);
     ASSERT_TRUE(consumed_data.has_value());
     ASSERT_FALSE(consumed_data->empty());
+    std::shared_ptr<const indexes::VectorRecord> consumed_vector;
     absl::string_view data_view;
     if (!data_ptr.empty()) {
       EXPECT_TRUE(consumed_data->begin()->second.IsVector());
-      auto consumed_vector = consumed_data->begin()->second.ConsumeVector();
+      consumed_vector = consumed_data->begin()->second.ConsumeVector();
       ASSERT_NE(consumed_vector, nullptr);
       data_view = absl::string_view(consumed_vector->GetRawVector(),
                                     dimensions * sizeof(float));
@@ -2300,6 +2303,7 @@ void IndexSchemaFriendTest::VerifyVectorIndexConsistency(
     EXPECT_EQ(mutations_thread_pool.QueueSize(), 1);
     VMSDK_EXPECT_OK(mutations_thread_pool.ResumeWorkers());
   }
+  WaitWorkerTasksAreCompleted(mutations_thread_pool);
   EXPECT_EQ(index_schema->stats_.document_cnt, 1);
   const auto &stats = index_schema->GetStats();
   const size_t iterations = 10;
@@ -2405,7 +2409,7 @@ TEST_F(IndexSchemaFriendTest, FlatConsistencyTest) {
   VerifyVectorIndexConsistency(flat_index, "flat_id");
 }
 
-class IndexSchemaTest : public vmsdk::ValkeyTest {};
+class IndexSchemaTest : public ValkeySearchTest {};
 
 TEST_F(IndexSchemaTest, ShouldBlockClient) {
   ValkeyModuleCtx fake_ctx;
@@ -3147,7 +3151,8 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
 
   // Verify the document score was stored
   vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
-  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.8f);
+  EXPECT_FLOAT_EQ(
+      index_schema->GetDocumentScore(BorrowedInternedStringPtr(key)), 0.8f);
 }
 
 TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
@@ -3210,7 +3215,8 @@ TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
 
   // Should fall back to default score (0.5)
   vmsdk::ReaderMutexLock lock(&index_schema->GetTimeSlicedMutex());
-  EXPECT_FLOAT_EQ(index_schema->GetDocumentScore(key), 0.5f);
+  EXPECT_FLOAT_EQ(
+      index_schema->GetDocumentScore(BorrowedInternedStringPtr(key)), 0.5f);
 }
 
 TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
@@ -3452,6 +3458,75 @@ TEST_F(IndexSchemaScoreFieldTest,
 
   EXPECT_FALSE(hnsw_index->IsTracked(key));
   EXPECT_EQ(VectorRegistry::Instance().GetStats().entry_cnt, 0);
+}
+
+TEST_F(IndexSchemaTest, GetVectorIndexesFiltersNonVectorAttributes) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, "schema_mixed", key_prefixes,
+                          std::make_unique<HashAttributeDataType>(), nullptr)
+                          .value();
+  auto hnsw_index =
+      indexes::VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(
+              4, data_model::DistanceMetric::DISTANCE_METRIC_L2, 100, 16, 200,
+              50),
+          "vec1", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  auto flat_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(
+              8, data_model::DistanceMetric::DISTANCE_METRIC_COSINE, 100, 50),
+          "vec2", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  auto tag_index =
+      std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+  auto num_index =
+      std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+
+  VMSDK_EXPECT_OK(index_schema->AddIndex("embedding1", "vec1", hnsw_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("embedding2", "vec2", flat_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("category", "tag", tag_index));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("price", "num", num_index));
+
+  auto vector_indexes = index_schema->GetVectorIndexes();
+  EXPECT_EQ(vector_indexes.size(), 2);
+  std::vector<std::pair<std::string, size_t>> vectors;
+  vectors.reserve(vector_indexes.size());
+  for (const auto *vec : vector_indexes) {
+    vectors.emplace_back(vec->GetInternedAttributeIdentifier()->Str(),
+                         vec->GetDimensions());
+  }
+  EXPECT_THAT(vectors,
+              testing::UnorderedElementsAre(std::make_pair("vec1", 4),
+                                            std::make_pair("vec2", 8)));
+}
+
+TEST_F(IndexSchemaTest, GetVectorIndexesSchemaWithNoVectorFieldsReturnsEmpty) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto index_schema = MockIndexSchema::Create(
+                          &fake_ctx_, "schema_no_vectors", key_prefixes,
+                          std::make_unique<HashAttributeDataType>(), nullptr)
+                          .value();
+  auto tag_index =
+      std::make_shared<indexes::Tag>(CreateTagIndexProto(",", false));
+  VMSDK_EXPECT_OK(index_schema->AddIndex("category", "tag", tag_index));
+
+  auto vector_indexes = index_schema->GetVectorIndexes();
+  EXPECT_TRUE(vector_indexes.empty());
+}
+
+TEST_F(IndexSchemaTest, IsInDBMatchesDbNum) {
+  std::vector<absl::string_view> key_prefixes = {"prefix:"};
+  auto index_schema =
+      MockIndexSchema::Create(&fake_ctx_, "schema_db", key_prefixes,
+                              std::make_unique<HashAttributeDataType>(),
+                              nullptr, data_model::Language::LANGUAGE_ENGLISH,
+                              ".", true, {}, 1.0, "", 2)
+          .value();
+  EXPECT_TRUE(index_schema->IsInDB(2));
+  EXPECT_FALSE(index_schema->IsInDB(0));
+  EXPECT_FALSE(index_schema->IsInDB(1));
 }
 
 }  // namespace valkey_search

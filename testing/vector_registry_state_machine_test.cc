@@ -463,12 +463,6 @@ class VectorRegistryStateMachineTest
     return GetParam().sharing && !GetParam().json;
   }
 
-  static bool RegistrationExpected() { return GetParam().sharing; }
-
-  static size_t ExpectedEntries(size_t entries) {
-    return GetParam().sharing ? entries : 0;
-  }
-
   // Asserts the index holds exactly the bytes of a valid vector at `scale` for
   // `key`, and that the registry and engine-side sharing state match what this
   // data type is supposed to produce. Leverages DedupOrConstruct return value
@@ -484,10 +478,8 @@ class VectorRegistryStateMachineTest
                 absl::string_view(VectorAtScale(scale)));
     }
 
-    if (RegistrationExpected()) {
-      EXPECT_GT(GetStats().entry_cnt, 0u)
-          << "key " << key << " is not in the registry";
-    }
+    EXPECT_GT(GetStats().entry_cnt, 0u)
+        << "key " << key << " is not in the registry";
     if (SharingExpected()) {
       EXPECT_TRUE(HasSharedRef(key))
           << "engine is not sharing the registry's buffer for " << key;
@@ -542,7 +534,7 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithValidVector) {
 
   auto record = ExpectTracked(kKey, 1.0f);
   EXPECT_NE(record, nullptr);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
             hits_before + (SharingExpected() ? 1u : 0u));
   if (GetParam().mixed_schema) {
@@ -558,7 +550,7 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithInvalidVector) {
   WriteKey(kKey, FieldState::kInvalid);
 
   ExpectNotTracked(kKey);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
   EXPECT_FALSE(IndexTracks(kKey));
 }
@@ -570,7 +562,7 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithAbsentVector) {
   WriteKey(kKey, FieldState::kAbsent);
 
   ExpectNotTracked(kKey);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
   EXPECT_FALSE(IndexTracks(kKey));
 }
@@ -590,10 +582,9 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithDifferentValid) {
   auto second = ExpectTracked(kKey, 5.0f);
   EXPECT_NE(first, second)
       << "changed payload must produce a new record pointer";
-  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(),
-            dedup_before + (RegistrationExpected() ? 1 : 0))
+  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 1)
       << "ExpectTracked verification of new payload adds 1 dedup hit";
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
             hits_before + (SharingExpected() ? 1u : 0u));
 }
@@ -609,14 +600,11 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithIdenticalValid) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
 
   auto second = ExpectTracked(kKey, 1.0f);
-  if (RegistrationExpected()) {
-    EXPECT_EQ(first, second)
-        << "identical payload must reuse the exact same record pointer";
-  }
-  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(),
-            dedup_before + (RegistrationExpected() ? 2 : 0))
+  EXPECT_EQ(first, second)
+      << "identical payload must reuse the exact same record pointer";
+  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 2)
       << "identical payload ingestion (+1) and ExpectTracked verification (+1)";
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
             hits_before + (SharingExpected() ? 1u : 0u))
       << "re-sharing an unchanged record";
@@ -656,7 +644,7 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteInvalidWithValid) {
   WriteKey(kKey, FieldState::kValid, 3.0f);
 
   ExpectTracked(kKey, 3.0f);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
             hits_before + (SharingExpected() ? 1u : 0u));
 }
@@ -669,7 +657,7 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteAbsentWithValid) {
   WriteKey(kKey, FieldState::kValid, 3.0f);
 
   ExpectTracked(kKey, 3.0f);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
             hits_before + (SharingExpected() ? 1u : 0u));
 }
@@ -684,7 +672,7 @@ TEST_P(VectorRegistryStateMachineTest, DeleteKeyRemovesRegistryEntry) {
 
   EXPECT_FALSE(IndexTracks(kKey));
   ExpectNotTracked(kKey);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 
 // A second key must be untouched by the first key's deletion.
@@ -694,13 +682,13 @@ TEST_P(VectorRegistryStateMachineTest, DeleteKeyLeavesOtherKeysTracked) {
   WriteKey(kOther, FieldState::kValid, 9.0f);
   ExpectTracked(kKey, 1.0f);
   ExpectTracked(kOther, 9.0f);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(2));
+  EXPECT_EQ(GetStats().entry_cnt, 2);
 
   DeleteKey(kKey);
 
   ExpectNotTracked(kKey);
   ExpectTracked(kOther, 9.0f);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
 }
 
 // --- non-vector fields ---------------------------------------------------
@@ -722,9 +710,8 @@ TEST_P(VectorRegistryStateMachineTest, NonVectorFieldChangeLeavesVectorAlone) {
 
   auto second = ExpectTracked(kKey, 1.0f);
   EXPECT_EQ(first, second);
-  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(),
-            dedup_before + (RegistrationExpected() ? 2 : 0));
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 2);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
   EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
 }
 
@@ -742,25 +729,27 @@ TEST_P(VectorRegistryStateMachineTest, InvalidNonVectorFieldWithValidVector) {
     ExpectTracked(kKey, 1.0f);
   } else {
     ExpectNotTracked(kKey);
-    EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+    EXPECT_EQ(GetStats().entry_cnt, 1);
   }
 }
 
 // --- dropping the index --------------------------------------------------
 
-// Destroying the vector index does not drain the registry when untrack is
-// removed.
+// Destroying the vector index must drain its keys out of the registry and
+// hand the engine back plain values.
 TEST_P(VectorRegistryStateMachineTest, DroppingIndexUntracksAndDetaches) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
   ExpectTracked(kKey, 1.0f);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 1);
 
   index_schema_.reset();
   vector_index_.reset();
   numeric_index_.reset();
   tag_index_.reset();
 
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(1));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
+  EXPECT_FALSE(HasSharedRef(kKey))
+      << "engine still holds a reference into freed registry memory";
   // The value must survive the detach, as a plain (unshared) value.
   EXPECT_EQ(keyspace_[std::string(kKey)][VectorIdentifier()],
             *VectorValue(FieldState::kValid, 1.0f));
@@ -785,7 +774,7 @@ TEST_P(VectorRegistryStateMachineTest, KeyReplacedByWrongTypeIsUntracked) {
   Notify(kKey);
 
   ExpectNotTracked(kKey);
-  EXPECT_EQ(GetStats().entry_cnt, ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 
 std::vector<StateMachineTestCase> AllCases() {

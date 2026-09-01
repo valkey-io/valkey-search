@@ -78,10 +78,8 @@ float TermIterator::GetScore() const {
     return 1.0f;
   }
 
-  // Expansion mode (prefix/suffix/fuzzy): contribute a SINGLE matched term's
-  // BM25 (its own IDF + own F), never the sum over matched terms. Pick whatever
-  // the merge surfaced first for this key -- O(1); the representative is an
-  // unspecified union artifact per the Redis oracle (do not golden-test which).
+  // Expansion mode: contribute a SINGLE matched term's BM25 (own IDF + own F),
+  // never the sum. Which term is unspecified, so take the merge's front.
   if (!per_term_idf_.empty()) {
     const size_t chosen = current_key_indices_.front();
     const uint32_t term_frequency =

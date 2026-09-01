@@ -30,9 +30,9 @@ def _vec(*floats):
 # =====================================================================
 
 # General-purpose index: two TEXT fields + NUMERIC + TAG + VECTOR.
-# WITHSUFFIXTRIE on `body` enables suffix queries. It is a lookup structure
-# only, changing neither tokenization nor scores, so the verified constants
-# throughout this file are unaffected.
+# WITHSUFFIXTRIE on `body` enables the suffix expansion queries; it is a lookup
+# structure only and changes neither tokenization nor scores, so every verified
+# constant below applies unchanged.
 IDX_MAIN = [
     "FT.CREATE", "idxMain", "ON", "HASH", "PREFIX", "1", "doc:",
     "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
@@ -56,11 +56,18 @@ IDX_NO_TEXT_FIELD = [
     "SCHEMA", "rank", "NUMERIC", "cat", "TAG",
 ]
 
-# WITHSUFFIXTRIE, so suffix queries expand; NOSTEM keeps expansion the only
-# source of extra matched terms.
+# Single TEXT field with a suffix trie, for prefix / suffix / fuzzy EXPANSION
+# scoring on a corpus where several terms expand from one pattern.
 IDX_EXPANSION = [
-    "FT.CREATE", "idxExpansion", "ON", "HASH", "PREFIX", "1", "doc:",
+    "FT.CREATE", "idxExpansion", "ON", "HASH", "PREFIX", "1", "exp:",
     "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+]
+
+# TEXT (so doc lengths are non-zero and tag terms can score) + TAG + NUMERIC,
+# for TAG PREFIX expansion scoring.
+IDX_TAG_PREFIX = [
+    "FT.CREATE", "idxTagPrefix", "ON", "HASH", "PREFIX", "1", "tpx:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "cat", "TAG", "rank", "NUMERIC",
 ]
 
 
@@ -111,31 +118,28 @@ PARTIAL_TEXT_DOCS = {
 # else, so the same value tells the two apart.
 TEN_WORDS = "one two three four five six seven eight nine ten"
 
-# Expansion corpus: cat* -> {cat, category (dt=3), catalog}; *ing -> {running,
-# jogging}; %cat% -> just {cat}, every other token being >1 edit away. doc:2
-# matches cat* via two terms with distinct IDFs, so which one is credited is
-# observable.
+# Expansion corpus. dt: cat=1, category=3, catalog=1, running=1, jogging=1.
+# exp:multi matches cat* through two terms, every other doc through exactly one.
 EXPANSION_DOCS = {
-    "doc:1": {"body": "cat"},
-    "doc:2": {"body": "category catalog"},
-    "doc:3": {"body": "category"},
-    "doc:4": {"body": "category"},
-    "doc:5": {"body": "running"},
-    "doc:6": {"body": "jogging"},
-    "doc:7": {"body": "dog"},
+    "exp:cat": {"body": "cat"},
+    "exp:multi": {"body": "category catalog"},
+    "exp:cat2": {"body": "category"},
+    "exp:cat3": {"body": "category"},
+    "exp:run": {"body": "running"},
+    "exp:jog": {"body": "jogging"},
+    "exp:dog": {"body": "dog"},
 }
 
-# Tag-prefix corpus: cat dt redis=4, redcap=2, so the two carry distinct IDFs and
-# the value credited to doc:5 (which carries both) is observable. Every body is
-# the same single token, giving equal non-zero doc_len -- a tag term needs a TEXT
-# field to score at all, and equal lengths keep the comparison on IDF alone.
+# Tag prefix corpus: cat dt redis=4 (a,b,c,multi), redcap=2 (d,multi), so the two
+# values matching `red*` carry distinct IDFs and the value a multi-match doc is
+# scored on is observable. Identical one-token bodies keep doc_len constant.
 TAG_PREFIX_DOCS = {
-    "doc:1": {"body": "aa", "cat": "redis", "rank": "1"},
-    "doc:2": {"body": "aa", "cat": "redis", "rank": "2"},
-    "doc:3": {"body": "aa", "cat": "redis", "rank": "3"},
-    "doc:4": {"body": "aa", "cat": "redcap", "rank": "4"},
-    "doc:5": {"body": "aa", "cat": "redis,redcap", "rank": "5"},
-    "doc:6": {"body": "aa", "cat": "green", "rank": "6"},
+    "tpx:a": {"body": "aa", "cat": "redis", "rank": "1"},
+    "tpx:b": {"body": "aa", "cat": "redis", "rank": "2"},
+    "tpx:c": {"body": "aa", "cat": "redis", "rank": "3"},
+    "tpx:d": {"body": "aa", "cat": "redcap", "rank": "4"},
+    "tpx:multi": {"body": "aa", "cat": "redis,redcap", "rank": "5"},
+    "tpx:green": {"body": "aa", "cat": "green", "rank": "6"},
 }
 
 
@@ -613,96 +617,75 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, restored = search(client, IDX_MAIN, "hello")
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
 
-    # Group 15: a prefix / suffix / fuzzy expansion is scored on exactly ONE
-    # matched term (its own IDF and TF), never the sum over matched terms.
-    #
-    # Unlike every other group here, these assertions are not pinned to Redis
-    # EXPLAINSCORE values: which term represents the expansion is an unspecified,
-    # corpus-dependent union-iterator artifact, and on a multi-match doc we
-    # deliberately pick a different representative than Redis. So compare against
-    # our own exact-term scores on the same index instead.
+    # Group 15: prefix / suffix / fuzzy expansions score ONE matched term.
+    # No reference values pinned: which term represents a multi-match doc is
+    # unspecified and we pick differently, so assert against our own scores.
     def test_expansion_scoring(self):
         client = self.server.get_new_client()
         load(client, IDX_EXPANSION, EXPANSION_DOCS)
 
-        # A doc matching via a single term scores exactly like the exact-term
-        # query for that term. This case does agree with Redis.
-        _, prefix = search(client, IDX_EXPANSION, "cat*")
-        _, cat = search(client, IDX_EXPANSION, "cat")
-        assert prefix["doc:1"] > 0.0
-        assert prefix["doc:1"] == pytest.approx(cat["doc:1"], abs=SCORE_ABS_TOL)
+        # Each pattern expands to several terms, but the asserted doc carries
+        # exactly one, so it must score the same as the exact-term query.
+        for pattern, term, key in [("cat*", "cat", "exp:cat"),
+                                   ("@body:*ing", "running", "exp:run"),
+                                   ("%cat%", "cat", "exp:cat")]:
+            _, expanded = search(client, IDX_EXPANSION, pattern)
+            _, exact = search(client, IDX_EXPANSION, term)
+            assert expanded[key] > 0.0, pattern
+            assert expanded[key] == pytest.approx(exact[key],
+                                                  abs=SCORE_ABS_TOL), pattern
 
-        # doc:2 matches cat* via both "category" and "catalog". Which term wins is
-        # unspecified, so assert only the invariant: one term's score, below the sum.
+        # exp:multi matches cat* via "category" (dt=3) and "catalog" (dt=1), so
+        # the pick is observable: one of them, and strictly below their sum.
+        _, prefix = search(client, IDX_EXPANSION, "cat*")
         _, category = search(client, IDX_EXPANSION, "category")
         _, catalog = search(client, IDX_EXPANSION, "catalog")
-        got = prefix["doc:2"]
-        assert got < category["doc:2"] + catalog["doc:2"] - SCORE_ABS_TOL
-        assert (got == pytest.approx(category["doc:2"], abs=SCORE_ABS_TOL)
-                or got == pytest.approx(catalog["doc:2"], abs=SCORE_ABS_TOL)), (
-            f"prefix={got} category={category['doc:2']} "
-            f"catalog={catalog['doc:2']}")
+        got = prefix["exp:multi"]
+        one, two = category["exp:multi"], catalog["exp:multi"]
+        assert got < one + two - SCORE_ABS_TOL
+        assert (got == pytest.approx(one, abs=SCORE_ABS_TOL)
+                or got == pytest.approx(two, abs=SCORE_ABS_TOL)), (
+            f"prefix={got} category={one} catalog={two}")
 
-        # Suffix (needs WITHSUFFIXTRIE) and fuzzy single matches behave the same.
-        _, suffix = search(client, IDX_EXPANSION, "@body:*ing")
-        _, running = search(client, IDX_EXPANSION, "running")
-        assert suffix["doc:5"] > 0.0
-        assert suffix["doc:5"] == pytest.approx(running["doc:5"],
-                                                abs=SCORE_ABS_TOL)
-
-        _, fuzzy = search(client, IDX_EXPANSION, "%cat%")
-        assert fuzzy["doc:1"] > 0.0
-        assert fuzzy["doc:1"] == pytest.approx(cat["doc:1"], abs=SCORE_ABS_TOL)
-
-    # Group 16: expansions are scored on the extra-step path too. A numeric or
-    # tag clause forces that path -- a pure-text query takes the in-iterator one
-    # (Group 15) -- so this pins that the expansion leaf still reaches the total
-    # instead of silently contributing 0.
-    def test_expansion_scoring_combined_query(self):
-        client = self.server.get_new_client()
+        # A text+numeric/tag query takes the extra-step path. Each pattern
+        # single-matches "hello", so these are the verified "hello @cat:{a}"
+        # values; a dropped expansion would leave the text leaf at 0.
         load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        for pattern in ("hell*", "@body:*llo", "@body:%helo%"):
+            keys, scores = search(client, IDX_MAIN,
+                                  f"{pattern} @cat:{{a}} @rank:[0 100]")
+            assert keys == ["doc:3", "doc:1"], pattern
+            assert scores == pytest.approx(
+                {"doc:3": 2.234903, "doc:1": 1.492684},
+                abs=SCORE_ABS_TOL), pattern
 
-        # Each expansion below single-matches "hello", so its leaf equals the
-        # exact "hello" leaf and the combined total matches "hello @cat:{a}";
-        # the numeric clause adds nothing.
-        _, baseline = search(client, IDX_MAIN, "hello @cat:{a}")
-        for query in ("hell* @cat:{a} @rank:[0 100]",
-                      "@body:*llo @cat:{a} @rank:[0 100]",
-                      "@body:%helo% @cat:{a} @rank:[0 100]"):
-            keys, scores = search(client, IDX_MAIN, query)
-            assert keys == ["doc:3", "doc:1"], query
-            assert scores == pytest.approx(baseline, abs=SCORE_ABS_TOL), query
-
-    # Group 17: a tag prefix is scored like a text expansion -- exactly ONE
-    # matched value's BM25 (TF is 1, its own IDF), never the sum over the values
-    # it expands to, while an explicit union still sums. As in Group 15, compare
-    # against our own exact-value scores: which value represents the prefix can
-    # diverge from Redis on a doc matching several.
+    # Group 16: a tag prefix scores ONE matched value, an explicit union sums.
     def test_tag_prefix_scoring(self):
         client = self.server.get_new_client()
-        load(client, IDX_MAIN, TAG_PREFIX_DOCS)
+        load(client, IDX_TAG_PREFIX, TAG_PREFIX_DOCS)
+        _, prefix = search(client, IDX_TAG_PREFIX, "@cat:{red*}")
+        _, redis = search(client, IDX_TAG_PREFIX, "@cat:{redis}")
+        _, redcap = search(client, IDX_TAG_PREFIX, "@cat:{redcap}")
 
-        # A doc whose only matching value is one tag scores exactly like the
-        # exact-value query for it. This case does agree with Redis.
-        _, prefix = search(client, IDX_MAIN, "@cat:{red*}")
-        _, redis = search(client, IDX_MAIN, "@cat:{redis}")
-        assert prefix["doc:1"] > 0.0
-        assert prefix["doc:1"] == pytest.approx(redis["doc:1"],
+        # tpx:a carries only `redis`, so red* resolves to that one value.
+        assert prefix["tpx:a"] > 0.0
+        assert prefix["tpx:a"] == pytest.approx(redis["tpx:a"],
                                                 abs=SCORE_ABS_TOL)
 
-        # doc:5 carries both redis (dt=4) and redcap (dt=2): the union sums them,
-        # the prefix credits exactly one, so it lands strictly below.
-        _, redcap = search(client, IDX_MAIN, "@cat:{redcap}")
-        _, both = search(client, IDX_MAIN, "@cat:{redis|redcap}")
-        got = prefix["doc:5"]
-        assert both["doc:5"] == pytest.approx(redis["doc:5"] + redcap["doc:5"],
-                                              abs=SCORE_ABS_TOL)
-        assert got < both["doc:5"] - SCORE_ABS_TOL
-        assert (got == pytest.approx(redis["doc:5"], abs=SCORE_ABS_TOL)
-                or got == pytest.approx(redcap["doc:5"], abs=SCORE_ABS_TOL)), (
-            f"prefix={got} redis={redis['doc:5']} redcap={redcap['doc:5']}")
+        # tpx:multi carries both values red* matches, with distinct IDFs. An
+        # explicit union sums them...
+        _, both = search(client, IDX_TAG_PREFIX, "@cat:{redis|redcap}")
+        got = prefix["tpx:multi"]
+        one, two = redis["tpx:multi"], redcap["tpx:multi"]
+        assert both["tpx:multi"] == pytest.approx(one + two,
+                                                  abs=SCORE_ABS_TOL)
+        # ...while the prefix contributes exactly one of them.
+        assert got < both["tpx:multi"] - SCORE_ABS_TOL
+        assert (got == pytest.approx(one, abs=SCORE_ABS_TOL)
+                or got == pytest.approx(two, abs=SCORE_ABS_TOL)), (
+            f"prefix={got} redis={one} redcap={two}")
 
-        # A numeric clause adds nothing, so the tag expansion still reaches the
-        # total on the combined-query path.
-        _, combined = search(client, IDX_MAIN, "@cat:{red*} @rank:[0 100]")
+        # The numeric adds 0, so the combined query must equal the prefix alone.
+        _, combined = search(client, IDX_TAG_PREFIX,
+                             "@cat:{red*} @rank:[0 100]")
         assert combined == pytest.approx(prefix, abs=SCORE_ABS_TOL)

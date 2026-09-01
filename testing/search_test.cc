@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
@@ -2117,6 +2118,27 @@ TEST_F(ScoreTextQueryTestBase, TagPrefixInCombinedQueryScored) {
   ASSERT_TRUE(combined && prefix_only);
   EXPECT_GT(*combined, 0.0f);
   EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// An empty tag (leading separator) must not be picked as the representative.
+// Only a bare `*` gives an empty prefix that can match one, hence min length 0.
+TEST_F(ScoreTextQueryTestBase, TagPrefixSkipsEmptyTagsWhenPickingValue) {
+  auto &min_prefix = options::GetTagMinPrefixLength();
+  const int original = min_prefix.GetValue();
+  VMSDK_EXPECT_OK(min_prefix.SetValue(0));
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(min_prefix.SetValue(original));
+  };
+
+  auto schema = BuildTextTagSchema({
+      {"d_lead", "aa", ",red"},
+      {"d_plain", "aa", "red"},
+  });
+  auto lead = Score(*schema, "@color:{*}", "d_lead");
+  auto plain = Score(*schema, "@color:{*}", "d_plain");
+  ASSERT_TRUE(lead && plain);
+  EXPECT_GT(*lead, 0.0f);
+  EXPECT_FLOAT_EQ(*lead, *plain);
 }
 
 }  // namespace

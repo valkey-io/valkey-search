@@ -23,16 +23,14 @@ namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
-  // Matched terms within the edit distance: their KeyIterators plus the
-  // per-term document frequency (dt), index-aligned, so scoring can contribute
-  // a single matched term's own BM25 (never the sum).
+  // Matched terms within the edit distance, index-aligned across all three
+  // vectors so scoring can use one matched term's own dt.
   struct Expansion {
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
         key_iterators;
     absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
-    // The matched terms' posting lists, index-aligned with per_term_dt. Needed
-    // by the extra-step scoring path, which does per-key LookupKey rather than
-    // a forward iteration; the in-iterator path ignores this.
+    // Used only by the extra-step scoring path, which does per-key LookupKey
+    // instead of forward iteration.
     absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
         postings;
   };

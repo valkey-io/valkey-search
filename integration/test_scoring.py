@@ -590,24 +590,14 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
 
     # Group 15: prefix / suffix / fuzzy expansions score ONE matched term.
-    #
-    # Unlike every other group here, these do not pin reference values. An
-    # expansion is scored on a single matched term (its own IDF and TF, never the
-    # sum over matched terms), but WHICH term is an unspecified, corpus-dependent
-    # union-iterator artifact, and on a multi-match doc we deliberately pick a
-    # different representative than the reference. So the assertions are against
-    # our own exact-term scores on the same index: a single-match doc must equal
-    # the exact-term query (this case does agree with the reference), and a
-    # multi-match doc must equal ONE matched term and stay below their sum.
+    # No reference values pinned: which term represents a multi-match doc is
+    # unspecified and we pick differently, so assert against our own scores.
     def test_expansion_scoring(self):
         client = self.server.get_new_client()
         load(client, IDX_EXPANSION, EXPANSION_DOCS)
 
-        # Every pattern below expands to several terms corpus-wide, but the doc
-        # asserted on carries exactly one of them, so it must score the same as
-        # the exact-term query: cat* -> {cat, category, catalog} for exp:cat,
-        # *ing -> {running, jogging} for exp:run, and %cat% -> {cat} (everything
-        # else is more than one edit away) for exp:cat again.
+        # Each pattern expands to several terms, but the asserted doc carries
+        # exactly one, so it must score the same as the exact-term query.
         for pattern, term, key in [("cat*", "cat", "exp:cat"),
                                    ("@body:*ing", "running", "exp:run"),
                                    ("%cat%", "cat", "exp:cat")]:
@@ -617,9 +607,8 @@ class TestScoring(ValkeySearchTestCaseBase):
             assert expanded[key] == pytest.approx(exact[key],
                                                   abs=SCORE_ABS_TOL), pattern
 
-        # exp:multi matches cat* through both "category" (dt=3) and "catalog"
-        # (dt=1), so the two candidate scores differ and the pick is observable:
-        # the score must be one of them, and strictly below their sum.
+        # exp:multi matches cat* via "category" (dt=3) and "catalog" (dt=1), so
+        # the pick is observable: one of them, and strictly below their sum.
         _, prefix = search(client, IDX_EXPANSION, "cat*")
         _, category = search(client, IDX_EXPANSION, "category")
         _, catalog = search(client, IDX_EXPANSION, "catalog")
@@ -630,12 +619,9 @@ class TestScoring(ValkeySearchTestCaseBase):
                 or got == pytest.approx(two, abs=SCORE_ABS_TOL)), (
             f"prefix={got} category={one} catalog={two}")
 
-        # A text/numeric/tag query takes the extra-step scoring path rather than
-        # the in-iterator one, so an expansion has to be scored there too. Each
-        # pattern single-matches "hello", making the expansion leaf equal the
-        # exact "hello" leaf, so text + tag reproduce the verified
-        # "hello @cat:{a}" values and the numeric contributes 0. An expansion
-        # silently dropped on this path would leave the text leaf at 0.
+        # A text+numeric/tag query takes the extra-step path. Each pattern
+        # single-matches "hello", so these are the verified "hello @cat:{a}"
+        # values; a dropped expansion would leave the text leaf at 0.
         load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
         for pattern in ("hell*", "@body:*llo", "@body:%helo%"):
             keys, scores = search(client, IDX_MAIN,
@@ -653,13 +639,12 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, redis = search(client, IDX_TAG_PREFIX, "@cat:{redis}")
         _, redcap = search(client, IDX_TAG_PREFIX, "@cat:{redcap}")
 
-        # tpx:a carries only `redis`, so red* resolves to that one value and
-        # scores exactly like the exact-value query.
+        # tpx:a carries only `redis`, so red* resolves to that one value.
         assert prefix["tpx:a"] > 0.0
         assert prefix["tpx:a"] == pytest.approx(redis["tpx:a"],
                                                 abs=SCORE_ABS_TOL)
 
-        # tpx:multi carries both values red* matches, with distinct IDFs. The
+        # tpx:multi carries both values red* matches, with distinct IDFs. An
         # explicit union sums them...
         _, both = search(client, IDX_TAG_PREFIX, "@cat:{redis|redcap}")
         got = prefix["tpx:multi"]
@@ -672,8 +657,7 @@ class TestScoring(ValkeySearchTestCaseBase):
                 or got == pytest.approx(two, abs=SCORE_ABS_TOL)), (
             f"prefix={got} redis={one} redcap={two}")
 
-        # The numeric clause adds 0, so a combined query scores exactly the same
-        # as the tag prefix alone rather than dropping the expansion to 0.
+        # The numeric adds 0, so the combined query must equal the prefix alone.
         _, combined = search(client, IDX_TAG_PREFIX,
                              "@cat:{red*} @rank:[0 100]")
         assert combined == pytest.approx(prefix, abs=SCORE_ABS_TOL)

@@ -115,10 +115,8 @@ class TermIterator : public TextIterator {
   float idf_{0.0f};
   float avg_doc_len_{0.0f};
 
-  // Per-matched-term IDF for prefix/suffix/fuzzy expansions, index-aligned with
-  // key_iterators_. Non-empty => expansion mode: GetScore() contributes a
-  // SINGLE matched term (front of current_key_indices_) with its own IDF and
-  // own F, never the sum. Empty => exact/stem mode (summed F, combined idf_).
+  // Per-matched-term IDF for prefix/suffix/fuzzy, index-aligned with
+  // key_iterators_. Non-empty selects expansion mode in GetScore().
   absl::InlinedVector<float, kWordExpansionInlineCapacity> per_term_idf_;
 
   // Pending queue: heap of valid iterators not currently being processed.

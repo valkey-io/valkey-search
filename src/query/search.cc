@@ -674,52 +674,30 @@ struct ResolvedLeaf {
   const indexes::Tag *tag_index = nullptr;
   absl::InlinedVector<std::pair<std::string, float>, 4> tag_values;
 
-  // Tag prefix expansions (values like `foo*` in a TagPredicate): one group per
-  // prefix query value, each holding the (matched value, IDF) pairs the prefix
-  // expands to. Unlike tag_values (summed), ScoreNode contributes exactly ONE
-  // matched value per GROUP -- the first the document carries -- matching
-  // Redis: a tag prefix is scored on a single representative value, never the
-  // sum over matched values, while a union still sums across its members. F ≡ 1
-  // as for exact tag values.
-  absl::InlinedVector<absl::InlinedVector<std::pair<std::string, float>, 4>, 2>
-      tag_prefix_groups;
+  // Tag prefix query values (`foo*`), as views into the TagPredicate's tag
+  // strings. Nothing is precomputed: the representative value is per-document,
+  // so Tag::GetPrefixMatchDocCount resolves its dt per candidate.
+  absl::InlinedVector<absl::string_view, 2> tag_prefixes;
 
   // --- Expansion leaf (Prefix/Suffix/Fuzzy) ---
   // One entry per matched expansion term: its posting list plus that term's own
-  // precomputed IDF. Empty for term/tag leaves. ScoreNode contributes exactly
-  // ONE matched term (the first whose posting contains the key), never the sum
-  // over matched terms -- matching Redis's single-representative behavior
-  // (docs/redis_prefix_suffix_fuzzy_scoring.md). Which term wins is an
-  // unspecified corpus artifact, so this "first present" pick may differ from
-  // the in-iterator path's heap-order pick on a doc matching several terms;
-  // both honor the one-term invariant.
+  // precomputed IDF. An expansion contributes exactly ONE matched term's BM25
+  // (its own IDF and TF), never the sum; which term is unspecified, so this
+  // path takes the first posting containing the key while the in-iterator path
+  // (TermIterator::per_term_idf_) takes the merge heap's front.
+  // Inline capacity stays small: ResolvedLeaf is a by-value hash-map payload
+  // shared with term/tag leaves, so 200 slots would cost ~3.2 KB per leaf.
   struct ExpansionTerm {
     indexes::text::InvasivePtr<indexes::text::Postings> postings;
     float idf = 0.0f;
   };
-  absl::InlinedVector<ExpansionTerm,
-                      indexes::text::kWordExpansionInlineCapacity>
-      expansion_terms;
+  absl::InlinedVector<ExpansionTerm, 8> expansion_terms;
 };
 
 // Keyed on the base Predicate* (not TermPredicate*) so the per-document scoring
-// walk can look leaves up without a dynamic_cast: a hit is a scored term leaf,
-// a miss is a non-scored text predicate (prefix/suffix/fuzzy).
+// walk can look leaves up without a dynamic_cast: a hit is a scored leaf, a
+// miss is a leaf that resolved to nothing scoreable.
 using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
-
-// Runs once per query to hoist all document-independent scoring work out of the
-// per-candidate loop. Walks the predicate tree and, for each TermPredicate
-// leaf, precomputes the parts that are identical for every matching document:
-//   - the posting lists (the expensive radix-tree lookup + stem expansion),
-//   - the document frequency (dt), and
-//   - the per-term BM25 weight (IDF).
-// It also performs the one dynamic_cast needed to tell scored TermPredicates
-// apart from non-scored text predicates (prefix/suffix/fuzzy) here, so the
-// per-document walk can distinguish them with a cheap map lookup instead.
-// Results go into `resolved`, keyed on the base Predicate*; the per-document
-// walk then only does the cheap per-key term-frequency lookup. A leaf whose
-// term (and all its variants) is absent from the index resolves to empty
-// postings.
 
 // Appends one matched expansion term -- its posting list plus that term's own
 // precomputed IDF -- to `leaf`. Used when resolving a prefix/suffix/fuzzy leaf,
@@ -733,6 +711,20 @@ void AddExpansionTerm(
   leaf.expansion_terms.push_back(
       {std::move(postings), scorer->PrecomputeIDF({total_docs, dt})});
 }
+
+// Runs once per query to hoist all document-independent scoring work out of the
+// per-candidate loop. Walks the predicate tree and, for each TermPredicate
+// leaf, precomputes the parts that are identical for every matching document:
+//   - the posting lists (the expensive radix-tree lookup + stem expansion),
+//   - the document frequency (dt), and
+//   - the per-term BM25 weight (IDF).
+// It also performs the dynamic_casts needed to tell the concrete text predicate
+// types apart here, so the per-document walk can distinguish them with a cheap
+// map lookup instead.
+// Results go into `resolved`, keyed on the base Predicate*; the per-document
+// walk then only does the cheap per-key term-frequency lookup. A leaf whose
+// term (and all its variants) is absent from the index resolves to empty
+// postings.
 
 void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
                    const indexes::scoring::Scorer *scorer,
@@ -755,63 +747,55 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // matched term per document. Infix is unimplemented
       // (InfixPredicate::BuildTextIterator and ::Evaluate both CHECK(false)),
       // so an infix query aborts before scoring and never reaches this point.
+      // The three expansion kinds differ only in which words the pattern
+      // expands to, so they share one collector and one `max_words` bound.
       const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
+      ResolvedLeaf expansion_leaf;
+      auto add_expansion = [&](const indexes::text::Rax &tree,
+                               absl::string_view pattern) {
+        auto it = tree.GetWordIterator(pattern);
+        for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
+          AddExpansionTerm(it.GetPostingsTarget(), total_docs, scorer,
+                           expansion_leaf);
+        }
+      };
+      bool is_expansion = true;
       if (auto *p = dynamic_cast<const PrefixPredicate *>(predicate)) {
-        if (resolved.contains(predicate)) break;
-        ResolvedLeaf leaf;
-        auto text_index = p->GetTextIndexSchema()->GetTextIndex();
-        auto it = text_index->GetPrefix().GetWordIterator(p->GetTextString());
-        uint32_t n = 0;
-        while (!it.Done() && n < max_words) {
-          AddExpansionTerm(it.GetPostingsTarget(), total_docs, scorer, leaf);
-          it.Next();
-          ++n;
-        }
-        if (!leaf.expansion_terms.empty()) {
-          resolved.emplace(predicate, std::move(leaf));
-        }
-        break;
-      }
-      if (auto *s = dynamic_cast<const SuffixPredicate *>(predicate)) {
-        if (resolved.contains(predicate)) break;
-        ResolvedLeaf leaf;
-        auto text_index = s->GetTextIndexSchema()->GetTextIndex();
-        auto suffix = text_index->GetSuffix();
+        add_expansion(p->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
+                      p->GetTextString());
+      } else if (auto *s = dynamic_cast<const SuffixPredicate *>(predicate)) {
+        // The suffix trie stores reversed words, so a suffix is a prefix query
+        // over it; no trie (no WITHSUFFIXTRIE) means no matched terms.
+        auto suffix = s->GetTextIndexSchema()->GetTextIndex()->GetSuffix();
         if (suffix.has_value()) {
           const absl::string_view term = s->GetTextString();
-          std::string reversed(term.rbegin(), term.rend());
-          auto it = suffix.value().get().GetWordIterator(reversed);
-          uint32_t n = 0;
-          while (!it.Done() && n < max_words) {
-            AddExpansionTerm(it.GetPostingsTarget(), total_docs, scorer, leaf);
-            it.Next();
-            ++n;
-          }
+          add_expansion(suffix->get(), std::string(term.rbegin(), term.rend()));
         }
-        if (!leaf.expansion_terms.empty()) {
-          resolved.emplace(predicate, std::move(leaf));
-        }
-        break;
-      }
-      if (auto *f = dynamic_cast<const FuzzyPredicate *>(predicate)) {
-        if (resolved.contains(predicate)) break;
-        ResolvedLeaf leaf;
-        auto text_index = f->GetTextIndexSchema()->GetTextIndex();
+      } else if (auto *f = dynamic_cast<const FuzzyPredicate *>(predicate)) {
         auto expansion = indexes::text::FuzzySearch::Search(
-            text_index->GetPrefix(), f->GetTextString(), f->GetDistance(),
-            max_words);
+            f->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
+            f->GetTextString(), f->GetDistance(), max_words);
         for (auto &postings : expansion.postings) {
-          AddExpansionTerm(std::move(postings), total_docs, scorer, leaf);
+          AddExpansionTerm(std::move(postings), total_docs, scorer,
+                           expansion_leaf);
         }
-        if (!leaf.expansion_terms.empty()) {
-          resolved.emplace(predicate, std::move(leaf));
+      } else {
+        is_expansion = false;
+      }
+      if (is_expansion) {
+        // Matching nothing stays unresolved, so ScoreNode returns nullopt.
+        if (!expansion_leaf.expansion_terms.empty()) {
+          resolved.emplace(predicate, std::move(expansion_leaf));
         }
         break;
       }
+
       // Otherwise a plain TermPredicate: its own (+ stem-variant) posting
-      // lists.
+      // lists. Infix is the only other kText subclass and the parser rejects it
+      // (ParseUnquotedTextToken), so this cast cannot fail; assert rather
+      // than break, which would silently score the leaf 0.
       auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
-      if (resolved.contains(term_pred)) break;
+      CHECK(term_pred != nullptr);
       auto text_index_schema = term_pred->GetTextIndexSchema();
       CHECK(text_index_schema != nullptr);
       auto text_index = text_index_schema->GetTextIndex();
@@ -882,23 +866,12 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       const bool case_sensitive = tag_index->IsCaseSensitive();
       absl::flat_hash_set<std::string> seen;
       for (const auto &value : tag_pred->GetTags()) {
-        // A prefix value (`foo*`) is scored as an expansion: one group of its
-        // matched values, of which ScoreNode credits a single representative
-        // per document (never the sum). GetPrefixMatchedValues returns the
-        // matched values already normalized, with each value's document count.
+        // A prefix value (`foo*`) is scored as an expansion: ScoreNode credits
+        // a single representative matched value per document (never the sum).
+        // Which value that is depends on the document, so only the prefix is
+        // recorded here; the dt/IDF resolve per candidate.
         if (!value.empty() && value.back() == '*') {
-          absl::InlinedVector<std::pair<std::string, float>, 4> group;
-          for (auto &[matched, count] :
-               tag_index->GetPrefixMatchedValues(value)) {
-            uint32_t dt =
-                static_cast<uint32_t>(std::min<size_t>(count, total_docs));
-            if (dt == 0) continue;
-            group.emplace_back(std::move(matched),
-                               scorer->PrecomputeIDF({total_docs, dt}));
-          }
-          if (!group.empty()) {
-            leaf.tag_prefix_groups.push_back(std::move(group));
-          }
+          leaf.tag_prefixes.push_back(value);
           continue;
         }
         std::string norm =
@@ -1045,7 +1018,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
       if (leaf.tag_index == nullptr ||
-          (leaf.tag_values.empty() && leaf.tag_prefix_groups.empty())) {
+          (leaf.tag_values.empty() && leaf.tag_prefixes.empty())) {
         return 0.0f;
       }
 
@@ -1066,17 +1039,18 @@ std::optional<float> ScoreNode(const Predicate *predicate,
                                             score_ctx.avg_doc_len,
                                             predicate->GetWeight()});
       }
-      // Each prefix group contributes exactly ONE matched value -- the first
-      // the document carries -- never the sum over the values it expands to; a
-      // union still sums across its members (each group + each exact value).
-      for (const auto &group : leaf.tag_prefix_groups) {
-        for (const auto &[value, idf] : group) {
-          if (!leaf.tag_index->ContainsKey(value, key)) continue;
-          sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1,
-                                              doc_len, score_ctx.avg_doc_len,
-                                              predicate->GetWeight()});
-          break;
-        }
+      // Each prefix contributes ONE matched value (the doc's first), never the
+      // sum; a union still sums. Clamp as ResolveLeaves does -- dt and
+      // total_docs come from independently-locked counters.
+      for (absl::string_view prefix : leaf.tag_prefixes) {
+        const uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
+            leaf.tag_index->GetPrefixMatchDocCount(prefix, key),
+            score_ctx.total_docs));
+        if (dt == 0) continue;
+        sum += score_ctx.scorer->ScoreLeaf(
+            {score_ctx.scorer->PrecomputeIDF({score_ctx.total_docs, dt}),
+             /*term_frequency=*/1, doc_len, score_ctx.avg_doc_len,
+             predicate->GetWeight()});
       }
       return sum;
     }

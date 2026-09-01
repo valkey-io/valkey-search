@@ -165,15 +165,13 @@ class Tag : public IndexBase {
   size_t GetTagValueDocCount(absl::string_view value) const
       ABSL_LOCKS_EXCLUDED(index_mutex_);
 
-  // Enumerates every indexed tag value matching the prefix query value
-  // `prefix_value` (which must end in '*'), each paired with the number of
-  // documents carrying it (its BM25 IDF document frequency). The returned
-  // values are the normalized rax keys, so callers can pass them straight to
-  // ContainsKey. Mirrors the prefix walk in Search(); used to score a tag
-  // prefix as an expansion (one matched value per document). Empty when the
-  // value is not a prefix or nothing matches.
-  std::vector<std::pair<std::string, size_t>> GetPrefixMatchedValues(
-      absl::string_view prefix_value) const ABSL_LOCKS_EXCLUDED(index_mutex_);
+  // Document count (dt) of the first value on `key` matching prefix query value
+  // `prefix_value` (must end in '*') -- the value a tag prefix is scored on,
+  // since a prefix credits ONE matched value, never the sum. 0 if none matches.
+  // Lock-free like GetValue/ContainsKey (read-side invariant).
+  size_t GetPrefixMatchDocCount(absl::string_view prefix_value,
+                                BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(

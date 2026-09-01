@@ -1,0 +1,51 @@
+# Reviewer Triage Board (issue-based)
+#
+# Regenerates a single tracking issue's body from this repo's open pull requests
+# and applies slash-command comments (/priority, /note, /stage, /claim,
+# /reviewed, …), deleting each command comment after it is processed so the
+# issue stays fast to load.
+#
+# Runs on three triggers:
+#   * schedule (*/5)        — keep the PR data fresh.
+#   * issue_comment created — apply a command within seconds.
+#   * workflow_dispatch     — manual run.
+#
+# Setup: the board lives in a single issue. Its number is hardcoded below as
+# DASHBOARD_ISSUE (and in the issue_comment guard). Point both at the tracking
+# issue for this repo. Only comments on that issue are processed.
+
+name: Reviewer Triage Board
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+concurrency:
+  group: reviewer-triage-board
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  pull-requests: read
+  contents: read
+
+jobs:
+  build:
+    # For comment events, only react to the board issue itself.
+    if: ${{ github.event_name != 'issue_comment' || github.event.issue.number == 1346 }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dashboard
+        uses: actions/github-script@v7
+        env:
+          DASHBOARD_ISSUE: '1346'
+          POOLS_PATH: .github/reviewer-pools.json
+        with:
+          script: |
+            const build = require('./.github/scripts/reviewer-dashboard.js');
+            await build({ github, context, core });

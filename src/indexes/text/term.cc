@@ -43,7 +43,7 @@ TermIterator::TermIterator(
       avg_doc_len_ = stats.avg_doc_len;
       // total_docs and the doc counts come from separate, independently-locked
       // counters and can be transiently out of sync, so clamp to keep
-      // dt <= total_docs (matches ResolveLeaves in search.cc).
+      // dt <= total_docs.
       if (!per_term_dt.empty()) {
         // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term.
         per_term_idf_.reserve(per_term_dt.size());
@@ -92,7 +92,7 @@ float TermIterator::GetScore() const {
   }
 
   // F is document-wide: sum the term frequency across every word/field
-  // iterator currently positioned on this key (§5.2).
+  // iterator currently positioned on this key
   uint32_t term_frequency = 0;
   for (size_t idx : current_key_indices_) {
     term_frequency += key_iterators_[idx].GetTermFrequency();

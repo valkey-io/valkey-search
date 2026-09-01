@@ -7,6 +7,8 @@
 
 #include "src/indexes/scoring/bm25std_scorer.h"
 
+#include <cstdint>
+#include <cstring>
 #include <limits>
 
 #include "gmock/gmock.h"
@@ -128,6 +130,43 @@ TEST(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
   const float kInf = std::numeric_limits<float>::infinity();
   EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, kInf), kInf);
   EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, -kInf), -kInf);
+}
+
+// The mirror of the case above. An infinite sum_of_terms times a zero document
+// score is the other way to reach 0 * inf -> NaN, and a NaN score is worse than
+// wrong: SearchResult::TrimResults sorts on it, and NaN compares false against
+// everything, which violates strict weak ordering and makes std::sort
+// undefined.
+TEST(Bm25StdScorerTest, ComposeInfiniteSumWithZeroDocumentScoreIsNotNaN) {
+  Bm25StdScorer scorer;
+  const float kInf = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(IsNaN(scorer.ComposeDocumentScore(kInf, 0.0f)));
+  EXPECT_EQ(scorer.ComposeDocumentScore(kInf, 0.0f), kInf);
+  EXPECT_FALSE(IsNaN(scorer.ComposeDocumentScore(-kInf, 0.0f)));
+  EXPECT_EQ(scorer.ComposeDocumentScore(-kInf, 0.0f), -kInf);
+}
+
+// IsInf/IsNaN exist because the build uses -ffast-math (-ffinite-math-only),
+// under which the compiler assumes no inf/NaN and may fold std::isinf,
+// std::isnan and the `f != f` idiom to a constant. Construct the NaN from its
+// bit pattern so the test does not depend on the optimizer preserving one
+// either.
+TEST(ScorerFloatClassificationTest, DetectsInfAndNaNBitPatterns) {
+  static constexpr uint32_t kQuietNaNBits = 0x7FC00000U;
+  float nan_value;
+  std::memcpy(&nan_value, &kQuietNaNBits, sizeof(nan_value));
+  EXPECT_TRUE(IsNaN(nan_value));
+  EXPECT_FALSE(IsInf(nan_value));
+
+  const float kInf = std::numeric_limits<float>::infinity();
+  EXPECT_TRUE(IsInf(kInf));
+  EXPECT_TRUE(IsInf(-kInf));
+  EXPECT_FALSE(IsNaN(kInf));
+
+  for (float finite : {0.0f, -0.0f, 1.5f, std::numeric_limits<float>::max()}) {
+    EXPECT_FALSE(IsInf(finite)) << finite;
+    EXPECT_FALSE(IsNaN(finite)) << finite;
+  }
 }
 
 // Per-document ranking (score-desc / key-asc ordering, document_score

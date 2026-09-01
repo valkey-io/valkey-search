@@ -13,6 +13,7 @@
 #include "src/index_schema.h"
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -313,6 +314,26 @@ absl::Status StringPoolStats(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
+                                   vmsdk::ArgsIterator &itr) {
+  VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
+  auto stats = VectorRegistry::Instance().GetStats();
+
+  ValkeyModule_ReplyWithArray(ctx, 10);
+  ValkeyModule_ReplyWithCString(ctx, "entry_cnt");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.entry_cnt);
+  ValkeyModule_ReplyWithCString(ctx, "hash_sharing_errors");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_errors.GetTotal());
+  ValkeyModule_ReplyWithCString(ctx, "hash_sharing_hits");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_hits.GetTotal());
+  ValkeyModule_ReplyWithCString(ctx, "lookup_record_hits");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.lookup_record_hits.GetTotal());
+  ValkeyModule_ReplyWithCString(ctx, "lookup_record_misses");
+  ValkeyModule_ReplyWithLongLong(ctx, stats.lookup_record_misses.GetTotal());
+
+  return absl::OkStatus();
+}
+
 absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   static std::vector<std::pair<std::string, std::string>> help_text{
@@ -327,6 +348,7 @@ absl::Status HelpCmd(ValkeyModuleCtx *ctx, vmsdk::ArgsIterator &itr) {
        "control pause points"},
       {"FT._DEBUG TEXTINFO <index> ...", "show info about schema-level text"},
       {"FT._DEBUG STRINGPOOLSTATS", "Show InternStringPool Stats"},
+      {"FT._DEBUG VECTOR_SHARING_STATS", "Show VectorRegistry Sharing Stats"},
       {"FT_DEBUG SHOW_METADATA",
        "list internal metadata manager table namespace"},
       {"FT_DEBUG SHOW_INDEXSCHEMAS", "list internal index schema tables"},
@@ -348,7 +370,7 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
   std::string msg;
   for (int i = 1; i < argc; ++i) {
-    msg += " ";
+    msg += ' ';
     msg += vmsdk::ToStringView(argv[i]);
   }
   VMSDK_LOG(WARNING, ctx) << "FT._DEBUG: " << msg;
@@ -365,6 +387,8 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return ControlledCmd(ctx, itr);
   } else if (keyword == "STRINGPOOLSTATS") {
     return StringPoolStats(ctx, itr);
+  } else if (keyword == "VECTOR_SHARING_STATS") {
+    return VectorSharingStatsCmd(ctx, itr);
   } else if (keyword == "TEXTINFO") {
     return IndexSchema::TextInfoCmd(ctx, itr);
   } else if (keyword == "SHOW_METADATA") {

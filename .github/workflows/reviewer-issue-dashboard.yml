@@ -6,7 +6,7 @@
 # issue stays fast to load.
 #
 # Runs on three triggers:
-#   * schedule (*/5)        — keep the PR data fresh.
+#   * schedule (*/15)       — keep the PR data fresh.
 #   * issue_comment created — apply a command within seconds.
 #   * workflow_dispatch     — manual run.
 #
@@ -18,7 +18,7 @@ name: Reviewer Triage Board
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/15 * * * *'
   issue_comment:
     types: [created]
   workflow_dispatch:

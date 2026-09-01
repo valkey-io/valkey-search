@@ -1,6 +1,6 @@
 // Living Triage Board — a single GitHub Issue that behaves like an app.
 //
-// Every ~5 minutes an Action runs this. It:
+// Every ~15 minutes an Action runs this. It:
 //   1. Reads all open PRs of the target repo (GraphQL) and classifies each
 //      reviewer as auto-assigned (from the auto-assign bot comment) or manual,
 //      first-pass or maintainer, with their latest review status.
@@ -16,7 +16,7 @@
 //      priority-grouped tables, and a collapsible per-reviewer "your queue".
 //
 // Invoked from a github-script step:
-//   const build = require('./.github/scripts/build-issue-dashboard.js');
+//   const build = require('./.github/scripts/reviewer-dashboard.js');
 //   await build({ github, context, core });
 //
 // Env:
@@ -26,23 +26,10 @@
 
 const fs = require('fs');
 
-// One-time priority seed, transcribed from Allen's triage doc. Only used for a
-// PR the board has never seen before; once a PR has state its stored value wins
-// (including a human clearing it), so the doc is never re-read.
-const SEED_PRIORITY = {
-  984: 1, 985: 1, 997: 1, 1001: 1, 1083: 1, 1084: 1, 1090: 1, 1217: 1, 1263: 1,
-  1287: 1, 1321: 1, 1292: 1, 1301: 1, 1302: 1, 1279: 1, 924: 1, 1068: 1, 1075: 1,
-  1196: 1, 1204: 1, 1271: 1, 1273: 1, 1277: 1, 1295: 1, 1304: 1,
-  1184: 2, 567: 2, 759: 2, 800: 2, 923: 2, 1023: 2, 1193: 2, 1218: 2, 1239: 2,
-  1296: 2, 1103: 2, 1297: 2,
-  1278: 3, 762: 3, 864: 3, 908: 3, 922: 3, 936: 3, 946: 3, 947: 3, 948: 3, 949: 3,
-  967: 3, 983: 3, 1000: 3, 1021: 3, 1116: 3, 1129: 3, 1139: 3, 1225: 3, 1234: 3,
-  1236: 3, 1268: 3, 1294: 3, 1035: 3, 1088: 3,
-  795: 4, 859: 4, 988: 4, 1005: 4, 1113: 4, 1016: 4, 1049: 4, 1256: 4, 1300: 4,
-  1095: 4, 1124: 4, 1298: 4, 894: 4,
-};
-
 const STALE_DAYS = 7;
+// GitHub caps an issue body at 65,536 characters; renderBody has a compact mode
+// for when the full board would exceed it.
+const GH_BODY_MAX = 65536;
 
 // ── GitHub data gathering ────────────────────────────────────────────────────
 async function gatherPRs(github, owner, repo) {
@@ -55,7 +42,6 @@ async function gatherPRs(github, owner, repo) {
             number title url isDraft createdAt updatedAt
             mergeable
             author { login }
-            labels(first:30) { nodes { name } }
             reviewRequests(first:30) { nodes { requestedReviewer { __typename ... on User { login } } } }
             reviews(first:100) { nodes { author { login } state submittedAt } }
             comments(first:100) { nodes { author { login } body } }
@@ -176,12 +162,25 @@ const STATE_CLOSE = 'BOARD_STATE-->';
 function loadState(body) {
   const empty = { notes: {}, priority: {}, stage: {}, reviewed: {}, claims: {}, log: [] };
   if (!body) return empty;
-  const i = body.indexOf(STATE_OPEN);
-  const j = body.indexOf(STATE_CLOSE);
+  // Parse the LAST marker pair: the real state block is always appended at the
+  // very end, so any earlier occurrence (e.g. a note or log line that happens to
+  // contain the marker text, echoed in the visible activity log) can't truncate
+  // it. Combined with the URL-encoded payload, the block can't be forged.
+  const i = body.lastIndexOf(STATE_OPEN);
+  const j = body.lastIndexOf(STATE_CLOSE);
   if (i === -1 || j === -1 || j < i) return empty;
   try {
-    const json = body.slice(i + STATE_OPEN.length, j).trim();
-    const p = JSON.parse(json);
+    // The payload is URL-encoded (see renderBody) so user-supplied text — a note
+    // or log line — can never contain "<", ">" and therefore can't reproduce the
+    // STATE_CLOSE marker and truncate the block. Fall back to a raw parse for any
+    // legacy body that stored the JSON unencoded.
+    const payload = body.slice(i + STATE_OPEN.length, j).trim();
+    let json;
+    try { json = decodeURIComponent(payload); }
+    catch (_) { json = payload; }
+    let p;
+    try { p = JSON.parse(json); }
+    catch (_) { p = JSON.parse(payload); }
     // reviewed: { prNum: { login: true } }   claims: { prNum: [login, …] }
     // Strip any bare "@login" left in historical log lines (older runs wrote
     // them); a re-rendered "@login" would keep pinging that person every run.
@@ -234,14 +233,22 @@ const HINT_MARKER = '<!--HINT-->';
 const mention = login => `[${login}](https://github.com/${login})`;
 
 // ctx (optional) = { prByNum } — needed by /needs-review to find a PR's maintainers.
+//
+// Returns the log message on success, null for a no-op, or { hint } when a
+// command parsed but its argument was invalid — the caller nudges the author and
+// leaves state untouched, so a typo can't silently clear or mis-set a value.
 function applyCommand(state, c, now, ctx) {
   const n = c.pr;
   let msg = null;
   switch (c.cmd) {
     case 'priority': {
-      const p = (c.arg.match(/[1-4]/) || [])[0];
-      if (p) { state.priority[n] = Number(p); msg = `${mention(c.author)} set #${n} → P${p}`; }
-      else { state.priority[n] = null; msg = `${mention(c.author)} cleared priority on #${n}`; }
+      const a = c.arg.trim().toLowerCase();
+      if (!a || a === 'clear' || a === 'none') {
+        state.priority[n] = null; msg = `${mention(c.author)} cleared priority on #${n}`; break;
+      }
+      const m = a.match(/^p?([1-4])$/);
+      if (!m) return { hint: `\`${esc(c.arg)}\` isn't a valid priority for #${n} — use \`P1\`–\`P4\`, or \`clear\`.` };
+      state.priority[n] = Number(m[1]); msg = `${mention(c.author)} set #${n} → P${m[1]}`;
       break;
     }
     case 'note':
@@ -252,7 +259,7 @@ function applyCommand(state, c, now, ctx) {
       const a = c.arg.toLowerCase().trim();
       if (!a || a === 'auto' || a === 'clear') { delete state.stage[n]; msg = `${mention(c.author)} reset #${n} stage to auto`; }
       else if (STAGE_ALIAS[a]) { state.stage[n] = STAGE_ALIAS[a]; msg = `${mention(c.author)} set #${n} → ${STAGES[STAGE_ALIAS[a]].label}`; }
-      // unknown stage word → no change, no log (avoids noise).
+      else return { hint: `\`${esc(c.arg)}\` isn't a valid stage for #${n} — use \`review\`, \`changes\`, \`maintainer\`, \`approved\`, or \`auto\`.` };
       break;
     }
     case 'claim': {
@@ -342,7 +349,7 @@ function stageCell(pr, state) {
   return `${STAGES[k].emoji} ${STAGES[k].label}${overridden ? ' ✎' : ''}`;
 }
 
-function renderBody(prs, state, pools, now, targetLabel) {
+function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   const L = [];
   const total = prs.length;
   const byPri = { 1: 0, 2: 0, 3: 0, 4: 0, none: 0 };
@@ -396,7 +403,7 @@ function renderBody(prs, state, pools, now, targetLabel) {
     badge(`stale >${STALE_DAYS}d`, stale, stale ? 'lightgrey' : 'green'),
   ].join(' '));
   L.push('');
-  L.push(`_Auto-updated every ~5 min from **${targetLabel}** open PRs. Last run: **${now}**._`);
+  L.push(`_Auto-updated every ~15 min from **${targetLabel}** open PRs. Last run: **${now}**._`);
   L.push('');
 
   // Mermaid: PRs by priority (compact labels).
@@ -435,7 +442,7 @@ function renderBody(prs, state, pools, now, targetLabel) {
   L.push('');
   L.push('> **Approving a PR on GitHub already marks it Reviewed ✅ for you — you do not need `/reviewed`.** '
     + 'And if you later withdraw or change that approval, it clears itself again. The board picks this up on '
-    + 'the next ~5-min refresh, or immediately if anyone runs `/update`. `/reviewed` / `/unreviewed` are only for '
+    + 'the next ~15-min refresh, or immediately if anyone runs `/update`. `/reviewed` / `/unreviewed` are only for '
     + 'a review you did *without* a formal GitHub approval.');
   L.push('');
 
@@ -477,7 +484,7 @@ function renderBody(prs, state, pools, now, targetLabel) {
   legend('Reviewed <sub>(Your queue)</sub>', [
     '✅ you approved the PR on GitHub **or** ran `/reviewed <#>` — either is enough.',
     '☐ not yet — this is what counts toward **awaiting you**.',
-    'Approving on GitHub sets ✅ automatically (no `/reviewed` needed); withdrawing or changing that approval clears it again. This syncs on the next ~5-min refresh, or right away with `/update`.',
+    'Approving on GitHub sets ✅ automatically (no `/reviewed` needed); withdrawing or changing that approval clears it again. This syncs on the next ~15-min refresh, or right away with `/update`.',
     '`/reviewed` / `/unreviewed` are manual overrides for a review done *without* a GitHub approval.',
     '`/needs-review <#>` clears the manual `/reviewed` flag for the PR\'s maintainers (a standing GitHub approval still shows ✅ until it\'s dismissed).',
   ]);
@@ -493,6 +500,7 @@ function renderBody(prs, state, pools, now, targetLabel) {
   // Your queue: expand your name to see your PRs, split by how you were added.
   // (In-issue heading anchors are unreliable, so this uses inline collapsibles
   // instead of jump links — expand right here.)
+  if (!opts.compact) {
   L.push('## 🔎 Your queue');
   L.push('');
   L.push('_Expand your name to see your PRs. 🤖 = auto-assigned to you · ✋ = requested by hand · 🙋 = you `/claim`ed it. **Reviewed** ✅ = you approved it on GitHub **or** ran `/reviewed`. **Awaiting you** = the rest._');
@@ -524,6 +532,11 @@ function renderBody(prs, state, pools, now, targetLabel) {
     }
     L.push('');
     L.push('</details>');
+  }
+  } else {
+    L.push('## 🔎 Your queue');
+    L.push('');
+    L.push('_Per-reviewer queues are hidden to keep this issue under GitHub’s 65,536-character limit. Use the **review-requested** filter on the Pulls tab to find your PRs._');
   }
   L.push('');
 
@@ -559,9 +572,11 @@ function renderBody(prs, state, pools, now, targetLabel) {
     L.push('');
   }
 
-  L.push(`<sub>Priority: P1 launch blocker · P2–P3 nice to have · P4 likely not. Pools: ${pools.firstPass.length} first-pass, ${pools.maintainers.length} maintainers. Seeded once from the triage doc, maintained here via commands.</sub>`);
+  L.push(`<sub>Priority: P1 launch blocker · P2–P3 nice to have · P4 likely not. Pools: ${pools.firstPass.length} first-pass, ${pools.maintainers.length} maintainers. Set priorities with \`/priority <#> P1–P4\`.</sub>`);
   L.push('');
-  L.push(`${STATE_OPEN} ${JSON.stringify(state)} ${STATE_CLOSE}`);
+  // URL-encode so no user-supplied text (notes, log lines) can contain "<"/">"
+  // and forge the STATE_CLOSE marker, which would truncate and wipe the state.
+  L.push(`${STATE_OPEN} ${encodeURIComponent(JSON.stringify(state))} ${STATE_CLOSE}`);
   return L.join('\n');
 }
 
@@ -595,19 +610,10 @@ module.exports = async ({ github, context, core }) => {
   const issue = await github.rest.issues.get({ owner: hostOwner, repo: hostRepo, issue_number });
   const state = loadState(issue.data.body || '');
 
-  // Seed priority for PRs the board has never recorded.
-  for (const pr of prs) {
-    if (!(pr.number in state.priority) && SEED_PRIORITY[pr.number] != null) {
-      state.priority[pr.number] = SEED_PRIORITY[pr.number];
-    }
-  }
-
-  // 3. Process command comments, then delete them so the issue stays fast.
-  //
-  // Deleting leaves a "X deleted a comment" timeline event, but GitHub auto-
-  // folds runs of those into "N hidden items", so the comment list itself
-  // stays truly empty. We skip our own log comments and only clean up our own
-  // transient hint replies.
+  // 3. Read command comments and apply them to in-memory state. We do NOT delete
+  // anything yet: a command comment is only removed *after* the rewritten body is
+  // persisted, so if issues.update fails the command survives for the next run
+  // (deleting first would silently drop the requested change).
   const ctx = { prByNum: Object.fromEntries(prs.map(p => [p.number, p])) };
   const comments = await github.paginate(github.rest.issues.listComments,
     { owner: hostOwner, repo: hostRepo, issue_number, per_page: 100 });
@@ -615,33 +621,31 @@ module.exports = async ({ github, context, core }) => {
     try { await github.rest.issues.deleteComment({ owner: hostOwner, repo: hostRepo, comment_id: id }); return true; }
     catch (e) { core.warning(`Could not delete comment ${id}: ${e.message}`); return false; }
   };
-  let processed = 0;
+  const HELP = `most commands need a PR number, e.g. \`/priority 1234 P2\`. `
+    + `General: \`/priority <#> P1-P4\` · \`/note <#> text\` · \`/stage <#> …\` · \`/needs-review <#>\` · \`/update\`. `
+    + `Personal: \`/claim <#>\` · \`/unclaim <#>\` · \`/reviewed <#>\` · \`/unreviewed <#>\`.`;
+  const toDelete = [];        // command / hint comments to remove after persisting
+  const hints = [];           // { author, lines } nudges to post after persisting
   for (const c of comments) {
     const author = c.user && c.user.login;
     const body = c.body || '';
-    // Clean up our own prior hint replies (transient nudges — never state).
+    // Our own prior hint replies are transient — clean them up (never state, and
+    // never our log comments).
     if (isBot(author)) {
-      if (body.includes(HINT_MARKER)) await del(c.id);
-      continue; // never touch our own log comments
+      if (body.includes(HINT_MARKER)) toDelete.push(c.id);
+      continue;
     }
     const cmds = parseCommands(body, author);
     if (cmds.length) {
-      for (const cmd of cmds) applyCommand(state, cmd, now, ctx);
-      if (await del(c.id)) processed++;
+      const lines = [];
+      for (const cmd of cmds) { const r = applyCommand(state, cmd, now, ctx); if (r && r.hint) lines.push(r.hint); }
+      if (lines.length) hints.push({ author, lines });
+      toDelete.push(c.id);
     } else if (looksLikeCommand(body)) {
-      // Tried to command but it didn't parse — most often a missing PR number.
-      // Nudge, then remove both the attempt and (later) the hint.
-      try {
-        await github.rest.issues.createComment({ owner: hostOwner, repo: hostRepo, issue_number,
-          body: `${HINT_MARKER}\n${mention(author)} most commands need a PR number, e.g. \`/priority 1234 P2\`. `
-            + `General: \`/priority <#> P1-P4\` · \`/note <#> text\` · \`/stage <#> …\` · \`/needs-review <#>\` · \`/update\`. `
-            + `Personal: \`/claim <#>\` · \`/unclaim <#>\` · \`/reviewed <#>\` · \`/unreviewed <#>\`. `
-            + `(This hint auto-deletes on the next run.)` });
-      } catch (e) { core.warning(`Could not post hint: ${e.message}`); }
-      await del(c.id);
+      hints.push({ author, lines: [HELP] });
+      toDelete.push(c.id);
     }
   }
-  if (processed) core.info(`Applied and cleared ${processed} command comment(s).`);
 
   // Prune state for PRs no longer open (merged/closed drop off the board).
   const openNums = new Set(prs.map(p => p.number));
@@ -651,19 +655,40 @@ module.exports = async ({ github, context, core }) => {
     }
   }
 
-  // 4. Rewrite the issue body.
+  // 4. Rewrite the issue body. If it would exceed GitHub's hard 65,536-char body
+  // limit, re-render without the (unbounded) per-reviewer queues so the update
+  // still succeeds and never silently fails every run.
   const targetLabel = `${readOwner}/${readRepo}`;
-  const body = renderBody(prs, state, pools, now, targetLabel);
+  let body = renderBody(prs, state, pools, now, targetLabel);
+  if (body.length > GH_BODY_MAX) {
+    core.warning(`Body ${body.length} > ${GH_BODY_MAX} chars — rendering compact (per-reviewer queues omitted).`);
+    body = renderBody(prs, state, pools, now, targetLabel, { compact: true });
+  }
+  // Persist BEFORE deleting/posting comments. If this throws, we abort here and
+  // no command comment is lost — the next scheduled run reprocesses it.
   if ((issue.data.body || '') !== body) {
     await github.rest.issues.update({ owner: hostOwner, repo: hostRepo, issue_number, body });
     core.info('Board updated.');
   } else {
     core.info('No change.');
   }
+
+  // 5. Now that state is durable, nudge on any rejected commands and clear the
+  // processed comments. Deleting leaves a "deleted a comment" timeline event, but
+  // GitHub auto-folds runs of those into "N hidden items", so the list stays empty.
+  for (const h of hints) {
+    try {
+      await github.rest.issues.createComment({ owner: hostOwner, repo: hostRepo, issue_number,
+        body: `${HINT_MARKER}\n${mention(h.author)} ${h.lines.join(' ')} (This note auto-deletes on the next run.)` });
+    } catch (e) { core.warning(`Could not post hint: ${e.message}`); }
+  }
+  let cleared = 0;
+  for (const id of toDelete) { if (await del(id)) cleared++; }
+  if (cleared) core.info(`Cleared ${cleared} processed comment(s).`);
 };
 
 // Exposed for offline testing.
 module.exports._internal = {
   shape, loadState, parseCommands, looksLikeCommand, applyCommand, renderBody,
-  autoStage, stageKey, stageCell, SEED_PRIORITY,
+  autoStage, stageKey, stageCell,
 };

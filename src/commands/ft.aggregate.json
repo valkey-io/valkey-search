@@ -211,6 +211,11 @@
                     "name": "TOLIST",
                     "type": "pure-token",
                     "token": "TOLIST"
+                  },
+                  {
+                    "name": "FIRST_VALUE",
+                    "type": "pure-token",
+                    "token": "FIRST_VALUE"
                   }
                 ]
               },

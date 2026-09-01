@@ -81,6 +81,10 @@ class TestRDBCorruptedIndex(ValkeySearchTestCaseCommon):
         logfile = os.path.join(testdir, f"logfile_{port}")
         return server, client, logfile
 
+    @pytest.mark.skipif(
+        os.environ.get("SAN_BUILD", "no") == "address",
+        reason="Corrupted RDB triggers memory errors intercepted by ASAN",
+    )
     def test_corrupted_rdb_load_fails(self):
         """Test that loading corrupted RDB fails without skip option."""
         server, client, logfile = self._start_server(

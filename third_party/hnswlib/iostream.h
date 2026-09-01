@@ -1,15 +1,9 @@
 #ifndef THIRD_PARTY_HNSWLIB_IOSTREAM_H_
 #define THIRD_PARTY_HNSWLIB_IOSTREAM_H_
 
-#include <stdlib.h>
-
 #include <cstddef>
-#include <cstdint>
-#include <fstream>
-#include <ios>
 #include <memory>
 #include <string>
-#include <utility>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -19,12 +13,6 @@
 #endif
 
 namespace hnswlib {
-
-class VectorTracker {
- public:
-  virtual ~VectorTracker() = default;
-  virtual char *TrackVector(uint64_t internal_id, char *vector, size_t len) = 0;
-};
 
 class InputStream {
  public:

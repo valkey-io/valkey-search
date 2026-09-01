@@ -251,9 +251,9 @@ const HINT_MARKER = '<!--HINT-->';
 
 // Render a person WITHOUT pinging them. A bare "@login" in the issue body (or a
 // hint comment) fires a GitHub notification every single run — spammy for a page
-// that rewrites itself every ~5 min. A profile link shows the same name, stays
-// clickable, and never notifies.
-const mention = login => `[${login}](https://github.com/${login})`;
+// that rewrites itself every ~15 min. Rendering the plain login shows the name
+// and never notifies.
+const mention = login => login;
 
 // ctx (optional) = { prByNum } — needed by /needs-review to find a PR's maintainers.
 //

@@ -49,8 +49,10 @@ jobs:
           DASHBOARD_ISSUE: '1346'
           POOLS_PATH: .github/reviewer-pools.json
           # Release scope to surface: open issues with this label that have no
-          # open PR are listed in their own section. Leave empty to disable.
-          RELEASE_LABEL: '1.3.0'
+          # open PR are listed in their own section. Set to e.g. '1.3.0' to
+          # enable; empty disables it (kept off for now to stay well under
+          # GitHub's 65,536-char issue-body limit at this repo's PR volume).
+          RELEASE_LABEL: ''
         with:
           script: |
             const build = require('./.github/scripts/reviewer-dashboard.js');

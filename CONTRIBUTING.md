@@ -99,7 +99,9 @@ To link your PR to an existing issue, include `Fixes #<issue-number>` or `Resolv
 
 ## Slash commands
 
-Collaborators can use the following commands in PR and issue comments to help do some trivial tasks.
+Repository collaborators and maintainers can use the following commands in PR and issue
+comments to help do some trivial tasks. Comments from other users (new or unknown
+contributors) are ignored with a short reply, since collaborators are added by maintainers.
 
 | Command                       | Where       | What it does                                                                                            |
 | ----------------------------- | ----------- | ------------------------------------------------------------------------------------------------------- |

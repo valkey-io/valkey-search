@@ -325,7 +325,14 @@ function applyCommand(state, c, now, ctx) {
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
-const esc = s => String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+// Escape echoed user text (PR titles, notes) for a table cell. Besides table
+// syntax, neutralize "@login" — a bare mention in a PR title would otherwise
+// ping that user on every regeneration — by inserting a zero-width space after
+// the "@" (renders identically; GitHub no longer autolinks it into a mention).
+const esc = s => String(s == null ? '' : s)
+  .replace(/\|/g, '\\|')
+  .replace(/\r?\n/g, ' ')
+  .replace(/@(?=[A-Za-z0-9])/g, '@\u200b'); // @ + U+200B zero-width space
 const prLink = pr => `[#${pr.number}](${pr.url})`;
 const badge = (label, msg, color) => {
   const enc = t => encodeURIComponent(String(t)).replace(/-/g, '--').replace(/_/g, '__').replace(/%20/g, '_');

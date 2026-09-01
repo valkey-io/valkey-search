@@ -357,8 +357,9 @@ size_t EvaluateFilterAsPrimary(
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
         std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> child_fetchers;
-        size_t child_size = EvaluateFilterAsPrimary(
-            parameters, child.get(), child_fetchers, negate, or_weight_multiplier);
+        size_t child_size =
+            EvaluateFilterAsPrimary(parameters, child.get(), child_fetchers,
+                                    negate, or_weight_multiplier);
         if (child_size < min_size) {
           min_size = child_size;
           best_fetchers = std::move(child_fetchers);
@@ -1141,10 +1142,9 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   // In-iterator scoring runs only for pure text queries over a non-empty text
   // index; match-all is excluded because its universal-set scan carries no
   // TextIterator. Everything else is scored by the extra step below.
-  const bool score_in_drain =
-      !has_non_text_predicate && text_index_schema &&
-      text_index_schema->GetTrackedKeyCount() > 0 &&
-      !parameters.filter_parse_results.is_match_all;
+  const bool score_in_drain = !has_non_text_predicate && text_index_schema &&
+                              text_index_schema->GetTrackedKeyCount() > 0 &&
+                              !parameters.filter_parse_results.is_match_all;
 
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;

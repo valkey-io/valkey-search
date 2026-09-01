@@ -12,9 +12,19 @@ ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
+    ValkeySearchClusterTestCase,
     ValkeySearchClusterTestCaseDebugMode,
+    ValkeySearchTestCaseBase,
     ValkeySearchTestCaseDebugMode,
 )
+
+# The compatibility pickles capture Redisearch behavior, which is the
+# compatible target. Run Valkey Search with search.emulate-release pinned to the
+# release that fixes the invalid-data compatibility defect so the compatible
+# (whole-key-drop) behavior is exercised. This requires debug-mode (the value is
+# above kModuleVersion), which the *DebugMode base classes enable. Datasets
+# without invalid data are unaffected by this setting.
+COMPAT_EMULATE_RELEASE = "1.3.0"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -82,7 +92,10 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if key_type == "json" and isinstance(x, int):
+        if isinstance(x, list):
+            # TOLIST reducer returns a Python list for both hash and json
+            result = x
+        elif key_type == "json" and isinstance(x, int):
             result = x
         elif key_type == "json" and x.startswith(b'['):
             assert isinstance(x, bytes), f"Expected bytes for JSON value, got {type(x)}"
@@ -233,9 +246,20 @@ def compare_row(l, r, key_type):
         return False
     for i in range(len(lks)):
         #
+        # TOLIST reducer returns lists where order is non-deterministic.
+        # Check for list values first, before any field-name-based heuristics.
+        # Sort both lists before comparing since insertion order differs between
+        # Redis (random hash table traversal) and valkey-search (index order).
+        #
+        if isinstance(l[lks[i]], list) and isinstance(r[rks[i]], list):
+            if sorted(l[lks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)) != \
+               sorted(r[rks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)):
+                print("mismatch list field: ", lks[i], " ", sorted(l[lks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)), "!=", sorted(r[rks[i]], key=lambda x: x if isinstance(x, (int, float)) else str(x)))
+                return False
+        #
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
-        if lks[i].startswith("n") or lks[i].endswith("score"):
+        elif lks[i].startswith("n") or lks[i].endswith("score"):
             if not compare_number_eq(l[lks[i]], r[rks[i]]):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 print("RL: ", r)
@@ -554,18 +578,9 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
 
         data_set = None
         client = self.server.get_new_client()
-        # Pin VK to the most-compatible behavior shipped by the module so the
-        # answer comparison reflects every fix (see COMPATIBILITY.md
-        # "Compatibility Defects"). The configured upper bound on
-        # search.emulate-release is logical infinity, but the production
-        # validator caps it at the current kModuleVersion; the cap is lifted
-        # while search.debug-mode is on (set at module load by the
-        # *DebugMode base class), so the infinity value below is accepted.
-        # Failure here means none of the compatibility fixes will run during
-        # the test, which would silently produce a misleading baseline-style
-        # failure mode — fail loudly instead.
         client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", "65535.255.255")
+            "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+        )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
 
@@ -624,13 +639,13 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
 
         data_set = None
         cluster_client = self.new_cluster_client()
-        # Pin VK to the most-compatible behavior on every primary in the
-        # cluster (see TestAnswersCMD comment above). debug-mode is enabled
-        # at module load by the *DebugMode base class. Fail loudly on error
-        # so a misconfigured fixture can't produce a silent baseline run.
-        for rg in self.replication_groups:
-            rg.primary.client.execute_command(
-                "CONFIG", "SET", "search.emulate-release", "65535.255.255")
+
+        # Pin every primary to the compatible (whole-key-drop) behavior so the
+        # invalid-data datasets match the Redisearch reference answers.
+        for node_idx in range(self.CLUSTER_SIZE):
+            self.client_for_primary(node_idx).execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
         for expected in answers:
             data_set = do_answer_cluster(

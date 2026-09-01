@@ -173,6 +173,7 @@ To ease application migration, incompatible behavior controlled by `search.emula
 
 A list of the compatibility issues that have been fixed.
 
-| Release            | INFO field | Old Behavior | New Behavior |
-| ------------------ | ---------- | ------------ | ------------ |
-| under construction | n/a        | ---          | ---          |
+| Release | INFO field | Old Behavior | New Behavior |
+| ------- | ---------- | ------------ | ------------ |
+| 1.3.0   | `compatibility-invalid_data_drops_key` | When an indexed field contains data that does not conform to the field's declared type (e.g. a `NUMERIC` field whose value is not a number, or a `VECTOR` field with the wrong byte length), only that field is treated as missing; the rest of the key remains indexed. | The entire key is dropped from the index, matching Redisearch. (Absent/missing fields are unaffected — this applies only to malformed values.) |
+| 1.3.0   | `compatibility-aggregate_reducer_default_alias` | An `FT.AGGREGATE` `REDUCE` with no `AS` clause names its output column `REDUCER(args)` — for example `COUNT_DISTINCT(@rating)`. | The column is named `__generated_alias` followed by the reducer name and its arguments with the leading `@` stripped, all lowercased — for example `__generated_aliascount_distinctrating`. |

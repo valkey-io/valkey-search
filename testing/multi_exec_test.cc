@@ -77,7 +77,7 @@ class MultiExecTest : public ValkeySearchTest {
               absl::MutexLock lock(&mutex);
               added_keys.push_back(std::string(*key));
               added_records.push_back(std::string(record));
-              return true;
+              return indexes::RecordResult::kAdded;
             });
   }
   void TearDown() override {

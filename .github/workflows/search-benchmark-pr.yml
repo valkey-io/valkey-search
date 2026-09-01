@@ -1,0 +1,530 @@
+name: PR Search Benchmark
+
+# One workflow, two ways to start it:
+#   1. Manually (workflow_dispatch) — you type the PR number.
+#   2. By labeling a PR (pull_request_target) — add 'run-search-benchmark' or
+#      'run-search-benchmark-skip-profiling'.
+# Both paths run the exact same benchmark: build the search module at the PR
+# merge commit AND at the base branch, benchmark each, and post a comparison.
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to benchmark"
+        required: true
+        type: number
+      core_commit:
+        description: "Manual core commit SHA (overrides latest HEAD of unstable)"
+        required: false
+        default: ""
+        type: string
+      num_runs:
+        description: "Number of times to run each benchmark configuration"
+        required: false
+        type: string
+        default: "3"
+      config_file:
+        description: "Benchmark config file (from valkey-perf-benchmark/configs/)"
+        type: choice
+        default: "fts-benchmarks-shortened-arm.json"
+        options:
+          - "fts-benchmarks-arm.json"
+          - "fts-benchmarks-shortened-arm.json"
+      cluster_mode:
+        description: "Cluster mode (empty=run config in file, true=cluster-mode only, false=non-cluster-mode only)"
+        type: choice
+        default: ""
+        options:
+          - ""
+          - "true"
+          - "false"
+      skip_profiling:
+        description: "Skip profiling (faster run, no flamegraphs)"
+        type: boolean
+        default: true
+      skip_config_set:
+        description: "Skip config_sets (use default config set)"
+        type: boolean
+        default: false
+      timeout_minutes:
+        description: "Job timeout in minutes (default 1440)"
+        required: false
+        default: "1440"
+        type: string
+  pull_request_target:
+    types: [labeled]
+
+# Concurrency: group by PR number + label name. Same label re-added cancels
+# the in-progress run and starts fresh. Different labels produce separate
+# groups; parallel execution is prevented by the single self-hosted runner.
+# On-demand (workflow_dispatch) runs use a unique run ID so they never collide.
+concurrency:
+  group: ${{ github.event_name == 'pull_request_target' && format('benchmark-{0}-{1}', github.event.pull_request.number, github.event.label.name) || format('on-demand-{0}', github.run_id) }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+# Workflow-level permissions are minimal. Jobs grant additional scopes only
+# where they are actually needed (defense-in-depth).
+permissions:
+  contents: read
+
+jobs:
+  # Normalize both trigger types into one set of outputs so the benchmark job
+  # does not care how it was started.
+  resolve:
+    if: |
+      github.repository == 'valkey-io/valkey-search' && (
+        github.event_name == 'workflow_dispatch' ||
+        (github.event.action == 'labeled' &&
+         (github.event.label.name == 'run-search-benchmark' || github.event.label.name == 'run-search-benchmark-skip-profiling'))
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      merge_commit_sha: ${{ steps.pr.outputs.merge_commit_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      base_ref: ${{ steps.pr.outputs.base_ref }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      cluster_filter: ${{ steps.pr.outputs.cluster_filter }}
+      skip_profiling: ${{ steps.pr.outputs.skip_profiling }}
+      label: ${{ steps.pr.outputs.label }}
+    steps:
+      - name: Resolve PR details
+        id: pr
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const {owner, repo} = context.repo;
+            const noMerge = "The PR has no mergeable commit (likely conflicts with the base branch, or merge not yet computed - try again in a moment).";
+
+            if (context.eventName === 'workflow_dispatch') {
+              const prNumber = Number('${{ github.event.inputs.pr_number }}');
+              const pr = await github.rest.pulls.get({owner, repo, pull_number: prNumber});
+              if (pr.data.state !== 'open') {
+                core.setFailed(`PR #${prNumber} is not open`);
+                return;
+              }
+              if (!pr.data.merge_commit_sha) {
+                core.setFailed(noMerge);
+                return;
+              }
+              core.setOutput('merge_commit_sha', pr.data.merge_commit_sha);
+              core.setOutput('head_sha', pr.data.head.sha);
+              core.setOutput('base_ref', pr.data.base.ref);
+              core.setOutput('base_sha', pr.data.base.sha);
+              core.setOutput('pr_number', String(prNumber));
+              const clusterInput = '${{ github.event.inputs.cluster_mode }}';
+              core.setOutput('cluster_filter', clusterInput || '');
+              core.setOutput('skip_profiling', '${{ github.event.inputs.skip_profiling }}' === 'true' ? 'true' : 'false');
+              core.setOutput('label', '');
+            } else {
+              // pull_request_target: the PR context is already in the payload.
+              const pr = context.payload.pull_request;
+              if (!pr.merge_commit_sha) {
+                core.setFailed(noMerge);
+                return;
+              }
+              const label = context.payload.label.name;
+              core.setOutput('merge_commit_sha', pr.merge_commit_sha);
+              core.setOutput('head_sha', pr.head.sha);
+              core.setOutput('base_ref', pr.base.ref);
+              core.setOutput('base_sha', pr.base.sha);
+              core.setOutput('pr_number', String(pr.number));
+              core.setOutput('cluster_filter', '');
+              core.setOutput('skip_profiling', label === 'run-search-benchmark-skip-profiling' ? 'true' : 'false');
+              core.setOutput('label', label);
+            }
+
+      - name: Debug resolved outputs
+        run: |
+          echo "merge_commit_sha: ${{ steps.pr.outputs.merge_commit_sha }}"
+          echo "head_sha: ${{ steps.pr.outputs.head_sha }}"
+          echo "base_ref: ${{ steps.pr.outputs.base_ref }}"
+          echo "base_sha: ${{ steps.pr.outputs.base_sha }}"
+          echo "pr_number: ${{ steps.pr.outputs.pr_number }}"
+          echo "cluster_filter: ${{ steps.pr.outputs.cluster_filter }}"
+          echo "skip_profiling: ${{ steps.pr.outputs.skip_profiling }}"
+          echo "label: ${{ steps.pr.outputs.label }}"
+
+  benchmark:
+    needs: resolve
+    runs-on: [self-hosted, valkey-search-arm-pr]
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '1440') }}
+    env:
+      # Module configuration
+      MODULE_NAME: "search"
+      MODULE_DIR: "valkey-search"
+      MODULE_PATH: "${{ github.workspace }}/valkey-search"
+      MODULE_BASELINE_DIR: "valkey-search-baseline"
+      MODULE_BASELINE_PATH: "${{ github.workspace }}/valkey-search-baseline"
+      # Core configuration
+      CORE_GITHUB_REPO: "valkey-io/valkey"
+      CORE_BRANCH: "unstable"
+      CORE_DIR: "valkey"
+      CORE_PATH: "${{ github.workspace }}/valkey"
+      # Benchmark configuration
+      PERF_BENCHMARK_REPO: "valkey-io/valkey-perf-benchmark"
+      PERF_BENCHMARK_BRANCH: "main"
+      PERF_BENCHMARK_DIR: "valkey-perf-benchmark"
+      PERF_BENCHMARK_PATH: "${{ github.workspace }}/valkey-perf-benchmark"
+      CONFIG_FILE: "${{ github.workspace }}/valkey-perf-benchmark/configs/${{ github.event.inputs.config_file || 'fts-benchmarks-shortened-arm.json' }}"
+      # Run parameters
+      RUNS: ${{ github.event.inputs.num_runs || '3' }}
+      CORE_COMMIT_INPUT: ${{ github.event.inputs.core_commit || '' }}
+      CLUSTER_FILTER: ${{ needs.resolve.outputs.cluster_filter }}
+      SKIP_PROFILING: ${{ needs.resolve.outputs.skip_profiling == 'true' && '1' || '' }}
+      SKIP_CONFIG_SET: ${{ github.event.inputs.skip_config_set == 'true' && '1' || '' }}
+    # Write access scoped to the job that posts the result comment / removes the label.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Ensure git is installed
+        run: command -v git || sudo dnf install -y git
+
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Checkout valkey_ram (for dataset-enabled valkey-benchmark)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: VoletiRam/valkey_ram
+          ref: npy_support
+          path: valkey_ram
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout valkey (for valkey-server)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ env.CORE_GITHUB_REPO }}
+          ref: ${{ env.CORE_BRANCH }}
+          path: ${{ env.CORE_DIR }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout valkey-search (PR merge commit)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.resolve.outputs.merge_commit_sha }}
+          path: ${{ env.MODULE_DIR }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout valkey-search (baseline)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: ${{ env.MODULE_BASELINE_DIR }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ${{ env.PERF_BENCHMARK_REPO }}
+          ref: ${{ env.PERF_BENCHMARK_BRANCH }}
+          path: ${{ env.PERF_BENCHMARK_DIR }}
+          persist-credentials: false
+
+      - name: Setup persistent datasets cache
+        run: |
+          DATASET_CACHE="/home/ec2-user/search-datasets-cache"
+          mkdir -p "$DATASET_CACHE"
+
+          if [[ -d "$PERF_BENCHMARK_PATH/datasets" ]] && [[ "$(ls -A $PERF_BENCHMARK_PATH/datasets 2>/dev/null)" ]]; then
+            echo "Updating cache with repo-committed datasets..."
+            cp -r "$PERF_BENCHMARK_PATH/datasets/"* "$DATASET_CACHE/" || true
+          fi
+
+          rm -rf "$PERF_BENCHMARK_PATH/datasets"
+          ln -sf "$DATASET_CACHE" "$PERF_BENCHMARK_PATH/datasets"
+
+          echo "✓ Dataset directory linked to persistent cache: $DATASET_CACHE"
+          ls -lh "$PERF_BENCHMARK_PATH/" | grep datasets
+
+      - name: Install dependencies
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ cmake \
+              ninja-build \
+              python3-devel \
+              openssl-devel \
+              systemd-devel \
+              bzip2-devel \
+              libffi-devel \
+              perf
+
+          gcc --version
+          g++ --version
+
+          pip install --require-hashes -r requirements.txt
+
+      - name: Ensure GCC >= 12 (required for valkey-search build)
+        # NOTE: This uses AL2023-specific packages. Update if runner OS changes.
+        run: |
+          GCC_MIN_VERSION=12
+          CURRENT_VERSION=0
+
+          if /usr/local/bin/gcc --version 2>/dev/null; then
+            CURRENT_VERSION=$(/usr/local/bin/gcc -dumpversion | cut -d. -f1)
+          fi
+
+          if [[ "$CURRENT_VERSION" -ge "$GCC_MIN_VERSION" ]]; then
+            echo "✓ GCC $CURRENT_VERSION already available at /usr/local/bin/gcc (>= $GCC_MIN_VERSION)"
+            /usr/local/bin/gcc --version
+            /usr/local/bin/g++ --version
+          else
+            echo "GCC >= $GCC_MIN_VERSION not found (current: $CURRENT_VERSION) — installing GCC 14 from AL2023 repos..."
+            sudo dnf install -y gcc14 gcc14-c++
+
+            # Create symlinks in /usr/local/bin so builds pick up GCC 14 by default
+            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/gcc
+            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/g++
+            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/cc
+            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/c++
+
+            echo "✓ GCC 14 installed and symlinked"
+            /usr/local/bin/gcc --version
+            /usr/local/bin/g++ --version
+          fi
+
+      - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
+        working-directory: valkey_ram
+        run: |
+          echo "Building valkey_ram for valkey-benchmark with dataset support..."
+          make distclean || true
+          make BUILD_TLS=yes -j$(nproc)
+          if [[ -f "src/valkey-benchmark" ]]; then
+            echo "✓ valkey-benchmark with dataset support built successfully"
+            ./src/valkey-benchmark --version || echo "Version check completed"
+            ls -lh src/valkey-benchmark
+          else
+            echo "✗ valkey-benchmark build failed"
+            exit 1
+          fi
+
+      - name: Resolve latest core commit
+        id: core_commit
+        working-directory: ${{ env.CORE_DIR }}
+        run: |
+          if [[ -n "$CORE_COMMIT_INPUT" ]]; then
+            CORE_SHA="$CORE_COMMIT_INPUT"
+            echo "Using manual core commit: $CORE_SHA"
+            git checkout "$CORE_SHA"
+          else
+            CORE_SHA=$(git rev-parse HEAD)
+            echo "Using latest core commit: $CORE_SHA"
+          fi
+          echo "sha=$CORE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build valkey (valkey-server)
+        working-directory: ${{ env.CORE_DIR }}
+        run: |
+          make distclean || true
+          make BUILD_TLS=yes -j$(nproc)
+          if [[ -f "src/valkey-server" ]]; then
+            echo "✓ valkey-server build successful"
+            ./src/valkey-server --version
+          else
+            echo "✗ valkey-server build failed"
+            exit 1
+          fi
+
+      - name: Build valkey-search module (PR)
+        working-directory: ${{ env.MODULE_DIR }}
+        run: |
+          echo "Building valkey-search module..."
+          if [[ ! -f "/usr/local/bin/gcc" ]]; then
+            echo "✗ ERROR: GCC 12 not found at /usr/local/bin/gcc"
+            exit 1
+          fi
+          export PATH=/usr/local/bin:$PATH
+          export LD_LIBRARY_PATH=/usr/local/lib64:${LD_LIBRARY_PATH:-}
+          export CC=/usr/local/bin/gcc
+          export CXX=/usr/local/bin/g++
+          ./build.sh
+          if [[ ! -f ".build-release/libsearch.so" ]]; then
+            echo "✗ valkey-search module build failed"
+            exit 1
+          fi
+          echo "✓ valkey-search module build successful"
+
+      - name: Build valkey-search module (baseline)
+        id: baseline_commit
+        working-directory: ${{ env.MODULE_BASELINE_DIR }}
+        run: |
+          BASELINE_SHA=$(git rev-parse HEAD)
+          echo "sha=$BASELINE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Baseline module commit: $BASELINE_SHA"
+
+          echo "Building valkey-search module (baseline)..."
+          if [[ ! -f "/usr/local/bin/gcc" ]]; then
+            echo "✗ ERROR: GCC 12 not found at /usr/local/bin/gcc"
+            exit 1
+          fi
+          export PATH=/usr/local/bin:$PATH
+          export LD_LIBRARY_PATH=/usr/local/lib64:${LD_LIBRARY_PATH:-}
+          export CC=/usr/local/bin/gcc
+          export CXX=/usr/local/bin/g++
+          ./build.sh
+          if [[ ! -f ".build-release/libsearch.so" ]]; then
+            echo "✗ baseline valkey-search module build failed"
+            exit 1
+          fi
+          echo "✓ baseline valkey-search module build successful"
+
+      - name: Run PR benchmarks
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          echo "Running search benchmarks for PR merge commit..."
+          python benchmark.py \
+            --module "$MODULE_NAME" \
+            --config "$CONFIG_FILE" \
+            --valkey-path "$CORE_PATH" \
+            --commits "${{ steps.core_commit.outputs.sha }}" \
+            --valkey-benchmark-path "${{ github.workspace }}/valkey_ram/src/valkey-benchmark" \
+            --module-path "$MODULE_PATH/.build-release/libsearch.so" \
+            --module-commit "${{ needs.resolve.outputs.merge_commit_sha }}" \
+            --repository "${{ github.repository }}" \
+            --target-ip ${{ secrets.EC2_SEARCH_IP }} \
+            --mode both \
+            --results-dir results-pr \
+            --runs "$RUNS" \
+            ${CLUSTER_FILTER:+--cluster-mode-filter "$CLUSTER_FILTER"} \
+            ${SKIP_CONFIG_SET:+--skip-config-set} \
+            ${SKIP_PROFILING:+--skip-profiling}
+          echo "✓ Completed PR benchmarks"
+
+      - name: Kill valkey processes between runs
+        run: pkill -f valkey || echo "No valkey processes to kill"
+
+      - name: Run baseline benchmarks
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          echo "Running search benchmarks for baseline..."
+          python benchmark.py \
+            --module "$MODULE_NAME" \
+            --config "$CONFIG_FILE" \
+            --valkey-path "$CORE_PATH" \
+            --commits "${{ steps.core_commit.outputs.sha }}" \
+            --valkey-benchmark-path "${{ github.workspace }}/valkey_ram/src/valkey-benchmark" \
+            --module-path "$MODULE_BASELINE_PATH/.build-release/libsearch.so" \
+            --module-commit "${{ steps.baseline_commit.outputs.sha }}" \
+            --repository "${{ github.repository }}" \
+            --target-ip ${{ secrets.EC2_SEARCH_IP }} \
+            --mode both \
+            --results-dir results-baseline \
+            --runs "$RUNS" \
+            ${CLUSTER_FILTER:+--cluster-mode-filter "$CLUSTER_FILTER"} \
+            ${SKIP_CONFIG_SET:+--skip-config-set} \
+            ${SKIP_PROFILING:+--skip-profiling}
+          echo "✓ Completed baseline benchmarks"
+
+      - name: Compare results
+        working-directory: ${{ env.PERF_BENCHMARK_DIR }}
+        run: |
+          python ./utils/compare_benchmark_results.py \
+            --baseline ./results-baseline/search_tests/metrics.json \
+            --new ./results-pr/search_tests/metrics.json \
+            --output "${{ github.workspace }}/comparison.md" \
+            --metrics all
+
+      - name: Clean large profiling data
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Removing large .perf.data files..."
+          find "$PERF_BENCHMARK_PATH" -name "*.perf.data" -type f -delete || true
+          echo "✓ Removed raw perf data, keeping flamegraphs and reports"
+
+      - name: Upload artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: search-benchmark-pr-${{ needs.resolve.outputs.pr_number }}
+          path: |
+            ${{ env.PERF_BENCHMARK_PATH }}/results-pr/
+            ${{ env.PERF_BENCHMARK_PATH }}/results-baseline/
+            ${{ github.workspace }}/comparison.md
+
+      - name: Comment PR with results
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('${{ github.workspace }}/comparison.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const sha = '${{ needs.resolve.outputs.head_sha }}';
+            const short = sha.slice(0, 7);
+            const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`;
+            const base = '${{ needs.resolve.outputs.base_ref }}';
+            const prNumber = Number('${{ needs.resolve.outputs.pr_number }}');
+            const coreSha = '${{ steps.core_commit.outputs.sha }}';
+            const coreShort = coreSha.slice(0, 7);
+            const coreLink = `[\`${coreShort}\`](https://github.com/valkey-io/valkey/commit/${coreSha})`;
+            const baselineSha = '${{ steps.baseline_commit.outputs.sha }}';
+            const baselineShort = baselineSha.slice(0, 7);
+            const baselineLink = `[\`${baselineShort}\`](https://github.com/${owner}/${repo}/commit/${baselineSha})`;
+            const cluster = '${{ needs.resolve.outputs.cluster_filter }}';
+            const clusterLabel = cluster === 'true' ? ' (Cluster Mode)' : cluster === 'false' ? ' (Standalone)' : '';
+            const skipProf = '${{ needs.resolve.outputs.skip_profiling }}' === 'true' ? ' | Profiling: skipped' : '';
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
+
+            let header = `**Search Benchmark${clusterLabel} ran on commit:** ${link}\n`;
+            header += `**Baseline (module):** ${baselineLink} (\`${base}\`)\n`;
+            header += `**Core (valkey-server):** ${coreLink}\n`;
+            header += `**Runs:** ${process.env.RUNS}${skipProf} | [Workflow Run](${runUrl})\n\n`;
+
+            await github.rest.issues.createComment({
+              issue_number: prNumber,
+              owner,
+              repo,
+              body: header + body
+            });
+
+      - name: Cleanup
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "Cleaning up workspace..."
+          pkill -f valkey || echo "No valkey processes found to kill"
+
+          # Datasets persist via symlink to the host cache; only remove checkouts.
+          echo "Datasets persist at /home/ec2-user/search-datasets-cache"
+          rm -rf "${{ github.workspace }}/comparison.md" \
+                 "${{ github.workspace }}/valkey_ram" \
+                 "$CORE_PATH" \
+                 "$MODULE_PATH" \
+                 "$MODULE_BASELINE_PATH" \
+                 "$PERF_BENCHMARK_PATH"
+
+      # Only meaningful for the label path; resolve.outputs.label is empty for
+      # manual dispatch, so this step no-ops there.
+      - name: Remove benchmark label
+        if: always() && needs.resolve.outputs.label != ''
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.removeLabel({
+              issue_number: Number('${{ needs.resolve.outputs.pr_number }}'),
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: '${{ needs.resolve.outputs.label }}'
+            }).catch(err => console.log('label not present', err.message));

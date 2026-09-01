@@ -937,6 +937,97 @@ FilterParser::ParseTextTokens(
   return pred;
 }
 
+// If the parser is positioned at a `=> { ... }` QMA block, consume it and
+// apply the parsed weight to `predicate`.
+absl::Status FilterParser::MaybeConsumeQMABlock(query::Predicate& predicate) {
+  SkipWhitespace();
+  size_t saved_pos = pos_;
+  if (IsEnd() || pos_ + 1 >= expression_.size() || expression_[pos_] != '=' ||
+      expression_[pos_ + 1] != '>') {
+    return absl::OkStatus();
+  }
+  // Look ahead past => and optional whitespace for {.
+  size_t lookahead = pos_ + 2;
+  while (lookahead < expression_.size() &&
+         std::isspace(expression_[lookahead])) {
+    lookahead++;
+  }
+  // Only `=> {` is a QMA block. `=> [` is the vector KNN delimiter (handled
+  // upstream), so leave the position untouched in that case.
+  if (lookahead >= expression_.size() || expression_[lookahead] != '{') {
+    pos_ = saved_pos;
+    return absl::OkStatus();
+  }
+  pos_ = lookahead + 1;
+  VMSDK_ASSIGN_OR_RETURN(auto weight, ParseQMABlock());
+  predicate.SetWeight(static_cast<float>(weight));
+  return absl::OkStatus();
+}
+
+// Parses a QMA block. Expects the parser position to be after `=> {`.
+// Parses `$weight:` followed by a positive float, expects closing `}`.
+// Returns the weight value on success.
+absl::StatusOr<double> FilterParser::ParseQMABlock() {
+  // Parse attribute name starting with $
+  if (!Match('$')) {
+    if (IsEnd() || Peek() == '}') {
+      return absl::InvalidArgumentError("Missing QMA attribute name");
+    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected character in QMA block at position ", pos_ + 1,
+                     ": expected '$'"));
+  }
+  // Parse the attribute name
+  std::string attr_name;
+  while (!IsEnd() && Peek() != ':' && !std::isspace(Peek()) && Peek() != '}') {
+    attr_name += expression_[pos_++];
+  }
+  // Only $weight is supported (case-insensitive)
+  if (absl::AsciiStrToLower(attr_name) != "weight") {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported QMA attribute: `$", attr_name, "`"));
+  }
+  // Expect colon after attribute name
+  if (!Match(':')) {
+    return absl::InvalidArgumentError(
+        "Expected ':' following QMA attribute name");
+  }
+  SkipWhitespace();
+  // Parse the weight value
+  if (IsEnd() || Peek() == ';' || Peek() == '}') {
+    return absl::InvalidArgumentError("Missing value for QMA attribute name");
+  }
+  // Parse the number manually. Non-numeric input fails SimpleAtod below and
+  // non-positive values (including a leading '-') are caught by value <= 0.
+  std::string number_str;
+  if (!IsEnd() && Peek() == '-') {
+    number_str += expression_[pos_++];
+  }
+  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+    number_str += expression_[pos_++];
+  }
+  double value;
+  if (!absl::SimpleAtod(number_str, &value)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a positive number");
+  }
+  if (value <= 0.0) {
+    return absl::InvalidArgumentError("Weight must be a positive number");
+  }
+  // SetWeight narrows to float, so a value above FLT_MAX would become inf and
+  // then produce a NaN score wherever it meets a zero document score. Reject it
+  // here instead.
+  if (value > static_cast<double>(std::numeric_limits<float>::max())) {
+    return absl::InvalidArgumentError("Weight must be a finite number");
+  }
+  // Consume optional semicolon
+  Match(';');
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Missing closing '}' in QMA block");
+  }
+  return value;
+}
+
 // Parsing rules:
 // 1. Predicate evaluation is done with left-associative grouping while the OR
 // operator has lower precedence than the AND operator. precedence. For
@@ -996,6 +1087,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         return absl::InvalidArgumentError(
             absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
       }
+      // Check for QMA block: => { ... } after closing )
+      VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
       if (result.prev_predicate) {
         node_count_++;
       }
@@ -1063,6 +1156,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         }
         predicate = std::move(*predicate_opt);
       }
+      // Attach an optional QMA block (=> { ... }) to this bare term, matching
+      // RediSearch which allows attributes on a term, not only on a group.
+      VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
       if (result.prev_predicate) {
         node_count_++;
       }

@@ -46,6 +46,7 @@ async function gatherPRs(github, owner, repo) {
             reviews(first:100) { nodes { author { login } state submittedAt } }
             comments(first:100) { nodes { author { login } body } }
             commits(last:1) { nodes { commit { statusCheckRollup { state } } } }
+            closingIssuesReferences(first:20) { nodes { number } }
           }
         }
       }
@@ -59,6 +60,24 @@ async function gatherPRs(github, owner, repo) {
     cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
   } while (cursor);
   return nodes;
+}
+
+// Open issues carrying a given label (e.g. the "1.3.0" release scope). The REST
+// issues endpoint returns PRs too, so drop anything with a pull_request field.
+async function gatherIssues(github, owner, repo, label) {
+  if (!label) return [];
+  const raw = await github.paginate(github.rest.issues.listForRepo,
+    { owner, repo, state: 'open', labels: label, per_page: 100 });
+  return raw.filter(i => !i.pull_request).map(i => {
+    const labels = (i.labels || []).map(l => (typeof l === 'string' ? l : l.name)).filter(Boolean);
+    return {
+      number: i.number, title: i.title, url: i.html_url, labels,
+      assignees: (i.assignees || []).map(a => a.login),
+      daysIdle: Math.floor((Date.now() - new Date(i.updated_at).getTime()) / 86400000),
+      // Draw the eye to release blockers — the "prio 1" case.
+      blocker: labels.some(l => /blocker/i.test(l) || /^release blocker$/i.test(l)),
+    };
+  });
 }
 
 const FP_RE = /\*\*First Pass Reviewer:\s*@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\*\*/;
@@ -136,11 +155,15 @@ function shape(node, firstPassPool, maintainerPool) {
   const ci = rollup ? rollup.state : null;      // SUCCESS / FAILURE / ERROR / PENDING / EXPECTED / null
   const mergeable = node.mergeable || 'UNKNOWN'; // MERGEABLE / CONFLICTING / UNKNOWN
 
+  // Issues this PR will close on merge (from "Fixes/Closes #N" links) — used to
+  // tell which release-scoped issues already have a PR in flight.
+  const closesIssues = ((node.closingIssuesReferences || {}).nodes || []).map(n => n.number);
+
   return {
     number: node.number, title: node.title, url: node.url, isDraft: node.isDraft,
     author, firstPass, maintainers, other, via,
     reviewerCount: universe.size, daysIdle, stale: daysIdle >= STALE_DAYS,
-    ci, mergeable,
+    ci, mergeable, closesIssues,
   };
 }
 
@@ -401,6 +424,9 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     badge('ready for maintainer', readyMaint, 'blueviolet'),
     badge('approved', approved, 'brightgreen'),
     badge(`stale >${STALE_DAYS}d`, stale, stale ? 'lightgrey' : 'green'),
+    ...(opts.releaseLabel
+      ? [badge(`${opts.releaseLabel} no-PR`, (opts.issues || []).length, (opts.issues || []).length ? 'critical' : 'green')]
+      : []),
   ].join(' '));
   L.push('');
   L.push(`_Auto-updated every ~15 min from **${targetLabel}** open PRs. Last run: **${now}**._`);
@@ -415,6 +441,31 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push(`    "P4/none" : ${byPri[4] + byPri.none}`);
   L.push('```');
   L.push('');
+
+  // Release-scope issues with no open PR — the gap that's hard to see from the
+  // PR list alone (an issue in the release with nothing being merged toward it).
+  const relLabel = opts.releaseLabel;
+  if (relLabel) {
+    const relIssues = (opts.issues || []).slice()
+      .sort((a, b) => (Number(b.blocker) - Number(a.blocker)) || (b.daysIdle - a.daysIdle) || (a.number - b.number));
+    L.push(`## 🚩 \`${relLabel}\` issues with no open PR`);
+    L.push('');
+    if (!relIssues.length) {
+      L.push(`_Every open \`${relLabel}\` issue has a PR in flight. 🎉_`);
+    } else {
+      L.push(`_${relIssues.length} open \`${relLabel}\` issue(s) have no PR that closes them (🔴 = release blocker) — nothing is being merged toward them yet._`);
+      L.push('');
+      L.push('| Issue | Title | Labels | Assignee | Idle |');
+      L.push('|-------|-------|--------|----------|:----:|');
+      for (const it of relIssues) {
+        const t = (it.blocker ? '🔴 ' : '') + esc(it.title);
+        const labels = it.labels.length ? it.labels.map(l => `\`${esc(l)}\``).join(' ') : '—';
+        const who = it.assignees.length ? it.assignees.map(mention).join(', ') : '—';
+        L.push(`| [#${it.number}](${it.url}) | ${t} | ${labels} | ${who} | ${it.daysIdle}d |`);
+      }
+    }
+    L.push('');
+  }
 
   // How to edit (the whole point: no write access needed) — always visible.
   L.push('## ✍️ How to update this board');
@@ -606,6 +657,17 @@ module.exports = async ({ github, context, core }) => {
   const prs = nodes.map(n => shape(n, firstPassPool, maintainerPool));
   core.info(`Gathered ${prs.length} open PRs from ${readOwner}/${readRepo}.`);
 
+  // 1b. Release-scope issues (e.g. "1.3.0") that no open PR is set to close.
+  const releaseLabel = (process.env.RELEASE_LABEL || '').trim();
+  let noPrIssues = [];
+  if (releaseLabel) {
+    const closed = new Set();
+    for (const pr of prs) for (const n of (pr.closesIssues || [])) closed.add(n);
+    const issues = await gatherIssues(github, readOwner, readRepo, releaseLabel);
+    noPrIssues = issues.filter(i => !closed.has(i.number));
+    core.info(`Gathered ${issues.length} open '${releaseLabel}' issue(s); ${noPrIssues.length} with no PR.`);
+  }
+
   // 2. Load prior state from the issue body.
   const issue = await github.rest.issues.get({ owner: hostOwner, repo: hostRepo, issue_number });
   const state = loadState(issue.data.body || '');
@@ -659,10 +721,11 @@ module.exports = async ({ github, context, core }) => {
   // limit, re-render without the (unbounded) per-reviewer queues so the update
   // still succeeds and never silently fails every run.
   const targetLabel = `${readOwner}/${readRepo}`;
-  let body = renderBody(prs, state, pools, now, targetLabel);
+  const renderOpts = { issues: noPrIssues, releaseLabel };
+  let body = renderBody(prs, state, pools, now, targetLabel, renderOpts);
   if (body.length > GH_BODY_MAX) {
     core.warning(`Body ${body.length} > ${GH_BODY_MAX} chars — rendering compact (per-reviewer queues omitted).`);
-    body = renderBody(prs, state, pools, now, targetLabel, { compact: true });
+    body = renderBody(prs, state, pools, now, targetLabel, { ...renderOpts, compact: true });
   }
   // Persist BEFORE deleting/posting comments. If this throws, we abort here and
   // no command comment is lost — the next scheduled run reprocesses it.

@@ -190,7 +190,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   inline bool HasScoreField() const { return score_field_.has_value(); }
   float GetDocumentScore(BorrowedInternedStringPtr key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
-    auto itr = index_key_info_.find(key.AsInternedRef());
+    auto itr = index_key_info_.find(key);
     if (itr == index_key_info_.end()) {
       return score_;
     }

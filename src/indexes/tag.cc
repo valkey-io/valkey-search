@@ -24,6 +24,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
+#include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -106,6 +107,12 @@ void Tag::DeindexTagForKey(absl::string_view tag,
 
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
                                             absl::string_view data) {
+  if (!utils::IsValidUtf8(data)) {
+    absl::MutexLock lock(&index_mutex_);
+    untracked_keys_.insert(key);
+    return RecordResult::kInvalidData;
+  }
+
   auto interned_data = StringInternStore::Intern(data);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
@@ -207,6 +214,12 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
                                                absl::string_view data) {
+  if (!utils::IsValidUtf8(data)) {
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kIdentifier);
+    return RecordResult::kInvalidData;
+  }
+
   auto interned_data = StringInternStore::Intern(data);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {

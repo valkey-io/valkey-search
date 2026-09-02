@@ -664,6 +664,16 @@ struct ResolvedLeaf {
   // per candidate document.
   float term_weight = 0.0f;
 
+  // --- Field scoping (text and expansion leaves) ---
+  // One posting tree serves every TEXT field, so a posting only supplies
+  // scoring inputs when the key carries the term in a field the predicate asked
+  // for.
+  uint64_t field_mask = ~0ULL;
+  // Gates stem-variant postings; stemming is enabled per field.
+  uint64_t stem_field_mask = 0;
+  // Is postings[0] the original word (not a stem variant)?
+  bool has_original = false;
+
   // --- Tag leaf (TagPredicate) ---
   // Null for text leaves. When set, `tag_values` holds one (query tag value,
   // precomputed IDF) entry per value that actually exists in the index; the
@@ -683,10 +693,12 @@ struct ResolvedLeaf {
   // One entry per matched expansion term: its posting list plus that term's own
   // precomputed IDF. An expansion contributes exactly ONE matched term's BM25
   // (its own IDF and TF), never the sum; which term is unspecified, so this
-  // path takes the first posting containing the key while the in-iterator path
-  // (TermIterator::per_term_idf_) takes the merge heap's front.
+  // path takes the first posting containing the key in a requested field while
+  // the in-iterator path (TermIterator::per_term_idf_) takes the merge heap's
+  // front, which InsertValidKeyIterator already field-filtered.
   // Inline capacity stays small: ResolvedLeaf is a by-value hash-map payload
   // shared with term/tag leaves, so 200 slots would cost ~3.2 KB per leaf.
+  // Expansions never stem, so `field_mask` gates every entry.
   struct ExpansionTerm {
     indexes::text::InvasivePtr<indexes::text::Postings> postings;
     float idf = 0.0f;
@@ -698,6 +710,17 @@ struct ResolvedLeaf {
 // walk can look leaves up without a dynamic_cast: a hit is a scored leaf, a
 // miss is a leaf that resolved to nothing scoreable.
 using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
+
+// Collapses an all-fields mask (what the parser builds for an unscoped query)
+// to the `~0ULL` sentinel, so LookupKey skips the per-position scan. Field
+// numbers are dense from 0 (TextIndexSchema::AllocateTextFieldNumber).
+uint64_t ScoringFieldMask(uint64_t field_mask,
+                          const indexes::text::TextIndexSchema *schema) {
+  const uint8_t num_fields = schema->GetNumTextFields();
+  if (num_fields == 0 || num_fields >= 64) return field_mask;
+  const uint64_t all_fields = (1ULL << num_fields) - 1;
+  return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
+}
 
 // Appends one matched expansion term -- its posting list plus that term's own
 // precomputed IDF -- to `leaf`. Used when resolving a prefix/suffix/fuzzy leaf,
@@ -761,17 +784,23 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       };
       bool is_expansion = true;
       if (auto *p = dynamic_cast<const PrefixPredicate *>(predicate)) {
+        expansion_leaf.field_mask =
+            ScoringFieldMask(p->GetFieldMask(), p->GetTextIndexSchema().get());
         add_expansion(p->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
                       p->GetTextString());
       } else if (auto *s = dynamic_cast<const SuffixPredicate *>(predicate)) {
         // The suffix trie stores reversed words, so a suffix is a prefix query
         // over it; no trie (no WITHSUFFIXTRIE) means no matched terms.
+        expansion_leaf.field_mask =
+            ScoringFieldMask(s->GetFieldMask(), s->GetTextIndexSchema().get());
         auto suffix = s->GetTextIndexSchema()->GetTextIndex()->GetSuffix();
         if (suffix.has_value()) {
           const absl::string_view term = s->GetTextString();
           add_expansion(suffix->get(), std::string(term.rbegin(), term.rend()));
         }
       } else if (auto *f = dynamic_cast<const FuzzyPredicate *>(predicate)) {
+        expansion_leaf.field_mask =
+            ScoringFieldMask(f->GetFieldMask(), f->GetTextIndexSchema().get());
         auto expansion = indexes::text::FuzzySearch::Search(
             f->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
             f->GetTextString(), f->GetDistance(), max_words);
@@ -803,6 +832,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       const auto &prefix = text_index->GetPrefix();
 
       ResolvedLeaf leaf;
+      leaf.field_mask =
+          ScoringFieldMask(term_pred->GetFieldMask(), text_index_schema.get());
       // Collect the words the term matches on: the original word plus, for a
       // non-exact term on a stemmed field, every variant sharing its stem root
       // (matching TermPredicate::Evaluate). Ingestion stores original words in
@@ -817,9 +848,15 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         }
       };
       add_word(term_pred->GetTextString());
+      // postings[0] is the original word only if it was found above.
+      leaf.has_original = !leaf.postings.empty();
 
       const uint64_t stem_field_mask =
           term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
+      // Gates the variants appended below; must stay non-zero whenever any is
+      // pushed, or ScoreNode gates it on mask 0 and drops the document.
+      leaf.stem_field_mask =
+          ScoringFieldMask(stem_field_mask, text_index_schema.get());
       if (!term_pred->IsExact() && stem_field_mask != 0) {
         absl::InlinedVector<absl::string_view,
                             indexes::text::kStemVariantsInlineCapacity>
@@ -957,25 +994,29 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       // Expansion leaf: contribute exactly ONE matched term's BM25 (its own IDF
       // + own F), never the sum. Pick the first expansion term whose posting
-      // contains this key -- the representative is unspecified per the oracle,
-      // so this may differ from the in-iterator heap-order pick on multi-match
-      // docs; both honor the one-term invariant. doc_len is co-located in the
-      // matched posting entry.
+      // contains this key in a requested field -- without the field gate a term
+      // the doc carries only elsewhere would supply the IDF and F. The
+      // representative is unspecified per the oracle, so this may differ from
+      // the in-iterator heap-order pick on multi-match docs; both honor the
+      // one-term invariant. doc_len is co-located in the matched posting entry.
       if (!leaf.expansion_terms.empty()) {
         for (const auto &term : leaf.expansion_terms) {
-          if (auto entry = term.postings->LookupKey(key)) {
+          if (auto entry = term.postings->LookupKey(key, leaf.field_mask)) {
             return score_ctx.scorer->ScoreLeaf(
                 {term.idf, entry->tf, entry->doc_len, score_ctx.avg_doc_len,
                  predicate->GetWeight()});
           }
         }
-        return std::nullopt;  // doc carries none of the expansion terms
+        return std::nullopt;  // doc carries no expansion term in those fields
       }
 
       if (leaf.postings.empty()) return std::nullopt;
 
       // Sum the term frequency across the original word and its stem variants:
-      // a doc matches the leaf if any resolved posting list contains its key.
+      // a doc matches the leaf if any resolved posting list holds its key in a
+      // requested field. Stemming is per-field, so a variant counts only where
+      // it is enabled: variants take the stem mask, the original the query mask
+      // (as TermIterator::InsertValidKeyIterator does).
       // doc_len is co-located in the posting entry, so the same lookup yields
       // it (identical across postings for one key) — no separate per-key
       // scoring-map probe. It is 0 only when no posting matches, in which case
@@ -983,8 +1024,11 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // scorer, which ScoreLeaf treats as a degenerate corpus and scores 0.
       uint32_t tf = 0;
       uint32_t doc_len = 0;
-      for (const auto &postings : leaf.postings) {
-        if (auto entry = postings->LookupKey(key)) {
+      for (size_t i = 0; i < leaf.postings.size(); ++i) {
+        const uint64_t field_mask = (i == 0 && leaf.has_original)
+                                        ? leaf.field_mask
+                                        : leaf.stem_field_mask;
+        if (auto entry = leaf.postings[i]->LookupKey(key, field_mask)) {
           tf += entry->tf;
           doc_len = entry->doc_len;
         }

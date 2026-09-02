@@ -70,6 +70,15 @@ IDX_TAG_PREFIX = [
     "SCHEMA", "body", "TEXT", "NOSTEM", "cat", "TAG", "rank", "NUMERIC",
 ]
 
+# Two TEXT fields share one posting tree, so which field a term occurred in is
+# visible only through the field mask. NUMERIC forces the extra-step scoring path;
+# WITHSUFFIXTRIE enables the suffix expansion.
+IDX_FIELD_SCOPE = [
+    "FT.CREATE", "idxFieldScope", "ON", "HASH", "PREFIX", "1", "fs:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+    "title", "TEXT", "NOSTEM", "rank", "NUMERIC",
+]
+
 
 # =====================================================================
 # Documents
@@ -129,6 +138,20 @@ EXPANSION_DOCS = {
     "exp:jog": {"body": "jogging"},
     "exp:dog": {"body": "dog"},
 }
+
+# Field-scope corpus: fs:1 carries `alxta` in title and `alzta` in body, the rest
+# carry `alxta` in body. dt: alxta=4, alzta=1. Every doc_len is 2 = avg_doc_len,
+# so the TF factor is exactly 1 and each score equals its term's IDF. `alxta`
+# sorts ahead of `alzta` in the forward AND the reversed trie, so a field-blind
+# expansion would credit fs:1 with alxta -- the wrong term, at 1/11th the score.
+FIELD_SCOPE_DOCS = {
+    "fs:1": {"body": "alzta", "title": "alxta", "rank": "1"},
+    "fs:2": {"body": "alxta", "title": "zed", "rank": "2"},
+    "fs:3": {"body": "alxta", "title": "zed", "rank": "3"},
+    "fs:4": {"body": "alxta", "title": "zed", "rank": "4"},
+}
+IDF_ALZTA = 1.203973
+IDF_ALXTA = 0.105361
 
 # Tag prefix corpus: cat dt redis=4 (a,b,c,multi), redcap=2 (d,multi), so the two
 # values matching `red*` carry distinct IDFs and the value a multi-match doc is
@@ -338,6 +361,28 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, title = search(client, IDX_MAIN, "@title:alpha")
         assert title == pytest.approx({"doc:1": scoped["doc:1"]},
                                       abs=SCORE_ABS_TOL)
+
+        # TF is doc-wide, but ADMISSION stays per-field: a term the doc carries
+        # only in another field must contribute nothing. fs:1 has `alxta` in title
+        # alone, so the OR admits it on rank while the @body leaf scores 0.
+        load(client, IDX_FIELD_SCOPE, FIELD_SCOPE_DOCS)
+        keys, or_scoped = search(client, IDX_FIELD_SCOPE,
+                                 "(@body:alxta)|(@rank:[1 1])")
+        assert keys == ["fs:2", "fs:3", "fs:4", "fs:1"]
+        assert or_scoped == pytest.approx(
+            {"fs:2": IDF_ALXTA, "fs:3": IDF_ALXTA, "fs:4": IDF_ALXTA,
+             "fs:1": 0.0}, abs=SCORE_ABS_TOL)
+
+        # Scoping the same leaf to the field fs:1 does carry admits only fs:1.
+        _, title_scoped = search(client, IDX_FIELD_SCOPE,
+                                 "(@title:alxta)|(@rank:[1 1])")
+        assert title_scoped == pytest.approx({"fs:1": IDF_ALXTA},
+                                             abs=SCORE_ABS_TOL)
+
+        # Unscoped, the mask covers both fields, so every doc scores on alxta.
+        _, all_fields = search(client, IDX_FIELD_SCOPE, "alxta @rank:[0 100]")
+        assert all_fields == pytest.approx(
+            {f"fs:{i}": IDF_ALXTA for i in range(1, 5)}, abs=SCORE_ABS_TOL)
 
     # Group 6: an exact phrase narrows admission by adjacency without changing scores.
     def test_exact_phrase(self):
@@ -630,6 +675,28 @@ class TestScoring(ValkeySearchTestCaseBase):
             assert scores == pytest.approx(
                 {"doc:3": 2.234903, "doc:1": 1.492684},
                 abs=SCORE_ABS_TOL), pattern
+
+        # A field-scoped expansion must represent a doc by a term it carries in
+        # THAT field. fs:1 holds alzta in body and alxta in title, so despite
+        # alxta sorting first it may only be scored on alzta -- one term matches
+        # per field here, so unlike above the pick is determined and pinnable.
+        load(client, IDX_FIELD_SCOPE, FIELD_SCOPE_DOCS)
+        for pattern in ("@body:al*", "@body:*ta", "@body:%alata%"):
+            keys, scores = search(client, IDX_FIELD_SCOPE,
+                                  f"{pattern} @rank:[0 100]")
+            assert keys == ["fs:1", "fs:2", "fs:3", "fs:4"], pattern
+            assert scores == pytest.approx(
+                {"fs:1": IDF_ALZTA, "fs:2": IDF_ALXTA,
+                 "fs:3": IDF_ALXTA, "fs:4": IDF_ALXTA},
+                abs=SCORE_ABS_TOL), pattern
+
+        # Scoped to title, the same patterns reach only fs:1, and only via alxta.
+        # No suffix pattern: only `body` has WITHSUFFIXTRIE.
+        for pattern in ("@title:al*", "@title:%alata%"):
+            _, scores = search(client, IDX_FIELD_SCOPE,
+                               f"{pattern} @rank:[0 100]")
+            assert scores == pytest.approx({"fs:1": IDF_ALXTA},
+                                           abs=SCORE_ABS_TOL), pattern
 
     # Group 16: a tag prefix scores ONE matched value, an explicit union sums.
     def test_tag_prefix_scoring(self):

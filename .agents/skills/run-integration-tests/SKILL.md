@@ -1,6 +1,6 @@
 ---
 name: run-integration-tests
-description: Run and diagnose Valkey Search C++ and Python integration harnesses, including standalone, cluster/coordinator, vector-search, and stability tests. Use when executing or troubleshooting integration tests in a valkey-search checkout.
+description: Run or troubleshoot Valkey Search C++ and Python integration tests, including focused development runs, full-suite verification, and packaging/build or runtime failure classification.
 ---
 
 # Run Integration Tests
@@ -29,15 +29,8 @@ top-level integration harnesses:
    repository-owned bundles as packaging/build failures; classify stale or
    externally misconfigured dependencies as environment failures.
 
-2. Run the full integration suite through the devcontainer:
-
-   ```bash
-   .devcontainer/run_in_docker.sh ./build.sh --run-integration-tests --debug
-   ```
-
-   Do not run integration servers directly on the host.
-
-3. For a requested focused run or fast iteration, inspect:
+2. During development, run the smallest focused test that exercises the
+   changed path. Inspect the available selectors with:
 
    ```bash
    ./build.sh --help
@@ -47,14 +40,17 @@ top-level integration harnesses:
    Use `build.sh --run-integration-tests=<pattern>` for Python tests or
    `testing/integration/run.sh --test <suite>` for C++ suite selection.
 
-## Python Cluster Tests
+3. Before opening or updating a PR, run the full integration suite through the
+   devcontainer:
 
-For coordinator or replica changes, run the applicable test in standalone and
-cluster modes. For fan-out coverage, use data whose matching documents span at
-least two shards. Add failover or recovery tests only when the changed path
-requires them.
+   ```bash
+   .devcontainer/run_in_docker.sh ./build.sh --run-integration-tests --debug
+   ```
+
+   Do not run integration servers directly on the host.
 
 ## Failure Reporting
 
 Report the command, selector, harness, mode, and relevant logs. Classify the
-result as a product, harness, cluster-readiness/timing, or environment failure.
+result as a product, packaging/build, harness, cluster-readiness/timing, or
+environment failure.

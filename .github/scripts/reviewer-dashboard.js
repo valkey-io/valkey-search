@@ -5,8 +5,8 @@
 //      reviewer as auto-assigned (from the auto-assign bot comment) or manual,
 //      first-pass or maintainer, with their latest review status.
 //   2. Reads the dashboard issue's *comments*, which are one-line commands that
-//      anyone (no repo write access needed) can post: /priority, /note, /stage,
-//      /update. It applies them to the board state, then DELETES each processed
+//      repository collaborators and maintainers can post: /priority, /note,
+//      /stage, /update. It applies them to the board state, then DELETES each processed
 //      command comment so the issue never accrues a pile of comments (that was
 //      the "page gets slow" risk).
 //   3. Persists canonical human state in a hidden JSON block inside the issue
@@ -255,6 +255,13 @@ const HINT_MARKER = '<!--HINT-->';
 // and never notifies.
 const mention = login => login;
 
+// Commands are limited to repository collaborators and maintainers: they change
+// the shared board, so they aren't open to arbitrary users on a public repo.
+// author_association (from the issue comments API) is OWNER/MEMBER for
+// maintainers and COLLABORATOR for added collaborators; CONTRIBUTOR,
+// FIRST_TIME_CONTRIBUTOR and NONE are turned away.
+const PRIVILEGED_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+
 // ctx (optional) = { prByNum } — needed by /needs-review to find a PR's maintainers.
 //
 // Returns the log message on success, null for a no-op, or { hint } when a
@@ -453,10 +460,10 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push('```');
   L.push('');
 
-  // How to edit (the whole point: no write access needed) — always visible.
+  // How to edit — always visible. Commands are limited to collaborators/maintainers.
   L.push('## ✍️ How to update this board');
   L.push('');
-  L.push('Anyone can edit — **no repo write access needed**. Add a **comment** with one or more commands; the bot applies it, then deletes your comment so this page stays fast.');
+  L.push('**Repository collaborators and maintainers** can drive this board: add a **comment** with one or more commands; the bot applies it, then deletes your comment so this page stays fast.');
   L.push('');
   L.push('**General commands** — act on a PR (the priority tables below):');
   L.push('');
@@ -735,6 +742,13 @@ module.exports = async ({ github, context, core }) => {
       continue;
     }
     const cmds = parseCommands(body, author);
+    // Gate: only collaborators and maintainers can drive the board. Anyone else's
+    // command is turned away with a nudge and cleaned up, never applied.
+    if ((cmds.length || looksLikeCommand(body)) && !PRIVILEGED_ASSOCIATIONS.has(c.author_association)) {
+      hints.push({ author, lines: ['Slash commands are limited to repository collaborators and maintainers.'] });
+      toDelete.push(c.id);
+      continue;
+    }
     if (cmds.length) {
       const lines = [];
       for (const cmd of cmds) { const r = applyCommand(state, cmd, now, ctx); if (r && r.hint) lines.push(r.hint); }

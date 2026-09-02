@@ -92,7 +92,12 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if isinstance(x, list):
+        if x is None:
+            # A RESP2 null bulk string: an APPLY expression that evaluated to
+            # Nil. Both engines report it this way, so keep it as None and let
+            # compare_row match it by equality.
+            result = None
+        elif isinstance(x, list):
             # TOLIST reducer returns a Python list for both hash and json
             result = x
         elif key_type == "json" and isinstance(x, int):
@@ -171,6 +176,15 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
+def row_sort_key(row):
+    """Deterministic ordering key for a result row.
+
+    Values can be bytes, str, int, list or None, which are not mutually
+    orderable, so compare their string forms.
+    """
+    return sorted((str(k), str(v)) for k, v in row.items())
+
+
 def unpack_result(cmd, key_type, rs, sortkeys):
     if "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
@@ -189,7 +203,12 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             out.sort(key=itemgetter(*sortkeys))
         except KeyError:
             if sortkeys == ['__key']:
-                # we're not smart about when there is or isn't a key in the return
+                # No '__key' in the reply. That means an FT.AGGREGATE with
+                # neither SORTBY nor GROUPBY, where row order is unspecified:
+                # the two engines routinely emit tied rows in different orders.
+                # Order is not part of the contract here, so canonicalize it by
+                # row content and let the positional comparison proceed.
+                out.sort(key=row_sort_key)
                 return out
             print("Failed on sortkeys: ", sortkeys)
             print("CMD:", cmd)

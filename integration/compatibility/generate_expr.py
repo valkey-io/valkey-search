@@ -34,6 +34,18 @@ DATE_COMPONENT_FNS = {"dayofweek", "dayofmonth", "dayofyear", "monthofyear",
                       "year", "minute", "hour", "day", "month"}
 INFINITY_LITERALS = {"+inf", "-inf"}
 
+# A vector field has no clean string conversion: on a hash its raw value is a
+# binary blob containing NUL bytes. Redisearch's `contains` scans the needle as
+# a C string rather than honoring its length, so a blob needle never terminates
+# the scan -- `contains(<any string-valued operand>, @v1)` never returns and
+# pins the Redis server at 100% CPU. valkey-search answers all of these
+# normally, so this is a defect in the reference engine, not in valkey-search;
+# there is simply no reference answer to capture. Skip the vector field in the
+# needle (second) position of `contains`. The haystack position is fine and
+# stays in the sweep, as does `contains` on the JSON datasets where the vector
+# renders as a numeric array with no embedded NULs.
+VECTOR_OPERANDS = {"@v1"}
+
 # (filter, operand_values). The filter must match the same set of rows in
 # Redisearch and valkey_search — otherwise the per-row APPLY results are
 # compared against different row sets and every test cascades into a
@@ -99,6 +111,8 @@ class TestExprCompatibility(BaseCompatibilityTest):
         for fn in BINARY_FUNCS:
             for l in operands:
                 for r in operands:
+                    if fn == "contains" and r in VECTOR_OPERANDS:
+                        continue  # hangs Redisearch, see VECTOR_OPERANDS
                     self._apply(key_type, filter_q, f"{fn}({l},{r})")
 
     def test_substr(self, key_type, dataset):

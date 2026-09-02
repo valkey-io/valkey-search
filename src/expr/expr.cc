@@ -496,16 +496,16 @@ struct Compiler {
   // The precedence ordering is (highest to lowest)
   //
   //  Primary: Number, Field, ()
-  //  PowOp:   ^                 (Redisearch-compatible since 1.2.1)
+  //  PowOp:   ^                 (Redisearch-compatible since 1.3.0)
   //  MulOp:   * /
   //  AddOp:   + -
   //  CmpOp:   < <= == != > >=
-  //  LandOp:  &&                (Redisearch-compatible since 1.2.1)
+  //  LandOp:  &&                (Redisearch-compatible since 1.3.0)
   //  LorOp:   ||
   //
-  // Pre-1.2.1 valkey-search put `^` at the same precedence as `*` and `/`,
+  // Pre-1.3.0 valkey-search put `^` at the same precedence as `*` and `/`,
   // making expressions like `@a*@b^@c` parse as `(@a*@b)^@c` instead of the
-  // Redisearch-compatible `@a*(@b^@c)`. Pre-1.2.1 also put `&&` and `||` at
+  // Redisearch-compatible `@a*(@b^@c)`. Pre-1.3.0 also put `&&` and `||` at
   // the same level, making `@a||@b&&@c` parse as `(@a||@b)&&@c` instead of
   // the C/SQL-standard `@a||(@b&&@c)` that Redisearch follows. Both fixes are
   // gated by search.emulate-release per COMPATIBILITY.md.
@@ -518,7 +518,7 @@ struct Compiler {
       return DoDyadic(ctx, &Compiler::CmpOp, kLegacyLogicalOps);
     };
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 2, 1, "ft_aggregate_logical_precedence", fixed, legacy);
+        1, 3, 0, "ft_aggregate_logical_precedence", fixed, legacy);
   }
   absl::StatusOr<ExprPtr> LandOp(CompileContext &ctx) {
     static const std::vector<DyadicOp> ops{{"&&", &FuncLand}};
@@ -547,7 +547,7 @@ struct Compiler {
       return DoDyadic(ctx, &Compiler::Primary, kLegacyMulOps);
     };
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 2, 1, "ft_aggregate_pow_precedence", fixed, legacy);
+        1, 3, 0, "ft_aggregate_pow_precedence", fixed, legacy);
   }
   // `^` is right-associative in Redisearch: `a^b^c` == `a^(b^c)`. DoDyadic
   // would produce a left-fold (`(a^b)^c`), so recurse into PowOp for the rhs

@@ -588,7 +588,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 // Returns a token within an exact phrase parsing it until reaching the
 // token boundary while handling escape chars. `delim` is the character that
 // closes the phrase: `"` for double-quoted phrases, `'` for apostrophe-phrases
-// (the latter is enabled by the search.emulate-release >= 1.2.1 gate in
+// (the latter is enabled by the search.emulate-release >= 1.3.0 gate in
 // ParseTextTokens; see COMPATIBILITY.md).
 // Quoted Text Syntax:
 // word1 word2<delim> word3 -> word1
@@ -822,7 +822,7 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // a text predicate.
 // Text Parsing Syntax:
 //   Quoted: "word1 word2" -> ComposedAND(exact, slop=0, inorder=true)
-//   Apostrophe-quoted (>= 1.2.1 with emulate-release):
+//   Apostrophe-quoted (>= 1.3.0 with emulate-release):
 //     'word1 word2' -> ComposedAND(exact, slop=0, inorder=true)
 //   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
@@ -838,12 +838,12 @@ FilterParser::ParseTextTokens(
   // Redisearch treats unescaped `'` as a secondary phrase delimiter, paired
   // left-to-right and structurally equivalent to `"`. An apostrophe with no
   // matching close ahead is silently treated as a separator — so we look
-  // ahead before entering phrase mode. Pre-1.2.1 valkey-search dropped
+  // ahead before entering phrase mode. Pre-1.3.0 valkey-search dropped
   // unescaped apostrophes as ordinary punctuation, which silently changed
   // the parse of queries like `great'wall great'wall`. Gate behind
   // search.emulate-release per COMPATIBILITY.md.
   const bool apostrophe_phrases_enabled = VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 2, 1, "ft_search_apostrophe_phrase", [&] { return true; },
+      1, 3, 0, "ft_search_apostrophe_phrase", [&] { return true; },
       [&] { return false; });
   auto has_matching_apostrophe_ahead = [&](size_t start) {
     for (size_t i = start; i < expression_.size(); ++i) {

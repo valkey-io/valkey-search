@@ -494,12 +494,12 @@ Value FuncDiv(const Value& l, const Value& r) {
       return Value(Value::Nil("Divide requires numeric operands"));
     }
     // Redisearch returns IEEE 754 division semantics for divide-by-zero:
-    // positive/0 -> +inf, negative/0 -> -inf, 0/0 -> NaN. Valkey-search 1.2.0
+    // positive/0 -> +inf, negative/0 -> -inf, 0/0 -> NaN. Valkey-search 1.2.x
     // and earlier collapsed all divide-by-zero cases to a plain NaN, which is
     // observably different from Redisearch. Gate the fixed behavior behind
     // search.emulate-release per COMPATIBILITY.md.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 2, 1, "ft_aggregate_divide_by_zero",
+        1, 3, 0, "ft_aggregate_divide_by_zero",
         [&] { return Value(lv.value() / rv.value()); },
         [&] {
           if (rv.value() == 0) {
@@ -951,11 +951,22 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
 
+  // strftime() returns 0 both when the buffer is too small and when the
+  // format legitimately produces no output, and the two are indistinguishable.
+  // The latter is reachable: strftime() takes a NUL-terminated C string, so a
+  // format carrying an embedded NUL -- a vector field's raw bytes, say -- is
+  // truncated at that NUL and can end up empty. Growing the buffer then never
+  // helps, and an unbounded doubling loop walks the server into an OOM kill.
+  // Cap the growth and report no output instead.
+  static constexpr size_t kMaxTimefmtResult = 1 << 20;
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
   while ((result_bytes = strftime(result.data(), result.size(), fmt_z.c_str(),
                                   &tm)) == 0) {
+    if (result.size() >= kMaxTimefmtResult) {
+      return Value(Value::Nil("timefmt: format produced no output"));
+    }
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);

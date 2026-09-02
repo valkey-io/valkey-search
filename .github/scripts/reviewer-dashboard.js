@@ -46,7 +46,6 @@ async function gatherPRs(github, owner, repo) {
             reviews(first:100) { nodes { author { login } state submittedAt } }
             comments(first:100) { nodes { author { login } body } }
             commits(last:1) { nodes { commit { statusCheckRollup { state } } } }
-            closingIssuesReferences(first:20) { nodes { number } }
           }
         }
       }
@@ -60,24 +59,6 @@ async function gatherPRs(github, owner, repo) {
     cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
   } while (cursor);
   return nodes;
-}
-
-// Open issues carrying a given label (e.g. the "1.3.0" release scope). The REST
-// issues endpoint returns PRs too, so drop anything with a pull_request field.
-async function gatherIssues(github, owner, repo, label) {
-  if (!label) return [];
-  const raw = await github.paginate(github.rest.issues.listForRepo,
-    { owner, repo, state: 'open', labels: label, per_page: 100 });
-  return raw.filter(i => !i.pull_request).map(i => {
-    const labels = (i.labels || []).map(l => (typeof l === 'string' ? l : l.name)).filter(Boolean);
-    return {
-      number: i.number, title: i.title, url: i.html_url, labels,
-      assignees: (i.assignees || []).map(a => a.login),
-      daysIdle: Math.floor((Date.now() - new Date(i.updated_at).getTime()) / 86400000),
-      // Draw the eye to release blockers — the "prio 1" case.
-      blocker: labels.some(l => /blocker/i.test(l) || /^release blocker$/i.test(l)),
-    };
-  });
 }
 
 const FP_RE = /\*\*First Pass Reviewer:\s*@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\*\*/;
@@ -155,15 +136,11 @@ function shape(node, firstPassPool, maintainerPool) {
   const ci = rollup ? rollup.state : null;      // SUCCESS / FAILURE / ERROR / PENDING / EXPECTED / null
   const mergeable = node.mergeable || 'UNKNOWN'; // MERGEABLE / CONFLICTING / UNKNOWN
 
-  // Issues this PR will close on merge (from "Fixes/Closes #N" links) — used to
-  // tell which release-scoped issues already have a PR in flight.
-  const closesIssues = ((node.closingIssuesReferences || {}).nodes || []).map(n => n.number);
-
   return {
     number: node.number, title: node.title, url: node.url, isDraft: node.isDraft,
     author, firstPass, maintainers, other, via,
     reviewerCount: universe.size, daysIdle, stale: daysIdle >= STALE_DAYS,
-    ci, mergeable, closesIssues,
+    ci, mergeable,
   };
 }
 
@@ -198,12 +175,12 @@ function loadState(body) {
     // STATE_CLOSE marker and truncate the block. Fall back to a raw parse for any
     // legacy body that stored the JSON unencoded.
     const payload = body.slice(i + STATE_OPEN.length, j).trim();
-    let json;
-    try { json = decodeURIComponent(payload); }
-    catch (_) { json = payload; }
+    // Parse the raw payload first: a legacy body stored the JSON unencoded, and
+    // decoding it first would mangle any literal "%XX" it contains. New bodies are
+    // URL-encoded, so a raw parse of them fails and we decode-then-parse.
     let p;
-    try { p = JSON.parse(json); }
-    catch (_) { p = JSON.parse(payload); }
+    try { p = JSON.parse(payload); }
+    catch (_) { p = JSON.parse(decodeURIComponent(payload)); }
     // reviewed: { prNum: { login: true } }   claims: { prNum: [login, …] }
     // Strip any bare "@login" left in historical log lines (older runs wrote
     // them); a re-rendered "@login" would keep pinging that person every run.
@@ -279,7 +256,10 @@ function applyCommand(state, c, now, ctx) {
   switch (c.cmd) {
     case 'priority': {
       const a = c.arg.trim().toLowerCase();
-      if (!a || a === 'clear' || a === 'none') {
+      // A bare `/priority #n` with no value is a no-op with a hint — not a
+      // destructive clear. Clearing requires an explicit `clear`/`none`.
+      if (!a) return { hint: `\`/priority #${n}\` needs a value — use \`P1\`–\`P4\`, or \`clear\` to remove it.` };
+      if (a === 'clear' || a === 'none') {
         state.priority[n] = null; msg = `${mention(c.author)} cleared priority on #${n}`; break;
       }
       const m = a.match(/^p?([1-4])$/);
@@ -288,7 +268,13 @@ function applyCommand(state, c, now, ctx) {
       break;
     }
     case 'note':
-      if (c.arg) { state.notes[n] = c.arg; msg = `${mention(c.author)} noted #${n}: ${c.arg}`; }
+      if (c.arg) {
+        // Cap note length (Unicode code points, matching the body-size accounting)
+        // so notes — the only free-text state — can't bloat the persisted block.
+        const len = [...c.arg].length;
+        if (len > 500) return { hint: `that note for #${n} is ${len} characters — keep notes under 500.` };
+        state.notes[n] = c.arg; msg = `${mention(c.author)} noted #${n}: ${c.arg}`;
+      }
       else { delete state.notes[n]; msg = `${mention(c.author)} cleared note on #${n}`; }
       break;
     case 'stage': {
@@ -444,9 +430,6 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     badge('ready for maintainer', readyMaint, 'blueviolet'),
     badge('approved', approved, 'brightgreen'),
     badge(`stale >${STALE_DAYS}d`, stale, stale ? 'lightgrey' : 'green'),
-    ...(opts.releaseLabel
-      ? [badge(`${opts.releaseLabel} no-PR`, (opts.issues || []).length, (opts.issues || []).length ? 'critical' : 'green')]
-      : []),
   ].join(' '));
   L.push('');
   L.push(`_Auto-updated every ~15 min from **${targetLabel}** open PRs. Last run: **${now}**._`);
@@ -474,8 +457,8 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push('**General commands** — act on a PR (the priority tables below):');
   L.push('');
   L.push('```');
-  L.push('/priority 1234 P2      set priority (P1–P4; empty clears it)');
-  L.push('/note 1234 some text   set a note (empty clears it)');
+  L.push('/priority 1234 P2      set priority (P1–P4; `/priority 1234 clear` to remove)');
+  L.push('/note 1234 some text   set a note (≤500 chars; empty clears it)');
   L.push('/stage 1234 maintainer override stage: review | changes | maintainer | approved | auto');
   L.push('/needs-review 1234     re-request maintainer review (clears maintainers’ Reviewed)');
   L.push('/update                refresh the board from the latest PR data now');
@@ -645,34 +628,6 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
     L.push('');
   }
 
-  // Per-issue view: release-scope issues with no open PR — the gap that's hard
-  // to see from the PR list alone (a release issue nothing is being merged
-  // toward). Rendered last, after the per-person and per-PR views.
-  const relLabel = opts.releaseLabel;
-  if (relLabel) {
-    const relIssues = (opts.issues || []).slice()
-      .sort((a, b) => (Number(b.blocker) - Number(a.blocker)) || (b.daysIdle - a.daysIdle) || (a.number - b.number));
-    L.push(`<details open><summary><h2>🚩 <code>${relLabel}</code> issues with no open PR · ${relIssues.length}</h2></summary>`);
-    L.push('');
-    if (!relIssues.length) {
-      L.push(`_Every open \`${relLabel}\` issue has a PR in flight. 🎉_`);
-    } else {
-      L.push(`_${relIssues.length} open \`${relLabel}\` issue(s) have no PR that closes them (🔴 = release blocker) — nothing is being merged toward them yet._`);
-      L.push('');
-      L.push('| Issue | Title | Labels | Assignee | Idle |');
-      L.push('|-------|-------|--------|----------|:----:|');
-      for (const it of relIssues) {
-        const t = (it.blocker ? '🔴 ' : '') + esc(it.title);
-        const labels = it.labels.length ? it.labels.map(l => `\`${esc(l)}\``).join(' ') : '—';
-        const who = it.assignees.length ? it.assignees.map(mention).join(', ') : '—';
-        L.push(`| [#${it.number}](${it.url}) | ${t} | ${labels} | ${who} | ${it.daysIdle}d |`);
-      }
-    }
-    L.push('');
-    L.push('</details>');
-    L.push('');
-  }
-
   L.push(`<sub>Priority: P1 launch blocker · P2–P3 nice to have · P4 likely not. Pools: ${pools.firstPass.length} first-pass, ${pools.maintainers.length} maintainers. Set priorities with \`/priority <#> P1–P4\`.</sub>`);
   L.push('');
   // URL-encode so no user-supplied text (notes, log lines) can contain "<"/">"
@@ -706,17 +661,6 @@ module.exports = async ({ github, context, core }) => {
   const nodes = await gatherPRs(github, readOwner, readRepo);
   const prs = nodes.map(n => shape(n, firstPassPool, maintainerPool));
   core.info(`Gathered ${prs.length} open PRs from ${readOwner}/${readRepo}.`);
-
-  // 1b. Release-scope issues (e.g. "1.3.0") that no open PR is set to close.
-  const releaseLabel = (process.env.RELEASE_LABEL || '').trim();
-  let noPrIssues = [];
-  if (releaseLabel) {
-    const closed = new Set();
-    for (const pr of prs) for (const n of (pr.closesIssues || [])) closed.add(n);
-    const issues = await gatherIssues(github, readOwner, readRepo, releaseLabel);
-    noPrIssues = issues.filter(i => !closed.has(i.number));
-    core.info(`Gathered ${issues.length} open '${releaseLabel}' issue(s); ${noPrIssues.length} with no PR.`);
-  }
 
   // 2. Load prior state from the issue body.
   const issue = await github.rest.issues.get({ owner: hostOwner, repo: hostRepo, issue_number });
@@ -788,7 +732,6 @@ module.exports = async ({ github, context, core }) => {
   // limit, re-render without the (unbounded) per-reviewer queues so the update
   // still succeeds and never silently fails every run.
   const targetLabel = `${readOwner}/${readRepo}`;
-  const renderOpts = { issues: noPrIssues, releaseLabel };
   // Size tiers (only ever needed when a repo has an unusually large number of
   // open PRs). The per-person queue and the legend are always kept. Trim the
   // per-PR tables first, then the queue as a last resort:
@@ -806,7 +749,7 @@ module.exports = async ({ github, context, core }) => {
   const bodyLen = s => [...s].length;
   let body, tier = 0;
   for (; tier < tiers.length; tier++) {
-    body = renderBody(prs, state, pools, now, targetLabel, { ...renderOpts, ...tiers[tier] });
+    body = renderBody(prs, state, pools, now, targetLabel, tiers[tier]);
     if (bodyLen(body) <= GH_BODY_MAX) break;
   }
   if (tier > 0) {

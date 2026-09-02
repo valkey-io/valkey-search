@@ -19,6 +19,12 @@ dump.rdb
 test-data*
 integration/test-data/
 .kiro/
+!.kiro/
+!.kiro/skills
+!.kiro/skills/
+!.claude/
+!.claude/skills
+!.claude/skills/
 venv/
 env/
 .venv/

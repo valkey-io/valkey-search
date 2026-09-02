@@ -18,9 +18,9 @@ index = Index(
 
 
 def _start_server_with_search_module_v1_0(test_case, testdir, dbfilename):
-    """Start a valkey server the valkey-search module 1.0.0, loading an existing RDB."""
+    """Start a Valkey server with the 1.0.0 module and an existing RDB."""
     server_path = os.getenv("VALKEY_SERVER_PATH")
-    
+
     # Unzip the 1.0.0 module binary, overwriting if it already exists
     module_dir = os.path.join(os.path.dirname(__file__), "module")
     zip_path = os.path.join(module_dir, "1.0.0-libsearch.so.zip")
@@ -56,7 +56,9 @@ def _start_server_with_search_module_v1_0(test_case, testdir, dbfilename):
     logfile = os.path.join(server.cwd, server.args["logfile"])
     return server, logfile, module_path
 
+
 def do_rdb_load_on_module_v1_0(test_case, client, server):
+    """Verify that module 1.0.0 rejects an RDB written by the current module."""
     # skip ASAN test for now since binary takes too much space
     if os.environ.get('SAN_BUILD', 'no') != 'no':
         pytest.skip("1.0.0 module binary is not ASAN-compatible")

@@ -37,8 +37,15 @@ permissions:
 
 jobs:
   build:
-    # For comment events, only react to the board issue itself.
-    if: ${{ github.event_name != 'issue_comment' || github.event.issue.number == 1346 }}
+    # For comment events, only react to the board issue itself, and only to
+    # comments from repository collaborators/maintainers — a non-collaborator's
+    # command shouldn't spin up a run (matches slash-commands.yml). The in-script
+    # gate still rejects and cleans up any such comment on the next scheduled
+    # sweep, so this is a cost guard, not the only line of defense.
+    if: >-
+      ${{ github.event_name != 'issue_comment' ||
+          (github.event.issue.number == 1346 &&
+           contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

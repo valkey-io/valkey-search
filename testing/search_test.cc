@@ -10,12 +10,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -32,6 +34,7 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
+#include "src/coordinator/search_converter.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -41,8 +44,8 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/metrics.h"
 #include "src/query/predicate.h"
-#include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -482,15 +485,16 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
             CreateHNSWVectorIndexProto(kVectorDimensions, distance_metric, 1000,
                                        10, 300, 30),
             "vector_attribute_identifier",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
   } else {
-    vector_index = indexes::VectorFlat<float>::Create(
-                       CreateFlatVectorIndexProto(kVectorDimensions,
-                                                  distance_metric, 1000, 250),
-                       "vector_attribute_identifier",
-                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
-                       .value();
+    vector_index =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(kVectorDimensions, distance_metric, 1000,
+                                       250),
+            "vector_attribute_identifier",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
   }
   VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
                                          kVectorAttributeAlias, vector_index));
@@ -694,7 +698,7 @@ TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
           CreateFlatVectorIndexProto(kVectorDimensions,
                                      data_model::DISTANCE_METRIC_L2, 1000, 250),
           "vector_attribute_identifier",
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
           .value();
   VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
                                    vector_index));
@@ -1066,7 +1070,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto vector_index =
             indexes::VectorHNSW<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, vector_index));
@@ -1079,7 +1083,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto flat_index =
             indexes::VectorFlat<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, flat_index));
@@ -1760,6 +1764,59 @@ TEST_F(ScoreTextQueryTestBase, TextLessIndexScoresZeroNotNan) {
   EXPECT_FLOAT_EQ(*score, 0.0f);
 }
 
+// A scorer that hands back NaN, to drive the scoring boundary directly. Scorer
+// is a public virtual seam, so a NaN there is reachable regardless of what
+// BM25STD itself can produce. std::isnan/std::nanf are unusable under
+// -ffast-math, so build the NaN from its bit pattern and classify it with the
+// codebase's own bit-pattern check.
+class NaNScorer : public indexes::scoring::Scorer {
+ public:
+  static float MakeNaN() {
+    static constexpr uint32_t kQuietNaNBits = 0x7FC00000U;
+    float value;
+    std::memcpy(&value, &kQuietNaNBits, sizeof(value));
+    return value;
+  }
+  std::string_view Name() const override { return "NANTEST"; }
+  indexes::scoring::ScorerType Type() const override {
+    return indexes::scoring::ScorerType::kBm25Std;
+  }
+  bool NeedsDocumentLength() const override { return false; }
+  float PrecomputeIDF(const indexes::scoring::IdfInput &) const override {
+    return 1.0f;
+  }
+  float ScoreLeaf(const indexes::scoring::LeafScoreInput &) const override {
+    return 1.0f;
+  }
+  float ComposeDocumentScore(float, float) const override { return MakeNaN(); }
+};
+
+// A NaN must never reach Neighbor.score: SearchResult::TrimResults sorts on
+// that field, and NaN compares false against everything, which violates strict
+// weak ordering and makes std::sort undefined behavior rather than merely
+// misordered.
+TEST_F(ScoreTextQueryTestBase, NaNScoreIsClampedBeforeReachingNeighbor) {
+  ASSERT_TRUE(indexes::scoring::IsNaN(NaNScorer::MakeNaN()))
+      << "test cannot construct a NaN; the clamp assertion below is vacuous";
+  auto schema = BuildTextTagSchema({{"d1", "hello world", "red"}});
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, "@text:hello", options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+
+  auto interned = StringInternStore::Intern("d1");
+  std::vector<indexes::BorrowedNeighbor> cands{
+      {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+  NaNScorer nan_scorer;
+  {
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    query::ScoreTextQuery(*schema, parsed.value().root_predicate.get(),
+                          &nan_scorer, cands);
+  }
+  ASSERT_EQ(cands.size(), 1u);
+  EXPECT_FALSE(indexes::scoring::IsNaN(cands[0].score));
+  EXPECT_FLOAT_EQ(cands[0].score, 0.0f);
+}
+
 // The recompute path (SingleDocumentScorer) must land on the same scale as the
 // shard-side extra-step path (ScoreTextQuery) — both walk the same ScoreNode.
 // Pinned at a real NON-ZERO value (text + tag terms) so a magnitude divergence
@@ -1788,6 +1845,34 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
   auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
   ASSERT_TRUE(recomputed.has_value());
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// A query that omits SCORER picks up the `default-scorer` config.
+// Needs the fixture: UnitTestSearchParameters reaches ValkeyModule_Milliseconds
+// via cancel::Make, and the mock module only lives between SetUp and TearDown.
+TEST_F(ValkeySearchTest, DefaultScorerSeedsSearchParameters) {
+  auto &config = options::GetDefaultScorer();
+  const int original = config.GetValue();
+  for (const auto &[name, expected] : *indexes::scoring::kScorerByStr) {
+    VMSDK_EXPECT_OK(config.FromString(name));
+    EXPECT_EQ(UnitTestSearchParameters().scorer, expected) << name;
+  }
+  VMSDK_EXPECT_OK(config.SetValue(original));
+}
+
+// A shard scores with whatever SearchParameters::scorer holds, so the fanout
+// request must carry the coordinator's choice; otherwise SCORER is silently
+// downgraded to the default on every shard.
+TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
+  for (auto type : {indexes::scoring::ScorerType::kBm25Std,
+                    indexes::scoring::ScorerType::kTfidf}) {
+    EXPECT_EQ(coordinator::ScorerFromGRPC(coordinator::ScorerToGRPC(type)),
+              type);
+  }
+  // An absent field (peer that predates the field) must mean the default.
+  coordinator::SearchIndexPartitionRequest request;
+  EXPECT_EQ(coordinator::ScorerFromGRPC(request.scorer()),
+            indexes::scoring::ScorerType::kBm25Std);
 }
 
 // --- Stemmed-term scoring (extra-step path), docs/redis_stemming_scoring.md

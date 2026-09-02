@@ -49,8 +49,12 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx,
-                        const indexes::Neighbor &neighbor);
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
+
+bool HasTextRelevance(const SearchCommand &parameters) {
+  return parameters.IsNonVectorQuery() ||
+         query::QueryHasTextPredicate(parameters);
+}
 
 void SendReplyNoContent(ValkeyModuleCtx *ctx,
                         const query::SearchResult &search_result,
@@ -59,15 +63,15 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
   auto range = search_result.GetSerializationRange(parameters);
 
   // WITHSCORES keeps the top-level relevance score even under NOCONTENT
-  const bool emit_score =
-      parameters.with_scores && query::QueryHasTextPredicate(parameters);
+  const bool emit_score = parameters.with_scores;
+  const bool has_relevance = HasTextRelevance(parameters);
   ValkeyModule_ReplyWithArray(ctx, (emit_score ? 2 : 1) * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
   for (auto i = range.start_index; i < range.end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
     if (emit_score) {
-      ReplyScoreTopLevel(ctx, neighbors[i]);
+      ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
     }
   }
 }
@@ -85,9 +89,8 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx,
-                        const indexes::Neighbor &neighbor) {
-  auto score_value = absl::StrFormat("%.12g", neighbor.score);
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
+  auto score_value = absl::StrFormat("%.12g", score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
@@ -102,12 +105,8 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   auto range = search_result.GetSerializationRange(parameters);
 
-  // For a hybrid text=>[KNN] query with WITHSCORES, emit the text relevance
-  // score as a top-level element (Redis format: score between doc ID and the
-  // attributes array), mirroring SerializeNonVectorNeighbors. Pure vector
-  // queries carry no text relevance, so they keep their existing shape.
-  const bool emit_top_level_score =
-      parameters.with_scores && query::QueryHasTextPredicate(parameters);
+  const bool emit_top_level_score = parameters.with_scores;
+  const bool has_relevance = HasTextRelevance(parameters);
 
   // WITHSORTKEYS: emit the sort key (prefixed with '#') after the optional
   // score.
@@ -126,7 +125,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
     if (emit_top_level_score) {
-      ReplyScoreTopLevel(ctx, neighbors[i]);
+      ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
     }
     if (emit_sort_key) {
       std::string value = sort_by_vec_score
@@ -211,7 +210,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 
     // Score as top-level element when WITHSCORES is specified
     if (command.with_scores) {
-      ReplyScoreTopLevel(ctx, neighbors[i]);
+      ReplyScoreTopLevel(ctx, neighbors[i].score);
     }
 
     // Sort key value (prefixed with #) when WITHSORTKEYS is specified

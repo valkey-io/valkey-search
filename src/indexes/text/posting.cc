@@ -47,22 +47,9 @@ Postings::~Postings() {
 // Check if posting list contains any documents
 bool Postings::IsEmpty() const { return key_to_positions_.empty(); }
 
-// Count terms across all fields in a position map
-unsigned int count_num_terms(const PositionMap& pos_map) {
-  unsigned int num_terms = 0;
-  for (const auto& [_, field_mask] : pos_map) {
-    num_terms += field_mask.CountSetFields();
-  }
-  return num_terms;
-}
-
-void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map,
+void Postings::InsertKey(const Key& key, FlatPositionMap* flat_map, uint32_t tf,
                          uint32_t doc_len) {
-  // Insert FlatPositionMap pointer plus mirrors of its (immutable) tf and the
-  // key's document length.
-  PostingValue value{
-      flat_map, static_cast<uint32_t>(flat_map->GetTermFrequency()), doc_len};
-  key_to_positions_.emplace(key, value);
+  key_to_positions_.emplace(key, PostingValue{flat_map, tf, doc_len});
 }
 
 // Remove a document key and all its positions
@@ -72,12 +59,8 @@ void Postings::RemoveKey(const Key& key, TextIndexMetadata* metadata) {
 
   FlatPositionMap* flat_map = node.mapped().map;
 
-  // Use member functions to get counts
-  size_t position_count = flat_map->CountPositions();
-  size_t term_frequency = flat_map->GetTermFrequency();
-
-  metadata->total_positions -= position_count;
-  metadata->total_term_frequency -= term_frequency;
+  metadata->total_positions -= flat_map->CountPositions();
+  metadata->total_term_frequency -= node.mapped().tf;
 
   // Destroy and remove from map
   FlatPositionMap::Destroy(flat_map);
@@ -106,7 +89,7 @@ size_t Postings::GetTotalTermFrequency() const {
 
 std::optional<PostingValue> Postings::LookupKey(
     BorrowedInternedStringPtr key) const {
-  auto it = key_to_positions_.find(key.AsInternedRef());
+  auto it = key_to_positions_.find(key);
   if (it == key_to_positions_.end()) {
     return std::nullopt;
   }

@@ -287,6 +287,43 @@ TEST_F(AggregateTest, StageParserTest) {
   }
 }
 
+// TestStages above covers the legacy auto-generated REDUCE name, which is what
+// the default emulate-release selects. Both forms have to stay reachable; see
+// COMPATIBILITY.md.
+TEST_F(AggregateTest, DefaultReducerAliasFollowsEmulateRelease) {
+  // Mixed-case field: the compatible form lowercases the args too, not just
+  // the reducer name.
+  fake_index.fields_["N3"] = indexes::IndexerType::kNumeric;
+  auto dump = [&](absl::string_view stage) {
+    auto argv = vmsdk::ToValkeyStringVector(stage);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.timeout_ms = 0;
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    std::ostringstream os;
+    if (parser.Parse(params, itr).ok() && !params.stages_.empty()) {
+      params.stages_[0]->Dump(os);
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+    return os.str();
+  };
+
+  const auto saved = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MIN 1 @n2"),
+            "GROUPBY @n1 MIN(@n2) => MIN(@n2)");
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE COUNT 0"),
+            "GROUPBY @n1 COUNT() => __generated_aliascount");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MAX 1 @N3"),
+            "GROUPBY @n1 MAX(@N3) => __generated_aliasmaxn3");
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
 TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
   for (absl::string_view test_case :
        {"FILTER ''", "FILTER ' '", "APPLY '' AS r", "APPLY ' ' AS r"}) {

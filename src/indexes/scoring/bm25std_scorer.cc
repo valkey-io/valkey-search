@@ -39,9 +39,14 @@ float Bm25StdScorer::ScoreLeaf(const LeafScoreInput& input) const {
 
 float Bm25StdScorer::ComposeDocumentScore(float sum_of_terms,
                                           float document_score) const {
-  // Avoid 0 * inf -> NaN; propagate ±inf as the final score.
+  // 0 * inf is NaN in either direction, and a NaN score is not merely wrong: it
+  // breaks the strict-weak-ordering the result sort relies on. Propagate the
+  // infinite operand instead of multiplying.
   if (IsInf(document_score)) {
     return document_score;
+  }
+  if (IsInf(sum_of_terms)) {
+    return sum_of_terms;
   }
   return sum_of_terms * document_score;
 }

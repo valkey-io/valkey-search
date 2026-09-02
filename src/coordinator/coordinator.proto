@@ -127,6 +127,11 @@ message IndexFingerprintVersion {
   uint32 version = 2;
 }
 
+enum Scorer {
+  SCORER_BM25STD = 0;
+  SCORER_TFIDF = 1;
+}
+
 message SearchIndexPartitionRequest {
   uint32 db_num = 1;
   string index_schema_name = 2;
@@ -147,6 +152,7 @@ message SearchIndexPartitionRequest {
   uint64 slot_fingerprint = 17;
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
+  Scorer scorer = 20;
 }
 
 message NeighborEntry {

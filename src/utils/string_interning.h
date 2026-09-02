@@ -206,6 +206,9 @@ class BorrowedInternedStringPtr {
   const InternedString &operator*() const { return *ptr_; }
   explicit operator bool() const { return ptr_ != nullptr; }
 
+  // Access the raw pointer (used by the transparent lookup functors below).
+  const InternedString *RawPtr() const { return ptr_; }
+
   // Convert to an owning pointer (increments ref count).
   InternedStringPtr Materialize() const {
     if (ptr_) {
@@ -241,6 +244,42 @@ static_assert(std::is_trivially_destructible_v<BorrowedInternedStringPtr>,
 static_assert(sizeof(BorrowedInternedStringPtr) == sizeof(InternedStringPtr),
               "AsInternedRef() requires identical single-pointer layout");
 
+// Collapse either pointer type to the identity that keys interned containers.
+inline const InternedString *RawInternedPtr(const InternedStringPtr &p) {
+  return p.RawPtr();
+}
+inline const InternedString *RawInternedPtr(
+    const BorrowedInternedStringPtr &p) {
+  return p.RawPtr();
+}
+
+// Transparent lookup: probe an owning-keyed container with a borrowed pointer.
+struct InternedStringPtrHash {
+  using is_transparent = void;
+  // Hashes one canonical type, so hash(borrowed) == hash(owning) always.
+  template <typename T>
+  size_t operator()(const T &p) const {
+    return absl::HashOf(RawInternedPtr(p));
+  }
+};
+
+struct InternedStringPtrEq {
+  using is_transparent = void;
+  template <typename A, typename B>
+  bool operator()(const A &a, const B &b) const {
+    return RawInternedPtr(a) == RawInternedPtr(b);
+  }
+};
+
+// Address order, matching InternedStringPtr's defaulted operator<=>.
+struct InternedStringPtrLess {
+  using is_transparent = void;
+  template <typename A, typename B>
+  bool operator()(const A &a, const B &b) const {
+    return RawInternedPtr(a) < RawInternedPtr(b);
+  }
+};
+
 inline std::ostream &operator<<(std::ostream &os,
                                 const InternedStringPtr &str) {
   return str ? os << str->Str() : os << "<null>";
@@ -261,12 +300,19 @@ struct std::hash<valkey_search::InternedStringPtr> {
 
 namespace valkey_search {
 
+// Transparent so reads can probe borrowed; insertion still needs an owning ptr.
 template <typename T>
-using InternedStringHashMap = absl::flat_hash_map<InternedStringPtr, T>;
-using InternedStringSet = absl::flat_hash_set<InternedStringPtr>;
+using InternedStringHashMap =
+    absl::flat_hash_map<InternedStringPtr, T, InternedStringPtrHash,
+                        InternedStringPtrEq>;
+using InternedStringSet =
+    absl::flat_hash_set<InternedStringPtr, InternedStringPtrHash,
+                        InternedStringPtrEq>;
 
 template <typename T>
-using InternedStringNodeHashMap = absl::node_hash_map<InternedStringPtr, T>;
+using InternedStringNodeHashMap =
+    absl::node_hash_map<InternedStringPtr, T, InternedStringPtrHash,
+                        InternedStringPtrEq>;
 
 //
 // BagOfInternedStringPtrs is a space-optimized drop-in replacement for
@@ -486,18 +532,12 @@ class BagOfInternedStringPtrs {
     storage_ = 0;
   }
 
+  // Either pointer type; no ref-count traffic in any representation.
   bool contains(const InternedStringPtr &key) const {
-    switch (storage_ & kTagMask) {
-      case kSingleTag:
-        return storage_ != 0 && SingleRef() == key;
-      case kArray4Tag:
-        return ArrayFind(*GetArray4(), key) != kArray4Cap;
-      case kArray8Tag:
-        return ArrayFind(*GetArray8(), key) != kArray8Cap;
-      case kSetTag:
-        return GetSet()->contains(key);
-    }
-    return false;
+    return ContainsImpl(key);
+  }
+  bool contains(const BorrowedInternedStringPtr &key) const {
+    return ContainsImpl(key);
   }
 
   const_iterator find(const InternedStringPtr &key) const {
@@ -763,16 +803,32 @@ class BagOfInternedStringPtrs {
     }
     return i;
   }
-  // Linear-search an array for a key; returns N if not found.
-  template <std::size_t N>
+  // Linear-search for a key (either pointer type); returns N if not found.
+  template <std::size_t N, typename K>
   static std::size_t ArrayFind(const std::array<InternedStringPtr, N> &arr,
-                               const InternedStringPtr &key) {
+                               const K &key) {
     for (std::size_t i = 0; i < N && arr[i]; ++i) {
-      if (arr[i] == key) {
+      if (RawInternedPtr(arr[i]) == RawInternedPtr(key)) {
         return i;
       }
     }
     return N;
+  }
+
+  template <typename K>
+  bool ContainsImpl(const K &key) const {
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        return storage_ != 0 &&
+               RawInternedPtr(SingleRef()) == RawInternedPtr(key);
+      case kArray4Tag:
+        return ArrayFind(*GetArray4(), key) != kArray4Cap;
+      case kArray8Tag:
+        return ArrayFind(*GetArray8(), key) != kArray8Cap;
+      case kSetTag:
+        return GetSet()->contains(key);
+    }
+    return false;
   }
   // Erase the element at `idx`, shifting subsequent elements left to keep the
   // packed-from-zero invariant.

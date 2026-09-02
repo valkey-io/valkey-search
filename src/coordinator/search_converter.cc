@@ -21,6 +21,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
@@ -54,6 +55,29 @@ std::optional<query::SortByParameter> SortByFromGRPC(
                      ? query::SortOrder::kAscending
                      : query::SortOrder::kDescending;
   return sortby;
+}
+
+// Exhaustive switch so a newly added ScorerType fails to compile here instead
+// of silently reaching the shard as the default scorer.
+Scorer ScorerToGRPC(indexes::scoring::ScorerType scorer) {
+  switch (scorer) {
+    case indexes::scoring::ScorerType::kBm25Std:
+      return coordinator::SCORER_BM25STD;
+    case indexes::scoring::ScorerType::kTfidf:
+      return coordinator::SCORER_TFIDF;
+  }
+  return coordinator::SCORER_BM25STD;
+}
+
+// An unset or unrecognized value (older or newer peer) means the default
+// scorer.
+indexes::scoring::ScorerType ScorerFromGRPC(Scorer scorer) {
+  switch (scorer) {
+    case coordinator::SCORER_TFIDF:
+      return indexes::scoring::ScorerType::kTfidf;
+    default:
+      return indexes::scoring::ScorerType::kBm25Std;
+  }
 }
 
 static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
@@ -271,6 +295,7 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
+  parameters->scorer = ScorerFromGRPC(request.scorer());
   return absl::OkStatus();
 }
 
@@ -442,6 +467,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   SortByToGRPC(parameters.sortby_parameter, request.get());
+  request->set_scorer(ScorerToGRPC(parameters.scorer));
   return request;
 }
 

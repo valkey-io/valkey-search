@@ -183,7 +183,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
-  bool found_original;
+  bool found_original = false;
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
 
@@ -195,13 +195,12 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   {
     auto word_iter = text_index->GetPrefix().GetWordIterator(text_string);
     if (!word_iter.Done() && word_iter.GetWord() == text_string) {
-      num_doc_contain_term = word_iter.GetPostingsTarget()->GetKeyCount();
+      auto postings = word_iter.GetPostingsTarget();
+      num_doc_contain_term = postings->GetKeyCount();
+      key_iterators.emplace_back(postings->GetKeyIterator());
+      found_original = true;
     }
   }
-
-  // Search for the original word - may or may not exist in corpus
-  found_original =
-      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
 
   // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {

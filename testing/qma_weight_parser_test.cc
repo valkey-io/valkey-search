@@ -210,6 +210,15 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "(@title:{dogs}) => { $weight: NaN; }",
             .parse_success = false,
         },
+        // A value above FLT_MAX would narrow to inf in SetWeight and then
+        // produce a NaN score wherever it met a zero document score.
+        {
+            .test_name = "weight_overflows_float",
+            .filter = "(@title:{dogs}) => { $weight: "
+                      "999999999999999999999999999999999999999999; }",
+            .parse_success = false,
+            .expected_error_substr = "finite",
+        },
         {
             .test_name = "weight_missing_value_semicolon",
             .filter = "(@title:{dogs}) => { $weight: ; }",
@@ -225,6 +234,14 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "missing_closing_brace",
             .filter = "(@title:{dogs}) => { $weight: 2.0; ",
             .parse_success = false,
+        },
+        // A bare term (no parentheses) accepts a QMA block, matching
+        // RediSearch. The weight attaches to the bare term.
+        {
+            .test_name = "bare_term_qma_weight",
+            .filter = "@title:{dogs} => { $weight: 2 }",
+            .parse_success = true,
+            .expected_weight = 2.0f,
         },
     }),
     [](const TestParamInfo<QMAParserTestCase> &info) {

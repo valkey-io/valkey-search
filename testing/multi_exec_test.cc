@@ -325,5 +325,86 @@ TEST_F(MultiExecTest, FtSearchMulti) {
   index_schema = nullptr;
 }
 
+// Regression test for the main-thread deadlock during fork: while the
+// writer thread pool is suspended (as it is for the duration of a fork
+// child, see ValkeySearch::AtForkPrepare/AfterForkParent),
+// IndexSchema::ProcessMultiQueue must still fully ingest queued multi-exec
+// mutations synchronously before FT.SEARCH executes, instead of scheduling
+// onto the suspended pool and blocking on it.
+TEST_F(MultiExecTest, FtSearchMultiWriterPoolSuspended) {
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .Times(0);
+  VMSDK_EXPECT_OK(mutations_thread_pool->SuspendWorkers());
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(&fake_ctx_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_MULTI));
+  std::vector<std::string> expected_keys;
+  expected_keys.reserve(max_keys);
+  for (size_t i = 0; i < mutations_thread_pool->Size() - 1; ++i) {
+    expected_keys.push_back(key_prefix + std::to_string(i));
+  }
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+  EXPECT_CALL(*kMockValkeyModule,
+              UnblockClient((ValkeyModuleBlockedClient *)1, testing::_))
+      .Times(0);
+  for (const auto &key : expected_keys) {
+    auto key_valkey_str = vmsdk::MakeUniqueValkeyString(key);
+    index_schema->OnKeyspaceNotification(&fake_ctx_, VALKEYMODULE_NOTIFY_HASH,
+                                         "event", key_valkey_str.get());
+  }
+  // The keys were only tracked, not yet ingested: they were queued behind
+  // the suspended writer pool rather than executed inline.
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_TRUE(added_keys.empty());
+  }
+
+  std::vector<std::string> argv = {
+      "FT.SEARCH",
+      "index_schema_name",
+      "*=>[KNN 1 @vector $query_vector "
+      "EF_RUNTIME 100 AS score]",
+      "params",
+      "2",
+      "query_vector",
+      "$embedding",
+      "DIALECT",
+      "2",
+  };
+  auto vectors = DeterministicallyGenerateVectors(1, 100, 10.0);
+  std::vector<ValkeyModuleString *> cmd_argv;
+  std::transform(
+      argv.begin(), argv.end(), std::back_inserter(cmd_argv),
+      [&](std::string val) {
+        if (val == "$embedding") {
+          return ValkeyModule_CreateString(&fake_ctx_,
+                                           (char *)vectors[0].data(),
+                                           vectors[0].size() * sizeof(float));
+        }
+        return ValkeyModule_CreateString(&fake_ctx_, val.data(), val.size());
+      });
+  EXPECT_FALSE(cb_data);
+  // FT.SEARCH must fully ingest the queued multi-exec mutations before it
+  // executes, even though the writer pool cannot process them, and must not
+  // deadlock the main thread doing so.
+  VMSDK_EXPECT_OK(FTSearchCmd(&fake_ctx_, cmd_argv.data(), cmd_argv.size()));
+  {
+    absl::MutexLock lock(&mutex);
+    EXPECT_THAT(expected_keys, testing::UnorderedElementsAreArray(added_keys));
+  }
+  for (auto cmd_arg : cmd_argv) {
+    TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+  }
+  VMSDK_EXPECT_OK(mutations_thread_pool->ResumeWorkers());
+  index_schema = nullptr;
+}
+
 }  // namespace
 }  // namespace valkey_search

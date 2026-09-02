@@ -183,7 +183,7 @@ const STATE_OPEN = '<!--BOARD_STATE';
 const STATE_CLOSE = 'BOARD_STATE-->';
 
 function loadState(body) {
-  const empty = { notes: {}, priority: {}, stage: {}, reviewed: {}, claims: {}, log: [] };
+  const empty = { notes: {}, priority: {}, stage: {}, reviewed: {}, claims: {}, log: [], processed: [] };
   if (!body) return empty;
   // Parse the LAST marker pair: the real state block is always appended at the
   // very end, so any earlier occurrence (e.g. a note or log line that happens to
@@ -208,9 +208,15 @@ function loadState(body) {
     // Strip any bare "@login" left in historical log lines (older runs wrote
     // them); a re-rendered "@login" would keep pinging that person every run.
     const log = (p.log || []).map(l => String(l).replace(/@([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/g, '$1'));
+    // processed: ids of command comments already applied. A command comment is
+    // deleted only after the body is persisted; if that delete fails the comment
+    // lingers, so we remember its id and skip re-applying it (which would
+    // duplicate log lines and could clobber newer state). Capped, so it can't grow
+    // without bound; ids of successfully deleted comments never reappear anyway.
+    const processed = Array.isArray(p.processed) ? p.processed.filter(Number.isFinite).slice(-200) : [];
     return {
       notes: p.notes || {}, priority: p.priority || {}, stage: p.stage || {},
-      reviewed: p.reviewed || {}, claims: p.claims || {}, log,
+      reviewed: p.reviewed || {}, claims: p.claims || {}, log, processed,
     };
   } catch (e) {
     return empty;
@@ -732,6 +738,7 @@ module.exports = async ({ github, context, core }) => {
     + `Personal: \`/claim <#>\` · \`/unclaim <#>\` · \`/reviewed <#>\` · \`/unreviewed <#>\`.`;
   const toDelete = [];        // command / hint comments to remove after persisting
   const hints = [];           // { author, lines } nudges to post after persisting
+  const processed = new Set(state.processed || []); // command comments already applied
   for (const c of comments) {
     const author = c.user && c.user.login;
     const body = c.body || '';
@@ -750,15 +757,24 @@ module.exports = async ({ github, context, core }) => {
       continue;
     }
     if (cmds.length) {
+      // Already applied on an earlier run but still here → its delete failed last
+      // time. Retry the delete, but do NOT re-apply (would duplicate log lines /
+      // clobber newer state).
+      if (processed.has(c.id)) { toDelete.push(c.id); continue; }
       const lines = [];
       for (const cmd of cmds) { const r = applyCommand(state, cmd, now, ctx); if (r && r.hint) lines.push(r.hint); }
       if (lines.length) hints.push({ author, lines });
+      processed.add(c.id);
       toDelete.push(c.id);
     } else if (looksLikeCommand(body)) {
       hints.push({ author, lines: [HELP] });
       toDelete.push(c.id);
     }
   }
+
+  // Remember applied command-comment ids (capped) so a delete that fails after
+  // the body is persisted can't cause the command to replay on the next run.
+  state.processed = [...processed].slice(-200);
 
   // Prune state for PRs no longer open (merged/closed drop off the board).
   const openNums = new Set(prs.map(p => p.number));

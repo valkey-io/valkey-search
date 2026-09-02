@@ -1338,6 +1338,31 @@ TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
   EXPECT_EQ(Value(20260201.0).AsString().value(), "20260201");
 }
 
+// The integral path renders in fixed notation so Redisearch's "1700000000"
+// is matched rather than shortest-round-trip's "1.7e+09"; above 1e17 the value
+// falls back to to_chars, whose exponent form Redisearch has no counterpart
+// for in any dataset we test.
+TEST_F(ValueTest, FormatDoubleIntegralUsesFixedNotation) {
+  EXPECT_EQ(FormatDouble(1700000000.0), "1700000000");        // epoch seconds
+  EXPECT_EQ(FormatDouble(1700000000123.0), "1700000000123");  // epoch millis
+  EXPECT_EQ(FormatDouble(9007199254740992.0), "9007199254740992");  // 2^53
+
+  // Straddle the fixed-vs-scientific switch. 99999999999999999.0 is not
+  // representable and rounds up to 1e17, so the largest double below the
+  // threshold is 99999999999999984.
+  EXPECT_EQ(FormatDouble(99999999999999984.0), "99999999999999984");
+  EXPECT_EQ(FormatDouble(1e16), "10000000000000000");
+  EXPECT_EQ(FormatDouble(1e17), "1e+17");
+  EXPECT_EQ(FormatDouble(-1e16), "-10000000000000000");
+  EXPECT_EQ(FormatDouble(-1e17), "-1e+17");
+
+  // Non-integral, zero and the infinities keep to_chars' rendering.
+  EXPECT_EQ(FormatDouble(1.5), "1.5");
+  EXPECT_EQ(FormatDouble(-0.0), "-0");
+  EXPECT_EQ(FormatDouble(std::numeric_limits<double>::infinity()), "inf");
+  EXPECT_EQ(FormatDouble(-std::numeric_limits<double>::infinity()), "-inf");
+}
+
 // Streaming an array used to reach operator<<'s CHECK(false). GroupKey streams
 // its elements, so expanding a multi-value GROUPBY key aborted any DBG build.
 TEST_F(ValueTest, StreamArrayValue) {

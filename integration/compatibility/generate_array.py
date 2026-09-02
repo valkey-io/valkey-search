@@ -59,6 +59,26 @@ DATE_COMPONENT_FUNCS = ["dayofweek", "dayofmonth", "dayofyear", "monthofyear",
 ARRAY_FUNCS = ["arraylen(@items)", "arraylen(@sitems)", "arrayat(@items,0)",
                "isarray(@items)", "flatten(@items,1)"]
 
+# String functions taking more than one argument, tried with the array as the
+# subject, as the other argument, and -- for substr -- as a position argument.
+STRING_FUNC_EXPRS = [
+    "substr(@sitems,0,3)",
+    "substr(@items,0,1)",
+    # Array in a position argument rather than the subject.
+    "substr(@sitems,@items,2)",
+    'startswith(@sitems,"a")',
+    'startswith("apple",@sitems)',
+    'startswith(@items,"1")',
+    'contains(@sitems,"an")',
+    'contains("banana",@sitems)',
+    'contains(@items,"1")',
+    'concat(@sitems,"-x")',
+    'concat("x-",@sitems)',
+    'concat(@items,"-x")',
+    "concat(@sitems,@sitems)",
+    "concat(@sitems,@items)",
+]
+
 
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestArrayInputCompatibility(BaseCompatibilityTest):
@@ -96,8 +116,8 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
     def test_apply_dyadic_ops(self, key_type):
         self.setup_data(DATASET, key_type)
         for op in DYADIC_OPS:
-            for l, r in DYADIC_OPERANDS:
-                self._apply(key_type, f"({l}){op}({r})")
+            for lhs, rhs in DYADIC_OPERANDS:
+                self._apply(key_type, f"({lhs}){op}({rhs})")
 
     def test_apply_unary_not(self, key_type):
         self.setup_data(DATASET, key_type)
@@ -115,21 +135,8 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
         for fn in ["lower", "upper", "strlen", "exists"]:
             self._apply(key_type, f"{fn}(@items)")
             self._apply(key_type, f"{fn}(@sitems)")
-        self._apply(key_type, "substr(@sitems,0,3)")
-        self._apply(key_type, "substr(@items,0,1)")
-        # Array in a position argument rather than the subject.
-        self._apply(key_type, "substr(@sitems,@items,2)")
-        self._apply(key_type, 'startswith(@sitems,"a")')
-        self._apply(key_type, 'startswith("apple",@sitems)')
-        self._apply(key_type, 'startswith(@items,"1")')
-        self._apply(key_type, 'contains(@sitems,"an")')
-        self._apply(key_type, 'contains("banana",@sitems)')
-        self._apply(key_type, 'contains(@items,"1")')
-        self._apply(key_type, 'concat(@sitems,"-x")')
-        self._apply(key_type, 'concat("x-",@sitems)')
-        self._apply(key_type, 'concat(@items,"-x")')
-        self._apply(key_type, "concat(@sitems,@sitems)")
-        self._apply(key_type, "concat(@sitems,@items)")
+        for expr in STRING_FUNC_EXPRS:
+            self._apply(key_type, expr)
 
     def test_apply_time_funcs(self, key_type):
         self.setup_data(DATASET, key_type)
@@ -197,6 +204,35 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
                     f"apply (@items){op}(@items2) as result").split()
             self.execute_command(cmd + ["DIALECT", "2"])
 
+    ### FILTER ###
+
+    def test_filter_array(self, key_type):
+        """The array reaching a FILTER stage predicate."""
+        self.setup_data(DATASET, key_type)
+        for tail in [
+            "filter @items",  # the array's own truthiness
+            "filter !(@items)",
+            "filter (@items)>(2)",
+            "filter (@items)==(2)",
+            'filter (@sitems)==("apple")',
+            'filter startswith(@sitems,"a")',
+            "filter exists(@items)",
+            "filter (@items)==(@items2)",
+            'filter (@t1)==("ga")',  # control: scalar predicate
+        ]:
+            self._pipeline(key_type, tail)
+
+    def test_filter_empty_array(self, key_type):
+        """A FILTER predicate over a group whose TOLIST collected nothing."""
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "filter @items",
+            "filter !(@items)",
+            "filter exists(@items)",
+            'filter (@items)==("")',
+        ]:
+            self._empty_pipeline(key_type, tail)
+
     ### SORTBY ###
 
     def test_sortby_array(self, key_type):
@@ -232,6 +268,28 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
             "groupby 1 @items reduce tolist 1 @items as items3",
             "groupby 1 @items reduce sum 1 @items as nsum",
             "groupby 1 @t1 reduce count 0 as cnt",  # control: scalar key
+        ]:
+            self._pipeline(key_type, tail)
+
+    def test_first_value_over_array(self, key_type):
+        """FIRST_VALUE with an array as the value, and as the BY key.
+
+        Simple mode is left out for the reason upstream's generate.py gives:
+        without BY the pick depends on retrieval order, which the two engines
+        do not share. The one-row-per-group shapes have a single record, so
+        the pick is deterministic whatever the BY key compares like; the
+        collapsed shapes group every row together and sort on scalar t1.
+        """
+        self.setup_data(DATASET, key_type)
+        for tail in [
+            "groupby 1 @t1 reduce first_value 3 @items BY @t1 as fv",
+            "groupby 1 @t1 reduce first_value 4 @items BY @t1 desc as fv",
+            "groupby 1 @t1 reduce first_value 3 @sitems BY @t1 asc as fv",
+            # The array as the sort key rather than the returned value.
+            "groupby 1 @t1 reduce first_value 3 @t1 BY @items as fv",
+            # Collapse every row into one group so the reducer actually picks.
+            'apply "x" as k groupby 1 @k reduce first_value 4 @items BY @t1 asc as fv',
+            'apply "x" as k groupby 1 @k reduce first_value 4 @sitems BY @t1 desc as fv',
         ]:
             self._pipeline(key_type, tail)
 

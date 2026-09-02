@@ -399,12 +399,4 @@ uint32_t FlatPositionMap::GetNumPartitions() const {
   return num_partitions;
 }
 
-size_t FlatPositionMap::CountTermFrequency() const {
-  size_t total_frequency = 0;
-  for (PositionIterator iter(*this); iter.IsValid(); iter.NextPosition()) {
-    total_frequency += __builtin_popcountll(iter.GetFieldMask());
-  }
-  return total_frequency;
-}
-
 }  // namespace valkey_search::indexes::text

@@ -2094,8 +2094,7 @@ void IndexSchema::MarkAsDestructing() {
       if (params) {
         params->search_result.status =
             GenerateIndexNotFoundError(db_num_, name_);
-        auto *raw_params = params.get();
-        raw_params->QueryCompleteMainThread(std::move(params));
+        params->QueryCompleteMainThread(std::move(params));
       }
     }
   }

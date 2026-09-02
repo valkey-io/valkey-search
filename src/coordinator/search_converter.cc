@@ -296,6 +296,13 @@ absl::Status GRPCSearchRequestToParameters(
       static_cast<QueryOperations>(request.query_operations());
   parameters->sortby_parameter = SortByFromGRPC(request);
   parameters->scorer = ScorerFromGRPC(request.scorer());
+  if (request.has_inkeys()) {
+    auto& dest = parameters->inkeys.emplace();
+    dest.reserve(request.inkeys().keys().size());
+    for (const auto& key : request.inkeys().keys()) {
+      dest.insert(key);
+    }
+  }
   return absl::OkStatus();
 }
 
@@ -431,7 +438,6 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   auto request = std::make_unique<SearchIndexPartitionRequest>();
   request->set_db_num(parameters.db_num);
   request->set_index_schema_name(parameters.index_schema_name);
-  request->set_db_num(parameters.db_num_);
   request->set_attribute_alias(parameters.attribute_alias);
   request->set_score_as(vmsdk::ToStringView(parameters.score_as.get()));
   request->set_query(parameters.query);
@@ -468,6 +474,12 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   SortByToGRPC(parameters.sortby_parameter, request.get());
   request->set_scorer(ScorerToGRPC(parameters.scorer));
+  if (parameters.inkeys.has_value()) {
+    auto* inkeys_filter = request->mutable_inkeys();
+    for (const auto& key : *parameters.inkeys) {
+      inkeys_filter->add_keys(key);
+    }
+  }
   return request;
 }
 

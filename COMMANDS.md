@@ -109,7 +109,8 @@ LOCAL: An array of key value pairs.
 - **index_definition** (array) An array of values defining the index
   - **key_type** (string) HASH. This is the only available key type.
   - **prefixes** (array of strings) Prefixes for keys
-  - **default_score** (integer) This is the default scoring value for the vector search scoring function, which is used for sorting.
+  - **default_score** (double) The index's configured `SCORE` value, used as the document score when no `SCORE_FIELD` is set.
+  - **score_field** (string) The index's configured `SCORE_FIELD`, or an empty string if none.
   - **attributes** (array) One array of entries for each field defined in the index.
     - **identifier** (string) field name
     - **attribute** (string) An index field. This is correlated to a specific index HASH field.

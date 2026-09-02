@@ -31,7 +31,8 @@ An array of key value pairs.
 - `index_definition` (an array of key/value pairs)
   - `key_type` (string) `HASH` or `JSON`
   - `prefixes` (array of strings) The declared prefixes for this index
-  - `default_score` (string) currently "1.0"
+    - `default_score` (double) The index's configured `SCORE` value
+    - `score_field` (string) The index's configured `SCORE_FIELD`, or an empty string if none
 - `attributes` (array of arrays) One entry per declared attribute of the index.
   - `identifier` (string) identifier for this attribute
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.

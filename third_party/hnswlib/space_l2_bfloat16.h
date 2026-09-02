@@ -15,7 +15,8 @@
 namespace hnswlib {
 
 static float
-L2SqrBF16(const void *pVect1v, const void *pVect2v, const void *qty_ptr) {
+L2SqrBF16(const void *pVect1v, const void *pVect2v, const void *qty_ptr,
+          [[maybe_unused]] float product_magnitude) {
     bfloat16 *pVect1 = (bfloat16 *) pVect1v;
     bfloat16 *pVect2 = (bfloat16 *) pVect2v;
     size_t qty = *((size_t *) qty_ptr);
@@ -30,7 +31,8 @@ L2SqrBF16(const void *pVect1v, const void *pVect2v, const void *qty_ptr) {
 
 #if defined(USE_SIMSIMD)
 static float
-L2SqrBF16Simsimd(const void *pVect1, const void *pVect2, const void *qty_ptr) {
+L2SqrBF16Simsimd(const void *pVect1, const void *pVect2, const void *qty_ptr,
+                 [[maybe_unused]] float product_magnitude) {
     simsimd_size_t dim = *static_cast<const size_t *>(qty_ptr);
     const simsimd_bf16_t *vec1 = static_cast<const simsimd_bf16_t *>(pVect1);
     const simsimd_bf16_t *vec2 = static_cast<const simsimd_bf16_t *>(pVect2);

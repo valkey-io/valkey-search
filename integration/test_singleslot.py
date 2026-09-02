@@ -88,3 +88,60 @@ class TestSingleSlot(ValkeySearchClusterTestCaseDebugMode):
             assert(requests() == expected_requests)
             assert(rpcs() == expected_rpcs)
             assert result[0] == 10  # number of results
+
+    @pytest.mark.parametrize(
+        "setup_test", [{"replica_count": 1}], indirect=True
+    )
+    def test_single_slot_force_replicas_only(self):
+        """
+        Regression test: single-slot index + ForceReplicasOnly must not crash.
+
+        ForceReplicasOnly sets mode=kOneReplicaPerShard in ComputeSearchTargets.
+        For single-slot indexes this calls GetTargetsForSlot(kOneReplicaPerShard)
+        which previously had no case for that mode → CHECK(false) → SIGABRT.
+
+        Fix: added kOneReplicaPerShard case to GetTargetsForSlot in
+        vmsdk/src/cluster_map.cc.
+        """
+        cluster = self.new_cluster_client()
+        nodes = self.get_all_primary_clients()
+        primary = nodes[0]
+
+        # Create single-slot index
+        primary.execute_command(
+            "FT.CREATE", "idx{shard0}",
+            "PREFIX", "1", "doc:{shard0}",
+            "SCHEMA", "price", "NUMERIC"
+        )
+
+        # Add data
+        for i in range(10):
+            cluster.execute_command(
+                "HSET", f"doc:{{shard0}}:{i}", "price", str(i * 10)
+            )
+
+        # Wait for backfill
+        waiters.wait_for_true(
+            lambda: primary.execute_command(
+                "FT.SEARCH", "idx{shard0}", "@price:[0 100]"
+            )[0] == 10
+        )
+
+        # Verify query works before ForceReplicasOnly (uses kRandom → handled)
+        result = primary.execute_command(
+            "FT.SEARCH", "idx{shard0}", "@price:[0 100]"
+        )
+        assert result[0] == 10
+
+        # Enable ForceReplicasOnly on ALL nodes → mode = kOneReplicaPerShard
+        for n in self.nodes:
+            n.client.execute_command(
+                "ft._debug CONTROLLED_VARIABLE set ForceReplicasOnly yes"
+            )
+
+        # Query with ForceReplicasOnly: validates that single-slot indexes
+        # correctly handle replica-targeted fanout modes in GetTargetsForSlot
+        result = primary.execute_command(
+            "FT.SEARCH", "idx{shard0}", "@price:[0 100]"
+        )
+        assert result[0] == 10

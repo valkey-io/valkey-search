@@ -19,9 +19,10 @@ target_link_libraries(hnswlib_vmsdk INTERFACE iostream)
 # they'd be emitted into every TU and collide at link time (macOS hard error).
 target_link_libraries(hnswlib_vmsdk INTERFACE simsimd_c)
 target_link_libraries(hnswlib_vmsdk INTERFACE vmsdklib)
+# USE_SIMSIMD is defined unconditionally in hnswlib.h; defining it here too
+# just produces a -Wmacro-redefined warning in every TU.
 target_compile_definitions(hnswlib_vmsdk
-                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES
-                                     USE_SIMSIMD)
+                           INTERFACE VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)
 target_link_libraries(hnswlib_vmsdk INTERFACE index_cc_proto)
 
 set(SRCS_SIMSIMD ${CMAKE_CURRENT_LIST_DIR}/simsimd.h)

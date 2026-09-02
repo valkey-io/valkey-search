@@ -37,6 +37,7 @@ constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kSlopParam{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kScorerParam{"SCORER"};
 
 std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
   return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
@@ -216,7 +217,8 @@ ConstructGroupByParser() {
                                  _ << "Missing Reducer name");
           auto uc_name =
               expr::FuncUpper(expr::Value(vmsdk::ToStringView(name)));
-          auto reducer_itr = GroupBy::reducerTable.find(uc_name.AsStringView());
+          auto reducer_itr =
+              GroupBy::reducerTable.find(*uc_name.AsStringView());
           if (reducer_itr == GroupBy::reducerTable.end()) {
             return absl::NotFoundError(absl::StrCat("reducer function `",
                                                     vmsdk::ToStringView(name),
@@ -225,7 +227,7 @@ ConstructGroupByParser() {
 
           VMSDK_ASSIGN_OR_RETURN(
               std::unique_ptr<GroupBy::Reducer> r,
-              reducer_itr->second(uc_name.AsStringView(), parameters, itr));
+              reducer_itr->second(*uc_name.AsStringView(), parameters, itr));
           groupby->reducers_.emplace_back(std::move(r));
         }
         parameters.stages_.emplace_back(std::move(groupby));
@@ -248,6 +250,9 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
                         GENERATE_FLAG_PARSER(AggregateParameters, inorder));
   parser.AddParamParser(kVerbatim,
                         GENERATE_FLAG_PARSER(AggregateParameters, verbatim));
+  parser.AddParamParser(kScorerParam,
+                        GENERATE_ENUM_PARSER(AggregateParameters, scorer,
+                                             *indexes::scoring::kScorerByStr));
   parser.AddParamParser(kLoadParam, ConstructLoadParser());
   parser.AddParamParser(kApplyParam, ConstructApplyParser());
   parser.AddParamParser(kFilterParam, ConstructFilterParser());

@@ -67,8 +67,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
-      auto indexer_type = indexer->GetIndexerType();
-      if (indexer->IsVectorIndex()) {
+      if (indexes::IsVectorIndex(indexer)) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Loading of vector fields is not supported (field `", load, "`)"));
       }
@@ -78,7 +77,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
             .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(*schema_identifier, load, indexer_type);
+        params.AddRecordAttribute(*schema_identifier, load,
+                                  indexer->GetIndexerType());
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(load),
@@ -128,6 +128,34 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
+// Forward declaration for recursive serialization
+void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
+
+void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
+  ValkeyModule_ReplyWithArray(ctx, vec->size());
+  for (const auto &elem : *vec) {
+    SerializeValueToResp(ctx, elem);
+  }
+}
+
+void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
+  if (value.IsArray()) {
+    SerializeArrayToResp(ctx, value.GetArray());
+  } else if (value.IsBool()) {
+    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
+  } else if (value.IsDouble()) {
+    // IsDouble() guarantees AsString() returns a value.
+    auto value_str = *value.AsString();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
+  } else if (value.IsString()) {
+    auto value_sv = value.GetStringView();
+    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+  } else {
+    // Fallback for Nil and unknown types
+    ValkeyModule_ReplyWithNull(ctx);
+  }
+}
+
 bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     data_model::AttributeDataType data_type,
                     std::string_view name, indexes::IndexerType indexer_type,
@@ -135,37 +163,24 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
   if (value.IsNil()) {
     return false;
   }
+
+  // Handle array values with RESP array serialization
+  if (value.IsArray()) {
+    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+    SerializeArrayToResp(ctx, value.GetArray());
+    return true;
+  }
+
   if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    auto value_sv = value.AsStringView();
+    // Guarded by IsNil() check above; AsStringView always succeeds here.
+    auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
-    char double_storage[50];
-    std::string_view value_view;
-    if (name == "$") {
-      value_view = value.AsStringView();
-    } else {
-      switch (indexer_type) {
-        case indexes::IndexerType::kTag:
-        case indexes::IndexerType::kText:
-        case indexes::IndexerType::kNone: {
-          value_view = value.AsStringView();
-          break;
-        }
-        case indexes::IndexerType::kNumeric: {
-          auto dble = value.AsDouble();
-          if (!dble) {
-            return false;
-          }
-          auto double_size =
-              snprintf(double_storage, sizeof(double_storage), "%.11g", *dble);
-          value_view = std::string_view(double_storage, double_size);
-          break;
-        }
-        default:
-          CHECK(false) << " Received type " << int(indexer_type);
-      }
+    if (name != "$") {
+      indexes::AssertValidIndexerType(indexer_type);
     }
+    std::string_view value_view = *value.AsStringView();
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     if (dialect == 2) {
       ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
@@ -236,8 +251,11 @@ absl::Status CreateRecordsFromNeighbors(
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
   for (auto &n : neighbors) {
+    // Not record_indexes_by_alias_.size(): that undercounts once an alias has
+    // been re-bound (shadowed) to a new slot, leaving later slots out of
+    // bounds.
     auto rec =
-        std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
+        std::make_unique<Record>(parameters.record_info_by_index_.size());
 
     // Set key field if requested
     if (parameters.load_key) {
@@ -246,7 +264,7 @@ absl::Status CreateRecordsFromNeighbors(
 
     // Set score field for vector queries
     if (parameters.IsVectorQuery()) {
-      rec->fields_.at(scores_index) = expr::Value(n.distance);
+      rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
     // Process attribute contents
@@ -261,13 +279,13 @@ absl::Status CreateRecordsFromNeighbors(
         if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
             by_alias != parameters.record_indexes_by_alias_.end()) {
           record_index = by_alias->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         } else if (auto by_identifier =
                        parameters.record_indexes_by_identifier_.find(name);
                    by_identifier !=
                    parameters.record_indexes_by_identifier_.end()) {
           record_index = by_identifier->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         }
 
         if (record_index) {

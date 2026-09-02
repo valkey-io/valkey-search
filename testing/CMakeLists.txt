@@ -14,7 +14,6 @@ target_link_libraries(testing_common_base PUBLIC index_schema)
 target_link_libraries(testing_common_base PUBLIC keyspace_event_manager)
 target_link_libraries(testing_common_base PUBLIC schema_manager)
 target_link_libraries(testing_common_base PUBLIC valkey_search)
-target_link_libraries(testing_common_base PUBLIC vector_externalizer)
 target_link_libraries(testing_common_base PUBLIC metadata_manager)
 target_link_libraries(testing_common_base PUBLIC vector_base)
 target_link_libraries(testing_common_base PUBLIC vector_hnsw)
@@ -58,7 +57,8 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_info_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/commands/ft_internal_update_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/filter_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/qma_weight_parser_test.cc)
 
 add_executable(commands_test ${COMMANDS_TEST_SOURCES})
 target_include_directories(commands_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -79,6 +79,8 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/tag_index_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/space_distance_test.cc)
 
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
@@ -96,7 +98,6 @@ set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/server_events_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/attribute_data_type_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/multi_exec_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_externalizer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/acl_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rdb_serialization_test.cc)
 
@@ -113,6 +114,7 @@ finalize_test_flags(core_test)
 # 1. Query Test Suite - consolidates query and search related tests
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/find_vector_delimiter_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
@@ -123,6 +125,8 @@ target_link_libraries(query_test PRIVATE testing_common_coordinator)
 target_link_libraries(query_test PRIVATE fanout)
 target_link_libraries(query_test PRIVATE response_generator)
 target_link_libraries(query_test PRIVATE search_converter)
+target_link_libraries(query_test PRIVATE scoring)
+target_link_libraries(query_test PRIVATE text)
 finalize_test_flags(query_test)
 
 # 1. Coordinator Test Suite - consolidates coordinator related tests
@@ -155,7 +159,7 @@ set(UTILS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/utils/intrusive_ref_count_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/lru_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/patricia_tree_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/utils/segment_tree_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/utils/numeric_btree_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils/string_interning_test.cc)
 
 add_executable(valkey_utils_test ${UTILS_TEST_SOURCES})
@@ -165,11 +169,11 @@ target_include_directories(valkey_utils_test
 target_link_libraries(valkey_utils_test PRIVATE testing_common_base)
 target_link_libraries(valkey_utils_test PRIVATE intrusive_list)
 target_link_libraries(valkey_utils_test PRIVATE lru)
-target_link_libraries(valkey_utils_test PRIVATE segment_tree)
+target_link_libraries(valkey_utils_test PRIVATE numeric_btree)
 finalize_test_flags(valkey_utils_test)
 
 # 7. Text Index Test Suite
-add_executable(text_index_test 
+add_executable(text_index_test
     ${CMAKE_CURRENT_LIST_DIR}/flat_position_map_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/radix_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/rax_wrapper_test.cc
@@ -179,5 +183,13 @@ target_link_libraries(text_index_test PRIVATE testing_common_base)
 target_link_libraries(text_index_test PRIVATE text)
 finalize_test_flags(text_index_test)
 
-# 8. Expr Test Suite
+# 8. Scoring Test Suite
+add_executable(scoring_test
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer_test.cc)
+target_include_directories(scoring_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoring_test PRIVATE testing_common_base)
+target_link_libraries(scoring_test PRIVATE scoring)
+finalize_test_flags(scoring_test)
+
+# 9. Expr Test Suite
 add_subdirectory(expr)

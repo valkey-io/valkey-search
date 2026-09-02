@@ -39,12 +39,12 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_hnsw_search_exceptions_count",
             "search_hnsw_create_exceptions_count",
             "search_string_interning_store_size",
-            "search_vector_externing_entry_count",
-            "search_vector_externing_hash_extern_errors",
-            "search_vector_externing_generated_value_cnt",
-            "search_vector_externing_num_lru_entries",
-            "search_vector_externing_lru_promote_cnt",
-            "search_vector_externing_deferred_entry_cnt",
+            "search_vector_registry_entry_cnt",
+            "search_vector_registry_shared_externally_cnt",
+            "search_vector_registry_get_record_hits",
+            "search_vector_registry_get_record_misses",
+            "search_vector_registry_shared_externally_errors",
+            "search_vector_registry_sharing_active",
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
@@ -101,9 +101,13 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             m.decode('utf-8') if isinstance(m, bytes) else m 
             for m in actual_metrics
         )
-        # Expected baseline: 68 APP metrics as of current implementation
+        # Expected baseline: 70 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
+            # Counts uses of the legacy (incompatible) invalid-data handling
+            # while search.emulate-release is below the fix version. See
+            # COMPATIBILITY.md.
+            "compatibility-invalid_data_drops_key",
             "coordinator_bytes_in",
             "coordinator_bytes_out",
             "coordinator_client_get_global_metadata_failure_count",
@@ -126,6 +130,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
             "hnsw_create_exceptions_count",
+            "hnsw_duplicate_label_on_load_count",
             "hnsw_modify_exceptions_count",
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",
@@ -160,12 +165,12 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "writer_queue_size",
             "writer_resumed_cnt",
             "writer_suspension_expired_cnt",
-            "vector_externing_deferred_entry_cnt",
-            "vector_externing_entry_count",
-            "vector_externing_generated_value_cnt",
-            "vector_externing_hash_extern_errors",
-            "vector_externing_lru_promote_cnt",
-            "vector_externing_num_lru_entries",
+            "vector_registry_entry_cnt",
+            "vector_registry_shared_externally_cnt",
+            "vector_registry_get_record_hits",
+            "vector_registry_get_record_misses",
+            "vector_registry_shared_externally_errors",
+            "vector_registry_sharing_active",
         }
         # Verify no metrics are missing
         missing = expected_metrics - actual_metrics_set

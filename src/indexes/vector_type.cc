@@ -103,11 +103,21 @@ void VectorType<T>::Init(data_model::DistanceMetric distance_metric) {
 }
 
 template <typename T>
+float VectorType<T>::ComputeReciprocalMagnitude(
+    absl::string_view record) const {
+  return CalcReciprocalMagnitude(reinterpret_cast<const T *>(record.data()),
+                                 record.size() / sizeof(T));
+}
+
+template <typename T>
 void VectorType<T>::EmitDataTypeInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
+  // LookupKeyByValue returns a string_view, whose data() is not guaranteed
+  // NUL-terminated; materialize it before handing it to the C API.
   ValkeyModule_ReplyWithSimpleString(
-      ctx, LookupKeyByValue(*kVectorDataTypeByStr, VectorDataTypeEnumFor<T>())
-               .data());
+      ctx, std::string(LookupKeyByValue(*kVectorDataTypeByStr,
+                                        VectorDataTypeEnumFor<T>()))
+               .c_str());
 }
 
 template <typename T>

@@ -28,19 +28,22 @@ InnerProductBF16(const void *pVect1, const void *pVect2, const void *qty_ptr) {
 }
 
 static float
-InnerProductDistanceBF16(const void *pVect1, const void *pVect2, const void *qty_ptr) {
-    return 1.0f - InnerProductBF16(pVect1, pVect2, qty_ptr);
+InnerProductDistanceBF16(const void *pVect1, const void *pVect2, const void *qty_ptr,
+                         float reciprocal_mag_product) {
+    return 1.0f - (InnerProductBF16(pVect1, pVect2, qty_ptr) *
+                   reciprocal_mag_product);
 }
 
 #if defined(USE_SIMSIMD)
 static float
-InnerProductDistanceBF16Simsimd(const void *pVect1, const void *pVect2, const void *qty_ptr) {
+InnerProductDistanceBF16Simsimd(const void *pVect1, const void *pVect2, const void *qty_ptr,
+                                float reciprocal_mag_product) {
     simsimd_size_t dim = *static_cast<const size_t *>(qty_ptr);
     const simsimd_bf16_t *vec1 = static_cast<const simsimd_bf16_t *>(pVect1);
     const simsimd_bf16_t *vec2 = static_cast<const simsimd_bf16_t *>(pVect2);
     simsimd_distance_t distance;
     simsimd_dot_bf16(vec1, vec2, dim, &distance);
-    return 1.0f - static_cast<float>(distance);
+    return 1.0f - (static_cast<float>(distance) * reciprocal_mag_product);
 }
 #endif
 

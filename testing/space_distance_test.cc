@@ -19,9 +19,10 @@
 //   * dim=20 : SIMD16Ext block + 4-tail
 //   * dim=17 : SIMD16Ext block + 1-element residual handler
 //
-// FP16 spaces use the scalar fallback in this build (USE_SIMSIMD is not
-// defined in third_party/hnswlib/CMakeLists.txt), so the dim sweep mainly
-// guards against future regressions there.
+// USE_SIMSIMD is now defined unconditionally in third_party/hnswlib/hnswlib.h,
+// so the FP16/BF16 spaces take the simsimd kernels here (simsimd does its own
+// runtime CPU dispatch). The dim sweep therefore exercises simsimd's own
+// blocked/tail handling as well.
 //
 // All test inputs use values exactly representable in FP16 (small integers,
 // zero) so FP32 and FP16 expectations agree without precision drift.
@@ -29,6 +30,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "gtest/gtest.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
@@ -96,9 +98,13 @@ std::vector<bfloat16> PadBf16(std::initializer_list<float> prefix, size_t dim) {
   return v;
 }
 
+// The trailing argument is the product of the two vectors' reciprocal
+// magnitudes. L2 kernels ignore it; IP kernels multiply the dot product by it
+// before subtracting from 1. These tests pass un-normalized vectors, so 1.0f
+// is the identity and the expectations below are the raw distances.
 float CallDist(hnswlib::SpaceInterface<float>& space, const void* a,
-               const void* b) {
-  return space.get_dist_func()(a, b, space.get_dist_func_param());
+               const void* b, float magnitude = 1.0f) {
+  return space.get_dist_func()(a, b, space.get_dist_func_param(), magnitude);
 }
 
 // ---------------------------------------------------------------------------

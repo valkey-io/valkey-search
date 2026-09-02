@@ -1373,6 +1373,14 @@ TEST_F(VectorIndexTest, RejectHeaderMaxLevelTooLarge) {
   auto h = GetHeader(golden);
   h.set_max_level(1000);
   SetHeader(&golden, h);
+  ExpectReject(std::move(golden), "max level above expected range");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMaxLevelEntryPointMismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_max_level(100);
+  SetHeader(&golden, h);
   // A max_level inconsistent with the actual per-element levels is caught by
   // the global entry-point invariant (the entry point must be a tallest node).
   ExpectReject(std::move(golden), "enterpoint node is not at max_level");

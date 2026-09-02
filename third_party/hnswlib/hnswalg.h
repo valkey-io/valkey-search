@@ -1028,7 +1028,7 @@ class HierarchicalNSW
         loadCheck(maxlevel_ >= 0, "non-empty index has a negative max_level");
         // Sanity upper bound on the maxlevel_ to ensure an entrypoint with
         // a crazy large level and corresponding linked list isn't loaded.
-        loadCheck(maxlevel_ <= 256, "max level outside expected range");
+        loadCheck(maxlevel_ <= 256, "max level above expected range");
         loadCheck(enterpoint_node_ < target_element_count,
                   "enterpoint_node is out of range");
       }

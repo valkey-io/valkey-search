@@ -461,7 +461,7 @@ function renderBody(prs, state, pools, now, targetLabel, opts = {}) {
   L.push('**General commands** — act on a PR (the priority tables below):');
   L.push('');
   L.push('```');
-  L.push('/priority 1234 P2      set priority (P1–P4)');
+  L.push('/priority 1234 P2      set priority (P1–P4; empty clears it)');
   L.push('/note 1234 some text   set a note (empty clears it)');
   L.push('/stage 1234 maintainer override stage: review | changes | maintainer | approved | auto');
   L.push('/needs-review 1234     re-request maintainer review (clears maintainers’ Reviewed)');

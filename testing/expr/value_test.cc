@@ -11,6 +11,8 @@
 #include <cstring>
 #include <limits>
 #include <random>
+#include <sstream>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "src/valkey_search_options.h"
@@ -1334,6 +1336,22 @@ TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
   EXPECT_EQ(FormatDouble(std::numeric_limits<double>::max()),
             "1.7976931348623157e+308");
   EXPECT_EQ(Value(20260201.0).AsString().value(), "20260201");
+}
+
+// Streaming an array used to reach operator<<'s CHECK(false). GroupKey streams
+// its elements, so expanding a multi-value GROUPBY key aborted any DBG build.
+TEST_F(ValueTest, StreamArrayValue) {
+  std::ostringstream os;
+  os << Value({Value(1.0), Value("two"), Value(true)});
+  EXPECT_EQ(os.str(), "[Dble(1),'two',Bool(true)]");
+
+  std::ostringstream empty;
+  empty << Value(std::vector<Value>{});
+  EXPECT_EQ(empty.str(), "[]");
+
+  std::ostringstream nested;
+  nested << Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
+  EXPECT_EQ(nested.str(), "[[Dble(1),Dble(2)],Dble(3)]");
 }
 
 }  // namespace valkey_search::expr

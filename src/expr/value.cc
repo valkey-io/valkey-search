@@ -251,6 +251,19 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   } else if (v.IsString()) {
     // IsString() guarantees AsStringView() succeeds.
     return os << "'" << *v.AsStringView() << "'";
+  } else if (v.IsArray()) {
+    // GroupKey streams its elements, and expanding a multi-value key puts
+    // arrays here, so this has to render rather than abort. Elements recurse,
+    // which also covers nested arrays.
+    auto array = v.GetArray();
+    os << '[';
+    for (size_t i = 0; i < array->size(); ++i) {
+      if (i > 0) {
+        os << ',';
+      }
+      os << (*array)[i];
+    }
+    return os << ']';
   }
   CHECK(false);
 }

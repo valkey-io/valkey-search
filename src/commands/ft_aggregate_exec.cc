@@ -203,7 +203,9 @@ static absl::StatusOr<std::vector<GroupKey>> ExpandGroupKeys(
       auto array = value.GetArray();
       alternatives.assign(array->begin(), array->end());
     }
-    if (keys.size() * alternatives.size() > max_expansion) {
+    // Divide rather than multiply: the product would wrap before the compare.
+    // alternatives is never empty -- every branch above pushes an element.
+    if (keys.size() > max_expansion / alternatives.size()) {
       return absl::ResourceExhaustedError(
           absl::StrCat("GROUPBY over multi-value fields exceeds ",
                        max_expansion, " group keys for a single record"));
@@ -309,18 +311,18 @@ static expr::Value NumericReducerArg(const expr::Value &value) {
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
   void ProcessRecord(const ArgVector &raw) override {
-    ArgVector values{NumericReducerArg(raw[0])};
-    if (values[0].IsNil()) {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (min_.IsNil()) {
-      DBG << "First Value Min is " << values[0] << "\n";
-      min_ = values[0];
-    } else if (min_ > values[0]) {
-      DBG << " New Min: " << values[0] << "\n";
-      min_ = values[0];
+      DBG << "First Value Min is " << value << "\n";
+      min_ = value;
+    } else if (min_ > value) {
+      DBG << " New Min: " << value << "\n";
+      min_ = value;
     } else {
-      DBG << "Not new Min: " << values[0] << "\n";
+      DBG << "Not new Min: " << value << "\n";
     }
   }
   expr::Value GetResult() const override { return min_; }
@@ -336,14 +338,14 @@ struct ReducerInstanceVector : GroupBy::ReducerInstance {
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
   void ProcessRecord(const ArgVector &raw) override {
-    ArgVector values{NumericReducerArg(raw[0])};
-    if (values[0].IsNil()) {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (max_.IsNil()) {
-      max_ = values[0];
-    } else if (max_ < values[0]) {
-      max_ = values[0];
+      max_ = value;
+    } else if (max_ < value) {
+      max_ = value;
     }
   }
   expr::Value GetResult() const override { return max_; }

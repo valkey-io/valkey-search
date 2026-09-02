@@ -289,7 +289,8 @@ TEST_F(AggregateExecTest, GroupByArrayKeyExpandsTest) {
     return rec;
   };
 
-  // {1,2} and {2,3} share the element 2, so the two records join five groups.
+  // {1,2} and {2,3} share the element 2, so the two records join three
+  // distinct groups: 1, 2 and 3.
   {
     auto param = MakeStages("groupby 1 @n1 reduce count 0");
     RecordSet records(nullptr);

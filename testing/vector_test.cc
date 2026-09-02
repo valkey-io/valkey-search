@@ -77,7 +77,7 @@ static void ExpectNeighborsNear(const std::vector<NeighborTest> &act,
   std::sort(sorted_exp.begin(), sorted_exp.end(), compare_by_id);
   for (size_t j = 0; j < sorted_act.size(); ++j) {
     EXPECT_EQ(sorted_act[j].external_id, sorted_exp[j].external_id);
-    EXPECT_NEAR(sorted_act[j].distance, sorted_exp[j].distance, tolerance);
+    EXPECT_NEAR(sorted_act[j].score, sorted_exp[j].score, tolerance);
   }
 }
 
@@ -343,7 +343,7 @@ void TestIndex(T *index, int dimensions, int vector_size,
       bool found = false;
       for (const auto &neighbors : res.value()) {
         if (neighbors.external_id == IndexToKey(i)) {
-          EXPECT_LT(neighbors.distance - res.value()[0].distance, 0.0001);
+          EXPECT_LT(neighbors.score - res.value()[0].score, 0.0001);
           found = true;
           break;
         }

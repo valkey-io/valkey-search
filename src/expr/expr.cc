@@ -262,6 +262,15 @@ struct Dyadic : Expression {
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto lvalue = lexpr_->Evaluate(ctx, record);
     auto rvalue = rexpr_->Evaluate(ctx, record);
+    // Redisearch drops a record whose APPLY expression reached for a field the
+    // key does not have, however deep in the expression that reference sat.
+    // Without this the operator manufactures its own reason ("Add requires
+    // numeric operands"), which reads as "evaluated to nothing" and keeps the
+    // record. Safe only because a field named by a stage is now loaded
+    // implicitly, so an unpopulated slot means the key really lacks it.
+    if (lvalue.IsMissing() || rvalue.IsMissing()) {
+      return Value::Missing();
+    }
     return (*func_)(lvalue, rvalue);
   }
   void Dump(std::ostream &os) const override {

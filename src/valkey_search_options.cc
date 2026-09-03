@@ -6,6 +6,9 @@
  */
 #include "valkey_search_options.h"
 
+#include <string_view>
+#include <vector>
+
 #include "valkey_search.h"
 #include "version.h"
 #include "vmsdk/src/concurrency.h"
@@ -212,6 +215,24 @@ static auto log_level =
         })
         .WithValidationCallback(ValidateLogLevel)
         .Build();
+
+/// Scorer used by FT.SEARCH when the query omits SCORER.
+constexpr absl::string_view kDefaultScorer{"default-scorer"};
+/// Enumerators come from the scorer registry, so a scorer that is not yet
+/// selectable via SCORER cannot be selected through this config either.
+static auto default_scorer = [] {
+  std::vector<std::string_view> names;
+  std::vector<int> values;
+  for (const auto &[name, type] : *indexes::scoring::kScorerByStr) {
+    names.push_back(name);
+    values.push_back(static_cast<int>(type));
+  }
+  return config::EnumBuilder(
+             kDefaultScorer,
+             static_cast<int>(indexes::scoring::ScorerType::kBm25Std), names,
+             values)
+      .Build();
+}();
 
 /// Prefer partial results by default of not
 /// If set to true, search will use SOMESHARDS if user does not explicitly
@@ -608,6 +629,10 @@ absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   VMSDK_RETURN_IF_ERROR(enable_vector_sharing->SetValue(true));
   return absl::OkStatus();
+}
+
+config::Enum &GetDefaultScorer() {
+  return dynamic_cast<config::Enum &>(*default_scorer);
 }
 
 const vmsdk::config::Boolean &GetPreferPartialResults() {

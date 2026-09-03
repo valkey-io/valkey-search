@@ -229,25 +229,23 @@ expected length.
 ## JSON Vector Format
 
 For JSON type indexes, a vector may be written either as a **native JSON array**
-of numbers or as a **JSON string** containing a comma-separated list. Both forms
-are supported and are equivalent -- they index identically and return identical
-distances:
+of numbers or as a **JSON string** containing a bracketed, comma-separated list.
+Both forms are supported and equivalent -- they index identically and return
+identical distances:
 
 ```
 JSON.SET doc:1 $ '{"embedding": [1.0, 0.0, 0.0]}'     # native array
 JSON.SET doc:2 $ '{"embedding": "[1.0, 0.0, 0.0]"}'   # quoted string
 ```
 
-The native array is usually the better choice: it is ordinary JSON, so other
-readers of the document see a real array rather than an opaque string, and it
-needs no client-side formatting. The string form exists for compatibility with
-documents already written that way.
+Prefer the native array. It is ordinary JSON, so other readers of the document
+see a real array rather than an opaque string, and it needs no client-side
+formatting. The quoted string is the older form, still supported for documents
+already written that way.
 
-Either way the module parses the value the same way -- splitting on commas with
-whitespace skipped, and converting each element to the index's declared `TYPE`.
-For a `FLOAT16` or `BFLOAT16` index the values are therefore rounded to 2-byte
-precision on ingest, exactly as a binary blob would be. Integer elements such as
-`[1, 0, 0]` are accepted and converted.
+Either form is converted element by element to the index's declared `TYPE`. For
+a `FLOAT16` or `BFLOAT16` index the values are therefore rounded to 2-byte
+precision on ingest, exactly as a binary blob would be.
 
 In Python, with the native array form:
 
@@ -263,20 +261,9 @@ client.json().set("doc:2", "$",
                   {"embedding": "[" + ",".join(str(v) for v in vector) + "]"})
 ```
 
-The parser is tolerant of whitespace and of surplus commas, and in the string
-form the enclosing brackets are optional:
-
-```
-[0.1, 0.2, 0.3]         --> valid (native array)
-"[0.1, 0.2, 0.3]"       --> valid (string)
-"0.1,0.2,0.3"           --> valid (string; brackets are optional)
-"[ 0.1, ,0.2,0.3,]"     --> valid (extra commas and spaces are tolerated)
-"[0.1, 0.2, a]"         --> rejected (non-numeric element)
-```
-
-A value whose element count does not match `DIM` is not indexed for that field:
-the key is left out of vector search results, exactly as an incorrectly sized
-binary blob would be.
+A value containing a non-numeric element, or whose element count does not match
+`DIM`, is not indexed for that field: the key is left out of vector search
+results, exactly as an incorrectly sized binary blob would be.
 
 ## Query Vectors
 

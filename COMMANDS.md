@@ -53,12 +53,12 @@ FT.CREATE <index-name>
 
 - **FLAT:** The Flat algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
-  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
+  - **TYPE [FLOAT32 | FLOAT16 | BFLOAT16]** (required): Element data type. FLOAT16 and BFLOAT16 halve the memory used per vector at some cost in precision; see [Supported Data Types](docs/topics/search-data-formats.md#supported-data-types).
   - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
   - **INITIAL_CAP \<size\>** (optional): Initial index size.
 - **HNSW:** The HNSW algorithm provides approximate answers, but operates substantially faster than FLAT.
   - **DIM \<number\>** (required): Specifies the number of dimensions in a vector.
-  - **TYPE FLOAT32** (required): Data type, currently only FLOAT32 is supported.
+  - **TYPE [FLOAT32 | FLOAT16 | BFLOAT16]** (required): Element data type. FLOAT16 and BFLOAT16 halve the memory used per vector at some cost in precision; see [Supported Data Types](docs/topics/search-data-formats.md#supported-data-types).
   - **DISTANCE_METRIC \[L2 | IP | COSINE\]** (required): Specifies the distance algorithm
   - **INITIAL_CAP \<size\>** (optional): Initial index size.
   - **M \<number\>** (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
@@ -118,7 +118,7 @@ LOCAL: An array of key value pairs.
       - **capacity** (integer) The current capacity for the total number of vectors that the index can store.
       - **dimensions** (integer) Dimension count
       - **distance_metric** (string) Possible values are L2, IP or Cosine
-      - **data_type** (string) FLOAT32. This is the only available data type
+      - **data_type** (string) Element data type of the vector. Possible values are FLOAT32, FLOAT16 or BFLOAT16
       - **algorithm** (array) Information about the algorithm for this field.
         - **name** (string) HNSW or FLAT
         - **m** (integer) The count of maximum permitted outgoing edges for each node in the graph in each layer. The maximum number of outgoing edges is 2\*M for layer 0\. The Default is 16\. The maximum is 512\.
@@ -202,7 +202,7 @@ Where:
 - **\<filtering\>** Is either a `*` or a filter expression. A `*` indicates no filtering and thus all vectors within the index are searched. A filter expression can be provided to designate a subset of the vectors to be searched.
 - **\<vector_field_name\>** The name of a vector field within the specified index.
 - **\<K\>** The number of nearest neighbor vectors to return.
-- **\<vector_parameter_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded as a 32-bit IEEE 754 binary floating point in little-endian format.
+- **\<vector_parameter_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`), so its length must be `DIM * 4` bytes for FLOAT32 and `DIM * 2` bytes for the 16-bit types.
 - **\<query-modifiers\>** (Optional) A list of keyword/value pairs that modify this particular KNN search. Currently two keywords are supported:
   - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created.
   - **AS** This keyword is accompanied by a string value which becomes the name of the score field in the result, overriding the default score field name generation algorithm.

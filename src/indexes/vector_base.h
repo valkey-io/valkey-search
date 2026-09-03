@@ -35,6 +35,7 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -295,6 +296,20 @@ class VectorBase : public IndexBase {
   // BFLOAT16 wherever a byte width alone is ambiguous -- both are 2 bytes, so
   // a size-based check would silently route the wrong format.
   virtual data_model::VectorDataType GetVectorDataType() const = 0;
+  // KNN entry point, dispatched virtually so callers hold a VectorBase* and
+  // never need to know the storage type or the ANN algorithm. `ef_runtime` is
+  // meaningful only to HNSW; FLAT ignores it.
+  //
+  // The default arguments must stay identical here and in every override.
+  // C++ binds default arguments statically, so differing defaults would make
+  // the same call mean different things depending on the static type of the
+  // pointer it went through.
+  virtual absl::StatusOr<std::vector<Neighbor>> Search(
+      absl::string_view query, uint64_t count,
+      cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool enable_partial_results = false) = 0;
   bool IsValidSizeVector(absl::string_view record) const {
     return record.size() == GetVectorDataSize();
   }

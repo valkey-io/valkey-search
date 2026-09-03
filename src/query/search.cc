@@ -44,8 +44,6 @@
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
-#include "src/indexes/vector_flat.h"
-#include "src/indexes/vector_hnsw.h"
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/planner.h"
@@ -149,72 +147,28 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
         text_index_schema, parameters.filter_parse_results.query_operations);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
-  if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
-    if (auto *p = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index)) {
-      auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res =
-          p->Search(parameters.query, parameters.k,
-                    parameters.cancellation_token, std::move(inline_filter),
-                    parameters.ef, parameters.enable_partial_results);
+  // Search dispatches virtually on VectorBase, so neither the storage type
+  // (float / float16 / bfloat16) nor the ANN algorithm appears here. Only the
+  // latency metric still depends on the algorithm.
+  auto latency_sample = SAMPLE_EVERY_N(100);
+  auto res = vector_index->Search(
+      parameters.query, parameters.k, parameters.cancellation_token,
+      std::move(inline_filter), parameters.ef,
+      parameters.enable_partial_results);
+  switch (vector_index->GetIndexerType()) {
+    case indexes::IndexerType::kHNSW:
       Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
-      return res;
-    }
-    if (auto *p = dynamic_cast<indexes::VectorHNSW<float16> *>(vector_index)) {
-      auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res =
-          p->Search(parameters.query, parameters.k,
-                    parameters.cancellation_token, std::move(inline_filter),
-                    parameters.ef, parameters.enable_partial_results);
-      Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
+      break;
+    case indexes::IndexerType::kFlat:
+      Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
           std::move(latency_sample));
-      return res;
-    }
-    if (auto *p = dynamic_cast<indexes::VectorHNSW<bfloat16> *>(vector_index)) {
-      auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res =
-          p->Search(parameters.query, parameters.k,
-                    parameters.cancellation_token, std::move(inline_filter),
-                    parameters.ef, parameters.enable_partial_results);
-      Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
-          std::move(latency_sample));
-      return res;
-    }
+      break;
+    default:
+      CHECK(false) << "Unsupported indexer type: "
+                   << (int)vector_index->GetIndexerType();
   }
-  if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
-    if (auto *p = dynamic_cast<indexes::VectorFlat<float> *>(vector_index)) {
-      auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res =
-          p->Search(parameters.query, parameters.k,
-                    parameters.cancellation_token, std::move(inline_filter),
-                    parameters.enable_partial_results);
-      Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
-          std::move(latency_sample));
-      return res;
-    }
-    if (auto *p = dynamic_cast<indexes::VectorFlat<float16> *>(vector_index)) {
-      auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res =
-          p->Search(parameters.query, parameters.k,
-                    parameters.cancellation_token, std::move(inline_filter),
-                    parameters.enable_partial_results);
-      Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
-          std::move(latency_sample));
-      return res;
-    }
-    if (auto *p = dynamic_cast<indexes::VectorFlat<bfloat16> *>(vector_index)) {
-      auto latency_sample = SAMPLE_EVERY_N(100);
-      auto res =
-          p->Search(parameters.query, parameters.k,
-                    parameters.cancellation_token, std::move(inline_filter),
-                    parameters.enable_partial_results);
-      Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
-          std::move(latency_sample));
-      return res;
-    }
-  }
-  CHECK(false) << "Unsupported indexer type: "
-               << (int)vector_index->GetIndexerType();
+  return res;
 }
 
 void AppendQueue(

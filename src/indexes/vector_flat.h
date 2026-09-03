@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
@@ -78,11 +79,16 @@ class VectorFlat : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
+  // `ef_runtime` is accepted to match VectorBase::Search and ignored: it tunes
+  // the HNSW candidate list and has no meaning for a brute-force scan.
+  // Defaults must match VectorBase::Search exactly -- see the note there.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-      bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool enable_partial_results = false) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

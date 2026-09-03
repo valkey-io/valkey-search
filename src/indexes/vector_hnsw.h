@@ -116,12 +116,14 @@ class VectorHNSW : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
+  // Defaults must match VectorBase::Search exactly -- see the note there.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<size_t> ef_runtime = std::nullopt,
-      bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      bool enable_partial_results = false) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

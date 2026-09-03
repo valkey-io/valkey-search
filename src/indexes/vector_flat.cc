@@ -13,6 +13,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -219,6 +220,7 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    [[maybe_unused]] std::optional<size_t> ef_runtime,
     bool enable_partial_results) {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(

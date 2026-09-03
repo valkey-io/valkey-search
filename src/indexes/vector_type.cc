@@ -61,9 +61,14 @@ std::unique_ptr<hnswlib::SpaceInterface<float>> CreateSpace(
       return std::make_unique<hnswlib::InnerProductSpaceBF16>(dimensions);
     }
     return std::make_unique<hnswlib::L2SpaceBF16>(dimensions);
+  } else {
+    // Compile error rather than a runtime fallthrough. The previous fallback
+    // DCHECK'd and returned a FLOAT32 space, but DCHECK is a no-op in release
+    // builds -- so a storage type added without an arm here would silently get
+    // a space that reads its 2-byte elements as 4-byte floats. Matches the
+    // static_assert in VectorDataTypeEnumFor below.
+    static_assert(sizeof(StorageT) == 0, "no hnswlib space for this T");
   }
-  DCHECK(false) << "no matching space for T";
-  return std::make_unique<hnswlib::L2Space>(dimensions);
 }
 
 // Compile-time mapping from T to its data_model::VectorDataType enum.

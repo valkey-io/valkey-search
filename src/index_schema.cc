@@ -144,6 +144,59 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
       << vmsdk::config::RedactIfNeeded(name) << " (size: " << db_size << ")";
 }
 
+namespace {
+
+// Builds one vector index, loading it from RDB when `iter` is present and
+// creating it empty otherwise. Templated on both the algorithm and the storage
+// type because those are the only things that vary across the six
+// algorithm x data-type combinations; writing them out longhand duplicated
+// this body six times and let per-arm details (notably the BFLOAT16 capability
+// probe) drift apart unnoticed.
+template <template <typename> class AlgoT, typename T>
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::Attribute &attribute,
+    const data_model::VectorIndex &vector_index_proto,
+    std::optional<SupplementalContentChunkIter> &iter) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto index,
+      iter.has_value()
+          ? AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                                  vector_index_proto, attribute.identifier(),
+                                  std::move(*iter), index_schema->GetDBNum())
+          : AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
+                             index_schema->GetAttributeDataType().ToProto(),
+                             index_schema->GetDBNum()));
+  return index;
+}
+
+// Selects the storage type for `AlgoT` from the schema's declared data type.
+// BFLOAT16 additionally requires a SIMD-safe BF16 path on this CPU; that check
+// lives here so it cannot be forgotten for one algorithm and not the other.
+template <template <typename> class AlgoT>
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::Attribute &attribute,
+    const data_model::VectorIndex &vector_index_proto,
+    std::optional<SupplementalContentChunkIter> &iter) {
+  switch (vector_index_proto.vector_data_type()) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return CreateVectorIndex<AlgoT, float>(ctx, index_schema, attribute,
+                                             vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return CreateVectorIndex<AlgoT, float16>(ctx, index_schema, attribute,
+                                               vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
+      return CreateVectorIndex<AlgoT, bfloat16>(ctx, index_schema, attribute,
+                                                vector_index_proto, iter);
+    default:
+      return absl::InvalidArgumentError("Unsupported vector data type.");
+  }
+}
+
+}  // namespace
+
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
@@ -165,116 +218,19 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
           index.text_index(), index_schema->GetTextIndexSchema());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
-      switch (index.vector_index().algorithm_case()) {
-        case data_model::VectorIndex::kHnswAlgorithm: {
-          switch (index.vector_index().vector_data_type()) {
-            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorHNSW<float>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorHNSW<float>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            case data_model::VECTOR_DATA_TYPE_FLOAT16: {
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorHNSW<float16>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorHNSW<float16>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
-              VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorHNSW<bfloat16>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorHNSW<bfloat16>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            default: {
-              return absl::InvalidArgumentError(
-                  "Unsupported vector data type.");
-            }
-          }
-        }
-        case data_model::VectorIndex::kFlatAlgorithm: {
-          switch (index.vector_index().vector_data_type()) {
-            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              // TODO: Create an empty index in case of an error
-              // loading the index contents from RDB.
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorFlat<float>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorFlat<float>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            case data_model::VECTOR_DATA_TYPE_FLOAT16: {
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorFlat<float16>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorFlat<float16>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            case data_model::VECTOR_DATA_TYPE_BFLOAT16: {
-              VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorFlat<bfloat16>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorFlat<bfloat16>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            default: {
-              return absl::InvalidArgumentError(
-                  "Unsupported vector data type.");
-            }
-          }
-        }
-        default: {
+      // TODO: Create an empty index in case of an error loading the index
+      // contents from RDB.
+      const auto &vector_index_proto = index.vector_index();
+      switch (vector_index_proto.algorithm_case()) {
+        case data_model::VectorIndex::kHnswAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorHNSW>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        case data_model::VectorIndex::kFlatAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorFlat>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
-        }
       }
-      break;
     }
     default: {
       return absl::InvalidArgumentError("Unsupported index type.");

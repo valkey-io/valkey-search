@@ -45,20 +45,20 @@ class Tag : public IndexBase {
  public:
   using KeySet = BagOfInternedStringPtrs;
 
-  explicit Tag(const data_model::TagIndex& tag_index_proto);
+  explicit Tag(const data_model::TagIndex &tag_index_proto);
   ~Tag() override;
 
-  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
                                          absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<bool> RemoveRecord(
-      const InternedStringPtr& key,
+      const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr& key,
+  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr &key,
                                             absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override
+  int RespondWithInfo(ValkeyModuleCtx *ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
@@ -67,23 +67,23 @@ class Tag : public IndexBase {
   size_t GetTrackedKeyCount() const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   size_t GetUnTrackedKeyCount() const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  bool IsTracked(const InternedStringPtr& key) const override
+  bool IsTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  bool IsUnTracked(const InternedStringPtr& key) const override
+  bool IsUnTracked(const InternedStringPtr &key) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  void UnTrack(const InternedStringPtr& key) override
+  void UnTrack(const InternedStringPtr &key) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override ABSL_LOCKS_EXCLUDED(index_mutex_);
   std::unique_ptr<data_model::Index> ToProto() const override;
 
   uint32_t GetMutationWeight() const override;
 
-  InternedStringPtr GetRawValue(const InternedStringPtr& key) const
+  InternedStringPtr GetRawValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Returns the parsed tag set for `key`, or nullopt if `key` is not tracked.
@@ -91,26 +91,26 @@ class Tag : public IndexBase {
   // held by the tracked entry; valid for the duration of the call under the
   // index's read-side invariant.
   std::optional<absl::flat_hash_set<absl::string_view>> GetValue(
-      const InternedStringPtr& key,
-      bool& case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      const InternedStringPtr &key,
+      bool &case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated
   // queries, also walks an extras vector of untracked keys.
   class EntriesFetcherIterator : public EntriesFetcherIteratorBase {
    public:
-    EntriesFetcherIterator(const std::vector<void*>& slots,
-                           const std::vector<InternedStringPtr>& extras);
+    EntriesFetcherIterator(const std::vector<void *> &slots,
+                           const std::vector<InternedStringPtr> &extras);
     ~EntriesFetcherIterator() override;
     bool Done() const override;
     void Next() override;
-    const InternedStringPtr& operator*() const override;
+    const InternedStringPtr &operator*() const override;
 
    private:
     void AdvanceToNextNonEmpty();
 
-    const std::vector<void*>& slots_;
-    const std::vector<InternedStringPtr>& extras_;
+    const std::vector<void *> &slots_;
+    const std::vector<InternedStringPtr> &extras_;
     size_t slot_idx_{0};
     bool slots_done_{false};
     size_t extras_idx_{0};
@@ -124,7 +124,7 @@ class Tag : public IndexBase {
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(std::vector<void*> matched_slots,
+    EntriesFetcher(std::vector<void *> matched_slots,
                    std::vector<InternedStringPtr> extras, size_t size)
         : size_(size),
           matched_slots_(std::move(matched_slots)),
@@ -134,13 +134,13 @@ class Tag : public IndexBase {
 
    private:
     size_t size_;
-    std::vector<void*> matched_slots_;
+    std::vector<void *> matched_slots_;
     std::vector<InternedStringPtr> extras_;
   };
 
   // Kept virtual so unit tests can mock Search; no production subclass.
   virtual std::unique_ptr<EntriesFetcherBase> Search(
-      const query::TagPredicate& predicate,
+      const query::TagPredicate &predicate,
       bool negate) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   char GetSeparator() const { return separator_; }
@@ -153,9 +153,9 @@ class Tag : public IndexBase {
   static std::string UnescapeTag(absl::string_view tag);
 
  private:
-  void IndexTagForKey(absl::string_view tag, const InternedStringPtr& key)
+  void IndexTagForKey(absl::string_view tag, const InternedStringPtr &key)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
-  void DeindexTagForKey(absl::string_view tag, const InternedStringPtr& key)
+  void DeindexTagForKey(absl::string_view tag, const InternedStringPtr &key)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
   // Normalize a tag for storage / lookup: lowercase if !case_sensitive_,
   // pass-through otherwise.
@@ -170,7 +170,7 @@ class Tag : public IndexBase {
   KeySet untracked_keys_ ABSL_GUARDED_BY(index_mutex_);
   const char separator_;
   const bool case_sensitive_;
-  rax* tree_ ABSL_GUARDED_BY(index_mutex_);
+  rax *tree_ ABSL_GUARDED_BY(index_mutex_);
 };
 
 }  // namespace valkey_search::indexes

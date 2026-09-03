@@ -236,6 +236,30 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 1 __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 __v1_score __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=[x, y, z])
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+    def test_vector_return_clause(self, key_type, dialect, algo, metric,
+                                  vector_data_type):
+        """RETURN of a vector attribute, mirroring the @n1/@t1 RETURN coverage
+        already present in test_search_sortby.
+
+        The two key kinds are served differently and both are checked here:
+        a HASH vector attribute comes from the index, whose copy is the exact
+        blob the caller wrote, while a JSON one comes from the document, so it
+        reflects what the user stored rather than the index's converted copy.
+        That distinction only becomes observable with FLOAT16/BFLOAT16, where
+        the index copy is lossy -- which is precisely why this is parametrized
+        over vector_data_type.
+        """
+        self.setup_data(f"vector data {metric} {algo}", key_type,
+                        vector_data_type=vector_data_type)
+        for return_keys in ["RETURN 1 v1",
+                            "RETURN 2 v1 n1",
+                            "RETURN 3 v1 n1 t1",
+                            "RETURN 2 n1 t1"]:
+            self.checkvec(dialect,
+                          f"ft.search {key_type}_idx1 * {return_keys}")
+
     def test_aggregate_sortby(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")

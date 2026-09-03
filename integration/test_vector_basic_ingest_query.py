@@ -169,11 +169,21 @@ def _knn_top1_key_and_vector(client: Valkey, index: Index, query_blob: bytes):
 def _assert_returned_vector_matches(client: Valkey, index: Index,
                                     data_type: str, key_kind: KeyDataType,
                                     row: int, vec: List[float]):
-    """The vector read back through RETURN must equal what was ingested."""
+    """The vector read back through RETURN must equal what was ingested.
+
+    The two key kinds legitimately differ, matching RediSearch:
+
+      HASH -- the attribute is served from the index, whose copy is the exact
+              blob the caller wrote. Expect the values quantized to the
+              storage type, because that is what the caller supplied.
+      JSON -- the attribute is served from the document, so the caller gets
+              back what they stored, NOT the (possibly lower-precision) copy
+              the index holds. Expect the original values.
+    """
     query_blob = _encode_query(vec, data_type)
     key, raw = _knn_top1_key_and_vector(client, index, query_blob)
     got = _decode_returned_vector(raw, data_type, key_kind)
-    want = quantize_to(vec, data_type)
+    want = quantize_to(vec, data_type) if key_kind == KeyDataType.HASH else vec
 
     assert len(got) == len(want), (
         f"[{index.name}] RETURN gave {len(got)} elements, expected "
@@ -181,8 +191,9 @@ def _assert_returned_vector_matches(client: Valkey, index: Index,
         f"width (data_type={data_type}, key_kind={key_kind.name})"
     )
     for i, (g, w) in enumerate(zip(got, want)):
-        # The engine renders floats at six significant digits; compare with a
-        # tolerance comfortably above that but far below one ULP of BF16.
+        # HASH decodes exactly; JSON round-trips through the document's own
+        # text rendering. Either way the tolerance sits far below one ULP of
+        # BF16, so a wrong-width decode cannot slip through.
         assert abs(g - w) <= max(1e-5, 1e-4 * abs(w)), (
             f"[{index.name}] RETURN element {i} = {g!r}, expected {w!r} "
             f"(data_type={data_type}, key_kind={key_kind.name})"

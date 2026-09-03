@@ -611,21 +611,27 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
+          if (parameters.index_schema->GetAttributeDataType().ToProto() ==
+              data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+            // RediSearch materializes a JSON vector attribute from the
+            // document, so the caller gets back exactly what they stored. The
+            // index only holds a copy converted to the attribute's storage
+            // type, which for FLOAT16/BFLOAT16 is lossy -- serving it here
+            // would answer a different question than RediSearch does. Fall
+            // through to the main-thread key fetch, the same way a text
+            // attribute does. HASH keeps using the indexed copy: there the
+            // stored bytes are the bytes the user supplied, so the two agree.
+            any_value_missing = true;
+            break;
+          }
           const auto *vector_index =
               dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
           auto vector =
               vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {
-            if (parameters.index_schema->GetAttributeDataType().ToProto() ==
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
-              attribute_value = vmsdk::MakeUniqueValkeyString(
-                  vector_index->FormatVectorAsString(absl::string_view(
-                      vector->data(), vector->size())));
-            } else {
-              attribute_value =
-                  vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
-                      nullptr, vector->data(), vector->size()));
-            }
+            attribute_value =
+                vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
+                    nullptr, vector->data(), vector->size()));
           } else {
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Failed to get vector value during fetching through index "

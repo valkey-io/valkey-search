@@ -14,8 +14,6 @@
 
 #include "absl/log/check.h"
 #include "absl/strings/numbers.h"
-#include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
@@ -158,26 +156,6 @@ vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringRecord(
     }
   }
   return vmsdk::MakeUniqueValkeyString(binary_string);
-}
-
-template <typename T>
-std::string VectorType<T>::FormatVectorAsString(
-    absl::string_view vector) const {
-  // A payload that is not a whole number of elements cannot be rendered; hand
-  // it back untouched rather than emitting a truncated list.
-  if (vector.size() % sizeof(T) != 0) {
-    return std::string(vector);
-  }
-  const size_t count = vector.size() / sizeof(T);
-  const T *src = reinterpret_cast<const T *>(vector.data());
-  std::vector<std::string> elements;
-  elements.reserve(count);
-  for (size_t i = 0; i < count; ++i) {
-    // Widen to float first: absl::StrCat has no overload for the 2-byte types,
-    // and float is the precision every element round-trips through anyway.
-    elements.push_back(absl::StrCat(static_cast<float>(src[i])));
-  }
-  return absl::StrCat("[", absl::StrJoin(elements, ","), "]");
 }
 
 template class VectorType<float>;

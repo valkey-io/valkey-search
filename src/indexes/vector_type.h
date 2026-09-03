@@ -10,7 +10,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <string>
 
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -55,10 +54,6 @@ class VectorType : public VectorBase {
   // sizeof(T) per element, with the format conversion appropriate to T.
   vmsdk::UniqueValkeyString NormalizeStringRecord(
       vmsdk::UniqueValkeyString record) const override;
-
-  // Inverse of NormalizeStringRecord: render sizeof(T)-wide elements back out
-  // as "[v0,v1,...]".
-  std::string FormatVectorAsString(absl::string_view vector) const override;
 
  protected:
   VectorType(IndexerType indexer_type, int dimensions,

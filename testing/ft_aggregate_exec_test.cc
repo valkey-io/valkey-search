@@ -444,7 +444,7 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
   // Build an AggregateParameters with __key at 0, score_as at 1, and the
   // given vr field names registered starting at index 2.
   std::unique_ptr<AggregateParameters> MakeParams(
-      absl::string_view score_name, const std::vector<std::string>& vr_names) {
+      absl::string_view score_name, const std::vector<std::string> &vr_names) {
     auto params = std::make_unique<AggregateParameters>(0);
 
     auto schema = CreateIndexSchema("test_schema", &fake_ctx_).value();
@@ -453,7 +453,7 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
     params->AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone);
     params->AddRecordAttribute(score_name, score_name,
                                indexes::IndexerType::kNone);
-    for (const auto& name : vr_names) {
+    for (const auto &name : vr_names) {
       params->AddRecordAttribute(name, name, indexes::IndexerType::kNone);
     }
     params->vr_score_field_names_ = vr_names;
@@ -483,7 +483,7 @@ TEST_F(CreateRecordsFromNeighborsTest, TwoVrBothSlotsPopulated) {
       CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
 
   ASSERT_EQ(records.size(), 1u);
-  auto& rec = records.front();
+  auto &rec = records.front();
   ASSERT_EQ(rec->fields_.size(), 4u);
 
   auto d1_idx = params->record_indexes_by_alias_.at("d1");
@@ -511,7 +511,7 @@ TEST_F(CreateRecordsFromNeighborsTest, TwoVrOnlySlot0Populated) {
       CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
 
   ASSERT_EQ(records.size(), 1u);
-  auto& rec = records.front();
+  auto &rec = records.front();
 
   auto d1_idx = params->record_indexes_by_alias_.at("d1");
   auto d2_idx = params->record_indexes_by_alias_.at("d2");
@@ -539,7 +539,7 @@ TEST_F(CreateRecordsFromNeighborsTest, KnnWithVrBothFieldsSet) {
       CreateRecordsFromNeighbors(neighbors, *params, 0, scores_index, records));
 
   ASSERT_EQ(records.size(), 1u);
-  auto& rec = records.front();
+  auto &rec = records.front();
 
   auto vr_idx = params->record_indexes_by_alias_.at("vr_dist");
   ASSERT_TRUE(rec->fields_.at(vr_idx).IsDouble());

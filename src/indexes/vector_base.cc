@@ -34,8 +34,8 @@
 #include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
-#include "src/index_schema.pb.h"
 #include "src/index_schema.h"
+#include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -111,12 +111,11 @@ std::vector<char> NormalizeVector(absl::string_view record, float *magnitude) {
   return ret;
 }
 
-
 // NormalizeEmbedding: normalize a float32 vector, optionally returning the
 // pre-normalization magnitude. Used by ComputeDistanceFromRecord and
 // NormalizeQueryIfNeeded for cosine-distance indexes.
 template <typename T>
-T CopyAndNormalizeEmbedding(T* dst, T* src, size_t size) {
+T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
   T magnitude = 0.0f;
   for (size_t i = 0; i < size; i++) {
     magnitude += src[i] * src[i];
@@ -130,11 +129,11 @@ T CopyAndNormalizeEmbedding(T* dst, T* src, size_t size) {
 }
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float* magnitude) {
+                                     float *magnitude) {
   std::vector<char> ret(record.size());
   if (type_size == sizeof(float)) {
     float result = CopyAndNormalizeEmbedding(
-        (float*)&ret[0], (float*)record.data(), ret.size() / sizeof(float));
+        (float *)&ret[0], (float *)record.data(), ret.size() / sizeof(float));
     if (magnitude) {
       *magnitude = result;
     }
@@ -176,7 +175,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateFull(
-    const query::Predicate& predicate, const InternedStringPtr& key) {
+    const query::Predicate &predicate, const InternedStringPtr &key) {
   key_ = &key;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
@@ -184,7 +183,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateFull(
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
-    const query::VectorRangePredicate& predicate) {
+    const query::VectorRangePredicate &predicate) {
   CHECK(key_);
   auto query_vector = predicate.GetQueryVector();
   if (query_vector.empty()) {
@@ -200,7 +199,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
   if (!index.ok()) {
     return query::EvaluationResult(false);
   }
-  auto* vector_index = dynamic_cast<VectorBase*>(index->get());
+  auto *vector_index = dynamic_cast<VectorBase *>(index->get());
   if (!vector_index) {
     return query::EvaluationResult(false);
   }
@@ -218,7 +217,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
 
 // ComputeDistanceFromRecord without query_magnitude — used by VR search path.
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
-VectorBase::ComputeDistanceFromRecord(const InternedStringPtr& key,
+VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
                                       absl::string_view query) const {
   float query_magnitude = 1.0f;
   return ComputeDistanceFromRecord(key, query, query_magnitude);
@@ -226,9 +225,9 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr& key,
 
 // AddPrefilteredKey (query, count, key) — used by VR search path.
 bool VectorBase::AddPrefilteredKey(
-    absl::string_view query, uint64_t count, const InternedStringPtr& key,
-    std::priority_queue<std::pair<float, hnswlib::labeltype>>& results,
-    absl::flat_hash_set<const char*>& top_keys) const {
+    absl::string_view query, uint64_t count, const InternedStringPtr &key,
+    std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
+    absl::flat_hash_set<const char *> &top_keys) const {
   auto result = ComputeDistanceFromRecord(key, query);
   if (!result.ok()) {
     return false;
@@ -247,7 +246,6 @@ bool VectorBase::AddPrefilteredKey(
   }
   return false;
 }
-
 
 template <typename T>
 void VectorBase::Init(int dimensions,

@@ -1560,11 +1560,11 @@ TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
     EXPECT_EQ(hnsw_result->size(), flat_result->size())
         << "HNSW and Flat disagree on radius=0 result count for vector " << i;
 
-    for (const auto& n : *hnsw_result) {
+    for (const auto &n : *hnsw_result) {
       EXPECT_FLOAT_EQ(n.distance, 0.0f)
           << "HNSW returned non-zero distance for radius=0 query";
     }
-    for (const auto& n : *flat_result) {
+    for (const auto &n : *flat_result) {
       EXPECT_FLOAT_EQ(n.distance, 0.0f)
           << "Flat returned non-zero distance for radius=0 query";
     }

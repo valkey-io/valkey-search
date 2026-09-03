@@ -75,8 +75,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters& params) {
     // else is produced by the pipeline itself (an APPLY or REDUCE output, a
     // chained GROUPBY over a reducer alias) and has no stored value to fetch.
     const auto score_name = vmsdk::ToStringView(params.score_as.get());
-    for (const auto &info : params.record_info_by_index_) {
-      const std::string &name = info.alias_;
+    for (const auto& info : params.record_info_by_index_) {
+      const std::string& name = info.alias_;
       if (name == "__key" || name == score_name) {
         continue;
       }
@@ -96,7 +96,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters& params) {
       }
     }
 
-    for (const auto &load : loads_to_process) {
+    for (const auto& load : loads_to_process) {
       //
       // Skip loading of the score and the key, we always get those...
       //
@@ -332,7 +332,7 @@ absl::Status CreateRecordsFromNeighbors(
     size_t key_index, size_t scores_index, RecordSet& records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
-  for (auto &n : neighbors) {
+  for (auto& n : neighbors) {
     // Not record_indexes_by_alias_.size(): that undercounts once an alias has
     // been re-bound (shadowed) to a new slot, leaving later slots out of
     // bounds.

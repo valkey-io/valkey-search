@@ -47,7 +47,7 @@ namespace valkey_search::indexes {
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
-    const data_model::VectorIndex& vector_index_proto,
+    const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type, int db_num) {
   try {
@@ -62,7 +62,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_,
                                     vector_index_proto.initial_cap());
     return index;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while creating a FLAT index: ", e.what()));
@@ -111,7 +111,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     VMSDK_RETURN_IF_ERROR(
         index->algo_->LoadIndex(input, index->space_.get(), generator));
     return index;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while loading a FLAT index: ", e.what()));
@@ -193,7 +193,7 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     algo_->removePoint(internal_id);
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_remove_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while removing a FLAT record: ", e.what()));
@@ -205,13 +205,13 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
  public:
-  explicit CancelCondition(cancel::Token& token) : token_(token) {
+  explicit CancelCondition(cancel::Token &token) : token_(token) {
     CHECK(&token);
   }
   bool isCancelled() override { return token_->IsCancelled(); }
 
  private:
-  cancel::Token& token_;
+  cancel::Token &token_;
 };
 
 template <typename T>
@@ -258,12 +258,11 @@ T VectorFlat<T>::ComputeDistance(absl::string_view query,
                              algo_->dist_func_param_, query_magnitude);
 }
 
-
 // Linear scan over all tracked keys. This is O(N) but correct for flat
 // indexes which have no graph structure to exploit.
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token& cancellation_token,
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   auto nq = NormalizeQueryIfNeeded(query);
 
@@ -273,7 +272,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
   // capacity that covers typical result sets without over-allocating.
   neighbors.reserve(128);
   auto status =
-      ForEachTrackedKey([&](const InternedStringPtr& key) -> absl::Status {
+      ForEachTrackedKey([&](const InternedStringPtr &key) -> absl::Status {
         if (cancellation_token->IsCancelled()) {
           return absl::CancelledError("SearchRange cancelled");
         }
@@ -300,7 +299,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
 
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
-    data_model::VectorIndex* vector_index_proto) const {
+    data_model::VectorIndex *vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
@@ -317,7 +316,7 @@ void VectorFlat<T>::ToProtoImpl(
 }
 
 template <typename T>
-int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
+int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(

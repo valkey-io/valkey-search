@@ -56,7 +56,7 @@ namespace valkey_search::indexes {
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
-    const data_model::VectorIndex& vector_index_proto,
+    const data_model::VectorIndex &vector_index_proto,
     absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type, int db_num) {
   try {
@@ -73,7 +73,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
         options::GetHNSWAllowReplaceDeleted().GetValue());
     index->algo_->setEf(hnsw_proto.ef_runtime());
     return index;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("HNSWLib error while creating a record: ", e.what()));
@@ -135,7 +135,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
     // ef_runtime is not persisted in the index contents
     index->algo_->setEf(vector_index_proto.hnsw_algorithm().ef_runtime());
     return index;
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_create_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("HNSWLib error while loading an index: ", e.what()));
@@ -171,7 +171,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
                                   normalize_),
                       internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
       std::string error_msg = e.what();
       if (absl::StrContains(
               error_msg,
@@ -187,7 +187,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
 }
 
 template <typename T>
-int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
+int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   if constexpr (std::is_same_v<T, float>) {
     ValkeyModule_ReplyWithSimpleString(
@@ -262,7 +262,7 @@ absl::Status VectorHNSW<T>::ResizeIfFull() {
           << ", expand by: " << block_size << ", resize time took: "
           << absl::FormatDuration(stop_watch.Duration());
     }
-  } catch (const std::exception& e) {
+  } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_add_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while adding a record: ", e.what()));
@@ -332,16 +332,16 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
  public:
-  explicit CancelCondition(cancel::Token& token) : token_(token) {}
+  explicit CancelCondition(cancel::Token &token) : token_(token) {}
   bool isCancelled() override { return token_->IsCancelled(); }
 
  private:
-  cancel::Token& token_;
+  cancel::Token &token_;
 };
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
-    absl::string_view query, uint64_t count, cancel::Token& cancellation_token,
+    absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
     std::optional<size_t> ef_runtime, bool enable_partial_results) {
   if (!IsValidSizeVector(query)) {
@@ -375,7 +375,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
-    absl::string_view query, float radius, cancel::Token& cancellation_token,
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
@@ -386,22 +386,21 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // out-of-radius candidate is encountered — which happens immediately when
   // the HNSW entry point is far from the query.  Using searchKnn avoids this
   // by ensuring the exploration covers the full neighborhood.
-  auto perform_search = [this, &filter, max_candidates,
-                         &cancellation_token](absl::string_view query_view,
-                                              T reciprocal_magnitude)
-                            ABSL_NO_THREAD_SAFETY_ANALYSIS
+  auto perform_search =
+      [this, &filter, max_candidates, &cancellation_token](
+          absl::string_view query_view, T reciprocal_magnitude)
+          ABSL_NO_THREAD_SAFETY_ANALYSIS
       -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
-      QueryVector embedding(VectorRecord::Construct(query_view,
-                                                    reciprocal_magnitude,
-                                                    nullptr),
-                            query_view.size(), false);
+      QueryVector embedding(
+          VectorRecord::Construct(query_view, reciprocal_magnitude, nullptr),
+          query_view.size(), false);
       auto res = algo_->searchKnn(embedding, max_candidates,
                                   std::optional<size_t>(max_candidates),
                                   filter.get(), &cancel_condition);
       return res;
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
       Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
           1, std::memory_order_relaxed);
       return absl::InternalError(e.what());
@@ -409,11 +408,13 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   };
 
   auto nq = NormalizeQueryIfNeeded(query);
-  T reciprocal_magnitude = normalize_
-      ? CalcReciprocalMagnitude(
-            reinterpret_cast<const float*>(nq.view.data()), dimensions_)
-      : static_cast<T>(kDefaultMagnitude);
-  VMSDK_ASSIGN_OR_RETURN(auto raw_results, perform_search(nq.view, reciprocal_magnitude));
+  T reciprocal_magnitude =
+      normalize_
+          ? CalcReciprocalMagnitude(
+                reinterpret_cast<const float *>(nq.view.data()), dimensions_)
+          : static_cast<T>(kDefaultMagnitude);
+  VMSDK_ASSIGN_OR_RETURN(auto raw_results,
+                         perform_search(nq.view, reciprocal_magnitude));
 
   // Filter results to only those within the strict radius, applying cosine
   // clamping so floating-point noise doesn't exclude exact matches.
@@ -440,7 +441,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
 
 template <typename T>
 void VectorHNSW<T>::ToProtoImpl(
-    data_model::VectorIndex* vector_index_proto) const {
+    data_model::VectorIndex *vector_index_proto) const {
   data_model::VectorDataType data_type;
   if constexpr (std::is_same_v<T, float>) {
     data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;

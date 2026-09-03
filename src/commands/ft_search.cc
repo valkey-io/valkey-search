@@ -49,17 +49,17 @@ void ReplyAvailNeighbors(ValkeyModuleCtx* ctx,
   }
 }
 
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
+void ReplyScoreTopLevel(ValkeyModuleCtx* ctx, float score);
 
-bool HasTextRelevance(const SearchCommand &parameters) {
+bool HasTextRelevance(const SearchCommand& parameters) {
   return parameters.IsNonVectorQuery() ||
          query::QueryHasTextPredicate(parameters);
 }
 
-void SendReplyNoContent(ValkeyModuleCtx *ctx,
-                        const query::SearchResult &search_result,
-                        const SearchCommand &parameters) {
-  const auto &neighbors = search_result.neighbors;
+void SendReplyNoContent(ValkeyModuleCtx* ctx,
+                        const query::SearchResult& search_result,
+                        const SearchCommand& parameters) {
+  const auto& neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(parameters);
 
   // WITHSCORES keeps the top-level relevance score even under NOCONTENT
@@ -89,19 +89,19 @@ void ReplyScore(ValkeyModuleCtx* ctx, ValkeyModuleString& score_as,
 
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
+void ReplyScoreTopLevel(ValkeyModuleCtx* ctx, float score) {
   auto score_value = absl::StrFormat("%.12g", score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command);
+std::string GetSortKeyValue(const indexes::Neighbor& neighbor,
+                            const SearchCommand& command);
 
-void SerializeNeighbors(ValkeyModuleCtx *ctx,
-                        const query::SearchResult &search_result,
-                        const SearchCommand &parameters) {
-  const auto &neighbors = search_result.neighbors;
+void SerializeNeighbors(ValkeyModuleCtx* ctx,
+                        const query::SearchResult& search_result,
+                        const SearchCommand& parameters) {
+  const auto& neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   auto range = search_result.GetSerializationRange(parameters);
 
@@ -433,8 +433,8 @@ void ApplySorting(std::vector<indexes::Neighbor>& neighbors,
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
-  auto compare = [&](const indexes::Neighbor &a,
-                     const indexes::Neighbor &b) -> bool {
+  auto compare = [&](const indexes::Neighbor& a,
+                     const indexes::Neighbor& b) -> bool {
     if (is_vector_score) {
       if (a.distance != b.distance) {
         return sortby.order == query::SortOrder::kAscending

@@ -100,7 +100,7 @@ absl::Status Limit::Execute(RecordSet &records) const {
 
 void SetField(Record &record, Attribute &dest, expr::Value value) {
   if (record.fields_.size() <= dest.record_index_) {
-    record.fields_.resize(dest.record_index_ + 1);
+    record.fields_.resize(dest.record_index_ + 1, expr::Value::Missing());
   }
   record.fields_[dest.record_index_] = value;
 }
@@ -109,9 +109,21 @@ absl::Status Apply::Execute(RecordSet &records) const {
   DBG << "Executing APPLY with expr: " << *expr_ << "\n";
   agg_apply_stages.Increment();
   agg_apply_records.Increment(records.size());
-  for (auto &r : records) {
-    SetField(*r, *name_, expr_->Evaluate(ctx, *r));
+  // Redisearch drops a record whose APPLY expression referenced a field the
+  // key does not have, rather than replying with the alias unset. Only a
+  // *missing* value does this: an expression that ran and produced nothing --
+  // abs() of a string, say -- keeps the record and replies nan or nil.
+  RecordSet kept(records.agg_params_);
+  while (!records.empty()) {
+    auto r = records.pop_front();
+    auto value = expr_->Evaluate(ctx, *r);
+    if (value.IsMissing()) {
+      continue;
+    }
+    SetField(*r, *name_, value);
+    kept.push_back(std::move(r));
   }
+  records.swap(kept);
   return absl::OkStatus();
 }
 

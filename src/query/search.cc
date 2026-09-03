@@ -611,7 +611,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
-          if (parameters.index_schema->GetAttributeDataType().ToProto() ==
+          const auto attribute_data_type =
+              parameters.index_schema->GetAttributeDataType().ToProto();
+          if (attribute_data_type ==
               data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
             // RediSearch materializes a JSON vector attribute from the
             // document, so the caller gets back exactly what they stored. The
@@ -619,11 +621,20 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
             // type, which for FLOAT16/BFLOAT16 is lossy -- serving it here
             // would answer a different question than RediSearch does. Fall
             // through to the main-thread key fetch, the same way a text
-            // attribute does. HASH keeps using the indexed copy: there the
-            // stored bytes are the bytes the user supplied, so the two agree.
+            // attribute does.
             any_value_missing = true;
             break;
           }
+          // Serving the indexed copy is only correct when it is byte-identical
+          // to what the caller stored, which holds for HASH alone: there the
+          // stored bytes are the blob the caller supplied. Assert rather than
+          // assume, so a third attribute data type cannot silently inherit the
+          // HASH path and start handing back a converted vector.
+          CHECK(attribute_data_type ==
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+              << "Unsupported attribute data type for vector content "
+                 "materialization: "
+              << (int)attribute_data_type;
           const auto *vector_index =
               dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
           auto vector =

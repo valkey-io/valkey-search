@@ -67,12 +67,34 @@ std::vector<std::string> RandomAliases(std::mt19937 &rng, int max_count = 5) {
   return aliases;
 }
 
+// Base fixture that keeps a VectorRegistry alive around the tests. IndexSchema
+// teardown calls VectorRegistry::Instance(), which segfaults if the singleton
+// is null. Vector sharing is disabled so Init() does not need the module API.
+class AliasPropertyTestBase : public vmsdk::ValkeyTest {
+ protected:
+  // Call at the end of a derived SetUp(), after module mocks are installed.
+  void SetUpVectorRegistry(ValkeyModuleCtx *ctx) {
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
+    VectorRegistry::Construct(ctx);
+  }
+
+  // Call at the start of a derived TearDown(), before singletons are torn down.
+  void TearDownVectorRegistry() {
+    VectorRegistry::Destruct();
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
+  }
+};
+
 // Alias-only proto change does not trigger index rebuild.
 //
 // When OnMetadataCallback receives a proto where only `aliases` and/or `stats`
 // changed, it calls RebuildAliasMapsForIndex instead of tearing down and
 // recreating the index, preserving the in-memory IndexSchema identity.
-class AliasOnlyChangeNoRebuildTest : public vmsdk::ValkeyTest {
+class AliasOnlyChangeNoRebuildTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -113,6 +135,7 @@ class AliasOnlyChangeNoRebuildTest : public vmsdk::ValkeyTest {
         .WillByDefault(testing::Return(0));
     ON_CALL(*kMockValkeyModule, GetMyClusterID())
         .WillByDefault(testing::Return("fake_node_id"));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
@@ -120,6 +143,7 @@ class AliasOnlyChangeNoRebuildTest : public vmsdk::ValkeyTest {
     coordinator::MetadataManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -664,7 +688,7 @@ struct StructuralChangeTestCase {
   }
 };
 
-class StructuralProtoChangeRebuildTest : public vmsdk::ValkeyTest {
+class StructuralProtoChangeRebuildTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -709,6 +733,7 @@ class StructuralProtoChangeRebuildTest : public vmsdk::ValkeyTest {
                                                        *mock_client_pool_));
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
@@ -716,6 +741,7 @@ class StructuralProtoChangeRebuildTest : public vmsdk::ValkeyTest {
     coordinator::MetadataManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -854,7 +880,7 @@ TEST_F(StructuralProtoChangeRebuildTest,
 //
 // After any sequence of AddAlias/RemoveAlias operations, the aliases list
 // is always in lexicographic ascending order.
-class AliasListDeterminismTest : public vmsdk::ValkeyTest {
+class AliasListDeterminismTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -876,12 +902,14 @@ class AliasListDeterminismTest : public vmsdk::ValkeyTest {
     // Standalone mode: no coordinator, no MetadataManager needed.
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -998,7 +1026,7 @@ TEST_F(AliasListDeterminismTest, PropertyAliasListAlwaysSorted) {
 // ALIASUPDATE atomicity: after UpdateAlias completes, the alias exists in
 // exactly the target index and is absent from the source. The update is atomic
 // (single lock scope), so the alias is never absent from both indexes.
-class AliasUpdateReachabilityTest : public vmsdk::ValkeyTest {
+class AliasUpdateReachabilityTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1019,12 +1047,14 @@ class AliasUpdateReachabilityTest : public vmsdk::ValkeyTest {
 
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -1180,7 +1210,7 @@ TEST_F(AliasUpdateReachabilityTest,
 }
 
 // Null-byte alias acceptance: aliases with embedded null bytes are valid.
-class NullByteAliasAcceptanceTest : public vmsdk::ValkeyTest {
+class NullByteAliasAcceptanceTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1202,12 +1232,14 @@ class NullByteAliasAcceptanceTest : public vmsdk::ValkeyTest {
     // Standalone mode: no coordinator needed for this validation test.
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -1272,7 +1304,7 @@ TEST_F(NullByteAliasAcceptanceTest, PropertyNullByteAliasesAccepted) {
 }
 
 // Hashtag validation for single-slot indexes.
-class HashtagAliasValidationTest : public vmsdk::ValkeyTest {
+class HashtagAliasValidationTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1294,12 +1326,14 @@ class HashtagAliasValidationTest : public vmsdk::ValkeyTest {
     // Standalone mode: no coordinator needed for this validation test.
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -1420,7 +1454,7 @@ TEST_F(HashtagAliasValidationTest, NonHashtagIndexAllowsAnyAlias) {
 // Calling AddAlias twice with the same alias returns AlreadyExists on the
 // second call. The alias appears exactly once in the stored proto and
 // GetAllAliases count does not increase on retry.
-class DuplicateAliasAddTest : public vmsdk::ValkeyTest {
+class DuplicateAliasAddTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1467,6 +1501,7 @@ class DuplicateAliasAddTest : public vmsdk::ValkeyTest {
                                                        *mock_client_pool_));
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
@@ -1474,6 +1509,7 @@ class DuplicateAliasAddTest : public vmsdk::ValkeyTest {
     coordinator::MetadataManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -1578,7 +1614,7 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
 //
 // When an index with aliases is dropped via RemoveIndexSchema, all its
 // aliases are removed from the forward alias map with no dangling entries.
-class IndexDropAliasAtomicityTest : public vmsdk::ValkeyTest {
+class IndexDropAliasAtomicityTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1600,12 +1636,14 @@ class IndexDropAliasAtomicityTest : public vmsdk::ValkeyTest {
     // Standalone mode: no coordinator, no MetadataManager needed.
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -1701,7 +1739,7 @@ TEST_F(IndexDropAliasAtomicityTest, PropertyIndexDropRemovesAllAliases) {
 //
 // OnSwapDB atomically swaps the forward alias maps so that db 0's aliases
 // after the swap equal db 1's aliases before the swap, and vice versa.
-class SwapDBAliasAtomicityTest : public vmsdk::ValkeyTest {
+class SwapDBAliasAtomicityTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1723,12 +1761,14 @@ class SwapDBAliasAtomicityTest : public vmsdk::ValkeyTest {
     // Standalone mode: no coordinator, no MetadataManager needed.
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
     SchemaManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -1930,7 +1970,7 @@ TEST(AliasFingerprint, ComputeFingerprintDistinguishesStructuralChanges) {
 }
 
 // Stored proto round-trips correctly through MetadataManager.
-class StoredProtoRoundTripTest : public vmsdk::ValkeyTest {
+class StoredProtoRoundTripTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -1974,6 +2014,7 @@ class StoredProtoRoundTripTest : public vmsdk::ValkeyTest {
                                                        *mock_client_pool_));
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
@@ -1981,6 +2022,7 @@ class StoredProtoRoundTripTest : public vmsdk::ValkeyTest {
     coordinator::MetadataManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 
@@ -2015,7 +2057,7 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
 
 // Cross-index alias conflict resolution: higher version wins, then
 // lexicographically greater index name breaks ties.
-class CrossIndexAliasConflictTest : public vmsdk::ValkeyTest {
+class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
@@ -2059,6 +2101,7 @@ class CrossIndexAliasConflictTest : public vmsdk::ValkeyTest {
                                                        *mock_client_pool_));
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
         &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+    SetUpVectorRegistry(&fake_ctx_);
   }
 
   void TearDown() override {
@@ -2066,6 +2109,7 @@ class CrossIndexAliasConflictTest : public vmsdk::ValkeyTest {
     coordinator::MetadataManager::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
+    TearDownVectorRegistry();
     vmsdk::ValkeyTest::TearDown();
   }
 

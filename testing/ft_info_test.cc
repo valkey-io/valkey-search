@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include "absl/strings/match.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
@@ -19,6 +21,7 @@
 #include "src/commands/commands.h"
 #include "src/index_schema.pb.h"
 #include "src/schema_manager.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -46,54 +49,112 @@ struct MultiFtInfoTestCase {
   std::vector<SingleFtInfoTestCase> test_cases;
 };
 
-class FTInfoTest : public ValkeySearchTestWithParam<MultiFtInfoTestCase> {};
+// The FT.INFO index_definition block is gated on search.emulate-release: 1.3.0
+// and later emit an 8-element block whose default_score is a double and which
+// carries a score_field pair, while earlier releases emit a 6-element block
+// with default_score as the bulk string "1" and no score_field. See
+// COMPATIBILITY.md ("compatibility-ft_info_score_field").
+//
+// Each expected_output below is written in the 1.3.0 (fixed) shape; the legacy
+// expectation is derived from it so the two cannot drift apart. The segment is
+// identical across every case, so a single substitution covers all of them.
+constexpr absl::string_view kFixedScoreInfoSegment =
+    "+default_score\r\n1\r\n+score_field\r\n+\r\n";
+constexpr absl::string_view kLegacyScoreInfoSegment =
+    "+default_score\r\n$1\r\n1\r\n";
+
+// Rewrites a fixed-shape expectation into the pre-1.3.0 shape. Replies that do
+// not contain an index_definition block (error cases) are returned unchanged.
+std::string ToLegacyScoreInfoShape(absl::string_view fixed) {
+  if (!absl::StrContains(fixed, kFixedScoreInfoSegment)) {
+    return std::string(fixed);
+  }
+  return absl::StrReplaceAll(
+      fixed, {{"+index_definition\r\n*8\r\n", "+index_definition\r\n*6\r\n"},
+              {kFixedScoreInfoSegment, kLegacyScoreInfoSegment}});
+}
+
+class FTInfoTest : public ValkeySearchTestWithParam<MultiFtInfoTestCase> {
+ protected:
+  void SetUp() override {
+    ValkeySearchTestWithParam<MultiFtInfoTestCase>::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    ValkeySearchTestWithParam<MultiFtInfoTestCase>::TearDown();
+  }
+
+  // Pinning to 1.3.0 exceeds kModuleVersion, which ValidateEmulateRelease only
+  // permits while debug mode is on. Debug mode defaults to on under the unit
+  // tests (ParseAndLoadArgv, which would clear it, never runs here).
+  static void SetEmulateRelease(vmsdk::ValkeyVersion v) {
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(v));
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
 
 TEST_P(FTInfoTest, FTInfoTests) {
   const MultiFtInfoTestCase &test_cases = GetParam();
 
-  for (bool use_thread_pool : {true, false}) {
-    for (const auto &test_case : test_cases.test_cases) {
-      fake_ctx_ = ValkeyModuleCtx{};
-      // Set up the data structures for the test case.
-      vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
-      SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-          &fake_ctx_, []() {},
-          use_thread_pool ? &mutations_thread_pool : nullptr, false));
-      data_model::IndexSchema index_schema_proto;
-      if (test_case.index_schema_pbtxt.has_value()) {
-        ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
-            test_case.index_schema_pbtxt.value(), &index_schema_proto));
-        VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
-            &fake_ctx_, index_schema_proto));
-        EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
-      }
+  // Exercise both sides of the compatibility gate. The fixed shape is what the
+  // expectations below are written in; the legacy shape is what ships by
+  // default, since emulate-release defaults to <major>.0.0.
+  for (bool score_info_fixed : {true, false}) {
+    SetEmulateRelease(score_info_fixed ? vmsdk::ValkeyVersion(1, 3, 0)
+                                       : vmsdk::ValkeyVersion(1, 2, 1));
+    SCOPED_TRACE(score_info_fixed ? "emulate-release=1.3.0 (fixed shape)"
+                                  : "emulate-release=1.2.1 (legacy shape)");
+    for (bool use_thread_pool : {true, false}) {
+      for (const auto &test_case : test_cases.test_cases) {
+        fake_ctx_ = ValkeyModuleCtx{};
+        // Set up the data structures for the test case.
+        vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 5);
+        SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+            &fake_ctx_, []() {},
+            use_thread_pool ? &mutations_thread_pool : nullptr, false));
+        data_model::IndexSchema index_schema_proto;
+        if (test_case.index_schema_pbtxt.has_value()) {
+          ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+              test_case.index_schema_pbtxt.value(), &index_schema_proto));
+          VMSDK_EXPECT_OK(SchemaManager::Instance().CreateIndexSchema(
+              &fake_ctx_, index_schema_proto));
+          EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+        }
 
-      if (test_case.expect_return_failure) {
-        EXPECT_CALL(*kMockValkeyModule, ReplyWithError(&fake_ctx_, _))
-            .WillOnce(Return(VALKEYMODULE_OK));
-      }
+        if (test_case.expect_return_failure) {
+          EXPECT_CALL(*kMockValkeyModule, ReplyWithError(&fake_ctx_, _))
+              .WillOnce(Return(VALKEYMODULE_OK));
+        }
 
-      // Run the command.
-      std::vector<ValkeyModuleString *> cmd_argv;
-      std::transform(test_case.argv.begin(), test_case.argv.end(),
-                     std::back_inserter(cmd_argv), [&](std::string val) {
-                       return TestValkeyModule_CreateStringPrintf(
-                           &fake_ctx_, "%s", val.data());
-                     });
-      EXPECT_EQ(vmsdk::CreateCommand<FTInfoCmd>(&fake_ctx_, cmd_argv.data(),
-                                                cmd_argv.size()),
-                VALKEYMODULE_OK);
-      EXPECT_EQ(fake_ctx_.reply_capture.GetReply(), test_case.expected_output);
+        // Run the command.
+        std::vector<ValkeyModuleString *> cmd_argv;
+        std::transform(test_case.argv.begin(), test_case.argv.end(),
+                       std::back_inserter(cmd_argv), [&](std::string val) {
+                         return TestValkeyModule_CreateStringPrintf(
+                             &fake_ctx_, "%s", val.data());
+                       });
+        EXPECT_EQ(vmsdk::CreateCommand<FTInfoCmd>(&fake_ctx_, cmd_argv.data(),
+                                                  cmd_argv.size()),
+                  VALKEYMODULE_OK);
+        EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+                  score_info_fixed
+                      ? std::string(test_case.expected_output)
+                      : ToLegacyScoreInfoShape(test_case.expected_output));
 
-      if (test_case.index_schema_pbtxt.has_value()) {
-        VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
-            index_schema_proto.db_num(), index_schema_proto.name()));
-        EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
-      }
+        if (test_case.index_schema_pbtxt.has_value()) {
+          VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(
+              index_schema_proto.db_num(), index_schema_proto.name()));
+          EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
+        }
 
-      // Clean up
-      for (auto cmd_arg : cmd_argv) {
-        TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+        // Clean up
+        for (auto cmd_arg : cmd_argv) {
+          TestValkeyModule_FreeString(&fake_ctx_, cmd_arg);
+        }
       }
     }
   }

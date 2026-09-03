@@ -1203,6 +1203,18 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+  // The index_definition block gained the score_field pair and switched
+  // default_score from a hardcoded "1" bulk string to the configured score as
+  // a double in 1.3.0. Pre-1.3.0: a 6-element array with no score_field and a
+  // literal "1" for default_score (SCORE only accepted 1.0 at the time, so the
+  // literal was always accurate). Evaluated once per reply so the element count
+  // and the emitted pairs cannot disagree, and so the INFO counter records one
+  // use per FT.INFO call rather than one per affected field. See
+  // COMPATIBILITY.md.
+  const bool score_info_fixed = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_info_score_field", [] { return true; },
+      [] { return false; });
+
   int arrSize = 28;
   // Text-attribute info fields
   if (text_index_schema_) {
@@ -1214,7 +1226,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithArray(ctx, score_info_fixed ? 8 : 6);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -1224,11 +1236,15 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
-  ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
+  if (score_info_fixed) {
+    ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
 
-  ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
+    ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
+    ValkeyModule_ReplyWithSimpleString(
+        ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
+  } else {
+    ValkeyModule_ReplyWithCString(ctx, "1");
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);

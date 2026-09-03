@@ -29,7 +29,6 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
 #include "src/expr/value.h"
 #include "src/indexes/index_base.h"
@@ -555,21 +554,6 @@ CalcBestMatchingPrefilteredKeys(
   return results;
 }
 
-std::string StringFormatVector(std::vector<char> vector) {
-  if (vector.size() % sizeof(float) != 0) {
-    return {vector.data(), vector.size()};
-  }
-
-  std::vector<std::string> float_strings;
-  for (size_t i = 0; i < vector.size(); i += sizeof(float)) {
-    float value;
-    std::memcpy(&value, vector.data() + i, sizeof(float));
-    float_strings.push_back(absl::StrCat(value));
-  }
-
-  return absl::StrCat("[", absl::StrJoin(float_strings, ","), "]");
-}
-
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
@@ -635,7 +619,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
             if (parameters.index_schema->GetAttributeDataType().ToProto() ==
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
               attribute_value = vmsdk::MakeUniqueValkeyString(
-                  StringFormatVector(vector.value()));
+                  vector_index->FormatVectorAsString(absl::string_view(
+                      vector->data(), vector->size())));
             } else {
               attribute_value =
                   vmsdk::UniqueValkeyString(ValkeyModule_CreateString(

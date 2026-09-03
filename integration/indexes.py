@@ -37,6 +37,33 @@ def bfloat16_to_bytes(flt: list[float]) -> bytes:
     return bytes(out)
 
 
+# Inverses of the encoders above. Used by tests that read a vector back out of
+# the engine (e.g. via FT.SEARCH ... RETURN) and need to compare it against
+# what was written, at the storage type's own precision.
+def bytes_to_float(raw: bytes) -> list[float]:
+    return list(struct.unpack(f"<{len(raw) // 4}f", raw))
+
+def bytes_to_float16(raw: bytes) -> list[float]:
+    return list(struct.unpack(f"<{len(raw) // 2}e", raw))
+
+def bytes_to_bfloat16(raw: bytes) -> list[float]:
+    out = []
+    for i in range(0, len(raw), 2):
+        # BF16 is the top half of an FP32; widening is a pure left shift.
+        fp32 = b"\x00\x00" + raw[i : i + 2]
+        out.append(struct.unpack("<f", fp32)[0])
+    return out
+
+# Quantize a Python float list through a storage type and back, giving the
+# exact values the engine holds after ingest.
+def quantize_to(values: list[float], data_type: str) -> list[float]:
+    if data_type == "FLOAT16":
+        return bytes_to_float16(float16_to_bytes(values))
+    if data_type == "BFLOAT16":
+        return bytes_to_bfloat16(bfloat16_to_bytes(values))
+    return bytes_to_float(float_to_bytes(values))
+
+
 class Field:
     name: str
     alias: Union[str, None]

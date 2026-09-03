@@ -295,6 +295,13 @@ class VectorBase : public IndexBase {
   // BFLOAT16 wherever a byte width alone is ambiguous -- both are 2 bytes, so
   // a size-based check would silently route the wrong format.
   virtual data_model::VectorDataType GetVectorDataType() const = 0;
+  // Renders a stored vector as the bracketed, comma-separated text form used
+  // when a JSON-backed vector attribute is materialized from the index rather
+  // than from the key. Virtual because only VectorType<T> knows the element
+  // width: decoding a 2-byte payload as 4-byte floats yields half the elements
+  // and garbage values.
+  virtual std::string FormatVectorAsString(
+      absl::string_view vector) const = 0;
   bool IsValidSizeVector(absl::string_view record) const {
     return record.size() == GetVectorDataSize();
   }

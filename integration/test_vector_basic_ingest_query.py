@@ -36,6 +36,10 @@ from indexes import (
     float_to_bytes,
     float16_to_bytes,
     bfloat16_to_bytes,
+    quantize_to,
+    bytes_to_float,
+    bytes_to_float16,
+    bytes_to_bfloat16,
 )
 
 
@@ -105,6 +109,86 @@ def _write_one(client: Valkey, index: Index, row: int, vec: List[float],
         client.execute_command("JSON.SET", key, "$", json.dumps({"v": vec}))
 
 
+def _decode_returned_vector(raw, data_type: str, key_kind: KeyDataType):
+    """Decode the value FT.SEARCH ... RETURN gave us for the vector field.
+
+    HASH indexes hand back the stored bytes verbatim; JSON indexes hand back
+    the bracketed text form the engine renders from those same bytes. Both
+    must decode to the vector that was ingested, at the storage type's own
+    precision.
+    """
+    if key_kind == KeyDataType.HASH:
+        if data_type == "FLOAT16":
+            return bytes_to_float16(raw)
+        if data_type == "BFLOAT16":
+            return bytes_to_bfloat16(raw)
+        return bytes_to_float(raw)
+    text = raw.decode() if isinstance(raw, bytes) else raw
+    text = text.strip()
+    assert text.startswith("[") and text.endswith("]"), (
+        f"JSON vector attribute was not rendered as a bracketed list: {text[:80]!r}"
+    )
+    body = text[1:-1]
+    if not body:
+        return []
+    return [float(x) for x in body.split(",")]
+
+
+def _knn_top1_key_and_vector(client: Valkey, index: Index, query_blob: bytes):
+    """KNN(1) asking for the vector attribute back.
+
+    Passing RETURN is what routes the reply through the engine's vector
+    content-materialization path. Without a RETURN clause that path is skipped
+    entirely and the value comes straight off the key, so a formatter that
+    misreads the stored element width stays invisible.
+    """
+    res = client.execute_command(
+        "FT.SEARCH",
+        index.name,
+        "*=>[KNN 1 @v $q AS knn_score]",
+        "PARAMS",
+        "2",
+        "q",
+        query_blob,
+        "RETURN",
+        "1",
+        "v",
+        "DIALECT",
+        "2",
+        "LIMIT",
+        "0",
+        "1",
+    )
+    assert res[0] >= 1, f"KNN returned no results: {res!r}"
+    fields = res[2]
+    attrs = {fields[i]: fields[i + 1] for i in range(0, len(fields), 2)}
+    assert b"v" in attrs, f"RETURN did not include the vector field: {attrs!r}"
+    return res[1], attrs[b"v"]
+
+
+def _assert_returned_vector_matches(client: Valkey, index: Index,
+                                    data_type: str, key_kind: KeyDataType,
+                                    row: int, vec: List[float]):
+    """The vector read back through RETURN must equal what was ingested."""
+    query_blob = _encode_query(vec, data_type)
+    key, raw = _knn_top1_key_and_vector(client, index, query_blob)
+    got = _decode_returned_vector(raw, data_type, key_kind)
+    want = quantize_to(vec, data_type)
+
+    assert len(got) == len(want), (
+        f"[{index.name}] RETURN gave {len(got)} elements, expected "
+        f"{len(want)} -- the stored vector was decoded at the wrong element "
+        f"width (data_type={data_type}, key_kind={key_kind.name})"
+    )
+    for i, (g, w) in enumerate(zip(got, want)):
+        # The engine renders floats at six significant digits; compare with a
+        # tolerance comfortably above that but far below one ULP of BF16.
+        assert abs(g - w) <= max(1e-5, 1e-4 * abs(w)), (
+            f"[{index.name}] RETURN element {i} = {g!r}, expected {w!r} "
+            f"(data_type={data_type}, key_kind={key_kind.name})"
+        )
+
+
 def _knn_top1_key(client: Valkey, index: Index, query_blob: bytes) -> bytes:
     res = client.execute_command(
         "FT.SEARCH",
@@ -154,6 +238,15 @@ def _ingest_and_assert_self_match(client: Valkey, index: Index,
             f"[{index.name}] KNN top-1 for row {row} returned {top1!r}, "
             f"expected {expected!r}"
         )
+
+    # Reading the vector back through RETURN exercises a different code path
+    # than the bare KNN above: the engine materializes the attribute from its
+    # own stored copy rather than from the key. One row is enough to catch a
+    # wrong element width, and keeps the max-dim case cheap.
+    probe_row = sample_rows[0]
+    _assert_returned_vector_matches(
+        client, index, data_type, index.type, probe_row, vectors[probe_row]
+    )
 
 
 class TestVectorBasicIngestQuery(ValkeySearchTestCaseBase):

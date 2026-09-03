@@ -254,9 +254,7 @@ class RandomSample : public GroupBy::ReducerInstance {
 
   explicit RandomSample(size_t sample_size)
       : samples_(std::make_shared<std::vector<expr::Value>>()),
-        sample_size_(sample_size) {
-    samples_->reserve(sample_size_);
-  }
+        sample_size_(sample_size) {}
 
   void ProcessRecord(const ArgVector &values) override {
     if (values[0].IsNil()) return;
@@ -482,7 +480,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
 
   uint32_t cnt{0};
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-  if (cnt < 2) {
+  if (cnt != 2) {
     return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
                                               cnt, ") to reducer ", name));
   }
@@ -494,16 +492,13 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     auto arg_sv = vmsdk::ToStringView(arg);
     if (i == 0) {
       field_text = arg_sv;
-    } else if (i == 1) {
+    } else {
       size_text = arg_sv;
     }
-    if (i < 2) {
-      VMSDK_ASSIGN_OR_RETURN(auto expr,
-                             expr::Expression::Compile(parameters, arg_sv),
-                             _ << " in GROUPBY stage");
-      r->args_.emplace_back(std::move(expr));
-    }
-    // Extra args beyond the two we need are silently consumed (Redis compat).
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
+    r->args_.emplace_back(std::move(expr));
   }
 
   // Evaluate the sample-size expression (arg 1) at parse time.
@@ -515,7 +510,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
     return absl::InvalidArgumentError(absl::StrCat(
         name, " sample size must be a non-negative integer constant"));
   }
-  if (static_cast<size_t>(*size_opt) > RandomSample::kMaxSampleSize) {
+  if (*size_opt > static_cast<double>(RandomSample::kMaxSampleSize)) {
     return absl::OutOfRangeError(absl::StrCat(
         name, " sample size must be <= ", RandomSample::kMaxSampleSize));
   }

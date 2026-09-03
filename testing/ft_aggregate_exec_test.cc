@@ -925,11 +925,13 @@ TEST_F(AggregateExecTest, RandomSampleParseErrorsTest) {
     EXPECT_TRUE(status.ok()) << status;
   }
 
-  // Extra declared arguments beyond 2 are silently consumed (Redis compat).
+  // Extra declared arguments beyond 2 are rejected (RANDOM_SAMPLE is
+  // fixed-arity 2).
   {
     auto status =
         TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 3 @n1 5 extra");
-    EXPECT_TRUE(status.ok()) << status;
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
   }
 }
 

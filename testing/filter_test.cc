@@ -124,7 +124,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   // Add a flat vector field for VECTOR_RANGE parser tests (4-dimensional).
   auto vec_index = indexes::VectorFlat<float>::Create(
       CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 100, 1024),
-      "vec_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+      "vec_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   VMSDK_EXPECT_OK(vec_index);
   VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "vec", *vec_index));
 }

@@ -1,0 +1,54 @@
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#include "src/indexes/scoring/bm25std_scorer.h"
+
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+
+#include "absl/log/check.h"
+#include "src/indexes/scoring/scorer.h"
+
+namespace valkey_search::indexes::scoring {
+
+float Bm25StdScorer::PrecomputeIDF(const IdfInput& input) const {
+  // dt <= total_docs is enforced by callers via clamping (dt and total_docs are
+  // read from separate, independently-locked counters and can be transiently
+  // out of sync; summing stem-variant key counts can also double-count). A
+  // debug-only check catches genuine caller bugs without aborting production on
+  // a benign transient skew.
+  DCHECK_LE(input.num_doc_contain_term, input.total_docs);
+  const float n = static_cast<float>(input.total_docs);
+  const float dt = static_cast<float>(input.num_doc_contain_term);
+  return std::log1pf((n - dt + 0.5f) / (dt + 0.5f));
+}
+
+float Bm25StdScorer::ScoreLeaf(const LeafScoreInput& input) const {
+  if (input.avg_doc_len <= 0.0f) return 0.0f;
+  const float f = static_cast<float>(input.term_frequency);
+  const float dl = static_cast<float>(input.doc_len);
+  const float numerator = f * (kK1 + 1.0f);
+  const float denominator = f + kK1 * (1.0f - kB + kB * dl / input.avg_doc_len);
+  return input.leaf_weight * input.idf * (numerator / denominator);
+}
+
+float Bm25StdScorer::ComposeDocumentScore(float sum_of_terms,
+                                          float document_score) const {
+  // 0 * inf is NaN in either direction, and a NaN score is not merely wrong: it
+  // breaks the strict-weak-ordering the result sort relies on. Propagate the
+  // infinite operand instead of multiplying.
+  if (IsInf(document_score)) {
+    return document_score;
+  }
+  if (IsInf(sum_of_terms)) {
+    return sum_of_terms;
+  }
+  return sum_of_terms * document_score;
+}
+
+}  // namespace valkey_search::indexes::scoring

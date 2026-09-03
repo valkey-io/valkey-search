@@ -49,32 +49,59 @@ void ReplyAvailNeighbors(ValkeyModuleCtx* ctx,
   }
 }
 
-void SendReplyNoContent(ValkeyModuleCtx* ctx,
-                        const query::SearchResult& search_result,
-                        const query::SearchParameters& parameters) {
-  const auto& neighbors = search_result.neighbors;
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
+
+bool HasTextRelevance(const SearchCommand &parameters) {
+  return parameters.IsNonVectorQuery() ||
+         query::QueryHasTextPredicate(parameters);
+}
+
+void SendReplyNoContent(ValkeyModuleCtx *ctx,
+                        const query::SearchResult &search_result,
+                        const SearchCommand &parameters) {
+  const auto &neighbors = search_result.neighbors;
   auto range = search_result.GetSerializationRange(parameters);
 
-  ValkeyModule_ReplyWithArray(ctx, range.count() + 1);
+  // WITHSCORES keeps the top-level relevance score even under NOCONTENT
+  const bool emit_score = parameters.with_scores;
+  const bool has_relevance = HasTextRelevance(parameters);
+  ValkeyModule_ReplyWithArray(ctx, (emit_score ? 2 : 1) * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
   for (auto i = range.start_index; i < range.end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+    if (emit_score) {
+      ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
+    }
   }
 }
 
 void ReplyScore(ValkeyModuleCtx* ctx, ValkeyModuleString& score_as,
                 const indexes::Neighbor& neighbor) {
   ValkeyModule_ReplyWithString(ctx, &score_as);
+  // The score_as field carries the vector distance (Redis' __<field>_score).
+  // For pure vector queries Neighbor.score == distance; for hybrid text=>[KNN]
+  // queries Neighbor.score is the text relevance while distance stays here.
   auto score_value = absl::StrFormat("%.12g", neighbor.distance);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-void SerializeNeighbors(ValkeyModuleCtx* ctx,
-                        const query::SearchResult& search_result,
-                        const query::SearchParameters& parameters) {
-  const auto& neighbors = search_result.neighbors;
+// Reply with just the score value as a top-level element (Redis WITHSCORES
+// format: score appears between document ID and attributes array).
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
+  auto score_value = absl::StrFormat("%.12g", score);
+  ValkeyModule_ReplyWithString(
+      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+}
+
+std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
+                            const SearchCommand &command);
+
+void SerializeNeighbors(ValkeyModuleCtx *ctx,
+                        const query::SearchResult &search_result,
+                        const SearchCommand &parameters) {
+  const auto &neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   auto range = search_result.GetSerializationRange(parameters);
 
@@ -84,12 +111,36 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
     vr_fields = query::CollectVrScoreFields(parameters);
   }
 
-  ValkeyModule_ReplyWithArray(ctx, 2 * range.count() + 1);
+  const bool emit_top_level_score = parameters.with_scores;
+  const bool has_relevance = HasTextRelevance(parameters);
+
+  // WITHSORTKEYS: emit the sort key (prefixed with '#') after the optional
+  // score.
+  const bool emit_sort_key = parameters.with_sort_keys;
+  const bool sort_by_vec_score =
+      parameters.sortby_parameter.has_value() && parameters.score_as &&
+      parameters.sortby_parameter->field ==
+          vmsdk::ToStringView(parameters.score_as.get());
+
+  const size_t elements_per_result =
+      2 + (emit_top_level_score ? 1 : 0) + (emit_sort_key ? 1 : 0);
+  ValkeyModule_ReplyWithArray(ctx, elements_per_result * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, parameters);
 
   for (auto i = range.start_index; i < range.end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+    if (emit_top_level_score) {
+      ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
+    }
+    if (emit_sort_key) {
+      std::string value = sort_by_vec_score
+                              ? absl::StrFormat("%.12g", neighbors[i].distance)
+                              : GetSortKeyValue(neighbors[i], parameters);
+      std::string prefixed_value = "#" + value;
+      ValkeyModule_ReplyWithString(
+          ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
+    }
     if (parameters.return_attributes.empty()) {
       // Count populated VR score slots for this neighbor.
       size_t populated_vr = 0;
@@ -200,13 +251,27 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
 
   // When with_sort_keys is true, we add an extra element per result (the sort
   // key)
-  size_t elements_per_result = command.with_sort_keys ? 3 : 2;
+  // Each result has: doc_id [+ score if WITHSCORES] [+ sort_key if
+  // WITHSORTKEYS] + attributes array
+  size_t elements_per_result = 2;
+  if (command.with_scores) {
+    ++elements_per_result;
+  }
+  if (command.with_sort_keys) {
+    ++elements_per_result;
+  }
+
   ValkeyModule_ReplyWithArray(ctx, elements_per_result * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, command);
   for (size_t i = range.start_index; i < range.end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+
+    // Score as top-level element when WITHSCORES is specified
+    if (command.with_scores) {
+      ReplyScoreTopLevel(ctx, neighbors[i].score);
+    }
 
     // Sort key value (prefixed with #) when WITHSORTKEYS is specified
     if (command.with_sort_keys) {
@@ -355,14 +420,30 @@ void ApplySorting(std::vector<indexes::Neighbor>& neighbors,
     PerformSortingOnRelevantPortion(neighbors, parameters, distance_compare);
     return;
   }
+  // A SORTBY on the vector score field (the KNN distance, reported via
+  // score_as) orders by Neighbor.distance directly: the distance is a
+  // synthesized reply field, not a stored attribute, so it is not present in
+  // attribute_contents. Default order is ascending (nearest first).
+  const bool is_vector_score =
+      parameters.score_as &&
+      sortby.field == vmsdk::ToStringView(parameters.score_as.get());
 
   // Check if field is a declared numeric attribute
   auto index_result = parameters.index_schema->GetIndex(sortby.field);
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
-  auto compare = [&](const indexes::Neighbor& a,
-                     const indexes::Neighbor& b) -> bool {
+  auto compare = [&](const indexes::Neighbor &a,
+                     const indexes::Neighbor &b) -> bool {
+    if (is_vector_score) {
+      if (a.distance != b.distance) {
+        return sortby.order == query::SortOrder::kAscending
+                   ? a.distance < b.distance
+                   : a.distance > b.distance;
+      }
+      // Tie-break on key ascending for a deterministic order.
+      return a.external_id->Str() < b.external_id->Str();
+    }
     if (!a.attribute_contents.has_value() ||
         !b.attribute_contents.has_value()) {
       return false;

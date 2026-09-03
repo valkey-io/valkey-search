@@ -113,6 +113,9 @@ message Predicate {
     FuzzyPredicate fuzzy = 10;
     VectorRangePredicate vector_range = 11;
   }
+  // Query-modifier weight ($weight:N). Defaults to 1.0 when unset so scoring on
+  // the shard matches standalone. Applies to leaf and composed predicates.
+  optional float weight = 12;
 }
 
 message ReturnParameter {
@@ -135,6 +138,11 @@ message IndexFingerprintVersion {
   uint32 version = 2;
 }
 
+enum Scorer {
+  SCORER_BM25STD = 0;
+  SCORER_TFIDF = 1;
+}
+
 message SearchIndexPartitionRequest {
   uint32 db_num = 1;
   string index_schema_name = 2;
@@ -155,15 +163,17 @@ message SearchIndexPartitionRequest {
   uint64 slot_fingerprint = 17;
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
+  Scorer scorer = 20;
 }
 
 message NeighborEntry {
   string key = 1;
-  float score = 2;
+  float distance = 2;
   repeated AttributeContentEntry attribute_contents = 3;
   // VR distance values in score_slot order. Only set when the query contains
   // VECTOR_RANGE predicates with $yield_distance_as aliases.
   repeated float vr_scores = 4;
+  float score = 5;
 }
 
 message SearchIndexPartitionResponse {

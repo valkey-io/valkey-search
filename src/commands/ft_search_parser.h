@@ -41,6 +41,7 @@ struct SearchCommand : public QueryCommand {
   query::SerializationRange GetSerializationRange() const;
 
   bool with_sort_keys{false};
+  bool with_scores{false};
 
   // Returns true if this is a standalone vector range query (no KNN).
   bool IsVectorRangeQuery() const {

@@ -43,7 +43,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -68,6 +68,7 @@ struct SendReplyTestInput {
   std::string score_as;
   query::LimitParameter limit;
   std::vector<TestReturnAttribute> return_attributes;
+  bool with_scores{false};
 };
 
 struct SendReplyTestCase {
@@ -178,6 +179,7 @@ void SendReplyTest::DoSendReplyTest(
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
   std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(input.neighbors.size());
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
   }
@@ -189,6 +191,7 @@ void SendReplyTest::DoSendReplyTest(
   parameters->k = 20;
   parameters->limit = input.limit;
   parameters->no_content = no_content;
+  parameters->with_scores = input.with_scores;
   for (const auto &return_attribute : input.return_attributes) {
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
@@ -225,8 +228,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -243,13 +246,38 @@ INSTANTIATE_TEST_SUITE_P(
                 "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
         },
         {
+            // Pure vector KNN + WITHSCORES emits a score of 0
+            .test_name = "pure_vector_with_scores_reports_zero",
+            .input =
+                {
+                    .neighbors =
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 0, .number = 10},
+                    .with_scores = true,
+                },
+            .expected_output =
+                "*7\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n*6\r\n$10\r\nscore_as_"
+                "1\r\n$16\r\n0.00999999977648\r\n$17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$3\r\ndef\r\n$1\r\n0\r\n*6\r\n$"
+                "10\r\nscore_as_1\r\n$14\r\n0.019999999553\r\n$"
+                "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*5\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n$3\r\ndef\r\n$1\r\n0\r\n",
+        },
+        {
             .test_name = "external_id_not_found",
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553},
-                         {.external_id = "ghi", .distance = 0.03}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553},
+                         {.external_id = "ghi", .score = 0.03}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -268,8 +296,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 100, .number = 105},
@@ -282,8 +310,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 0},
@@ -296,8 +324,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "ext_1", .distance = 0.00999999977648},
-                         {.external_id = "ext_2", .distance = 0.019999999553}},
+                        {{.external_id = "ext_1", .score = 0.00999999977648},
+                         {.external_id = "ext_2", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_2",
                     .score_as = "score_as_2",
                     .limit = {.first_index = 0, .number = 1},
@@ -315,8 +343,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "ext_1", .distance = 0.00999999977648},
-                         {.external_id = "ext_2", .distance = 0.019999999553}},
+                        {{.external_id = "ext_1", .score = 0.00999999977648},
+                         {.external_id = "ext_2", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_2",
                     .score_as = "__vector_score",
                     .limit = {.first_index = 1, .number = 1},
@@ -333,8 +361,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -354,8 +382,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -379,8 +407,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -406,8 +434,8 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "abc", .distance = 0.00999999977648},
-                         {.external_id = "def", .distance = 0.019999999553}},
+                        {{.external_id = "abc", .score = 0.00999999977648},
+                         {.external_id = "def", .score = 0.019999999553}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 0, .number = 10},
@@ -436,9 +464,9 @@ INSTANTIATE_TEST_SUITE_P(
             .input =
                 {
                     .neighbors =
-                        {{.external_id = "ext_1", .distance = 0.00999999977648},
-                         {.external_id = "ext_2", .distance = 0.019999999553},
-                         {.external_id = "ext_3", .distance = 0.0299999993294}},
+                        {{.external_id = "ext_1", .score = 0.00999999977648},
+                         {.external_id = "ext_2", .score = 0.019999999553},
+                         {.external_id = "ext_3", .score = 0.0299999993294}},
                     .attribute_alias = "attribute_alias_1",
                     .score_as = "score_as_1",
                     .limit = {.first_index = 1, .number = 5},
@@ -607,8 +635,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "default_distance_field_name",
             .input =
                 {
-                    .neighbors = {{.external_id = "k1", .distance = 0.1f},
-                                  {.external_id = "k2", .distance = 0.3f}},
+                    .neighbors = {{.external_id = "k1", .score = 0.1f},
+                                  {.external_id = "k2", .score = 0.3f}},
                     .vector_field_alias = "myvec",
                     .score_as = std::nullopt,
                     .limit = {.first_index = 0, .number = 10},
@@ -626,7 +654,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "custom_score_as_name",
             .input =
                 {
-                    .neighbors = {{.external_id = "k1", .distance = 0.25f}},
+                    .neighbors = {{.external_id = "k1", .score = 0.25f}},
                     .vector_field_alias = "vec",
                     .score_as = "my_dist",
                     .limit = {.first_index = 0, .number = 10},
@@ -640,9 +668,9 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "nocontent_suppresses_scores",
             .input =
                 {
-                    .neighbors = {{.external_id = "a", .distance = 0.1f},
-                                  {.external_id = "b", .distance = 0.2f},
-                                  {.external_id = "c", .distance = 0.3f}},
+                    .neighbors = {{.external_id = "a", .score = 0.1f},
+                                  {.external_id = "b", .score = 0.2f},
+                                  {.external_id = "c", .score = 0.3f}},
                     .vector_field_alias = "vec",
                     .score_as = std::nullopt,
                     .limit = {.first_index = 0, .number = 10},
@@ -662,9 +690,9 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "limit_slicing",
             .input =
                 {
-                    .neighbors = {{.external_id = "k1", .distance = 0.1f},
-                                  {.external_id = "k2", .distance = 0.2f},
-                                  {.external_id = "k3", .distance = 0.3f}},
+                    .neighbors = {{.external_id = "k1", .score = 0.1f},
+                                  {.external_id = "k2", .score = 0.2f},
+                                  {.external_id = "k3", .score = 0.3f}},
                     .vector_field_alias = "vec",
                     .score_as = std::nullopt,
                     .limit = {.first_index = 1, .number = 1},
@@ -679,8 +707,8 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "limit_zero",
             .input =
                 {
-                    .neighbors = {{.external_id = "k1", .distance = 0.1f},
-                                  {.external_id = "k2", .distance = 0.2f}},
+                    .neighbors = {{.external_id = "k1", .score = 0.1f},
+                                  {.external_id = "k2", .score = 0.2f}},
                     .vector_field_alias = "vec",
                     .score_as = std::nullopt,
                     .limit = {.first_index = 0, .number = 0},
@@ -693,7 +721,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "return_with_score_field",
             .input =
                 {
-                    .neighbors = {{.external_id = "k1", .distance = 0.5f}},
+                    .neighbors = {{.external_id = "k1", .score = 0.5f}},
                     .vector_field_alias = "vec",
                     .score_as = "my_dist",
                     .limit = {.first_index = 0, .number = 10},
@@ -710,7 +738,7 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "return_without_score_field",
             .input =
                 {
-                    .neighbors = {{.external_id = "k1", .distance = 0.5f}},
+                    .neighbors = {{.external_id = "k1", .score = 0.5f}},
                     .vector_field_alias = "vec",
                     .score_as = "my_dist",
                     .limit = {.first_index = 0, .number = 10},
@@ -905,6 +933,37 @@ TEST_F(MultiVrSendReplyTest, TwoVrPredicatesDefaultNames) {
   EXPECT_EQ(parsed, expected);
 }
 
+// A hybrid text=>[KNN] query with WITHSCORES must still emit the relevance
+// score under NOCONTENT (Redis drops attributes for NOCONTENT, not the
+// WITHSCORES score). Exercises the SendReplyNoContent WITHSCORES path.
+TEST_F(ValkeySearchTest, NoContentWithScoresEmitsScore) {
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->attribute_alias = "vec";  // vector query (hybrid text=>[KNN])
+  parameters->score_as = vmsdk::MakeUniqueValkeyString("score_as");
+  parameters->k = 20;
+  parameters->limit = {.first_index = 0, .number = 10};
+  parameters->no_content = true;
+  parameters->with_scores = true;
+  // Mark the query as text-bearing so the relevance score is emitted.
+  parameters->filter_parse_results.query_operations =
+      QueryOperations::kContainsText;
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(ToIndexesNeighbor({.external_id = "abc", .score = 0.5f}));
+  neighbors.push_back(
+      ToIndexesNeighbor({.external_id = "def", .score = 0.25f}));
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  parameters->SendReply(&fake_ctx_, wrapper);
+
+  // Count header followed by (id, score) per neighbor.
+  EXPECT_EQ(ParseRespReply(fake_ctx_.reply_capture.GetReply()),
+            ParseRespReply("*5\r\n:2\r\n$3\r\nabc\r\n$3\r\n0.5\r\n$3\r\ndef\r\n"
+                           "$4\r\n0.25\r\n"));
+}
+
 using ::testing::TestParamInfo;
 using ::testing::ValuesIn;
 
@@ -1033,7 +1092,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
         return VALKEYMODULE_OK;
       });
   EXPECT_CALL(*kMockValkeyModule,
-              OpenKey(VectorExternalizer::Instance().GetCtx(),
+              OpenKey(VectorRegistry::Instance().GetCtx(),
                       An<ValkeyModuleString *>(), testing::_))
       .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
   EXPECT_CALL(*kMockValkeyModule,
@@ -1128,8 +1187,7 @@ TEST_P(FTSearchTest, FTSearchTests) {
         }
       }
       EXPECT_CALL(*kMockValkeyModule, GetBlockedClientPrivateData(&fake_ctx_))
-          .WillRepeatedly(testing::InvokeWithoutArgs(
-              [&] { return private_data_external; }));
+          .WillRepeatedly([&] { return private_data_external; });
       async::Reply(&fake_ctx_, nullptr, 0);
       async::Free(&fake_ctx_, private_data_external);
     }

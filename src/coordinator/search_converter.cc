@@ -21,6 +21,7 @@
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
 #include "src/query/search.h"
@@ -56,7 +57,46 @@ std::optional<query::SortByParameter> SortByFromGRPC(
   return sortby;
 }
 
+// Exhaustive switch so a newly added ScorerType fails to compile here instead
+// of silently reaching the shard as the default scorer.
+Scorer ScorerToGRPC(indexes::scoring::ScorerType scorer) {
+  switch (scorer) {
+    case indexes::scoring::ScorerType::kBm25Std:
+      return coordinator::SCORER_BM25STD;
+    case indexes::scoring::ScorerType::kTfidf:
+      return coordinator::SCORER_TFIDF;
+  }
+  return coordinator::SCORER_BM25STD;
+}
+
+// An unset or unrecognized value (older or newer peer) means the default
+// scorer.
+indexes::scoring::ScorerType ScorerFromGRPC(Scorer scorer) {
+  switch (scorer) {
+    case coordinator::SCORER_TFIDF:
+      return indexes::scoring::ScorerType::kTfidf;
+    default:
+      return indexes::scoring::ScorerType::kBm25Std;
+  }
+}
+
+static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
+    const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
+    absl::flat_hash_set<std::string>& attribute_identifiers);
+
 absl::StatusOr<std::unique_ptr<query::Predicate>> GRPCPredicateToPredicate(
+    const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
+    absl::flat_hash_set<std::string>& attribute_identifiers) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto result,
+      BuildPredicateFromGRPC(predicate, index_schema, attribute_identifiers));
+  if (predicate.has_weight()) {
+    result->SetWeight(predicate.weight());
+  }
+  return result;
+}
+
+static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
     absl::flat_hash_set<std::string>& attribute_identifiers) {
   switch (predicate.predicate_case()) {
@@ -285,10 +325,25 @@ absl::Status GRPCSearchRequestToParameters(
     parameters->num_vr_predicates = query::AssignVectorRangeScoreSlots(
         parameters->filter_parse_results.root_predicate.get());
   }
+  parameters->scorer = ScorerFromGRPC(request.scorer());
   return absl::OkStatus();
 }
 
+static std::unique_ptr<Predicate> BuildGRPCPredicate(
+    const query::Predicate& predicate);
+
 std::unique_ptr<Predicate> PredicateToGRPCPredicate(
+    const query::Predicate& predicate) {
+  auto proto = BuildGRPCPredicate(predicate);
+  if (proto != nullptr) {
+    // Carry the query-modifier weight ($weight:N) to the shard so per-shard
+    // scoring matches standalone; without this the leaf/group weight is lost.
+    proto->set_weight(predicate.GetWeight());
+  }
+  return proto;
+}
+
+static std::unique_ptr<Predicate> BuildGRPCPredicate(
     const query::Predicate& predicate) {
   switch (predicate.GetType()) {
     // TODO: Support CME Fanouts of TextPredicate
@@ -467,6 +522,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
   SortByToGRPC(parameters.sortby_parameter, request.get());
+  request->set_scorer(ScorerToGRPC(parameters.scorer));
   return request;
 }
 

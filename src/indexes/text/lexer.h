@@ -77,8 +77,6 @@ struct Lexer {
   std::bitset<256> punct_bitmap_;
   absl::flat_hash_set<std::string> stop_words_set_;
 
-  // UTF-8 processing helpers
-  bool IsValidUtf8(absl::string_view text) const;
   // Common stemming logic
   std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
                               uint32_t min_stem_size) const;

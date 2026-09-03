@@ -74,12 +74,16 @@ class TestFtDebugCommand(ValkeySearchTestCaseDebugMode):
         pprint(byref)
         pprint(bysize)
 
-        assert inline == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
-        assert outofline == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
-        assert byref[-1] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
-        assert byref[6] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
-        assert bysize[-12] == {'Count': 10, 'Bytes': 120, 'AvgSize': b'12', 'Allocated': 280, 'AvgAllocated': b'28', 'Utilization': 42}
-        assert bysize[14] == {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
+        assert inline == {'Count': 11, 'Bytes': 141, 'AvgSize': b'12.818181818181818', 'Allocated': 336, 'AvgAllocated': b'30.545454545454547', 'Utilization': 41}
+        assert outofline == {'Count': 0, 'Bytes': 0, 'AvgSize': b'0', 'Allocated': 0, 'AvgAllocated': b'0', 'Utilization': 0}
+        assert byref == {
+            7: {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43},
+            11: {'Count': 1, 'Bytes': 1, 'AvgSize': b'1', 'Allocated': 16, 'AvgAllocated': b'16', 'Utilization': 6}
+        }
+        assert bysize == {
+            1: {'Count': 1, 'Bytes': 1, 'AvgSize': b'1', 'Allocated': 16, 'AvgAllocated': b'16', 'Utilization': 6},
+            14: {'Count': 10, 'Bytes': 140, 'AvgSize': b'14', 'Allocated': 320, 'AvgAllocated': b'32', 'Utilization': 43}
+        }
 
     def test_ft_debug_denied_without_admin_permissions(self):
         self.client.execute_command(

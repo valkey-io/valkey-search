@@ -22,9 +22,8 @@ namespace valkey_search {
 
 namespace {
 
-class SafeRDBTest : public ValkeySearchTest {
+class SafeRDBTest : public vmsdk::ValkeyTest {
  protected:
-  void SetUp() override { TestValkeyModule_Init(); }
   ValkeyModuleIO* fake_valkey_module_io_ = (ValkeyModuleIO*)0xBADF00D1;
 };
 
@@ -252,15 +251,15 @@ class MockRDBSectionCallback {
   MOCK_METHOD(int, minimum_semantic_version, (ValkeyModuleCtx * ctx, int when));
 };
 
-class RDBSerializationTest : public ValkeySearchTest {
+class RDBSerializationTest : public vmsdk::ValkeyTest {
  protected:
+  ValkeyModuleCtx fake_ctx_;
   struct TestRDBSectionCallbacks {
     std::shared_ptr<MockRDBSectionCallback> mock_callbacks;
     RDBSectionCallbacks callbacks_struct;
   };
-  void SetUp() override { TestValkeyModule_Init(); }
   void TearDown() override {
-    TestValkeyModule_Teardown();
+    vmsdk::ValkeyTest::TearDown();
     ClearRDBCallbacks();
   }
   TestRDBSectionCallbacks GenerateRDBSectionCallbacks() {

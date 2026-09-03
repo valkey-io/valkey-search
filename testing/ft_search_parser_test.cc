@@ -83,6 +83,9 @@ struct FTSearchParserTestCase {
   bool sortby_enabled{false};
   bool with_sort_keys{false};
   std::optional<absl::flat_hash_set<std::string>> expected_infields;
+  // WITHSCORES and SCORER test fields
+  bool with_scores{false};
+  indexes::scoring::ScorerType scorer{indexes::scoring::ScorerType::kBm25Std};
 };
 
 class FTSearchParserTest
@@ -146,7 +149,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
         flat_algorithm_proto.release());
     auto index = indexes::VectorFlat<float>::Create(
                      vector_index_proto, "attribute_identifier_1",
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                      .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
@@ -177,6 +180,9 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     auto tf2 = std::make_shared<indexes::Text>(text_proto, text_schema);
     VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_1", "tid1", tf1));
     VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_2", "tid2", tf2));
+    VMSDK_EXPECT_OK(index_schema->AddIndex(
+        "__score", "id3",
+        std::make_shared<indexes::Numeric>(numeric_index_proto)));
   }
   args.push_back(
       ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
@@ -295,6 +301,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->k, 0);
       EXPECT_FALSE(search_params.value()->ef.has_value());
       EXPECT_TRUE(search_params.value()->attribute_alias.empty());
+      EXPECT_EQ(search_params.value()->score_as.get(), nullptr);
     }
     EXPECT_EQ(search_params.value()->no_content,
               no_content || test_case.no_content);
@@ -318,10 +325,12 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     EXPECT_EQ(search_params.value()->verbatim, test_case.verbatim);
     EXPECT_EQ(search_params.value()->inorder, test_case.inorder);
     EXPECT_EQ(search_params.value()->slop, test_case.slop);
+    EXPECT_EQ(search_params.value()->scorer, test_case.scorer);
     // Validate SORTBY parameters
     EXPECT_EQ(search_params.value()->sortby_parameter.has_value(),
               test_case.sortby_enabled);
     EXPECT_EQ(search_params.value()->with_sort_keys, test_case.with_sort_keys);
+    EXPECT_EQ(search_params.value()->with_scores, test_case.with_scores);
     if (test_case.sortby_enabled) {
       EXPECT_EQ(search_params.value()->sortby_parameter->field,
                 test_case.sortby_field);
@@ -536,6 +545,16 @@ INSTANTIATE_TEST_SUITE_P(
             .score_as = "as_test",
         },
         {
+            // The KNN `AS` alias collides with a declared schema attribute, so
+            // SORTBY / WITHSORTKEYS on that name would ambiguously map to the
+            // vector distance. Reject at parse time (matches Redis).
+            .test_name = "score_as_collides_with_schema_field",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB As vec]",
+            .expected_error_message = "Property `vec` already exists in schema",
+        },
+        {
             .test_name = "empty_hash_field",
             .success = false,
             .params_str = " PARAMS 4 EF 190",
@@ -735,10 +754,11 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_vector_parameters_1",
             .success = false,
             .params_str = " PARAMS 2",
+            // `=>ss[` is not a vector delimiter (non-whitespace between => and
+            // [), so the whole string is treated as a pre-filter expression,
+            // which fails to parse.
             .filter_str = "(*)=>ss[KNN 10 @vec $BLOB]",
-            .expected_error_message =
-                "Error parsing vector similarity parameters: `ss[KNN 10 @vec "
-                "$BLOB]`. Expecting '[' got 's'",
+            .expected_error_message = "Invalid filter expression:",
         },
         {
             .test_name = "invalid_vector_parameters_2",
@@ -982,6 +1002,80 @@ INSTANTIATE_TEST_SUITE_P(
                 "Error parsing value for the parameter `SLOP`",
             .search_parameters_str = "SLOP -100",
         },
+        // WITHSCORES parameter tests
+        {
+            .test_name = "withscores_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "WITHSCORES",
+            .with_scores = true,
+        },
+        {
+            .test_name = "withscores_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES",
+            .vector_query = false,
+            .with_scores = true,
+        },
+        // SCORER parameter tests
+        {
+            .test_name = "scorer_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SCORER BM25STD",
+            .scorer = indexes::scoring::ScorerType::kBm25Std,
+        },
+        {
+            .test_name = "scorer_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SCORER BM25STD",
+            .vector_query = false,
+            .scorer = indexes::scoring::ScorerType::kBm25Std,
+        },
+        {
+            .test_name = "withscores_and_scorer_combined",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES SCORER BM25STD",
+            .vector_query = false,
+            .with_scores = true,
+            .scorer = indexes::scoring::ScorerType::kBm25Std,
+        },
+        {
+            // TFIDF is not implemented; it must be rejected at parse time
+            // rather than accepted (which would abort at scoring).
+            .test_name = "scorer_tfidf_rejected",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SCORER TFIDF",
+            .vector_query = false,
+        },
         // SORTBY tests
         {
             .test_name = "sortby_numeric_asc",
@@ -1193,6 +1287,70 @@ INSTANTIATE_TEST_SUITE_P(
                 "INFIELDS count exceeds maximum supported (64)",
             .search_parameters_str = "INFIELDS 65",
             .vector_query = false,
+        },
+        {
+            // Adding WITHSCORES must not change how SORTBY resolves.
+            .test_name = "sortby_schema_field_named_score_with_withscores",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES",
+            .vector_query = false,
+            .sortby_parameters_str = "SORTBY __score ASC",
+            .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+            .with_scores = true,
+        },
+        {
+            .test_name = "sortby_schema_field_named_score_no_withscores",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+            .sortby_parameters_str = "SORTBY __score DESC",
+            .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
+        },
+        {
+            // SORTBY on the KNN score alias is accepted even though the alias
+            // is not an index field: it is a synthesized reply field.
+            .test_name = "sortby_vector_score_asc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test ASC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+        },
+        {
+            // Descending on the score alias is supported too: ApplySorting
+            // compares Neighbor.distance directly rather than relying on the
+            // natural KNN order.
+            .test_name = "sortby_vector_score_desc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test DESC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

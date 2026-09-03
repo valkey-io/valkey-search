@@ -102,6 +102,9 @@ message Predicate {
     InfixPredicate infix = 9;
     FuzzyPredicate fuzzy = 10;
   }
+  // Query-modifier weight ($weight:N). Defaults to 1.0 when unset so scoring on
+  // the shard matches standalone. Applies to leaf and composed predicates.
+  optional float weight = 11;
 }
 
 message ReturnParameter {
@@ -124,6 +127,11 @@ message IndexFingerprintVersion {
   uint32 version = 2;
 }
 
+enum Scorer {
+  SCORER_BM25STD = 0;
+  SCORER_TFIDF = 1;
+}
+
 message SearchIndexPartitionRequest {
   uint32 db_num = 1;
   string index_schema_name = 2;
@@ -144,13 +152,16 @@ message SearchIndexPartitionRequest {
   uint64 slot_fingerprint = 17;
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
-  repeated string infields = 20;
+  Scorer scorer = 20;
+  // Field 21 is reserved for INKEYS (feature/INKEYS-support).
+  repeated string infields = 22;
 }
 
 message NeighborEntry {
   string key = 1;
-  float score = 2;
+  float distance = 2;
   repeated AttributeContentEntry attribute_contents = 3;
+  float score = 4;
 }
 
 message SearchIndexPartitionResponse {

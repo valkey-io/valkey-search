@@ -39,6 +39,10 @@ void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
 absl::StatusOr<std::optional<absl::flat_hash_set<std::string>>>
 InfieldsFromGRPC(const SearchIndexPartitionRequest& request);
 
+Scorer ScorerToGRPC(indexes::scoring::ScorerType scorer);
+
+indexes::scoring::ScorerType ScorerFromGRPC(Scorer scorer);
+
 }  // namespace valkey_search::coordinator
 
 #endif  // VALKEYSEARCH_SRC_COORDINATOR_SEARCH_CONVERTER_H_

@@ -1,4 +1,5 @@
 import pytest, traceback, valkey, time, struct
+import random
 import sys, os
 import pickle
 import gzip
@@ -14,6 +15,12 @@ TEST_MARKER = "*" * 100
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
 SYSTEM_R_ADDRESS = ('localhost', 6380)
+
+# Every generator used to run a container literally named "Generate-search",
+# so two checkouts generating at once on one machine shared it: the second
+# `docker run` replaced the first one's server and the first run collapsed
+# mid-generation. The name now gets a per-run suffix.
+CONTAINER_PREFIX = "Generate-search"
 class ClientRSystem(ClientSystem):
     def __init__(self):
         super().__init__(SYSTEM_R_ADDRESS)
@@ -45,10 +52,16 @@ class BaseCompatibilityTest:
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
+        cls.container_name = f"{CONTAINER_PREFIX}-{random.randint(1000, 9999)}"
+        if os.system(f"docker run --rm -d --name {cls.container_name} "
+                     f"-p {SYSTEM_R_ADDRESS[1]}:6379 redis/redis-stack-server") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
-        print("Started Generate-search server")
+        print(f"Started {cls.container_name} server")
+        # teardown_class has no route to the pytest session, and it must not
+        # write an answer file from a run that did not finish. Set it up front
+        # so that a run which never reaches a test is treated as incomplete.
+        cls.session = None
         cls.answers = []
         # add reply count to check redis non-empty answer
         cls.replied_count = 0
@@ -62,10 +75,31 @@ class BaseCompatibilityTest:
                 time.sleep(.25)
         print("Done initializing")
 
+    @pytest.fixture(autouse=True)
+    def _remember_session(self, request):
+        type(self).session = request.session
+
     @classmethod
     def teardown_class(cls):
-        print("Stopping Generate-search server")
-        os.system("docker stop Generate-search")
+        print(f"Stopping {cls.container_name} server")
+        os.system(f"docker stop {cls.container_name}")
+
+        # A generator that died part way collected only some of its answers.
+        # Writing them replaces a complete answer file with a short one that
+        # still satisfies the sources-hash check, so the loss stays invisible
+        # until someone counts the answers -- a flaky docker start once cut
+        # text-search from 42612 answers to 11000 this way. Leave the file
+        # alone; pytest's non-zero exit stops regenerate.sh.
+        if cls.session is None:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: no test reported in, "
+                  f"so the run never started properly.")
+            return
+        if cls.session.testsfailed:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: "
+                  f"{cls.session.testsfailed} test(s) failed, so the "
+                  f"{len(cls.answers)} answers collected are incomplete.")
+            return
+
         print("Dumping ", len(cls.answers), " answers")
         payload = {
             "sources_hash": compute_sources_hash(),

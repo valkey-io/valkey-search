@@ -33,11 +33,22 @@ Usage: test.sh [options...]
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
     --tsan                   Build the TSan version of the module.
+    --parallel[=N] | -j[=N]  Run tests in parallel with N workers (default: all CPU cores).
 
 EOF
 }
 SAN_BUILD="no"
 san_suffix=""
+function is_valid_parallel_workers() {
+    local val="$1"
+    [[ "$val" == "auto" || "$val" == "logical" || "$val" =~ ^[0-9]+$ ]]
+}
+
+PARALLEL_WORKERS="${PARALLEL_WORKERS:=auto}"
+if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+    printf "\n${RED}ERROR: Invalid PARALLEL_WORKERS environment variable: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer.${RESET}\n\n" >&2
+    exit 1
+fi
 ## Parse command line arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -55,9 +66,39 @@ while [[ $# -gt 0 ]]; do
         SAN_BUILD="thread"
         san_suffix="-tsan"
         ;;
+    --parallel | -j)
+        shift || true
+        if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+            if is_valid_parallel_workers "$1"; then
+                PARALLEL_WORKERS="$1"
+                shift || true
+            else
+                printf "\n${RED}ERROR: Invalid value for --parallel: '$1'. Supported values: 0, auto, logical, or positive integer.${RESET}\n\n" >&2
+                exit 1
+            fi
+        else
+            PARALLEL_WORKERS="auto"
+        fi
+        ;;
+    --parallel=* | -j=*)
+        PARALLEL_WORKERS="${1#*=}"
+        shift || true
+        if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+            printf "\n${RED}ERROR: Invalid value for --parallel: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer.${RESET}\n\n" >&2
+            exit 1
+        fi
+        ;;
     --test)
+        if [[ $# -lt 2 || "$2" =~ ^- ]]; then
+            printf "\n${RED}ERROR: Option --test requires an argument.${RESET}\n\n" >&2
+            exit 1
+        fi
         TEST="$2"
         shift 2
+        ;;
+    --test=*)
+        TEST="${1#*=}"
+        shift || true
         ;;
    --debug)
         shift || true
@@ -108,6 +149,11 @@ function is_cmake_required() {
         echo "yes"
         return
     fi
+    local req_file_lastmodified=$(get_file_last_modified ${ROOT_DIR}/requirements.txt)
+    if [ ${req_file_lastmodified} -gt ${cmake_cache_modified} ]; then
+        echo "yes"
+        return
+    fi
     echo "no"
 }
 
@@ -143,6 +189,9 @@ function configure() {
 function build() {
     cd ${BUILD_DIR}
     source venv/bin/activate
+    if ! python3 -c "import pytest, xdist" 2>/dev/null; then
+        pip install -r ${ROOT_DIR}/requirements.txt
+    fi
     make
 }
 
@@ -152,6 +201,7 @@ else
     BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX}
 fi
 BUILD_DIR=${ROOT_DIR}/${BUILD_DIR_BASENAME}
+export TEST_TMPDIR="$BUILD_DIR/tmp"
 VALKEY_SEARCH_PATH=${MODULE_ROOT}/${BUILD_DIR_BASENAME}/libsearch.${MODULE_EXT}
 
 if [[ "${CLEAN}" == "yes" ]]; then
@@ -162,7 +212,9 @@ fi
 function cleanup() {
     local exit_code=$1
     printf "Cleanup before exit..."
-    pkill valkey-server || true
+    if [ -n "${TEST_TMPDIR:-}" ]; then
+        pkill -9 -f "valkey-server.*${TEST_TMPDIR}" 2>/dev/null || true
+    fi
     deactivate >/dev/null 2>&1 || true
     cd ${ROOT_DIR}
     printf "${GREEN}done${RESET}\n"
@@ -174,15 +226,31 @@ function cleanup() {
 }
 
 # Ensure cleanup runs on exit
-trap 'exit_code=$?; cleanup ${exit_code}; exit $exit_code' EXIT
+trap 'exit_code=$?; cleanup ${exit_code}; exit $exit_code' EXIT INT TERM
+
+# Early sanity check for required external CLI binaries
+missing=()
+if ! command -v memtier_benchmark &>/dev/null; then
+    missing+=("memtier_benchmark")
+fi
+if ! command -v python3 &>/dev/null; then
+    missing+=("python3")
+fi
+if ! command -v cmake &>/dev/null; then
+    missing+=("cmake")
+fi
+if [[ ${#missing[@]} -gt 0 ]]; then
+    printf "\n${RED}ERROR: Missing required CLI binaries for integration tests:${RESET}\n" >&2
+    for tool in "${missing[@]}"; do
+        printf "  ${RED}- %s${RESET}\n" "${tool}" >&2
+    done
+    printf "\n${YELLOW}Note: It is strongly recommended to run within the repository devcontainer where all dependencies are pre-installed:${RESET}\n" >&2
+    printf "    ${GREEN}.devcontainer/run_in_docker.sh ./build.sh --run-integration-tests${RESET}\n\n" >&2
+    exit 1
+fi
 
 configure
 build
-
-if ! command -v memtier_benchmark &> /dev/null; then
-    printf "\n${RED}Error: memtier_benchmark is not installed or not in PATH.${RESET}\n\n" >&2
-    exit 1
-fi
 
 export MEMTIER_PATH=memtier_benchmark
 export VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH}
@@ -203,24 +271,55 @@ print_environment_var TEST_UNDECLARED_OUTPUTS_DIR ${TEST_UNDECLARED_OUTPUTS_DIR}
 print_environment_var TEST_TMPDIR ${TEST_TMPDIR}
 
 mkdir -p $TEST_TMPDIR
-pkill -9 valkey-server || true
+if [ -n "${TEST_TMPDIR:-}" ]; then
+    pkill -9 -f "valkey-server.*${TEST_TMPDIR}" 2>/dev/null || true
+fi
+
+# Ensure virtual environment is active
+if [ -f "${BUILD_DIR}/venv/bin/activate" ]; then
+    source "${BUILD_DIR}/venv/bin/activate"
+fi
+
+PARALLEL_WORKERS="${PARALLEL_WORKERS:=auto}"
+if [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARALLEL_WORKERS}" != "1" ]; then
+    if [ "${PARALLEL_WORKERS}" == "auto" ]; then
+        PARALLEL_WORKERS=$(num_proc)
+        if [ ${PARALLEL_WORKERS} -gt 32 ]; then
+            PARALLEL_WORKERS=32
+        elif [ ${PARALLEL_WORKERS} -lt 1 ]; then
+            PARALLEL_WORKERS=1
+        fi
+    fi
+fi
 
 ALL_FILES="vector_search_integration_test.py stability_test.py"
 
-if [[ "${TEST}" == "all" ]]; then
-    for file in $ALL_FILES; do
-        python3 ${ROOT_DIR}/${file}
-    done
+if [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARALLEL_WORKERS}" != "1" ]; then
+    XDIST_ARGS="-n ${PARALLEL_WORKERS} --dist=load"
+    echo "Running integration tests in parallel with ${PARALLEL_WORKERS} workers"
+    if [[ "${TEST}" == "all" ]]; then
+        python3 -m pytest ${XDIST_ARGS} -v ${ROOT_DIR}/vector_search_integration_test.py ${ROOT_DIR}/stability_test.py
+    else
+        python3 -m pytest ${XDIST_ARGS} -v ${ROOT_DIR}/${TEST}_test.py
+    fi
 else
-    python3 ${ROOT_DIR}/${TEST}_test.py
+    if [[ "${TEST}" == "all" ]]; then
+        for file in $ALL_FILES; do
+            python3 ${ROOT_DIR}/${file}
+        done
+    else
+        python3 ${ROOT_DIR}/${TEST}_test.py
+    fi
 fi
 
 if [[ "${SAN_BUILD}" != "no" ]]; then
     printf "Checking for errors...\n"
     # Terminate valkey-server so the logs will be flushed
-    pkill valkey-server || true
+    if [ -n "${TEST_TMPDIR:-}" ]; then
+        pkill -f "valkey-server.*${TEST_TMPDIR}" 2>/dev/null || true
+    fi
     # Wait for 3 seconds making sure the processes terminated
     sleep 3
     # And now we can check the logs
-    check_for_san_errors "$(ls ${TEST_UNDECLARED_OUTPUTS_DIR}/*_stdout.txt | grep -v valkey_cli_stdout)"
+    check_for_san_errors "$(find ${TEST_UNDECLARED_OUTPUTS_DIR} -name "*_stdout.txt" | grep -v valkey_cli_stdout)"
 fi

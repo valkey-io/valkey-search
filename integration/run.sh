@@ -2,11 +2,18 @@
 
 # Find the rood folder
 ROOT_DIR=$(readlink -f $(readlink -f $(dirname $0))/..)
+export ROOT_DIR
 
 . ${ROOT_DIR}/scripts/common.rc
-setup_valkey_server
 
 LOG_NOTICE "Root directory is: ${ROOT_DIR}"
+
+function cleanup() {
+  if [ -n "${LOGS_DIR:-}" ]; then
+    pkill -9 -f "valkey-server.*${LOGS_DIR}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
 
 function print_usage() {
   cat <<EOF
@@ -16,6 +23,7 @@ Usage: run.sh [options...]
     --asan                  When passed, the integration will load the module under .build-release-asan/ | .build-debug-asan/
     --tsan                  When passed, the integration will load the module under .build-release-tsan/ | .build-debug-tsan/
     --capture               Disable pytest output capture (shows print statements in real-time).
+    --parallel[=N] | -j[=N] Run tests in parallel with N workers (default: all CPU cores).
     --help | -h             Print this help message and exit.
 
 EOF
@@ -30,6 +38,11 @@ function check_existence() {
 
 ## Parse command line arguments
 BUILD_CONFIG="release"
+PARALLEL_WORKERS="${PARALLEL_WORKERS:=auto}"
+if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+  LOG_ERROR "Invalid PARALLEL_WORKERS environment variable: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer."
+  exit 1
+fi
 while [ $# -gt 0 ]; do
   arg=$1
   case $arg in
@@ -58,6 +71,38 @@ while [ $# -gt 0 ]; do
     export PYTEST_CAPTURE_DISABLED=1
     LOG_INFO "pytest capture mode will be disabled"
     ;;
+  --parallel | -j)
+    shift || true
+    if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+      if is_valid_parallel_workers "$1"; then
+        PARALLEL_WORKERS="$1"
+        shift || true
+      else
+        LOG_ERROR "Invalid value for --parallel: '$1'. Supported values: 0, auto, logical, or positive integer."
+        exit 1
+      fi
+    else
+      PARALLEL_WORKERS="auto"
+    fi
+    ;;
+  --parallel=* | -j=*)
+    PARALLEL_WORKERS="${arg#*=}"
+    shift || true
+    if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+      LOG_ERROR "Invalid value for --parallel: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer."
+      exit 1
+    fi
+    ;;
+  -k | --filter)
+    shift || true
+    if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+      TEST_PATTERN="$1"
+      shift || true
+    else
+      LOG_ERROR "Option $arg requires an argument."
+      exit 1
+    fi
+    ;;
   --help | -h)
     print_usage
     exit 0
@@ -79,8 +124,32 @@ if [ -z "${SAN_SUFFIX}" ] && [ ! -z "${SAN_BUILD}" ]; then
   fi
 fi
 
-BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${SAN_SUFFIX}
+# Early sanity check for required external CLI binaries
+missing=()
+if ! command -v python3 &>/dev/null; then
+  missing+=("python3")
+fi
+if ! command -v script &>/dev/null; then
+  missing+=("script")
+fi
+if ! command -v git &>/dev/null; then
+  missing+=("git")
+fi
+if [[ ${#missing[@]} -gt 0 ]]; then
+  echo "" >&2
+  printf "${RED}ERROR: Missing required CLI binaries for integration tests:${RESET}\n" >&2
+  for tool in "${missing[@]}"; do
+    printf "  ${RED}- %s${RESET}\n" "${tool}" >&2
+  done
+  echo "" >&2
+  printf "${YELLOW}Note: It is strongly recommended to run within the repository devcontainer where all dependencies are pre-installed:${RESET}\n" >&2
+  printf "    ${GREEN}.devcontainer/run_in_docker.sh ./build.sh --run-integration-tests${RESET}\n\n" >&2
+  exit 1
+fi
+
+BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${SAN_SUFFIX}
 WD=${BUILD_DIR}/integration
+export LOGS_DIR=${WD}/.valkey-test-framework
 
 # Check for user provided module path
 MODULE_PATH="${MODULE_PATH:=}"
@@ -137,9 +206,9 @@ export VALKEY_SERVER_PATH=${VALKEY_SERVER_PATH}
 export JSON_MODULE_PATH=${JSON_MODULE_PATH}
 export SKIPLOGCLEAN=1
 
-FILTER_ARGS=""
+FILTER_ARGS=()
 if [ ! -z "${TEST_PATTERN}" ]; then
-  FILTER_ARGS=" -k ${TEST_PATTERN}"
+  FILTER_ARGS=(-k "${TEST_PATTERN}")
   LOG_INFO "TEST_PATTERN is set to: '${TEST_PATTERN}'"
 else
   LOG_INFO "TEST_PATTERN is not set. Running all integration tests."
@@ -155,7 +224,9 @@ mkdir -p ${LOGS_DIR}
 PYTEST_OUTPUT_LOG=${LOGS_DIR}/pytest_output.log
 
 function run_pytest() {
-  zap valkey-server
+  if [ -n "${LOGS_DIR:-}" ]; then
+    pkill -9 -f "valkey-server.*${LOGS_DIR}" 2>/dev/null || true
+  fi
   
   # Check if PYTEST_CAPTURE_DISABLED is set
   CAPTURE_ARG="--capture=sys"
@@ -164,12 +235,41 @@ function run_pytest() {
     LOG_INFO "pytest capture mode is disabled"
   fi
   
-  LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
+  PARALLEL_WORKERS="${PARALLEL_WORKERS:=auto}"
+  XDIST_ARGS=""
+  if [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARALLEL_WORKERS}" != "1" ]; then
+    if [ "${PARALLEL_WORKERS}" == "auto" ]; then
+      PARALLEL_WORKERS=$(num_proc)
+      if [ ${PARALLEL_WORKERS} -gt 32 ]; then
+        PARALLEL_WORKERS=32
+      elif [ ${PARALLEL_WORKERS} -lt 1 ]; then
+        PARALLEL_WORKERS=1
+      fi
+    fi
+    if [ "${PARALLEL_WORKERS}" != "1" ]; then
+      XDIST_ARGS="-n ${PARALLEL_WORKERS} --dist=loadscope"
+      LOG_INFO "Running integration tests in parallel with ${PARALLEL_WORKERS} workers"
+    fi
+  fi
+
+  PYTEST_CMD=("${PYTHON_PATH}" -m pytest)
+  if [ ${#FILTER_ARGS[@]} -gt 0 ]; then
+    PYTEST_CMD+=("${FILTER_ARGS[@]}")
+  fi
+  PYTEST_CMD+=("${CAPTURE_ARG}")
+  if [ -n "${XDIST_ARGS}" ]; then
+    # shellcheck disable=SC2206
+    XDIST_ARRAY=(${XDIST_ARGS})
+    PYTEST_CMD+=("${XDIST_ARRAY[@]}")
+  fi
+  PYTEST_CMD+=(--cache-clear -v "${ROOT_DIR}/integration/")
+
+  LOG_INFO "Running: ${PYTEST_CMD[*]}"
   # Capture pytest output to check for sanitizer errors
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    script -q ${PYTEST_OUTPUT_LOG} ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
+    script -q "${PYTEST_OUTPUT_LOG}" "${PYTEST_CMD[@]}"
   else
-    script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
+    script -q -e -c "$(printf '%q ' "${PYTEST_CMD[@]}")" "${PYTEST_OUTPUT_LOG}"
   fi
   RUN_SUCCESS=$?
 }
@@ -203,7 +303,9 @@ run_with_retries
 if [[ "${SAN_BUILD}" != "no" ]]; then
   printf "Checking for errors...\n"
   # Terminate valkey-server so the logs will be flushed
-  pkill valkey-server || true
+  if [ -n "${LOGS_DIR:-}" ]; then
+    pkill -f "valkey-server.*${LOGS_DIR}" 2>/dev/null || true
+  fi
   # Wait for 3 seconds making sure the processes terminated
   sleep 3
   # And now we can check the logs

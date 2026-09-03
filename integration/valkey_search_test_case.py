@@ -20,6 +20,11 @@ LOGS_DIR = "/tmp/valkey-test-framework-files"
 if "LOGS_DIR" in os.environ:
     LOGS_DIR = os.environ["LOGS_DIR"]
 
+# Ensure worker-specific subdirectory under LOGS_DIR when running with pytest-xdist
+worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+if worker_id and not LOGS_DIR.endswith(f"/{worker_id}"):
+    LOGS_DIR = os.path.join(LOGS_DIR, worker_id)
+
 
 class Node:
     """This class represents a valkey server instance, regardless of its role"""
@@ -131,16 +136,25 @@ class ReplicationGroup:
         if not rg:
             return
 
-        if rg.primary:
-            if rg.primary.server is not None:
+        first_error = None
+        if getattr(rg, "primary", None) and rg.primary.server is not None:
+            try:
                 rg.primary.server.exit()
+            except Exception as e:
+                logging.error(f"Error during primary exit: {e}")
+                first_error = e
 
-        if not rg.replicas:
-            return
+        for replica in getattr(rg, "replicas", []):
+            if replica and replica.server is not None:
+                try:
+                    replica.server.exit()
+                except Exception as e:
+                    logging.error(f"Error during replica exit: {e}")
+                    if first_error is None:
+                        first_error = e
 
-        for replica in rg.replicas:
-            if replica.server:
-                replica.server.exit()
+        if first_error is not None:
+            raise first_error
 
 
 class ValkeySearchTestCaseCommon(ValkeyTestCase):
@@ -176,26 +190,28 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
 
         os.makedirs(testdir, exist_ok=True)
         curdir = os.getcwd()
-        os.chdir(testdir)
-        lines = self.get_config_file_lines(testdir, port)
+        try:
+            os.chdir(testdir)
+            lines = self.get_config_file_lines(testdir, port)
 
-        conf_file = f"{testdir}/valkey_{port}.conf"
-        with open(conf_file, "w+") as f:
-            for line in lines:
-                f.write(f"{line}\n")
-            f.write("\n")
-            f.close()
+            conf_file = f"{testdir}/valkey_{port}.conf"
+            with open(conf_file, "w+") as f:
+                for line in lines:
+                    f.write(f"{line}\n")
+                f.write("\n")
+                f.close()
 
-        role = "primary" if is_primary else "replica"
-        logfile = f"{testdir}/logfile-{role}-{port}.log"
-        server, client = self.create_server(
-            testdir=testdir,
-            server_path=server_path,
-            args=self.append_startup_args({"logfile": logfile}),
-            port=port,
-            conf_file=conf_file,
-        )
-        os.chdir(curdir)
+            role = "primary" if is_primary else "replica"
+            logfile = f"{testdir}/logfile-{role}-{port}.log"
+            server, client = self.create_server(
+                testdir=testdir,
+                server_path=server_path,
+                args=self.append_startup_args({"logfile": logfile}),
+                port=port,
+                conf_file=conf_file,
+            )
+        finally:
+            os.chdir(curdir)
         self.wait_for_logfile(logfile, "Ready to accept connections")
         client.ping()
         return server, client, logfile
@@ -228,36 +244,77 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         assert search_loaded, "search module not loaded"
         assert json_loaded, "json module not loaded"
 
+    def teardown_method(self, method=None):
+        first_error = None
+        if hasattr(self, "server_list"):
+            for s in list(self.server_list):
+                if s:
+                    try:
+                        s.exit()
+                    except Exception as e:
+                        logging.error(f"Error during server exit: {e}")
+                        if first_error is None:
+                            first_error = e
+            self.server_list.clear()
+        if hasattr(self, "teardown"):
+            try:
+                self.teardown()
+            except Exception as e:
+                if first_error is None:
+                    first_error = e
+        if first_error is not None:
+            raise first_error
+
+    def tearDown(self):
+        self.teardown_method()
+        if hasattr(super(), "tearDown"):
+            super().tearDown()
+
 
 class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
 
     @pytest.fixture(autouse=True)
     def setup_test(self, request):
-        # Setup
-        test_name = self.normalize_dir_name(request.node.name)
-        self.test_name = test_name
+        try:
+            # Setup
+            test_name = self.normalize_dir_name(request.node.name)
+            self.test_name = test_name
 
-        replica_count = 0
-        if hasattr(request, "param") and request.param["replica_count"]:
-            replica_count = request.param["replica_count"]
+            replica_count = 0
+            if hasattr(request, "param") and request.param["replica_count"]:
+                replica_count = request.param["replica_count"]
 
-        primary = self.start_new_server(is_primary=True)
-        replicas: List[Node] = []
-        for _ in range(0, replica_count):
-            replicas.append(self.start_new_server(is_primary=False))
+            primary = self.start_new_server(is_primary=True)
+            replicas: List[Node] = []
+            for _ in range(0, replica_count):
+                replicas.append(self.start_new_server(is_primary=False))
 
-        self.rg = ReplicationGroup(primary=primary, replicas=replicas)
-        self.rg.setup_replications_cmd()
-        self.server = self.rg.primary.server
-        self.client = self.rg.primary.client
+            self.rg = ReplicationGroup(primary=primary, replicas=replicas)
+            self.rg.setup_replications_cmd()
+            self.server = self.rg.primary.server
+            self.client = self.rg.primary.client
 
-        self.nodes: List[Node] = [self.rg.primary]
-        self.nodes += self.rg.replicas
+            self.nodes: List[Node] = [self.rg.primary]
+            self.nodes += self.rg.replicas
 
-        yield
-
-        # Cleanup
-        ReplicationGroup.cleanup(self.rg)
+            yield
+        finally:
+            # Cleanup - always executed even if setup failed
+            cleanup_err = None
+            if hasattr(self, "rg") and self.rg:
+                try:
+                    ReplicationGroup.cleanup(self.rg)
+                except Exception as e:
+                    logging.error(f"Error during ReplicationGroup.cleanup: {e}")
+                    cleanup_err = e
+            try:
+                self.teardown_method()
+            except Exception as e:
+                logging.error(f"Error during teardown_method: {e}")
+                if cleanup_err is None:
+                    cleanup_err = e
+            if cleanup_err is not None:
+                raise cleanup_err
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return [
@@ -377,102 +434,117 @@ class ValkeySearchClusterTestCase(ValkeySearchTestCaseCommon):
 
     @pytest.fixture(autouse=True)
     def setup_test(self, request):
-        replica_count = self.REPLICAS_COUNT
-        if hasattr(request, "param") and request.param["replica_count"]:
-            replica_count = request.param["replica_count"]
-
         self.replication_groups: list[ReplicationGroup] = list()
-        ports = []
-        for i in range(0, self.CLUSTER_SIZE):
-            ports.append(self.get_bind_port())
-            for _ in range(0, replica_count):
-                ports.append(self.get_bind_port())
-
-        test_name = self.normalize_dir_name(request.node.name)
-        testdir_base = f"{LOGS_DIR}/{test_name}"
-
-        if os.path.exists(testdir_base):
-            shutil.rmtree(testdir_base)
-
-        for i in range(0, len(ports), replica_count + 1):
-            primary_port = ports[i]
-            server, client, logfile = self.start_server(
-                port=primary_port,
-                test_name=test_name,
-                cluster_enabled=True,
-                is_primary=True,
-            )
-
-            replicas = []
-            for _ in range(0, replica_count):
-                # Start the replicas
-                i = i + 1
-                replica_port = ports[i]
-                replica_server, replica_client, replica_logfile = (
-                    self.start_server(
-                        port=replica_port,
-                        test_name=test_name,
-                        cluster_enabled=True,
-                        is_primary=False,
-                    )
-                )
-                replicas.append(
-                    Node(
-                        server=replica_server,
-                        client=replica_client,
-                        logfile=replica_logfile,
-                    )
-                )
-
-            primary_node = Node(
-                server=server,
-                client=client,
-                logfile=logfile,
-            )
-            rg = ReplicationGroup(primary=primary_node, replicas=replicas)
-            self.replication_groups.append(rg)
-
         self.nodes: List[Node] = list()
-        for rg in self.replication_groups:
-            self.nodes.append(rg.primary)
-            self.nodes += rg.replicas
+        try:
+            replica_count = self.REPLICAS_COUNT
+            if hasattr(request, "param") and request.param["replica_count"]:
+                replica_count = request.param["replica_count"]
 
-        # Split the slots
-        ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
-        node_idx = 0
-        for start, end in ranges:
-            self.add_slots(node_idx, start, end)
-            node_idx = node_idx + 1
+            ports = []
+            for i in range(0, self.CLUSTER_SIZE):
+                ports.append(self.get_bind_port())
+                for _ in range(0, replica_count):
+                    ports.append(self.get_bind_port())
 
-        # Perform cluster meet
-        for node_idx in range(0, self.CLUSTER_SIZE):
-            self.cluster_meet(node_idx, self.CLUSTER_SIZE)
+            test_name = self.normalize_dir_name(request.node.name)
+            testdir_base = f"{LOGS_DIR}/{test_name}"
 
-        waiters.wait_for_equal(
-            lambda: self._wait_for_meet(
-                self.CLUSTER_SIZE + (self.CLUSTER_SIZE * replica_count)
-            ),
-            True,
-        )
+            if os.path.exists(testdir_base):
+                shutil.rmtree(testdir_base)
 
-        # Wait for the cluster to be up
-        for rg in self.replication_groups:
-            logging.info(
-                f"Waiting for cluster to change state...{rg.primary.logfile}"
+            for i in range(0, len(ports), replica_count + 1):
+                primary_port = ports[i]
+                server, client, logfile = self.start_server(
+                    port=primary_port,
+                    test_name=test_name,
+                    cluster_enabled=True,
+                    is_primary=True,
+                )
+
+                replicas = []
+                for _ in range(0, replica_count):
+                    # Start the replicas
+                    i = i + 1
+                    replica_port = ports[i]
+                    replica_server, replica_client, replica_logfile = (
+                        self.start_server(
+                            port=replica_port,
+                            test_name=test_name,
+                            cluster_enabled=True,
+                            is_primary=False,
+                        )
+                    )
+                    replicas.append(
+                        Node(
+                            server=replica_server,
+                            client=replica_client,
+                            logfile=replica_logfile,
+                        )
+                    )
+
+                primary_node = Node(
+                    server=server,
+                    client=client,
+                    logfile=logfile,
+                )
+                rg = ReplicationGroup(primary=primary_node, replicas=replicas)
+                self.replication_groups.append(rg)
+
+            for rg in self.replication_groups:
+                self.nodes.append(rg.primary)
+                self.nodes += rg.replicas
+
+            # Split the slots
+            ranges = self._split_range_pairs(0, 16384, self.CLUSTER_SIZE)
+            node_idx = 0
+            for start, end in ranges:
+                self.add_slots(node_idx, start, end)
+                node_idx = node_idx + 1
+
+            # Perform cluster meet
+            for node_idx in range(0, self.CLUSTER_SIZE):
+                self.cluster_meet(node_idx, self.CLUSTER_SIZE)
+
+            waiters.wait_for_equal(
+                lambda: self._wait_for_meet(
+                    self.CLUSTER_SIZE + (self.CLUSTER_SIZE * replica_count)
+                ),
+                True,
             )
-            self.wait_for_logfile(
-                rg.primary.logfile, "Cluster state changed: ok"
-            )
-            rg.setup_replications_cluster()
-        logging.info("Cluster is up and running!")
 
-        # Wait for cluster topology to settle
-        self.wait_for_cluster_topology_to_settle()
-        yield
+            # Wait for the cluster to be up
+            for rg in self.replication_groups:
+                logging.info(
+                    f"Waiting for cluster to change state...{rg.primary.logfile}"
+                )
+                self.wait_for_logfile(
+                    rg.primary.logfile, "Cluster state changed: ok"
+                )
+                rg.setup_replications_cluster()
+            logging.info("Cluster is up and running!")
 
-        # Cleanup
-        for rg in self.replication_groups:
-            ReplicationGroup.cleanup(rg)
+            # Wait for cluster topology to settle
+            self.wait_for_cluster_topology_to_settle()
+            yield
+        finally:
+            # Cleanup - always executed even on setup failure
+            cleanup_err = None
+            for rg in getattr(self, "replication_groups", []):
+                try:
+                    ReplicationGroup.cleanup(rg)
+                except Exception as e:
+                    logging.error(f"Error during ReplicationGroup.cleanup: {e}")
+                    if cleanup_err is None:
+                        cleanup_err = e
+            try:
+                self.teardown_method()
+            except Exception as e:
+                logging.error(f"Error during teardown_method: {e}")
+                if cleanup_err is None:
+                    cleanup_err = e
+            if cleanup_err is not None:
+                raise cleanup_err
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return [

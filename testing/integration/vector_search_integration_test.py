@@ -429,17 +429,19 @@ class VectorSearchIntegrationTest(VSSTestCase):
         handler.setFormatter(formatter)
         valkey_logger.addHandler(handler)
 
-        valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
+        valkey_server_stdout_dir = utils.get_worker_stdoutdir()
         valkey_server_path = os.environ["VALKEY_SERVER_PATH"]
         valkey_cli_path = os.environ["VALKEY_CLI_PATH"]
         valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
 
-        cls.valkey_ports = [6379, 6380, 6381]
+        cls.valkey_ports = utils.get_worker_cluster_ports(
+            3, default_ports=[6379, 6380, 6381]
+        )
         cls.valkey_cluster_under_test = utils.start_valkey_cluster(
             valkey_server_path,
             valkey_cli_path,
             cls.valkey_ports,
-            os.environ["TEST_TMPDIR"],
+            utils.get_worker_tmpdir(),
             valkey_server_stdout_dir,
             {
                 "loglevel": "debug",
@@ -465,6 +467,8 @@ class VectorSearchIntegrationTest(VSSTestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if hasattr(cls, "valkey_cluster_under_test") and cls.valkey_cluster_under_test:
+            cls.valkey_cluster_under_test.terminate()
         super().tearDownClass()
 
     def tearDown(self):

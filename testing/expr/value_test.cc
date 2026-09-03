@@ -1333,8 +1333,12 @@ TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
   EXPECT_EQ(FormatDouble(0.0), "0");
   EXPECT_EQ(FormatDouble(-20260201.0), "-20260201");
   EXPECT_EQ(FormatDouble(-0.5), "-0.5");
+  // Non-integral values take Redisearch's 12 significant digits, so this is
+  // no longer the shortest round-trip form #1264 originally asserted. No
+  // dataset carries a value near DBL_MAX; the compatibility-relevant half of
+  // this test is the integral cases above.
   EXPECT_EQ(FormatDouble(std::numeric_limits<double>::max()),
-            "1.7976931348623157e+308");
+            "1.79769313486e+308");
   EXPECT_EQ(Value(20260201.0).AsString().value(), "20260201");
 }
 

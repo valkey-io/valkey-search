@@ -302,10 +302,22 @@ class Count : public GroupBy::ReducerInstance {
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
-// MIN and MAX are numeric: Redisearch reads an array as the number 0 rather
-// than letting it become the reducer's result.
+// MIN and MAX are strictly numeric in Redisearch: anything that is not a
+// number -- an array, a non-numeric string -- reads as 0 rather than becoming
+// the reducer's result. Hash fields arrive as strings, so the test is whether
+// the value converts, not which variant it holds; converting also makes the
+// comparison numeric rather than lexicographic.
+//
+// Nil passes through untouched for the caller to skip. Whether a non-numeric
+// input contributes 0 or contributes nothing is not distinguishable from any
+// dataset we have -- a group holding only such values lands on 0 either way,
+// here or via Min/Max's empty-group identity.
 static expr::Value NumericReducerArg(const expr::Value &value) {
-  return value.IsArray() ? expr::Value(0.0) : value;
+  if (value.IsNil()) {
+    return value;
+  }
+  auto number = value.AsDouble();
+  return number ? expr::Value(*number) : expr::Value(0.0);
 }
 
 class Min : public GroupBy::ReducerInstance {
@@ -325,7 +337,11 @@ class Min : public GroupBy::ReducerInstance {
       DBG << "Not new Min: " << value << "\n";
     }
   }
-  expr::Value GetResult() const override { return min_; }
+  // A group whose every input was nil replies 0 in Redisearch, for a string
+  // field as much as a numeric one -- MIN is numeric, so 0 is its identity.
+  expr::Value GetResult() const override {
+    return min_.IsNil() ? expr::Value(0.0) : min_;
+  }
 };
 
 struct ReducerInstanceVector : GroupBy::ReducerInstance {
@@ -348,7 +364,10 @@ class Max : public GroupBy::ReducerInstance {
       max_ = value;
     }
   }
-  expr::Value GetResult() const override { return max_; }
+  // As for Min: nothing seen replies 0, not a missing field.
+  expr::Value GetResult() const override {
+    return max_.IsNil() ? expr::Value(0.0) : max_;
+  }
 };
 
 class Sum : public GroupBy::ReducerInstance {
@@ -450,7 +469,14 @@ class FirstValue : public GroupBy::ReducerInstance {
     }
   }
 
-  expr::Value GetResult() const override { return result_value_; }
+  // Unlike MIN and MAX, Redisearch names the alias with a nil here rather
+  // than an identity value. The default Value is Nil(kMissing), which
+  // ReplyWithValue drops, so say why there is no value instead.
+  expr::Value GetResult() const override {
+    return result_value_.IsMissing()
+               ? expr::Value(expr::Value::Nil("no values"))
+               : result_value_;
+  }
 };
 
 class CountDistinct : public GroupBy::ReducerInstance {

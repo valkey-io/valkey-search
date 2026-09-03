@@ -185,6 +185,55 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
         ]:
             self._empty_pipeline(key_type, tail)
 
+    def _empty_reduce(self, key_type, tail):
+        """Reducers straight over the dataset where group ge lacks n2 and t2."""
+        cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
+        cmd += f"load 5 @__key @n1 @n2 @t1 @t2 groupby 1 @t1 {tail}".split()
+        self.execute_command(cmd + ["DIALECT", "2"])
+
+    def test_reduce_all_nil(self, key_type):
+        """A reducer whose argument is absent from every record in its group.
+
+        Group ge has neither n2 nor t2, so these pin down what each engine
+        replies when a reducer never saw a value: the alias named with a nil,
+        the alias omitted, or an identity value. COUNT rides along so the
+        group is visible even when the reducer's own field is dropped.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for reducer in [
+            "reduce min 1 @n2 as m",
+            "reduce max 1 @n2 as m",
+            "reduce min 1 @t2 as m",
+            "reduce max 1 @t2 as m",
+            "reduce sum 1 @n2 as m",
+            "reduce avg 1 @n2 as m",
+            "reduce stddev 1 @n2 as m",
+            "reduce count_distinct 1 @n2 as m",
+            "reduce tolist 1 @n2 as m",
+            "reduce first_value 3 @n2 BY @n1 as m",
+            "reduce first_value 3 @t2 BY @n1 as m",
+            "reduce first_value 4 @n2 BY @n1 desc as m",
+        ]:
+            self._empty_reduce(key_type, f"reduce count 0 as c {reducer}")
+
+    def test_apply_missing_field(self, key_type):
+        """APPLY over a field absent from some records.
+
+        The same question as test_reduce_all_nil, but through an APPLY alias,
+        which is the other place a computed output can carry a default nil.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "apply @t2 as x",
+            "apply @n2 as x",
+            'apply concat(@t2,"!") as x',
+            "apply (@n2)+(1) as x",
+            "apply exists(@t2) as x",
+        ]:
+            cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
+            cmd += f"load 5 @__key @n1 @n2 @t1 @t2 {tail}".split()
+            self.execute_command(cmd + ["DIALECT", "2"])
+
     def test_array_vs_array_compare(self, key_type):
         """Comparing two arrays -- a query Redisearch accepts.
 

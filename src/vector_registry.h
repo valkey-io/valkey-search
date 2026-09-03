@@ -59,8 +59,7 @@ class VectorRegistry {
       Allocator *allocator,
       const data_model::AttributeDataType &attribute_data_type, int db_num,
       data_model::VectorDataType vector_data_type =
-          data_model::VECTOR_DATA_TYPE_FLOAT32)
-      ABSL_LOCKS_EXCLUDED(mutex_);
+          data_model::VECTOR_DATA_TYPE_FLOAT32) ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Retrieves the tracked VectorRecord and raw payload byte size for a given
   // key and attribute. Increments lookup_record_hits if found, or

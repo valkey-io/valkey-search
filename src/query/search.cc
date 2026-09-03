@@ -151,10 +151,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
   // (float / float16 / bfloat16) nor the ANN algorithm appears here. Only the
   // latency metric still depends on the algorithm.
   auto latency_sample = SAMPLE_EVERY_N(100);
-  auto res = vector_index->Search(
-      parameters.query, parameters.k, parameters.cancellation_token,
-      std::move(inline_filter), parameters.ef,
-      parameters.enable_partial_results);
+  auto res = vector_index->Search(parameters.query, parameters.k,
+                                  parameters.cancellation_token,
+                                  std::move(inline_filter), parameters.ef,
+                                  parameters.enable_partial_results);
   switch (vector_index->GetIndexerType()) {
     case indexes::IndexerType::kHNSW:
       Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(

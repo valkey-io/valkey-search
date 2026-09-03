@@ -27,9 +27,9 @@
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
-#include "src/indexes/index_base.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
+#include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/metrics.h"
@@ -146,7 +146,7 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
                           data_model::AttributeDataType attribute_data_type,
                           int db_num)
     : VectorType<T>(IndexerType::kHNSW, dimensions, attribute_data_type,
-                 attribute_identifier, db_num) {}
+                    attribute_identifier, db_num) {}
 
 QueryVector::QueryVector(
     const std::shared_ptr<const VectorRecord> &vector_record,
@@ -291,10 +291,9 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
-    algo_->addPoint(
-        QueryVector(std::move(vector_record), GetVectorDataSize(), normalize_,
-                    this->GetVectorDataType()),
-        internal_id, /*replace_deleted=*/false);
+    algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
+                                normalize_, this->GetVectorDataType()),
+                    internal_id, /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -348,8 +347,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     CancelCondition cancel_condition(cancellation_token);
     QueryVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
                                                   GetVectorAllocator()),
-                          query.size(), normalize_,
-                          this->GetVectorDataType());
+                          query.size(), normalize_, this->GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -378,8 +376,8 @@ void VectorHNSW<T>::ToProtoImpl(
 
 template <typename T>
 float VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                 const VectorRecord *vector_record,
-                                 float query_magnitude) const {
+                                     const VectorRecord *vector_record,
+                                     float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }

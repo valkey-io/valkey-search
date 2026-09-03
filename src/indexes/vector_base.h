@@ -355,8 +355,7 @@ class VectorBase : public IndexBase {
   // Computes 1/||record|| interpreting `record` as elements of the concrete
   // storage type. Implemented by VectorType<T>; VectorBase cannot know the
   // element width.
-  virtual float ComputeReciprocalMagnitude(
-      absl::string_view record) const = 0;
+  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex *vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

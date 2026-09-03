@@ -6,7 +6,8 @@
  */
 
 // Validation for the type-aware normalization helpers introduced alongside
-// FLOAT16 / BFLOAT16 storage: CalcReciprocalMagnitude<T> and NormalizeVector<T>.
+// FLOAT16 / BFLOAT16 storage: CalcReciprocalMagnitude<T> and
+// NormalizeVector<T>.
 //
 // The invariant being validated is NOT "fp16 equals fp32". It is:
 //

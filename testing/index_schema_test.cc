@@ -32,7 +32,6 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
-#include "src/version.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -45,6 +44,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/space_ip.h"
@@ -3197,7 +3197,6 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   EXPECT_EQ(res_record_after, nullptr);
 }
 
-
 // GetMinVersion must move an index schema to the 1.3 floor if and ONLY IF it
 // uses one of the new low-precision vector storage types. Nothing else about a
 // schema may push it to 1.3, or older modules would needlessly refuse to load
@@ -3229,8 +3228,8 @@ vmsdk::ValkeyVersion MinVersionOf(const data_model::IndexSchema &schema) {
 }
 
 TEST(IndexSchemaMinVersionTest, Float32VectorDoesNotRequire13) {
-  EXPECT_LT(MinVersionOf(MakeSchemaWithVectorType(
-                data_model::VECTOR_DATA_TYPE_FLOAT32)),
+  EXPECT_LT(MinVersionOf(
+                MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT32)),
             kRelease13);
 }
 
@@ -3260,8 +3259,7 @@ TEST(IndexSchemaMinVersionTest, TextIndexDoesNotRequire13) {
 
 // A non-zero db_num moves the floor to 1.1, not 1.3.
 TEST(IndexSchemaMinVersionTest, DbNumDoesNotRequire13) {
-  auto schema =
-      MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto schema = MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT32);
   schema.set_db_num(3);
   EXPECT_EQ(MinVersionOf(schema), kRelease11);
 }
@@ -3269,8 +3267,7 @@ TEST(IndexSchemaMinVersionTest, DbNumDoesNotRequire13) {
 // Low precision wins over every other contributor, since 1.3 is the highest
 // floor any of them can demand.
 TEST(IndexSchemaMinVersionTest, LowPrecisionDominatesOtherContributors) {
-  auto schema =
-      MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_BFLOAT16);
+  auto schema = MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_BFLOAT16);
   schema.set_db_num(3);
   auto *attr = schema.add_attributes();
   attr->set_alias("t");

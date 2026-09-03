@@ -26,9 +26,9 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
-#include "src/indexes/index_base.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
+#include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/metrics.h"
@@ -126,7 +126,7 @@ VectorFlat<T>::VectorFlat(
     uint32_t block_size, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type, int db_num)
     : VectorType<T>(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier, db_num),
+                    attribute_identifier, db_num),
       block_size_(block_size) {}
 
 template <typename T>
@@ -254,8 +254,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 
 template <typename T>
 float VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                 const VectorRecord *vector_record,
-                                 float query_magnitude) const {
+                                     const VectorRecord *vector_record,
+                                     float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }

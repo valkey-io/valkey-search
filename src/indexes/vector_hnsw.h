@@ -144,10 +144,9 @@ class VectorHNSW : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  float ComputeDistance(absl::string_view query,
-                        const VectorRecord *vector_record,
-                    float query_magnitude) const override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  float ComputeDistance(
+      absl::string_view query, const VectorRecord *vector_record,
+      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPointLockFree(internal_id);

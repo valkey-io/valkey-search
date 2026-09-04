@@ -285,6 +285,78 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             # Ensure we reset the control variable even if asserts fail
             client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
 
+def _get_index_num_docs(client: Valkey, index_name: str) -> str:
+    info = client.execute_command("FT.INFO", index_name)
+    decoded = {}
+    for i in range(0, len(info) - 1, 2):
+        k = info[i].decode() if isinstance(info[i], bytes) else str(info[i])
+        decoded[k] = info[i + 1]
+    val = decoded.get("num_docs", 0)
+    return val.decode() if isinstance(val, bytes) else str(val)
+
+
+class TestVectorRegistryElementTypeIsolation(ValkeySearchTestCaseDebugMode):
+    """Two indexes over the same key and attribute but with different element
+    types must not share a VectorRegistry record.
+
+    A VectorRecord carries a reciprocal magnitude computed by reading the
+    payload as one specific element type. FLOAT16 and BFLOAT16 payloads of the
+    same DIM are byte-identical in length, so before the registry key included
+    the data type the two indexes shared a single record and whichever
+    registered second determined the magnitude. The first index then returned
+    wrong cosine distances -- a self-query scored ~0.99 instead of ~0.
+    """
+
+    def _self_distance(self, client: Valkey, index_name: str, blob: bytes) -> float:
+        res = client.execute_command(
+            "FT.SEARCH", index_name, "*=>[KNN 1 @v $q AS sc]",
+            "PARAMS", "2", "q", blob, "RETURN", "1", "sc", "DIALECT", "2",
+        )
+        assert res[0] >= 1, f"{index_name} returned no results"
+        fields = res[2]
+        attrs = {fields[i]: fields[i + 1] for i in range(0, len(fields), 2)}
+        return float(attrs[b"sc"])
+
+    @pytest.mark.parametrize(
+        "type_a,type_b,dim_a,dim_b",
+        [
+            # Same DIM, both 2-byte: byte-identical payloads. The realistic case,
+            # e.g. comparing recall between the two low-precision formats.
+            ("FLOAT16", "BFLOAT16", 3, 3),
+            # Different DIM chosen so DIM_A * 4 == DIM_B * 2.
+            ("FLOAT32", "FLOAT16", 3, 6),
+        ],
+    )
+    def test_distinct_element_types_do_not_share_records(
+        self, type_a: str, type_b: str, dim_a: int, dim_b: int
+    ):
+        client: Valkey = self.server.get_new_client()
+        values = [3.0, 4.0, 0.0]
+        blob = struct.pack(f"<{len(values)}e", *values) if type_a == "FLOAT16" \
+            else struct.pack(f"<{len(values)}f", *values)
+
+        # Both indexes cover the same prefix and the same attribute.
+        for name, vtype, dim in (("idx_a", type_a, dim_a), ("idx_b", type_b, dim_b)):
+            client.execute_command(
+                "FT.CREATE", name, "ON", "HASH", "PREFIX", "1", "shared:",
+                "SCHEMA", "v", "VECTOR", "FLAT", "6", "DIM", str(dim),
+                "TYPE", vtype, "DISTANCE_METRIC", "COSINE",
+            )
+        client.hset("shared:1", "v", blob)
+        waiters.wait_for_equal(
+            lambda: int(_get_index_num_docs(client, "idx_a")), 1, timeout=30
+        )
+
+        # idx_a queried with the exact bytes it stores must score ~0. If it were
+        # handed idx_b's record the magnitude would be wrong and this would not
+        # be near zero.
+        distance = self._self_distance(client, "idx_a", blob)
+        assert abs(distance) < 1e-4, (
+            f"{type_a} self-distance was {distance}, expected ~0 -- the record "
+            f"was likely shared with the {type_b} index and carries its magnitude"
+        )
+
+
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
     """
     Integration tests comparing Valkey memory consumption when vector memory sharing is OFF vs ON.

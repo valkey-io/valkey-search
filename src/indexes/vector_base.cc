@@ -181,7 +181,7 @@ std::shared_ptr<const VectorRecord> VectorBase::GetOrConstructVectorRecord(
     const InternedStringPtr &key, absl::string_view record) const {
   auto [vector_record, vector_record_size] =
       VectorRegistry::Instance().LookupRecord(
-          key, interned_attribute_identifier_, db_num_);
+          key, interned_attribute_identifier_, db_num_, vector_data_type_);
   if (vector_record && vector_record_size == record.size() &&
       std::memcmp(vector_record->GetRawVector(), record.data(),
                   record.size()) == 0) {
@@ -332,7 +332,7 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
     }
   }
   VectorRegistry::Instance().UntrackIfUnused(
-      key, interned_attribute_identifier_, db_num_);
+      key, interned_attribute_identifier_, db_num_, vector_data_type_);
 }
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
@@ -589,7 +589,7 @@ absl::Status VectorBase::ForEachUnTrackedKey(
 VectorBase::~VectorBase() {
   VectorRegistry::Instance().BatchUntrackIfUnused(
       interned_attribute_identifier_, std::move(tracked_metadata_by_key_),
-      db_num_);
+      db_num_, vector_data_type_);
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

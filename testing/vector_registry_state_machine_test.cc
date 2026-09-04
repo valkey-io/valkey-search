@@ -440,7 +440,8 @@ class VectorRegistryStateMachineTest
       absl::string_view key) const {
     return VectorRegistry::Instance().LookupRecord(
         StringInternStore::Intern(key),
-        vector_index_->GetInternedAttributeIdentifier(), 0);
+        vector_index_->GetInternedAttributeIdentifier(), 0,
+        data_model::VECTOR_DATA_TYPE_FLOAT32);
   }
 
   static size_t EntryCount() {

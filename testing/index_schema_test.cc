@@ -3174,10 +3174,12 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_data);
   VectorRegistry::Instance().Track(
       key, hnsw_index->GetInternedAttributeIdentifier(), valkey_vec.get(),
-      nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+      nullptr, data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
+      data_model::VECTOR_DATA_TYPE_FLOAT32);
 
   auto [res_record, res_size] = VectorRegistry::Instance().LookupRecord(
-      key, hnsw_index->GetInternedAttributeIdentifier(), 0);
+      key, hnsw_index->GetInternedAttributeIdentifier(), 0,
+      data_model::VECTOR_DATA_TYPE_FLOAT32);
   EXPECT_NE(res_record, nullptr);
 
   // 2. Mock OpenKey to return nullptr (simulating deleted key)
@@ -3193,7 +3195,8 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
   // 4. Verify that the registry entry is now erased
   auto [res_record_after, res_size_after] =
       VectorRegistry::Instance().LookupRecord(
-          key, hnsw_index->GetInternedAttributeIdentifier(), 0);
+          key, hnsw_index->GetInternedAttributeIdentifier(), 0,
+          data_model::VECTOR_DATA_TYPE_FLOAT32);
   EXPECT_EQ(res_record_after, nullptr);
 }
 

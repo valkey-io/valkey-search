@@ -58,15 +58,15 @@ class VectorRegistry {
       const InternedStringPtr &attribute_identifier, ValkeyModuleString *vector,
       Allocator *allocator,
       const data_model::AttributeDataType &attribute_data_type, int db_num,
-      data_model::VectorDataType vector_data_type =
-          data_model::VECTOR_DATA_TYPE_FLOAT32) ABSL_LOCKS_EXCLUDED(mutex_);
+      data_model::VectorDataType vector_data_type) ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Retrieves the tracked VectorRecord and raw payload byte size for a given
   // key and attribute. Increments lookup_record_hits if found, or
   // lookup_record_misses if not present.
   std::pair<std::shared_ptr<indexes::VectorRecord>, size_t> LookupRecord(
       const InternedStringPtr &key,
-      const InternedStringPtr &interned_attribute_identifier, int db_num) const
+      const InternedStringPtr &interned_attribute_identifier, int db_num,
+      data_model::VectorDataType vector_data_type) const
       ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Batch untracks a map of keys if the registry holds the last remaining
@@ -74,7 +74,9 @@ class VectorRegistry {
   void BatchUntrackIfUnused(const InternedStringPtr &attribute_identifier,
                             InternedStringHashMap<indexes::TrackedKeyMetadata>
                                 &&tracked_metadata_by_key,
-                            int db_num) ABSL_LOCKS_EXCLUDED(mutex_);
+                            int db_num,
+                            data_model::VectorDataType vector_data_type)
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
   struct Stats {
     size_t entry_cnt;
@@ -93,22 +95,32 @@ class VectorRegistry {
   // sole remaining reference (use_count == 1).
   void UntrackIfUnused(const InternedStringPtr &key,
                        const InternedStringPtr &interned_attribute_identifier,
-                       int db_num) ABSL_LOCKS_EXCLUDED(mutex_);
+                       int db_num, data_model::VectorDataType vector_data_type)
+      ABSL_LOCKS_EXCLUDED(mutex_);
 
  private:
   struct RegistryKey {
     int db_num;
     InternedStringPtr key;
     InternedStringPtr attribute_identifier;
+    // Part of the key because a VectorRecord carries a reciprocal magnitude
+    // computed by reading the payload as a specific element type. Two indexes
+    // over the same key and attribute with different types see byte-identical
+    // payloads (FLOAT16 and BFLOAT16 always; FLOAT32 and a double-dimension
+    // 16-bit index also) but need different magnitudes, so they must not share
+    // a record.
+    data_model::VectorDataType vector_data_type;
 
     bool operator==(const RegistryKey &o) const {
       return db_num == o.db_num && key == o.key &&
-             attribute_identifier == o.attribute_identifier;
+             attribute_identifier == o.attribute_identifier &&
+             vector_data_type == o.vector_data_type;
     }
 
     template <typename H>
     friend H AbslHashValue(H h, const RegistryKey &k) {
-      return H::combine(std::move(h), k.db_num, k.key, k.attribute_identifier);
+      return H::combine(std::move(h), k.db_num, k.key, k.attribute_identifier,
+                        k.vector_data_type);
     }
   };
 

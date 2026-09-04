@@ -1,11 +1,13 @@
 """Utilities for ValkeySearch testing."""
 
 from abc import abstractmethod
+import atexit
 import fcntl
 import logging
 import os
 import random
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -42,10 +44,41 @@ class ValkeyServerUnderTest:
         self.port = port
 
     def terminate(self):
-        self.process_handle.terminate()
+        try:
+            self.process_handle.terminate()
+            self.process_handle.wait(timeout=5)
+            return
+        except ProcessLookupError:
+            return
+        except subprocess.TimeoutExpired:
+            logging.warning(
+                "Process on port %d did not exit within 5s of SIGTERM; escalating to SIGKILL",
+                self.port,
+            )
+        except Exception as e:
+            logging.warning(
+                "Unexpected error during SIGTERM for port %d: %s; escalating to SIGKILL",
+                self.port,
+                e,
+            )
+
+        try:
+            self.process_handle.kill()
+            self.process_handle.wait(timeout=5)
+        except ProcessLookupError:
+            pass
+        except subprocess.TimeoutExpired:
+            logging.error(
+                "CRITICAL: Process on port %d failed to terminate even after SIGKILL!",
+                self.port,
+            )
+        except Exception as e:
+            logging.error(
+                "Error during SIGKILL for process on port %d: %s", self.port, e
+            )
 
     def terminated(self):
-        return self.process_handle.poll()
+        return self.process_handle.poll() is not None
 
     def ping(self) -> Any:
         return valkey.Valkey(port=self.port).ping()
@@ -72,7 +105,7 @@ def start_valkey_process(
         for k, v in modules.items():
             f.write(f"loadmodule {k} {v}\n")
 
-    command = f"ulimit -c unlimited && {valkey_server_path} {conf_path}"
+    command = f"ulimit -c unlimited && exec {valkey_server_path} {conf_path}"
     logging.info("Starting valkey process with config: %s", conf_path)
 
     process = subprocess.Popen(
@@ -101,6 +134,34 @@ def start_valkey_process(
         ):
             time.sleep(1)
     if not connected:
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except ProcessLookupError:
+            pass
+        except subprocess.TimeoutExpired:
+            logging.warning(
+                "Process on port %d did not exit within 5s of SIGTERM; escalating to SIGKILL",
+                port,
+            )
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except ProcessLookupError:
+                pass
+            except subprocess.TimeoutExpired:
+                logging.error(
+                    "CRITICAL: Process on port %d failed to terminate even after SIGKILL!",
+                    port,
+                )
+            except Exception as e:
+                logging.error(
+                    "Error during SIGKILL for process on port %d: %s", port, e
+                )
+        except Exception as e:
+            logging.warning(
+                "Unexpected error terminating process on port %d: %s", port, e
+            )
         raise valkey.exceptions.ConnectionError(
             f"Failed to connect to valkey server on port {port}"
         )
@@ -110,11 +171,35 @@ def start_valkey_process(
 
 
 class ValkeyClusterUnderTest:
-    def __init__(self, servers: List[ValkeyServerUnderTest], stdout_files: List[TextIO] = None):
-        self.servers = servers
-        self.stdout_files = stdout_files or []
+    active_clusters = set()
+    active_cluster = None
+
+    def __init__(
+        self,
+        servers: List[ValkeyServerUnderTest],
+        stdout_files: List[TextIO] = None,
+        node_dirs: List[str] = None,
+    ):
+        self.servers = list(servers)
+        self.stdout_files = list(stdout_files or [])
+        self.node_dirs = list(node_dirs or [])
+        ValkeyClusterUnderTest.active_clusters.add(self)
+        ValkeyClusterUnderTest.active_cluster = self
+
+    def register_server(
+        self, server: ValkeyServerUnderTest, stdout_file: TextIO | None = None
+    ):
+        """Register a replacement or restarted server (e.g. during failover)."""
+        self.servers = [s for s in self.servers if s.port != server.port] + [server]
+        if stdout_file is not None and stdout_file not in self.stdout_files:
+            self.stdout_files.append(stdout_file)
 
     def terminate(self):
+        ValkeyClusterUnderTest.active_clusters.discard(self)
+        if ValkeyClusterUnderTest.active_cluster is self:
+            ValkeyClusterUnderTest.active_cluster = next(
+                iter(ValkeyClusterUnderTest.active_clusters), None
+            )
         for server in self.servers:
             server.terminate()
         # Close all stdout files
@@ -123,6 +208,10 @@ class ValkeyClusterUnderTest:
                 stdout_file.close()
             except Exception as e:
                 logging.warning("Failed to close stdout file: %s", e)
+        # Clean up node directories
+        for node_dir in self.node_dirs:
+            if os.path.exists(node_dir):
+                shutil.rmtree(node_dir, ignore_errors=True)
 
     def get_terminated_servers(self) -> List[int]:
         result = []
@@ -138,6 +227,81 @@ class ValkeyClusterUnderTest:
         return result
 
 
+def _cleanup_active_clusters():
+    for cluster in list(ValkeyClusterUnderTest.active_clusters):
+        try:
+            cluster.terminate()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_active_clusters)
+
+
+_worker_port_cycle = 0
+
+
+def get_worker_cluster_ports(
+    num_nodes: int = 3,
+    default_ports: Union[List[int], tuple, None] = None,
+) -> List[int]:
+    """Return collision-free ports partitioned by worker ID (e.g. pytest-xdist)."""
+    global _worker_port_cycle
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if not worker_id and default_ports:
+        return list(default_ports)
+    worker_idx = 0
+    if worker_id and worker_id.startswith("gw"):
+        try:
+            worker_idx = int(worker_id[2:])
+        except ValueError:
+            worker_idx = 0
+    if worker_idx >= 100:
+        raise RuntimeError(
+            f"Worker index {worker_idx} exceeds maximum supported workers (100)"
+        )
+    # Base ports for testing/integration: 7000 + worker_idx * 50
+    # Client ports: [7000, 11999] (stride = 50 ports per worker, up to 100 workers)
+    # Cluster bus:  [17000, 21999]
+    # Coordinator:  [27294, 32294]
+    # Cycle across tests on the same worker to prevent immediate port reuse.
+    # Dynamically compute slot_size to prevent overlapping port ranges.
+    slot_size = max(num_nodes * 2, 12)
+    max_slots = 48 // slot_size
+    if max_slots < 1:
+        raise ValueError(
+            f"num_nodes {num_nodes} exceeds maximum supported cluster size for worker port allocation"
+        )
+    cycle_offset = (_worker_port_cycle % max_slots) * slot_size
+    _worker_port_cycle += 1
+    base = 7000 + worker_idx * 50 + cycle_offset
+    return [base + i * 2 for i in range(num_nodes)]
+
+
+def get_worker_tmpdir(base_dir: str | None = None) -> str:
+    """Return isolated temporary directory for the current worker process."""
+    if not base_dir:
+        base_dir = os.environ.get("TEST_TMPDIR", "/tmp")
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id and os.path.basename(os.path.normpath(base_dir)) != worker_id:
+        path = os.path.join(base_dir, worker_id)
+        os.makedirs(path, exist_ok=True)
+        return path
+    return base_dir
+
+
+def get_worker_stdoutdir(base_dir: str | None = None) -> str:
+    """Return isolated stdout directory for the current worker process."""
+    if not base_dir:
+        base_dir = os.environ.get("TEST_UNDECLARED_OUTPUTS_DIR", "/tmp")
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id and os.path.basename(os.path.normpath(base_dir)) != worker_id:
+        path = os.path.join(base_dir, worker_id)
+        os.makedirs(path, exist_ok=True)
+        return path
+    return base_dir
+
+
 def start_valkey_cluster(
     valkey_server_path: str,
     valkey_cli_path: str,
@@ -148,7 +312,7 @@ def start_valkey_cluster(
     modules: Dict[str, str],
     replica_count: int = 0,
     password: str | None = None,
-) -> Dict[int, subprocess.Popen[Any]]:
+) -> ValkeyClusterUnderTest:
     """Starts a valkey cluster.
 
     Starts a valkey cluster with the given ports and arguments, with zero replicas.
@@ -164,65 +328,102 @@ def start_valkey_cluster(
     Returns:
       Dictionary of port to valkey process.
     """
+    directory = get_worker_tmpdir(directory)
+    stdout_directory = get_worker_stdoutdir(stdout_directory)
     cluster_args = dict(args)
     processes = []
     stdout_files = []
+    node_dirs = []
 
-    for port in ports:
-        stdout_path = os.path.join(stdout_directory, f"{port}_stdout.txt")
-        # Open file without buffering - will be closed when cluster terminates
-        stdout_file = open(stdout_path, "w", buffering=1)
-        stdout_files.append(stdout_file)
-        node_dir = os.path.join(directory, f"nodes{port}")
-        cluster_args["cluster-enabled"] = "yes"
-        cluster_args["cluster-config-file"] = os.path.join(
-            node_dir, "nodes.conf"
-        )
-        cluster_args["cluster-node-timeout"] = "10000"
-        os.mkdir(node_dir)
-        processes.append(start_valkey_process(
-            valkey_server_path,
-            port,
-            node_dir,
-            stdout_file,
-            cluster_args,
-            modules,
-            password,
-        ))
-
-    cli_stdout_path = os.path.join(stdout_directory, "valkey_cli_stdout.txt")
-    # Close file after subprocess completes
-    with open(cli_stdout_path, "w") as cli_stdout_file:
-        valkey_cli_args = [valkey_cli_path, "--cluster-yes", "--cluster", "create"]
+    try:
         for port in ports:
-            valkey_cli_args.append(f"127.0.0.1:{port}")
-        valkey_cli_args.extend(["--cluster-replicas", str(replica_count)])
-        if password:
-            valkey_cli_args.extend(["-a", password])
+            stdout_path = os.path.join(stdout_directory, f"{port}_stdout.txt")
+            # Open file without buffering - will be closed when cluster terminates
+            stdout_file = open(stdout_path, "w", buffering=1)
+            stdout_files.append(stdout_file)
+            node_dir = os.path.join(directory, f"nodes{port}")
+            node_dirs.append(node_dir)
+            cluster_args["cluster-enabled"] = "yes"
+            cluster_args["cluster-config-file"] = os.path.join(
+                node_dir, "nodes.conf"
+            )
+            cluster_args["cluster-node-timeout"] = "10000"
+            if os.path.exists(node_dir):
+                shutil.rmtree(node_dir, ignore_errors=True)
+            os.makedirs(node_dir, exist_ok=True)
+            processes.append(start_valkey_process(
+                valkey_server_path,
+                port,
+                node_dir,
+                stdout_file,
+                cluster_args,
+                modules,
+                password,
+            ))
 
-        logging.info("Creating valkey cluster with command: %s", valkey_cli_args)
+        cli_stdout_path = os.path.join(stdout_directory, "valkey_cli_stdout.txt")
+        # Close file after subprocess completes
+        with open(cli_stdout_path, "w") as cli_stdout_file:
+            valkey_cli_args = [valkey_cli_path, "--cluster-yes", "--cluster", "create"]
+            for port in ports:
+                valkey_cli_args.append(f"127.0.0.1:{port}")
+            valkey_cli_args.extend(["--cluster-replicas", str(replica_count)])
+            if password:
+                valkey_cli_args.extend(["-a", password])
 
-        timeout = 60
-        now = time.time()
-        while time.time() - now < timeout:
-            try:
-                subprocess.run(
-                    valkey_cli_args,
-                    check=True,
-                    stdout=cli_stdout_file,
-                    stderr=cli_stdout_file,
+            display_args = [
+                "***" if i > 0 and valkey_cli_args[i - 1] == "-a" else arg
+                for i, arg in enumerate(valkey_cli_args)
+            ]
+            logging.info("Creating valkey cluster with command: %s", display_args)
+
+            timeout = 60
+            now = time.time()
+            while time.time() - now < timeout:
+                try:
+                    subprocess.run(
+                        valkey_cli_args,
+                        check=True,
+                        stdout=cli_stdout_file,
+                        stderr=cli_stdout_file,
+                        timeout=10,
+                    )
+                    break
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    time.sleep(1)
+            else:
+                raise RuntimeError(
+                    f"Timed out creating Valkey cluster on ports {ports} after {timeout} seconds"
                 )
-                break
-            except subprocess.CalledProcessError:
-                time.sleep(1)
 
-    # This is also ugly, but we need to wait for the cluster to be ready. There
-    # doesn't seem to be a way to do that with the valkey-server, since it seems to
-    # be ready immediately, but returns an CLUSTERDOWN error when we try to search
-    # too early, even after checking with ping.
-    time.sleep(10)
+        # This is also ugly, but we need to wait for the cluster to be ready. There
+        # doesn't seem to be a way to do that with the valkey-server, since it seems to
+        # be ready immediately, but returns an CLUSTERDOWN error when we try to search
+        # too early, even after checking with ping.
+        time.sleep(10)
 
-    return ValkeyClusterUnderTest(processes, stdout_files)
+        return ValkeyClusterUnderTest(processes, stdout_files, node_dirs)
+    except Exception:
+        for p in processes:
+            try:
+                p.terminate()
+            except Exception as e:
+                logging.warning(
+                    "Error terminating server process during startup failure cleanup: %s",
+                    e,
+                )
+        for f in stdout_files:
+            try:
+                f.close()
+            except Exception as e:
+                logging.warning(
+                    "Error closing stdout file during startup failure cleanup: %s",
+                    e,
+                )
+        for d in node_dirs:
+            if os.path.exists(d):
+                shutil.rmtree(d, ignore_errors=True)
+        raise
 
 
 class AttributeDefinition:
@@ -1534,7 +1735,10 @@ def restart_node(
     Returns:
         ValkeyServerUnderTest object if restart succeeds, None otherwise
     """
+    stdout_file = None
     try:
+        config_dir = get_worker_tmpdir(config_dir)
+        stdout_dir = get_worker_stdoutdir(stdout_dir)
         node_dir = os.path.join(config_dir, f"nodes{port}")
         stdout_path = os.path.join(stdout_dir, f"{port}_restart_stdout.txt")
         
@@ -1555,7 +1759,7 @@ def restart_node(
         
         # Reuse start_valkey_process to ensure identical configuration
         # This guarantees same module loading order, argument parsing, etc.
-        return start_valkey_process(
+        server = start_valkey_process(
             valkey_server_path=valkey_server_path,
             port=port,
             directory=node_dir,
@@ -1564,8 +1768,25 @@ def restart_node(
             modules=modules,
             password=password
         )
+        for cluster in ValkeyClusterUnderTest.active_clusters:
+            if any(s.port == port for s in cluster.servers) or any(
+                d == node_dir for d in cluster.node_dirs
+            ):
+                cluster.register_server(server, stdout_file)
+                break
+        else:
+            if ValkeyClusterUnderTest.active_cluster is not None:
+                ValkeyClusterUnderTest.active_cluster.register_server(
+                    server, stdout_file
+                )
+        return server
         
     except Exception as e:
+        if stdout_file is not None:
+            try:
+                stdout_file.close()
+            except Exception:
+                pass
         logging.error("Error restarting node on port %d: %s", port, e)
         return None
 

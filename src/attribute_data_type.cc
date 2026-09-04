@@ -133,9 +133,14 @@ RecordsMap HashAttributeDataType::FetchSpecificFields(
 }
 
 absl::Status NormalizeJsonAttribute(absl::string_view attribute,
-                                    vmsdk::UniqueValkeyString &out_attribute) {
+                                    vmsdk::UniqueValkeyString &out_attribute,
+                                    bool preserve_json_array) {
   if (!attribute.empty() && attribute[0] != '[') {
     return absl::NotFoundError("Invalid attribute");
+  }
+  if (preserve_json_array) {
+    out_attribute = vmsdk::MakeUniqueValkeyString(attribute);
+    return absl::OkStatus();
   }
   bool was_string = false;
   if (absl::ConsumePrefix(&attribute, "[")) {
@@ -174,7 +179,8 @@ absl::Status NormalizeJsonAttribute(absl::string_view attribute,
 absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
                               absl::string_view key,
                               absl::string_view identifier,
-                              vmsdk::UniqueValkeyString *attribute) {
+                              vmsdk::UniqueValkeyString *attribute,
+                              bool preserve_json_array = false) {
   vmsdk::VerifyMainThread();
   if (!IsJsonModuleSupported(ctx)) {
     return absl::UnavailableError("The JSON module is not supported");
@@ -194,7 +200,7 @@ absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
       return absl::OkStatus();
     }
     return NormalizeJsonAttribute(vmsdk::ToStringView(attribute_tmp.get()),
-                                  *attribute);
+                                  *attribute, preserve_json_array);
   }
   auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
       ctx, kJsonCmd.data(), "cc", key.data(), identifier.data()));
@@ -213,15 +219,16 @@ absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     return absl::OkStatus();
   }
   return NormalizeJsonAttribute(vmsdk::ToStringView(reply_str.get()),
-                                *attribute);
+                                *attribute, preserve_json_array);
 }
 
 absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetAttribute(
     ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
-    absl::string_view identifier) const {
+    absl::string_view identifier, bool preserve_json_array) const {
   vmsdk::UniqueValkeyString attribute;
   VMSDK_RETURN_IF_ERROR(
-      GetJsonAttribute(ctx, open_key, key, identifier, &attribute));
+      GetJsonAttribute(ctx, open_key, key, identifier, &attribute,
+                       preserve_json_array));
   return attribute;
 }
 

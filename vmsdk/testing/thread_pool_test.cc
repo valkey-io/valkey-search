@@ -374,6 +374,43 @@ TEST_F(ThreadPoolTest, SynchronousResizeWhileSuspended) {
   thread_pool.JoinWorkers();
 }
 
+TEST_F(ThreadPoolTest, ResizeDownWithQueuedTasks) {
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+
+  // Keep the only worker busy so tasks pile up behind it.
+  absl::Notification started, release;
+  EXPECT_TRUE(thread_pool.Schedule(
+      [&started, &release]() {
+        started.Notify();
+        release.WaitForNotification();
+      },
+      ThreadPool::Priority::kHigh));
+  std::atomic<int> executed{0};
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule([&executed]() { ++executed; },
+                                     ThreadPool::Priority::kHigh));
+  }
+  started.WaitForNotification();
+
+  // A retired worker must exit without draining the queue.
+  thread_pool.Resize(0);
+  release.Notify();
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (thread_pool.threads_.Size() > 0 && absl::Now() < deadline) {
+    thread_pool.JoinTerminatedWorkers();
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  EXPECT_EQ(thread_pool.threads_.Size(), 0u);
+  EXPECT_EQ(executed.load(), 0);
+  EXPECT_EQ(thread_pool.QueueSize(), 5u);
+
+  // The queued tasks run once the pool is resized back up.
+  thread_pool.Resize(1);
+  thread_pool.JoinWorkers();
+  EXPECT_EQ(executed.load(), 5);
+}
+
 TEST_F(ThreadPoolTest, ConcurrentResizeAndSuspendResume) {
   ThreadPool thread_pool("test-pool", 4);
   thread_pool.StartWorkers();

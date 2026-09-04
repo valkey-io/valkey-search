@@ -143,8 +143,7 @@ class ThreadPool {
   void DecrThreadCountBy(size_t count, bool sync);
 
   /// Wait while the pool is suspended, unless `thread` is already retired.
-  /// Returns true if the worker waited.
-  inline bool AwaitSuspensionCleared(const Thread& thread)
+  inline void AwaitSuspensionCleared(const Thread& thread)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
   /// True once every running worker is waiting in AwaitSuspensionCleared.
   inline bool AllWorkersSuspended() const
@@ -202,6 +201,7 @@ class ThreadPool {
 
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
   FRIEND_TEST(ThreadPoolTest, RepeatedResizeWhileSuspended);
+  FRIEND_TEST(ThreadPoolTest, ResizeDownWithQueuedTasks);
 };
 
 }  // namespace vmsdk

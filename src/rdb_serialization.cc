@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdlib>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -173,6 +174,15 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   Metrics::GetStats().rdb_restore_completed_indexes = 0;
   Metrics::GetStats().rdb_restore_current_index_keys_total = 0;
   Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+  // Clear progress tracking on every exit path (success or failure) so a
+  // stale residual can't leak into the at-rest number_of_indexes metric.
+  absl::Cleanup clear_restore_progress = [] {
+    Metrics::GetStats().rdb_restore_in_progress = false;
+    Metrics::GetStats().rdb_restore_total_indexes = 0;
+    Metrics::GetStats().rdb_restore_completed_indexes = 0;
+    Metrics::GetStats().rdb_restore_current_index_keys_total = 0;
+    Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
+  };
 
   // Begin RDBSection iteration
   RDBSectionIter it(rdb, rdb_section_count);
@@ -200,8 +210,7 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
     }
   }
 
-  // Mark restore as complete (all indexes loaded successfully)
-  Metrics::GetStats().rdb_restore_in_progress = false;
+  // Restore progress counters are cleared by clear_restore_progress above.
   Metrics::GetStats().rdb_last_restore_aux_load_duration_ms =
       absl::ToInt64Milliseconds(absl::Now() - rdb_load_start);
 

@@ -36,6 +36,8 @@ FT.AGGREGATE <index-name> <query>
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
 
+- In cluster mode, if a timeout occurs, the command uses the `search.enable-partial-results` configuration to determine whether to return the results received from responding shards. Its default value is `true`, which is equivalent to `SOMESHARDS`. `FT.AGGREGATE` does not currently accept the `ALLSHARDS` or `SOMESHARDS` command options; set `search.enable-partial-results` to `false` to require responses from all shards.
+
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `GROUPBY <count> <field> <field> ... [REDUCE <reducer> <count> [<expression> [<expression> ...]]]` (optional): The working set is grouped into buckets according to the input fields. One summarization record is generated for each bucket including the outputs of each reducer. See [GROUPBY Stage](#groupby-stage) for details.

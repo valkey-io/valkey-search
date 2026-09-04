@@ -676,6 +676,20 @@ static vmsdk::info_field::Integer
               return ValkeySearch::Instance().UsingCoordinator();
             }));
 
+static vmsdk::info_field::Integer
+    coordinator_client_search_index_partition_cancelled_count(
+        "coordinator",
+        "coordinator_client_search_index_partition_cancelled_count",
+        vmsdk::info_field::IntegerBuilder()
+            .App()
+            .Computed([]() -> long long {
+              return Metrics::GetStats()
+                  .coordinator_client_search_index_partition_cancelled_cnt;
+            })
+            .VisibleIf([]() -> bool {
+              return ValkeySearch::Instance().UsingCoordinator();
+            }));
+
 static vmsdk::info_field::Integer coordinator_bytes_out(
     "coordinator", "coordinator_bytes_out",
     vmsdk::info_field::IntegerBuilder()

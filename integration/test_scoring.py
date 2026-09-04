@@ -12,7 +12,10 @@ import struct
 
 import pytest
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -546,3 +549,29 @@ class TestScoring(ValkeySearchTestCaseBase):
         wait_indexed(client, IDX_MAIN, 8)
         _, restored = search(client, IDX_MAIN, "hello")
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
+
+
+# The kill switch is a dev config, so it needs debug-mode to be settable.
+class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
+
+    def test_scoring_disabled_zeroes_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+
+        # Pure text is scored in-iterator; text+tag takes the extra step.
+        queries = ["hello", "hello @cat:{a}"]
+
+        # Baseline: scores are non-zero, so the zeroes below are the switch
+        # working rather than an empty result.
+        for query in queries:
+            _, scores = search(client, IDX_MAIN, query)
+            assert scores and all(v > 0.0 for v in scores.values()), \
+                f"expected non-zero scores for {query!r}, got {scores}"
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same queries still match the same docs; every score is now 0.
+        for query in queries:
+            keys, scores = search(client, IDX_MAIN, query)
+            assert keys and scores == pytest.approx({k: 0.0 for k in keys}), \
+                f"expected all-zero scores for {query!r}, got {scores}"

@@ -190,7 +190,12 @@ def row_sort_key(sortkeys):
     # Rows that tie on the sort keys are ordered by their whole content, so
     # equal-keyed rows still line up between the two replies.
     def key(row):
-        return ([order_insensitive(row[k]) for k in sortkeys],
+        # A sort key can be absent from a row: a field the key never had is
+        # left out of the reply, so `sortby 2 @t2 asc` over a dataset where
+        # some documents lack t2 yields rows without it. Both engines omit it
+        # the same way, so a shared placeholder keeps those rows comparable
+        # and lets the whole-content tiebreak below order them.
+        return ([order_insensitive(row.get(k)) for k in sortkeys],
                 sorted((repr(k), order_insensitive(v)) for k, v in row.items()))
     return key
 
@@ -225,6 +230,12 @@ def unpack_result(cmd, key_type, rs, sortkeys):
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
+
+    # A numeric field can come back as a RESP nil -- GROUPBY on a field some
+    # documents lack names the group's key with one. float(None) raises, so
+    # without this two identical nil replies read as a mismatch.
+    if l is None or r is None:
+        return l is None and r is None
 
     if lnan and rnan:
         return True

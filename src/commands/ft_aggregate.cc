@@ -20,6 +20,7 @@
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/info.h"
 
 namespace valkey_search {
@@ -203,14 +204,20 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    if (value.IsMissing()) {
-      return false;
-    }
-    // Something evaluated to nothing: name the field with a nil value rather
-    // than dropping it, which is what Redisearch does.
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    ValkeyModule_ReplyWithNull(ctx);
-    return true;
+    // 1.3.0 fix: a field the key never had stays out of the reply, but
+    // something that evaluated to nothing is named with a nil value, which is
+    // what Redisearch does. Before the fix every nil was left out.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_nil_alias_named",
+        [&] {
+          if (value.IsMissing()) {
+            return false;
+          }
+          ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+          ValkeyModule_ReplyWithNull(ctx);
+          return true;
+        },
+        [] { return false; });
   }
 
   // Handle array values with RESP array serialization

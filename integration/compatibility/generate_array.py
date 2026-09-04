@@ -191,6 +191,17 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
         cmd += f"load 5 @__key @n1 @n2 @t1 @t2 groupby 1 @t1 {tail}".split()
         self.execute_command(cmd + ["DIALECT", "2"])
 
+    def _missing_pipeline(self, key_type, tail):
+        """A stage reading fields straight off the empty dataset.
+
+        Unlike _empty_pipeline there is no TOLIST prologue, so t2 and n2 are
+        genuinely absent for the ge rows rather than collected into an empty
+        array. That is the distinction the empty-array tests do not draw.
+        """
+        cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
+        cmd += f"load 5 @__key @n1 @n2 @t1 @t2 {tail}".split()
+        self.execute_command(cmd + ["DIALECT", "2"])
+
     def test_reduce_all_nil(self, key_type):
         """A reducer whose argument is absent from every record in its group.
 
@@ -233,6 +244,103 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
             cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
             cmd += f"load 5 @__key @n1 @n2 @t1 @t2 {tail}".split()
             self.execute_command(cmd + ["DIALECT", "2"])
+
+    def test_apply_missing_through_functions(self, key_type):
+        """A missing field reaching each class of function.
+
+        Dyadic::Evaluate propagates missingness, so `(@t2)+(1)` over an absent
+        t2 stays missing and the record goes. Nothing else does: Not reads a
+        nil as false and answers true, and every function proxy evaluates its
+        arguments and returns its own reason. These pin down which of those
+        Redisearch agrees with.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "apply !(@t2) as x",  # Not: valkey answers true, keeps the record
+            "apply abs(@n2) as x",  # monadic, numeric
+            "apply lower(@t2) as x",  # monadic, string
+            "apply upper(@t2) as x",
+            "apply strlen(@t2) as x",
+            "apply dayofweek(@n2) as x",  # monadic, time
+            "apply timefmt(@n2) as x",
+            'apply parsetime(@t2,"%Y-%m-%d") as x',
+            'apply startswith(@t2,"a") as x',  # dyadic function
+            'apply contains(@t2,"a") as x',
+            "apply substr(@t2,0,1) as x",  # triadic function
+            'apply concat(@t2,"!") as x',  # variadic function
+            "apply (@n2)&&(1) as x",  # dyadic operator, already propagating
+            "apply (@n2)||(0) as x",
+            "apply (@t2)==(@t2) as x",  # missing on both sides
+        ]:
+            self._missing_pipeline(key_type, tail)
+
+    def test_apply_missing_chained(self, key_type):
+        """Missingness surviving an alias hop.
+
+        The first APPLY names an alias from an absent field; the second reads
+        that alias. If the record survives the first stage at all, this says
+        whether what it carries is still missing.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "apply @t2 as x apply exists(@x) as y",
+            "apply @t2 as x apply (@x)==(@t2) as y",
+            'apply @t2 as x apply concat(@x,"!") as y',
+            "apply @n2 as x apply (@x)+(1) as y",
+        ]:
+            self._missing_pipeline(key_type, tail)
+
+    def test_filter_missing_field(self, key_type):
+        """FILTER over an absent field.
+
+        Filter keeps a record when the predicate IsTrue(), and a nil is falsy,
+        so valkey drops these -- by falsiness rather than by missingness. The
+        negations are the interesting half: Not answers true for a missing
+        operand, so valkey keeps those.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "filter @t2",
+            "filter !(@t2)",
+            "filter @n2",
+            "filter !(@n2)",
+            "filter exists(@t2)",
+            "filter !(exists(@t2))",
+            'filter (@t2)==("apple")',
+            "filter (@n2)>(5)",
+        ]:
+            self._missing_pipeline(key_type, tail)
+
+    def test_groupby_missing_field(self, key_type):
+        """GROUPBY on an absent field.
+
+        The key value is missing, so ReplyWithValue leaves the group key out
+        of the reply entirely -- a group identified by nothing. This says
+        whether Redisearch groups such records, drops them, or names the key.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "groupby 1 @t2 reduce count 0 as c",
+            "groupby 1 @n2 reduce count 0 as c",
+            "groupby 2 @t1 @t2 reduce count 0 as c",
+            "groupby 1 @t2 reduce tolist 1 @n1 as items",
+        ]:
+            self._missing_pipeline(key_type, tail)
+
+    def test_sortby_missing_field(self, key_type):
+        """SORTBY on an absent field.
+
+        Compare answers kUNORDERED against a nil and SortFunctor treats that
+        as a tie, so valkey leaves such records in scan order.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "sortby 2 @t2 asc",
+            "sortby 2 @t2 desc",
+            "sortby 2 @n2 asc",
+            "sortby 4 @t1 asc @n2 asc",
+        ]:
+            self._missing_pipeline(key_type, tail)
 
     def test_array_vs_array_compare(self, key_type):
         """Comparing two arrays -- a query Redisearch accepts.

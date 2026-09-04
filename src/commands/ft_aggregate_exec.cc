@@ -98,6 +98,14 @@ absl::Status Limit::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// 1.3.0 fix: Redisearch drops a record whose APPLY expression reached for a
+// field the key does not have, rather than replying with the alias unset.
+static bool ApplyDropsMissingField() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "apply_drops_missing_field", [] { return true; },
+      [] { return false; });
+}
+
 void SetField(Record &record, Attribute &dest, expr::Value value) {
   if (record.fields_.size() <= dest.record_index_) {
     record.fields_.resize(dest.record_index_ + 1, expr::Value::Missing());
@@ -117,7 +125,7 @@ absl::Status Apply::Execute(RecordSet &records) const {
   while (!records.empty()) {
     auto r = records.pop_front();
     auto value = expr_->Evaluate(ctx, *r);
-    if (value.IsMissing()) {
+    if (value.IsMissing() && ApplyDropsMissingField()) {
       continue;
     }
     SetField(*r, *name_, value);
@@ -294,7 +302,14 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
     RecordPtr record = std::make_unique<Record>(record_field_count);
     CHECK(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
-      SetField(*record, *groups_[i], group.first.keys_[i]);
+      // The group exists, so its key is an output of this stage rather than a
+      // field the key never had: Redisearch names it with a nil rather than
+      // leaving it out. ExpandGroupKeys already says this for an empty array.
+      auto key = group.first.keys_[i];
+      if (key.IsMissing()) {
+        key = expr::Value(expr::Value::Nil("absent group key"));
+      }
+      SetField(*record, *groups_[i], key);
     }
     CHECK(reducers_.size() == group.second.size());
     agg_reducer_stages.Increment(reducers_.size());
@@ -324,8 +339,28 @@ class Count : public GroupBy::ReducerInstance {
 // input contributes 0 or contributes nothing is not distinguishable from any
 // dataset we have -- a group holding only such values lands on 0 either way,
 // here or via Min/Max's empty-group identity.
+// 1.3.0 fix: MIN and MAX are strictly numeric in Redisearch. Anything that is
+// not a number reads as 0 rather than becoming the reducer's result, and a
+// group that saw no value at all answers 0 rather than dropping its alias.
+// One counter covers both halves of the one rule.
+static bool MinMaxIsNumeric() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "reduce_minmax_numeric", [] { return true; },
+      [] { return false; });
+}
+
 static expr::Value NumericReducerArg(const expr::Value &value) {
-  if (value.IsNil()) {
+  // Nil passes through for the caller to skip, and a value that is already a
+  // number needs no decision, so neither consults the gate. An array has no
+  // 1.2.1 behavior to preserve -- arrays cannot occur there, TOLIST being
+  // newer than that release -- so that half is not gated either.
+  if (value.IsNil() || value.IsDouble()) {
+    return value;
+  }
+  if (value.IsArray()) {
+    return expr::Value(0.0);
+  }
+  if (!MinMaxIsNumeric()) {
     return value;
   }
   auto number = value.AsDouble();
@@ -352,7 +387,10 @@ class Min : public GroupBy::ReducerInstance {
   // A group whose every input was nil replies 0 in Redisearch, for a string
   // field as much as a numeric one -- MIN is numeric, so 0 is its identity.
   expr::Value GetResult() const override {
-    return min_.IsNil() ? expr::Value(0.0) : min_;
+    if (!min_.IsNil()) {
+      return min_;
+    }
+    return MinMaxIsNumeric() ? expr::Value(0.0) : min_;
   }
 };
 
@@ -378,7 +416,10 @@ class Max : public GroupBy::ReducerInstance {
   }
   // As for Min: nothing seen replies 0, not a missing field.
   expr::Value GetResult() const override {
-    return max_.IsNil() ? expr::Value(0.0) : max_;
+    if (!max_.IsNil()) {
+      return max_;
+    }
+    return MinMaxIsNumeric() ? expr::Value(0.0) : max_;
   }
 };
 

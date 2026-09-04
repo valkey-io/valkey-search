@@ -39,16 +39,29 @@ class BaseCompatibilityTest:
     
     # Subclasses must define this
     ANSWER_FILE_NAME = None
+
+    # Reference engine container. Subclasses override DOCKER_IMAGE when they
+    # need a command the default image does not implement (FT.HYBRID, for
+    # instance, only exists in the Redis 8.4+ query engine). CONTAINER_NAME is
+    # per-subclass so a leftover container from one generator cannot collide
+    # with the next.
+    DOCKER_IMAGE = "redis/redis-stack-server"
+    CONTAINER_NAME = "Generate-search"
     
     @classmethod
     def setup_class(cls):
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
-            
-        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
-            print("Failed to start Redis Stack server, please check your Docker setup.")
+
+        # A container left behind by an interrupted run would otherwise make
+        # `docker run` fail on the name.
+        os.system(f"docker rm -f {cls.CONTAINER_NAME} >/dev/null 2>&1")
+        if os.system(
+            f"docker run --rm -d --name {cls.CONTAINER_NAME} -p 6380:6379 {cls.DOCKER_IMAGE}"
+        ) != 0:
+            print(f"Failed to start {cls.DOCKER_IMAGE}, please check your Docker setup.")
             sys.exit(1)
-        print("Started Generate-search server")
+        print(f"Started {cls.CONTAINER_NAME} server ({cls.DOCKER_IMAGE})")
         cls.answers = []
         # add reply count to check redis non-empty answer
         cls.replied_count = 0
@@ -64,8 +77,8 @@ class BaseCompatibilityTest:
 
     @classmethod
     def teardown_class(cls):
-        print("Stopping Generate-search server")
-        os.system("docker stop Generate-search")
+        print(f"Stopping {cls.CONTAINER_NAME} server")
+        os.system(f"docker stop {cls.CONTAINER_NAME}")
         print("Dumping ", len(cls.answers), " answers")
         payload = {
             "sources_hash": compute_sources_hash(),

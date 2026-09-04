@@ -39,8 +39,16 @@ def printable_cmd(cmd):
 def printable_result(res):
     if isinstance(res, list):
         return [printable_result(x) for x in res]
-    else:
-        return unbytes(res)
+    if isinstance(res, bytes):
+        # Vector fields are raw little-endian floats, so a result carrying one
+        # (any FT.HYBRID answer loading the vector column, for instance) is not
+        # UTF-8. Fall back to repr rather than letting the diagnostic print
+        # raise and hide the mismatch it was called to explain.
+        try:
+            return res.decode("utf-8")
+        except UnicodeDecodeError:
+            return repr(res)
+    return unbytes(res)
 
 def sortkeyfunc(row):
     if isinstance(row, list):
@@ -171,8 +179,37 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
+def unpack_hybrid_result(rs, key_type):
+    """Unpack an FT.HYBRID reply into a list of row dicts.
+
+    The two engines wrap the same rows differently:
+
+      Redis   [b"total_results", N, b"results", [row, ...],
+               b"warnings", [...], b"execution_time", b"..."]
+      Valkey  [N, row, row, ...]                       (the FT.AGGREGATE shape)
+
+    Only the rows are comparable. Redis's `total_results` is the size of the
+    fused set *before* LIMIT while Valkey's leading count is the number of rows
+    actually returned, and `execution_time` is wall-clock noise, so both are
+    dropped here rather than compared.
+    """
+    if len(rs) >= 2 and unbytes(rs[0]) == "total_results":
+        fields = {unbytes(rs[i]): rs[i + 1] for i in range(0, len(rs), 2)}
+        rows = fields.get("results", [])
+    else:
+        rows = rs[1:]
+    out = []
+    for row in rows:
+        out.append({
+            parse_field(row[i], key_type): parse_value(row[i + 1], key_type)
+            for i in range(0, len(row), 2)
+        })
+    return out
+
 def unpack_result(cmd, key_type, rs, sortkeys):
-    if "ft.search" in cmd[0].lower():
+    if "ft.hybrid" in cmd[0].lower():
+        out = unpack_hybrid_result(rs, key_type)
+    elif "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
         # not just whether WITHSORTKEYS is in the command. This handles cases
         # where the expected result (from pickle) may not have sort keys even
@@ -191,11 +228,15 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             if sortkeys == ['__key']:
                 # we're not smart about when there is or isn't a key in the return
                 return out
+            # A sort field the engine did not return as its own column. That is
+            # itself a difference worth reporting, so leave the rows unsorted
+            # and let compare_results surface the mismatch -- aborting the whole
+            # run here would hide every answer after this one.
             print("Failed on sortkeys: ", sortkeys)
             print("CMD:", cmd)
             print("RESULT:", rs)
             print("Out:", out)
-            assert False
+            return out
     return out
 
 def compare_number_eq(l, r):
@@ -300,17 +341,28 @@ def compare_results(expected, results):
         print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
     
-    if 'groupby' in cmd and 'sortby' in cmd:
+    # Keyword lookup is case-insensitive: generators spell these either way
+    # (generate.py lowercases, generate_hybrid.py uses the documented casing),
+    # and a missed keyword silently degrades to comparing rows positionally.
+    lower_cmd = [c.lower() if isinstance(c, str) else None for c in cmd]
+
+    if 'groupby' in lower_cmd and 'sortby' in lower_cmd:
         assert False
-    if 'groupby' in cmd:
-        ix = cmd.index('groupby')
+    if 'groupby' in lower_cmd:
+        ix = lower_cmd.index('groupby')
         count = int(cmd[ix+1])
         sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
-    elif 'sortby' in cmd:
-        ix = cmd.index('sortby')
-        count = int(cmd[ix+1]) if cmd[0] != 'ft.search' else 1
-        # Grab the fields after the count, stripping any leading '@'
-        sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
+    elif 'sortby' in lower_cmd:
+        ix = lower_cmd.index('sortby')
+        if lower_cmd[0] == 'ft.search':
+            # FT.SEARCH takes a bare `SORTBY <field>` -- no leading count, so
+            # the field sits one past the keyword, not two.
+            fields = [cmd[ix+1]]
+        else:
+            count = int(cmd[ix+1])
+            fields = [cmd[ix+2+i] for i in range(count)]
+        # Strip any leading '@'
+        sortkeys = [f[1:] if f.startswith("@") else f for f in fields]
         for f in ['asc', 'desc', 'ASC', 'DESC']:
             if f in sortkeys:
                 sortkeys.remove(f)

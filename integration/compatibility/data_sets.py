@@ -657,13 +657,20 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
 def load_data(client, data_set, key_type, data_source=None, schema_type="default"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        if data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        else:
+            data_source = "vector"
 
     match data_source:
         case "vector":
             data = compute_data_sets()
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
@@ -772,3 +779,161 @@ def extract_vocab_by_field_from_text_data(dataset_name, key_type):
             vocab_by_field[field] = field_values[field]
     
     return vocab_by_field
+
+
+### FT.HYBRID data sets ###
+#
+# FT.HYBRID needs a corpus that is simultaneously a *text* corpus (so the
+# SEARCH arm produces interesting BM25 scores) and a *vector* corpus (so the
+# VSIM arm produces a ranking that is genuinely different from the text
+# ranking -- otherwise fusion is indistinguishable from either arm alone).
+#
+# The corpus is built constructively rather than randomly so every BM25 input
+# is auditable from the code:
+#
+#   * IDF spread   -- each signal term occupies a different slice of the
+#                     corpus, from `alpha` (most documents) down to `epsilon`
+#                     (a single document).
+#   * TF spread    -- `alpha` is repeated 0..3 times within a title, `stone`
+#                     1..3 times within a body.
+#   * Length norm  -- every document is padded with filler to a length no
+#                     other document shares, so documents that match the same
+#                     terms still differ in BM25's length normalization.
+#
+# Giving every document a distinct length is also what keeps the corpus free of
+# BM25 ties. A tie would leave the fused ranking to each engine's tie-break,
+# which is not something this suite should be pinning down.
+#
+# Text fields are indexed NOSTEM: the FT.HYBRID scoring path does not yet
+# implement stemming, and every query term below is a plain word (no prefix,
+# suffix, fuzzy or wildcard forms), which the scoring path does not implement
+# either.
+
+HYBRID_DATASETS = ["hybrid text"]
+
+HYBRID_VECTOR_DIM = 4
+HYBRID_NUM_KEYS = 24
+
+# Signal terms for the `title` field, in decreasing document frequency. The
+# divisor is the stride at which the term appears, so `alpha` lands in most
+# documents and `epsilon` in exactly one.
+HYBRID_TITLE_TERMS = [
+    ("beta", 2),      # every 2nd document
+    ("gamma", 3),     # every 3rd
+    ("delta", 5),     # every 5th
+    ("epsilon", 24),  # document 0 only
+]
+
+# Filler words, used only to vary document length. They are deliberately
+# outside the query vocabulary so they move BM25 length normalization without
+# adding matches.
+HYBRID_FILLER = ["lorem", "ipsum", "dolor", "amet"]
+
+# Signal terms for the `body` field, as (term, stride, offset). The offsets
+# shift each term off the `title` strides, so `@body:<term>` selects a
+# different document set than any `@title:<term>` -- without that, an
+# intersection like `@title:beta @body:river` would degenerate to one of its
+# operands.
+HYBRID_BODY_TERMS = [
+    ("river", 2, 1),
+    ("mountain", 3, 1),
+    ("forest", 4, 2),
+    ("canyon", 7, 3),
+]
+
+HYBRID_COLORS = ["red", "green", "blue", "amber"]
+
+
+def _pad_to_length(words, target):
+    """Pad `words` with filler until it is exactly `target` words long.
+
+    Every document gets a different target, which is what keeps BM25 scores
+    distinct: for a single-term query the score is a function of the term
+    frequency and the document length alone, so two documents of equal length
+    carrying the term the same number of times would score identically and
+    leave the fused ranking to each engine's tie-break.
+    """
+    filler = [HYBRID_FILLER[j % len(HYBRID_FILLER)]
+              for j in range(max(0, target - len(words)))]
+    return words + filler
+
+
+def _hybrid_title(i):
+    """Title for document i: `alpha` repeated 0..3 times, then the signal terms
+    whose stride divides i, padded out to a length unique to this document."""
+    words = ["alpha"] * (i % 4)
+    words += [term for term, stride in HYBRID_TITLE_TERMS if i % stride == 0]
+    if not words:
+        # Keep every document non-empty so it is indexed and can be reached by
+        # the vector arm even when it matches no query term.
+        words = ["omega"]
+    return " ".join(_pad_to_length(words, i + 8))
+
+
+def _hybrid_body(i):
+    """Body for document i: `stone` repeated 1..3 times plus the body signal
+    terms whose stride divides i, padded to a length unique to this document."""
+    words = ["stone"] * (1 + (i % 3))
+    words += [term for term, stride, offset in HYBRID_BODY_TERMS
+              if (i + offset) % stride == 0]
+    return " ".join(_pad_to_length(words, i + 5))
+
+
+def _hybrid_vector(i):
+    """Vector for document i.
+
+    Documents are placed along a diagonal ramp so L2 distance from the query
+    vector (1, 0, 0, 0) grows with i, while `title` term matches are keyed on
+    divisibility of i. The two rankings therefore disagree, which is what makes
+    fusion observable: neither arm's order survives into the fused order.
+    """
+    return [1.0 + i * 0.25, i * 0.5, 0.0, 0.0]
+
+
+def compute_hybrid_data_sets():
+    """Build the FT.HYBRID text+vector data set (both hash and json variants).
+
+    Returns the same {dataset: {"<kt> creates": [...], "<kt> sets": [...]}}
+    shape as compute_data_sets() / compute_text_data_sets().
+    """
+    name = "hybrid text"
+    data = {name: {}}
+
+    create_cmds = {
+        "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
+        "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
+    }
+    vector_def = (
+        f"VECTOR HNSW 6 TYPE FLOAT32 DIM {HYBRID_VECTOR_DIM} DISTANCE_METRIC L2"
+    )
+    # NOSTEM is required: see the module comment above.
+    field_defs = [
+        ("title", "TEXT NOSTEM"),
+        ("body", "TEXT NOSTEM"),
+        ("color", "TAG"),
+        ("price", "NUMERIC"),
+        ("vec", vector_def),
+    ]
+
+    for key_type in ["hash", "json"]:
+        if key_type == "hash":
+            schema = " ".join(f"{f} {d}" for f, d in field_defs)
+        else:
+            schema = " ".join(f"$.{f} AS {f} {d}" for f, d in field_defs)
+        data[name][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+
+        docs = []
+        for i in range(HYBRID_NUM_KEYS):
+            docs.append((
+                f"{key_type}:{i:02d}",
+                {
+                    "title": _hybrid_title(i),
+                    "body": _hybrid_body(i),
+                    "color": HYBRID_COLORS[i % len(HYBRID_COLORS)],
+                    "price": (i * 7) % 53,
+                    "vec": array_encode(key_type, _hybrid_vector(i)),
+                },
+            ))
+        data[name][SETS_KEY(key_type)] = docs
+
+    return data

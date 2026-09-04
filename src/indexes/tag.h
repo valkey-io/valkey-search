@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -163,6 +164,14 @@ class Tag : public IndexBase {
   // (dt) for tag scoring. O(1) rax lookup plus a bag size read.
   size_t GetTagValueDocCount(absl::string_view value) const
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+
+  // Document count (dt) of the first value on `key` matching prefix query value
+  // `prefix_value` (must end in '*') -- the value a tag prefix is scored on,
+  // since a prefix credits ONE matched value, never the sum. 0 if none matches.
+  // Lock-free like GetValue/ContainsKey (read-side invariant).
+  size_t GetPrefixMatchDocCount(absl::string_view prefix_value,
+                                BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(

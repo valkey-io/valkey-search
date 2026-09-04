@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
@@ -1532,6 +1533,36 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     if (cands.empty()) return std::nullopt;
     return cands[0].score;
   }
+
+  // Score `key` for `filter` through the IN-ITERATOR path
+  // (TextIterator::GetScore), which is the path pure-text prefix/suffix/fuzzy
+  // queries run on -- unlike Score() above, which uses the extra-step
+  // ScoreTextQuery. Mirrors DoSearchNonVector's per-key scoring
+  // (GetScore() * GetWeight()). `filter` must be a single text predicate.
+  // Returns nullopt when the document does not match.
+  std::optional<float> ScoreViaIterator(MockIndexSchema &schema,
+                                        absl::string_view filter,
+                                        const std::string &key) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(schema, filter, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    auto *text_pred = dynamic_cast<query::TextPredicate *>(
+        parsed.value().root_predicate.get());
+    EXPECT_NE(text_pred, nullptr) << "not a single text predicate: " << filter;
+    if (text_pred == nullptr) return std::nullopt;
+    text_pred->SetScorer(
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+    auto text_index = schema.GetTextIndexSchema()->GetTextIndex();
+    auto interned = StringInternStore::Intern(key);
+    vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
+    auto iter =
+        text_pred->BuildTextIterator(text_index, text_pred->GetFieldMask(),
+                                     /*require_positions=*/false);
+    if (!iter->SeekForwardKey(interned) || iter->DoneKeys())
+      return std::nullopt;
+    if (iter->CurrentKey()->Str() != key) return std::nullopt;
+    return iter->GetScore() * iter->GetWeight();
+  }
 };
 
 // Every case has the same shape: score `filter` against `key`, compare to a
@@ -1872,6 +1903,242 @@ TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
   coordinator::SearchIndexPartitionRequest request;
   EXPECT_EQ(coordinator::ScorerFromGRPC(request.scorer()),
             indexes::scoring::ScorerType::kBm25Std);
+}
+
+// --- Prefix / suffix / fuzzy expansion scoring (in-iterator path) ------------
+//
+// Contract (docs/redis_prefix_suffix_fuzzy_scoring.md): an expansion
+// contributes exactly ONE matched term's BM25 (its own IDF + own F), never the
+// sum over matched terms. A doc matching a single expansion term therefore
+// scores identically to the exact-term query for that term.
+
+// A doc matching the prefix via a single term scores like the exact term.
+TEST_F(ScoreTextQueryTestBase, PrefixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto prefix = ScoreViaIterator(*schema, "@text:cat*", "d_cat");
+  auto exact = ScoreViaIterator(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+}
+
+// A doc matching the prefix via SEVERAL terms is scored on ONE of them, never
+// their sum (category df=3, catalog df=1 -> distinct IDFs, so the pick is
+// observable). Which term wins is an unspecified union artifact, so assert only
+// the invariant: score == one candidate's BM25 and strictly below their sum.
+TEST_F(ScoreTextQueryTestBase, PrefixMultiMatchScoresOneTermNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_multi", "category catalog", ""},
+      {"d_cat2", "category", ""},
+      {"d_cat3", "category", ""},
+  });
+  auto prefix = ScoreViaIterator(*schema, "@text:cat*", "d_multi");
+  auto only_category = ScoreViaIterator(*schema, "@text:category", "d_multi");
+  auto only_catalog = ScoreViaIterator(*schema, "@text:catalog", "d_multi");
+  ASSERT_TRUE(prefix && only_category && only_catalog);
+  EXPECT_LT(*prefix, *only_category + *only_catalog);
+  EXPECT_TRUE(std::fabs(*prefix - *only_category) < 1e-4f ||
+              std::fabs(*prefix - *only_catalog) < 1e-4f)
+      << "prefix=" << *prefix << " category=" << *only_category
+      << " catalog=" << *only_catalog;
+}
+
+// A doc matching the suffix via a single term scores like the exact term.
+TEST_F(ScoreTextQueryTestBase, SuffixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog", "jogging", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto suffix = ScoreViaIterator(*schema, "@text:*ing", "d_run");
+  auto exact = ScoreViaIterator(*schema, "@text:running", "d_run");
+  ASSERT_TRUE(suffix && exact);
+  EXPECT_GT(*suffix, 0.0f);
+  EXPECT_FLOAT_EQ(*suffix, *exact);
+}
+
+// A doc matching the fuzzy pattern via a single term scores like the exact
+// term.
+TEST_F(ScoreTextQueryTestBase, FuzzySingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_dog", "dog", ""},
+      {"d_bird", "bird", ""},
+  });
+  auto fuzzy = ScoreViaIterator(*schema, "@text:%cat%", "d_cat");
+  auto exact = ScoreViaIterator(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(fuzzy && exact);
+  EXPECT_GT(*fuzzy, 0.0f);
+  EXPECT_FLOAT_EQ(*fuzzy, *exact);
+}
+
+// --- Expansion scoring: extra-step path (ScoreTextQuery / ScoreNode) ---------
+//
+// The tests above drive the in-iterator path (pure-text queries). Score() below
+// always takes the extra-step ScoreNode path -- the one combined (text +
+// numeric/tag/negate) queries use. Same contract: one matched term, not the
+// sum. The representative pick (first present expansion term) can differ from
+// the in-iterator heap pick on multi-match docs, so cross-path equality is
+// asserted only on single-match docs.
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto prefix = Score(*schema, "@text:cat*", "d_cat");
+  auto exact = Score(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+  // Single-match: extra-step and in-iterator pick the same (only) term.
+  auto in_iter = ScoreViaIterator(*schema, "@text:cat*", "d_cat");
+  ASSERT_TRUE(in_iter);
+  EXPECT_FLOAT_EQ(*prefix, *in_iter);
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixMultiMatchScoresOneTermNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_multi", "category catalog", ""},
+      {"d_cat2", "category", ""},
+      {"d_cat3", "category", ""},
+  });
+  auto prefix = Score(*schema, "@text:cat*", "d_multi");
+  auto only_category = Score(*schema, "@text:category", "d_multi");
+  auto only_catalog = Score(*schema, "@text:catalog", "d_multi");
+  ASSERT_TRUE(prefix && only_category && only_catalog);
+  EXPECT_LT(*prefix, *only_category + *only_catalog);
+  EXPECT_TRUE(std::fabs(*prefix - *only_category) < 1e-4f ||
+              std::fabs(*prefix - *only_catalog) < 1e-4f)
+      << "prefix=" << *prefix << " category=" << *only_category
+      << " catalog=" << *only_catalog;
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepSuffixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog", "jogging", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto suffix = Score(*schema, "@text:*ing", "d_run");
+  auto exact = Score(*schema, "@text:running", "d_run");
+  ASSERT_TRUE(suffix && exact);
+  EXPECT_GT(*suffix, 0.0f);
+  EXPECT_FLOAT_EQ(*suffix, *exact);
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepFuzzySingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_dog", "dog", ""},
+      {"d_bird", "bird", ""},
+  });
+  auto fuzzy = Score(*schema, "@text:%cat%", "d_cat");
+  auto exact = Score(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(fuzzy && exact);
+  EXPECT_GT(*fuzzy, 0.0f);
+  EXPECT_FLOAT_EQ(*fuzzy, *exact);
+}
+
+// The real reason the extra-step path matters: a prefix combined with a numeric
+// clause. The numeric contributes 0, so the combined score equals the prefix
+// alone -- and must be non-zero (the expansion IS scored here, unlike before).
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+  });
+  auto combined = Score(*schema, "@text:cat* @rating:[0 100]", "d_cat");
+  auto prefix_only = Score(*schema, "@text:cat*", "d_cat");
+  ASSERT_TRUE(combined && prefix_only);
+  EXPECT_GT(*combined, 0.0f);
+  EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// --- Tag prefix expansion scoring (extra-step path) --------------------------
+//
+// A tag prefix (`@color:{re*}`) is scored like a text expansion: it contributes
+// exactly ONE matched value's BM25 (F ≡ 1, its own IDF), never the sum over the
+// values it expands to -- while an explicit union (`{red|reef}`) still sums.
+// Verified empirically against Redis 8.6 (tag prefix scores a single
+// representative value; a union sums its members).
+
+// A doc whose only matching value is one tag scores like the exact-value query.
+TEST_F(ScoreTextQueryTestBase, TagPrefixSingleMatchEqualsExactValue) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_red2", "aa", "red"},
+      {"d_reef", "aa", "reef"},
+  });
+  auto prefix = Score(*schema, "@color:{re*}", "d_red");
+  auto exact = Score(*schema, "@color:{red}", "d_red");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+}
+
+// A doc carrying SEVERAL values matching the prefix is scored on exactly ONE of
+// them, never their sum (red df=3, reef df=1 -> distinct IDFs, so the pick is
+// observable). Which value wins is unspecified, so assert only the invariant:
+// score == one candidate value's BM25 and strictly below the union of both.
+TEST_F(ScoreTextQueryTestBase, TagPrefixMultiMatchScoresOneValueNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_red2", "aa", "red"},
+      {"d_multi", "aa", "red,reef"},
+  });
+  auto prefix = Score(*schema, "@color:{re*}", "d_multi");
+  auto only_red = Score(*schema, "@color:{red}", "d_multi");
+  auto only_reef = Score(*schema, "@color:{reef}", "d_multi");
+  auto both = Score(*schema, "@color:{red|reef}", "d_multi");
+  ASSERT_TRUE(prefix && only_red && only_reef && both);
+  EXPECT_FLOAT_EQ(*both, *only_red + *only_reef);  // union sums
+  EXPECT_LT(*prefix, *both);                       // prefix picks one
+  EXPECT_TRUE(std::fabs(*prefix - *only_red) < 1e-4f ||
+              std::fabs(*prefix - *only_reef) < 1e-4f)
+      << "prefix=" << *prefix << " red=" << *only_red << " reef=" << *only_reef;
+}
+
+// A tag prefix combined with a numeric clause is scored (the numeric adds 0),
+// proving the expansion is not silently dropped on the combined-query path.
+TEST_F(ScoreTextQueryTestBase, TagPrefixInCombinedQueryScored) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_reef", "aa", "reef"},
+  });
+  auto combined = Score(*schema, "@color:{re*} @rating:[0 100]", "d_red");
+  auto prefix_only = Score(*schema, "@color:{re*}", "d_red");
+  ASSERT_TRUE(combined && prefix_only);
+  EXPECT_GT(*combined, 0.0f);
+  EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// An empty tag (leading separator) must not be picked as the representative.
+// Only a bare `*` gives an empty prefix that can match one, hence min length 0.
+TEST_F(ScoreTextQueryTestBase, TagPrefixSkipsEmptyTagsWhenPickingValue) {
+  auto &min_prefix = options::GetTagMinPrefixLength();
+  const int original = min_prefix.GetValue();
+  VMSDK_EXPECT_OK(min_prefix.SetValue(0));
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(min_prefix.SetValue(original));
+  };
+
+  auto schema = BuildTextTagSchema({
+      {"d_lead", "aa", ",red"},
+      {"d_plain", "aa", "red"},
+  });
+  auto lead = Score(*schema, "@color:{*}", "d_lead");
+  auto plain = Score(*schema, "@color:{*}", "d_plain");
+  ASSERT_TRUE(lead && plain);
+  EXPECT_GT(*lead, 0.0f);
+  EXPECT_FLOAT_EQ(*lead, *plain);
 }
 
 }  // namespace

@@ -21,7 +21,8 @@ TermIterator::TermIterator(
     const FieldMaskPredicate query_field_mask, const bool require_positions,
     const FieldMaskPredicate stem_field_mask, bool has_original,
     float leaf_weight, uint32_t num_doc_contain_term,
-    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer)
+    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer,
+    absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
@@ -39,11 +40,22 @@ TermIterator::TermIterator(
     const auto stats = text_index_schema_->GetIndexScoringStats();
     if (stats.total_docs > 0) {
       scorer_ = scorer;
-      // clamp to keep dt <= total_docs
-      idf_ = scorer_->PrecomputeIDF(
-          {stats.total_docs,
-           std::min(num_doc_contain_term_, stats.total_docs)});
       avg_doc_len_ = stats.avg_doc_len;
+      // total_docs and the doc counts come from separate, independently-locked
+      // counters and can be transiently out of sync, so clamp to keep
+      // dt <= total_docs.
+      if (!per_term_dt.empty()) {
+        // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term.
+        per_term_idf_.reserve(per_term_dt.size());
+        for (uint32_t dt : per_term_dt) {
+          per_term_idf_.push_back(scorer_->PrecomputeIDF(
+              {stats.total_docs, std::min(dt, stats.total_docs)}));
+        }
+      } else {
+        idf_ = scorer_->PrecomputeIDF(
+            {stats.total_docs,
+             std::min(num_doc_contain_term_, stats.total_docs)});
+      }
     }
   }
 
@@ -64,6 +76,17 @@ float TermIterator::GetScore() const {
   // No scoring context: preserve the constant stub used before scoring landed.
   if (scorer_ == nullptr) {
     return 1.0f;
+  }
+
+  // Expansion mode: contribute a SINGLE matched term's BM25 (own IDF + own F),
+  // never the sum. Which term is unspecified, so take the merge's front.
+  if (!per_term_idf_.empty()) {
+    const size_t chosen = current_key_indices_.front();
+    const uint32_t term_frequency =
+        static_cast<uint32_t>(key_iterators_[chosen].GetTermFrequency());
+    return scorer_->ScoreLeaf({per_term_idf_[chosen], term_frequency,
+                               key_iterators_[chosen].GetDocLen(), avg_doc_len_,
+                               leaf_weight_});
   }
 
   // F is document-wide: sum the term frequency across every word/field

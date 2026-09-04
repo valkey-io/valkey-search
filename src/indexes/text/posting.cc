@@ -87,10 +87,36 @@ size_t Postings::GetTotalTermFrequency() const {
   return total_frequency;
 }
 
-std::optional<PostingValue> Postings::LookupKey(
-    BorrowedInternedStringPtr key) const {
+namespace {
+
+// Does any position for this key fall in a field in `field_mask`?
+bool PositionsContainFields(const FlatPositionMap& flat_map,
+                            uint64_t field_mask) {
+  PositionIterator iter(flat_map);
+  while (iter.IsValid()) {
+    if ((iter.GetFieldMask() & field_mask) != 0) {
+      return true;
+    }
+    iter.NextPosition();
+  }
+  return false;
+}
+
+}  // namespace
+
+std::optional<PostingValue> Postings::LookupKey(BorrowedInternedStringPtr key,
+                                                uint64_t field_mask) const {
   auto it = key_to_positions_.find(key);
   if (it == key_to_positions_.end()) {
+    return std::nullopt;
+  }
+  // Every key present has >=1 position, so "any field" needs no scan.
+  if (field_mask == ~0ULL) {
+    return it->second;
+  }
+  CHECK(it->second.map != nullptr)
+      << "Posting list contains a key with no FlatPositionMap";
+  if (!PositionsContainFields(*it->second.map, field_mask)) {
     return std::nullopt;
   }
   return it->second;
@@ -134,20 +160,7 @@ bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   // and every key in the posting list has at least one position entry.
   if (field_mask == ~0ULL) return true;
 
-  FlatPositionMap* flat_map = current_->second.map;
-
-  // Check all positions for this key to see if any of the requested fields are
-  // set
-  PositionIterator iter(*flat_map);
-  while (iter.IsValid()) {
-    uint64_t position_mask = iter.GetFieldMask();
-    if ((position_mask & field_mask) != 0) {
-      return true;
-    }
-    iter.NextPosition();
-  }
-
-  return false;
+  return PositionsContainFields(*current_->second.map, field_mask);
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {

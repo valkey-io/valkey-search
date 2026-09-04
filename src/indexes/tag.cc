@@ -17,6 +17,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -509,6 +510,32 @@ size_t Tag::GetTagValueDocCount(absl::string_view value) const {
   size_t count = bag.size();
   (void)bag.Release();
   return count;
+}
+
+size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
+                                   BorrowedInternedStringPtr key) const {
+  if (prefix_value.empty() || prefix_value.back() != '*') return 0;
+  const absl::string_view prefix =
+      prefix_value.substr(0, prefix_value.size() - 1);
+
+  // Scan the doc's own tags rather than the prefix's rax subtree: a doc carries
+  // a handful of tags while a prefix can match an unbounded slice of the index.
+  // Lock-free by the read-side invariant GetValue / ContainsKey rely on.
+  auto it = tracked_tags_by_keys_.find(key);
+  if (it == tracked_tags_by_keys_.end()) return 0;
+
+  for (const auto &part :
+       absl::StrSplit(it->second.raw_tag_string->Str(), separator_)) {
+    const absl::string_view tag = absl::StripAsciiWhitespace(part);
+    // Empty tags are never indexed (ParseRecordTags drops them), and a bare `*`
+    // query gives an empty prefix that would otherwise match one.
+    if (tag.empty()) continue;
+    if (case_sensitive_ ? absl::StartsWith(tag, prefix)
+                        : absl::StartsWithIgnoreCase(tag, prefix)) {
+      return GetTagValueDocCount(tag);
+    }
+  }
+  return 0;
 }
 
 bool Tag::IsTracked(const InternedStringPtr &key) const {

@@ -111,16 +111,21 @@ struct AggregateParameters : public expr::Expression::CompileContext,
                             indexes::IndexerType data_type) {
     auto identifier_itr = record_indexes_by_identifier_.find(identifier);
     auto alias_itr = record_indexes_by_alias_.find(alias);
+    // Callers may add the same (identifier, alias) pair more than once: they
+    // re-add __key/score and LOAD fields already referenced elsewhere.
     if (identifier_itr != record_indexes_by_identifier_.end() &&
-        alias_itr != record_indexes_by_alias_.end()) {
-      assert(identifier_itr->second == alias_itr->second);
+        alias_itr != record_indexes_by_alias_.end() &&
+        identifier_itr->second == alias_itr->second) {
       return identifier_itr->second;
     }
-    assert(identifier_itr == record_indexes_by_identifier_.end());
-    assert(alias_itr == record_indexes_by_alias_.end());
+    // Re-binding an existing alias to a new identifier (e.g. `LOAD 2 n1 n2 AS
+    // n1`) shadows the previous binding, per RediSearch LOAD/APPLY semantics:
+    // the alias resolves to the new slot, while the shadowed slot stays
+    // reachable only by its identifier.
     size_t new_index = record_info_by_index_.size();
-    record_indexes_by_identifier_.emplace(std::string(identifier), new_index);
-    record_indexes_by_alias_.emplace(std::string(alias), new_index);
+    record_indexes_by_identifier_.insert_or_assign(std::string(identifier),
+                                                   new_index);
+    record_indexes_by_alias_.insert_or_assign(std::string(alias), new_index);
     record_info_by_index_.push_back(
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),

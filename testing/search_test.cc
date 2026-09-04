@@ -7,13 +7,17 @@
 
 #include "src/query/search.h"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -30,15 +34,18 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
+#include "src/coordinator/search_converter.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/metrics.h"
 #include "src/query/predicate.h"
-#include "src/utils/patricia_tree.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -478,15 +485,16 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
             CreateHNSWVectorIndexProto(kVectorDimensions, distance_metric, 1000,
                                        10, 300, 30),
             "vector_attribute_identifier",
-            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
             .value();
   } else {
-    vector_index = indexes::VectorFlat<float>::Create(
-                       CreateFlatVectorIndexProto(kVectorDimensions,
-                                                  distance_metric, 1000, 250),
-                       "vector_attribute_identifier",
-                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
-                       .value();
+    vector_index =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(kVectorDimensions, distance_metric, 1000,
+                                       250),
+            "vector_attribute_identifier",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
   }
   VMSDK_EXPECT_OK(index_schema->AddIndex(kVectorAttributeAlias,
                                          kVectorAttributeAlias, vector_index));
@@ -673,6 +681,76 @@ INSTANTIATE_TEST_SUITE_P(
                   : "COSINE_") +
              std::get<1>(info.param).test_name;
     });
+
+// A hybrid `text=>[KNN]` query must rank by the text relevance score, not by
+// the vector distance. Both docs contain "cat": "short" is a one-word document
+// (high BM25) but far from the query vector; "long" buries "cat" in a long
+// document (low BM25) yet sits exactly on the query vector (distance 0). By KNN
+// distance alone "long" would rank first; by text score "short" wins. The
+// result order must follow the text score.
+TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber());
+
+  auto vector_index =
+      indexes::VectorFlat<float>::Create(
+          CreateFlatVectorIndexProto(kVectorDimensions,
+                                     data_model::DISTANCE_METRIC_L2, 1000, 250),
+          "vector_attribute_identifier",
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+          .value();
+  VMSDK_EXPECT_OK(schema->AddIndex(kVectorAttributeAlias, kVectorAttributeAlias,
+                                   vector_index));
+
+  schema->CreateTextIndexSchema();
+  auto text_schema = schema->GetTextIndexSchema();
+  auto text = std::make_shared<indexes::Text>(
+      CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+      text_schema);
+  VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
+
+  auto add_doc = [&](const std::string &key, const std::string &content,
+                     float vec_value) {
+    auto interned = StringInternStore::Intern(key);
+    std::vector<float> vec(kVectorDimensions, vec_value);
+    VMSDK_EXPECT_OK(vector_index->AddRecord(
+        interned, std::string((char *)vec.data(), vec.size() * sizeof(float))));
+    VMSDK_EXPECT_OK(text->AddRecord(interned, content));
+    text_schema->CommitKeyData(interned);
+    schema->SetIndexMutationSequenceNumber(interned, 0);
+  };
+  // "short": short doc (high BM25 for "cat"), far from the query vector.
+  add_doc("short", "cat", 5.0f);
+  // "long": long doc (low BM25 for "cat"), exactly on the query vector.
+  add_doc("long", "cat dog bird fish tree stone river cloud", 1.0f);
+
+  UnitTestSearchParameters params;
+  params.index_schema_name = kIndexSchemaName;
+  params.index_schema = schema;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.dialect = kDialect;
+  params.k = 2;
+  params.ef = kEfRuntime;
+  std::vector<float> query_vector(kVectorDimensions, 1.0f);
+  params.query = VectorToStr(query_vector);
+  TextParsingOptions options{};
+  FilterParser parser(*schema, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  VMSDK_EXPECT_OK(Search(params, valkey_search::query::SearchMode::kLocal));
+
+  const auto &neighbors = params.search_result.neighbors;
+  ASSERT_EQ(neighbors.size(), 2u);
+  // Ranked by text score: "short" (higher BM25) before "long".
+  EXPECT_EQ(neighbors[0].external_id->Str(), "short");
+  EXPECT_EQ(neighbors[1].external_id->Str(), "long");
+  // The winner has the higher text score but the LARGER vector distance,
+  // confirming distance is not the ranking key.
+  EXPECT_GT(neighbors[0].score, neighbors[1].score);
+  EXPECT_GT(neighbors[0].distance, neighbors[1].distance);
+}
 
 struct FetchFilteredKeysTestCase {
   std::string test_name;
@@ -911,12 +989,12 @@ struct IndexedContentTestCase {
   };
   struct TestNeighbor {
     std::string external_id;
-    float distance;
+    float score;
     std::optional<absl::flat_hash_map<std::string, std::string>>
         attribute_contents;
     indexes::Neighbor ToIndexesNeighbor() const {
       auto string_interned_external_id = StringInternStore::Intern(external_id);
-      auto result = indexes::Neighbor{string_interned_external_id, distance};
+      auto result = indexes::Neighbor{string_interned_external_id, score};
       if (attribute_contents.has_value()) {
         result.attribute_contents = RecordsMap();
         for (auto &attribute : *attribute_contents) {
@@ -931,7 +1009,7 @@ struct IndexedContentTestCase {
     static TestNeighbor FromIndexesNeighbor(const indexes::Neighbor &neighbor) {
       TestNeighbor result;
       result.external_id = std::string(*neighbor.external_id);
-      result.distance = neighbor.distance;
+      result.score = neighbor.score;
       if (neighbor.attribute_contents.has_value()) {
         result.attribute_contents =
             absl::flat_hash_map<std::string, std::string>();
@@ -944,7 +1022,7 @@ struct IndexedContentTestCase {
       return result;
     }
     bool operator==(const TestNeighbor &other) const {
-      if (external_id != other.external_id || distance != other.distance) {
+      if (external_id != other.external_id || score != other.score) {
         return false;
       }
       if (attribute_contents.has_value() !=
@@ -992,7 +1070,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto vector_index =
             indexes::VectorHNSW<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, vector_index));
@@ -1005,7 +1083,7 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
         auto flat_index =
             indexes::VectorFlat<float>::Create(
                 vector_index_proto, "attribute_identifier_1",
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
                 .value();
         VMSDK_EXPECT_OK(index_schema->AddIndex(
             index.attribute_alias, index.attribute_identifier, flat_index));
@@ -1108,10 +1186,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     .test_name = "no_return_attributes",
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1119,10 +1197,10 @@ INSTANTIATE_TEST_SUITE_P(
                     .return_attributes = {{.identifier = "1", .alias = "a1"},
                                           {.identifier = "2", .alias = "a2"}},
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1139,10 +1217,10 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1158,10 +1236,10 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{.external_id = "1",
-                                          .distance = 0.1,
+                                          .score = 0.1,
                                           .attribute_contents = std::nullopt}}},
                 },
                 {
@@ -1184,11 +1262,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", "1"}, {"as2", "2, abc ,ABC    "}},
@@ -1214,11 +1292,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", "1"}, {"as2", "2"}},
@@ -1244,11 +1322,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", kTestVector0}, {"as2", kTestVector1}},
@@ -1274,11 +1352,11 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output = {{{
                         .external_id = "1",
-                        .distance = 0.1,
+                        .score = 0.1,
                         .attribute_contents =
                             absl::flat_hash_map<std::string, std::string>{
                                 {"as1", kTestVector0}, {"as2", kTestVector1}},
@@ -1311,23 +1389,23 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = absl::flat_hash_map<
                                     std::string, std::string>{{"as1", "1"},
                                                               {"as2", "2"}}},
                                {.external_id = "2",
-                                .distance = 0.2,
+                                .score = 0.2,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output =
                         {{{
                               .external_id = "1",
-                              .distance = 0.1,
+                              .score = 0.1,
                               .attribute_contents =
                                   absl::flat_hash_map<std::string, std::string>{
                                       {"as1", "1"}, {"as2", "2"}},
                           },
                           {.external_id = "2",
-                           .distance = 0.2,
+                           .score = 0.2,
                            .attribute_contents =
                                absl::flat_hash_map<std::string, std::string>{
                                    {"as1", "1"}, {"as2", "2"}}}}},
@@ -1352,21 +1430,21 @@ INSTANTIATE_TEST_SUITE_P(
                             },
                         },
                     .input = {{{.external_id = "1",
-                                .distance = 0.1,
+                                .score = 0.1,
                                 .attribute_contents = std::nullopt},
                                {.external_id = "2",
-                                .distance = 0.2,
+                                .score = 0.2,
                                 .attribute_contents = std::nullopt}}},
                     .expected_output =
                         {{{
                               .external_id = "1",
-                              .distance = 0.1,
+                              .score = 0.1,
                               .attribute_contents =
                                   absl::flat_hash_map<std::string, std::string>{
                                       {"as1", "1"}, {"as2", "2"}},
                           },
                           {.external_id = "2",
-                           .distance = 0.2,
+                           .score = 0.2,
                            .attribute_contents = std::nullopt}}},
                 },
             })),
@@ -1378,5 +1456,423 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+
+class ScoreTextQueryTestBase : public ValkeySearchTest {
+ protected:
+  // Schema with a text field "text", a case-insensitive tag field "color", and
+  // a numeric field "rating", so ScoreTextQuery sees real posting lists and a
+  // non-zero corpus. Each doc is (key, text, color); an empty color leaves the
+  // doc untracked by the tag index, and the numeric field needs no records
+  // (ScoreNode's numeric case returns 0 without touching the index).
+  std::shared_ptr<MockIndexSchema> BuildTextTagSchema(
+      const std::vector<std::tuple<std::string, std::string, std::string>>
+          &docs) {
+    auto schema = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    schema->CreateTextIndexSchema();
+    auto text_schema = schema->GetTextIndexSchema();
+    auto text = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
+    auto tag = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+    VMSDK_EXPECT_OK(schema->AddIndex("color", "color", tag));
+    // A numeric field so text+numeric composition can be scored. ScoreNode's
+    // kNumeric case returns 0 without touching the index (the pre-filter admits
+    // range membership), so the numeric index needs no records for scoring.
+    auto numeric =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
+    for (const auto &[k, content, color] : docs) {
+      auto key = StringInternStore::Intern(k);
+      VMSDK_EXPECT_OK(text->AddRecord(key, content));
+      text_schema->CommitKeyData(key);
+      if (!color.empty()) {
+        VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+      }
+      schema->SetIndexMutationSequenceNumber(key, 0);
+    }
+    return schema;
+  }
+
+  // Schema with ONLY a case-insensitive tag field "color" (no text field), for
+  // the degenerate text-less case. Each doc is (key, color).
+  std::shared_ptr<MockIndexSchema> BuildTagOnlySchema(
+      const std::vector<std::pair<std::string, std::string>> &docs) {
+    auto schema = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    auto tag = std::make_shared<indexes::Tag>(
+        CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+    VMSDK_EXPECT_OK(schema->AddIndex("color", "color", tag));
+    for (const auto &[k, color] : docs) {
+      auto key = StringInternStore::Intern(k);
+      VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+      schema->SetIndexMutationSequenceNumber(key, 0);
+    }
+    return schema;
+  }
+
+  // Score `key` against `filter`; nullopt when the predicate did not match.
+  std::optional<float> Score(MockIndexSchema &schema, absl::string_view filter,
+                             const std::string &key) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(schema, filter, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    auto interned = StringInternStore::Intern(key);
+    std::vector<indexes::BorrowedNeighbor> cands{
+        {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+    vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
+    query::ScoreTextQuery(
+        schema, parsed.value().root_predicate.get(),
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std),
+        cands);
+    if (cands.empty()) return std::nullopt;
+    return cands[0].score;
+  }
+};
+
+// Every case has the same shape: score `filter` against `key`, compare to a
+// linear combination of baseline single-filter scores on the same key.
+// `expected` receives the baseline scores in the order they appear in
+// `baselines`. Optional `zero_score_keys` asserts the filter retains those
+// keys (already admitted by the pre-filter, but re-deriving a non-match here)
+// with a zero score rather than dropping them. Docs are (key, text, color);
+// pass "" for either field a case does not use.
+struct ScoreCase {
+  std::string test_name;
+  std::vector<std::tuple<std::string, std::string, std::string>> docs;
+  std::string key;
+  std::vector<std::string> baselines;
+  std::string filter;
+  std::function<float(const std::vector<float> &)> expected;
+  std::vector<std::string> zero_score_keys{};
+};
+
+class ScoreTextQueryTest : public ScoreTextQueryTestBase,
+                           public testing::WithParamInterface<ScoreCase> {};
+
+TEST_P(ScoreTextQueryTest, ScoreMatchesFormula) {
+  const auto &c = GetParam();
+  auto schema = BuildTextTagSchema(c.docs);
+  std::vector<float> bases;
+  for (const auto &f : c.baselines) {
+    auto s = Score(*schema, f, c.key);
+    ASSERT_TRUE(s.has_value()) << "baseline did not match: " << f;
+    bases.push_back(*s);
+  }
+  auto got = Score(*schema, c.filter, c.key);
+  ASSERT_TRUE(got.has_value()) << "filter did not match: " << c.filter;
+  EXPECT_NEAR(*got, c.expected(bases), 1e-4f);
+  for (const auto &k : c.zero_score_keys) {
+    auto s = Score(*schema, c.filter, k);
+    ASSERT_TRUE(s.has_value())
+        << "candidate dropped instead of retained: " << k;
+    EXPECT_EQ(*s, 0.0f) << "expected zero score for non-matching key: " << k;
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ScoreTextQueryTests, ScoreTextQueryTest,
+    ValuesIn<ScoreCase>({
+        // --- Text leaf weight + AND/OR composition ---
+        // Leaf weight scales the score linearly.
+        {.test_name = "text_weight_0_1",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "(@text:hello) => { $weight: 0.1; }",
+         .expected = [](const auto &b) { return 0.1f * b[0]; }},
+        {.test_name = "text_weight_100",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "(@text:hello) => { $weight: 100; }",
+         .expected = [](const auto &b) { return 100.0f * b[0]; }},
+        // AND with default weight sums matching children; a doc missing a child
+        // term re-derives a non-match here, but stays admitted with a zero
+        // score
+        // rather than being dropped.
+        {.test_name = "AndPredicateScoreSumsChildWeights",
+         .docs = {{"key1", "hello world", ""}, {"key2", "hello there", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello", "@text:world"},
+         .filter = "@text:hello @text:world",
+         .expected = [](const auto &b) { return b[0] + b[1]; },
+         .zero_score_keys = {"key2"}},
+        {.test_name = "AndPredicateOwnWeightMultipliesSum",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello @text:world"},
+         .filter = "(@text:hello @text:world) => { $weight: 4.0; }",
+         .expected = [](const auto &b) { return 4.0f * b[0]; }},
+        {.test_name = "AndDefaultWeightChildrenSumToCount",
+         .docs = {{"key1", "hello brave new world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello", "@text:brave", "@text:world"},
+         .filter = "@text:hello @text:brave @text:world",
+         .expected = [](const auto &b) { return b[0] + b[1] + b[2]; }},
+        {.test_name = "OrPredicateDefaultWeightChildrenSum",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello", "@text:world"},
+         .filter = "@text:hello | @text:world",
+         .expected = [](const auto &b) { return b[0] + b[1]; }},
+        {.test_name = "NestedAndWeightsComposeMultiplicatively",
+         .docs = {{"key1", "hello brave new world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello", "@text:brave", "@text:world"},
+         .filter = "(@text:hello @text:brave) => { $weight: 4.0; } @text:world",
+         .expected = [](const auto &b) { return 4.0f * (b[0] + b[1]) + b[2]; }},
+        // Negation is a filter, not a scoring clause: it contributes 0.
+        {.test_name = "NegateContributesZero",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "@text:hello -@text:missing",
+         .expected = [](const auto &b) { return b[0]; }},
+        // Same, even for a doc that contains the negated term: candidate
+        // filtering happens before scoring, so ScoreNode still adds zero for
+        // the negation.
+        {.test_name = "NegateDoesNotInflateEnclosingAnd",
+         .docs = {{"key1", "hello world", ""}, {"key2", "hello there", ""}},
+         .key = "key2",
+         .baselines = {"@text:hello"},
+         .filter = "@text:hello -@text:there",
+         .expected = [](const auto &b) { return b[0]; }},
+
+        // --- Numeric: a filter, never a ranker (contributes 0) ---
+        // Adding a numeric clause to a text query changes nothing.
+        {.test_name = "NumericClauseAddsZeroToText",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "@text:hello @rating:[0 100]",
+         .expected = [](const auto &b) { return b[0]; }},
+        // The enclosing group weight multiplies the text term; numeric adds 0.
+        {.test_name = "NumericInWeightedGroupContributesZero",
+         .docs = {{"key1", "hello world", ""}},
+         .key = "key1",
+         .baselines = {"@text:hello"},
+         .filter = "(@text:hello @rating:[0 100]) => { $weight: 4.0; }",
+         .expected = [](const auto &b) { return 4.0f * b[0]; }},
+
+        // --- Tag: BM25 term with F ≡ 1, IDF over per-tag-value doc count ---
+        // $weight scales the tag term linearly.
+        {.test_name = "TagWeightScalesTerm",
+         .docs = {{"d1", "aa bb", "red"}, {"d2", "aa bb", "blue"}},
+         .key = "d1",
+         .baselines = {"@color:{red}"},
+         .filter = "(@color:{red}) => { $weight: 3.0; }",
+         .expected = [](const auto &b) { return 3.0f * b[0]; }},
+        // Text + tag AND sums the text term and the tag term.
+        {.test_name = "TextAndTagTermsSum",
+         .docs = {{"d1", "hello world", "red"}, {"d2", "hello there", "blue"}},
+         .key = "d1",
+         .baselines = {"@text:hello", "@color:{red}"},
+         .filter = "@text:hello @color:{red}",
+         .expected = [](const auto &b) { return b[0] + b[1]; }},
+        // A union {red|blue} on a doc carrying both sums both value terms.
+        {.test_name = "TagUnionSumsMatchedValues",
+         .docs = {{"d1", "aa bb", "red"},
+                  {"d2", "aa bb", "blue"},
+                  {"d3", "aa bb", "red,blue"}},
+         .key = "d3",
+         .baselines = {"@color:{red}", "@color:{blue}"},
+         .filter = "@color:{red|blue}",
+         .expected = [](const auto &b) { return b[0] + b[1]; }},
+        // A union of values that collapse to the same tag under the index's
+        // case rules ({red|Red} on a case-insensitive index) must score the
+        // value ONCE, not once per query spelling.
+        {.test_name = "TagUnionCaseVariantsScoreOnce",
+         .docs = {{"d1", "aa bb", "red"}, {"d2", "aa bb", "blue"}},
+         .key = "d1",
+         .baselines = {"@color:{red}"},
+         .filter = "@color:{red|Red}",
+         .expected = [](const auto &b) { return b[0]; }},
+    }),
+    [](const TestParamInfo<ScoreCase> &info) { return info.param.test_name; });
+
+// --- Tag scoring: relationships not expressible as a same-key formula --------
+//
+// The formula-shaped cases ($weight, union sum, text+tag sum, numeric adds 0)
+// live in the ScoreTextQueryTest param suite above. These remaining tests
+// compare scores ACROSS keys / schemas, so they stay as standalone TEST_Fs on
+// the shared ScoreTextQueryTestBase fixture. Semantics:
+// docs/redis_numeric_tag_scoring.md.
+
+// A rarer tag value scores higher (IDF). Text length is held equal across docs,
+// so ordering is driven purely by tag-value document frequency:
+// red -> 3 docs, blue -> 2, green -> 1, hence IDF(green) > IDF(blue) >
+// IDF(red).
+TEST_F(ScoreTextQueryTestBase, RarerTagValueScoresHigher) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "aa bb", "red"},
+      {"d2", "aa bb", "red,blue"},
+      {"d3", "aa bb", "red,blue,green"},
+  });
+  auto red = Score(*schema, "@color:{red}", "d1");
+  auto blue = Score(*schema, "@color:{blue}", "d2");
+  auto green = Score(*schema, "@color:{green}", "d3");
+  ASSERT_TRUE(red && blue && green);
+  EXPECT_GT(*green, *blue);
+  EXPECT_GT(*blue, *red);
+  EXPECT_GT(*red, 0.0f);
+}
+
+// Tag term frequency is NOT counted (F ≡ 1): a value repeated within a document
+// scores the same as a single occurrence. doc_len also counts TEXT tokens only,
+// not tags, so the same holds for differing tag counts. Text is held equal.
+TEST_F(ScoreTextQueryTestBase, TagFrequencyAndTagCountDoNotAffectScore) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "aa bb", "red"},
+      {"d2", "aa bb", "red,red,red"},
+      {"d3", "aa bb", "red,blue,green,yellow,purple"},
+  });
+  auto single = Score(*schema, "@color:{red}", "d1");
+  auto repeated = Score(*schema, "@color:{red}", "d2");   // F still 1
+  auto many_tags = Score(*schema, "@color:{red}", "d3");  // doc_len still 2
+  ASSERT_TRUE(single && repeated && many_tags);
+  EXPECT_FLOAT_EQ(*single, *repeated);
+  EXPECT_FLOAT_EQ(*single, *many_tags);
+}
+
+// Shorter TEXT gets a mild boost on its tag term (doc-length normalization uses
+// the TEXT length).
+TEST_F(ScoreTextQueryTestBase, ShorterTextBoostsTagTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "aa", "red"},           // text length 1
+      {"d2", "aa bb cc dd", "red"},  // text length 4
+  });
+  auto short_doc = Score(*schema, "@color:{red}", "d1");
+  auto long_doc = Score(*schema, "@color:{red}", "d2");
+  ASSERT_TRUE(short_doc && long_doc);
+  EXPECT_GT(*short_doc, *long_doc);
+}
+
+// On a text-less index every doc has TEXT length 0, so avg_doc_len is 0 and the
+// scorer returns a well-defined 0 — NOT Redis's nan. The candidate is kept
+// (matched), just contributes nothing to relevance.
+TEST_F(ScoreTextQueryTestBase, TextLessIndexScoresZeroNotNan) {
+  auto schema = BuildTagOnlySchema({{"d1", "red"}, {"d2", "blue"}});
+  auto score = Score(*schema, "@color:{red}", "d1");
+  ASSERT_TRUE(score.has_value());
+  EXPECT_FALSE(std::isnan(*score));
+  EXPECT_FLOAT_EQ(*score, 0.0f);
+}
+
+// A scorer that hands back NaN, to drive the scoring boundary directly. Scorer
+// is a public virtual seam, so a NaN there is reachable regardless of what
+// BM25STD itself can produce. std::isnan/std::nanf are unusable under
+// -ffast-math, so build the NaN from its bit pattern and classify it with the
+// codebase's own bit-pattern check.
+class NaNScorer : public indexes::scoring::Scorer {
+ public:
+  static float MakeNaN() {
+    static constexpr uint32_t kQuietNaNBits = 0x7FC00000U;
+    float value;
+    std::memcpy(&value, &kQuietNaNBits, sizeof(value));
+    return value;
+  }
+  std::string_view Name() const override { return "NANTEST"; }
+  indexes::scoring::ScorerType Type() const override {
+    return indexes::scoring::ScorerType::kBm25Std;
+  }
+  bool NeedsDocumentLength() const override { return false; }
+  float PrecomputeIDF(const indexes::scoring::IdfInput &) const override {
+    return 1.0f;
+  }
+  float ScoreLeaf(const indexes::scoring::LeafScoreInput &) const override {
+    return 1.0f;
+  }
+  float ComposeDocumentScore(float, float) const override { return MakeNaN(); }
+};
+
+// A NaN must never reach Neighbor.score: SearchResult::TrimResults sorts on
+// that field, and NaN compares false against everything, which violates strict
+// weak ordering and makes std::sort undefined behavior rather than merely
+// misordered.
+TEST_F(ScoreTextQueryTestBase, NaNScoreIsClampedBeforeReachingNeighbor) {
+  ASSERT_TRUE(indexes::scoring::IsNaN(NaNScorer::MakeNaN()))
+      << "test cannot construct a NaN; the clamp assertion below is vacuous";
+  auto schema = BuildTextTagSchema({{"d1", "hello world", "red"}});
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, "@text:hello", options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+
+  auto interned = StringInternStore::Intern("d1");
+  std::vector<indexes::BorrowedNeighbor> cands{
+      {BorrowedInternedStringPtr(interned), 0.0f, 0.0f}};
+  NaNScorer nan_scorer;
+  {
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    query::ScoreTextQuery(*schema, parsed.value().root_predicate.get(),
+                          &nan_scorer, cands);
+  }
+  ASSERT_EQ(cands.size(), 1u);
+  EXPECT_FALSE(indexes::scoring::IsNaN(cands[0].score));
+  EXPECT_FLOAT_EQ(cands[0].score, 0.0f);
+}
+
+// The recompute path (SingleDocumentScorer) must land on the same scale as the
+// shard-side extra-step path (ScoreTextQuery) — both walk the same ScoreNode.
+// Pinned at a real NON-ZERO value (text + tag terms) so a magnitude divergence
+// in either path is caught; the numeric clause adds 0 and must not perturb it.
+TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "hello world", "red"},
+      {"d2", "hello there", "blue"},
+  });
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@text:hello @color:{red} @rating:[0 100]";
+
+  // Extra-step path: Score() takes the reader lock internally.
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
+
+  // Recompute path: SingleDocumentScorer takes the lock itself, so construct
+  // and call it WITHOUT the reader lock held.
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::SingleDocumentScorer document_scorer(
+      *schema, parsed.value().root_predicate.get(), scorer);
+  auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// A query that omits SCORER picks up the `default-scorer` config.
+// Needs the fixture: UnitTestSearchParameters reaches ValkeyModule_Milliseconds
+// via cancel::Make, and the mock module only lives between SetUp and TearDown.
+TEST_F(ValkeySearchTest, DefaultScorerSeedsSearchParameters) {
+  auto &config = options::GetDefaultScorer();
+  const int original = config.GetValue();
+  for (const auto &[name, expected] : *indexes::scoring::kScorerByStr) {
+    VMSDK_EXPECT_OK(config.FromString(name));
+    EXPECT_EQ(UnitTestSearchParameters().scorer, expected) << name;
+  }
+  VMSDK_EXPECT_OK(config.SetValue(original));
+}
+
+// A shard scores with whatever SearchParameters::scorer holds, so the fanout
+// request must carry the coordinator's choice; otherwise SCORER is silently
+// downgraded to the default on every shard.
+TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
+  for (auto type : {indexes::scoring::ScorerType::kBm25Std,
+                    indexes::scoring::ScorerType::kTfidf}) {
+    EXPECT_EQ(coordinator::ScorerFromGRPC(coordinator::ScorerToGRPC(type)),
+              type);
+  }
+  // An absent field (peer that predates the field) must mean the default.
+  coordinator::SearchIndexPartitionRequest request;
+  EXPECT_EQ(coordinator::ScorerFromGRPC(request.scorer()),
+            indexes::scoring::ScorerType::kBm25Std);
+}
+
 }  // namespace
 }  // namespace valkey_search

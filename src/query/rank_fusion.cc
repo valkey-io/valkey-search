@@ -32,10 +32,10 @@ namespace {
 struct FusedEntry {
   const indexes::Neighbor* representative = nullptr;  // for attribute_contents
   double score = 0.0;
-  // Per-arm raw distances. nullopt means "doc absent from this arm". (Using
-  // optional rather than a NaN sentinel because the build uses -ffast-math,
-  // under which NaN comparisons are undefined.)
-  std::vector<std::optional<double>> per_arm_distance;
+  // Per-arm raw scores (Neighbor::score). nullopt means "doc absent from this
+  // arm". (Using optional rather than a NaN sentinel because the build uses
+  // -ffast-math, under which NaN comparisons are undefined.)
+  std::vector<std::optional<double>> per_arm_score;
 };
 
 // Format a double the way the rest of the code formats reply doubles.
@@ -62,9 +62,10 @@ void AttachArmScore(indexes::Neighbor& n, const std::string& alias,
 }
 
 // Build the merged neighbor list from the accumulator. Each fused neighbor
-// carries the fused score in `distance` (positive = better; opposite of the
-// vector-distance convention). Per-arm score aliases are added to
-// attribute_contents.
+// carries the fused score in `Neighbor::score` (higher = better), which is what
+// the reply path and the aggregate post-pipeline read. `distance` is set to the
+// same value so anything still keyed on it stays consistent. Per-arm score
+// aliases are added to attribute_contents.
 std::vector<indexes::Neighbor> AssembleResult(
     const std::vector<ArmInput>& arms,
     absl::flat_hash_map<std::string, FusedEntry>& accum) {
@@ -73,7 +74,8 @@ std::vector<indexes::Neighbor> AssembleResult(
   for (auto& [key, entry] : accum) {
     indexes::Neighbor n;
     n.external_id = entry.representative->external_id;
-    n.distance = static_cast<float>(entry.score);
+    n.score = static_cast<float>(entry.score);
+    n.distance = n.score;
     // Carry over the representative's attribute_contents as the base. We
     // shallow-copy via move-fresh; if we want to merge from multiple arms in
     // the future, this is the place.
@@ -97,7 +99,7 @@ std::vector<indexes::Neighbor> AssembleResult(
       if (!arms[i].score_alias.has_value()) {
         continue;
       }
-      const auto& d = entry.per_arm_distance[i];
+      const auto& d = entry.per_arm_score[i];
       if (!d.has_value()) {
         // Doc was not present in this arm — omit the alias entry.
         continue;
@@ -110,8 +112,8 @@ std::vector<indexes::Neighbor> AssembleResult(
   // determinism.
   std::sort(out.begin(), out.end(),
             [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
-              if (a.distance != b.distance) {
-                return a.distance > b.distance;
+              if (a.score != b.score) {
+                return a.score > b.score;
               }
               return a.external_id->Str() < b.external_id->Str();
             });
@@ -136,27 +138,29 @@ std::vector<indexes::Neighbor> RRF(std::vector<ArmInput> arms) {
       auto [it, inserted] = accum.try_emplace(n.external_id->Str());
       if (inserted) {
         it->second.representative = &n;
-        it->second.per_arm_distance.assign(arms.size(), std::nullopt);
+        it->second.per_arm_score.assign(arms.size(), std::nullopt);
       }
       it->second.score += 1.0 / (static_cast<double>(arm.rrf_constant) +
                                  static_cast<double>(rank + 1));
-      it->second.per_arm_distance[arm_i] = static_cast<double>(n.distance);
+      it->second.per_arm_score[arm_i] = static_cast<double>(n.score);
     }
   }
   return AssembleResult(arms, accum);
 }
 
 std::vector<indexes::Neighbor> Linear(std::vector<ArmInput> arms) {
-  // Per-arm normalization: walk neighbors[0..window) and capture min/max of
-  // `distance`. Then translate distance -> normalized score in [0,1]:
+  // Weighted sum of the arms' raw scores: sum over arms of
+  // `weight_i * score_i`, where a doc absent from an arm contributes 0 from
+  // that arm.
   //
-  //   normalized = 1 - (d - min) / (max - min)
-  //
-  // (Lower distance = higher normalized score.) If max == min, all docs in
-  // the arm are equally good — normalized score is 1.0.
-  //
-  // Then for each surviving doc, sum weight_i * normalized_i across arms.
-  // Docs absent from an arm contribute 0 from that arm.
+  // The scores are used as they stand — there is no per-arm normalization.
+  // Normalizing would make a document's fused score depend on which *other*
+  // documents happened to come back in the same arm, so the same document
+  // against the same query would score differently as the corpus around it
+  // changed. Callers balance the arms with ALPHA/BETA instead. Every arm
+  // reaches here higher-is-better: a vector arm's distance was already turned
+  // into a similarity by the caller (see ConvertVectorArmScoresToSimilarity in
+  // ft_hybrid.cc).
   absl::flat_hash_map<std::string, FusedEntry> accum;
   for (size_t arm_i = 0; arm_i < arms.size(); ++arm_i) {
     const auto& arm = arms[arm_i];
@@ -167,43 +171,16 @@ std::vector<indexes::Neighbor> Linear(std::vector<ArmInput> arms) {
         arm.window == 0
             ? arm.neighbors->size()
             : std::min(static_cast<size_t>(arm.window), arm.neighbors->size());
-    if (cap == 0) {
-      continue;
-    }
-
-    double min_d = (*arm.neighbors)[0].distance;
-    double max_d = min_d;
-    for (size_t rank = 0; rank < cap; ++rank) {
-      double d = (*arm.neighbors)[rank].distance;
-      if (d < min_d) {
-        min_d = d;
-      }
-      if (d > max_d) {
-        max_d = d;
-      }
-    }
-    const double range = max_d - min_d;
 
     for (size_t rank = 0; rank < cap; ++rank) {
       const auto& n = (*arm.neighbors)[rank];
       auto [it, inserted] = accum.try_emplace(n.external_id->Str());
       if (inserted) {
         it->second.representative = &n;
-        it->second.per_arm_distance.assign(arms.size(), std::nullopt);
+        it->second.per_arm_score.assign(arms.size(), std::nullopt);
       }
-      // Min-max normalize to [0,1]. For distance-based arms (the default,
-      // lower = better) invert so a smaller distance yields a higher score.
-      // For score-based arms (higher = better) keep the raw ordering, otherwise
-      // the best-scoring document would be pushed to 0.0 and its rank inverted.
-      double normalized;
-      if (range <= 0.0) {
-        normalized = 1.0;
-      } else {
-        const double scaled = (static_cast<double>(n.distance) - min_d) / range;
-        normalized = arm.higher_is_better ? scaled : 1.0 - scaled;
-      }
-      it->second.score += arm.weight * normalized;
-      it->second.per_arm_distance[arm_i] = static_cast<double>(n.distance);
+      it->second.score += arm.weight * static_cast<double>(n.score);
+      it->second.per_arm_score[arm_i] = static_cast<double>(n.score);
     }
   }
   return AssembleResult(arms, accum);
@@ -229,14 +206,14 @@ std::vector<indexes::Neighbor> Function(
       auto [it, inserted] = accum.try_emplace(n.external_id->Str());
       if (inserted) {
         it->second.representative = &n;
-        it->second.per_arm_distance.assign(arms.size(), std::nullopt);
+        it->second.per_arm_score.assign(arms.size(), std::nullopt);
       }
-      it->second.per_arm_distance[arm_i] = static_cast<double>(n.distance);
+      it->second.per_arm_score[arm_i] = static_cast<double>(n.score);
     }
   }
   // Pass 2: compute the combined score for each document via the user fn.
   for (auto& [key, entry] : accum) {
-    entry.score = score_fn(entry.per_arm_distance);
+    entry.score = score_fn(entry.per_arm_score);
   }
   return AssembleResult(arms, accum);
 }

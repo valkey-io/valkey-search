@@ -164,9 +164,8 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
 
     def test_combine_function_uses_vsim_score(self):
         """COMBINE FUNCTION computes the fused score from a user expression.
-        With EXPR '@v + 1', the fused score equals each doc's VSIM score + 1
-        (the SEARCH text arm contributes 0, since text scoring is not yet
-        implemented)."""
+        With EXPR '@v + 1', the fused score equals each doc's VSIM score + 1 --
+        the text arm's score is not referenced by the expression."""
         client = self.server.get_new_client()
         self.setup_index(client)
         result = client.execute_command(
@@ -439,6 +438,165 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             )
 
 
+class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
+    """Result framing and score conventions: how many rows come back, what
+    WINDOW bounds, what number the VSIM arm reports, and how LINEAR combines
+    the arms. These are the points where FT.HYBRID differs from FT.AGGREGATE,
+    and each is pinned against the Redis behavior the compatibility suite
+    captures (integration/compatibility/generate_hybrid.py)."""
+
+    INDEX = "idx"
+    NUM_DOCS = 25
+    Q = _vec(1.0, 0.0, 0.0, 0.0)
+
+    def setup_index(self, client: Valkey) -> None:
+        client.execute_command(
+            "FT.CREATE", self.INDEX,
+            "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "title", "TEXT", "NOSTEM",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+        )
+        for i in range(self.NUM_DOCS):
+            client.hset(
+                f"doc:{i:02d}",
+                mapping={
+                    # Every document matches `hello`, so the SEARCH arm alone
+                    # returns more rows than the default page.
+                    "title": " ".join(["hello"] * (1 + i % 3) + ["world"] * i),
+                    "vec": _vec(1.0 + i, 0.0, 0.0, 0.0),
+                },
+            )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == self.NUM_DOCS,
+            timeout=10)
+
+    def _hybrid(self, client, *extra):
+        return client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+            *extra,
+            "PARAMS", "2", "q", self.Q,
+        )
+
+    def test_default_limit_is_ten(self):
+        """With no LIMIT, FT.HYBRID returns one page of 10 -- unlike
+        FT.AGGREGATE, which returns everything."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        result = self._hybrid(client)
+        assert result[0] == 10, f"expected the default page of 10, got {result[0]}"
+
+    def test_explicit_limit_overrides_the_default(self):
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        assert self._hybrid(client, "LIMIT", "0", "3")[0] == 3
+        # The whole fused set is the SEARCH arm unioned with the VSIM top-10.
+        # WINDOW is raised past the corpus so the default of 20 does not cap
+        # the text arm first.
+        assert self._hybrid(
+            client, "COMBINE", "RRF", "2", "WINDOW", "100",
+            "LIMIT", "0", "100")[0] == self.NUM_DOCS
+
+    def test_window_bounds_the_arms_not_the_fused_list(self):
+        """WINDOW caps how much of each arm reaches fusion. It does not cap the
+        fused list, so two arms with disjoint windows can produce more rows
+        than WINDOW itself."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        result = self._hybrid(
+            client, "COMBINE", "RRF", "2", "WINDOW", "6", "LIMIT", "0", "100")
+        # 6 from the text arm plus up to 6 from the vector arm; the two
+        # rankings disagree here, so the union exceeds the window.
+        assert result[0] > 6, \
+            f"WINDOW must not truncate the fused list; got {result[0]} rows"
+        assert result[0] <= 12
+
+    def test_vsim_score_is_similarity_not_distance(self):
+        """The VSIM arm reports 1 / (1 + distance): higher is better, and the
+        document sitting on the query vector scores exactly 1."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
+            "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+            "LIMIT", "0", "100",
+            "PARAMS", "2", "q", self.Q,
+        )
+        seen = {}
+        for rec in result[1:]:
+            d = self._rec_to_dict(rec)
+            if b"v" in d:
+                seen[d[b"title"]] = float(d[b"v"])
+        assert seen, "no document carried the VSIM score alias"
+        # doc:00's vector is the query vector, so distance 0 -> similarity 1.
+        exact = [v for t, v in seen.items() if t == b"hello"]
+        assert exact and abs(exact[0] - 1.0) < 1e-6, \
+            f"document on the query vector should score 1.0, got {exact}"
+        # Every reported similarity lies in (0, 1].
+        assert all(0.0 < v <= 1.0 for v in seen.values()), seen
+
+    def test_linear_is_an_unnormalized_weighted_sum(self):
+        """LINEAR sums ALPHA * text_score + BETA * vector_score over the arms'
+        raw scores -- no per-arm normalization, so the fused score is
+        reproducible from the two per-arm aliases alone."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        alpha, beta = 0.3, 0.7
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
+            "COMBINE", "LINEAR", "8",
+            "ALPHA", str(alpha), "BETA", str(beta), "WINDOW", "100",
+            "YIELD_SCORE_AS", "h",
+            "LIMIT", "0", "100",
+            "PARAMS", "2", "q", self.Q,
+        )
+        checked = 0
+        for rec in result[1:]:
+            d = self._rec_to_dict(rec)
+            assert b"h" in d, f"missing fused score in {rec}"
+            s = float(d[b"s"]) if b"s" in d else 0.0
+            v = float(d[b"v"]) if b"v" in d else 0.0
+            h = float(d[b"h"])
+            assert abs(h - (alpha * s + beta * v)) < 1e-5, \
+                f"h={h} != {alpha}*{s} + {beta}*{v}"
+            checked += 1
+        assert checked == self.NUM_DOCS
+
+    def test_score_column_appears_only_when_named(self):
+        """The fused score reaches the reply under the caller's alias. Without
+        YIELD_SCORE_AS there is no score column at all."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        named = self._hybrid(
+            client, "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "h",
+            "LIMIT", "0", "3")
+        for rec in named[1:]:
+            assert b"h" in self._rec_to_dict(rec), f"missing alias in {rec}"
+
+        for extra in (
+            ["COMBINE", "RRF", "0", "LIMIT", "0", "3"],   # COMBINE, no alias
+            ["LIMIT", "0", "3"],                          # no COMBINE at all
+        ):
+            unnamed = self._hybrid(client, *extra)
+            for rec in unnamed[1:]:
+                keys = set(self._rec_to_dict(rec))
+                assert not any(k.startswith(b"__") for k in keys), \
+                    f"unnamed fused score leaked into the reply: {keys}"
+
+    @staticmethod
+    def _rec_to_dict(rec):
+        return {bytes(rec[i]): rec[i + 1] for i in range(0, len(rec), 2)}
+
+
 class TestFtHybridCluster(ValkeySearchClusterTestCase):
     """Cluster-mode tests covering cross-shard fanout and LOCALONLY routing."""
 
@@ -492,6 +650,9 @@ class TestFtHybridCluster(ValkeySearchClusterTestCase):
             "SEARCH", "@title:hello",
             "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
             "COMBINE", "RRF", "2", "WINDOW", "1000",
+            # Explicit LIMIT: FT.HYBRID returns 10 rows by default, and this
+            # test is about the size of the cross-shard union, not the page.
+            "LIMIT", "0", "100",
             "PARAMS", "2", "q", self.Q,
         )
         assert isinstance(result, list)
@@ -507,6 +668,7 @@ class TestFtHybridCluster(ValkeySearchClusterTestCase):
             "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
             "COMBINE", "LINEAR", "6", "ALPHA", "0.7", "BETA", "0.3",
             "WINDOW", "1000",
+            "LIMIT", "0", "100",  # see test_fanout_basic_rrf
             "PARAMS", "2", "q", self.Q,
         )
         assert isinstance(result, list)
@@ -540,6 +702,7 @@ class TestFtHybridCluster(ValkeySearchClusterTestCase):
         )
         assert isinstance(result, list)
         # Per-shard local result: fewer than the full 30-doc cluster total.
+        # (Also under the default LIMIT of 10.)
         assert 0 <= result[0] < 30
 
 

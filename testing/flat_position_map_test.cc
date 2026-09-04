@@ -116,7 +116,6 @@ TEST_F(FlatPositionMapTest, SinglePositionSingleField) {
   EXPECT_FALSE(iter.IsValid());
 
   EXPECT_EQ(flat_map->CountPositions(), 1);
-  EXPECT_EQ(flat_map->CountTermFrequency(), 1);
 }
 
 TEST_F(FlatPositionMapTest, MultiplePositionsIteration) {
@@ -189,15 +188,6 @@ TEST_F(FlatPositionMapTest, AllFieldsSet) {
 
   PositionIterator iter(*flat_map);
   EXPECT_EQ(iter.GetFieldMask(), all_fields);
-}
-
-TEST_F(FlatPositionMapTest, TermFrequencyCalculation) {
-  // Position 10: 1 field, Position 20: 2 fields, Position 30: 3 fields
-  auto position_map =
-      CreatePositionMap({{10, 0b001}, {20, 0b011}, {30, 0b111}}, 3);
-  FlatPositionMapPtr flat_map(position_map, 3);
-
-  EXPECT_EQ(flat_map->CountTermFrequency(), 6);  // 1+2+3
 }
 
 //=============================================================================
@@ -749,30 +739,6 @@ TEST_F(FlatPositionMapTest, RandomSkipForwardPatterns) {
   }
 }
 
-TEST_F(FlatPositionMapTest, RandomMapWithTermFrequencyVerification) {
-  // Verify term frequency calculation across random maps
-  RandomPositionMapGenerator gen(700);
-  std::mt19937 rng(700);
-
-  for (int test = 0; test < 100; ++test) {
-    size_t num_elements = std::uniform_int_distribution<size_t>(10, 100)(rng);
-    size_t num_fields = std::uniform_int_distribution<size_t>(1, 16)(rng);
-
-    auto positions = gen.GeneratePositionMap(num_elements, num_fields);
-    auto position_map = CreatePositionMap(positions, num_fields);
-    FlatPositionMapPtr flat_map(position_map, num_fields);
-
-    // Calculate expected term frequency
-    size_t expected_freq = 0;
-    for (const auto& [pos, mask] : positions) {
-      expected_freq += __builtin_popcountll(mask);
-    }
-
-    EXPECT_EQ(flat_map->CountTermFrequency(), expected_freq)
-        << "Test " << test << " failed: term frequency mismatch";
-  }
-}
-
 TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
   // Test very large position maps (100K-500K positions) across multiple
   // scenarios
@@ -796,7 +762,6 @@ TEST_F(FlatPositionMapTest, VeryLargeMapScenarios) {
       FlatPositionMapPtr flat_map(position_map, 1);
 
       ASSERT_EQ(flat_map->CountPositions(), target_size);
-      EXPECT_EQ(flat_map->CountTermFrequency(), target_size);
 
       // Test skip to various positions
       PositionIterator iter1(*flat_map);

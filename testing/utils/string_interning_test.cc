@@ -17,7 +17,9 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/btree_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "src/utils/allocator.h"
 #include "src/utils/intrusive_ref_count.h"
@@ -201,6 +203,53 @@ TEST_F(BorrowedInternedStringPtrTest, MaterializedPtrKeepsStringAlive) {
   EXPECT_EQ(materialized.RefCount(), 1);
   EXPECT_EQ(materialized->Str(), "lifetime_test");
   EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Transparent lookup tests
+// ---------------------------------------------------------------------------
+
+class TransparentLookupTest : public vmsdk::ValkeyTest {};
+
+// If these diverge, every borrowed lookup silently misses instead of crashing.
+TEST_F(TransparentLookupTest, HashAgreesAcrossPointerTypes) {
+  auto owned = StringInternStore::Intern("same_string");
+  BorrowedInternedStringPtr borrowed(owned);
+  EXPECT_EQ(InternedStringPtrHash{}(owned), InternedStringPtrHash{}(borrowed));
+  EXPECT_TRUE(InternedStringPtrEq{}(owned, borrowed));
+  EXPECT_TRUE(InternedStringPtrEq{}(borrowed, owned));
+  EXPECT_FALSE(InternedStringPtrLess{}(owned, borrowed));
+  EXPECT_FALSE(InternedStringPtrLess{}(borrowed, owned));
+}
+
+TEST_F(TransparentLookupTest, HashMapFoundViaBorrowedKeyWithoutRefCounting) {
+  auto owned = StringInternStore::Intern("present");
+  auto absent = StringInternStore::Intern("absent");
+  InternedStringHashMap<int> map;
+  map[owned] = 42;
+  // The map holds a reference; the probe below must not add another.
+  ASSERT_EQ(owned.RefCount(), 2);
+
+  auto it = map.find(BorrowedInternedStringPtr(owned));
+  ASSERT_NE(it, map.end());
+  EXPECT_EQ(it->second, 42);
+  EXPECT_EQ(map.find(BorrowedInternedStringPtr(absent)), map.end());
+  EXPECT_EQ(owned.RefCount(), 2);
+  EXPECT_EQ(absent.RefCount(), 1);
+}
+
+TEST_F(TransparentLookupTest, BtreeMapFoundViaBorrowedKeyWithoutRefCounting) {
+  auto owned = StringInternStore::Intern("present");
+  auto absent = StringInternStore::Intern("absent");
+  absl::btree_map<InternedStringPtr, int, InternedStringPtrLess> map;
+  map[owned] = 7;
+  ASSERT_EQ(owned.RefCount(), 2);
+
+  auto it = map.find(BorrowedInternedStringPtr(owned));
+  ASSERT_NE(it, map.end());
+  EXPECT_EQ(it->second, 7);
+  EXPECT_EQ(map.find(BorrowedInternedStringPtr(absent)), map.end());
+  EXPECT_EQ(owned.RefCount(), 2);
 }
 
 class StringInterningMultithreadTest : public vmsdk::ValkeyTest {};
@@ -1103,6 +1152,39 @@ TEST_F(BagOfInternedStringPtrsTest, ChurnAcrossAllModes) {
   }
   for (const auto& k : keys) {
     EXPECT_EQ(k.RefCount(), 1);
+  }
+}
+
+// Each representation takes a different path, so cover all four modes.
+TEST_F(BagOfInternedStringPtrsTest, ContainsViaBorrowedKeyInEveryMode) {
+  const std::vector<std::pair<size_t, BagOfInternedStringPtrs::TestMode>> cases{
+      {1, BagOfInternedStringPtrs::TestMode::kSingle},
+      {3, BagOfInternedStringPtrs::TestMode::kArray4},
+      {6, BagOfInternedStringPtrs::TestMode::kArray8},
+      {12, BagOfInternedStringPtrs::TestMode::kSet},
+  };
+  for (const auto& [count, expected_mode] : cases) {
+    std::vector<InternedStringPtr> keys;
+    for (size_t i = 0; i < count; ++i) {
+      keys.push_back(StringInternStore::Intern(absl::StrCat("mode_key_", i)));
+    }
+    auto absent = StringInternStore::Intern("mode_key_absent");
+
+    BagOfInternedStringPtrs bag;
+    for (const auto& k : keys) {
+      bag.insert(k);
+    }
+    ASSERT_EQ(bag.TestModeForTesting(), expected_mode) << "count=" << count;
+
+    for (const auto& k : keys) {
+      EXPECT_TRUE(bag.contains(BorrowedInternedStringPtr(k)))
+          << "count=" << count << " key=" << k->Str();
+      // The bag holds one reference; a borrowed probe must not add another.
+      EXPECT_EQ(k.RefCount(), 2) << "count=" << count;
+    }
+    EXPECT_FALSE(bag.contains(BorrowedInternedStringPtr(absent)))
+        << "count=" << count;
+    EXPECT_EQ(absent.RefCount(), 1) << "count=" << count;
   }
 }
 

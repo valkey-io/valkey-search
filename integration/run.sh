@@ -38,14 +38,19 @@ while [ $# -gt 0 ]; do
     BUILD_CONFIG="debug"
     LOG_INFO "Testing in debug mode"
     ;;
+  --test-errors-stdout)
+    shift || true
+    ;;
   --asan)
     shift || true
     SAN_SUFFIX="-asan"
+    export SAN_BUILD="address"
     LOG_INFO "Assuming ASan build"
     ;;
   --tsan)
     shift || true
     SAN_SUFFIX="-tsan"
+    export SAN_BUILD="thread"
     LOG_INFO "Assuming TSan build"
     ;;
   --capture)
@@ -161,13 +166,12 @@ function run_pytest() {
   
   LOG_INFO "Running: ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/"
   # Capture pytest output to check for sanitizer errors
-  if [[ "$(uname)" == "Darwin" ]]; then
-    ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --color=yes --cache-clear -v ${ROOT_DIR}/integration/ 2>&1 | tee ${PYTEST_OUTPUT_LOG}
-    RUN_SUCCESS=${PIPESTATUS[0]}
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    script -q ${PYTEST_OUTPUT_LOG} ${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/
   else
     script -q -e -c "${PYTHON_PATH} -m pytest ${FILTER_ARGS} ${CAPTURE_ARG} --cache-clear -v ${ROOT_DIR}/integration/" ${PYTEST_OUTPUT_LOG}
-    RUN_SUCCESS=$?
   fi
+  RUN_SUCCESS=$?
 }
 
 function run_with_retries() {

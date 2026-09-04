@@ -24,6 +24,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "vmsdk/src/log.h"
@@ -33,16 +34,8 @@
 
 class MockValkeyModule {
  public:
-  MockValkeyModule() {
-    ON_CALL(*this, EventLoopAddOneShot)
-        .WillByDefault(
-            [](ValkeyModuleEventLoopOneShotFunc callback, void *data) -> int {
-              if (callback) {
-                callback(data);
-              }
-              return 0;
-            });
-  };
+  MockValkeyModule();
+  ~MockValkeyModule() { RunPendingOneShots(); }
   MOCK_METHOD(ValkeyModuleBlockedClient *, BlockClientOnAuth,
               (ValkeyModuleCtx * ctx, ValkeyModuleAuthCallback reply_callback,
                void (*free_privdata)(ValkeyModuleCtx *, void *)));
@@ -87,9 +80,11 @@ class MockValkeyModule {
   MOCK_METHOD(int, KeyExists, (ValkeyModuleCtx * ctx, ValkeyModuleString *key));
   MOCK_METHOD(ValkeyModuleKey *, OpenKey,
               (ValkeyModuleCtx * ctx, ValkeyModuleString *key, int flags));
-  MOCK_METHOD(int, HashExternalize,
+  MOCK_METHOD(int, HashHasStringRef,
+              (ValkeyModuleKey * key, ValkeyModuleString *field));
+  MOCK_METHOD(int, HashSetStringRef,
               (ValkeyModuleKey * key, ValkeyModuleString *field,
-               ValkeyModuleHashExternCB fn, void *privdata));
+               const char *buf, size_t len));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
   MOCK_METHOD(mstime_t, GetExpire, (ValkeyModuleKey * key));
   MOCK_METHOD(int, HashGet,
@@ -282,7 +277,32 @@ class MockValkeyModule {
   MOCK_METHOD(ValkeyModuleString *, GetCurrentUserName,
               (ValkeyModuleCtx * ctx));
   MOCK_METHOD(long long, Milliseconds, ());
+
+  void RunPendingOneShots() {
+    std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> shots;
+    {
+      absl::MutexLock lock(&one_shots_mutex_);
+      shots = std::move(one_shots);
+      one_shots.clear();
+    }
+    for (auto &one_shot : shots) {
+      one_shot.first(one_shot.second);
+    }
+  }
+  mutable absl::Mutex one_shots_mutex_;
+  std::vector<std::pair<ValkeyModuleEventLoopOneShotFunc, void *>> one_shots;
 };
+
+inline MockValkeyModule::MockValkeyModule() {
+  ON_CALL(*this, EventLoopAddOneShot)
+      .WillByDefault(
+          [this](ValkeyModuleEventLoopOneShotFunc callback, void *data) -> int {
+            absl::MutexLock lock(&one_shots_mutex_);
+            one_shots.push_back({callback, data});
+            return 0;
+          });
+}
+
 // NOLINTBEGIN(readability-identifier-naming)
 // Global kMockValkeyModule is a fake Valkey module used for static wrappers
 // around MockValkeyModule methods.
@@ -593,15 +613,14 @@ inline ValkeyModuleString *TestValkeyModule_CreateString(ValkeyModuleCtx *ctx
 
 inline void TestValkeyModule_FreeString(ValkeyModuleCtx *ctx [[maybe_unused]],
                                         ValkeyModuleString *str) {
-  str->cnt--;
-  if (str->cnt == 0) {
+  if (--str->cnt == 0) {
     delete str;
   }
 }
 
 inline void TestValkeyModule_RetainString(ValkeyModuleCtx *ctx [[maybe_unused]],
                                           ValkeyModuleString *str) {
-  str->cnt++;
+  ++str->cnt;
 }
 
 inline int TestValkeyModule_EventLoopAdd(int fd, int mask,
@@ -663,6 +682,34 @@ inline int TestValkeyModule_HashExternalizeDefaultImpl(
   return VALKEYMODULE_OK;
 }
 
+inline int TestValkeyModule_HashSetStringRefDefaultImpl(
+    ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf,
+    size_t len) {
+  return VALKEYMODULE_OK;
+}
+
+inline int TestValkeyModule_HashHasStringRefDefaultImpl(
+    ValkeyModuleKey *key, ValkeyModuleString *field) {
+  return VALKEYMODULE_ERR;
+}
+
+inline int TestValkeyModule_HashGetExistsDefaultImpl(ValkeyModuleKey *key,
+                                                     int flags,
+                                                     const char *field,
+                                                     int *exists_out,
+                                                     void *terminating_null) {
+  CHECK(false);
+  return VALKEYMODULE_ERR;
+}
+
+inline int TestValkeyModule_HashGetDefaultImpl(ValkeyModuleKey *key, int flags,
+                                               const char *field,
+                                               ValkeyModuleString **value_out,
+                                               void *terminating_null) {
+  CHECK(false);
+  return VALKEYMODULE_ERR;
+}
+
 inline int TestValkeyModule_GetApiDefaultImpl(const char *name, void *func) {
   return VALKEYMODULE_OK;
 }
@@ -683,11 +730,15 @@ inline ValkeyModuleKey *TestValkeyModule_OpenKey(ValkeyModuleCtx *ctx,
   return kMockValkeyModule->OpenKey(ctx, key, flags);
 }
 
-inline int TestValkeyModule_HashExternalize(ValkeyModuleKey *key,
-                                            ValkeyModuleString *field,
-                                            ValkeyModuleHashExternCB fn,
-                                            void *privdata) {
-  return kMockValkeyModule->HashExternalize(key, field, fn, privdata);
+inline int TestValkeyModule_HashHasStringRef(ValkeyModuleKey *key,
+                                             ValkeyModuleString *field) {
+  return kMockValkeyModule->HashHasStringRef(key, field);
+}
+
+inline int TestValkeyModule_HashSetStringRef(ValkeyModuleKey *key,
+                                             ValkeyModuleString *field,
+                                             const char *buf, size_t len) {
+  return kMockValkeyModule->HashSetStringRef(key, field, buf, len);
 }
 
 inline int TestValkeyModule_GetApi(const char *name, void *func) {
@@ -1554,7 +1605,8 @@ inline void TestValkeyModule_Init() {
       &TestValkeyModule_SubscribeToKeyspaceEvents;
   ValkeyModule_KeyExists = &TestValkeyModule_KeyExists;
   ValkeyModule_OpenKey = &TestValkeyModule_OpenKey;
-  ValkeyModule_HashExternalize = &TestValkeyModule_HashExternalize;
+  ValkeyModule_HashSetStringRef = &TestValkeyModule_HashSetStringRef;
+  ValkeyModule_HashHasStringRef = &TestValkeyModule_HashHasStringRef;
   ValkeyModule_GetApi = &TestValkeyModule_GetApi;
   ValkeyModule_GetExpire = &TestValkeyModule_GetExpire;
   ValkeyModule_HashGet = &TestValkeyModule_HashGet;
@@ -1602,6 +1654,7 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_RegisterStringConfig = &TestValkeyModule_RegisterStringConfig;
   ValkeyModule_RegisterEnumConfig = &TestValkeyModule_RegisterEnumConfig;
   ValkeyModule_LoadConfigs = &TestValkeyModule_LoadConfigs;
+  ValkeyModule_StringCompare = &TestValkeyModule_StringCompare;
   ValkeyModule_SetConnectionProperties =
       &TestValkeyModule_SetConnectionProperties;
   ValkeyModule_SetShardId = &TestValkeyModule_SetShardId;
@@ -1691,8 +1744,17 @@ inline void TestValkeyModule_Init() {
   ON_CALL(*kMockValkeyModule, KeyExists(testing::_, testing::_))
       .WillByDefault(TestValkeyModule_KeyExistsDefaultImpl);
   ON_CALL(*kMockValkeyModule,
-          HashExternalize(testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault(TestValkeyModule_HashExternalizeDefaultImpl);
+          HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_HashSetStringRefDefaultImpl);
+  ON_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
+      .WillByDefault(TestValkeyModule_HashHasStringRefDefaultImpl);
+  ON_CALL(*kMockValkeyModule,
+          HashGet(testing::_, testing::_, testing::_,
+                  testing::An<ValkeyModuleString **>(), testing::_))
+      .WillByDefault(TestValkeyModule_HashGetDefaultImpl);
+  ON_CALL(*kMockValkeyModule, HashGet(testing::_, testing::_, testing::_,
+                                      testing::An<int *>(), testing::_))
+      .WillByDefault(TestValkeyModule_HashGetExistsDefaultImpl);
   ON_CALL(*kMockValkeyModule, ClusterKeySlot(testing::_))
       .WillByDefault(TestValkeyModule_ClusterKeySlotImpl);
   ON_CALL(*kMockValkeyModule, GetApi(testing::_, testing::_))

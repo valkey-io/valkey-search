@@ -372,6 +372,18 @@ class VSSOutput:
                     except Exception:
                         print("__eq__ Exception: {}, {}\n".format(self.keys[k][attr], other.keys[k][attr]))
                         return False
+                elif attr == "score":
+                    try:
+                        if not np.isclose(
+                            float(self.keys[k][attr]),
+                            float(other.keys[k][attr]),
+                            rtol=1e-5,
+                            atol=1e-6,
+                        ):
+                            return False
+                    except Exception:
+                        if self.keys[k][attr] != other.keys[k][attr]:
+                            return False
                 else:
                     if self.keys[k][attr] != other.keys[k][attr]:
                         return False

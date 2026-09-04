@@ -4,8 +4,10 @@ namespace valkey_search::indexes::text {
 
 OrProximityIterator::OrProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
-                        kProximityTermsInlineCapacity>&& iters)
+                        kProximityTermsInlineCapacity>&& iters,
+    float weight)
     : iters_(std::move(iters)),
+      weight_(weight),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       key_set_(),

@@ -14,8 +14,6 @@
 #include "absl/base/no_destructor.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
-#include "absl/strings/string_view.h"
-#include "src/vector_externalizer.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
@@ -36,9 +34,6 @@ void KeyspaceEventManager::InitInstance(
 void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
                                              const char *event,
                                              ValkeyModuleString *key) {
-  if (ctx == VectorExternalizer::Instance().GetCtx()) {
-    return;
-  }
   std::vector<KeyspaceEventSubscription *> subscriptions_to_notify;
   {
     auto key_view = vmsdk::ToStringView(key);
@@ -54,7 +49,6 @@ void KeyspaceEventManager::NotifySubscribers(ValkeyModuleCtx *ctx, int type,
   for (const auto &subscription : subscriptions_to_notify) {
     subscription->OnKeyspaceNotification(ctx, type, event, key);
   }
-  VectorExternalizer::Instance().ProcessEngineUpdateQueue();
 }
 
 absl::Status KeyspaceEventManager::RemoveSubscription(

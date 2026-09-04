@@ -43,7 +43,8 @@ class Expression;
 namespace valkey_search::query {
 
 // Configuration for the COMBINE fusion stage. Populated by the FT.HYBRID
-// parser; consumed by `query::rank_fusion::{RRF,Linear,Function}` in ft_hybrid.cc.
+// parser; consumed by `query::rank_fusion::{RRF,Linear,Function}` in
+// ft_hybrid.cc.
 //   kRRF      — reciprocal rank fusion (default).
 //   kLinear   — weighted linear combination of per-arm normalized scores.
 //   kFunction — user-defined expression over the per-arm scores (the compiled
@@ -100,6 +101,13 @@ struct MultiSearchParameters {
   //       V1, size()==2) -----
   std::vector<std::unique_ptr<MultiArmShim>> arms;
   std::vector<std::optional<std::string>> per_arm_score_alias;
+  // True for each arm whose Neighbor::score is a raw vector distance rather
+  // than a relevance score -- a pure vector arm. Such an arm's score is
+  // converted to a similarity before fusion so that every arm is
+  // higher-is-better; see ConvertVectorArmScoresToSimilarity in ft_hybrid.cc.
+  // Recorded at parse time because `arms` is emptied at dispatch (each
+  // MultiArmShim is moved into SearchAsync), so it cannot be re-derived later.
+  std::vector<bool> per_arm_score_is_distance;
 
   // ----- fusion + post-pipeline -----
   FusionConfig fusion;

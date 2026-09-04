@@ -72,6 +72,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
+
   //
   // Number of records required as output of the query phase.
   // If all records are required, then it will be

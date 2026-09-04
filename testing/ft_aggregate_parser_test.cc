@@ -345,6 +345,16 @@ TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
   }
 }
 
+// A no_content FT.AGGREGATE skips the main-thread fetch (see
+// ProcessNeighborsForProcessing), so it must not claim one here.
+TEST_F(AggregateTest, NoContentDoesNotFetchContentOnMainThread) {
+  AggregateParameters params(0);
+  params.no_content = true;
+  EXPECT_FALSE(params.WillFetchContentOnMainThread());
+  params.no_content = false;
+  EXPECT_TRUE(params.WillFetchContentOnMainThread());
+}
+
 TEST_F(AggregateTest, GetSerializationRange_NoStages) {
   AggregateParameters params(0);
   auto range = params.GetSerializationRange();

@@ -257,9 +257,16 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
                                                  indexes::IndexerType::kNone);
   }
 
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
+  // no_content means LOAD requested no attributes, so return_attributes is
+  // empty and GetContent would fetch every field of every key only for
+  // CreateRecordsFromNeighbors to discard it. Skip it, as FT.SEARCH NOCONTENT
+  // does in HandleEarlyReplyScenarios — and with it the stale-match, expiry and
+  // slot-ownership pruning that only the fetch performs.
+  if (!parameters.no_content) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
 
   return std::make_pair(key_index, scores_index);
 }

@@ -18,6 +18,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -27,6 +28,8 @@
 #include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -43,6 +46,62 @@ inline void *StorageToSlot(uintptr_t s) { return reinterpret_cast<void *>(s); }
 // letting it destruct frees any heap payload it owns.
 extern "C" void TagFreeCallback(void *p) {
   (void)BagOfInternedStringPtrs::Adopt(SlotToStorage(p));
+}
+
+std::optional<std::string> JoinJsonStringArray(absl::string_view record,
+                                               char separator) {
+  if (record.size() < 2 || record.front() != '[' || record.back() != ']') {
+    return std::nullopt;
+  }
+
+  size_t pos = 1;
+  std::string joined;
+  bool first = true;
+  while (true) {
+    while (pos < record.size() && absl::ascii_isspace(record[pos])) {
+      ++pos;
+    }
+    if (pos == record.size() - 1) {
+      return joined;
+    }
+    if (pos >= record.size() - 1 || record[pos++] != '"') {
+      return std::nullopt;
+    }
+
+    const size_t value_start = pos;
+    while (pos < record.size() - 1 && record[pos] != '"') {
+      if (record[pos] == '\\') {
+        if (++pos >= record.size() - 1) {
+          return std::nullopt;
+        }
+      }
+      ++pos;
+    }
+    if (pos >= record.size() - 1) {
+      return std::nullopt;
+    }
+    auto value =
+        vmsdk::JsonUnquote(record.substr(value_start, pos - value_start));
+    if (!value.has_value()) {
+      return std::nullopt;
+    }
+    if (!first) {
+      joined += separator;
+    }
+    joined += *value;
+    first = false;
+    ++pos;
+
+    while (pos < record.size() && absl::ascii_isspace(record[pos])) {
+      ++pos;
+    }
+    if (pos == record.size() - 1) {
+      return joined;
+    }
+    if (pos >= record.size() - 1 || record[pos++] != ',') {
+      return std::nullopt;
+    }
+  }
 }
 
 // Mutation trampoline for raxMutate.
@@ -252,6 +311,23 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
 
   tag_info.raw_tag_string = std::move(interned_data);
   return RecordResult::kAdded;
+}
+
+vmsdk::UniqueValkeyString Tag::NormalizeStringRecord(
+    vmsdk::UniqueValkeyString input) const {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 2, 1, "json_tag_wildcard_array",
+      [&] {
+        if (!input) {
+          return std::move(input);
+        }
+        auto normalized =
+            JoinJsonStringArray(vmsdk::ToStringView(input.get()), separator_);
+        return normalized.has_value()
+                   ? vmsdk::MakeUniqueValkeyString(*normalized)
+                   : std::move(input);
+      },
+      [&] { return std::move(input); });
 }
 
 absl::StatusOr<bool> Tag::RemoveRecord(const InternedStringPtr &key,

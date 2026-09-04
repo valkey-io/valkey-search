@@ -148,7 +148,8 @@ class MockAttributeDataType : public AttributeDataType {
  public:
   MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetRecord,
               (ValkeyModuleCtx * ctx, ValkeyModuleKey *open_key,
-               absl::string_view key, absl::string_view identifier),
+               absl::string_view key, absl::string_view identifier,
+               bool preserve_json_array),
               (override, const));
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
   MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,

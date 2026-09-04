@@ -16,8 +16,10 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/tag.h"
 #include "src/query/predicate.h"
+#include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -27,15 +29,24 @@ class TagIndexTest : public vmsdk::ValkeyTest {
  public:
   void SetUp() override {
     vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
     data_model::TagIndex tag_index_proto;
     tag_index_proto.set_separator(",");
     tag_index_proto.set_case_sensitive(false);
     index = std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(
         tag_index_proto);
   }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    vmsdk::ValkeyTest::TearDown();
+  }
   std::unique_ptr<IndexTeser<Tag, data_model::TagIndex>> index;
   std::string identifier = "attribute_id";
   std::string alias = "attribute_alias";
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
 };
 
 std::vector<std::string> Fetch(
@@ -138,6 +149,41 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
 
   EXPECT_EQ(entries_fetcher->Size(), 0);
   EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordConvertsWildcardJsonArrayFormat) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
+  auto normalized = index->NormalizeStringRecord(
+      vmsdk::MakeUniqueValkeyString("[\"Seoul\",\"New York\"]"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul,New York");
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordPreservesLiteralArrayDelimiter) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator("|");
+  auto pipe_index =
+      std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(tag_index_proto);
+  auto normalized = pipe_index->NormalizeStringRecord(
+      vmsdk::MakeUniqueValkeyString("[\"foo\\\",\\\"bar\",\"baz\"]"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "foo\",\"bar|baz");
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordUsesLegacyBehaviorBeforeFix) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 0, 0}));
+  auto input = vmsdk::MakeUniqueValkeyString("Seoul\",\"New York");
+  auto normalized = index->NormalizeStringRecord(std::move(input));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul\",\"New York");
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordLeavesRegularStringUntouched) {
+  auto normalized =
+      index->NormalizeStringRecord(vmsdk::MakeUniqueValkeyString("Seoul"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul");
 }
 
 TEST_F(TagIndexTest, KeyTrackingTest) {

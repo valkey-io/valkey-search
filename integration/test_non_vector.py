@@ -6,6 +6,7 @@ import json
 import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
+from utils import IndexingTestHelper
 import time
 import pytest
 
@@ -1041,6 +1042,53 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
+    def test_json_tag_query_wildcard_path(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "idx_wildcard_json_tag",
+            "ON", "JSON",
+            "PREFIX", "1", "user:",
+            "SCHEMA", "$.address[*].city", "AS", "address__city", "TAG"
+        ) == b"OK"
+
+        assert client.execute_command(
+            "JSON.SET", "user:1", "$",
+            '{"address":[{"city":"Seoul"},{"city":"New York"},{"city":"Seoul"},{"city":""}]}'
+        ) == b"OK"
+
+        assert client.execute_command(
+            "JSON.SET", "user:2", "$",
+            '{"address":[{"city":"Busan"}]}'
+        ) == b"OK"
+
+        IndexingTestHelper.wait_for_indexing_complete_on_node(
+            client, "idx_wildcard_json_tag")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx_wildcard_json_tag",
+            "@address__city:{Seoul}",
+            "NOCONTENT"
+        )
+        assert result[0] == 1
+        assert result[1] == b"user:1"
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx_wildcard_json_tag",
+            "@address__city:{New York}",
+            "NOCONTENT"
+        )
+        assert result[0] == 1
+        assert result[1] == b"user:1"
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx_wildcard_json_tag",
+            "@address__city:{Busan}",
+            "NOCONTENT"
+        )
+        assert result[0] == 1
+        assert result[1] == b"user:2"
+
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
         A REDUCE with no AS clause auto-generates its output name, and which form
@@ -1066,7 +1114,6 @@ class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
             for i in range(1, len(result)):
                 row = dict(zip(result[i][::2], result[i][1::2]))
                 assert alias in row, f"{release}: expected {alias} in {list(row)}"
-
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):

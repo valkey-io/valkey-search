@@ -63,7 +63,7 @@ class AttributeDataType {
   virtual ~AttributeDataType() = default;
   virtual absl::StatusOr<vmsdk::UniqueValkeyString> GetRecord(
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
-      absl::string_view identifier) const = 0;
+      absl::string_view identifier, bool preserve_json_array = false) const = 0;
   virtual int GetValkeyEventTypes() const {
     return VALKEYMODULE_NOTIFY_GENERIC | VALKEYMODULE_NOTIFY_EXPIRED |
            VALKEYMODULE_NOTIFY_EVICTED;
@@ -84,7 +84,8 @@ class HashAttributeDataType : public AttributeDataType {
  public:
   absl::StatusOr<vmsdk::UniqueValkeyString> GetRecord(
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
-      absl::string_view identifier) const override;
+      absl::string_view identifier,
+      bool preserve_json_array = false) const override;
   inline int GetValkeyEventTypes() const override {
     return VALKEYMODULE_NOTIFY_HASH | AttributeDataType::GetValkeyEventTypes();
   }
@@ -118,7 +119,8 @@ class JsonAttributeDataType : public AttributeDataType {
  public:
   absl::StatusOr<vmsdk::UniqueValkeyString> GetRecord(
       ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
-      absl::string_view identifier) const override;
+      absl::string_view identifier,
+      bool preserve_json_array = false) const override;
   inline int GetValkeyEventTypes() const override {
     return VALKEYMODULE_NOTIFY_MODULE |
            AttributeDataType::GetValkeyEventTypes();

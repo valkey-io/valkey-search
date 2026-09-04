@@ -216,6 +216,11 @@
                     "name": "FIRST_VALUE",
                     "type": "pure-token",
                     "token": "FIRST_VALUE"
+                  },
+                  {
+                    "name": "RANDOM_SAMPLE",
+                    "type": "pure-token",
+                    "token": "RANDOM_SAMPLE"
                   }
                 ]
               },

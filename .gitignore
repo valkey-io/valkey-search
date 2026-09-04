@@ -18,7 +18,6 @@ integration/valkeytestframework*
 dump.rdb
 test-data*
 integration/test-data/
-.kiro/
 venv/
 env/
 .venv/

@@ -1,6 +1,16 @@
 valkey_search_create_proto_library("src/index_schema.proto"
                                    "index_schema_cc_proto")
 
+set(SRCS_SCORING
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.cc
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.cc)
+
+valkey_search_add_static_library(scoring "${SRCS_SCORING}")
+target_include_directories(scoring PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoring PUBLIC vmsdklib)
+
 add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
 target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(index_base INTERFACE index_schema_cc_proto)
@@ -20,7 +30,6 @@ target_link_libraries(vector_base PUBLIC tag)
 target_link_libraries(vector_base PUBLIC attribute_data_type)
 target_link_libraries(vector_base PUBLIC index_schema_cc_proto)
 target_link_libraries(vector_base PUBLIC rdb_serialization)
-target_link_libraries(vector_base PUBLIC vector_externalizer)
 target_link_libraries(vector_base PUBLIC predicate)
 target_link_libraries(vector_base PUBLIC allocator)
 target_link_libraries(vector_base PUBLIC intrusive_ref_count)
@@ -132,3 +141,4 @@ target_link_libraries(text PUBLIC snowball)
 target_link_libraries(text PUBLIC scanner)
 target_link_libraries(text PUBLIC icu)
 target_link_libraries(text PUBLIC rax_lib)
+target_link_libraries(text PUBLIC scoring)

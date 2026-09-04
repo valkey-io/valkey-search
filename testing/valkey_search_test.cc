@@ -58,6 +58,7 @@ class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {
  public:
   void SetUp() override {
     ValkeySearchTestWithParam<LoadTestCase>::SetUp();
+    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     CHECK(options::Reset().ok());
     vmsdk::SetModuleLoaded("json", true);
   }
@@ -536,12 +537,14 @@ TEST_F(ValkeySearchTest, Info) {
       "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
       "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n");
 #endif
+  VMSDK_EXPECT_OK(writer_thread_pool->ResumeWorkers());
+  VMSDK_EXPECT_OK(reader_thread_pool->ResumeWorkers());
   StringInternStore::SetMemoryUsage(0);  // reset memory pool
 }
 
 TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
   InitThreadPools(std::nullopt, 5, 1);
-  auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
   Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
@@ -559,7 +562,7 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
 TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
   InitThreadPools(std::nullopt, 5, 1);
-  auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
   Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
@@ -587,11 +590,11 @@ class CompatibilityFixTest : public vmsdk::ValkeyTest {
     vmsdk::ValkeyTest::TearDown();
   }
 
-  void SetEmulateRelease(vmsdk::ValkeyVersion v) {
+  static void SetEmulateRelease(vmsdk::ValkeyVersion v) {
     VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(v));
   }
 
-  std::string DumpCompatibilitySection() {
+  static std::string DumpCompatibilitySection() {
     ValkeyModuleInfoCtx info_ctx;
     vmsdk::info_field::DoSection(&info_ctx, "compatibility",
                                  /*for_crash_report=*/0);

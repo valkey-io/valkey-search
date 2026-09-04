@@ -24,8 +24,8 @@
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/fanout.h"
-#include "src/query/rank_fusion.h"
 #include "src/query/multi_search.h"
+#include "src/query/rank_fusion.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
 #include "src/utils/cancel.h"
@@ -39,14 +39,41 @@
 namespace valkey_search {
 namespace query {
 
+// Converts a pure vector arm's raw distances into the similarity that fusion
+// and the per-arm score alias both report: `1 / (1 + distance)`.
+//
+// Every other arm already carries a relevance score where higher is better (a
+// text arm's BM25 value), so this is what puts all arms on one footing: fusion
+// can then read Neighbor::score uniformly, LINEAR can sum the arms directly,
+// and a COMBINE FUNCTION expression sees the same number the user sees through
+// YIELD_SCORE_AS. It is also the value Redis reports for the VSIM arm.
+//
+// `distance` is non-negative for the supported metrics, so 1 + distance is
+// never zero; the guard is defensive.
+void ConvertVectorArmScoresToSimilarity(std::vector<indexes::Neighbor> &ns) {
+  for (auto &n : ns) {
+    const double d = static_cast<double>(n.distance);
+    n.score = static_cast<float>(d > -1.0 ? 1.0 / (1.0 + d) : 0.0);
+  }
+}
+
 // Fuses the per-arm results into a single neighbor list using the configured
-// COMBINE method. The fused score lives in Neighbor::distance and per-arm
-// score aliases are injected into attribute_contents (see fusion.cc).
+// COMBINE method. The fused score lives in Neighbor::score and per-arm score
+// aliases are injected into attribute_contents (see rank_fusion.cc).
 std::vector<indexes::Neighbor> BuildFusedNeighbors(
     MultiSearchParameters &params) {
   std::vector<rank_fusion::ArmInput> arm_inputs;
   arm_inputs.reserve(params.arms.size());
   for (size_t i = 0; i < params.arms.size(); ++i) {
+    // A pure vector arm reports a raw distance (lower = better) in
+    // Neighbor::score; rewrite it to a similarity so every arm handed to
+    // fusion is higher-is-better. `per_arm_score_is_distance` was captured at
+    // parse time because `params.arms` is empty by now (the shims were moved
+    // into SearchAsync at dispatch).
+    if (i < params.per_arm_score_is_distance.size() &&
+        params.per_arm_score_is_distance[i]) {
+      ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors);
+    }
     rank_fusion::ArmInput in;
     in.neighbors = &params.per_arm_results[i].neighbors;
     if (i < params.per_arm_score_alias.size()) {
@@ -87,11 +114,10 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
           return d.has_value() ? *d : 0.0;
         });
   }
-  // The COMBINE WINDOW bounds the per-arm contribution AND the final result.
-  // Per-arm truncation already happened inside fusion; cap the final list too.
-  if (params.fusion.window > 0 && fused.size() > params.fusion.window) {
-    fused.resize(params.fusion.window);
-  }
+  // COMBINE WINDOW bounds each arm's contribution, and only that: the fused
+  // list itself is not capped by it. Truncating here as well would drop
+  // documents that both arms ranked inside their window, which is not what
+  // WINDOW means -- LIMIT is what bounds the reply.
   return fused;
 }
 

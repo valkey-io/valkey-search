@@ -657,7 +657,10 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     vmsdk::UniqueValkeyString attr_val =
         attribute_data_type_
             ->GetAttribute(ctx, key_obj.get(), key_cstr,
-                           attribute.GetIdentifier())
+                           attribute.GetIdentifier(),
+                           attribute.GetIndex()->GetIndexerType() ==
+                                   indexes::IndexerType::kTag &&
+                               options::EnabledInVersion(1, 2, 1))
             .value_or(vmsdk::UniqueValkeyString());
     if (attr_val && attribute_data_type_->AttributesProvidedAsString() &&
         attribute.GetIndex()) {

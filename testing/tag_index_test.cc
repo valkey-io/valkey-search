@@ -142,10 +142,31 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
 }
 
 TEST_F(TagIndexTest, NormalizeStringRecordConvertsWildcardJsonArrayFormat) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
   auto normalized = index->NormalizeStringAttribute(
-      vmsdk::MakeUniqueValkeyString("Seoul\",\"New York"));
+      vmsdk::MakeUniqueValkeyString("[\"Seoul\",\"New York\"]"));
   ASSERT_TRUE(normalized);
   EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul,New York");
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordPreservesLiteralArrayDelimiter) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
+  data_model::TagIndex tag_index_proto;
+  tag_index_proto.set_separator("|");
+  auto pipe_index =
+      std::make_unique<IndexTeser<Tag, data_model::TagIndex>>(tag_index_proto);
+  auto normalized = pipe_index->NormalizeStringAttribute(
+      vmsdk::MakeUniqueValkeyString("[\"foo\\\",\\\"bar\",\"baz\"]"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "foo\",\"bar|baz");
+}
+
+TEST_F(TagIndexTest, NormalizeStringRecordUsesLegacyBehaviorBeforeFix) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 0, 0}));
+  auto input = vmsdk::MakeUniqueValkeyString("Seoul\",\"New York");
+  auto normalized = index->NormalizeStringAttribute(std::move(input));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul\",\"New York");
 }
 
 TEST_F(TagIndexTest, NormalizeStringRecordLeavesRegularStringUntouched) {

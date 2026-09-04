@@ -1295,6 +1295,32 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   EXPECT_FALSE(algo.isMarkedDeleted(1));
 }
 
+TEST_F(VectorIndexTest, HnswHandlesEmptyNeighborLists) {
+  hnswlib::L2Space space{1};
+  VectorHNSW<float>::HNSWIndex algo(
+      &space, /*max_elements=*/2, /*normalized=*/false, /*m_value=*/2,
+      /*ef_construction=*/10, /*allow_replace_deleted=*/false);
+  auto query = [](float value) {
+    absl::string_view bytes(reinterpret_cast<const char *>(&value),
+                            sizeof(value));
+    return QueryVector(VectorRecord::Construct(bytes, kDefaultMagnitude),
+                       bytes.size(), false);
+  };
+  auto entry = query(0.0f);
+  auto point = query(1.0f);
+  auto update = query(2.0f);
+  algo.addPoint(std::move(entry), 0, 2);
+  auto *links = algo.get_linklist_at_level(0, 0);
+  algo.setListCount(links, 0);
+  reinterpret_cast<hnswlib::tableint *>(links + 1)[0] = algo.max_elements_;
+  EXPECT_NO_THROW(algo.searchBaseLayer(0, point, 0));
+  algo.addPoint(std::move(point), 1, 1);
+  links = algo.get_linklist_at_level(0, 2);
+  algo.setListCount(links, 0);
+  reinterpret_cast<hnswlib::tableint *>(links + 1)[0] = algo.max_elements_;
+  EXPECT_NO_THROW(algo.updatePoint(std::move(update), 1, 1.0));
+}
+
 // ---- Happy path ----------------------------------------------------------
 TEST_F(VectorIndexTest, LoadValidatesEmptyIndex) {
   auto golden = BuildGoldenChunks({}, kGoldenMax);

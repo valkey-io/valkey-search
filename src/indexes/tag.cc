@@ -319,7 +319,7 @@ vmsdk::UniqueValkeyString Tag::NormalizeStringRecord(
       1, 2, 1, "json_tag_wildcard_array",
       [&] {
         if (!input) {
-          return input;
+          return std::move(input);
         }
         auto normalized =
             JoinJsonStringArray(vmsdk::ToStringView(input.get()), separator_);

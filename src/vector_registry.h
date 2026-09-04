@@ -9,17 +9,16 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
+#include <optional>
 #include <utility>
 
 #include "absl/base/no_destructor.h"
-#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
-#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/sharded_atomic.h"
@@ -29,7 +28,12 @@ namespace valkey_search {
 
 class VectorRegistry {
  public:
-  static VectorRegistry &Instance() { return *InstancePtr(); }
+  static VectorRegistry &Instance() {
+    if (!InstancePtr()) {
+      InstancePtr() = new VectorRegistry();
+    }
+    return *InstancePtr();
+  }
   static void Construct(ValkeyModuleCtx *ctx) {
     Destruct();
     InstancePtr() = new VectorRegistry();
@@ -46,38 +50,45 @@ class VectorRegistry {
   VectorRegistry(const VectorRegistry &) = delete;
   VectorRegistry &operator=(const VectorRegistry &) = delete;
 
-  // Registers or updates a vector record in the registry for deduplication and
-  // external sharing. If vector is nullptr, untracks and removes the record
-  // from the registry for the given key and attribute. Returns the shared
-  // VectorRecord pointer (reusing existing instance if payload matches).
-  std::shared_ptr<indexes::VectorRecord> Track(
-      const InternedStringPtr &key,
-      const InternedStringPtr &attribute_identifier, ValkeyModuleString *vector,
-      Allocator *allocator,
-      const data_model::AttributeDataType &attribute_data_type, int db_num)
-      ABSL_LOCKS_EXCLUDED(mutex_);
+  // Registers or deduplicates a vector record in the registry.
+  // Returns VectorRecordWithSize.
+  indexes::VectorRecordWithSize DedupOrConstruct(
+      const InternedStringPtr &key, ValkeyModuleString *vector,
+      const data_model::AttributeDataType &attribute_data_type, int db_num,
+      const indexes::VectorBase *vector_base);
 
-  // Retrieves the tracked VectorRecord and raw payload byte size for a given
-  // key and attribute. Increments lookup_record_hits if found, or
-  // lookup_record_misses if not present.
-  std::pair<std::shared_ptr<indexes::VectorRecord>, size_t> LookupRecord(
-      const InternedStringPtr &key,
-      const InternedStringPtr &interned_attribute_identifier, int db_num) const
-      ABSL_LOCKS_EXCLUDED(mutex_);
+  // Checks whether any registered vector index in db_num matches the given
+  // key and attribute_identifier. Also checks that the index vector data size
+  // matches. If require_tracked is true, additionally checks that the index
+  // currently tracks the key.
+  bool HasMatchingVectorIndex(int db_num, absl::string_view key,
+                              const InternedStringPtr &attribute_identifier,
+                              ValkeyModuleKey *key_obj, size_t vector_size,
+                              bool require_tracked = false) const;
 
-  // Batch untracks a map of keys if the registry holds the last remaining
-  // reference to each vector record.
-  void BatchUntrackIfUnused(const InternedStringPtr &attribute_identifier,
-                            InternedStringHashMap<indexes::TrackedKeyMetadata>
-                                &&tracked_metadata_by_key,
-                            int db_num) ABSL_LOCKS_EXCLUDED(mutex_);
+  // Removes entries from VectorRegistry for a dropped vector index.
+  void RemoveIndexKeys(int db_num,
+                       const InternedStringPtr &attribute_identifier,
+                       absl::Span<const InternedStringPtr> keys);
+  void RemoveIndexKeys(int db_num,
+                       const InternedStringPtr &attribute_identifier,
+                       absl::flat_hash_map<uint64_t, InternedStringPtr> keys);
+
+  // Processes up to batch_size pending unshare keys across all databases.
+  // Returns the number of keys processed.
+  size_t ProcessPendingUnshares(uint32_t batch_size);
+
+  // Returns the total number of keys pending unshare.
+  size_t GetPendingUnsharesCount() const;
+
+  void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
+                            uint64_t subevent, void *data);
 
   struct Stats {
     size_t entry_cnt;
     vmsdk::ShardedAtomic<uint64_t> hash_sharing_errors;
     vmsdk::ShardedAtomic<uint64_t> hash_sharing_hits;
-    vmsdk::ShardedAtomic<uint64_t> lookup_record_hits;
-    vmsdk::ShardedAtomic<uint64_t> lookup_record_misses;
+    vmsdk::ShardedAtomic<uint64_t> dedup_cnt;
   };
   const Stats &GetStats() const;
 
@@ -85,57 +96,48 @@ class VectorRegistry {
 
   bool IsSharingActive() const { return hash_vector_sharing_; }
 
-  // Untracks a vector record entry from the registry if the registry holds the
-  // sole remaining reference (use_count == 1).
-  void UntrackIfUnused(const InternedStringPtr &key,
-                       const InternedStringPtr &interned_attribute_identifier,
-                       int db_num) ABSL_LOCKS_EXCLUDED(mutex_);
+  void OnFlushDB(const ValkeyModuleFlushInfo *flush_info);
+  void OnSwapDB(const ValkeyModuleSwapDbInfo *swap_info);
+  enum class Action {
+    kMove,
+    kUnshare,
+  };
+
+  // Moves or unshares tracked vector records during RENAME / MOVE operations.
+  void MoveKey(int src_db_num, const InternedStringPtr &src_key, int dst_db_num,
+               ValkeyModuleString *dst_key,
+               const absl::flat_hash_map<InternedStringPtr, Action> &actions);
 
  private:
   struct RegistryKey {
-    int db_num;
     InternedStringPtr key;
     InternedStringPtr attribute_identifier;
 
     bool operator==(const RegistryKey &o) const {
-      return db_num == o.db_num && key == o.key &&
-             attribute_identifier == o.attribute_identifier;
+      return key == o.key && attribute_identifier == o.attribute_identifier;
     }
 
     template <typename H>
     friend H AbslHashValue(H h, const RegistryKey &k) {
-      return H::combine(std::move(h), k.db_num, k.key, k.attribute_identifier);
+      return H::combine(std::move(h), k.key, k.attribute_identifier);
     }
   };
 
-  struct RegistryValue {
-    std::shared_ptr<indexes::VectorRecord> vector_record;
-    size_t vector_record_size{0};
-  };
-  // Map to track active vector records.
-  absl::flat_hash_map<RegistryKey, RegistryValue> tracked_vectors_
-      ABSL_GUARDED_BY(mutex_);
-  // Cache the last untracked vector to safely handle Valkey RENAME operations.
-  // When Valkey executes RENAME, it fires two sequential events on the main
-  // thread:
-  // 1. A 'del' for the source key (which drops the VectorRecord).
-  // 2. A 'rename_to' (treated as a 'set') for the destination key.
-  // By caching the shared_ptr during the 'del' phase, we prevent the memory
-  // from being freed prematurely (or being freed in a background worker thread
-  // before the main thread can reclaim it). When the subsequent 'set' phase
-  // arrives, we can reuse this cached pointer if the bytes match perfectly,
-  // preventing ASAN heap-use-after-free and preserving the vector reference.
-  struct LastUntracked {
-    std::shared_ptr<indexes::VectorRecord> record;
-    size_t size{0};
-  };
-  LastUntracked last_untracked_ ABSL_GUARDED_BY(mutex_);
+  using PerDbRegistryMap =
+      absl::flat_hash_map<RegistryKey, indexes::VectorRecordWithSize>;
+
+  // Maps db_num -> inner map to track active vector records per database.
+  absl::flat_hash_map<int, PerDbRegistryMap> tracked_vectors_;
+
+  // Maps db_num -> pending unshare keys queued for rate-limited processing.
+  absl::flat_hash_map<int, absl::flat_hash_set<RegistryKey>> pending_unshares_;
+
+  void CancelPendingUnshare(int db_num, const RegistryKey &key);
 
   friend class VectorRegistryTest;
   bool hash_vector_sharing_{false};
   mutable Stats stats_;
   vmsdk::UniqueValkeyDetachedThreadSafeContext ctx_;
-  mutable absl::Mutex mutex_;
 
   VectorRegistry() = default;
   ~VectorRegistry() = default;
@@ -152,16 +154,20 @@ class VectorRegistry {
       absl::string_view attribute_identifier,
       const indexes::VectorRecord *vector_record, size_t vector_size,
       const data_model::AttributeDataType &attribute_data_type);
-
-  // Reverts external shared vector references in the Valkey engine back to
-  // standard string values prior to untracking.
-  void DetachFromValkey(const RegistryKey &search_key)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
-
-  // Helper method that checks use_count and untracks an entry while mutex_ is
-  // held.
-  void LockFreeUntrackIfUnused(const RegistryKey &search_key)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+  std::optional<indexes::VectorRecordWithSize> ExtractTrackedRecord(
+      int db_num, const InternedStringPtr &key,
+      const InternedStringPtr &attribute_identifier);
+  void EraseTrackedRecord(int db_num, const RegistryKey &key);
+  // Replaces a shared string memory reference in the Valkey Hash data model
+  // with an independent owned copy.
+  bool UnshareWithValkey(ValkeyModuleKey *key_obj,
+                         absl::string_view attribute_identifier,
+                         const indexes::VectorRecord *vector_record,
+                         size_t vector_size);
+  bool IsEraseTrackedRecordSafe(
+      int db_num, const InternedStringPtr &key, absl::string_view vector_str,
+      absl::string_view attribute_identifier,
+      const data_model::AttributeDataType &attribute_data_type);
 };
 
 }  // namespace valkey_search

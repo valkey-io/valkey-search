@@ -61,6 +61,7 @@ add_subdirectory(src)
 
 if(BUILD_UNIT_TESTS)
   message(STATUS "Building tests")
+  enable_testing()
   add_subdirectory(testing)
 endif()
 

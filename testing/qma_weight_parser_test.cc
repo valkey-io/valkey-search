@@ -53,7 +53,8 @@ void InitQMATestIndexSchema(MockIndexSchema *index_schema) {
 
   auto key1 = StringInternStore::Intern("key1");
   std::string test_data = "dogs cats hello world";
-  VMSDK_EXPECT_OK(text_index->AddRecord(key1, test_data));
+  VMSDK_EXPECT_OK(text_index->AddRecord(
+      key1, AttributeData(vmsdk::MakeUniqueValkeyString(test_data))));
   text_index_schema->CommitKeyData(key1);
 }
 

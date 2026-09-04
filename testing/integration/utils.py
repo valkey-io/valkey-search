@@ -204,6 +204,7 @@ def start_valkey_cluster(
 
         timeout = 60
         now = time.time()
+        cluster_created = False
         while time.time() - now < timeout:
             try:
                 subprocess.run(
@@ -212,9 +213,15 @@ def start_valkey_cluster(
                     stdout=cli_stdout_file,
                     stderr=cli_stdout_file,
                 )
+                cluster_created = True
                 break
             except subprocess.CalledProcessError:
                 time.sleep(1)
+
+        if not cluster_created:
+            raise RuntimeError(
+                f"Failed to create valkey cluster within {timeout}s. Check {cli_stdout_path}"
+            )
 
     # This is also ugly, but we need to wait for the cluster to be ready. There
     # doesn't seem to be a way to do that with the valkey-server, since it seems to
@@ -1150,7 +1157,10 @@ def connect_to_valkey_cluster(
             )
             valkey_conn.ping()
             return valkey_conn
-        except valkey.exceptions.ConnectionError as e:
+        except (
+            valkey.exceptions.ConnectionError,
+            valkey.exceptions.ValkeyClusterException,
+        ) as e:
             if attempts == 0:
                 raise e
             logging.info("Failed to connect to valkey cluster, retrying...")

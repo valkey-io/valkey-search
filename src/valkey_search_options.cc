@@ -547,6 +547,18 @@ static auto query_string_depth =
                                             kQueryStringDepthConfig))
         .Build();
 
+/// Register the "--vector-unshare-batch-size" flag. Controls the batch size
+/// of vector records unshared per server cron tick.
+constexpr absl::string_view kVectorUnshareBatchSizeConfig{
+    "vector-unshare-batch-size"};
+constexpr uint32_t kDefaultVectorUnshareBatchSize{1024 * 10};
+constexpr uint32_t kMinimumVectorUnshareBatchSize{1};
+static auto vector_unshare_batch_size =
+    config::NumberBuilder(kVectorUnshareBatchSizeConfig,
+                          kDefaultVectorUnshareBatchSize,
+                          kMinimumVectorUnshareBatchSize, UINT_MAX)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number &GetHNSWBlockSize() {
@@ -614,6 +626,8 @@ absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   VMSDK_RETURN_IF_ERROR(enable_vector_sharing->SetValue(true));
+  VMSDK_RETURN_IF_ERROR(
+      vector_unshare_batch_size->SetValue(kDefaultVectorUnshareBatchSize));
   return absl::OkStatus();
 }
 
@@ -769,6 +783,10 @@ config::Number &GetMutationWeightNumeric() {
 
 config::Number &GetMutationWeightTag() {
   return dynamic_cast<config::Number &>(*mutation_weight_tag);
+}
+
+config::Number &GetVectorUnshareBatchSize() {
+  return dynamic_cast<config::Number &>(*vector_unshare_batch_size);
 }
 
 /// Register the "emulate-release" flag (see COMPATIBILITY.md).

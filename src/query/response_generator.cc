@@ -8,7 +8,6 @@
 #include "src/query/response_generator.h"
 
 #include <algorithm>
-#include <deque>
 #include <optional>
 #include <string>
 #include <utility>
@@ -19,10 +18,8 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/commands/ft_search_parser.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -88,7 +85,7 @@ class PredicateEvaluator : public query::Evaluator {
  public:
   PredicateEvaluator(const RecordsMap &records,
                      QueryOperations query_operations)
-      : Evaluator(query_operations), records_(records), text_index_(nullptr) {}
+      : Evaluator(query_operations), records_(records) {}
 
   PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,
@@ -267,7 +264,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   // NOEXPIRE prevents lazy expiry deletion which could cause
   // server.also_propagate.numops == 0 crash. The key handle is reused
-  // by FetchAllRecords to avoid a redundant second open.
+  // by FetchAllAttributes to avoid a redundant second open.
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
@@ -277,7 +274,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
   if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
     return absl::NotFoundError("Key expired");
   }
-  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllRecords(
+  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllAttributes(
                                            ctx, vector_identifier,
                                            key_obj.get(), key, identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
@@ -373,7 +370,7 @@ absl::StatusOr<RecordsMap> GetContent(
   auto key_str = vmsdk::MakeUniqueValkeyString(key);
   // NOEXPIRE prevents lazy expiry deletion which could cause
   // server.also_propagate.numops == 0 crash. The key handle is reused
-  // by FetchAllRecords to avoid a redundant second open.
+  // by FetchAllAttributes to avoid a redundant second open.
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
   if (!key_obj) {
@@ -384,7 +381,7 @@ absl::StatusOr<RecordsMap> GetContent(
     return absl::NotFoundError("Key expired");
   }
   VMSDK_ASSIGN_OR_RETURN(auto content,
-                         attribute_data_type.FetchAllRecords(
+                         attribute_data_type.FetchAllAttributes(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
   if (parameters.filter_parse_results.filter_identifiers.empty()) {

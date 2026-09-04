@@ -319,17 +319,16 @@ absl::Status VectorSharingStatsCmd(ValkeyModuleCtx *ctx,
   VMSDK_RETURN_IF_ERROR(CheckEndOfArgs(itr));
   auto stats = VectorRegistry::Instance().GetStats();
 
-  ValkeyModule_ReplyWithArray(ctx, 10);
+  ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithCString(ctx, "entry_cnt");
   ValkeyModule_ReplyWithLongLong(ctx, stats.entry_cnt);
   ValkeyModule_ReplyWithCString(ctx, "hash_sharing_errors");
   ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_errors.GetTotal());
   ValkeyModule_ReplyWithCString(ctx, "hash_sharing_hits");
   ValkeyModule_ReplyWithLongLong(ctx, stats.hash_sharing_hits.GetTotal());
-  ValkeyModule_ReplyWithCString(ctx, "lookup_record_hits");
-  ValkeyModule_ReplyWithLongLong(ctx, stats.lookup_record_hits.GetTotal());
-  ValkeyModule_ReplyWithCString(ctx, "lookup_record_misses");
-  ValkeyModule_ReplyWithLongLong(ctx, stats.lookup_record_misses.GetTotal());
+  ValkeyModule_ReplyWithCString(ctx, "pending_unshare_cnt");
+  ValkeyModule_ReplyWithLongLong(
+      ctx, VectorRegistry::Instance().GetPendingUnsharesCount());
 
   return absl::OkStatus();
 }

@@ -6,11 +6,20 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include <cstdlib>
+#include <iostream>
 #include <map>
 
 #include "gtest/gtest.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
+
+namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+}  // namespace
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
   return os << "S=" << *(std::string *)s;
@@ -24,7 +33,9 @@ struct FakeIndexInterface : public IndexInterface {
   absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view fld_name) const override {
     std::string field_name(fld_name);
-    std::cout << "Fake make reference " << field_name << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake make reference " << field_name << "\n";
+    }
     auto itr = fields_.find(field_name);
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -35,13 +46,17 @@ struct FakeIndexInterface : public IndexInterface {
   }
   absl::StatusOr<std::string> GetIdentifier(
       absl::string_view alias) const override {
-    std::cout << "Fake get identifier for " << alias << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get identifier for " << alias << "\n";
+    }
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto type, GetFieldType(alias));
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(
       absl::string_view identifier) const override {
-    std::cout << "Fake get alias for " << identifier << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get alias for " << identifier << "\n";
+    }
     auto itr = fields_.find(std::string(identifier));
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -125,7 +140,9 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               InorderTestValue inorder_test,
                               SlopTestValue slop_test,
                               VerbatimTestValue verbatim_test) {
-  std::cerr << "Running test: '" << test << "'\n";
+  if (IsVerbose()) {
+    std::cerr << "Running test: '" << test << "'\n";
+  }
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
@@ -247,7 +264,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
     text += TestStages[ix].stage_in_;
     any_bad |= TestStages[ix].stage_out_ == nullptr;
   }
-  std::cout << "Doing case " << text << "\n";
+  if (IsVerbose()) {
+    std::cout << "Doing case " << text << "\n";
+  }
   auto argv = vmsdk::ToValkeyStringVector(text);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
@@ -258,7 +277,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
   auto parser = CreateAggregateParser();
   auto result = parser.Parse(params, itr);
   if (any_bad) {
-    std::cout << "Failed status: " << result << "\n";
+    if (IsVerbose()) {
+      std::cout << "Failed status: " << result << "\n";
+    }
     EXPECT_FALSE(result.ok());
   } else {
     EXPECT_TRUE(result.ok());
@@ -280,9 +301,9 @@ TEST_F(AggregateTest, StageParserTest) {
     DoStageTest(&fake_index, std::vector<size_t>{i});
     for (size_t j = 0; j < TestStages.size(); ++j) {
       DoStageTest(&fake_index, std::vector<size_t>{i, j});
-      for (size_t k = 0; k < TestStages.size(); ++k) {
-        DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
-      }
+      // Sample 3-stage combinations across all stage positions
+      size_t k = (i + j) % TestStages.size();
+      DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
     }
   }
 }

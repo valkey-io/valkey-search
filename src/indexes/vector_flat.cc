@@ -33,6 +33,7 @@
 #include "src/utils/cancel.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // Note that the ordering matters here - we want to minimize the memory
@@ -55,7 +56,8 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
-                          attribute_identifier, attribute_data_type, db_num));
+                          attribute_identifier, attribute_data_type, db_num),
+        vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.dimension_count(),
                 vector_index_proto.distance_metric(), index->space_);
     index->algo_ =

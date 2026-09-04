@@ -11,7 +11,6 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -114,8 +113,10 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   // Add TEXT data for basic tests (exact_term, exact_prefix, proximity, etc.)
   auto key1 = StringInternStore::Intern("key1");
   std::string test_data = "word hello my name is hello how are you doing?";
-  VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, test_data));
-  VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
+  VMSDK_EXPECT_OK(text_index_1->AddRecord(
+      key1, AttributeData(vmsdk::MakeUniqueValkeyString(test_data))));
+  VMSDK_EXPECT_OK(text_index_2->AddRecord(
+      key1, AttributeData(vmsdk::MakeUniqueValkeyString(test_data))));
 
   text_index_schema->CommitKeyData(key1);
 }

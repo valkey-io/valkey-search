@@ -280,6 +280,7 @@ def compute_data_sets():
     data["sortable numbers"] = {}
     data["reverse vector numbers"] = {}
     data["bad numbers"] = {}
+    data["missing numbers"] = {}
     data["bad vectors"] = {}
     data["hard strings"] = {}
     data["tag special chars"] = {}
@@ -319,6 +320,40 @@ def compute_data_sets():
                 },
             )
             for i in range(len(combinations))
+        ]
+        #
+        # Missing numbers. `n1` is absent entirely -- not invalid, absent --
+        # from some documents, so a GROUPBY over @t1 yields one group whose
+        # members all have @n1, one where none do, and one mixed. That is the
+        # only way to reach the empty-fold branch of the MIN/MAX/SUM/AVG
+        # reducers, where Redisearch reports inf/-inf/nan instead of a value.
+        # Distinct from "bad numbers", whose @n1 holds an invalid value and
+        # whose keys are therefore dropped from the index altogether.
+        #
+        missing_groups = [
+            ("g_all", 2), ("g_all", 4),          # every member has @n1
+            ("g_none", None), ("g_none", None),  # no member has @n1
+            ("g_mixed", 5), ("g_mixed", None),   # only some members have @n1
+        ]
+        data["missing numbers"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["missing numbers"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    # `n1` is omitted from the mapping when None, so the field
+                    # does not exist on the key at all.
+                    **({} if n1 is None else {"n1": n1}),
+                    "n2": i,
+                    "n3": -i,
+                    "t1": group,
+                    "t2": f"two.two{i}",
+                    "t3": "all_the_same_value",
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                    "e1": 1,
+                    "e2": "two",
+                },
+            )
+            for i, (group, n1) in enumerate(missing_groups)
         ]
         #
         # Sortable numbers, designed so that sorted keys for this index don't have any duplications

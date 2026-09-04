@@ -297,6 +297,32 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
 
+    def test_aggregate_groupby_missing_field_reducers(self, key_type, dialect):
+        """Reducers folding over a group in which no member has the field.
+
+        `missing numbers` groups by @t1 into g_all (every member has @n1),
+        g_none (no member does) and g_mixed. The g_none group is the case that
+        matters: MIN/MAX/SUM/AVG have to fold zero values there, and Redisearch
+        reports inf / -inf / nan rather than a value or an omitted field. Every
+        other dataset populates @n1 on every key, so nothing else in this suite
+        reaches that branch.
+        """
+        self.setup_data("missing numbers", key_type)
+        for reducer in ["min", "max", "sum", "avg", "count_distinct"]:
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+                f"groupby 1 @t1 reduce {reducer} 1 @n1 as r"
+            )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+            f"groupby 1 @t1 reduce count 0 as c reduce min 1 @n1 as mn "
+            f"reduce max 1 @n1 as mx reduce sum 1 @n1 as sm reduce avg 1 @n1 as av"
+        )
+        # Not covered here: GROUPBY on @n1 itself, where the group key is
+        # absent on some keys. Redisearch emits that key as NULL while
+        # valkey-search omits it, which is a separate unfixed difference, and
+        # the omission also breaks this harness's sort-by-groupby-key.
+
     def test_aggregate_groupby_tolist(self, key_type, dialect):
         self.setup_data("sortable numbers", key_type)
         # Basic TOLIST on numeric field grouped by tag

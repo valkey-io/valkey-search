@@ -349,7 +349,6 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 absl::StatusOr<bool> VectorBase::UpdateMetadata(
     const InternedStringPtr &key, float magnitude,
     const VectorRecord *vector_record) {
-
   absl::ReaderMutexLock lock(&resize_mutex_);
   const VectorRecord *stored_record;
   {

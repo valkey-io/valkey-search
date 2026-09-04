@@ -846,6 +846,15 @@ void IndexSchema::ProcessMultiQueue() {
   Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
   Metrics::GetStats().ingest_total_batches++;
 
+  // While a fork is in flight the mutations thread pool is suspended, and every
+  // path that resumes it runs on this thread, so waiting below would never
+  // return. Drain inline instead: the workers are parked, hence no concurrent
+  // writer to race with.
+  if (ABSL_PREDICT_FALSE(mutations_thread_pool_->IsSuspended())) {
+    ProcessMultiQueueInline();
+    return;
+  }
+
   absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);
   while (!multi_mutations_keys.empty()) {
@@ -855,6 +864,23 @@ void IndexSchema::ProcessMultiQueue() {
                      &blocking_counter);
   }
   blocking_counter.Wait();
+}
+
+void IndexSchema::ProcessMultiQueueInline() {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  while (!multi_mutations_keys.empty()) {
+    auto key = multi_mutations_keys.front();
+    multi_mutations_keys.pop_front();
+    {
+      // Balances the decrement inside ProcessSingleMutationAsync.
+      absl::MutexLock lock(&stats_.mutex_);
+      ++stats_.mutation_queue_size_;
+    }
+    // time_sliced_mutex_ is left unheld: the callee takes it and it is not
+    // recursive.
+    ProcessSingleMutationAsync(detached_ctx_.get(), /*from_backfill=*/false,
+                               key, /*delay_capturer=*/nullptr);
+  }
 }
 
 void IndexSchema::EnqueueMultiMutation(const Key &key) {

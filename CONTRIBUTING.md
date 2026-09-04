@@ -99,23 +99,64 @@ To link your PR to an existing issue, include `Fixes #<issue-number>` or `Resolv
 
 ## Slash commands
 
-Collaborators can use the following commands in PR and issue comments to help do some trivial tasks.
+Repository collaborators and maintainers can use the following commands in PR and issue
+comments to help do some trivial tasks. Comments from other users (new or unknown
+contributors) are ignored with a short reply, since collaborators are added by maintainers.
 
-| Command                    | Where       | What it does                                                                                          |
-| -------------------------- | ----------- | ----------------------------------------------------------------------------------------------------- |
-| `/label <name>`            | PR or issue | Applies a label from the repo's defined label set. Rejects unknown labels; no-ops if already applied. |
-| `/reviewer <username>`     | PR only     | Requests a review from the specified GitHub user. The user must be a repo collaborator.               |
-| `/resolves <issue-number>` | PR only     | Appends `Resolves #<N>` to the PR body, linking the issue and auto-closing it on merge.               |
-| `/rerun`                   | PR only     | Re-runs all failed or timed-out CI jobs for the PR's current head commit.                             |
+| Command                       | Where       | What it does                                                                                            |
+| ----------------------------- | ----------- | ------------------------------------------------------------------------------------------------------- |
+| `/label <names>`              | PR or issue | Applies one or more labels from the repo's defined label set. Rejects unknown labels; no-ops if already applied. |
+| `/remove-label <names>`       | PR or issue | Removes one or more labels. No-ops for labels that are not currently applied.                           |
+| `/reviewer <usernames>`       | PR only     | Requests a review from one or more GitHub users. Each user must be a repo collaborator.                 |
+| `/remove-reviewer <usernames>`| PR only     | Withdraws a pending review request from one or more users.                                              |
+| `/resolves <issue-number>`    | PR only     | Appends `Resolves #<N>` to the PR body, linking the issue and auto-closing it on merge.                 |
+| `/rerun`                      | PR only     | Re-runs all failed or timed-out CI jobs for the PR's current head commit.                               |
+| `/duplicates`                 | PR or issue | Finds likely duplicate issues or pull requests and reports them.                                        |
+| `/assign-reviewers`           | PR only     | Runs automatic reviewer assignment on demand (see below). No-op if the PR is already assigned.          |
+
+The label and reviewer commands accept a comma-separated list, so several items can be
+handled in one comment. The command must be the first thing in the comment, and each
+command goes in its own comment.
 
 **Example usage:**
 
-```
-/label bug
-/reviewer allenss-amazon
+```text
+/label bug, documentation
+/remove-label good first issue
+/reviewer allenss-amazon, BCathcart
+/remove-reviewer yairgott
 /resolves 925
 /rerun
 ```
+
+When part of a request cannot be carried out — an unknown label, a user who is not a
+collaborator, an item that was already applied — the bot replies with a per-item breakdown
+and still carries out the rest. A request that fully succeeds gets no reply; check the PR's
+labels or reviewers to confirm.
+
+### Automatic reviewer assignment
+
+When a pull request is opened, or an existing draft is marked ready for review, a first-pass
+reviewer and a maintainer are requested automatically from the pools in
+[`.github/reviewer-pools.json`](.github/reviewer-pools.json). The bot leaves a comment
+naming both.
+
+Assignments are balanced across each pool, so review load stays evenly distributed no matter
+who authors pull requests or how quickly people review. The author is never assigned to their
+own pull request.
+
+The first-pass reviewer does the detailed review and drives the feedback loop; the
+maintainer then does the final review and merges. Use `/reviewer` and `/remove-reviewer` to
+adjust the assignment, and edit `.github/reviewer-pools.json` to change the pools — every
+entry in it needs collaborator access, since a review cannot be requested from a
+non-collaborator.
+
+Once a PR has been auto-assigned it is tagged with the `auto-assigned-reviewers` label, so
+re-opening it, toggling draft/ready, or removing the requested reviewers will not reassign.
+To request a fresh set of reviewers, **remove the `auto-assigned-reviewers` label and comment
+`/assign-reviewers`** — the same selection runs again and picks the next reviewers.
+`/assign-reviewers` also works on PRs opened before automatic assignment existed, so they can
+be backfilled with a single comment.
 
 ## Code of conduct
 

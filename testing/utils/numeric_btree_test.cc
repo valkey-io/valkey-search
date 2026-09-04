@@ -45,11 +45,11 @@ std::vector<std::pair<double, std::string>> ToVector(
 struct Reference {
   std::set<std::pair<double, std::string>> data;
 
-  void Insert(double v, const std::string& k) { data.insert({v, k}); }
-  bool Erase(double v, const std::string& k) { return data.erase({v, k}) > 0; }
+  void Insert(double v, const std::string &k) { data.insert({v, k}); }
+  bool Erase(double v, const std::string &k) { return data.erase({v, k}) > 0; }
   uint64_t Count(double s, double e, bool si, bool ei) const {
     uint64_t c = 0;
-    for (auto& [val, key] : data) {
+    for (auto &[val, key] : data) {
       bool ge_s = si ? val >= s : val > s;
       bool le_e = ei ? val <= e : val < e;
       if (ge_s && le_e) {
@@ -131,7 +131,7 @@ TEST_F(NumericBTreeTest, ManyKeysPerSingleValue) {
   // Iterate -- should yield N postings, all at value 7.0.
   auto v = ToVector(t.Begin(), t.End());
   ASSERT_EQ(v.size(), N);
-  for (auto& [val, _] : v) {
+  for (auto &[val, _] : v) {
     EXPECT_EQ(val, 7.0);
   }
 
@@ -303,7 +303,7 @@ TEST_F(NumericBTreeTest, EraseAllDownToEmpty) {
                                                   ref.data.end());
   std::mt19937 rng(123);
   std::shuffle(all.begin(), all.end(), rng);
-  for (auto& [v, ks] : all) {
+  for (auto &[v, ks] : all) {
     int k = std::stoi(ks.substr(1));
     EXPECT_TRUE(t.Erase(v, Key(k)));
   }
@@ -389,7 +389,7 @@ TEST_F(NumericBTreeTest, RandomCrossCheckDeepTree) {
                                                    ref.data.end());
   std::shuffle(live.begin(), live.end(), rng);
   int op = 30000;
-  for (auto& [val, ks] : live) {
+  for (auto &[val, ks] : live) {
     if (ref.data.size() <= 100) {
       break;
     }

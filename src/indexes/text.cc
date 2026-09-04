@@ -179,13 +179,24 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
-  bool found_original;
+  bool found_original = false;
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
 
-  // Search for the original word - may or may not exist in corpus
-  found_original =
-      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
+  // Search for the original word - may or may not exist in corpus. Document
+  // frequency (dt) for scoring is the original word's posting count; stem
+  // variants are not folded in (we skip stem-root scoring for now). Both come
+  // off the same posting list, so the word is resolved with one tree walk.
+  uint32_t num_doc_contain_term = 0;
+  {
+    auto word_iter = text_index->GetPrefix().GetWordIterator(text_string);
+    if (!word_iter.Done() && word_iter.GetWord() == text_string) {
+      auto postings = word_iter.GetPostingsTarget();
+      num_doc_contain_term = postings->GetKeyCount();
+      key_iterators.emplace_back(postings->GetKeyIterator());
+      found_original = true;
+    }
+  }
 
   // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {
@@ -212,7 +223,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // first pass)
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions, stem_field_mask,
-      found_original);
+      found_original, GetWeight(), num_doc_contain_term,
+      GetTextIndexSchema().get(), GetScorer());
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

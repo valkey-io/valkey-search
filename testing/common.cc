@@ -87,7 +87,8 @@ absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
       CreateHNSWVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
                                  1000, 10, 300, 30),
       "vector_identifier",
-      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH);
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+      index_schema_db_num);
   VMSDK_EXPECT_OK(index);
   VMSDK_EXPECT_OK(test_index_schema->AddIndex("vector", "vector", *index));
   return test_index_schema;
@@ -175,8 +176,7 @@ data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
 indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
   auto string_interned_external_id =
       StringInternStore::Intern(neighbor_test.external_id);
-  indexes::Neighbor neighbor(string_interned_external_id,
-                             neighbor_test.distance);
+  indexes::Neighbor neighbor(string_interned_external_id, neighbor_test.score);
   if (neighbor_test.attribute_contents.has_value()) {
     std::optional<RecordsMap> attribute_contents;
     neighbor.attribute_contents.value() = RecordsMap();
@@ -197,7 +197,7 @@ indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test) {
 NeighborTest ToNeighborTest(const indexes::Neighbor &neighbor) {
   NeighborTest neighbor_test;
   neighbor_test.external_id = *neighbor.external_id;
-  neighbor_test.distance = neighbor.distance;
+  neighbor_test.score = neighbor.score;
   if (neighbor.attribute_contents.has_value()) {
     std::unordered_map<std::string, std::string> attribute_contents;
     for (const auto &attribute_content : neighbor.attribute_contents.value()) {

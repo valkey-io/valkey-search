@@ -20,6 +20,7 @@ class TextFetcher : public indexes::EntriesFetcherIteratorBase {
   bool Done() const override;
   const Key& operator*() const override;
   void Next() override;
+  const TextIterator* GetTextIterator() const override { return iter_.get(); }
 
  private:
   std::unique_ptr<TextIterator> iter_;

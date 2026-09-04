@@ -178,7 +178,8 @@ class FakeCoordinatorStub final : public Coordinator::StubInterface {
     return nullptr;
   }
 
-  ::grpc::ClientAsyncResponseReaderInterface<MultiSearchIndexPartitionResponse> *
+  ::grpc::ClientAsyncResponseReaderInterface<
+      MultiSearchIndexPartitionResponse> *
   AsyncMultiSearchIndexPartitionRaw(::grpc::ClientContext *,
                                     const MultiSearchIndexPartitionRequest &,
                                     ::grpc::CompletionQueue *) override {
@@ -186,7 +187,8 @@ class FakeCoordinatorStub final : public Coordinator::StubInterface {
     return nullptr;
   }
 
-  ::grpc::ClientAsyncResponseReaderInterface<MultiSearchIndexPartitionResponse> *
+  ::grpc::ClientAsyncResponseReaderInterface<
+      MultiSearchIndexPartitionResponse> *
   PrepareAsyncMultiSearchIndexPartitionRaw(
       ::grpc::ClientContext *, const MultiSearchIndexPartitionRequest &,
       ::grpc::CompletionQueue *) override {

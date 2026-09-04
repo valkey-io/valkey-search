@@ -22,10 +22,11 @@
 namespace valkey_search::query::rank_fusion {
 namespace {
 
-// Build a Neighbor with a given key and distance; no attribute_contents.
-indexes::Neighbor N(absl::string_view key, float distance) {
-  return indexes::Neighbor{StringInternStore::Intern(std::string(key)),
-                           distance};
+// Build a Neighbor with a given key and raw arm score; no attribute_contents.
+// The two-arg Neighbor constructor mirrors `distance` into `score`, which is
+// the field fusion reads.
+indexes::Neighbor N(absl::string_view key, float score) {
+  return indexes::Neighbor{StringInternStore::Intern(std::string(key)), score};
 }
 
 // Construct a vector<Neighbor> from a parameter pack. Avoids the
@@ -76,10 +77,10 @@ TEST_F(RRFTest, DisjointArmsContributeIndependently) {
   arms.push_back({.neighbors = &arm1, .rrf_constant = 60, .window = 0});
   auto fused = RRF(std::move(arms));
   EXPECT_EQ(fused.size(), 4u);
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 1.0 / 61.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:3")->distance, 1.0 / 61.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 1.0 / 62.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:4")->distance, 1.0 / 62.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 1.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:3")->score, 1.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 1.0 / 62.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:4")->score, 1.0 / 62.0, 1e-7);
 }
 
 TEST_F(RRFTest, FullyOverlappingArmsAddRRFContributions) {
@@ -90,8 +91,8 @@ TEST_F(RRFTest, FullyOverlappingArmsAddRRFContributions) {
   arms.push_back({.neighbors = &arm1, .rrf_constant = 60, .window = 0});
   auto fused = RRF(std::move(arms));
   EXPECT_EQ(fused.size(), 2u);
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 2.0 / 61.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 2.0 / 62.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 2.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 2.0 / 62.0, 1e-7);
 }
 
 // The critical case: partial overlap. Documents in both arms get summed
@@ -104,10 +105,10 @@ TEST_F(RRFTest, PartialOverlapSumsAcrossArmsForSharedDocs) {
   arms.push_back({.neighbors = &arm1, .rrf_constant = 60, .window = 0});
   auto fused = RRF(std::move(arms));
   EXPECT_EQ(fused.size(), 4u);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 1.0 / 62.0 + 1.0 / 61.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 1.0 / 61.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:4")->distance, 1.0 / 62.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:3")->distance, 1.0 / 63.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 1.0 / 62.0 + 1.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 1.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:4")->score, 1.0 / 62.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:3")->score, 1.0 / 63.0, 1e-7);
   EXPECT_EQ(fused[0].external_id->Str(), "doc:2");
   EXPECT_EQ(fused[3].external_id->Str(), "doc:3");
 }
@@ -120,7 +121,7 @@ TEST_F(RRFTest, SameDocAtDifferentRanksAcrossArms) {
   arms.push_back({.neighbors = &arm0, .rrf_constant = 60, .window = 0});
   arms.push_back({.neighbors = &arm1, .rrf_constant = 60, .window = 0});
   auto fused = RRF(std::move(arms));
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 1.0 / 61.0 + 1.0 / 66.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 1.0 / 61.0 + 1.0 / 66.0, 1e-7);
 }
 
 TEST_F(RRFTest, WindowTruncatesArmContribution) {
@@ -156,7 +157,7 @@ TEST_F(RRFTest, EmptyArmYieldsOtherArmsResults) {
   arms.push_back({.neighbors = &arm1, .rrf_constant = 60, .window = 0});
   auto fused = RRF(std::move(arms));
   EXPECT_EQ(fused.size(), 2u);
-  EXPECT_NEAR(Find(fused, "doc:a")->distance, 1.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:a")->score, 1.0 / 61.0, 1e-7);
 }
 
 TEST_F(RRFTest, AllArmsEmpty) {
@@ -175,8 +176,8 @@ TEST_F(RRFTest, SingleArmDegenerate) {
   arms.push_back({.neighbors = &arm0, .rrf_constant = 60, .window = 0});
   auto fused = RRF(std::move(arms));
   EXPECT_EQ(fused.size(), 2u);
-  EXPECT_NEAR(Find(fused, "doc:a")->distance, 1.0 / 61.0, 1e-7);
-  EXPECT_NEAR(Find(fused, "doc:b")->distance, 1.0 / 62.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:a")->score, 1.0 / 61.0, 1e-7);
+  EXPECT_NEAR(Find(fused, "doc:b")->score, 1.0 / 62.0, 1e-7);
 }
 
 TEST_F(RRFTest, ScoreAliasPropagatesPerArmDistance) {
@@ -220,59 +221,78 @@ TEST_F(RRFTest, DeterministicTieBreakByExternalId) {
 // ---------------------------- LINEAR ----------------------------
 
 TEST_F(LinearTest, DisjointArmsScaledByWeight) {
-  auto arm0 = Vec(N("doc:1", 0.0f), N("doc:2", 1.0f));
-  auto arm1 = Vec(N("doc:3", 0.0f), N("doc:4", 1.0f));
+  auto arm0 = Vec(N("doc:1", 1.0f), N("doc:2", 0.5f));
+  auto arm1 = Vec(N("doc:3", 1.0f), N("doc:4", 0.5f));
   std::vector<ArmInput> arms;
   arms.push_back({.neighbors = &arm0, .weight = 0.7, .window = 0});
   arms.push_back({.neighbors = &arm1, .weight = 0.3, .window = 0});
   auto fused = Linear(std::move(arms));
   EXPECT_EQ(fused.size(), 4u);
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 0.7, 1e-6);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 0.0, 1e-6);
-  EXPECT_NEAR(Find(fused, "doc:3")->distance, 0.3, 1e-6);
-  EXPECT_NEAR(Find(fused, "doc:4")->distance, 0.0, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 0.7, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 0.35, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:3")->score, 0.3, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:4")->score, 0.15, 1e-6);
 }
 
-TEST_F(LinearTest, OverlappingDocSumsWeightedNormalized) {
-  auto arm0 = Vec(N("doc:1", 0.0f), N("doc:2", 1.0f));
-  auto arm1 = Vec(N("doc:1", 0.0f), N("doc:3", 1.0f));
+TEST_F(LinearTest, OverlappingDocSumsBothArms) {
+  auto arm0 = Vec(N("doc:1", 0.8f), N("doc:2", 0.2f));
+  auto arm1 = Vec(N("doc:1", 0.4f), N("doc:3", 0.6f));
   std::vector<ArmInput> arms;
   arms.push_back({.neighbors = &arm0, .weight = 0.5, .window = 0});
   arms.push_back({.neighbors = &arm1, .weight = 0.5, .window = 0});
   auto fused = Linear(std::move(arms));
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 1.0, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 0.6, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 0.1, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:3")->score, 0.3, 1e-6);
 }
 
-TEST_F(LinearTest, AllEqualDistancesNormalizesToOne) {
-  auto arm0 = Vec(N("doc:1", 0.5f), N("doc:2", 0.5f), N("doc:3", 0.5f));
+// The whole point of not normalizing: a document's fused score depends only on
+// its own arm scores, never on what else came back in the same arm.
+TEST_F(LinearTest, ScoreDoesNotDependOnTheRestOfTheArm) {
+  auto narrow = Vec(N("doc:1", 0.4f), N("doc:2", 0.5f));
+  std::vector<ArmInput> a;
+  a.push_back({.neighbors = &narrow, .weight = 1.0, .window = 0});
+  EXPECT_NEAR(Find(Linear(std::move(a)), "doc:1")->score, 0.4, 1e-6);
+
+  auto wide = Vec(N("doc:1", 0.4f), N("doc:2", 9.0f));
+  std::vector<ArmInput> b;
+  b.push_back({.neighbors = &wide, .weight = 1.0, .window = 0});
+  EXPECT_NEAR(Find(Linear(std::move(b)), "doc:1")->score, 0.4, 1e-6);
+}
+
+TEST_F(LinearTest, HigherRawScoreLeads) {
+  auto arm0 = Vec(N("doc:1", 3.0f), N("doc:2", 1.0f));
   std::vector<ArmInput> arms;
   arms.push_back({.neighbors = &arm0, .weight = 1.0, .window = 0});
   auto fused = Linear(std::move(arms));
-  for (const auto& n : fused) {
-    EXPECT_NEAR(n.distance, 1.0, 1e-6);
-  }
+  ASSERT_EQ(fused.size(), 2u);
+  EXPECT_EQ(fused[0].external_id->Str(), "doc:1");
+  EXPECT_NEAR(fused[0].score, 3.0, 1e-6);
+  // The fused score is mirrored into `distance` for consumers still keyed
+  // on it.
+  EXPECT_NEAR(fused[0].distance, fused[0].score, 1e-6);
 }
 
 TEST_F(LinearTest, AlphaZeroSilencesArm) {
-  auto arm0 = Vec(N("doc:1", 0.0f));
-  auto arm1 = Vec(N("doc:1", 0.0f), N("doc:2", 1.0f));
+  auto arm0 = Vec(N("doc:1", 1.0f));
+  auto arm1 = Vec(N("doc:1", 0.25f), N("doc:2", 0.5f));
   std::vector<ArmInput> arms;
   arms.push_back({.neighbors = &arm0, .weight = 0.0, .window = 0});
   arms.push_back({.neighbors = &arm1, .weight = 1.0, .window = 0});
   auto fused = Linear(std::move(arms));
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 1.0, 1e-6);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 0.0, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 0.25, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 0.5, 1e-6);
 }
 
 TEST_F(LinearTest, EmptyArmContributesZero) {
   std::vector<indexes::Neighbor> arm0;
-  auto arm1 = Vec(N("doc:1", 0.0f), N("doc:2", 1.0f));
+  auto arm1 = Vec(N("doc:1", 1.0f), N("doc:2", 0.5f));
   std::vector<ArmInput> arms;
   arms.push_back({.neighbors = &arm0, .weight = 0.5, .window = 0});
   arms.push_back({.neighbors = &arm1, .weight = 0.5, .window = 0});
   auto fused = Linear(std::move(arms));
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 0.5, 1e-6);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 0.0, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 0.5, 1e-6);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 0.25, 1e-6);
 }
 
 // ---------------------------- FUNCTION ----------------------------
@@ -288,18 +308,18 @@ TEST_F(FunctionTest, ScoreFnReceivesAllArmScores) {
   // Verify via the resulting fused scores: combined = arm0*10 + arm1.
   auto fused =
       Function(std::move(arms),
-                   [](const std::vector<std::optional<double>>& s) -> double {
-                     double a = s[0].has_value() ? *s[0] : 0.0;
-                     double b = s[1].has_value() ? *s[1] : 0.0;
-                     return a * 10.0 + b;
-                   });
+               [](const std::vector<std::optional<double>>& s) -> double {
+                 double a = s[0].has_value() ? *s[0] : 0.0;
+                 double b = s[1].has_value() ? *s[1] : 0.0;
+                 return a * 10.0 + b;
+               });
   ASSERT_EQ(fused.size(), 3u);
   // doc:1 in both arms: 0.5*10 + 0.2 = 5.2
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 5.2, 1e-5);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 5.2, 1e-5);
   // doc:2 in arm0 only: 0.7*10 + 0 = 7.0
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 7.0, 1e-5);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 7.0, 1e-5);
   // doc:3 in arm1 only: 0*10 + 0.9 = 0.9
-  EXPECT_NEAR(Find(fused, "doc:3")->distance, 0.9, 1e-5);
+  EXPECT_NEAR(Find(fused, "doc:3")->score, 0.9, 1e-5);
   // Sorted descending by combined score: doc:2 (7.0) > doc:1 (5.2) > doc:3.
   EXPECT_EQ(fused[0].external_id->Str(), "doc:2");
   EXPECT_EQ(fused[1].external_id->Str(), "doc:1");
@@ -314,15 +334,15 @@ TEST_F(FunctionTest, AbsentArmScoreIsNullopt) {
   arms.push_back({.neighbors = &arm1, .window = 0});
   auto fused =
       Function(std::move(arms),
-                   [](const std::vector<std::optional<double>>& s) -> double {
-                     // Return 1.0 if BOTH arms present, else 0.0 — lets us
-                     // assert presence.
-                     return (s[0].has_value() && s[1].has_value()) ? 1.0 : 0.0;
-                   });
+               [](const std::vector<std::optional<double>>& s) -> double {
+                 // Return 1.0 if BOTH arms present, else 0.0 — lets us
+                 // assert presence.
+                 return (s[0].has_value() && s[1].has_value()) ? 1.0 : 0.0;
+               });
   ASSERT_EQ(fused.size(), 2u);
   // Neither doc appears in both arms, so both score 0.
-  EXPECT_NEAR(Find(fused, "doc:1")->distance, 0.0, 1e-9);
-  EXPECT_NEAR(Find(fused, "doc:2")->distance, 0.0, 1e-9);
+  EXPECT_NEAR(Find(fused, "doc:1")->score, 0.0, 1e-9);
+  EXPECT_NEAR(Find(fused, "doc:2")->score, 0.0, 1e-9);
 }
 
 TEST_F(FunctionTest, ScoreAliasesStillPropagated) {
@@ -335,13 +355,13 @@ TEST_F(FunctionTest, ScoreAliasesStillPropagated) {
       {.neighbors = &arm1, .score_alias = std::string("v"), .window = 0});
   auto fused =
       Function(std::move(arms),
-                   [](const std::vector<std::optional<double>>& s) -> double {
-                     return *s[0] + *s[1];
-                   });
+               [](const std::vector<std::optional<double>>& s) -> double {
+                 return *s[0] + *s[1];
+               });
   ASSERT_EQ(fused.size(), 1u);
   const auto* doc1 = Find(fused, "doc:1");
   ASSERT_NE(doc1, nullptr);
-  EXPECT_NEAR(doc1->distance, 0.7, 1e-5);
+  EXPECT_NEAR(doc1->score, 0.7, 1e-5);
   EXPECT_NEAR(*AliasScore(*doc1, "s"), 0.5, 1e-6);
   EXPECT_NEAR(*AliasScore(*doc1, "v"), 0.2, 1e-6);
 }

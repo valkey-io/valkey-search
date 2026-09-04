@@ -406,6 +406,10 @@ int hdr_init(
     histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
     if (!histogram)
     {
+        /* Free the counts buffer allocated above so hdr_init does not leak
+         * partial state on failure. Callers only receive `*result` when the
+         * function returns 0, so they cannot clean this up themselves. */
+        free(counts);
         return ENOMEM;
     }
 

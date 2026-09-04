@@ -5,6 +5,7 @@
  *
  */
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -64,6 +65,13 @@ constexpr absl::string_view kDialectKw{"DIALECT"};
 // scan to see it and emit a precise rejection ("NOCONTENT is not supported
 // by FT.HYBRID") rather than letting it slip through as a top-level token
 // that subsequent handlers misinterpret.
+// FT.HYBRID returns 10 rows when the caller omits LIMIT.
+constexpr size_t kDefaultHybridLimit = 10;
+
+// Column name the fused score is parked under when the caller did not name it
+// with COMBINE ... YIELD_SCORE_AS. Reserved, and hidden from the reply.
+constexpr absl::string_view kInternalHybridScore = "__hybrid_score";
+
 bool IsTopLevelKeyword(absl::string_view tok) {
   return absl::EqualsIgnoreCase(tok, kSearchKw) ||
          absl::EqualsIgnoreCase(tok, kVsimKw) ||
@@ -444,7 +452,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     env.agg->timeout_ms = env.timeout_ms;
     env.agg->no_content = false;
     // Make the aggregate pipeline treat the fused result as a "scored" set so
-    // the score_as -> Neighbor::distance plumbing in CreateRecordsFromNeighbors
+    // the score_as -> Neighbor::score plumbing in CreateRecordsFromNeighbors
     // fires (it gates on AggregateParameters::IsVectorQuery, which checks
     // whether attribute_alias is non-empty). Reuse the VSIM arm's vector
     // field; the aggregate code calls index_schema->GetIdentifier on it, so
@@ -459,8 +467,13 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       env.agg->score_as = vmsdk::MakeUniqueValkeyString(
           vmsdk::ToStringView(env.score_as.get()));
     } else {
-      env.agg->score_as = vmsdk::MakeUniqueValkeyString("__hybrid_score");
-      env.score_as = vmsdk::MakeUniqueValkeyString("__hybrid_score");
+      // No COMBINE ... YIELD_SCORE_AS. The pipeline still needs the fused
+      // score as a column, but the caller never asked to see it, so keep it
+      // under a reserved name and hide that column from the reply -- Redis
+      // returns no score field in this case either.
+      env.agg->score_as = vmsdk::MakeUniqueValkeyString(kInternalHybridScore);
+      env.score_as = vmsdk::MakeUniqueValkeyString(kInternalHybridScore);
+      env.agg->suppressed_reply_field_ = std::string(kInternalHybridScore);
     }
     // Pre-populate the two reserved record slots that AggregateParameters
     // expects: __key at index 0 and the score alias at index 1. Mirrors the
@@ -554,10 +567,29 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     }
   }
 
-  // TIMEOUT is consumed by the aggregate-suffix parser into env.agg->timeout_ms.
-  // Propagate it back onto the envelope so that ExecuteCommand — which builds
-  // the cancellation token from env.timeout_ms AFTER ParseAfterIndex returns —
-  // honors the caller's requested timeout instead of the pre-parse default.
+  // FT.HYBRID bounds its reply at 10 rows when the caller writes no LIMIT --
+  // unlike FT.AGGREGATE, which returns everything. An explicit LIMIT stays
+  // where the caller put it in the pipeline; only the default is appended, so
+  // it runs after every other stage.
+  {
+    auto &stages = env.agg->stages_;
+    const bool has_limit =
+        std::any_of(stages.begin(), stages.end(), [](const auto &stage) {
+          return dynamic_cast<const aggregate::Limit *>(stage.get()) != nullptr;
+        });
+    if (!has_limit) {
+      auto limit_stage = std::make_unique<aggregate::Limit>();
+      limit_stage->offset_ = 0;
+      limit_stage->limit_ = kDefaultHybridLimit;
+      stages.push_back(std::move(limit_stage));
+    }
+  }
+
+  // TIMEOUT is consumed by the aggregate-suffix parser into
+  // env.agg->timeout_ms. Propagate it back onto the envelope so that
+  // ExecuteCommand — which builds the cancellation token from env.timeout_ms
+  // AFTER ParseAfterIndex returns — honors the caller's requested timeout
+  // instead of the pre-parse default.
   env.timeout_ms = env.agg->timeout_ms;
 
   // Now that PARAMS (if any) are populated on env.agg->parse_vars.params,
@@ -612,6 +644,14 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       VMSDK_RETURN_IF_ERROR(arm->PreParseQueryString());
       VMSDK_RETURN_IF_ERROR(arm->PostParseQueryString());
     }
+    // Record now whether this arm's score is a raw distance: `arms` is emptied
+    // at dispatch (each shim is moved into SearchAsync), so fusion cannot ask
+    // the arm later. Neighbor::score is a KNN distance only for a pure vector
+    // arm; anything with a text predicate — a text SEARCH arm, or a
+    // `text=>[KNN ...]` arm whose score ApplyHybridTextScore overwrites with
+    // text relevance — carries a BM25-style relevance score instead.
+    env.per_arm_score_is_distance.push_back(arm->IsVectorQuery() &&
+                                            !QueryHasTextPredicate(*arm));
   }
 
   // Clear the now-stale stack-local index_interface_ pointer.

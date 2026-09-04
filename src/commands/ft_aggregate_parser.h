@@ -50,6 +50,12 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
+  // A record column the pipeline needs but the reply must not carry. FT.HYBRID
+  // registers its fused score as a column so SORTBY/APPLY/FILTER can reference
+  // it, but only shows it to the caller when they named it with
+  // YIELD_SCORE_AS -- matching Redis, which returns no score column otherwise.
+  // Empty means nothing is suppressed.
+  std::string suppressed_reply_field_;
   std::vector<std::string> loads_;
   bool load_key{false};
   bool addscores_{false};
@@ -111,16 +117,21 @@ struct AggregateParameters : public expr::Expression::CompileContext,
                             indexes::IndexerType data_type) {
     auto identifier_itr = record_indexes_by_identifier_.find(identifier);
     auto alias_itr = record_indexes_by_alias_.find(alias);
+    // Callers may add the same (identifier, alias) pair more than once: they
+    // re-add __key/score and LOAD fields already referenced elsewhere.
     if (identifier_itr != record_indexes_by_identifier_.end() &&
-        alias_itr != record_indexes_by_alias_.end()) {
-      assert(identifier_itr->second == alias_itr->second);
+        alias_itr != record_indexes_by_alias_.end() &&
+        identifier_itr->second == alias_itr->second) {
       return identifier_itr->second;
     }
-    assert(identifier_itr == record_indexes_by_identifier_.end());
-    assert(alias_itr == record_indexes_by_alias_.end());
+    // Re-binding an existing alias to a new identifier (e.g. `LOAD 2 n1 n2 AS
+    // n1`) shadows the previous binding, per RediSearch LOAD/APPLY semantics:
+    // the alias resolves to the new slot, while the shadowed slot stays
+    // reachable only by its identifier.
     size_t new_index = record_info_by_index_.size();
-    record_indexes_by_identifier_.emplace(std::string(identifier), new_index);
-    record_indexes_by_alias_.emplace(std::string(alias), new_index);
+    record_indexes_by_identifier_.insert_or_assign(std::string(identifier),
+                                                   new_index);
+    record_indexes_by_alias_.insert_or_assign(std::string(alias), new_index);
     record_info_by_index_.push_back(
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),

@@ -20,6 +20,7 @@
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/debug.h"
@@ -52,8 +53,7 @@ struct Result {
 
 int Timeout(ValkeyModuleCtx *ctx, [[maybe_unused]] ValkeyModuleString **argv,
             [[maybe_unused]] int argc) {
-  return ValkeyModule_ReplyWithError(
-      ctx, "Search operation cancelled due to timeout");
+  return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
 }
 
 int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -71,8 +71,7 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
   if (!parameters->enable_partial_results &&
       parameters->cancellation_token->IsCancelled()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    return ValkeyModule_ReplyWithError(
-        ctx, "Search operation cancelled due to timeout");
+    return ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
   }
   parameters->SendReply(ctx, parameters->search_result);
   return VALKEYMODULE_OK;
@@ -141,6 +140,7 @@ std::vector<vmsdk::cluster_map::NodeInfo> ComputeSearchTargetsT(
 }
 
 CONTROLLED_BOOLEAN(ForceInvalidIndexFingerprint, false);
+CONTROLLED_BOOLEAN(ForceQueueDepthExceeded, false);
 
 // Generic dispatch shared by FT.SEARCH, FT.AGGREGATE, FT.HYBRID. Cmd-specific
 // behavior lives in the static hooks: Cmd::ParseAfterIndex, ExecuteSyncLocal,
@@ -195,6 +195,19 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       }
     }
 
+    // Reject queries before creating a blocked client if the reader thread
+    // pool queue is too deep. Covers both fanout and single-node paths.
+    // No scaling factor needed — each node protects its own queue via the
+    // server-side check in coordinator/server.cc.
+    auto configured_limit = options::GetMaxQueryQueueDepth().GetValue();
+    if (configured_limit > 0) {
+      auto *thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
+      if (ForceQueueDepthExceeded.GetValue() ||
+          thread_pool->QueueSize() >= static_cast<size_t>(configured_limit)) {
+        return absl::ResourceExhaustedError(query::kQueueDepthMsg);
+      }
+    }
+
     if (do_fanout) {
       // get index fingerprint and version
       if (ForceInvalidIndexFingerprint.GetValue()) {
@@ -244,8 +257,7 @@ absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
     return absl::OkStatus();
   }
   if (!cmd->enable_partial_results && cmd->cancellation_token->IsCancelled()) {
-    ValkeyModule_ReplyWithError(ctx,
-                                "Search operation cancelled due to timeout");
+    ValkeyModule_ReplyWithError(ctx, query::kTimeoutMsg.data());
     ++Metrics::GetStats().query_failed_requests_cnt;
     return absl::OkStatus();
   }

@@ -31,10 +31,10 @@ constexpr absl::string_view kInvalidOrMissingExpression{
 struct Constant : Expression {
   Constant(std::string constant) : constant_(std::move(constant)) {}
   Constant(double constant) : constant_(constant) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return constant_;
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << "Constant(" << constant_ << ")";
   }
 
@@ -43,12 +43,12 @@ struct Constant : Expression {
 };
 
 struct Parameter : Expression {
-  Parameter(std::string&& name, Value&& value)
+  Parameter(std::string &&name, Value &&value)
       : name_(std::move(name)), value_(std::move(value)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return value_;
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << "$" << name_ << "(" << value_ << ")";
   }
 
@@ -61,10 +61,10 @@ struct AttributeValue : Expression {
   AttributeValue(std::string identifier,
                  std::unique_ptr<AttributeReference> ref)
       : identifier_(std::move(identifier)), ref_(std::move(ref)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return ref_->GetValue(ctx, record);
   }
-  void Dump(std::ostream& os) const override { os << '@' << identifier_; }
+  void Dump(std::ostream &os) const override { os << '@' << identifier_; }
 
  private:
   std::string identifier_;
@@ -72,8 +72,8 @@ struct AttributeValue : Expression {
 };
 
 struct Not : Expression {
-  Not(ExprPtr&& p) : expr_(std::move(p)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Not(ExprPtr &&p) : expr_(std::move(p)) {}
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto Primary = expr_->Evaluate(ctx, record).AsBool();
     if (Primary) {
       return Value(!*Primary);
@@ -81,7 +81,7 @@ struct Not : Expression {
       return Value{};
     }
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << '!';
     expr_->Dump(os);
   }
@@ -91,19 +91,19 @@ struct Not : Expression {
 };
 
 struct FunctionCall : Expression {
-  using Func = Value (*)(EvalContext& ctx, const Record& record,
-                         const absl::InlinedVector<ExprPtr, 4>& params);
+  using Func = Value (*)(EvalContext &ctx, const Record &record,
+                         const absl::InlinedVector<ExprPtr, 4> &params);
   static absl::StatusOr<Func> LookUpAndValidate(
-      const std::string& name, const absl::InlinedVector<ExprPtr, 4>& params);
+      const std::string &name, const absl::InlinedVector<ExprPtr, 4> &params);
   FunctionCall(std::string name, Func func,
                absl::InlinedVector<ExprPtr, 4> params)
       : name_(std::move(name)), func_(func), params_(std::move(params)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return (*func_)(ctx, record, params_);
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << name_ << '(';
-    for (auto& p : params_) {
+    for (auto &p : params_) {
       if (&p != &params_[0]) {
         os << ',';
       }
@@ -118,52 +118,52 @@ struct FunctionCall : Expression {
   absl::InlinedVector<ExprPtr, 4> params_;
 };
 
-template <Value (*func1)(const Value& o)>
+template <Value (*func1)(const Value &o)>
 Value MonadicFunctionProxy(
-    Expression::EvalContext& ctx, const Expression::Record& record,
-    const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+    Expression::EvalContext &ctx, const Expression::Record &record,
+    const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 1);
   return (*func1)(params[0]->Evaluate(ctx, record));
 };
 
-template <Value (*func2)(const Value& l, const Value& r)>
-Value DyadicFunctionProxy(Expression::EvalContext& ctx,
-                          const Expression::Record& record,
-                          const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+template <Value (*func2)(const Value &l, const Value &r)>
+Value DyadicFunctionProxy(Expression::EvalContext &ctx,
+                          const Expression::Record &record,
+                          const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 2);
   return (*func2)(params[0]->Evaluate(ctx, record),
                   params[1]->Evaluate(ctx, record));
 };
 
-template <Value (*func3)(const Value& l, const Value& m, const Value& r)>
+template <Value (*func3)(const Value &l, const Value &m, const Value &r)>
 Value TriadicFunctionProxy(
-    Expression::EvalContext& ctx, const Expression::Record& record,
-    const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+    Expression::EvalContext &ctx, const Expression::Record &record,
+    const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 3);
   return (*func3)(params[0]->Evaluate(ctx, record),
                   params[1]->Evaluate(ctx, record),
                   params[2]->Evaluate(ctx, record));
 };
 
-using Func = Value (*)(Expression::EvalContext& ctx,
-                       const Expression::Record& record,
-                       const absl::InlinedVector<ExprPtr, 4>& params);
+using Func = Value (*)(Expression::EvalContext &ctx,
+                       const Expression::Record &record,
+                       const absl::InlinedVector<ExprPtr, 4> &params);
 
-Value FuncExists(const Value& o) { return Value(!o.IsNil()); }
+Value FuncExists(const Value &o) { return Value(!o.IsNil()); }
 
-Value ProxyConcat(Expression::EvalContext& ctx,
-                  const Expression::Record& record,
-                  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+Value ProxyConcat(Expression::EvalContext &ctx,
+                  const Expression::Record &record,
+                  const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   absl::InlinedVector<Value, 4> values;
-  for (auto& p : params) {
+  for (auto &p : params) {
     values.emplace_back(p->Evaluate(ctx, record));
   }
   return FuncConcat(values);
 }
 
-Value ProxyTimefmt(Expression::EvalContext& ctx,
-                   const Expression::Record& record,
-                   const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+Value ProxyTimefmt(Expression::EvalContext &ctx,
+                   const Expression::Record &record,
+                   const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
@@ -172,9 +172,9 @@ Value ProxyTimefmt(Expression::EvalContext& ctx,
   return FuncTimefmt(params[0]->Evaluate(ctx, record), fmt);
 }
 
-Value ProxyParsetime(Expression::EvalContext& ctx,
-                     const Expression::Record& record,
-                     const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+Value ProxyParsetime(Expression::EvalContext &ctx,
+                     const Expression::Record &record,
+                     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
@@ -223,7 +223,7 @@ static std::map<std::string, FunctionTableEntry> function_table{
 };
 
 absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
-    const std::string& name, const absl::InlinedVector<ExprPtr, 4>& params) {
+    const std::string &name, const absl::InlinedVector<ExprPtr, 4> &params) {
   auto it = function_table.find(name);
   if (it == function_table.end()) {
     return absl::NotFoundError(absl::StrCat("Function ", name, " is unknown"));
@@ -253,18 +253,18 @@ absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
 //
 
 struct Dyadic : Expression {
-  using ValueFunc = Value (*)(const Value&, const Value&);
+  using ValueFunc = Value (*)(const Value &, const Value &);
   Dyadic(ExprPtr lexpr, ExprPtr rexpr, ValueFunc func, absl::string_view name)
       : lexpr_(std::move(lexpr)),
         rexpr_(std::move(rexpr)),
         func_(func),
         name_(name) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto lvalue = lexpr_->Evaluate(ctx, record);
     auto rvalue = rexpr_->Evaluate(ctx, record);
     return (*func_)(lvalue, rvalue);
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << '(';
     lexpr_->Dump(os);
     os << name_;
@@ -284,8 +284,8 @@ bool IsIdentifierChar(int c) {
 }
 
 struct DepthGuard {
-  int& depth;
-  DepthGuard(int& d) : depth(d) { ++depth; }
+  int &depth;
+  DepthGuard(int &d) : depth(d) { ++depth; }
   ~DepthGuard() { --depth; }
 };
 
@@ -296,12 +296,12 @@ struct Compiler {
 
   using CompileContext = Expression::CompileContext;
 
-  using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext& ctx);
+  using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext &ctx);
 
   using DyadicOp = std::pair<absl::string_view, Dyadic::ValueFunc>;
 
-  absl::StatusOr<ExprPtr> DoDyadic(CompileContext& ctx, ParseFunc func,
-                                   const std::vector<DyadicOp>& ops) {
+  absl::StatusOr<ExprPtr> DoDyadic(CompileContext &ctx, ParseFunc func,
+                                   const std::vector<DyadicOp> &ops) {
     utils::Scanner s = s_;
     DBG << "Start Dyadic: " << ops[0].first << " Remaining: '"
         << s_.GetUnscanned() << "'\n";
@@ -313,7 +313,7 @@ struct Compiler {
     while (s_.SkipWhiteSpacePeekByte() != EOF) {
       s = s_;
       bool found = false;
-      for (auto& op : ops) {
+      for (auto &op : ops) {
         DBG << "Dyadic looking for " << op.first
             << " Remaining: " << s_.GetUnscanned() << "\n";
         if (s_.SkipWhiteSpacePopWord(op.first)) {
@@ -341,7 +341,7 @@ struct Compiler {
     return lvalue;
   }
 
-  absl::StatusOr<ExprPtr> ParseParameter(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseParameter(CompileContext &ctx) {
     CHECK(s_.PopByte('$'));
     std::string param_name;
     while (IsIdentifierChar(s_.PeekByte())) {
@@ -352,7 +352,7 @@ struct Compiler {
                                        std::move(param_value));
   }
 
-  absl::StatusOr<ExprPtr> Invert(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Invert(CompileContext &ctx) {
     CHECK(s_.PopByte('!'));
     VMSDK_ASSIGN_OR_RETURN(auto expr, Primary(ctx));
     if (!expr) {
@@ -361,7 +361,7 @@ struct Compiler {
     return std::make_unique<Not>(std::move(expr));
   }
 
-  absl::StatusOr<ExprPtr> Primary(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Primary(CompileContext &ctx) {
     DepthGuard guard(depth_);
     if (depth_ > options::GetQueryStringDepth().GetValue()) {
       return absl::InvalidArgumentError("Expression too complex");
@@ -409,7 +409,7 @@ struct Compiler {
         return ParseFunctionCall(ctx);
     }
   }
-  absl::StatusOr<ExprPtr> Attribute(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Attribute(CompileContext &ctx) {
     CHECK(s_.PopByte('@'));
     size_t pos = s_.GetPosition();
     std::string identifier;
@@ -422,7 +422,7 @@ struct Compiler {
                            _ << " near position " << pos);
     return std::make_unique<AttributeValue>(identifier, std::move(ref));
   }
-  absl::StatusOr<ExprPtr> ParseFunctionCall(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseFunctionCall(CompileContext &ctx) {
     std::string name;
     utils::Scanner s = s_;
     while (IsIdentifierChar(s_.PeekByte())) {
@@ -460,7 +460,7 @@ struct Compiler {
       }
     }
   }
-  absl::StatusOr<ExprPtr> Number(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Number(CompileContext &ctx) {
     DBG << "Number Start: '" << s_.GetUnscanned() << "'\n";
     auto num = s_.PopDouble();
     if (!num) {
@@ -470,7 +470,7 @@ struct Compiler {
         << "'\n";
     return std::make_unique<Constant>(*num);
   }
-  absl::StatusOr<ExprPtr> QuotedString(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> QuotedString(CompileContext &ctx) {
     std::string str;
     int start_byte = s_.NextByte();
     while (s_.PeekByte() != start_byte) {
@@ -502,40 +502,40 @@ struct Compiler {
   //  LandOp: &&
   //  LorOp: ||
   //
-  absl::StatusOr<ExprPtr> LorOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> LorOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{
         {"||", &FuncLor},
     };
     return DoDyadic(ctx, &Compiler::LandOp, ops);
   }
-  absl::StatusOr<ExprPtr> LandOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> LandOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{
         {"&&", &FuncLand},
     };
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
-  absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
                                      {"==", &FuncEq}, {"!=", &FuncNe},
                                      {">=", &FuncGe}, {">", &FuncGt}};
     return DoDyadic(ctx, &Compiler::AddOp, ops);
   }
-  absl::StatusOr<ExprPtr> AddOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> AddOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{{"+", &FuncAdd}, {"-", &FuncSub}};
     return DoDyadic(ctx, &Compiler::MulOp, ops);
   }
-  absl::StatusOr<ExprPtr> MulOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> MulOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{
         {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
     return DoDyadic(ctx, &Compiler::Primary, ops);
   }
 
-  absl::StatusOr<ExprPtr> ParseExpression(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseExpression(CompileContext &ctx) {
     DBG << "Start Expression: '" << s_.GetUnscanned() << "'\n";
     return LorOp(ctx);
   }
 
-  absl::StatusOr<ExprPtr> Compile(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Compile(CompileContext &ctx) {
     VMSDK_ASSIGN_OR_RETURN(auto result, ParseExpression(ctx));
     if (!result) {
       return absl::InvalidArgumentError(kInvalidOrMissingExpression);
@@ -549,7 +549,7 @@ struct Compiler {
   }
 };
 
-absl::StatusOr<ExprPtr> Expression::Compile(CompileContext& ctx,
+absl::StatusOr<ExprPtr> Expression::Compile(CompileContext &ctx,
                                             absl::string_view s) {
   Compiler c(s);
   return c.Compile(ctx);

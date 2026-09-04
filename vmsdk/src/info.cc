@@ -202,7 +202,7 @@ bool Validate(ValkeyModuleCtx* ctx) {
         VMSDK_LOG(WARNING, ctx) << "Non-unique name: " << name;
         failed = true;
       }
-      VMSDK_LOG(WARNING, ctx)
+      VMSDK_LOG(DEBUG, ctx)
           << "Defined Info Field: " << name << " Flags:" << info->GetFlags();
     }
   }

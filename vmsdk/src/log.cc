@@ -9,14 +9,13 @@
 
 #include <cerrno>
 #include <cstddef>
-#include <fstream>
 #include <optional>
 #include <string>
-#include <unordered_map>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/log/globals.h"
+#include "absl/log/internal/log_message.h"
 #include "absl/log/log_entry.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -28,7 +27,7 @@
 
 namespace vmsdk {
 
-const char* ToStrLogLevel(int log_level) {
+const char *ToStrLogLevel(int log_level) {
   switch (log_level) {
     case 0:
       return VALKEYMODULE_LOGLEVEL_WARNING;
@@ -42,7 +41,7 @@ const char* ToStrLogLevel(int log_level) {
   CHECK(false);
 }
 
-static inline std::string DefaultSinkFormatter(const absl::LogEntry& entry) {
+static inline std::string DefaultSinkFormatter(const absl::LogEntry &entry) {
   pthread_t thread_id = pthread_self();
   return absl::StrFormat(
       "[%s], tid: %lu, %s:%d: %s", ToStrLogLevel(entry.verbosity()),
@@ -73,7 +72,7 @@ const absl::flat_hash_map<std::string, LogLevel> kLogLevelMap = {
     {absl::AsciiStrToLower(VALKEYMODULE_LOGLEVEL_DEBUG), LogLevel::kDebug},
 };
 
-absl::StatusOr<std::string> FetchEngineLogLevel(ValkeyModuleCtx* ctx) {
+absl::StatusOr<std::string> FetchEngineLogLevel(ValkeyModuleCtx *ctx) {
   auto reply = vmsdk::UniquePtrValkeyCallReply(
       ValkeyModule_Call(ctx, "CONFIG", "cc", "GET", "loglevel"));
   if (reply == nullptr) {
@@ -89,7 +88,7 @@ absl::StatusOr<std::string> FetchEngineLogLevel(ValkeyModuleCtx* ctx) {
     }
   }
 
-  ValkeyModuleCallReply* loglevel_reply =
+  ValkeyModuleCallReply *loglevel_reply =
       ValkeyModule_CallReplyArrayElement(reply.get(), 1);
 
   if (loglevel_reply == nullptr ||
@@ -99,12 +98,12 @@ absl::StatusOr<std::string> FetchEngineLogLevel(ValkeyModuleCtx* ctx) {
   }
 
   size_t len;
-  const char* loglevel_str =
+  const char *loglevel_str =
       ValkeyModule_CallReplyStringPtr(loglevel_reply, &len);
   return std::string(loglevel_str, len);
 }
 
-absl::Status InitLogging(ValkeyModuleCtx* ctx,
+absl::Status InitLogging(ValkeyModuleCtx *ctx,
                          std::optional<std::string> log_level_str) {
   if (!log_level_str.has_value()) {
     auto engine_log_level = FetchEngineLogLevel(ctx);
@@ -132,21 +131,49 @@ absl::Status InitLogging(ValkeyModuleCtx* ctx,
   return absl::OkStatus();
 }
 
-const char* ReportedLogLevel(int log_level) {
+const char *ReportedLogLevel(int log_level) {
   if (sink_options.log_level_specified) {
     return VALKEYMODULE_LOGLEVEL_WARNING;
   }
   return ToStrLogLevel(log_level);
 }
 
-void ValkeyLogSink::Send(const absl::LogEntry& entry) {
+void ValkeyLogSink::Send(const absl::LogEntry &entry) {
   ValkeyModule_Log(ctx_, ReportedLogLevel(entry.verbosity()), "%s",
                    GetSinkFormatter()(entry).c_str());
 }
 
-void ValkeyIOLogSink::Send(const absl::LogEntry& entry) {
+void ValkeyIOLogSink::Send(const absl::LogEntry &entry) {
   ValkeyModule_LogIOError(io_, ReportedLogLevel(entry.verbosity()), "%s",
                           GetSinkFormatter()(entry).c_str());
 }
-
 }  // namespace vmsdk
+
+#if defined(__linux__) && defined(__GNUC__) && !defined(__clang__)
+#include "absl/log/internal/log_message.h"
+// Explicitly instantiate Abseil LogMessage operator<< templates for GCC on
+// Linux to prevent undefined reference linker errors in standalone test
+// executables and shared library loaders.
+namespace absl {
+ABSL_NAMESPACE_BEGIN
+namespace log_internal {
+template LogMessage &LogMessage::operator<<(const char &);
+template LogMessage &LogMessage::operator<<(const signed char &);
+template LogMessage &LogMessage::operator<<(const unsigned char &);
+template LogMessage &LogMessage::operator<<(const short &);
+template LogMessage &LogMessage::operator<<(const unsigned short &);
+template LogMessage &LogMessage::operator<<(const int &);
+template LogMessage &LogMessage::operator<<(const unsigned int &);
+template LogMessage &LogMessage::operator<<(const long &);
+template LogMessage &LogMessage::operator<<(const unsigned long &);
+template LogMessage &LogMessage::operator<<(const long long &);
+template LogMessage &LogMessage::operator<<(const unsigned long long &);
+template LogMessage &LogMessage::operator<<(void *const &);
+template LogMessage &LogMessage::operator<<(const void *const &);
+template LogMessage &LogMessage::operator<<(const float &);
+template LogMessage &LogMessage::operator<<(const double &);
+template LogMessage &LogMessage::operator<<(const bool &);
+}  // namespace log_internal
+ABSL_NAMESPACE_END
+}  // namespace absl
+#endif

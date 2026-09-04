@@ -1,0 +1,20 @@
+{
+  "_comment": "Reviewer pools for auto-assignment on new PRs. Every entry must have collaborator access, otherwise a review cannot be requested from them. Edit this file to change the pools; no workflow change is needed.",
+  "firstPass": [
+    "mnunberg1",
+    "Aksha1812",
+    "boda26",
+    "Frank-Gu-81",
+    "mohanrajendran",
+    "VoletiRam",
+    "neerajr0",
+    "chinguyen21",
+    "zackcam"
+  ],
+  "maintainers": [
+    "allenss-amazon",
+    "BCathcart",
+    "yairgott",
+    "KarthikSubbarao"
+  ]
+}

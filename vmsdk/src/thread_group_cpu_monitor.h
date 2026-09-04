@@ -15,7 +15,7 @@ namespace vmsdk {
 
 class ThreadGroupCPUMonitor {
  public:
-  ThreadGroupCPUMonitor(const std::string& thread_name_pattern);
+  explicit ThreadGroupCPUMonitor(absl::string_view thread_name_pattern);
   ~ThreadGroupCPUMonitor() = default;
 
   double GetTotalGrpcCPUTime() const ABSL_LOCKS_EXCLUDED(mutex_) {

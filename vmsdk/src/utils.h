@@ -217,6 +217,17 @@ class ValkeySelectDbGuard {
   int old_db_;
   bool switched_ = false;
 };
+
+template <typename T>
+struct DestructByMainThread {
+  void operator()(T *ptr) const {
+    if (!ptr) {
+      return;
+    }
+    vmsdk::RunByMain([ptr]() { delete ptr; });
+  }
+};
+
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress

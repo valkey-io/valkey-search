@@ -59,3 +59,10 @@ class TestNumberOfIndexesOnRestore(ValkeySearchTestCaseDebugMode):
         waiters.wait_for_true(lambda: index_1.backfill_complete(self.client))
         waiters.wait_for_true(lambda: index_2.backfill_complete(self.client))
         assert self.client.info("search")["search_number_of_indexes"] == 2
+
+        # Verify rdb_indexes_restored_percent is 100% after restore completes
+        info = self.client.info("search")
+        assert info["search_rdb_restore_in_progress"] == 0
+        percent = float(info["search_rdb_indexes_restored_percent"])
+        assert percent == 100.0, \
+            f"Expected search_rdb_indexes_restored_percent=100.0 after restore, got {percent}"

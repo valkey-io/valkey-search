@@ -150,13 +150,23 @@ than misreading its 2-byte elements as `FLOAT32`. This matters when downgrading,
 and in mixed-version clusters: keep to `FLOAT32` if an index has to be readable
 by modules earlier than 1.3.0. Indexes that use only `FLOAT32` are unaffected.
 
-### BFLOAT16 hardware requirement
+### BFLOAT16 CPU requirement
 
-`BFLOAT16` indexes require a CPU that provides a SIMD BF16 conversion path:
-Haswell or newer on x86-64, or NEON-BF16/SVE-BF16 on ARM. On a CPU without one,
-creating a `BFLOAT16` index -- or loading one from an RDB -- fails with an error
-rather than producing incorrect distances. `FLOAT32` and `FLOAT16` indexes have
-no such requirement.
+`BFLOAT16` indexes require a CPU on which bfloat16 values decode correctly:
+
+- **x86-64:** AVX2 (Haswell, 2013) or newer.
+- **ARM:** FEAT_BF16, i.e. NEON-BF16 or SVE-BF16.
+
+This is a correctness requirement, not a demand for native BF16 instructions.
+On x86 the AVX2 path carries no BF16 instructions at all -- it converts by
+shifting, which is exact -- so any reasonably modern x86 server qualifies. ARM
+is stricter only because no equivalent software path is available there, which
+means pre-FEAT_BF16 cores such as Neoverse N1 (AWS Graviton 2) are excluded.
+
+On a CPU that does not qualify, creating a `BFLOAT16` index -- or loading one
+from an RDB -- fails with an error rather than silently producing wrong
+distances. Use `FLOAT16` instead on such hosts; it has the same 2-byte width and
+no CPU requirement. `FLOAT32` and `FLOAT16` indexes are unaffected.
 
 ## HASH Vector Format
 

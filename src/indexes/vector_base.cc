@@ -598,24 +598,32 @@ template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
 absl::Status CheckSimsimdBf16Capability() {
 #if defined(__SSE2__) || defined(__AVX512F__) || \
     defined(__ARM_BF16_FORMAT_ALTERNATIVE__)
-  // This predicate mirrors third_party/simsimd/c/lib.c's SIMSIMD_NATIVE_BF16
-  // selection. When NATIVE_BF16 is 1, simsimd_bf16_t is a native bf16-like
-  // typedef (e.g. _Float16 on x86) and the serial fallback path
-  // (simsimd_l2sq_bf16_serial / simsimd_dot_bf16_serial) misinterprets the
-  // stored bits. The runtime CPU must therefore advertise at least one
-  // SIMD-targeted dispatch (haswell/genoa/sapphire on x86, neon_bf16/
-  // sve_bf16 on ARM) that loads raw 16-bit words and converts via shifts.
-  const bool has_simd_safe_bf16_path =
+  // This guard mirrors third_party/simsimd/c/lib.c's SIMSIMD_NATIVE_BF16
+  // selection: it is entered only in builds where NATIVE_BF16 is 1, and there
+  // simsimd_bf16_t is typedef'd to _Float16 (x86) or __fp16 (ARM). Both are
+  // IEEE half, so the serial kernels (simsimd_l2sq_bf16_serial /
+  // simsimd_dot_bf16_serial) decode bfloat16 bits as half precision and return
+  // wrong values. The CPU must therefore have some non-serial kernel.
+  //
+  // These are the dispatches with a correct kernel. Note that correctness here
+  // does not imply native BF16 instructions: the haswell kernels are plain
+  // AVX2 and upcast by shifting left 16 bits, which is exactly right. Only
+  // genoa/sapphire (avx512bf16) and neon_bf16/sve_bf16 (FEAT_BF16) are native.
+  // simsimd has no shift-based ARM fallback, which is why ARM needs FEAT_BF16
+  // while x86 needs only AVX2.
+  const bool has_correct_bf16_kernel =
       simsimd_uses_haswell() || simsimd_uses_genoa() ||
       simsimd_uses_sapphire() || simsimd_uses_neon_bf16() ||
       simsimd_uses_sve_bf16();
-  if (!has_simd_safe_bf16_path) {
+  if (!has_correct_bf16_kernel) {
     return absl::FailedPreconditionError(
-        "BFLOAT16 indexes require a SIMD-targeted BF16 path "
-        "(Haswell/Genoa/Sapphire on x86, NEON-BF16/SVE-BF16 on ARM). "
-        "simsimd's serial BF16 fallback is unsafe under the current build "
-        "(SIMSIMD_NATIVE_BF16=1 in third_party/simsimd/c/lib.c). Either "
-        "run on a newer CPU or rebuild with SIMSIMD_NATIVE_BF16=0.");
+        "BFLOAT16 indexes require a CPU with a BF16 kernel that decodes "
+        "bfloat16 correctly: AVX2 (Haswell) or newer on x86, or FEAT_BF16 "
+        "(NEON-BF16/SVE-BF16) on ARM. This host has neither, so the only "
+        "available path is simsimd's serial BF16 fallback, which misreads "
+        "bfloat16 as IEEE half under the current build "
+        "(SIMSIMD_NATIVE_BF16=1 in third_party/simsimd/c/lib.c). Use FLOAT16 "
+        "or FLOAT32 on this host, or rebuild with SIMSIMD_NATIVE_BF16=0.");
   }
 #endif
   return absl::OkStatus();

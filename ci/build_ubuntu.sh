@@ -11,14 +11,20 @@ RESET='\e[0m'
 GREEN='\e[32;1m'
 RED='\e[31;1m'
 
+BUILD_CONFIG="release"
 san_suffix=""
 INTEGRATION_OUTPUT=""
 UNITTEST_OUTPUT=""
-## Search for --asan/--tsan
+## Search for --asan/--tsan/--debug
 while [ $# -gt 0 ]
 do
     arg=$1
     case $arg in
+    --debug)
+        BUILD_CONFIG="debug"
+        shift || true
+        echo "Building in debug mode"
+        ;;
     --asan)
         SAN_BUILD="address"
         shift || true
@@ -103,34 +109,49 @@ function prepare_env() {
 }
 
 function save_integration_output() {
-    echo Saving integration test output to ${INTEGRATION_OUTPUT}
-    local artifacts_dir=${ROOT_DIR}/.build-release${san_suffix}
-    echo Saving build artifacts from ${artifacts_dir}
-    cp ${artifacts_dir}/valkey-json/build/src/libjson.so ${INTEGRATION_OUTPUT}
-    cp ${artifacts_dir}/valkey-server/.build-release/bin/valkey-server ${INTEGRATION_OUTPUT}
-    cp ${artifacts_dir}/libsearch.so ${INTEGRATION_OUTPUT}
-    local result_dir=${ROOT_DIR}/.build-release${san_suffix}/integration/.valkey-test-framework
-    echo Results Directory is ${result_dir}
+    echo "Saving integration test output to ${INTEGRATION_OUTPUT}"
+    local artifacts_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${san_suffix}"
+    local third_party_dir="${ROOT_DIR}/.build-release${san_suffix}"
+    echo "Saving build artifacts from ${artifacts_dir}"
+    if [ -f "${third_party_dir}/valkey-json/build/src/libjson.so" ]; then
+        cp -- "${third_party_dir}/valkey-json/build/src/libjson.so" "${INTEGRATION_OUTPUT}"
+    fi
+    if [ -f "${third_party_dir}/valkey-server/.build-release/bin/valkey-server" ]; then
+        cp -- "${third_party_dir}/valkey-server/.build-release/bin/valkey-server" "${INTEGRATION_OUTPUT}"
+    fi
+    if [ -f "${artifacts_dir}/libsearch.so" ]; then
+        cp -- "${artifacts_dir}/libsearch.so" "${INTEGRATION_OUTPUT}"
+    fi
+    local result_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${san_suffix}/integration/.valkey-test-framework"
+    echo "Results Directory is ${result_dir}"
     if [ -d "${result_dir}" ]; then
-        cp -r -P ${result_dir} ${INTEGRATION_OUTPUT}
-        mv ${INTEGRATION_OUTPUT}/.valkey-test-framework ${INTEGRATION_OUTPUT}/valkey-test-framework
+        cp -r -P -- "${result_dir}" "${INTEGRATION_OUTPUT}"
+        mv -- "${INTEGRATION_OUTPUT}/.valkey-test-framework" "${INTEGRATION_OUTPUT}/valkey-test-framework"
     fi
     # Do the stest outputs too.
-    local stest_dir=${ROOT_DIR}/testing/integration/.build-release${san_suffix}
-    echo Stest Directory output is ${stest_dir}
+    local stest_dir="${ROOT_DIR}/testing/integration/.build-${BUILD_CONFIG}${san_suffix}"
+    echo "Stest Directory output is ${stest_dir}"
     if [ -d "${stest_dir}" ]; then
-        cp -r -P ${stest_dir}/output ${INTEGRATION_OUTPUT}
-        cp -r -P ${stest_dir}/tmp ${INTEGRATION_OUTPUT}
+        if [ -d "${stest_dir}/output" ]; then
+            cp -r -P -- "${stest_dir}/output" "${INTEGRATION_OUTPUT}"
+        fi
+        if [ -d "${stest_dir}/tmp" ]; then
+            cp -r -P -- "${stest_dir}/tmp" "${INTEGRATION_OUTPUT}"
+        fi
     fi
 }
 
 function save_unittest_output() {
-    echo Saving unit test output to ${UNITTEST_OUTPUT}
-    local result_dir=${ROOT_DIR}/.build-release${san_suffix}
-    echo Results Directory is ${result_dir}
-    ls -l ${result_dir}/tests
-    cp -r -P ${result_dir}/tests ${UNITTEST_OUTPUT}
-    cp ${result_dir}/tests.out ${UNITTEST_OUTPUT}
+    echo "Saving unit test output to ${UNITTEST_OUTPUT}"
+    local result_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${san_suffix}"
+    echo "Results Directory is ${result_dir}"
+    if [ -d "${result_dir}/tests" ]; then
+        ls -l "${result_dir}/tests"
+        cp -r -P -- "${result_dir}/tests" "${UNITTEST_OUTPUT}"
+    fi
+    if [ -f "${result_dir}/tests.out" ]; then
+        cp -- "${result_dir}/tests.out" "${UNITTEST_OUTPUT}"
+    fi
 }
 
 function cleanup() {

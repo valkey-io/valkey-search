@@ -1456,6 +1456,102 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+// ---------------------------------------------------------------------------
+// CollectVrScoreFields tests
+// ---------------------------------------------------------------------------
+
+// Helper: build a UnitTestSearchParameters whose filter_parse_results contains
+// a manually-constructed predicate tree, then assign score slots and set
+// num_vr_predicates.
+static UnitTestSearchParameters MakeParamsWithVrPredicates(
+    std::unique_ptr<query::Predicate> root) {
+  UnitTestSearchParameters params;
+  params.filter_parse_results.root_predicate = std::move(root);
+  params.num_vr_predicates = query::AssignVectorRangeScoreSlots(
+      params.filter_parse_results.root_predicate.get());
+  return params;
+}
+
+class CollectVrScoreFieldsTest : public vmsdk::ValkeyTest {};
+
+// Zero VR predicates → empty vector.
+TEST_F(CollectVrScoreFieldsTest, ZeroVrPredicates) {
+  UnitTestSearchParameters params;
+  // No root predicate set; num_vr_predicates stays 0.
+  auto fields = query::CollectVrScoreFields(params);
+  EXPECT_TRUE(fields.empty());
+}
+
+// One VR predicate without $yield_distance_as → ["__vec1_score"].
+TEST_F(CollectVrScoreFieldsTest, OneVrPredicateNoExplicitAlias) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob", std::nullopt, std::nullopt);
+  auto params = MakeParamsWithVrPredicates(std::move(vr));
+
+  auto fields = query::CollectVrScoreFields(params);
+  ASSERT_EQ(fields.size(), 1u);
+  EXPECT_EQ(fields[0], "__vec1_score");
+}
+
+// One VR predicate with explicit alias → ["my_dist"].
+TEST_F(CollectVrScoreFieldsTest, OneVrPredicateWithExplicitAlias) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob", std::optional<std::string>("my_dist"),
+      std::nullopt);
+  auto params = MakeParamsWithVrPredicates(std::move(vr));
+
+  auto fields = query::CollectVrScoreFields(params);
+  ASSERT_EQ(fields.size(), 1u);
+  EXPECT_EQ(fields[0], "my_dist");
+}
+
+// Two VR predicates with explicit aliases in slot order → ["d0", "d1"].
+TEST_F(CollectVrScoreFieldsTest, TwoVrPredicatesWithExplicitAliases) {
+  auto vr0 = std::make_unique<query::VectorRangePredicate>(
+      "vec0", "vec0_id", 1.0, "blob0", std::optional<std::string>("d0"),
+      std::nullopt);
+  auto vr1 = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 2.0, "blob1", std::optional<std::string>("d1"),
+      std::nullopt);
+
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(std::move(vr0));
+  children.push_back(std::move(vr1));
+  auto root = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(children));
+
+  auto params = MakeParamsWithVrPredicates(std::move(root));
+  ASSERT_EQ(params.num_vr_predicates, 2u);
+
+  auto fields = query::CollectVrScoreFields(params);
+  ASSERT_EQ(fields.size(), 2u);
+  EXPECT_EQ(fields[0], "d0");
+  EXPECT_EQ(fields[1], "d1");
+}
+
+// Two VR predicates where slot 0 has no alias and slot 1 does
+// → ["__vec1_score", "d1"].
+TEST_F(CollectVrScoreFieldsTest, TwoVrPredicatesMixedAliases) {
+  auto vr0 = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob1", std::nullopt, std::nullopt);
+  auto vr1 = std::make_unique<query::VectorRangePredicate>(
+      "vec2", "vec2_id", 2.0, "blob2", std::optional<std::string>("d1"),
+      std::nullopt);
+
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(std::move(vr0));
+  children.push_back(std::move(vr1));
+  auto root = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(children));
+
+  auto params = MakeParamsWithVrPredicates(std::move(root));
+  ASSERT_EQ(params.num_vr_predicates, 2u);
+
+  auto fields = query::CollectVrScoreFields(params);
+  ASSERT_EQ(fields.size(), 2u);
+  EXPECT_EQ(fields[0], "__vec1_score");
+  EXPECT_EQ(fields[1], "d1");
+}
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {
  protected:

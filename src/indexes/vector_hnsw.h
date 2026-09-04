@@ -97,6 +97,11 @@ class VectorHNSW : public VectorBase {
       std::optional<size_t> ef_runtime = std::nullopt,
       bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  absl::StatusOr<std::vector<Neighbor>> SearchRange(
+      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
+      ABSL_LOCKS_EXCLUDED(resize_mutex_) override;
+
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddRecordImpl(

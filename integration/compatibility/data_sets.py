@@ -524,6 +524,56 @@ def compute_data_sets():
                     for z in vector_points
                 ]
 
+    #
+    # Two-vector dataset: designed for multi-VR predicate compatibility tests.
+    # Has two vector fields (v1 and v2) with asymmetric values so that distance
+    # ordering on v1 differs from v2.  Also includes numeric and tag fields.
+    #
+    data["two vectors"] = {}
+    two_vec_create_cmds = {
+        "hash": (
+            "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+            "v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "n1 NUMERIC t1 TAG"
+        ),
+        "json": (
+            "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+            "$.v1 AS v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.v2 AS v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.n1 AS n1 NUMERIC $.t1 AS t1 TAG"
+        ),
+    }
+    # 6 documents with asymmetric v1/v2 placements:
+    #   doc:0  v1=(0,0,0)  v2=(0,0,0)   -- origin for both
+    #   doc:1  v1=(1,0,0)  v2=(3,0,0)   -- close on v1, far on v2
+    #   doc:2  v1=(3,0,0)  v2=(1,0,0)   -- far on v1, close on v2
+    #   doc:3  v1=(2,0,0)  v2=(2,0,0)   -- moderate both
+    #   doc:4  v1=(5,0,0)  v2=(5,0,0)   -- far both
+    #   doc:5  v1=(10,0,0) v2=(10,0,0)  -- very far both
+    two_vec_docs_template = [
+        ("0", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0, "A"),
+        ("1", [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], 1, "B"),
+        ("2", [3.0, 0.0, 0.0], [1.0, 0.0, 0.0], 2, "A"),
+        ("3", [2.0, 0.0, 0.0], [2.0, 0.0, 0.0], 3, "B"),
+        ("4", [5.0, 0.0, 0.0], [5.0, 0.0, 0.0], 4, "A"),
+        ("5", [10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 5, "B"),
+    ]
+    for key_type in ["hash", "json"]:
+        data["two vectors"][CREATES_KEY(key_type)] = [two_vec_create_cmds[key_type]]
+        data["two vectors"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{doc_id}",
+                {
+                    "v1": array_encode(key_type, v1),
+                    "v2": array_encode(key_type, v2),
+                    "n1": n1,
+                    "t1": t1,
+                },
+            )
+            for doc_id, v1, v2, n1, t1 in two_vec_docs_template
+        ]
+
     # Tag special characters data set. Comma separator so } and | are literal;
     # avoid '-' etc. (query operators) or the reference engine rejects the query.
     tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z",

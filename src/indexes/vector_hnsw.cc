@@ -32,6 +32,8 @@
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
+#include "src/utils/cancel.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
@@ -47,6 +49,7 @@
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "third_party/hnswlib/stop_condition.h"
 // clang-format on
 
 namespace valkey_search::indexes {
@@ -368,6 +371,72 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         1, std::memory_order_relaxed);
     return absl::InternalError(e.what());
   }
+}
+
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  const size_t max_candidates = static_cast<size_t>(
+      options::GetMaxNonVectorSearchResultsFetched().GetValue());
+
+  // Use a standard KNN search with a large ef to explore the graph broadly,
+  // then filter to the radius.  The EpsilonSearchStopCondition approach
+  // fails for small-radius queries because it terminates as soon as any
+  // out-of-radius candidate is encountered — which happens immediately when
+  // the HNSW entry point is far from the query.  Using searchKnn avoids this
+  // by ensuring the exploration covers the full neighborhood.
+  auto perform_search =
+      [this, &filter, max_candidates, &cancellation_token](
+          absl::string_view query_view, T reciprocal_magnitude)
+          ABSL_NO_THREAD_SAFETY_ANALYSIS
+      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+    try {
+      CancelCondition cancel_condition(cancellation_token);
+      QueryVector embedding(
+          VectorRecord::Construct(query_view, reciprocal_magnitude, nullptr),
+          query_view.size(), false);
+      auto res = algo_->searchKnn(embedding, max_candidates,
+                                  std::optional<size_t>(max_candidates),
+                                  filter.get(), &cancel_condition);
+      return res;
+    } catch (const std::exception &e) {
+      Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
+          1, std::memory_order_relaxed);
+      return absl::InternalError(e.what());
+    }
+  };
+
+  auto nq = NormalizeQueryIfNeeded(query);
+  T reciprocal_magnitude =
+      normalize_
+          ? CalcReciprocalMagnitude(
+                reinterpret_cast<const float *>(nq.view.data()), dimensions_)
+          : static_cast<T>(kDefaultMagnitude);
+  VMSDK_ASSIGN_OR_RETURN(auto raw_results,
+                         perform_search(nq.view, reciprocal_magnitude));
+
+  // Filter results to only those within the strict radius, applying cosine
+  // clamping so floating-point noise doesn't exclude exact matches.
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(raw_results.size());
+  while (!raw_results.empty()) {
+    auto [dist, label] = raw_results.top();
+    raw_results.pop();
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    float clamped_dist = ClampCosineDistance(static_cast<float>(dist));
+    if (clamped_dist > radius) {
+      continue;
+    }
+    auto key = GetKeyDuringSearch(label);
+    if (!key.ok()) {
+      continue;
+    }
+    neighbors.emplace_back(*key, clamped_dist);
+  }
+  return neighbors;
 }
 
 template <typename T>

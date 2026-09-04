@@ -11,6 +11,9 @@
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/indexes/vector_base.h"
+#include "src/utils/string_interning.h"
+#include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -452,6 +455,117 @@ TEST_F(AggregateExecTest, testHash) {
   }));
 }
 */
+// ---------------------------------------------------------------------------
+// CreateRecordsFromNeighbors tests (task 4.2)
+// ---------------------------------------------------------------------------
+
+class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
+ protected:
+  // Build an AggregateParameters with __key at 0, score_as at 1, and the
+  // given vr field names registered starting at index 2.
+  std::unique_ptr<AggregateParameters> MakeParams(
+      absl::string_view score_name, const std::vector<std::string> &vr_names) {
+    auto params = std::make_unique<AggregateParameters>(0);
+
+    auto schema = CreateIndexSchema("test_schema", &fake_ctx_).value();
+    params->index_schema = schema;
+
+    params->AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone);
+    params->AddRecordAttribute(score_name, score_name,
+                               indexes::IndexerType::kNone);
+    for (const auto &name : vr_names) {
+      params->AddRecordAttribute(name, name, indexes::IndexerType::kNone);
+    }
+    params->vr_score_field_names_ = vr_names;
+    return params;
+  }
+
+  indexes::Neighbor MakeNeighbor(absl::string_view key, float distance,
+                                 std::vector<float> vr_scores = {}) {
+    auto interned = StringInternStore::Intern(std::string(key));
+    indexes::Neighbor n(interned, distance);
+    n.vr_scores = std::move(vr_scores);
+    return n;
+  }
+};
+
+// Two VR predicates, neighbor has both slots populated: both record fields
+// set to correct distances.
+TEST_F(CreateRecordsFromNeighborsTest, TwoVrBothSlotsPopulated) {
+  auto params = MakeParams("__score", {"d1", "d2"});
+  // index layout: 0=__key, 1=__score, 2=d1, 3=d2
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", 0.0f, {1.5f, 2.5f}));
+
+  RecordSet records(params.get());
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+  ASSERT_EQ(rec->fields_.size(), 4u);
+
+  auto d1_idx = params->record_indexes_by_alias_.at("d1");
+  auto d2_idx = params->record_indexes_by_alias_.at("d2");
+
+  ASSERT_TRUE(rec->fields_.at(d1_idx).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(d1_idx).AsDouble()),
+                  1.5f);
+
+  ASSERT_TRUE(rec->fields_.at(d2_idx).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(d2_idx).AsDouble()),
+                  2.5f);
+}
+
+// Two VR predicates, neighbor has only slot 0 populated (vr_scores.size()==1):
+// slot-0 field set, slot-1 field remains nil.
+TEST_F(CreateRecordsFromNeighborsTest, TwoVrOnlySlot0Populated) {
+  auto params = MakeParams("__score", {"d1", "d2"});
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", 0.0f, {1.5f}));  // only slot 0
+
+  RecordSet records(params.get());
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+
+  auto d1_idx = params->record_indexes_by_alias_.at("d1");
+  auto d2_idx = params->record_indexes_by_alias_.at("d2");
+
+  ASSERT_TRUE(rec->fields_.at(d1_idx).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(d1_idx).AsDouble()),
+                  1.5f);
+
+  // slot 1 not populated → nil
+  EXPECT_TRUE(rec->fields_.at(d2_idx).IsNil());
+}
+
+// KNN query with VR in filter: neighbor has KNN distance (n.distance) and
+// slot-0 VR distance (vr_scores[0]); VR field set correctly.
+TEST_F(CreateRecordsFromNeighborsTest, KnnWithVrBothFieldsSet) {
+  // index layout: 0=__key, 1=knn_dist, 2=vr_dist
+  auto params = MakeParams("knn_dist", {"vr_dist"});
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", 3.0f, {0.7f}));
+
+  RecordSet records(params.get());
+  size_t scores_index = params->record_indexes_by_alias_.at("knn_dist");
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, scores_index, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+
+  auto vr_idx = params->record_indexes_by_alias_.at("vr_dist");
+  ASSERT_TRUE(rec->fields_.at(vr_idx).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(vr_idx).AsDouble()),
+                  0.7f);
+}
 
 TEST_F(AggregateExecTest, FirstValueReducerTest) {
   struct Testcase {

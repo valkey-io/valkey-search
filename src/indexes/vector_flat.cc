@@ -258,6 +258,45 @@ T VectorFlat<T>::ComputeDistance(absl::string_view query,
                              algo_->dist_func_param_, query_magnitude);
 }
 
+// Linear scan over all tracked keys. This is O(N) but correct for flat
+// indexes which have no graph structure to exploit.
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  auto nq = NormalizeQueryIfNeeded(query);
+
+  std::vector<Neighbor> neighbors;
+  // Pre-allocate to reduce re-allocations during the linear scan.
+  // The actual match count is unknown ahead of time, so use a modest initial
+  // capacity that covers typical result sets without over-allocating.
+  neighbors.reserve(128);
+  auto status =
+      ForEachTrackedKey([&](const InternedStringPtr &key) -> absl::Status {
+        if (cancellation_token->IsCancelled()) {
+          return absl::CancelledError("SearchRange cancelled");
+        }
+        auto dist_result = ComputeDistanceFromRecord(key, nq.view);
+        if (!dist_result.ok()) {
+          return absl::OkStatus();
+        }
+        if (filter && !(*filter)(dist_result->second)) {
+          return absl::OkStatus();
+        }
+        float clamped_dist = ClampCosineDistance(dist_result->first);
+        if (clamped_dist <= radius) {
+          neighbors.emplace_back(key, clamped_dist);
+        }
+        return absl::OkStatus();
+      });
+  // Cancellation is expected (the inner lambda returns CancelledError to
+  // exit the iteration loop early); only propagate real errors.
+  if (!status.ok() && !absl::IsCancelled(status)) {
+    return status;
+  }
+  return neighbors;
+}
+
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {

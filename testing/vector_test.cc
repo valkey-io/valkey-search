@@ -1514,6 +1514,63 @@ TEST_F(VectorIndexTest, ValidationDisabledBypassesChecks) {
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/false));
 }
 
+TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
+  const int kDim = 8;
+  const int kVecCount = 5;
+  const int kInitCap = 64;
+
+  auto hnsw_index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 kInitCap, /*m=*/16, /*ef_construction=*/200,
+                                 /*ef_runtime=*/200),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(hnsw_index.ok());
+
+  auto flat_index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 kInitCap, /*block_size=*/64),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(flat_index.ok());
+
+  auto vectors = DeterministicallyGenerateVectors(kVecCount, kDim, 10.0);
+  for (int i = 0; i < kVecCount; ++i) {
+    VMSDK_EXPECT_OK(
+        (*hnsw_index)->AddRecord(IndexToKey(i), VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(
+        (*flat_index)->AddRecord(IndexToKey(i), VectorToStr(vectors[i])));
+  }
+
+  for (int i = 0; i < kVecCount; ++i) {
+    absl::string_view query = VectorToStr(vectors[i]);
+
+    auto hnsw_result =
+        (*hnsw_index)->SearchRange(query, /*radius=*/0.0f, CancelNever());
+    ASSERT_TRUE(hnsw_result.ok()) << hnsw_result.status();
+
+    auto flat_result =
+        (*flat_index)->SearchRange(query, /*radius=*/0.0f, CancelNever());
+    ASSERT_TRUE(flat_result.ok()) << flat_result.status();
+
+    EXPECT_GE(hnsw_result->size(), 1u)
+        << "HNSW radius=0 missed self-vector at index " << i;
+    EXPECT_GE(flat_result->size(), 1u)
+        << "Flat radius=0 missed self-vector at index " << i;
+    EXPECT_EQ(hnsw_result->size(), flat_result->size())
+        << "HNSW and Flat disagree on radius=0 result count for vector " << i;
+
+    for (const auto &n : *hnsw_result) {
+      EXPECT_FLOAT_EQ(n.distance, 0.0f)
+          << "HNSW returned non-zero distance for radius=0 query";
+    }
+    for (const auto &n : *flat_result) {
+      EXPECT_FLOAT_EQ(n.distance, 0.0f)
+          << "Flat returned non-zero distance for radius=0 query";
+    }
+  }
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

@@ -234,6 +234,14 @@ static auto default_scorer = [] {
       .Build();
 }();
 
+/// Kill switch for relevance scoring. When set, both scoring paths are skipped
+/// (in-iterator for pure-text queries and the extra step for combined,
+/// match-all, hybrid, and recompute) and every result keeps a 0 score.
+constexpr absl::string_view kScoringDisabled{"scoring-disabled"};
+static auto scoring_disabled = config::BooleanBuilder(kScoringDisabled, false)
+                                   .Dev()  // can only be set in debug mode
+                                   .Build();
+
 /// Prefer partial results by default of not
 /// If set to true, search will use SOMESHARDS if user does not explicitly
 /// provide an option in the command
@@ -620,6 +628,8 @@ absl::Status Reset() {
 config::Enum &GetDefaultScorer() {
   return dynamic_cast<config::Enum &>(*default_scorer);
 }
+
+bool IsScoringDisabled() { return scoring_disabled->GetValue(); }
 
 const vmsdk::config::Boolean &GetPreferPartialResults() {
   return static_cast<vmsdk::config::Boolean &>(prefer_partial_results);

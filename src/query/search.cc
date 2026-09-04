@@ -30,6 +30,7 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
+#include "absl/types/span.h"
 #include "src/attribute_data_type.h"
 #include "src/expr/value.h"
 #include "src/indexes/index_base.h"
@@ -646,22 +647,31 @@ float SanitizeScore(float score) {
   return indexes::scoring::IsNaN(score) ? 0.0f : score;
 }
 
-// A term leaf's posting lists resolved once per query. A term matches via its
-// original word plus any stem variants that stem to the same root (mirroring
-// TermPredicate::Evaluate), so a leaf can resolve to several posting lists. The
-// lists and document frequency (dt) are identical for every candidate, so they
-// are resolved up front by ResolveLeaves rather than re-walked per document.
-struct ResolvedLeaf {
-  // --- Text leaf (TermPredicate) ---
-  // Original term posting list first, followed by any stem-variant lists. Empty
-  // when the term (and all its variants) are absent from the index.
+// One scored BM25 term (a "leaf" in EXPLAINSCORE terms): a set of posting lists
+// whose per-doc term frequencies SUM into a single F, plus that term's
+// precomputed IDF. A plain term is one group; a stemmed term expands to up to
+// three (exact surface term, stem root literal, stem inflection group) that are
+// summed.
+struct TermGroup {
   absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
                       indexes::text::kStemVariantsInlineCapacity + 1>
       postings;
-  uint32_t num_doc_contain_term = 0;
-  // Query-invariant per-term weight (BM25 IDF), computed once here instead of
-  // per candidate document.
-  float term_weight = 0.0f;
+  // Query-invariant BM25 IDF for this group, computed once here instead of per
+  // candidate document.
+  float idf = 0.0f;
+};
+
+// A term leaf's scoring inputs resolved once per query. A stemmed query term
+// expands to a UNION of independent BM25 terms whose contributions are SUMMED
+// (unlike prefix/suffix/fuzzy, which pick one), each carrying its own IDF and
+// its own F: the exact surface term, the stem root literal (when the doc holds
+// it), and the stem inflection group. These are identical for every candidate,
+// so ResolveLeaves precomputes them rather than re-walking per document.
+struct ResolvedLeaf {
+  // --- Text leaf (TermPredicate) ---
+  // 1 group for a plain/exact term, up to 3 for a stemmed term. Empty when the
+  // term (and all its variants) are absent from the index.
+  absl::InlinedVector<TermGroup, 3> groups;
 
   // --- Tag leaf (TagPredicate) ---
   // Null for text leaves. When set, `tag_values` holds one (query tag value,
@@ -717,45 +727,70 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       const auto &prefix = text_index->GetPrefix();
 
       ResolvedLeaf leaf;
-      // Collect the words the term matches on: the original word plus, for a
-      // non-exact term on a stemmed field, every variant sharing its stem root
-      // (matching TermPredicate::Evaluate). Ingestion stores original words in
-      // the posting tree, so each word is resolved via FindPostingsTarget.
-      auto add_word = [&](absl::string_view word) {
+
+      // A single-word BM25 term (the exact surface term or the stem root
+      // literal): one posting list, IDF from that word's own df. Ingestion
+      // stores original words in the posting tree, resolved via
+      // FindPostingsTarget; an absent word adds no group.
+      auto add_word_group = [&](absl::string_view word) {
         auto postings = prefix.FindPostingsTarget(word);
-        // TODO: scoring for stemming. Redis treat stem variant as a leaf
-        // num_doc_contain_term is counted twice and need fix in future
-        if (postings) {
-          leaf.num_doc_contain_term += postings->GetKeyCount();
-          leaf.postings.push_back(std::move(postings));
-        }
+        if (!postings) return;
+        const uint32_t dt =
+            std::min<uint32_t>(postings->GetKeyCount(), total_docs);
+        TermGroup group;
+        group.postings.push_back(std::move(postings));
+        group.idf = scorer->PrecomputeIDF({total_docs, dt});
+        leaf.groups.push_back(std::move(group));
       };
-      add_word(term_pred->GetTextString());
+
+      const absl::string_view word = term_pred->GetTextString();
+      // Leaf 1: the exact surface term. For a stemmed term this same word is
+      // scored again in the inflection group below (it is one of its parents) —
+      // the deliberate exact-match boost.
+      add_word_group(word);
 
       const uint64_t stem_field_mask =
           term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
       if (!term_pred->IsExact() && stem_field_mask != 0) {
+        // Parents of the stem root: every surface word that stems to it with
+        // surface != root (a self-stemming word is never added to the stem
+        // tree, so the root literal is not among them). Includes the query
+        // word.
         absl::InlinedVector<absl::string_view,
                             indexes::text::kStemVariantsInlineCapacity>
             stem_variants;
-        std::string stemmed = text_index_schema->GetAllStemVariants(
-            term_pred->GetTextString(), stem_variants, stem_field_mask,
-            /*lock_needed=*/true);
-        if (stemmed != term_pred->GetTextString()) {
-          add_word(stemmed);
+        const std::string stemmed = text_index_schema->GetAllStemVariants(
+            word, stem_variants, stem_field_mask, /*lock_needed=*/true);
+
+        // Leaf 2: the stem root literal, its own posting/IDF — only when it
+        // differs from the query word (else it is Leaf 1) and is itself
+        // indexed.
+        if (stemmed != word) {
+          add_word_group(stemmed);
         }
+
+        // Leaf 3: the stem inflection group. F sums the per-doc frequencies of
+        // every inflection; dt is the DISTINCT doc count across their postings
+        // (a doc holding several inflections counts once), matching the
+        // in-iterator path.
+        TermGroup stem;
+        absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                            indexes::text::kStemVariantsInlineCapacity + 1>
+            stem_iters;
         for (const auto &variant : stem_variants) {
-          add_word(variant);
+          if (auto postings = prefix.FindPostingsTarget(variant)) {
+            stem_iters.push_back(postings->GetKeyIterator());
+            stem.postings.push_back(std::move(postings));
+          }
+        }
+        if (!stem.postings.empty()) {
+          const uint32_t dt = std::min<uint32_t>(
+              indexes::text::CountDistinctKeys(absl::MakeSpan(stem_iters)),
+              total_docs);
+          stem.idf = scorer->PrecomputeIDF({total_docs, dt});
+          leaf.groups.push_back(std::move(stem));
         }
       }
-
-      // dt feeds IDF, whose scorer checks dt <= total_docs. Summing key counts
-      // across variants can double-count a doc indexed under several variants,
-      // so clamp to keep the invariant.
-      leaf.num_doc_contain_term =
-          std::min(leaf.num_doc_contain_term, total_docs);
-      leaf.term_weight =
-          scorer->PrecomputeIDF({total_docs, leaf.num_doc_contain_term});
       resolved.emplace(term_pred, std::move(leaf));
       break;
     }
@@ -859,29 +894,34 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       auto it = score_ctx.resolved.find(predicate);
       if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
-      if (leaf.postings.empty()) return std::nullopt;
+      if (leaf.groups.empty()) return std::nullopt;
 
-      // Sum the term frequency across the original word and its stem variants:
-      // a doc matches the leaf if any resolved posting list contains its key.
-      // doc_len is co-located in the posting entry, so the same lookup yields
-      // it (identical across postings for one key) — no separate per-key
-      // scoring-map probe. It is 0 only when no posting matches, in which case
-      // tf is 0 and we return early; avg_doc_len is 0 for a length-agnostic
-      // scorer, which ScoreLeaf treats as a degenerate corpus and scores 0.
-      uint32_t tf = 0;
+      // A stemmed term sums several independent BM25 leaves, each with its own
+      // IDF and its own F (term frequency summed across that group's postings).
+      // The document matches the leaf if any group contains its key. doc_len is
+      // co-located in the posting entry (identical across postings for one
+      // key), so the same LookupKey that yields tf yields it — no separate
+      // per-key scoring-map probe. avg_doc_len is corpus-wide (precomputed in
+      // ScoreContext); both length inputs are 0 for a length-agnostic scorer,
+      // which ScoreLeaf treats as a degenerate corpus and scores 0.
+      float total = 0.0f;
+      bool matched = false;
       uint32_t doc_len = 0;
-      for (const auto &postings : leaf.postings) {
-        if (auto entry = postings->LookupKey(key)) {
-          tf += entry->tf;
-          doc_len = entry->doc_len;
+      for (const TermGroup &group : leaf.groups) {
+        uint32_t tf = 0;
+        for (const auto &postings : group.postings) {
+          if (auto entry = postings->LookupKey(key)) {
+            tf += entry->tf;
+            doc_len = entry->doc_len;
+          }
         }
+        if (tf == 0) continue;
+        matched = true;
+        total += score_ctx.scorer->ScoreLeaf({group.idf, tf, doc_len,
+                                              score_ctx.avg_doc_len,
+                                              predicate->GetWeight()});
       }
-
-      if (tf == 0) return std::nullopt;
-
-      return score_ctx.scorer->ScoreLeaf({leaf.term_weight, tf, doc_len,
-                                          score_ctx.avg_doc_len,
-                                          predicate->GetWeight()});
+      return matched ? std::optional<float>(total) : std::nullopt;
     }
     // A numeric range match is a filter, never a ranker: it carries no IDF, no
     // term frequency, and no doc-length component, so under BM25STD it

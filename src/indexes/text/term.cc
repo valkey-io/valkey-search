@@ -21,7 +21,9 @@ TermIterator::TermIterator(
     const FieldMaskPredicate query_field_mask, const bool require_positions,
     const FieldMaskPredicate stem_field_mask, bool has_original,
     float leaf_weight, uint32_t num_doc_contain_term,
-    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer)
+    uint32_t stem_num_doc_contain_term, uint32_t root_num_doc_contain_term,
+    bool has_root, const TextIndexSchema* text_index_schema,
+    const scoring::Scorer* scorer)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
@@ -29,6 +31,7 @@ TermIterator::TermIterator(
       current_field_mask_(0ULL),
       require_positions_(require_positions),
       has_original_(has_original),
+      has_root_(has_root),
       leaf_weight_(leaf_weight),
       num_doc_contain_term_(num_doc_contain_term),
       text_index_schema_(text_index_schema) {
@@ -43,6 +46,12 @@ TermIterator::TermIterator(
       idf_ = scorer_->PrecomputeIDF(
           {stats.total_docs,
            std::min(num_doc_contain_term_, stats.total_docs)});
+      idf_stem_ = scorer_->PrecomputeIDF(
+          {stats.total_docs,
+           std::min(stem_num_doc_contain_term, stats.total_docs)});
+      idf_root_ = scorer_->PrecomputeIDF(
+          {stats.total_docs,
+           std::min(root_num_doc_contain_term, stats.total_docs)});
       avg_doc_len_ = stats.avg_doc_len;
     }
   }
@@ -66,11 +75,21 @@ float TermIterator::GetScore() const {
     return 1.0f;
   }
 
-  // F is document-wide: sum the term frequency across every word/field
-  // iterator currently positioned on this key
-  uint32_t term_frequency = 0;
+  // Sum three separate BM25 leaves per the industry standard: exact word
+  // (idx 0), stem root literal (next iterator), and the stem inflection group.
+  const size_t root_index = has_original_ ? 1 : 0;
+  uint32_t exact_tf = 0;
+  uint32_t root_tf = 0;
+  uint32_t stem_tf = 0;
   for (size_t idx : current_key_indices_) {
-    term_frequency += key_iterators_[idx].GetTermFrequency();
+    const uint32_t tf = key_iterators_[idx].GetTermFrequency();
+    if (idx == 0 && has_original_) {
+      exact_tf += tf;
+    } else if (has_root_ && idx == root_index) {
+      root_tf += tf;
+    } else {
+      stem_tf += tf;
+    }
   }
 
   // doc_len is co-located in the posting entry the merge already visited (same
@@ -79,10 +98,21 @@ float TermIterator::GetScore() const {
   const uint32_t doc_len =
       key_iterators_[current_key_indices_.front()].GetDocLen();
 
-  // idf_ and avg_doc_len_ are precomputed at construction, so only the
-  // per-document term frequency and doc_len vary here.
-  return scorer_->ScoreLeaf(
-      {idf_, term_frequency, doc_len, avg_doc_len_, leaf_weight_});
+  // idfs and avg_doc_len_ are precomputed; only tf and doc_len vary here.
+  float score = 0.0f;
+  if (exact_tf > 0) {
+    score += scorer_->ScoreLeaf(
+        {idf_, exact_tf, doc_len, avg_doc_len_, leaf_weight_});
+  }
+  if (root_tf > 0) {
+    score += scorer_->ScoreLeaf(
+        {idf_root_, root_tf, doc_len, avg_doc_len_, leaf_weight_});
+  }
+  if (stem_tf > 0) {
+    score += scorer_->ScoreLeaf(
+        {idf_stem_, stem_tf, doc_len, avg_doc_len_, leaf_weight_});
+  }
+  return score;
 }
 
 FieldMaskPredicate TermIterator::QueryFieldMask() const {

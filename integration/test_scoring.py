@@ -1,8 +1,9 @@
 """
 End-to-end tests for BM25STD scoring through FT.SEARCH ... WITHSCORES.
 
-Scores are verified against the 8.6 reference implementation. Every TEXT field
-is NOSTEM so query terms match raw tokens and the verified tables apply directly.
+Scores are verified against the 8.6 reference implementation. Most TEXT fields are
+NOSTEM so query terms match raw tokens and the verified tables apply directly;
+idxStem (Group 15) enables stemming to cover stem-family scoring.
 
 WITHSCORES reply layout: [count, key, score_str, attrs, key, score_str, ...]
 where score_str is formatted "%.12g".
@@ -52,6 +53,55 @@ IDX_NO_TEXT_FIELD = [
     "SCHEMA", "rank", "NUMERIC", "cat", "TAG",
 ]
 
+
+# idxStem: one stemming index (no NOSTEM) shared by the stem-family tests. Query
+# "running" (stem root "run") exercises all three BM25 leaves:
+#   - exact word "running"    -> s:1, s:5, s:6
+#   - stem root literal "run" -> s:4, s:5   (its own leaf, own dt)
+#   - stem inflections        -> s:1/s:2/s:3/s:5/s:6 (distinct-doc dt)
+# s:5 "run running" hits all three leaves; s:6 "running runs" holds two distinct
+# inflections so the stem leaf's dt must count it once; s:7 ("swim") doesn't
+# match. N=7, avg_doc_len=1.571. Leaf dts: exact 3, root 2, stem 5 (distinct).
+_DOCS_STEM = {
+    "s:1": "running",         # exact + stem
+    "s:2": "runs",            # stem only
+    "s:3": "runs runs runs",  # stem only, TF 3
+    "s:4": "run",             # stem root literal -> its own leaf only
+    "s:5": "run running",     # root + exact + stem -> all three leaves summed
+    "s:6": "running runs",    # two inflections -> stem dt counts once
+    "s:7": "swimming",        # filler, does not match
+}
+IDX_STEM = [
+    "FT.CREATE", "idxStem", "ON", "HASH", "PREFIX", "1", "s:",
+    "SCHEMA", "body", "TEXT",
+]
+STEM_DOCS = {key: {"body": body} for key, body in _DOCS_STEM.items()}
+# Each matched doc scored on the leaves it hits, summed. Verified against the
+# industry-standard reference.
+STEM_RUNNING_SCORES = {
+    "s:5": 2.127192, "s:1": 1.411321, "s:4": 1.366420,
+    "s:6": 1.222204, "s:3": 0.492803, "s:2": 0.440174,
+}
+
+# idxStemMix: the SAME 7 stemming text docs as idxStem (same keys, so N=7,
+# avg_doc_len, and every stem-leaf dt are identical, and the stem scores match
+# STEM_RUNNING_SCORES) PLUS a numeric `rank` and tag `cat` field. A query that
+# adds a numeric or tag clause has a non-text predicate, so its scoring takes the
+# EXTRA-STEP path (ResolveLeaves/ScoreNode) rather than the pure-text in-iterator
+# path -- Group 15 pins the stem split on that path against idxStem.
+_STEMMIX_RANK = {"s:1": 1, "s:2": 2, "s:3": 3, "s:4": 4,
+                 "s:5": 5, "s:6": 6, "s:7": 7}
+_STEMMIX_CAT = {"s:1": "a", "s:2": "a", "s:3": "b", "s:4": "a",
+                "s:5": "b", "s:6": "a", "s:7": "b"}
+IDX_STEM_MIX = [
+    "FT.CREATE", "idxStemMix", "ON", "HASH", "PREFIX", "1", "s:",
+    "SCHEMA", "body", "TEXT", "rank", "NUMERIC", "cat", "TAG",
+]
+STEM_MIX_DOCS = {
+    key: {"body": body, "rank": str(_STEMMIX_RANK[key]),
+          "cat": _STEMMIX_CAT[key]}
+    for key, body in _DOCS_STEM.items()
+}
 
 # =====================================================================
 # Documents
@@ -546,3 +596,50 @@ class TestScoring(ValkeySearchTestCaseBase):
         wait_indexed(client, IDX_MAIN, 8)
         _, restored = search(client, IDX_MAIN, "hello")
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
+
+    # Group 15: a stemmed term is a UNION of independent BM25 leaves whose scores
+    # are SUMMED -- the exact word, the stem root literal, and the stem
+    # inflections -- each with its own dt, unlike prefix/fuzzy which pick one.
+    # A pure-text query scores in the term iterator; adding a numeric or tag
+    # clause routes the same split through the extra-step path, yield same result.
+    def test_stemming(self):
+        client = self.server.get_new_client()
+        load(client, IDX_STEM, STEM_DOCS)
+
+        # Each doc scores on the leaves it hits: s:5 "run running" all three,
+        # s:4 "run" the root leaf alone, s:6 "running runs" counted once in the
+        # stem leaf's distinct dt. s:7 ("swimming") does not match at all.
+        keys, stem = search(client, IDX_STEM, "running")
+        assert keys == ["s:5", "s:1", "s:4", "s:6", "s:3", "s:2"]
+        assert stem == pytest.approx(STEM_RUNNING_SCORES, abs=SCORE_ABS_TOL)
+
+        # The exact query form earns both the exact and the stem leaf, so s:1
+        # ("running", TF 1) outranks s:3 ("runs runs runs", TF 3) which carries
+        # the stem leaf alone: the exact-match boost beats the higher inflection TF.
+        assert stem["s:1"] > stem["s:3"]
+
+        # Same docs and same query, but a schema with a numeric and a tag field:
+        # any non-text clause makes scoring take the extra-step path instead of
+        # the term iterator. idxStemMix indexes the same 7 bodies, so every corpus
+        # statistic matches and the scores above are the oracle for that path.
+        load(client, IDX_STEM_MIX, STEM_MIX_DOCS)
+
+        # A numeric clause admits every doc and contributes 0, so the run-family
+        # scores must come out identical to the in-iterator run above.
+        keys, with_numeric = search(client, IDX_STEM_MIX, "running @rank:[1 100]")
+        assert keys == ["s:5", "s:1", "s:4", "s:6", "s:3", "s:2"]
+        assert with_numeric == pytest.approx(stem, abs=SCORE_ABS_TOL)
+
+        # ORing the numeric branch admits s:7 too, which holds no "run" term and
+        # so scores 0 while the rest keep their stem scores.
+        _, or_numeric = search(client, IDX_STEM_MIX, "running | @rank:[7 7]")
+        assert or_numeric == pytest.approx({**stem, "s:7": 0.0},
+                                           abs=SCORE_ABS_TOL)
+
+        # The stem expansion and a tag leaf sum, so each admitted doc scores its
+        # stem total plus its tag-only score.
+        keys, with_tag = search(client, IDX_STEM_MIX, "running @cat:{a}")
+        _, tag_only = search(client, IDX_STEM_MIX, "@cat:{a}")
+        assert set(keys) == {"s:1", "s:2", "s:4", "s:6"}
+        assert with_tag == pytest.approx(
+            {k: stem[k] + tag_only[k] for k in keys}, abs=SCORE_ABS_TOL)

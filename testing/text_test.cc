@@ -12,12 +12,15 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/text_index.h"
+#include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 
@@ -400,6 +403,78 @@ TEST_F(TextTest, StemmingBehavior) {
   }
 
   EXPECT_TRUE(has_tokens) << "Should create stemmed tokens";
+}
+
+// Builds a scored stem query iterator over a fresh stemming schema + corpus.
+class StemScoringTest : public TextTest {
+ protected:
+  std::unique_ptr<text::TextIterator> BuildScoredStemQuery(
+      std::shared_ptr<text::TextIndexSchema> schema, Text *text,
+      const std::string &query) {
+    query::TermPredicate pred(schema, /*field_mask=*/~0ULL, query,
+                              /*exact=*/false);
+    pred.SetScorer(scoring::GetScorer(scoring::ScorerType::kBm25Std));
+    return pred.BuildTextIterator(schema->GetTextIndex(), ~0ULL,
+                                  /*require_positions=*/false);
+  }
+
+  std::pair<std::shared_ptr<text::TextIndexSchema>, std::unique_ptr<Text>>
+  MakeStemIndex() {
+    auto schema = CreateCustomSchema("", /*stemming=*/true);
+    data_model::TextIndex proto;
+    proto.set_no_stem(false);
+    auto text = std::make_unique<Text>(proto, schema);
+    schema->SetStemTextFieldMask(1ULL << text->GetTextFieldNumber());
+    return {schema, std::move(text)};
+  }
+};
+
+// A stemmed query sums three BM25 leaves per the industry standard: the exact
+// word, the stem root literal, and the stem inflection group. Values verified
+// against the industry-standard reference.
+TEST_F(StemScoringTest, ThreeLeafScoresMatchStandard) {
+  auto [schema, text] = MakeStemIndex();
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d1"), "running",
+                        schema);
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d2"), "runs",
+                        schema);
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d3"), "run",
+                        schema);
+
+  auto iter = BuildScoredStemQuery(schema, text.get(), "running");
+  absl::flat_hash_map<std::string, float> scores;
+  while (!iter->DoneKeys()) {
+    scores[std::string(iter->CurrentKey()->Str())] = iter->GetScore();
+    iter->NextKey();
+  }
+
+  ASSERT_EQ(scores.size(), 3u);
+  // d1 "running": exact leaf (idf 0.98) + stem leaf (idf 0.47, dt=2 distinct).
+  EXPECT_NEAR(scores["d1"], 1.450833f, 1e-3f);
+  // d3 "run": scored only on the stem root literal leaf (its own idf 0.98).
+  EXPECT_NEAR(scores["d3"], 0.980829f, 1e-3f);
+  // d2 "runs": scored only on the stem inflection leaf.
+  EXPECT_NEAR(scores["d2"], 0.470004f, 1e-3f);
+  // exact-form doc outranks the root-literal doc, which outranks the
+  // inflection.
+  EXPECT_GT(scores["d1"], scores["d3"]);
+  EXPECT_GT(scores["d3"], scores["d2"]);
+}
+
+// When the exact surface word is absent, matches still score via the stem group
+// alone (the has_original_ == false path); no exact leaf, finite positive
+// score.
+TEST_F(StemScoringTest, MissingOriginalWordScoresStemOnly) {
+  auto [schema, text] = MakeStemIndex();
+  AddRecordAndCommitKey(text.get(), StringInternStore::Intern("d1"), "runs",
+                        schema);
+
+  auto iter = BuildScoredStemQuery(schema, text.get(), "running");
+  ASSERT_FALSE(iter->DoneKeys());
+  const float score = iter->GetScore();
+  iter->NextKey();
+  EXPECT_TRUE(iter->DoneKeys());
+  EXPECT_GT(score, 0.0f);
 }
 
 }  // namespace valkey_search::indexes

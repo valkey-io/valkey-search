@@ -46,12 +46,14 @@ struct IndexInterface {
 struct AggregateParameters : public expr::Expression::CompileContext,
                              public QueryCommand {
   ~AggregateParameters() override = default;
-  AggregateParameters(int db_num) : QueryCommand(db_num){};
+  AggregateParameters(int db_num) : QueryCommand(db_num) {};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
   bool loadall_{false};
   std::vector<std::string> loads_;
   bool load_key{false};
+  // ADDSCORES: expose the relevance score as pipeline field __score
+  // (see ProcessNeighborsForProcessing / CreateRecordsFromNeighbors).
   bool addscores_{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
@@ -72,6 +74,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
+
   //
   // Number of records required as output of the query phase.
   // If all records are required, then it will be

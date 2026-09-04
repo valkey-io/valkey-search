@@ -141,6 +141,12 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
+  // Non-vector queries have no KNN AS clause to name the score field, so
+  // default to Redis' ADDSCORES name. This also makes @__score resolvable by
+  // LOAD and by stages (SORTBY/APPLY/GROUPBY) via record_indexes_by_alias_.
+  if (score_as == nullptr) {
+    score_as = vmsdk::MakeUniqueValkeyString("__score");
+  }
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
   auto score_sv = vmsdk::ToStringView(score_as.get());
@@ -255,11 +261,23 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
     auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
     scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
                                                  indexes::IndexerType::kNone);
+  } else if (parameters.addscores_) {
+    // ADDSCORES: expose the relevance score (__score) to the pipeline.
+    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
+    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
+                                                 indexes::IndexerType::kNone);
   }
 
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
+  // no_content means LOAD requested no attributes, so return_attributes is
+  // empty and GetContent would fetch every field of every key only for
+  // CreateRecordsFromNeighbors to discard it. Skip it, as FT.SEARCH NOCONTENT
+  // does in HandleEarlyReplyScenarios — and with it the stale-match, expiry and
+  // slot-ownership pruning that only the fetch performs.
+  if (!parameters.no_content) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
 
   return std::make_pair(key_index, scores_index);
 }
@@ -304,8 +322,8 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
 
-    // Set score field for vector queries
-    if (parameters.IsVectorQuery()) {
+    // Set score field for vector queries and ADDSCORES
+    if (parameters.IsVectorQuery() || parameters.addscores_) {
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 

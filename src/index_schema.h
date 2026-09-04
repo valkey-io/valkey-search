@@ -205,6 +205,24 @@ class IndexSchema : public KeyspaceEventSubscription,
     return text_index_schema_->GetKeyDocLen(key);
   }
 
+  // Locking-enabled versions of the two accessors above, for callers outside
+  // the read phase. mutated_records_mutex_ is what excludes concurrent writers
+  // to index_key_info_ within the write phase.
+  float GetDocumentScoreLocked(BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    absl::MutexLock lock(&mutated_records_mutex_);
+    auto itr = index_key_info_.find(key);
+    return itr != index_key_info_.end() ? itr->second.document_score : score_;
+  }
+
+  uint32_t GetDocumentLengthLocked(BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetKeyDocLen(key, /*lock=*/true);
+  }
+
   uint32_t GetDocumentNorm(const Key &key) const
       ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
     if (!text_index_schema_) {

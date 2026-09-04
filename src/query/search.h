@@ -104,6 +104,7 @@ inline std::ostream &operator<<(std::ostream &os, const ReturnAttribute &r) {
 // Wrapper for search results that trims the neighbor deque based on query type
 
 struct SearchParameters;
+class SingleDocumentScorer;
 struct SerializationRange;
 
 //
@@ -228,6 +229,16 @@ struct SearchParameters {
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
+  // Recompute scorer pre-built by Search() on the background thread while the
+  // search's reader lock is held, for non-vector queries whose reply may need
+  // a main-thread score recompute (see response_generator.cc VerifyFilter).
+  // Pre-building here captures the SAME corpus snapshot (total_docs, per-term
+  // IDF, avg_doc_len) the other candidates were scored with, so a recomputed
+  // score is scale-consistent with the carried scores. Null when the query
+  // cannot need a recompute, and for the CME coordinator, which never runs
+  // Search() and never needs one: neighbors that arrive already populated skip
+  // VerifyFilter entirely.
+  std::unique_ptr<SingleDocumentScorer> recompute_scorer;
   struct ParseTimeVariables {
     // Members of this struct are only valid during the parsing of
     // VectorSearchParameters on the mainthread. They get cleared
@@ -263,6 +274,12 @@ struct SearchParameters {
   virtual bool RequiresCompleteResults() const {
     return sortby_parameter.has_value();
   }
+
+  // Gates the background pre-build of recompute_scorer, matching
+  // GetContentProcessing() != kNoContent. Not virtual: forcing this true for a
+  // no_content query would enable a recompute without the contention check its
+  // per-key text index walk depends on.
+  bool WillFetchContentOnMainThread() const { return !no_content; }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
@@ -379,26 +396,45 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 // on the same scale as shard-side scores and rank correctly against
 // non-recomputed neighbors.
 //
-// All document-independent inputs (posting lists, per-term IDF, corpus stats)
-// are resolved ONCE at construction, so scoring N mutated documents in a reply
-// costs one resolve instead of N. Construct lazily on the first document that
-// needs a recompute and reuse for the rest of the reply.
+// All document-independent inputs (per-term IDF, corpus stats) are resolved
+// ONCE at construction, so scoring N mutated documents in a reply costs one
+// resolve instead of N. Construction always happens on a background thread at
+// the end of Search(), while the search's reader lock is still held
+// (LockPolicy::kLockAlreadyHeld), so the snapshot matches the corpus state the
+// other candidates were scored with. In CME the coordinator never runs
+// Search(); it borrows the scorer its local responder built.
 //
-// The constructor and Score() each acquire the index reader lock internally,
-// so callers must NOT already hold it: TimeSlicedMRMWMutex is non-reentrant
-// and a nested acquire can deadlock in SwitchWithWait() when the inverse mode
-// is waiting and the time quota is exceeded. Used by the main-thread
-// content-fetch revalidation path (response_generator.cc VerifyFilter) where a
-// document mutated between scoring and fetch needs a fresh, scale-consistent
-// score. Score() returns
+// Posting lists are resolved at construction too, but only for the background
+// ScoreTextQuery walk: a pinned Postings goes stale if the scored key was its
+// word's last holder, so Score() re-resolves through the key's own text index.
+//
+// kLockAlreadyHeld asserts the caller holds the reader lock for the duration of
+// construction. kAcquireLock takes it internally, so the caller must NOT
+// already hold it: TimeSlicedMRMWMutex is non-reentrant and a nested acquire
+// can deadlock in SwitchWithWait() when the inverse mode is waiting and the
+// time quota is exceeded. kAcquireLock has no production caller and is kept for
+// tests that construct without a lock.
+//
+// Score() never touches the time-sliced mutex — it takes only the fine-grained
+// lock each per-key read's writer already holds — so it is safe to call whether
+// or not the reader lock is held.
+//
+// Used by the main-thread content-fetch revalidation path
+// (response_generator.cc VerifyFilter) where a document mutated between
+// scoring and fetch needs a fresh, scale-consistent score. Score() returns
 // nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
 // ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
 // never a drop.
 class SingleDocumentScorer {
  public:
+  enum class LockPolicy {
+    kAcquireLock,
+    kLockAlreadyHeld,
+  };
   SingleDocumentScorer(const IndexSchema &index_schema,
                        const Predicate *root_predicate,
-                       const indexes::scoring::Scorer *scorer);
+                       const indexes::scoring::Scorer *scorer,
+                       LockPolicy lock_policy = LockPolicy::kAcquireLock);
   ~SingleDocumentScorer();
   SingleDocumentScorer(const SingleDocumentScorer &) = delete;
   SingleDocumentScorer &operator=(const SingleDocumentScorer &) = delete;

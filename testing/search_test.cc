@@ -7,6 +7,7 @@
 
 #include "src/query/search.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +19,7 @@
 #include <queue>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <utility>
@@ -1515,6 +1517,45 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     return schema;
   }
 
+  // Re-index `key`'s text as a mutation would: drop its per-key tree (which
+  // destroys any Postings it was the last holder of) and stage+commit fresh
+  // data. Mirrors BuildTextTagSchema's Text index options.
+  void ReindexTextKey(MockIndexSchema &schema, const InternedStringPtr &key,
+                      absl::string_view content) {
+    auto text_schema = schema.GetTextIndexSchema();
+    text_schema->DeleteKeyData(key);
+    VMSDK_EXPECT_OK(text_schema->StageAttributeData(
+        key, content, /*text_field_number=*/0, /*stem=*/false,
+        /*suffix=*/true));
+    text_schema->CommitKeyData(key);
+  }
+
+  // A SingleDocumentScorer bundled with the parse result that owns the
+  // predicate it points at, so the two cannot be separated by accident. Moving
+  // is safe: root_predicate is a unique_ptr, so the pointee address is stable.
+  struct ScoredFilter {
+    FilterParseResults parsed;
+    std::unique_ptr<query::SingleDocumentScorer> scorer;
+    query::SingleDocumentScorer *operator->() const { return scorer.get(); }
+  };
+
+  ScoredFilter MakeScorer(
+      MockIndexSchema &schema, absl::string_view filter,
+      query::SingleDocumentScorer::LockPolicy lock_policy =
+          query::SingleDocumentScorer::LockPolicy::kAcquireLock) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(schema, filter, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    ScoredFilter out;
+    if (!parsed.ok()) return out;
+    out.parsed = std::move(parsed).value();
+    out.scorer = std::make_unique<query::SingleDocumentScorer>(
+        schema, out.parsed.root_predicate.get(),
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std),
+        lock_policy);
+    return out;
+  }
+
   // Score `key` against `filter`; nullopt when the predicate did not match.
   std::optional<float> Score(MockIndexSchema &schema, absl::string_view filter,
                              const std::string &key) {
@@ -1825,8 +1866,6 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
       {"d1", "hello world", "red"},
       {"d2", "hello there", "blue"},
   });
-  const auto *scorer =
-      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
   const std::string filter = "@text:hello @color:{red} @rating:[0 100]";
 
   // Extra-step path: Score() takes the reader lock internally.
@@ -1834,16 +1873,137 @@ TEST_F(ScoreTextQueryTestBase, RecomputePathMatchesExtraStepAtNonZero) {
   ASSERT_TRUE(extra_step.has_value());
   EXPECT_GT(*extra_step, 0.0f);
 
-  // Recompute path: SingleDocumentScorer takes the lock itself, so construct
-  // and call it WITHOUT the reader lock held.
-  TextParsingOptions options{};
-  auto parsed = FilterParser(*schema, filter, options).Parse();
-  ASSERT_TRUE(parsed.ok()) << parsed.status();
-  query::SingleDocumentScorer document_scorer(
-      *schema, parsed.value().root_predicate.get(), scorer);
-  auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
+  // Recompute path: the default kAcquireLock constructor takes the reader lock
+  // itself, so construct WITHOUT it held. Score() takes no time-sliced lock.
+  auto recomputed =
+      MakeScorer(*schema, filter)->Score(StringInternStore::Intern("d1"));
   ASSERT_TRUE(recomputed.has_value());
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// Search() pre-builds the recompute scorer on the background thread while the
+// search's reader lock is still held (LockPolicy::kLockAlreadyHeld). Pin that
+// construction mode: built under a caller-held reader lock, then scored after
+// the lock is released, it must land on the same scale as the extra-step path.
+TEST_F(ScoreTextQueryTestBase, RecomputeScorerConstructibleUnderHeldLock) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "hello world", "red"},
+      {"d2", "hello there", "blue"},
+  });
+  const std::string filter = "@text:hello @color:{red}";
+
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
+
+  ScoredFilter document_scorer;
+  {
+    // Simulate the Search() construction site: the reader lock is already
+    // held, so the constructor must not try to acquire it again.
+    vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+    document_scorer =
+        MakeScorer(*schema, filter,
+                   query::SingleDocumentScorer::LockPolicy::kLockAlreadyHeld);
+  }
+  auto recomputed = document_scorer->Score(StringInternStore::Intern("d1"));
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// Unlike the constructor, Score() takes only fine-grained locks, so it is safe
+// to call with the reader lock held. TimeSlicedMRMWMutex is non-reentrant, so
+// this would deadlock if Score() still acquired it.
+TEST_F(ScoreTextQueryTestBase, ScoreDoesNotTakeTimeSlicedMutex) {
+  auto schema = BuildTextTagSchema({{"d1", "hello world", "red"}});
+  auto document_scorer = MakeScorer(*schema, "@text:hello @color:{red}");
+
+  vmsdk::ReaderMutexLock lock(&schema->GetTimeSlicedMutex());
+  auto score = document_scorer->Score(StringInternStore::Intern("d1"));
+  ASSERT_TRUE(score.has_value());
+  EXPECT_GT(*score, 0.0f);
+}
+
+// Re-indexing the sole holder of a word destroys that word's Postings: the list
+// empties, the word is erased from the tree, and the re-add installs a fresh
+// object. Score() must re-resolve through the key's own text index — off the
+// stale pin it would see an empty list and silently score a match as 0.
+TEST_F(ScoreTextQueryTestBase, RecomputeSurvivesPostingsRecreation) {
+  auto schema = BuildTextTagSchema({
+      {"d1", "unique alpha", "red"},
+      {"d2", "beta gamma", "blue"},
+  });
+  // "unique" is carried by d1 alone, so re-indexing d1 destroys its Postings.
+  const std::string filter = "@text:unique";
+
+  auto expected = Score(*schema, filter, "d1");
+  ASSERT_TRUE(expected.has_value());
+  EXPECT_GT(*expected, 0.0f);
+
+  auto document_scorer = MakeScorer(*schema, filter);
+  auto key = StringInternStore::Intern("d1");
+  ReindexTextKey(*schema, key, "unique alpha");
+
+  auto recomputed = document_scorer->Score(key);
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *expected);
+}
+
+// Score() reads a shared Postings key map while mutation threads commit and
+// delete OTHER keys carrying the same word. Quiescing the scored key does not
+// cover that — the btree belongs to the word, not the key — so the word's
+// bucket mutex is what makes it safe. Run under TSAN (./build.sh --tsan) to
+// observe the race. The score must also hold steady: churn on other keys never
+// touches the scored key's posting entry.
+TEST_F(ScoreTextQueryTestBase, ScoreIsSafeAgainstCommitsOnTheSameWord) {
+  auto schema = BuildTextTagSchema({{"d1", "shared alpha", "red"}});
+  const std::string filter = "@text:shared";
+
+  auto expected = Score(*schema, filter, "d1");
+  ASSERT_TRUE(expected.has_value());
+  EXPECT_GT(*expected, 0.0f);
+
+  auto document_scorer = MakeScorer(*schema, filter);
+
+  // Interned up front: the churn thread must not race the intern store.
+  std::vector<InternedStringPtr> churn_keys;
+  for (int i = 0; i < 8; ++i) {
+    churn_keys.push_back(StringInternStore::Intern(absl::StrCat("churn", i)));
+  }
+  auto target = StringInternStore::Intern("d1");
+
+  std::atomic<bool> stop{false};
+  std::thread churn([&] {
+    auto text_schema = schema->GetTextIndexSchema();
+    for (size_t i = 0; !stop.load(std::memory_order_relaxed); ++i) {
+      // Commit then delete, so "shared" is repeatedly inserted into and erased
+      // from the posting list the main thread is reading.
+      const auto &key = churn_keys[i % churn_keys.size()];
+      ReindexTextKey(*schema, key, "shared beta");
+      text_schema->DeleteKeyData(key);
+    }
+  });
+
+  for (int i = 0; i < 500; ++i) {
+    auto score = document_scorer->Score(target);
+    ASSERT_TRUE(score.has_value());
+    EXPECT_FLOAT_EQ(*score, *expected);
+  }
+  stop.store(true, std::memory_order_relaxed);
+  churn.join();
+}
+
+// The pre-build gate must stay equivalent to GetContentProcessing() !=
+// kNoContent. No subclass overrides it: every operation that fetches content on
+// the main thread does so with no_content == false.
+TEST(RecomputeScorerGateTest, DefaultsToContentFetchingQueries) {
+  UnitTestSearchParameters params;
+  params.no_content = false;
+  EXPECT_TRUE(params.WillFetchContentOnMainThread());
+  EXPECT_NE(params.GetContentProcessing(), query::kNoContent);
+
+  params.no_content = true;
+  EXPECT_FALSE(params.WillFetchContentOnMainThread());
+  EXPECT_EQ(params.GetContentProcessing(), query::kNoContent);
 }
 
 // A query that omits SCORER picks up the `default-scorer` config.

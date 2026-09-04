@@ -152,6 +152,10 @@ class PredicateEvaluator : public query::Evaluator {
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
+// A mutated non-vector neighbor reached the recompute with no scorer. Expected
+// to stay 0: Search() pre-builds one for every operation that fetches content,
+// and neighbors resolved by another shard never reach VerifyFilter.
+DEV_INTEGER_COUNTER(query, recompute_scorer_missing);
 
 // Result of a main-thread content-fetch revalidation of a neighbor.
 struct FilterVerification {
@@ -165,10 +169,9 @@ struct FilterVerification {
   std::optional<float> recomputed_score;
 };
 
-FilterVerification VerifyFilter(
-    const query::SearchParameters &parameters, const RecordsMap &records,
-    const indexes::Neighbor &n,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer) {
+FilterVerification VerifyFilter(const query::SearchParameters &parameters,
+                                const RecordsMap &records,
+                                const indexes::Neighbor &n) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return {true, std::nullopt};
@@ -193,18 +196,21 @@ FilterVerification VerifyFilter(
     if (!result.matches || !recompute_score) {
       return {result.matches, std::nullopt};
     }
-    // The document-independent scoring inputs (posting lists, IDF, corpus
-    // stats) are resolved once per reply: construct the scorer lazily on the
-    // first mutated document and reuse it for every later one.
-    if (!document_scorer) {
-      document_scorer = std::make_unique<query::SingleDocumentScorer>(
-          *parameters.index_schema, predicate,
-          indexes::scoring::GetScorer(parameters.scorer));
+    // Always built on a background thread under the search's reader lock, so
+    // the corpus snapshot matches the state the carried scores came from. Every
+    // operation reaching here ran Search() itself: neighbors resolved by
+    // another shard arrive with content and are skipped before this point.
+    const query::SingleDocumentScorer *scorer =
+        parameters.recompute_scorer.get();
+    if (scorer == nullptr) {
+      // Keep the carried score rather than dropping or zeroing the document.
+      recompute_scorer_missing.Increment();
+      return {true, std::nullopt};
     }
     // nullopt (empty corpus / ScoreNode non-match) degrades to 0 rather than
     // dropping the already-admitted document. Carry the value on the
     // EvaluationResult (meaningful when matches == true) and hand it back.
-    result.score = document_scorer->Score(n.external_id).value_or(0.0f);
+    result.score = scorer->Score(n.external_id).value_or(0.0f);
     return {true, result.score};
   };
 
@@ -244,7 +250,6 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -297,8 +302,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     }
     return content;
   }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
+  auto verification = VerifyFilter(parameters, content, neighbor);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -334,14 +338,13 @@ absl::StatusOr<RecordsMap> GetContent(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier, document_scorer,
+                                  neighbor, vector_identifier,
                                   out_recomputed_score);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -390,8 +393,7 @@ absl::StatusOr<RecordsMap> GetContent(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
+  auto verification = VerifyFilter(parameters, content, neighbor);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -449,10 +451,6 @@ void ProcessNeighborsForReply(
   // such recompute means the carried scores are no longer globally ordered, so
   // the survivors must be re-ranked below (non-vector queries only).
   bool any_score_recomputed = false;
-  // Lazily built by VerifyFilter on the first mutated document and reused for
-  // the rest of the reply, so leaf resolution runs once instead of once per
-  // recomputed document.
-  std::unique_ptr<query::SingleDocumentScorer> document_scorer;
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -467,9 +465,8 @@ void ProcessNeighborsForReply(
       continue;
     }
     std::optional<float> recomputed_score;
-    auto content =
-        GetContent(ctx, attribute_data_type, parameters, neighbor,
-                   vector_identifier, document_scorer, &recomputed_score);
+    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
+                              vector_identifier, &recomputed_score);
     if (!content.ok()) {
       continue;
     }

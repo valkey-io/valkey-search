@@ -31,8 +31,8 @@ void ResetJsonLoadedCache() { is_json_loaded = std::nullopt; }
 
 absl::StatusOr<vmsdk::UniqueValkeyString> HashAttributeDataType::GetRecord(
     [[maybe_unused]] ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
-    [[maybe_unused]] absl::string_view key,
-    absl::string_view identifier) const {
+    [[maybe_unused]] absl::string_view key, absl::string_view identifier,
+    [[maybe_unused]] bool preserve_json_array) const {
   vmsdk::VerifyMainThread();
   ValkeyModuleString *record{nullptr};
   ValkeyModule_HashGet(open_key, VALKEYMODULE_HASH_CFIELDS, identifier.data(),
@@ -134,9 +134,14 @@ RecordsMap HashAttributeDataType::FetchSpecificFields(
 }
 
 absl::Status NormalizeJsonRecord(absl::string_view record,
-                                 vmsdk::UniqueValkeyString &out_record) {
+                                 vmsdk::UniqueValkeyString &out_record,
+                                 bool preserve_json_array) {
   if (!record.empty() && record[0] != '[') {
     return absl::NotFoundError("Invalid record");
+  }
+  if (preserve_json_array) {
+    out_record = vmsdk::MakeUniqueValkeyString(record);
+    return absl::OkStatus();
   }
   bool was_string = false;
   if (absl::ConsumePrefix(&record, "[")) {
@@ -174,7 +179,8 @@ absl::Status NormalizeJsonRecord(absl::string_view record,
 // by passing nullptr as the `record` value.
 absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
                            absl::string_view key, absl::string_view identifier,
-                           vmsdk::UniqueValkeyString *record) {
+                           vmsdk::UniqueValkeyString *record,
+                           bool preserve_json_array = false) {
   vmsdk::VerifyMainThread();
   if (!IsJsonModuleSupported(ctx)) {
     return absl::UnavailableError("The JSON module is not supported");
@@ -193,7 +199,8 @@ absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     if (!record) {
       return absl::OkStatus();
     }
-    return NormalizeJsonRecord(vmsdk::ToStringView(record_tmp.get()), *record);
+    return NormalizeJsonRecord(vmsdk::ToStringView(record_tmp.get()), *record,
+                               preserve_json_array);
   }
   auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
       ctx, kJsonCmd.data(), "cc", key.data(), identifier.data()));
@@ -211,14 +218,16 @@ absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
   if (!record) {
     return absl::OkStatus();
   }
-  return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()), *record);
+  return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()), *record,
+                             preserve_json_array);
 }
 
 absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetRecord(
     ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
-    absl::string_view identifier) const {
+    absl::string_view identifier, bool preserve_json_array) const {
   vmsdk::UniqueValkeyString record;
-  VMSDK_RETURN_IF_ERROR(GetJsonRecord(ctx, open_key, key, identifier, &record));
+  VMSDK_RETURN_IF_ERROR(GetJsonRecord(ctx, open_key, key, identifier, &record,
+                                      preserve_json_array));
   return record;
 }
 

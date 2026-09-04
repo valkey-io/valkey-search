@@ -642,7 +642,10 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
     vmsdk::UniqueValkeyString record =
         attribute_data_type_
-            ->GetRecord(ctx, key_obj.get(), key_cstr, attribute.GetIdentifier())
+            ->GetRecord(ctx, key_obj.get(), key_cstr, attribute.GetIdentifier(),
+                        attribute.GetIndex()->GetIndexerType() ==
+                                indexes::IndexerType::kTag &&
+                            options::EnabledInVersion(1, 2, 1))
             .value_or(vmsdk::UniqueValkeyString());
     TrackRecord(interned_key, attribute, attribute_data_type_->ToProto(),
                 record.get(), GetDBNum());

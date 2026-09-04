@@ -420,6 +420,79 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
+    def test_aggregate_autoload_groupby(self, key_type, dialect):
+        """A field named by GROUPBY or by a REDUCE argument must be fetched even
+        when no LOAD clause covers it. Redisearch loads such fields implicitly;
+        without that the group key is missing from the reply and every record
+        falls into a single group. See issue #919.
+
+        Row alignment: GROUPBY queries are aligned by the harness on the
+        grouped fields, so no @__key is needed (and adding one would defeat the
+        point of the test).
+        """
+        self.setup_data("sortable numbers", key_type)
+
+        # Group key with no LOAD clause at all.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce count 0 as cnt"
+        )
+        # Group key absent from a LOAD that covers a different field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @n1 groupby 1 @t1 reduce count 0 as cnt"
+        )
+        # Two group keys, neither loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 2 @t1 @t2 reduce count 0 as cnt"
+        )
+        # Group key loaded, reducer argument not.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @t1 groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Neither the group key nor the reducer argument loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Several reducers over different un-loaded fields.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce sum 1 @n1 as total reduce max 1 @n2 as peak"
+        )
+        # TOLIST over an un-loaded field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # Reducer with no AS clause over an un-loaded field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce sum 1 @n1"
+        )
+
+    def test_aggregate_autoload_sortby(self, key_type, dialect):
+        """A field named by SORTBY must be fetched even when no LOAD clause
+        covers it; Redisearch loads it implicitly and emits it. See issue #919.
+
+        Row alignment: SORTBY queries are aligned by the harness on the sort
+        fields, which only exist in the reply once the field is loaded.
+        """
+        self.setup_data("sortable numbers", key_type)
+
+        # Sort field not covered by the LOAD clause.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @n1 asc"
+        )
+        # No LOAD clause at all.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * sortby 2 @n1 asc")
+        # Two sort fields, neither loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 4 @n1 asc @n2 desc"
+        )
+        # Sort on an un-loaded tag field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @t1 asc"
+        )
+        # Sort field un-loaded, plus a LIMIT downstream.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @n1 asc limit 0 5"
+        )
+
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):
         self.setup_data("hard numbers", key_type)
         dyadic = ["+", "-", "*", "/", "^"]

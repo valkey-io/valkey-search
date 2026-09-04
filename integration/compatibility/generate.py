@@ -81,7 +81,7 @@ class BaseCompatibilityTest:
     def setup_data(self, data_set_name, key_type):
         self.data_set_name = data_set_name
         self.key_type = key_type
-        load_data(self.client, data_set_name, key_type)
+        return load_data(self.client, data_set_name, key_type)
 
     def execute_command(self, cmd):
         answer = {"cmd": cmd,
@@ -682,6 +682,17 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                    r"@tags:{ a\}b | a\|b | x\}y\}z | a\\b | normal }",
                    "LIMIT", "0", "40")
 
+    def test_search_limit_zero_number(self, key_type, dialect):
+        """LIMIT 0 0 — ShouldReturnNoResults path: reply is [total_count] only."""
+        self.setup_data("sortable numbers", key_type)
+        self.check(dialect, f"ft.search {key_type}_idx1 * LIMIT 0 0")
+        self.check(dialect, f"ft.search {key_type}_idx1 @n1:[-inf inf] LIMIT 0 0")
+
+    def test_search_limit_offset_beyond_results(self, key_type, dialect):
+        """LIMIT first_index > total results — reply is [total_count] only."""
+        self.setup_data("sortable numbers", key_type)
+        self.check(dialect, f"ft.search {key_type}_idx1 * LIMIT 10000 10")
+
     # test_first_value_simple_mode is intentionally omitted.
     # FIRST_VALUE without a BY clause is non-deterministic: the order of
     # records within a group depends on retrieval order, which differs between
@@ -812,4 +823,5 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"groupby 1 @n2 "
             f"reduce first_value 4 @n1 BY @n2 INVALID as first_error_invalid"
         )
+
 

@@ -153,6 +153,8 @@ message SearchIndexPartitionRequest {
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
+  // Field 21 is reserved for INKEYS (feature/INKEYS-support).
+  repeated string infields = 22;
 }
 
 message NeighborEntry {

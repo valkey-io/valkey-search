@@ -34,6 +34,61 @@
 
 namespace valkey_search {
 
+// Precomputes bitmasks and identifier sets for INFIELDS-restricted queries.
+// Two masks are maintained:
+//   - infields_field_mask: covers all TEXT fields named in INFIELDS.
+//   - infields_suffix_field_mask: subset of the above that support suffix
+//     trie queries (e.g., *foo). Suffix queries must only target fields with
+//     WithSuffixTrie() == true; the separate mask avoids suffix-matching
+//     against fields that lack the trie.
+absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
+    const IndexSchema& index_schema) {
+  infields_identifiers.clear();
+  infields_suffix_identifiers.clear();
+  infields_field_mask = ~FieldMaskPredicate{0};
+  infields_suffix_field_mask = ~FieldMaskPredicate{0};
+  if (!infields || infields->empty()) {
+    return absl::OkStatus();
+  }
+  FieldMaskPredicate mask = 0ULL;
+  FieldMaskPredicate suffix_mask = 0ULL;
+  for (const auto& field : *infields) {
+    // GetIndex validates the field exists and is a TEXT index (type check).
+    auto index = index_schema.GetIndex(field);
+    if (!index.ok()) {
+      // Divergence from RediSearch: RediSearch silently ignores non-existent
+      // fields in INFIELDS. We error to catch user mistakes early.
+      return absl::InvalidArgumentError(absl::StrCat(
+          "INFIELDS field '", field, "' does not exist in the index"));
+    }
+    if (index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+      // Divergence from RediSearch: RediSearch silently ignores non-TEXT
+      // fields in INFIELDS (they simply have no effect). We error because
+      // INFIELDS only applies to full-text matching and a non-TEXT field
+      // indicates a user mistake.
+      return absl::InvalidArgumentError(
+          absl::StrCat("INFIELDS field '", field, "' is not a TEXT field"));
+    }
+    auto* text_index = static_cast<const indexes::Text*>(index.value().get());
+    // GetIdentifier resolves the alias to the canonical storage identifier,
+    // which is a separate mapping from the index lookup above.
+    auto identifier = index_schema.GetIdentifier(field);
+    if (!identifier.ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "INFIELDS field '", field, "' could not resolve to an identifier"));
+    }
+    mask |= 1ULL << text_index->GetTextFieldNumber();
+    infields_identifiers.insert(identifier.value());
+    if (text_index->WithSuffixTrie()) {
+      suffix_mask |= 1ULL << text_index->GetTextFieldNumber();
+      infields_suffix_identifiers.insert(identifier.value());
+    }
+  }
+  infields_field_mask = mask;
+  infields_suffix_field_mask = suffix_mask;
+  return absl::OkStatus();
+}
+
 namespace options {
 
 /// Register the "query-string-terms-count" flag. Controls the size of the
@@ -792,24 +847,56 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
     if (with_suffix && !text_index->WithSuffixTrie()) {
       return absl::InvalidArgumentError("Field does not support suffix search");
     }
+    // INFIELDS restricts the allowed field set for every term, including
+    // explicit @field: terms. If the explicit field is not in INFIELDS, the
+    // query is invalid — the user asked to search a field they excluded.
+    // Divergence from RediSearch: RediSearch treats the intersection of the
+    // explicit field and INFIELDS as the effective scope — if the field is not
+    // in INFIELDS the term silently matches nothing. We error instead to
+    // surface the likely mistake.
+    if (options_.infields && !options_.infields->empty() &&
+        !options_.infields->contains(*field_name)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Field '", *field_name, "' is not in INFIELDS list"));
+    }
     auto identifier = index_schema_.GetIdentifier(*field_name).value();
     filter_identifiers_.insert(identifier);
     field_mask = 1ULL << text_index->GetTextFieldNumber();
   } else {
-    // Set identifiers to include all text fields in the index schema.
+    // Set identifiers to include all text fields in the index schema,
+    // then AND with the precomputed INFIELDS mask.  When INFIELDS is absent
+    // the mask is ~0 and the AND is a no-op.
     auto text_identifiers = index_schema_.GetAllTextIdentifiers(with_suffix);
-    // Set field mask to include all text fields in the index schema.
     field_mask = index_schema_.GetAllTextFieldMask(with_suffix);
-    if (text_identifiers.size() == 0 || field_mask == 0ULL) {
+    if (text_identifiers.empty() || field_mask == 0ULL) {
       if (with_suffix) {
         return absl::InvalidArgumentError("No fields support suffix search");
       }
       return absl::InvalidArgumentError("Index does not have any text field");
     }
-    filter_identifiers_.reserve(filter_identifiers_.size() +
-                                text_identifiers.size());
-    filter_identifiers_.insert(text_identifiers.begin(),
-                               text_identifiers.end());
+    FieldMaskPredicate infields_mask = with_suffix
+                                           ? options_.infields_suffix_field_mask
+                                           : options_.infields_field_mask;
+    field_mask &= infields_mask;
+    if (field_mask == 0ULL) {
+      // INFIELDS excludes all text fields — match nothing.
+      return absl::OkStatus();
+    }
+    // Use precomputed INFIELDS identifiers if available, otherwise all.
+    if (options_.infields && !options_.infields->empty()) {
+      const auto& precomputed_identifiers =
+          with_suffix ? options_.infields_suffix_identifiers
+                      : options_.infields_identifiers;
+      filter_identifiers_.reserve(filter_identifiers_.size() +
+                                  precomputed_identifiers.size());
+      filter_identifiers_.insert(precomputed_identifiers.begin(),
+                                 precomputed_identifiers.end());
+    } else {
+      filter_identifiers_.reserve(filter_identifiers_.size() +
+                                  text_identifiers.size());
+      filter_identifiers_.insert(text_identifiers.begin(),
+                                 text_identifiers.end());
+    }
   }
   return absl::OkStatus();
 }

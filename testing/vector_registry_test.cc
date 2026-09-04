@@ -43,8 +43,7 @@ TEST_F(VectorRegistryTest, LookupRecordHitsAndMisses) {
   auto attr1 = StringInternStore::Intern("attr1");
 
   // Initial lookup should miss.
-  auto [rec_miss, size_miss] = registry.LookupRecord(
-      key1, attr1, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec_miss, size_miss] = registry.LookupRecord(key1, attr1, 0);
   EXPECT_EQ(rec_miss, nullptr);
   EXPECT_EQ(size_miss, 0);
   EXPECT_EQ(registry.GetStats().lookup_record_misses.GetTotal(), 1);
@@ -56,15 +55,13 @@ TEST_F(VectorRegistryTest, LookupRecordHitsAndMisses) {
                       vec_data.size() * sizeof(float));
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
 
-  auto tracked_rec =
-      registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto tracked_rec = registry.Track(
+      key1, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(tracked_rec, nullptr);
 
   // Second lookup should hit.
-  auto [rec_hit, size_hit] = registry.LookupRecord(
-      key1, attr1, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec_hit, size_hit] = registry.LookupRecord(key1, attr1, 0);
   EXPECT_NE(rec_hit, nullptr);
   EXPECT_EQ(rec_hit, tracked_rec);
   EXPECT_EQ(size_hit, vec_str.size());
@@ -82,19 +79,17 @@ TEST_F(VectorRegistryTest, TrackDeduplication) {
                       vec_data.size() * sizeof(float));
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
 
-  auto rec1 =
-      registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec1 = registry.Track(
+      key1, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec1, nullptr);
 
   // Tracking the exact same data again for the same key and attribute returns
   // same instance.
   auto valkey_vec_dup = vmsdk::MakeUniqueValkeyString(vec_str);
-  auto rec2 =
-      registry.Track(key1, attr1, valkey_vec_dup.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec2 = registry.Track(
+      key1, attr1, valkey_vec_dup.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   EXPECT_EQ(rec1, rec2);
 
   // Tracking modified data creates a new instance.
@@ -102,10 +97,9 @@ TEST_F(VectorRegistryTest, TrackDeduplication) {
   std::string vec_str_mod(reinterpret_cast<const char *>(vec_data_mod.data()),
                           vec_data_mod.size() * sizeof(float));
   auto valkey_vec_mod = vmsdk::MakeUniqueValkeyString(vec_str_mod);
-  auto rec3 =
-      registry.Track(key1, attr1, valkey_vec_mod.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec3 = registry.Track(
+      key1, attr1, valkey_vec_mod.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   EXPECT_NE(rec1, rec3);
 }
 
@@ -120,20 +114,17 @@ TEST_F(VectorRegistryTest, TrackUntrackWithNullptr) {
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
 
   registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                 data_model::VECTOR_DATA_TYPE_FLOAT32);
+                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 
   // Untrack by passing nullptr vector.
-  auto res =
-      registry.Track(key1, attr1, nullptr, nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto res = registry.Track(
+      key1, attr1, nullptr, nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   EXPECT_EQ(res, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 
-  auto [rec, size] = registry.LookupRecord(
-      key1, attr1, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec, size] = registry.LookupRecord(key1, attr1, 0);
   EXPECT_EQ(rec, nullptr);
 }
 
@@ -147,22 +138,19 @@ TEST_F(VectorRegistryTest, UntrackIfUnused) {
                       vec_data.size() * sizeof(float));
   auto valkey_vec = vmsdk::MakeUniqueValkeyString(vec_str);
 
-  auto rec1 =
-      registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec1 = registry.Track(
+      key1, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
 
   // Local reference 'rec1' still exists, so use_count > 1.
-  registry.UntrackIfUnused(key1, attr1, 0,
-                           data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key1, attr1, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 
   // Drop local reference.
   rec1.reset();
 
   // Now registry holds the last reference (use_count == 1).
-  registry.UntrackIfUnused(key1, attr1, 0,
-                           data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key1, attr1, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
@@ -178,14 +166,12 @@ TEST_F(VectorRegistryTest, BatchUntrackIfUnused) {
   auto valkey_vec1 = vmsdk::MakeUniqueValkeyString(vec_str);
   auto valkey_vec2 = vmsdk::MakeUniqueValkeyString(vec_str);
 
-  auto rec1 =
-      registry.Track(key1, attr1, valkey_vec1.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
-  auto rec2 =
-      registry.Track(key2, attr1, valkey_vec2.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec1 = registry.Track(
+      key1, attr1, valkey_vec1.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  auto rec2 = registry.Track(
+      key2, attr1, valkey_vec2.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
 
   EXPECT_EQ(registry.GetStats().entry_cnt, 2);
 
@@ -196,18 +182,15 @@ TEST_F(VectorRegistryTest, BatchUntrackIfUnused) {
   batch_keys[key1] = {};
   batch_keys[key2] = {};
 
-  registry.BatchUntrackIfUnused(attr1, std::move(batch_keys), 0,
-                                data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.BatchUntrackIfUnused(attr1, std::move(batch_keys), 0);
 
   // key1 remains because it has external reference; key2 is untracked.
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
 
-  auto [rec_k1, sz_k1] = registry.LookupRecord(
-      key1, attr1, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec_k1, sz_k1] = registry.LookupRecord(key1, attr1, 0);
   EXPECT_NE(rec_k1, nullptr);
 
-  auto [rec_k2, sz_k2] = registry.LookupRecord(
-      key2, attr1, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec_k2, sz_k2] = registry.LookupRecord(key2, attr1, 0);
   EXPECT_EQ(rec_k2, nullptr);
 }
 
@@ -224,10 +207,9 @@ TEST_F(VectorRegistryTest, TrackAttributeDataTypeJson) {
   auto initial_hash_sharing_hits =
       registry.GetStats().hash_sharing_hits.GetTotal();
 
-  auto rec =
-      registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key1, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON, 0);
   ASSERT_NE(rec, nullptr);
 
   // JSON attributes track memory records but skip hash string reference
@@ -235,8 +217,7 @@ TEST_F(VectorRegistryTest, TrackAttributeDataTypeJson) {
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(),
             initial_hash_sharing_hits);
 
-  auto [rec_lookup, size_lookup] = registry.LookupRecord(
-      key1, attr1, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec_lookup, size_lookup] = registry.LookupRecord(key1, attr1, 0);
   EXPECT_EQ(rec_lookup, rec);
   EXPECT_EQ(size_lookup, vec_str.size());
 }
@@ -258,10 +239,9 @@ TEST_F(VectorRegistryTest, HashSetStringRefNotAvailable) {
   auto initial_hash_sharing_hits =
       registry.GetStats().hash_sharing_hits.GetTotal();
 
-  auto rec =
-      registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key1, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
 
   // Engine hash sharing is skipped when API support flag is false.
@@ -269,8 +249,7 @@ TEST_F(VectorRegistryTest, HashSetStringRefNotAvailable) {
             initial_hash_sharing_hits);
 
   rec.reset();
-  registry.UntrackIfUnused(key1, attr1, 0,
-                           data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key1, attr1, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 
   // Restore original support state.
@@ -297,10 +276,9 @@ TEST_F(VectorRegistryTest, VectorSharingDisabled) {
   auto initial_hash_sharing_hits =
       registry.GetStats().hash_sharing_hits.GetTotal();
 
-  auto rec =
-      registry.Track(key1, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key1, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
 
   // When vector sharing option is disabled, hash sharing hits stay unchanged.
@@ -326,10 +304,9 @@ TEST_F(VectorRegistryTest, ShareWithValkeyOpenKeyFails) {
       .WillOnce(testing::Return(nullptr));
 
   auto initial_hits = registry.GetStats().hash_sharing_hits.GetTotal();
-  auto rec =
-      registry.Track(key, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits);
 }
@@ -350,10 +327,9 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHasStringRefFails) {
       .WillRepeatedly(testing::Return(VALKEYMODULE_ERR));
 
   auto initial_hits = registry.GetStats().hash_sharing_hits.GetTotal();
-  auto rec =
-      registry.Track(key, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits);
 }
@@ -380,10 +356,9 @@ TEST_F(VectorRegistryTest, ShareWithValkeySetStringRefFails) {
       .WillOnce(testing::Return(VALKEYMODULE_ERR));
 
   auto initial_errors = registry.GetStats().hash_sharing_errors.GetTotal();
-  auto rec =
-      registry.Track(key, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().hash_sharing_errors.GetTotal(),
             initial_errors + 1);
@@ -411,10 +386,9 @@ TEST_F(VectorRegistryTest, ShareWithValkeySuccess) {
       .WillOnce(testing::Return(VALKEYMODULE_OK));
 
   auto initial_hits = registry.GetStats().hash_sharing_hits.GetTotal();
-  auto rec =
-      registry.Track(key, attr1, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key, attr1, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), initial_hits + 1);
 }
@@ -479,8 +453,7 @@ TEST_F(VectorRegistryTest,
 
   // Reference count in vector registry should be 2 (1 in registry + 1 in HNSW
   // index). LookupRecord handle adds 1, resulting in use_count of 3.
-  auto [rec1, size1] = registry.LookupRecord(
-      key, attr_interned, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec1, size1] = registry.LookupRecord(key, attr_interned, 0);
   ASSERT_NE(rec1, nullptr);
   EXPECT_EQ(rec1.use_count(), 3);
   EXPECT_EQ(size1, vec_bytes.size());
@@ -513,8 +486,7 @@ TEST_F(VectorRegistryTest,
 
   // Vector registry indicates reference count of 2 again upon ingestion
   // completed, and matching modified vector payload
-  auto [rec2, size2] = registry.LookupRecord(
-      key, attr_interned, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [rec2, size2] = registry.LookupRecord(key, attr_interned, 0);
   ASSERT_NE(rec2, nullptr);
   EXPECT_EQ(rec2.use_count(), 3);
   EXPECT_EQ(size2, vec_bytes_mod.size());
@@ -545,10 +517,9 @@ TEST_F(VectorRegistryTest, UntrackWithVectorSharingSuccess) {
               HashSetStringRef(testing::_, testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(VALKEYMODULE_OK));
 
-  auto rec =
-      registry.Track(key, attr, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec = registry.Track(
+      key, attr, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(rec, nullptr);
 
   // Now we setup expectations for UntrackIfUnused (which calls
@@ -579,7 +550,7 @@ TEST_F(VectorRegistryTest, UntrackWithVectorSharingSuccess) {
   // Release local reference so use_count falls to 1 inside registry
   rec.reset();
 
-  registry.UntrackIfUnused(key, attr, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key, attr, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 
@@ -599,51 +570,44 @@ TEST_F(VectorRegistryTest, NoCollisionBetweenDifferentDBs) {
   auto valkey_vec2 = vmsdk::MakeUniqueValkeyString(vec_str2);
 
   // 1. Track same key/attr on DB 1 and DB 2 with different data
-  auto rec1 =
-      registry.Track(key, attr, valkey_vec1.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 1,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
-  auto rec2 =
-      registry.Track(key, attr, valkey_vec2.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 2,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto rec1 = registry.Track(
+      key, attr, valkey_vec1.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 1);
+  auto rec2 = registry.Track(
+      key, attr, valkey_vec2.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 2);
   ASSERT_NE(rec1, nullptr);
   ASSERT_NE(rec2, nullptr);
   EXPECT_NE(rec1, rec2);  // They must be different records!
 
   // 2. Verify lookups return correct records for correct DBs
   {
-    auto [lookup_rec1, size1] = registry.LookupRecord(
-        key, attr, 1, data_model::VECTOR_DATA_TYPE_FLOAT32);
+    auto [lookup_rec1, size1] = registry.LookupRecord(key, attr, 1);
     EXPECT_EQ(lookup_rec1, rec1);
     EXPECT_EQ(size1, vec_str1.size());
 
-    auto [lookup_rec2, size2] = registry.LookupRecord(
-        key, attr, 2, data_model::VECTOR_DATA_TYPE_FLOAT32);
+    auto [lookup_rec2, size2] = registry.LookupRecord(key, attr, 2);
     EXPECT_EQ(lookup_rec2, rec2);
     EXPECT_EQ(size2, vec_str2.size());
   }
 
   // 3. Untrack DB 1, verify DB 2 is untouched
   rec1.reset();
-  registry.UntrackIfUnused(key, attr, 1, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key, attr, 1);
 
   {
-    auto [lookup_rec1_after, size1_after] = registry.LookupRecord(
-        key, attr, 1, data_model::VECTOR_DATA_TYPE_FLOAT32);
+    auto [lookup_rec1_after, size1_after] = registry.LookupRecord(key, attr, 1);
     EXPECT_EQ(lookup_rec1_after, nullptr);
 
-    auto [lookup_rec2_after, size2_after] = registry.LookupRecord(
-        key, attr, 2, data_model::VECTOR_DATA_TYPE_FLOAT32);
+    auto [lookup_rec2_after, size2_after] = registry.LookupRecord(key, attr, 2);
     EXPECT_EQ(lookup_rec2_after, rec2);  // DB 2 is still there!
   }
 
   // 4. Untrack DB 2
   rec2.reset();
-  registry.UntrackIfUnused(key, attr, 2, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key, attr, 2);
   {
-    auto [lookup_rec2_final, size2_final] = registry.LookupRecord(
-        key, attr, 2, data_model::VECTOR_DATA_TYPE_FLOAT32);
+    auto [lookup_rec2_final, size2_final] = registry.LookupRecord(key, attr, 2);
     EXPECT_EQ(lookup_rec2_final, nullptr);
   }
 }
@@ -673,17 +637,15 @@ TEST_F(VectorRegistryTest, MultipleConsumersTrackUseCountAndDetachOnLastDrop) {
       .WillOnce(testing::Return(VALKEYMODULE_OK));
 
   // 1. First index tracks the vector
-  auto index1_record =
-      registry.Track(key, attr, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto index1_record = registry.Track(
+      key, attr, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
   ASSERT_NE(index1_record, nullptr);
   // 1 reference in index1_record + 1 reference in registry.tracked_vectors_
   EXPECT_EQ(index1_record.use_count(), 2);
 
   // 2. Second index looks up and tracks the same vector
-  auto [index2_record, size] =
-      registry.LookupRecord(key, attr, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto [index2_record, size] = registry.LookupRecord(key, attr, 0);
   ASSERT_NE(index2_record, nullptr);
   EXPECT_EQ(index1_record, index2_record);
   // 1 in index1 + 1 in index2 + 1 in registry
@@ -692,7 +654,7 @@ TEST_F(VectorRegistryTest, MultipleConsumersTrackUseCountAndDetachOnLastDrop) {
   // 3. Second index drops its reference; index 1 is still alive
   index2_record.reset();
   EXPECT_EQ(index1_record.use_count(), 2);
-  registry.UntrackIfUnused(key, attr, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key, attr, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);  // Not untracked
 
   // 4. First index drops its reference; setup expectations for DetachFromValkey
@@ -718,7 +680,7 @@ TEST_F(VectorRegistryTest, MultipleConsumersTrackUseCountAndDetachOnLastDrop) {
       .WillOnce(testing::Return(VALKEYMODULE_OK));
 
   index1_record.reset();
-  registry.UntrackIfUnused(key, attr, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key, attr, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);  // Fully untracked and detached
 }
 
@@ -741,10 +703,9 @@ TEST_F(VectorRegistryTest, ForceHashSharingErrorFallback) {
   EXPECT_CALL(*kMockValkeyModule, HashHasStringRef(testing::_, testing::_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
 
-  auto tracked_rec =
-      registry.Track(key, attr, valkey_vec.get(), nullptr,
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0,
-                     data_model::VECTOR_DATA_TYPE_FLOAT32);
+  auto tracked_rec = registry.Track(
+      key, attr, valkey_vec.get(), nullptr,
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
 
   EXPECT_NE(tracked_rec, nullptr);
   EXPECT_GT(registry.GetStats().hash_sharing_errors.GetTotal(), 0);
@@ -753,7 +714,7 @@ TEST_F(VectorRegistryTest, ForceHashSharingErrorFallback) {
   // Clean up
   VMSDK_EXPECT_OK(vmsdk::debug::ControlledSet("ForceHashSharingError", "0"));
   tracked_rec.reset();
-  registry.UntrackIfUnused(key, attr, 0, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  registry.UntrackIfUnused(key, attr, 0);
   EXPECT_EQ(registry.GetStats().entry_cnt, 0);
 }
 

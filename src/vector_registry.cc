@@ -48,13 +48,11 @@ void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
 std::pair<std::shared_ptr<indexes::VectorRecord>, size_t>
 VectorRegistry::LookupRecord(
     const InternedStringPtr &key,
-    const InternedStringPtr &interned_attribute_identifier, int db_num,
-    data_model::VectorDataType vector_data_type) const {
+    const InternedStringPtr &interned_attribute_identifier, int db_num) const {
   RegistryKey search_key{
       .db_num = db_num,
       .key = key,
       .attribute_identifier = interned_attribute_identifier,
-      .vector_data_type = vector_data_type,
   };
   absl::MutexLock lock(&mutex_);
   auto it = tracked_vectors_.find(search_key);
@@ -76,7 +74,6 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
       .db_num = db_num,
       .key = key,
       .attribute_identifier = attribute_identifier,
-      .vector_data_type = vector_data_type,
   };
 
   std::shared_ptr<indexes::VectorRecord> vector_record;
@@ -193,9 +190,9 @@ void VectorRegistry::BatchUntrackIfUnused(
     const InternedStringPtr &attribute_identifier,
     InternedStringHashMap<indexes::TrackedKeyMetadata>
         &&tracked_metadata_by_key,
-    int db_num, data_model::VectorDataType vector_data_type) {
+    int db_num) {
   vmsdk::RunByMain(
-      [attribute_identifier, db_num, vector_data_type,
+      [attribute_identifier, db_num,
        tracked_metadata_by_key = std::move(tracked_metadata_by_key),
        this]() mutable {
         absl::MutexLock lock(&mutex_);
@@ -204,7 +201,6 @@ void VectorRegistry::BatchUntrackIfUnused(
               .db_num = db_num,
               .key = key,
               .attribute_identifier = attribute_identifier,
-              .vector_data_type = vector_data_type,
           };
           LockFreeUntrackIfUnused(search_key);
         }
@@ -253,13 +249,11 @@ void VectorRegistry::DetachFromValkey(const RegistryKey &search_key) {
 
 void VectorRegistry::UntrackIfUnused(
     const InternedStringPtr &key,
-    const InternedStringPtr &interned_attribute_identifier, int db_num,
-    data_model::VectorDataType vector_data_type) {
+    const InternedStringPtr &interned_attribute_identifier, int db_num) {
   RegistryKey search_key{
       .db_num = db_num,
       .key = key,
       .attribute_identifier = interned_attribute_identifier,
-      .vector_data_type = vector_data_type,
   };
   vmsdk::RunByMain([search_key = std::move(search_key), this]() mutable {
     absl::MutexLock lock(&mutex_);

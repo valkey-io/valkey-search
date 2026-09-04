@@ -309,14 +309,7 @@ class VectorBase : public IndexBase {
   // Returns the vector data type enum. Used to disambiguate FLOAT16 from
   // BFLOAT16 wherever a byte width alone is ambiguous -- both are 2 bytes, so
   // a size-based check would silently route the wrong format.
-  //
-  // Stored rather than dispatched: ~VectorBase() has to untrack this index's
-  // records from the VectorRegistry, whose key includes the data type, and a
-  // virtual call from a base destructor would resolve against the already
-  // destroyed VectorType<T> part.
-  data_model::VectorDataType GetVectorDataType() const {
-    return vector_data_type_;
-  }
+  virtual data_model::VectorDataType GetVectorDataType() const = 0;
   // KNN entry point, dispatched virtually so callers hold a VectorBase* and
   // never need to know the storage type or the ANN algorithm. `ef_runtime` is
   // meaningful only to HNSW; FLAT ignores it.
@@ -340,13 +333,11 @@ class VectorBase : public IndexBase {
 
  protected:
   VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
-             data_model::VectorDataType vector_data_type,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
         db_num_(db_num),
         dimensions_(dimensions),
-        vector_data_type_(vector_data_type),
         attribute_identifier_(attribute_identifier),
         interned_attribute_identifier_(
             StringInternStore::Intern(attribute_identifier)),
@@ -391,7 +382,6 @@ class VectorBase : public IndexBase {
 
   int db_num_;
   int dimensions_;
-  const data_model::VectorDataType vector_data_type_;
   std::string attribute_identifier_;
   InternedStringPtr interned_attribute_identifier_;
   bool normalize_{false};

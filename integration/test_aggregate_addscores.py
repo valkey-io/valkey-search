@@ -1,19 +1,13 @@
-"""Pins the CURRENT (broken) behavior of FT.AGGREGATE ADDSCORES.
+"""FT.AGGREGATE ADDSCORES: exposes each document's relevance score to the
+aggregation pipeline as the field __score (matching Redis), the way FT.SEARCH
+WITHSCORES exposes it in the reply.
 
-ADDSCORES should expose each document's relevance score to the aggregation
-pipeline, as FT.SEARCH WITHSCORES does for the reply. It parses into
-AggregateParameters::addscores_ and that field is read nowhere, so the keyword
-silently does nothing. CreateRecordsFromNeighbors also only writes Neighbor.score
-into a record under IsVectorQuery(), so a non-vector score has no route to output
-at all.
-
-TODO: implement ADDSCORES — surface the score as a pipeline field (Redis names it
-@__score) so stages can reference it. Until then these tests assert the no-op so
-the change is caught when implemented; each carries the assertion that should
-replace it.
+The score written is the carried search-time score (Neighbor.score). With no
+LOAD the query is still no_content, so the main-thread content fetch stays
+skipped and the score is emitted without revalidation or recompute; this is the
+same accepted semantics as FT.SEARCH NOCONTENT WITHSCORES.
 """
 
-import pytest
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
@@ -58,21 +52,14 @@ class TestAggregateAddScores(ValkeySearchTestCaseBase):
         return client
 
     def test_addscores_is_accepted(self):
-        """ADDSCORES parses. This is the only part of the keyword that works."""
         client = self._load()
         res = client.execute_command(
             "FT.AGGREGATE", IDX, "hello", "ADDSCORES", "LOAD", "1", "@n",
         )
         assert res[0] == 2
 
-    def test_addscores_does_not_add_a_score_field(self):
-        """Currently a no-op: the reply is byte-identical with and without it.
-
-        Once ADDSCORES is implemented the ADDSCORES rows must carry a score
-        field that the plain rows do not, i.e.
-            assert all("__score" in r for r in _rows(with_scores))
-            assert with_scores != without
-        """
+    def test_addscores_adds_score_field(self):
+        """ADDSCORES rows carry __score; plain rows do not."""
         client = self._load()
         with_scores = client.execute_command(
             "FT.AGGREGATE", IDX, "hello", "ADDSCORES", "LOAD", "1", "@n",
@@ -81,28 +68,40 @@ class TestAggregateAddScores(ValkeySearchTestCaseBase):
             "FT.AGGREGATE", IDX, "hello", "LOAD", "1", "@n",
         )
 
-        assert with_scores == without
-        for row in _rows(with_scores):
+        assert with_scores != without
+        rows = _rows(with_scores)
+        assert all(set(r) == {"n", "__score"} for r in rows)
+        assert all(float(r["__score"]) > 0.0 for r in rows)
+        # d:2 repeats "hello" (tf=2), so BM25 ranks it above d:1.
+        by_n = {r["n"]: float(r["__score"]) for r in rows}
+        assert by_n["2"] > by_n["1"]
+        for row in _rows(without):
             assert set(row) == {"n"}
 
-    def test_addscores_score_is_not_referenceable_by_a_stage(self):
-        """@__score is resolved as an ordinary schema field, so referencing it
-        is rejected even with ADDSCORES given.
-
-        Once implemented both commands must succeed and the SORTBY must order by
-        relevance — d:2 repeats "hello", so it outranks d:1:
-            assert [r["n"] for r in _rows(sortby_res)] == ["2", "1"]
-        """
+    def test_addscores_score_is_referenceable_by_stages(self):
+        """@__score can be named in LOAD and used by SORTBY."""
         client = self._load()
 
-        with pytest.raises(Exception, match="__score"):
-            client.execute_command(
-                "FT.AGGREGATE", IDX, "hello", "ADDSCORES",
-                "LOAD", "2", "@n", "@__score",
-            )
+        res = client.execute_command(
+            "FT.AGGREGATE", IDX, "hello", "ADDSCORES",
+            "LOAD", "2", "@n", "@__score",
+        )
+        assert all("__score" in r for r in _rows(res))
 
-        with pytest.raises(Exception, match="__score"):
-            client.execute_command(
-                "FT.AGGREGATE", IDX, "hello", "ADDSCORES",
-                "LOAD", "1", "@n", "SORTBY", "2", "@__score", "DESC",
-            )
+        sortby_res = client.execute_command(
+            "FT.AGGREGATE", IDX, "hello", "ADDSCORES",
+            "LOAD", "1", "@n", "SORTBY", "2", "@__score", "DESC",
+        )
+        assert [r["n"] for r in _rows(sortby_res)] == ["2", "1"]
+
+    def test_addscores_without_load(self):
+        """No LOAD keeps the query no_content (main-thread fetch skipped); the
+        score still flows because it comes from the neighbor, not the fetch."""
+        client = self._load()
+        res = client.execute_command(
+            "FT.AGGREGATE", IDX, "hello", "ADDSCORES",
+        )
+        assert res[0] == 2
+        rows = _rows(res)
+        assert all(set(r) == {"__score"} for r in rows)
+        assert all(float(r["__score"]) > 0.0 for r in rows)

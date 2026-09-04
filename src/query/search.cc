@@ -958,8 +958,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       float sum = 0.0f;
       for (const auto &[value, idf] : leaf.tag_values) {
         if (!leaf.tag_index->ContainsKey(
-                value, key,
-                score_ctx.main_thread_revalidation.has_value())) {
+                value, key, score_ctx.main_thread_revalidation.has_value())) {
           continue;
         }
         sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1, doc_len,

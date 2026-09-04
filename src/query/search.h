@@ -431,9 +431,9 @@ class SingleDocumentScorer {
     kAcquireLock,
     kLockAlreadyHeld,
   };
-  SingleDocumentScorer(const IndexSchema& index_schema,
-                       const Predicate* root_predicate,
-                       const indexes::scoring::Scorer* scorer,
+  SingleDocumentScorer(const IndexSchema &index_schema,
+                       const Predicate *root_predicate,
+                       const indexes::scoring::Scorer *scorer,
                        LockPolicy lock_policy = LockPolicy::kAcquireLock);
   ~SingleDocumentScorer();
   SingleDocumentScorer(const SingleDocumentScorer &) = delete;

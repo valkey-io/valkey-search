@@ -347,6 +347,22 @@ TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
 
 // A no_content FT.AGGREGATE skips the main-thread fetch (see
 // ProcessNeighborsForProcessing), so it must not claim one here.
+TEST_F(AggregateTest, AddScoresFlagParses) {
+  for (const bool given : {true, false}) {
+    auto argv = vmsdk::ToValkeyStringVector(given ? "ADDSCORES LOAD 1 @n1"
+                                                  : "LOAD 1 @n1");
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    ASSERT_TRUE(parser.Parse(params, itr).ok());
+    EXPECT_EQ(params.addscores_, given);
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
 TEST_F(AggregateTest, NoContentDoesNotFetchContentOnMainThread) {
   AggregateParameters params(0);
   params.no_content = true;

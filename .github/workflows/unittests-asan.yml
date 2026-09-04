@@ -39,12 +39,11 @@ jobs:
       run: docker build -t presubmit-image -f .devcontainer/Dockerfile .
 
     - name: Restore ccache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: .ccache
-        key: ccache-unittests-asan-${{ github.ref }}-${{ github.sha }}
+        key: ccache-unittests-asan-${{ github.sha }}
         restore-keys: |
-          ccache-unittests-asan-${{ github.ref }}-
           ccache-unittests-asan-
 
 
@@ -61,6 +60,13 @@ jobs:
           --user "ubuntu:ubuntu" \
           presubmit-image \
           sudo -E ci/build_ubuntu.sh --run-tests --asan --unittest-output=/workspace/test-results
+
+    - name: Save ccache
+      if: github.event_name == 'push'
+      uses: actions/cache/save@v4
+      with:
+        path: .ccache
+        key: ccache-unittests-asan-${{ github.sha }}
 
     - name: Update Test Results Permissions
       if: always()

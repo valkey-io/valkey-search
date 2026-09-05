@@ -87,30 +87,16 @@ extern template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
 extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
                                                         size_t);
 
-// Verify the running CPU has a BF16 kernel that decodes bfloat16 correctly.
-//
-// This is a correctness gate, not a check for native BF16 silicon. What it
-// rejects is falling back to simsimd's serial BF16 path, which is wrong when
-// the build sets SIMSIMD_NATIVE_BF16=1: simsimd then typedefs simsimd_bf16_t
-// to _Float16 (x86) or __fp16 (ARM), both of which are IEEE half -- 1/5/10
-// bits, not bfloat16's 1/8/7 -- so the serial path reads the stored bits as
-// half precision and yields wrong values.
-//
-// Which CPUs have a correct kernel differs by architecture, and neither
-// requirement is "native BF16 instructions":
-//   x86 -- AVX2 (Haswell, 2013) and newer qualify. Those kernels have no BF16
-//          instructions; they upcast by shifting left 16 bits, which is exactly
-//          correct. Genoa and Sapphire additionally have native avx512bf16.
-//   ARM -- only FEAT_BF16 (NEON-BF16 / SVE-BF16) qualifies. simsimd ships no
-//          shift-based ARM fallback, so pre-FEAT_BF16 cores such as Neoverse
-//          N1 (AWS Graviton 2) have no correct kernel at all.
-//
-// Returns OkStatus when a correct kernel exists, or when the build leaves
-// SIMSIMD_NATIVE_BF16=0 (the serial path is then bit-correct and usable).
-// Otherwise returns FailedPreconditionError; callers refuse to create or load
-// a BFLOAT16 index on this host. Called at index-create / RDB-load time rather
-// than module load, so a host without a correct BF16 kernel can still serve
-// FLOAT32 and FLOAT16 indexes.
+// Verify the running CPU exposes a SIMD-targeted BF16 path required by the
+// current simsimd build. Returns OkStatus when:
+//   - This build of simsimd does not enable native BF16 (the serial path is
+//     then bit-correct), or
+//   - The CPU advertises Haswell/Genoa/Sapphire on x86, or NEON-BF16/SVE-BF16
+//     on ARM.
+// Otherwise returns FailedPreconditionError; callers should refuse to create
+// or load a BFLOAT16 index on this host. Called at index-create / RDB-load
+// time rather than module load so that nodes lacking a SIMD BF16 path can
+// still serve FLOAT32 and FLOAT16 indexes.
 absl::Status CheckSimsimdBf16Capability();
 
 // Scales `record` by `reciprocal_magnitude`, interpreting it as elements of

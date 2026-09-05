@@ -207,7 +207,9 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
 // cancel::Token and hnswlib::BaseCancellationFunctor.
 class CancelCondition : public hnswlib::BaseCancellationFunctor {
  public:
-  explicit CancelCondition(cancel::Token &token) : token_(token) {}
+  explicit CancelCondition(cancel::Token &token) : token_(token) {
+    CHECK(&token);
+  }
   bool isCancelled() override { return token_->IsCancelled(); }
 
  private:

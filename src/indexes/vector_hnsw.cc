@@ -15,6 +15,7 @@
 #include <mutex>  // NOLINT(build/c++11)
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 #include "absl/log/check.h"
@@ -36,6 +37,8 @@
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
+#include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"

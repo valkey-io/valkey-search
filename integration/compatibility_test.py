@@ -444,6 +444,8 @@ wrong_answers = 0
 StopOnFailure = False
 failed_tests = {}
 passed_tests = {}
+xfailed_tests = {}
+xpassed_tests = {}
 
 def mark_as_passed(testname):
     global correct_answers, passed_tests
@@ -460,6 +462,23 @@ def mark_as_failed(testname):
     failed_tests[testname] += 1
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
+
+def mark_as_xfailed(testname):
+    """An answer marked `xfail` in the generator that did not match, as
+    expected. Counts as accounted-for so the suite stays green while the gap it
+    documents is open."""
+    global correct_answers, xfailed_tests
+    correct_answers += 1
+    xfailed_tests[testname] = xfailed_tests.get(testname, 0) + 1
+
+def mark_as_xpassed(testname):
+    """An answer marked `xfail` that now matches -- the gap it documents has
+    been closed, and the marker should come off. Reported loudly at the end of
+    the run; deliberately not a failure, so closing the gap does not break the
+    build before someone gets to the marker."""
+    global correct_answers, xpassed_tests
+    correct_answers += 1
+    xpassed_tests[testname] = xpassed_tests.get(testname, 0) + 1
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
@@ -489,23 +508,30 @@ def do_answer(client, expected, data_set):
         except Exception as e:
             print(f"⚠ Failed to set Valkey compat mode for test: {expected['testname']}, error: {e}")
     
+    # An `xfail` answer is compared like any other, but a mismatch is the
+    # documented state of an open gap rather than a regression. See
+    # integration/compatibility/unsupported_tests.md for what each one covers.
+    xfail = expected.get('xfail', False)
+    if xfail:
+        print(f"xfail answer (known gap): {expected['cmd']}")
+
+    def record(matched):
+        if xfail:
+            (mark_as_xpassed if matched else mark_as_xfailed)(expected['testname'])
+        else:
+            (mark_as_passed if matched else mark_as_failed)(expected['testname'])
+
     result = {}
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
         result["cmd"] = expected['cmd']
         result["result"] = client.execute_command(*expected['cmd'])
         result["exception"] = False
-        if compare_results(expected, result):
-            mark_as_passed(expected['testname'])
-        else:
-            mark_as_failed(expected['testname'])
+        record(compare_results(expected, result))
     except valkey.ResponseError as e:
         print(f"Got ResponseError: {e} for command {expected['cmd']}")
         result["exception"] = True
-        if compare_results(expected, result):
-            mark_as_passed(expected['testname'])
-        else:
-            mark_as_failed(expected['testname'])
+        record(compare_results(expected, result))
     return data_set
 
 def drop_index_cluster(test_case, key_type):
@@ -618,12 +644,15 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
+        global xfailed_tests, xpassed_tests
 
         # RESET GLOBAL COUNTERS AT START OF EACH TEST
         correct_answers = 0
         wrong_answers = 0
         failed_tests = {}
         passed_tests = {}
+        xfailed_tests = {}
+        xpassed_tests = {}
 
         print("Running test_answers with answers file:", answers)
         answers = _load_answers_with_hash_check(answers)
@@ -635,6 +664,22 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
+
+        if xfailed_tests:
+            print(">>>>>>>>> Expected Failures (known gaps) <<<<<<<<<")
+            for k, v in sorted(xfailed_tests.items()):
+                print(f"xfail {k:60}: {v} times")
+        if xpassed_tests:
+            # Not a failure: closing the gap should not break the build before
+            # someone removes the marker. It does need to be impossible to miss.
+            print("!" * 78)
+            print("XPASS: answers marked `xfail` in the generator now MATCH.")
+            print("The gap they document has been closed -- drop the xfail")
+            print("marker in integration/compatibility/ and update")
+            print("unsupported_tests.md.")
+            for k, v in sorted(xpassed_tests.items()):
+                print(f"  xpass {k:60}: {v} times")
+            print("!" * 78)
 
         expected_count = sum(1 for a in answers if not a.get('excluded'))
         if correct_answers != expected_count:

@@ -31,7 +31,11 @@ An array of key value pairs.
 - `index_definition` (an array of key/value pairs)
   - `key_type` (string) `HASH` or `JSON`
   - `prefixes` (array of strings) The declared prefixes for this index
-  - `default_score` (string) currently "1.0"
+  - `default_score` (double) The index's configured `SCORE` value
+  - `score_field` (string) The index's configured `SCORE_FIELD`, or an empty string if none
+
+  The two fields above require `search.emulate-release` to be `1.3.0` or later. Below that — including at the default setting — `index_definition` is a six-element block which omits `score_field` and reports `default_score` as the bulk string `"1"`. See [COMPATIBILITY.md](../../COMPATIBILITY.md).
+
 - `attributes` (array of arrays) One entry per declared attribute of the index.
   - `identifier` (string) identifier for this attribute
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.

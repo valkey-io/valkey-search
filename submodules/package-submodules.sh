@@ -1,5 +1,7 @@
 #!/bin/bash -e
 
+SAN_BUILD="no"
+
 ## Search for --asan
 while [ $# -gt 0 ]
 do
@@ -93,7 +95,11 @@ if [ ! -f "${INSTALL_DIR}/include/highwayhash/highwayhash.h" ]; then
     cp -fr ${SRC_DIR}/highwayhash/highwayhash ${INSTALL_DIR}/include
 fi
 
-if [[ "${SAN_BUILD}" != "no" && ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ]]; then
+# Normal builds require Google Benchmark during CMake configuration. Sanitizer
+# builds skip benchmark targets and do not need this dependency.
+if [[ "${SAN_BUILD}" == "no" &&
+      ( ! -f "${INSTALL_DIR}/include/benchmark/benchmark.h" ||
+        ! -f "${INSTALL_DIR}/lib/cmake/benchmark/benchmarkConfig.cmake" ) ]]; then
     echo "Building Google Benchmark..."
     clone_repo "https://github.com/google/benchmark" "v1.8.3"
     # Flags: Disable tests (faster build), Disable deps download

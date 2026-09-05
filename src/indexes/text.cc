@@ -33,23 +33,28 @@ Text::Text(const data_model::TextIndex &text_index_proto,
   }
 }
 
-absl::StatusOr<bool> Text::AddRecord(const InternedStringPtr &key,
-                                     absl::string_view data) {
+absl::StatusOr<RecordResult> Text::AddRecord(const InternedStringPtr &key,
+                                             absl::string_view data) {
   auto result = text_index_schema_->StageAttributeData(
       key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+  if (!result.ok()) {
+    return result.status();
+  }
 
   absl::MutexLock lock(&index_mutex_);
-  if (result.ok() && *result) {
+  if (*result) {
     auto [_, succ] = tracked_keys_.insert(key);
     if (!succ) {
       return absl::AlreadyExistsError(
           absl::StrCat("Key `", key->Str(), "` already exists"));
     }
     untracked_keys_.erase(key);
-  } else {
-    untracked_keys_.insert(key);
+    return RecordResult::kAdded;
   }
-  return result;
+  // No indexable tokens (or, until TEXT content validation is implemented, a
+  // UTF-8 error) is treated as a missing field.
+  untracked_keys_.insert(key);
+  return RecordResult::kMissing;
 }
 
 absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
@@ -71,8 +76,8 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
   return true;
 }
 
-absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
-                                        absl::string_view data) {
+absl::StatusOr<RecordResult> Text::ModifyRecord(const InternedStringPtr &key,
+                                                absl::string_view data) {
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
@@ -81,16 +86,19 @@ absl::StatusOr<bool> Text::ModifyRecord(const InternedStringPtr &key,
 
   absl::MutexLock lock(&index_mutex_);
   if (!result.ok() || !*result) {
+    // No indexable tokens (or, until TEXT content validation is implemented, a
+    // UTF-8 error) is treated as a missing field. (Behavior preserved from the
+    // pre-RecordResult implementation, which also folded staging errors here.)
     tracked_keys_.erase(key);
     untracked_keys_.insert(key);
-    return false;
+    return RecordResult::kMissing;
   }
   auto it = tracked_keys_.find(key);
   if (it == tracked_keys_.end()) {
     return absl::NotFoundError(
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
-  return true;
+  return RecordResult::kAdded;
 }
 
 int Text::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -171,13 +179,24 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   absl::string_view text_string = GetTextString();
-  bool found_original;
+  bool found_original = false;
   uint64_t stem_field_mask =
       field_mask & GetTextIndexSchema()->GetStemTextFieldMask();
 
-  // Search for the original word - may or may not exist in corpus
-  found_original =
-      TryAddWordKeyIterator(text_index.get(), text_string, key_iterators);
+  // Search for the original word - may or may not exist in corpus. Document
+  // frequency (dt) for scoring is the original word's posting count; stem
+  // variants are not folded in (we skip stem-root scoring for now). Both come
+  // off the same posting list, so the word is resolved with one tree walk.
+  uint32_t num_doc_contain_term = 0;
+  {
+    auto word_iter = text_index->GetPrefix().GetWordIterator(text_string);
+    if (!word_iter.Done() && word_iter.GetWord() == text_string) {
+      auto postings = word_iter.GetPostingsTarget();
+      num_doc_contain_term = postings->GetKeyCount();
+      key_iterators.emplace_back(postings->GetKeyIterator());
+      found_original = true;
+    }
+  }
 
   // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {
@@ -204,7 +223,8 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
   // first pass)
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions, stem_field_mask,
-      found_original);
+      found_original, GetWeight(), num_doc_contain_term,
+      GetTextIndexSchema().get(), GetScorer());
 }
 
 std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(

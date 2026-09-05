@@ -4,7 +4,10 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
+#include <algorithm>
 #include <ranges>
+#include <string>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -54,7 +57,46 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     CHECK(params.return_attributes.empty());
     return absl::OkStatus();
   } else {
-    for (const auto &load : params.loads_) {
+    std::vector<std::string> loads_to_process = params.loads_;
+
+    // A field named by a pipeline stage but absent from the LOAD clause still
+    // has to be fetched. Redisearch loads such fields implicitly; without that
+    // the field reads as Nil, so a GROUPBY key vanishes from the reply and
+    // every record lands in one group, a REDUCE aggregates nothing, and a
+    // SORTBY does not sort. See issue #919.
+    //
+    // Every `@name` in a GROUPBY key, REDUCE argument, SORTBY key, APPLY or
+    // FILTER expression has already been turned into a record column by
+    // AggregateParameters::MakeReference() -- GROUPBY keys directly, the rest
+    // via expr::Expression::Compile -- so the column table is a complete list
+    // of the names the pipeline references. No stage walking is needed.
+    //
+    // Only names that resolve to a declared attribute are loaded. Anything
+    // else is produced by the pipeline itself (an APPLY or REDUCE output, a
+    // chained GROUPBY over a reducer alias) and has no stored value to fetch.
+    const auto score_name = vmsdk::ToStringView(params.score_as.get());
+    for (const auto &info : params.record_info_by_index_) {
+      const std::string &name = info.alias_;
+      if (name == "__key" || name == score_name) {
+        continue;
+      }
+      auto indexer = params.index_schema->GetIndex(name);
+      if (!indexer.ok()) {
+        continue;
+      }
+      // Vector fields cannot be loaded at all (rejected below). Auto-loading
+      // one would turn a query that merely produced a Nil into an error, which
+      // is a bigger behavior change than this fix intends.
+      if (indexes::IsVectorIndex(*indexer)) {
+        continue;
+      }
+      if (std::find(loads_to_process.begin(), loads_to_process.end(), name) ==
+          loads_to_process.end()) {
+        loads_to_process.push_back(name);
+      }
+    }
+
+    for (const auto &load : loads_to_process) {
       //
       // Skip loading of the score and the key, we always get those...
       //
@@ -67,8 +109,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
       content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
-      auto indexer_type = indexer->GetIndexerType();
-      if (indexer->IsVectorIndex()) {
+      if (indexes::IsVectorIndex(indexer)) {
         return absl::InvalidArgumentError(absl::StrCat(
             "Loading of vector fields is not supported (field `", load, "`)"));
       }
@@ -78,7 +119,8 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
             .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
             .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(*schema_identifier, load, indexer_type);
+        params.AddRecordAttribute(*schema_identifier, load,
+                                  indexer->GetIndexerType());
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(load),
@@ -142,9 +184,7 @@ void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
   if (value.IsArray()) {
     SerializeArrayToResp(ctx, value.GetArray());
   } else if (value.IsBool()) {
-    // IsBool() guarantees AsStringView() returns a value.
-    auto value_sv = *value.AsStringView();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
   } else if (value.IsDouble()) {
     // IsDouble() guarantees AsString() returns a value.
     auto value_str = *value.AsString();
@@ -179,32 +219,10 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
     auto value_sv = *value.AsStringView();
     ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
   } else {
-    char double_storage[50];
-    std::string_view value_view;
-    if (name == "$") {
-      value_view = *value.AsStringView();
-    } else {
-      switch (indexer_type) {
-        case indexes::IndexerType::kTag:
-        case indexes::IndexerType::kText:
-        case indexes::IndexerType::kNone: {
-          value_view = *value.AsStringView();
-          break;
-        }
-        case indexes::IndexerType::kNumeric: {
-          auto dble = value.AsDouble();
-          if (!dble) {
-            return false;
-          }
-          auto double_size =
-              snprintf(double_storage, sizeof(double_storage), "%.11g", *dble);
-          value_view = std::string_view(double_storage, double_size);
-          break;
-        }
-        default:
-          CHECK(false) << " Received type " << int(indexer_type);
-      }
+    if (name != "$") {
+      indexes::AssertValidIndexerType(indexer_type);
     }
+    std::string_view value_view = *value.AsStringView();
     ValkeyModule_ReplyWithSimpleString(ctx, name.data());
     if (dialect == 2) {
       ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
@@ -275,8 +293,11 @@ absl::Status CreateRecordsFromNeighbors(
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
   for (auto &n : neighbors) {
+    // Not record_indexes_by_alias_.size(): that undercounts once an alias has
+    // been re-bound (shadowed) to a new slot, leaving later slots out of
+    // bounds.
     auto rec =
-        std::make_unique<Record>(parameters.record_indexes_by_alias_.size());
+        std::make_unique<Record>(parameters.record_info_by_index_.size());
 
     // Set key field if requested
     if (parameters.load_key) {
@@ -285,7 +306,7 @@ absl::Status CreateRecordsFromNeighbors(
 
     // Set score field for vector queries
     if (parameters.IsVectorQuery()) {
-      rec->fields_.at(scores_index) = expr::Value(n.distance);
+      rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
     // Process attribute contents
@@ -300,13 +321,13 @@ absl::Status CreateRecordsFromNeighbors(
         if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
             by_alias != parameters.record_indexes_by_alias_.end()) {
           record_index = by_alias->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         } else if (auto by_identifier =
                        parameters.record_indexes_by_identifier_.find(name);
                    by_identifier !=
                    parameters.record_indexes_by_identifier_.end()) {
           record_index = by_identifier->second;
-          assert(record_index < rec->fields_.size());
+          CHECK(record_index < rec->fields_.size());
         }
 
         if (record_index) {

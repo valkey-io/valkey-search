@@ -1,6 +1,6 @@
 from valkey import ResponseError
 from valkey.client import Valkey
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 import json
 import random
@@ -323,6 +323,289 @@ def validate_aggregate_queries(client: Valkey):
         with pytest.raises(ResponseError, match=r"Invalid or missing expression"):
             client.execute_command(*command)
 
+def collect_hash_dataset_values(dataset, field, predicate=lambda fields: True):
+    """
+        Return the encoded values for `field` from HSET-style dataset rows that
+        satisfy `predicate`.
+    """
+    values = []
+    for doc in dataset:
+        assert doc[0] == "HSET"
+        fields = dict(zip(doc[2::2], doc[3::2]))
+        if field in fields and predicate(fields):
+            values.append(fields[field].encode("utf-8"))
+    return values
+
+
+def extract_sample(result, alias=b'sample'):
+    """
+        Extract a RANDOM_SAMPLE array from a single FT.AGGREGATE row.
+    """
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    assert alias in row
+    sample = row[alias]
+    assert isinstance(sample, list)
+    return sample
+
+
+def assert_random_sample_matches_dataset(
+    sample,
+    expected_values,
+    expected_size=None,
+    exact_values=False,
+    normalize=lambda value: value,
+):
+    """
+        Validate that RANDOM_SAMPLE output is drawn from the supplied dataset.
+    """
+    expected_set = {normalize(value) for value in expected_values}
+    sample_set = {normalize(value) for value in sample}
+    assert sample_set.issubset(expected_set)
+    if expected_size is not None:
+        assert len(sample) == expected_size
+    if exact_values:
+        assert sample_set == expected_set
+        assert len(sample) == len(expected_values)
+
+
+def validate_random_sample_error_queries(client: Valkey):
+    """
+        Test FT.AGGREGATE RANDOM_SAMPLE error handling through the command path.
+    """
+    error_cases = [
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "0", "AS", "sample"),
+            r"incorrect number of arguments",
+        ),
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "1", "@price", "AS", "sample"),
+            r"incorrect number of arguments",
+        ),
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "2", "@price", "invalid", "AS", "sample"),
+            r"(sample size must be a non-negative integer constant|Invalid or missing expression)",
+        ),
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "2", "@price", "1.5", "AS", "sample"),
+            r"sample size must be a non-negative integer constant",
+        ),
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "2", "@price", "-1", "AS", "sample"),
+            r"sample size must be a non-negative integer constant",
+        ),
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "2", "@price", "1001", "AS", "sample"),
+            r"sample size must be <= 1000",
+        ),
+        (
+            ("FT.AGGREGATE", "products", "@price:[1 1000]", "LOAD", "2", "__key", "price",
+             "GROUPBY", "1", "@category", "REDUCE", "RANDOM_SAMPLE", "2", "@price", "10000", "AS", "sample"),
+            r"sample size must be <= 1000",
+        ),
+    ]
+
+    for command, pattern in error_cases:
+        with pytest.raises(ResponseError, match=pattern):
+            client.execute_command(*command)
+
+
+def validate_random_sample_queries(client: Valkey, dataset):
+    """
+        Test FT.AGGREGATE with RANDOM_SAMPLE reducer.
+    """
+    all_prices = collect_hash_dataset_values(dataset, "price")
+    prices_1_to_100 = collect_hash_dataset_values(
+        dataset, "price", lambda fields: 1 <= int(fields["price"]) <= 100
+    )
+    prices_1_to_10 = collect_hash_dataset_values(
+        dataset, "price", lambda fields: 1 <= int(fields["price"]) <= 10
+    )
+    prices_1_to_5 = collect_hash_dataset_values(
+        dataset, "price", lambda fields: 1 <= int(fields["price"]) <= 5
+    )
+    ratings_1_to_100 = collect_hash_dataset_values(
+        dataset, "rating", lambda fields: 1 <= int(fields["price"]) <= 100
+    )
+    categories_in_range = collect_hash_dataset_values(
+        dataset, "category", lambda fields: 1 <= int(fields["price"]) <= 100
+    )
+    ratings_50_to_60 = collect_hash_dataset_values(
+        dataset, "rating", lambda fields: 50 <= int(fields["price"]) <= 60
+    )
+    prices_by_category = {
+        category: collect_hash_dataset_values(
+            dataset,
+            "price",
+            lambda fields, expected=category: fields["category"] == expected,
+        )
+        for category in {value.decode("utf-8") for value in categories_in_range}
+    }
+
+    # 1. Basic RANDOM_SAMPLE functionality
+    # Use APPLY to create a constant field for grouping all records together
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "5", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert_random_sample_matches_dataset(sample, all_prices, expected_size=5)
+    
+    # 2. RANDOM_SAMPLE with various sample sizes
+    # Sample size smaller than group size
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "10", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert_random_sample_matches_dataset(sample, prices_1_to_100, expected_size=10)
+
+    # Sample size exactly equal to the group size.
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 10]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "10", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert_random_sample_matches_dataset(
+        sample, prices_1_to_10, expected_size=10, exact_values=True
+    )
+    
+    # Sample size larger than group size
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 5]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "100", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert_random_sample_matches_dataset(
+        sample, prices_1_to_5, expected_size=5, exact_values=True
+    )
+    
+    # Sample size = 0 (empty array)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "0", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert len(sample) == 0  # Should be empty
+    
+    # 3. Multiple RANDOM_SAMPLE reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "2", "price", "rating",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "5", "AS", "price_sample",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@rating", "5", "AS", "rating_sample"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    assert b'price_sample' in row
+    assert b'rating_sample' in row
+    price_sample = row[b'price_sample']
+    rating_sample = row[b'rating_sample']
+    assert isinstance(price_sample, list)
+    assert isinstance(rating_sample, list)
+    assert len(price_sample) == 5
+    assert len(rating_sample) == 5
+    assert set(price_sample).issubset(set(prices_1_to_100))
+    assert_random_sample_matches_dataset(
+        rating_sample,
+        ratings_1_to_100,
+        expected_size=5,
+        normalize=lambda value: float(value),
+    )
+    # Samples should be independent (different values)
+    assert price_sample != rating_sample
+    
+    # 4. RANDOM_SAMPLE with GROUPBY operations
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "10", "AS", "sample"
+    )
+    assert result[0] == 2  # Two categories: electronics and books
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'sample' in row
+        sample = row[b'sample']
+        assert isinstance(sample, list)
+        assert len(sample) == 10  # Each group should have 10 samples
+        category = row[b'category'].decode("utf-8")
+        assert set(sample).issubset(set(prices_by_category[category]))
+    
+    # 5. RANDOM_SAMPLE with numeric fields
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@price", "5", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert_random_sample_matches_dataset(sample, prices_1_to_100, expected_size=5)
+    for val in sample:
+        float(val)  # Should be convertible to float
+    
+    # 6. RANDOM_SAMPLE with string fields
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "category",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@category", "5", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    assert_random_sample_matches_dataset(sample, categories_in_range, expected_size=5)
+    
+    # 7. RANDOM_SAMPLE with nil-skipping (sparsely populated field)
+    # Add documents without a rating field, then sample @rating — documents
+    # missing the field should be excluded from the sample.
+    client.execute_command(
+        "HSET", "product:no_rating_1", "price", "50", "category", "books"
+    )
+    client.execute_command(
+        "HSET", "product:no_rating_2", "price", "60", "category", "books"
+    )
+    time.sleep(0.5)  # Allow indexing
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[50 60]",
+        "LOAD", "1", "rating",
+        "APPLY", "1", "AS", "all",
+        "GROUPBY", "1", "@all",
+        "REDUCE", "RANDOM_SAMPLE", "2", "@rating", "10", "AS", "sample"
+    )
+    sample = extract_sample(result)
+    # Only docs with rating values should appear; the no-rating docs are skipped.
+    assert len(sample) <= len(ratings_50_to_60)
+    assert_random_sample_matches_dataset(
+        sample,
+        ratings_50_to_60,
+        normalize=lambda value: float(value),
+    )
+
 def validate_aggregate_complex_queries(client: Valkey):
     """
         Test complex FT.AGGREGATE queries with numeric and tag.
@@ -536,6 +819,157 @@ def validate_aggregate_complex_queries(client: Valkey):
     assert result[1][1] == b'406'
     assert result[1][3] == b'4060'
 
+    # 17. FIRST_VALUE reducer - simple mode (no BY clause)
+    # Note: Simple mode is non-deterministic as it depends on retrieval order
+    # We only verify that valid values are returned, not specific values
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "1", "@price", "AS", "first_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'first_price' in row
+        first_price = float(row[b'first_price'])
+        # Verify it's a valid price from the dataset (1-1000)
+        assert 1.0 <= first_price <= 1000.0
+        # Verify category matches expected values
+        if row[b'category'] == b'electronics':
+            # Electronics has odd prices (1, 3, 5, ..., 999)
+            assert int(first_price) % 2 == 1
+        else:
+            # Books has even prices (2, 4, 6, ..., 1000)
+            assert int(first_price) % 2 == 0
+
+    # 18. FIRST_VALUE reducer - sorted ASC mode (with BY clause)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "ASC", "AS", "price_with_min_rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'price_with_min_rating' in row
+        price_with_min_rating = float(row[b'price_with_min_rating'])
+        if row[b'category'] == b'electronics':
+            # Multiple electronics have the same minimum rating (1.0), so any of their prices is valid
+            valid_prices_for_min_rating = {1, 101, 201, 301, 401, 501, 601, 701, 801, 901}
+            assert price_with_min_rating in valid_prices_for_min_rating, \
+                f"Electronics price_with_min_rating should be one of {valid_prices_for_min_rating}, got {price_with_min_rating}"
+        else:
+            # Multiple books have the same minimum rating (2.0), so any of their prices is valid
+            valid_prices_for_min_rating = {2, 102, 202, 302, 402, 502, 602, 702, 802, 902}
+            assert price_with_min_rating in valid_prices_for_min_rating, \
+                f"Books price_with_min_rating should be one of {valid_prices_for_min_rating}, got {price_with_min_rating}"
+
+    # 19. FIRST_VALUE reducer - sorted DESC mode (with BY clause)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "DESC", "AS", "price_with_max_rating"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'price_with_max_rating' in row
+        price_with_max_rating = float(row[b'price_with_max_rating'])
+        if row[b'category'] == b'electronics':
+            # Multiple electronics have the same maximum rating (99.0), so any of their prices is valid
+            valid_prices_for_max_rating = {99, 199, 299, 399, 499, 599, 699, 799, 899, 999}
+            assert price_with_max_rating in valid_prices_for_max_rating, \
+                f"Electronics price_with_max_rating should be one of {valid_prices_for_max_rating}, got {price_with_max_rating}"
+        else:
+            # Multiple books have the same maximum rating (100.0), so any of their prices is valid
+            valid_prices_for_max_rating = {100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}
+            assert price_with_max_rating in valid_prices_for_max_rating, \
+                f"Books price_with_max_rating should be one of {valid_prices_for_max_rating}, got {price_with_max_rating}"
+
+    # 20. FIRST_VALUE reducer - multiple groups with independent results
+    # Note: Simple mode (first_price) is non-deterministic
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "1", "@price", "AS", "first_price",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "ASC", "AS", "price_min_rating",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@rating", "DESC", "AS", "price_max_rating",
+        "REDUCE", "COUNT", "0", "AS", "count"
+    )
+    assert result[0] == 2
+    
+    electronics_found = False
+    books_found = False
+    
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'category' in row
+        assert b'first_price' in row
+        assert b'price_min_rating' in row
+        assert b'price_max_rating' in row
+        assert b'count' in row
+        
+        category = row[b'category']
+        first_price = float(row[b'first_price'])
+        price_min_rating = float(row[b'price_min_rating'])
+        price_max_rating = float(row[b'price_max_rating'])
+        count = int(row[b'count'])
+        
+        if category == b'electronics':
+            electronics_found = True
+            # Simple mode is non-deterministic, just verify valid range
+            assert 1.0 <= first_price <= 1000.0, f"Electronics first_price out of range: {first_price}"
+            assert int(first_price) % 2 == 1, f"Electronics should have odd prices, got {first_price}"
+            # Sorted modes - multiple electronics have the same min/max rating, so any of their prices is valid
+            valid_prices_for_min_rating = {1, 101, 201, 301, 401, 501, 601, 701, 801, 901}
+            assert price_min_rating in valid_prices_for_min_rating, \
+                f"Electronics price_min_rating should be one of {valid_prices_for_min_rating}, got {price_min_rating}"
+            valid_prices_for_max_rating = {99, 199, 299, 399, 499, 599, 699, 799, 899, 999}
+            assert price_max_rating in valid_prices_for_max_rating, \
+                f"Electronics price_max_rating should be one of {valid_prices_for_max_rating}, got {price_max_rating}"
+            assert count == 500, f"Electronics count should be 500, got {count}"
+        elif category == b'books':
+            books_found = True
+            # Simple mode is non-deterministic, just verify valid range
+            assert 1.0 <= first_price <= 1000.0, f"Books first_price out of range: {first_price}"
+            assert int(first_price) % 2 == 0, f"Books should have even prices, got {first_price}"
+            # Sorted modes - multiple books have the same min/max rating, so any of their prices is valid
+            valid_prices_for_min_rating = {2, 102, 202, 302, 402, 502, 602, 702, 802, 902}
+            assert price_min_rating in valid_prices_for_min_rating, \
+                f"Books price_min_rating should be one of {valid_prices_for_min_rating}, got {price_min_rating}"
+            valid_prices_for_max_rating = {100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}
+            assert price_max_rating in valid_prices_for_max_rating, \
+                f"Books price_max_rating should be one of {valid_prices_for_max_rating}, got {price_max_rating}"
+            assert count == 500, f"Books count should be 500, got {count}"
+        else:
+            raise AssertionError(f"Unexpected category: {category}")
+    
+    assert electronics_found, "Electronics group not found in results"
+    assert books_found, "Books group not found in results"
+
+    # 21. FIRST_VALUE reducer - numeric field type handling
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "FIRST_VALUE", "4", "@price", "BY", "@price", "ASC", "AS", "min_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        min_price = float(row[b'min_price'])
+        if row[b'category'] == b'electronics':
+            assert min_price == 1.0, f"Electronics min_price should be 1.0, got {min_price}"
+        else:
+            assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -567,6 +1001,9 @@ class TestNonVector(ValkeySearchTestCaseBase):
         for doc in json_docs:
             assert client.execute_command(*doc) == b"OK"
         validate_aggregate_complex_queries(client)
+        # Test RANDOM_SAMPLE functionality
+        validate_random_sample_queries(client, aggregate_complex_hash_docs)
+        validate_random_sample_error_queries(client)
 
     def test_uningested_multi_field(self):
         """
@@ -604,6 +1041,32 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
+class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
+    """
+        A REDUCE with no AS clause auto-generates its output name, and which form
+        it generates is gated on search.emulate-release (see COMPATIBILITY.md).
+        debug-mode is required to set emulate-release above the module version.
+    """
+
+    def test_default_reducer_alias(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        for release, alias in (("1.2.1", b'COUNT_DISTINCT(@rating)'),
+                               ("1.3.0", b'__generated_aliascount_distinctrating')):
+            assert client.execute_command("CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.AGGREGATE", "products", "@price:[1 1000]",
+                "LOAD", "2", "rating", "category",
+                "GROUPBY", "1", "@category",
+                "REDUCE", "COUNT_DISTINCT", "1", "@rating"
+            )
+            assert result[0] >= 1
+            for i in range(1, len(result)):
+                row = dict(zip(result[i][::2], result[i][1::2]))
+                assert alias in row, f"{release}: expected {alias} in {list(row)}"
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):
@@ -637,6 +1100,9 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         for doc in aggregate_complex_json_docs:
             assert cluster_client.execute_command(*doc) == b"OK"
         validate_aggregate_complex_queries(cluster_client)
+        # Test RANDOM_SAMPLE functionality in cluster mode
+        validate_random_sample_queries(cluster_client, aggregate_complex_hash_docs)
+        validate_random_sample_error_queries(cluster_client)
     
     def test_max_search_keys_fetch_limited(self):
         """

@@ -38,14 +38,19 @@ while [ $# -gt 0 ]; do
     BUILD_CONFIG="debug"
     LOG_INFO "Testing in debug mode"
     ;;
+  --test-errors-stdout)
+    shift || true
+    ;;
   --asan)
     shift || true
     SAN_SUFFIX="-asan"
+    export SAN_BUILD="address"
     LOG_INFO "Assuming ASan build"
     ;;
   --tsan)
     shift || true
     SAN_SUFFIX="-tsan"
+    export SAN_BUILD="thread"
     LOG_INFO "Assuming TSan build"
     ;;
   --capture)

@@ -403,13 +403,90 @@ double ReferenceDot(const std::vector<T>& a, const std::vector<T>& b) {
   return sum;
 }
 
-// Both the kernel and the reference consume the same quantized inputs, so the
-// gap is float accumulation over `dim` terms, not the storage type's own
-// precision. This bound is far below the O(1) error a decode or lane bug
-// produces.
-double AccumulationTolerance(size_t dim, double reference) {
-  return std::max(1e-4, 1e-4 * std::abs(reference)) * static_cast<double>(dim) /
-         4.0;
+// Sum of the absolute term magnitudes of a dot product. This, not the result,
+// is what the rounding error scales with -- see AccumulationTolerance.
+template <typename T>
+double ReferenceAbsDot(const std::vector<T>& a, const std::vector<T>& b) {
+  double sum = 0.0;
+  for (size_t i = 0; i < a.size(); ++i) {
+    sum += std::abs(static_cast<double>(static_cast<float>(a[i])) *
+                    static_cast<double>(static_cast<float>(b[i])));
+  }
+  return sum;
+}
+
+// Unit roundoff: the largest relative error one rounded operation can
+// introduce, for the arithmetic the kernel actually performs.
+constexpr double kF32Roundoff = 0x1p-24;
+constexpr double kF16Roundoff = 0x1p-11;
+
+// The roundoff to expect from whichever kernel simsimd dispatches to for
+// storage type T. simsimd chooses at runtime from the host's CPU features, so
+// this has to be the worst of the kernels that host might select.
+//
+// FLOAT16 is the awkward one, because those kernels are not numerically
+// equivalent to each other. simsimd_dot_f16_sve and simsimd_l2sq_f16_sve
+// accumulate AND reduce in fp16 -- svfloat16_t accumulator, svaddv_f16 -- so on
+// an SVE host the returned distance is an fp16 value, carrying ~2^-11 of
+// relative error no matter how few terms were summed. The NEON f16 kernels, the
+// x86 Haswell kernels and the serial fallback all widen to f32 first. fp16 is
+// therefore the bound.
+//
+// BFLOAT16 is not awkward: every bf16 kernel simsimd ships (neon, haswell,
+// genoa, serial) widens to f32 exactly before accumulating. Asserting f32
+// roundoff here rather than bf16's 2^-8 keeps this test able to catch a future
+// kernel that accumulates in bf16.
+//
+// No primary definition: a new storage type is a compile error until someone
+// states which roundoff applies to it.
+template <typename T>
+struct KernelRoundoff;
+template <>
+struct KernelRoundoff<float> {
+  static constexpr double kDispatched = kF32Roundoff;
+};
+template <>
+struct KernelRoundoff<float16> {
+  static constexpr double kDispatched = kF16Roundoff;
+};
+template <>
+struct KernelRoundoff<bfloat16> {
+  static constexpr double kDispatched = kF32Roundoff;
+};
+
+// Bound on the error of a sum of `dim` rounded terms.
+//
+// Two things this scales with, and one it deliberately does not:
+//
+//   * the unit roundoff of the arithmetic the KERNEL performs. The previous
+//     version of this function assumed f32 unconditionally -- "the gap is float
+//     accumulation over `dim` terms, not the storage type's own precision" --
+//     which is false for FLOAT16 on any host with SVE or NEON fp16, and is why
+//     L2Fp16 and IpFp16 failed there while passing on x86.
+//
+//   * the sum of the ABSOLUTE term magnitudes, because that is what gets
+//     rounded. Scaling with the result is wrong wherever terms cancel:
+//     ExpectDenseIpMatches compares 1 - dot * magnitude, a number near 1 that
+//     says nothing about how large the summed products were.
+//
+//   * sqrt(dim), the usual growth of accumulated rounding when the individual
+//     roundings are uncorrelated. The serial kernels carry one scalar
+//     accumulator so their error really does grow with depth; the SIMD kernels
+//     keep several partial sums and grow far more slowly. sqrt(dim) covers
+//     both. The old bound instead grew linearly in `dim`, which made it
+//     tightest at the smallest dim -- so L2Fp16 failed at dim=3 and passed at
+//     dim=16 despite a four times larger absolute error.
+//
+// kSlack = 4 against a worst measured ratio of 0.90, taken over both metrics,
+// all three storage types, the dispatched and the serial kernels, and every dim
+// from 1 to 2048. A decode or lane bug still exceeds this bound by ~900x at the
+// dimensions these tests use.
+constexpr double kSlack = 4.0;
+
+double AccumulationTolerance(size_t dim, double sum_abs_terms,
+                             double unit_roundoff) {
+  return kSlack * unit_roundoff *
+         (1.0 + std::sqrt(static_cast<double>(dim))) * std::abs(sum_abs_terms);
 }
 
 template <typename T, typename SpaceT>
@@ -420,9 +497,12 @@ void ExpectDenseL2Matches(size_t dim) {
   const std::vector<T> b = Quantize<T>(raw_b);
 
   SpaceT space(dim);
+  // Every L2 term is a square, so the reference is already the sum of the
+  // absolute term magnitudes.
   const double reference = ReferenceL2Sqr(a, b);
   EXPECT_NEAR(CallDist(space, a.data(), b.data()), reference,
-              AccumulationTolerance(dim, reference))
+              AccumulationTolerance(dim, reference,
+                                    KernelRoundoff<T>::kDispatched))
       << "dim=" << dim;
 }
 
@@ -438,8 +518,12 @@ void ExpectDenseIpMatches(size_t dim) {
   // on; the hand-computed cases above all leave it at the identity.
   constexpr float kMagnitude = 0.375f;
   const double reference = 1.0 - ReferenceDot(a, b) * kMagnitude;
+  // The rounding happens inside the dot product; the space then scales it by
+  // kMagnitude and subtracts from 1. So the bound is on the dot's terms,
+  // carried through the same scale -- not on `reference`, which sits near 1.
   EXPECT_NEAR(CallDist(space, a.data(), b.data(), kMagnitude), reference,
-              AccumulationTolerance(dim, reference))
+              AccumulationTolerance(dim, ReferenceAbsDot(a, b) * kMagnitude,
+                                    KernelRoundoff<T>::kDispatched))
       << "dim=" << dim;
 }
 
@@ -531,7 +615,7 @@ TEST(SpaceDistanceSerialKernel, Bf16MatchesReferenceOnDenseVectors) {
                              dim, &l2);
     const double l2_reference = ReferenceL2Sqr(a, b);
     EXPECT_NEAR(static_cast<double>(l2), l2_reference,
-                AccumulationTolerance(dim, l2_reference))
+                AccumulationTolerance(dim, l2_reference, kF32Roundoff))
         << "dim=" << dim;
 
     simsimd_distance_t dot = 0.0;
@@ -540,7 +624,7 @@ TEST(SpaceDistanceSerialKernel, Bf16MatchesReferenceOnDenseVectors) {
                             dim, &dot);
     const double dot_reference = ReferenceDot(a, b);
     EXPECT_NEAR(static_cast<double>(dot), dot_reference,
-                AccumulationTolerance(dim, dot_reference))
+                AccumulationTolerance(dim, ReferenceAbsDot(a, b), kF32Roundoff))
         << "dim=" << dim;
   }
 }
@@ -556,7 +640,7 @@ TEST(SpaceDistanceSerialKernel, Fp16MatchesReferenceOnDenseVectors) {
                             dim, &l2);
     const double l2_reference = ReferenceL2Sqr(a, b);
     EXPECT_NEAR(static_cast<double>(l2), l2_reference,
-                AccumulationTolerance(dim, l2_reference))
+                AccumulationTolerance(dim, l2_reference, kF32Roundoff))
         << "dim=" << dim;
 
     simsimd_distance_t dot = 0.0;
@@ -565,7 +649,7 @@ TEST(SpaceDistanceSerialKernel, Fp16MatchesReferenceOnDenseVectors) {
                            dim, &dot);
     const double dot_reference = ReferenceDot(a, b);
     EXPECT_NEAR(static_cast<double>(dot), dot_reference,
-                AccumulationTolerance(dim, dot_reference))
+                AccumulationTolerance(dim, ReferenceAbsDot(a, b), kF32Roundoff))
         << "dim=" << dim;
   }
 }

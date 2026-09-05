@@ -970,6 +970,69 @@ def validate_aggregate_complex_queries(client: Valkey):
         else:
             assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
 
+    # 22. QUANTILE reducer - median (0.5)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 1
+    median = float(result[1][1])
+    assert 49.5 <= median <= 51.5, f"Expected median near 50.5, got {median}"
+
+    # 23. QUANTILE reducer - 99th percentile (0.99)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.99", "AS", "p99"
+    )
+    assert result[0] == 1
+    p99 = float(result[1][1])
+    assert 98.0 <= p99 <= 100.0, f"Expected p99 near 99, got {p99}"
+
+    # 24. Multiple QUANTILE reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "1", "price",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median",
+        "REDUCE", "QUANTILE", "2", "@price", "0.99", "AS", "p99",
+        "REDUCE", "QUANTILE", "2", "@price", "0.25", "AS", "q1"
+    )
+    assert result[0] == 1
+    row = dict(zip(result[1][::2], result[1][1::2]))
+    median = float(row[b'median'])
+    p99 = float(row[b'p99'])
+    q1 = float(row[b'q1'])
+    assert 49.5 <= median <= 51.5, f"Expected median near 50.5, got {median}"
+    assert 98.0 <= p99 <= 100.0, f"Expected p99 near 99, got {p99}"
+    assert 24.0 <= q1 <= 27.0, f"Expected q1 near 25.75, got {q1}"
+
+    # 25. QUANTILE with GROUPBY operations
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 100]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "QUANTILE", "2", "@price", "0.5", "AS", "median_price"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        assert b'median_price' in row
+        float(row[b'median_price'])
+
+    # 26. QUANTILE with numeric fields (rating)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@rating:[1 100]",
+        "LOAD", "1", "rating",
+        "GROUPBY", "0",
+        "REDUCE", "QUANTILE", "2", "@rating", "0.5", "AS", "median_rating"
+    )
+    assert result[0] == 1
+    float(result[1][1])
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):

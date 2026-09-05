@@ -213,6 +213,11 @@
                     "token": "FIRST_VALUE"
                   },
                   {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
+                  },
+                  {
                     "name": "RANDOM_SAMPLE",
                     "type": "pure-token",
                     "token": "RANDOM_SAMPLE"

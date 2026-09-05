@@ -35,7 +35,7 @@ class VectorFlat : public VectorType<T> {
  protected:
   // VectorType<T> is a dependent base, so inherited names are not found by
   // unqualified lookup. Re-declare the ones used below (including inside
-  // thread-safety annotations, which cannot be written as this->member).
+  // thread-safety annotations, which cannot be written as member).
   using VectorType<T>::resize_mutex_;
   using VectorType<T>::dimensions_;
   using VectorType<T>::normalize_;
@@ -68,7 +68,7 @@ class VectorFlat : public VectorType<T> {
   ~VectorFlat() override = default;
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {
-    return this->space_.get();
+    return space_.get();
   }
   int GetBlockSize() const { return block_size_; }
   // Lock-free search optimization: Reading capacity is thread-safe because

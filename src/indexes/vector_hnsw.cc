@@ -164,7 +164,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
       absl::ReaderMutexLock lock(&resize_mutex_);
 
       algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
-                                  normalize_, this->GetVectorDataType()),
+                                  normalize_, GetVectorDataType()),
                       internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
@@ -184,7 +184,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
 
 template <typename T>
 int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  this->EmitDataTypeInfo(ctx);
+  EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
@@ -289,7 +289,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
     algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
-                                normalize_, this->GetVectorDataType()),
+                                normalize_, GetVectorDataType()),
                     internal_id, /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
@@ -344,7 +344,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     CancelCondition cancel_condition(cancellation_token);
     QueryVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
                                                   GetVectorAllocator()),
-                          query.size(), normalize_, this->GetVectorDataType());
+                          query.size(), normalize_, GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -361,7 +361,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
 template <typename T>
 void VectorHNSW<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
-  this->SetProtoDataType(vector_index_proto);
+  SetProtoDataType(vector_index_proto);
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto hnsw_algorithm_proto = std::make_unique<data_model::HNSWAlgorithm>();
   hnsw_algorithm_proto->set_ef_construction(GetEfConstruction());

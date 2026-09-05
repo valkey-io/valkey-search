@@ -261,7 +261,7 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
-  this->SetProtoDataType(vector_index_proto);
+  SetProtoDataType(vector_index_proto);
 
   auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
   flat_algorithm_proto->set_block_size(block_size_);
@@ -271,7 +271,7 @@ void VectorFlat<T>::ToProtoImpl(
 
 template <typename T>
 int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  this->EmitDataTypeInfo(ctx);
+  EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   ValkeyModule_ReplyWithArray(ctx, 4);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");

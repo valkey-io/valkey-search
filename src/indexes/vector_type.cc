@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -119,6 +119,13 @@ void VectorType<T>::EmitDataTypeInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
   // LookupKeyByValue returns a string_view, whose data() is not guaranteed
   // NUL-terminated; materialize it before handing it to the C API.
+  //
+  // Review suggested ValkeyModule_ReplyWithStringBuffer here to avoid the
+  // allocation. It cannot be used: it emits a RESP bulk string where
+  // ReplyWithSimpleString emits a simple string, so FT.INFO would report
+  // data_type as $7\r\nFLOAT32 rather than +FLOAT32. That is an observable
+  // protocol change for every client, which is not worth one small allocation
+  // on an administrative command.
   ValkeyModule_ReplyWithSimpleString(
       ctx, std::string(LookupKeyByValue(*kVectorDataTypeByStr,
                                         VectorDataTypeEnumFor<T>()))
@@ -138,23 +145,34 @@ vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringRecord(
   if (absl::ConsumePrefix(&record_str, "[")) {
     absl::ConsumeSuffix(&record_str, "]");
   }
-  std::vector<std::string> float_strings =
-      absl::StrSplit(record_str, ',', absl::SkipWhitespace());
   std::string binary_string;
-  binary_string.reserve(float_strings.size() * sizeof(T));
-  for (const auto &float_str : float_strings) {
+  // The payload is expected to hold `dimensions_` elements. Reserving that up
+  // front means the common case never reallocates, and costs nothing when the
+  // element count turns out to differ.
+  binary_string.reserve(dimensions_ * sizeof(T));
+  // Iterate the splitter directly rather than collecting into a
+  // std::vector<std::string>: absl::StrSplit yields string_views into the
+  // record, so no per-element buffer is allocated.
+  for (absl::string_view element :
+       absl::StrSplit(record_str, ',', absl::SkipWhitespace())) {
     float value;
-    if (!absl::SimpleAtof(float_str, &value)) {
+    if (!absl::SimpleAtof(element, &value)) {
       return nullptr;
     }
+    // Append the storage-typed bytes in place. Building a temporary
+    // std::string per element allocated once per dimension, which for a
+    // 1536-dimension vector was 1536 allocations per ingested record.
     if constexpr (std::is_same_v<T, float>) {
-      binary_string += std::string((char *)&value, sizeof(T));
+      binary_string.append(reinterpret_cast<const char *>(&value),
+                           sizeof(float));
     } else if constexpr (std::is_same_v<T, float16>) {
-      float16 fp16_value = static_cast<float16>(value);
-      binary_string += std::string((char *)&fp16_value, sizeof(float16));
+      const float16 fp16_value = static_cast<float16>(value);
+      binary_string.append(reinterpret_cast<const char *>(&fp16_value),
+                           sizeof(float16));
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-      bfloat16 bf16_value = float_to_bfloat16(value);
-      binary_string += std::string((char *)&bf16_value, sizeof(bfloat16));
+      const bfloat16 bf16_value = float_to_bfloat16(value);
+      binary_string.append(reinterpret_cast<const char *>(&bf16_value),
+                           sizeof(bfloat16));
     } else {
       static_assert(sizeof(T) == 0,
                     "NormalizeStringRecord not yet wired for this T");

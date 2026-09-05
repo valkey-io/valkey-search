@@ -58,7 +58,7 @@ class VectorHNSW : public VectorType<T> {
  protected:
   // VectorType<T> is a dependent base, so inherited names are not found by
   // unqualified lookup. Re-declare the ones used below (including inside
-  // thread-safety annotations, which cannot be written as this->member).
+  // thread-safety annotations, which cannot be written as member).
   using VectorType<T>::resize_mutex_;
   using VectorType<T>::dimensions_;
   using VectorType<T>::normalize_;
@@ -93,7 +93,7 @@ class VectorHNSW : public VectorType<T> {
   ~VectorHNSW() override = default;
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {
-    return this->space_.get();
+    return space_.get();
   }
 
   size_t GetCapacity() const override ABSL_NO_THREAD_SAFETY_ANALYSIS {

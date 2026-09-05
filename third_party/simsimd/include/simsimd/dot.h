@@ -480,6 +480,38 @@ SIMSIMD_PUBLIC void simsimd_dot_bf16_neon(simsimd_bf16_t const* a, simsimd_bf16_
                                           simsimd_distance_t* result) {
     float32x4_t ab_high_vec = vdupq_n_f32(0), ab_low_vec = vdupq_n_f32(0);
     simsimd_size_t i = 0;
+    // VALKEYSEARCH BEGIN
+    // Upstream keeps a single accumulator pair, so the loop is limited by the
+    // loop-carried latency of BFMLALB/BFMLALT (~2 cycles per dependent FMA on
+    // Neoverse V1) rather than by issue width: 2 chains * 4 MACs / 2 cycles =
+    // 4 elements/cycle. Three extra accumulator pairs give the out-of-order
+    // engine 8 independent chains and take the same loop to ~9.7 elements per
+    // cycle. Accumulation stays in f32 -- BFMLAL widens bf16 to f32 exactly and
+    // accumulates there, exactly as before; only the summation order changes.
+    float32x4_t ab_high_vec1 = vdupq_n_f32(0), ab_low_vec1 = vdupq_n_f32(0);
+    float32x4_t ab_high_vec2 = vdupq_n_f32(0), ab_low_vec2 = vdupq_n_f32(0);
+    float32x4_t ab_high_vec3 = vdupq_n_f32(0), ab_low_vec3 = vdupq_n_f32(0);
+    for (; i + 32 <= n; i += 32) {
+        bfloat16x8_t a0 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i);
+        bfloat16x8_t b0 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i);
+        bfloat16x8_t a1 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i + 8);
+        bfloat16x8_t b1 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i + 8);
+        bfloat16x8_t a2 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i + 16);
+        bfloat16x8_t b2 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i + 16);
+        bfloat16x8_t a3 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i + 24);
+        bfloat16x8_t b3 = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i + 24);
+        ab_high_vec = vbfmlaltq_f32(ab_high_vec, a0, b0);
+        ab_low_vec = vbfmlalbq_f32(ab_low_vec, a0, b0);
+        ab_high_vec1 = vbfmlaltq_f32(ab_high_vec1, a1, b1);
+        ab_low_vec1 = vbfmlalbq_f32(ab_low_vec1, a1, b1);
+        ab_high_vec2 = vbfmlaltq_f32(ab_high_vec2, a2, b2);
+        ab_low_vec2 = vbfmlalbq_f32(ab_low_vec2, a2, b2);
+        ab_high_vec3 = vbfmlaltq_f32(ab_high_vec3, a3, b3);
+        ab_low_vec3 = vbfmlalbq_f32(ab_low_vec3, a3, b3);
+    }
+    ab_high_vec = vaddq_f32(vaddq_f32(ab_high_vec, ab_high_vec1), vaddq_f32(ab_high_vec2, ab_high_vec3));
+    ab_low_vec = vaddq_f32(vaddq_f32(ab_low_vec, ab_low_vec1), vaddq_f32(ab_low_vec2, ab_low_vec3));
+    // VALKEYSEARCH END
     for (; i + 8 <= n; i += 8) {
         bfloat16x8_t a_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i);
         bfloat16x8_t b_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i);

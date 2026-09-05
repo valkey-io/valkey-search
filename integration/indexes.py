@@ -19,6 +19,50 @@ class KeyDataType(Enum):
 def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
+def float16_to_bytes(flt: list[float]) -> bytes:
+    return struct.pack(f"<{len(flt)}e", *flt)
+
+def bfloat16_to_bytes(flt: list[float]) -> bytes:
+    # FP32 -> BF16 with round-to-nearest, ties-to-even (IEEE 754 default).
+    # Mirrors the C++ bfloat16(float) constructor exactly so wire bytes match
+    # the engine's encoder, and matches RediSearch's BF16 rounding so the
+    # compatibility-test pickle generated against redis-stack-server lines up.
+    fp32 = struct.pack(f"<{len(flt)}f", *flt)
+    out = bytearray()
+    for i in range(len(flt)):
+        u = int.from_bytes(fp32[i * 4 : i * 4 + 4], "little")
+        rounding_bias = 0x7FFF + ((u >> 16) & 1)
+        u = (u + rounding_bias) & 0xFFFFFFFF
+        out += u.to_bytes(4, "little")[2:4]
+    return bytes(out)
+
+
+# Inverses of the encoders above. Used by tests that read a vector back out of
+# the engine (e.g. via FT.SEARCH ... RETURN) and need to compare it against
+# what was written, at the storage type's own precision.
+def bytes_to_float(raw: bytes) -> list[float]:
+    return list(struct.unpack(f"<{len(raw) // 4}f", raw))
+
+def bytes_to_float16(raw: bytes) -> list[float]:
+    return list(struct.unpack(f"<{len(raw) // 2}e", raw))
+
+def bytes_to_bfloat16(raw: bytes) -> list[float]:
+    out = []
+    for i in range(0, len(raw), 2):
+        # BF16 is the top half of an FP32; widening is a pure left shift.
+        fp32 = b"\x00\x00" + raw[i : i + 2]
+        out.append(struct.unpack("<f", fp32)[0])
+    return out
+
+# Quantize a Python float list through a storage type and back, giving the
+# exact values the engine holds after ingest.
+def quantize_to(values: list[float], data_type: str) -> list[float]:
+    if data_type == "FLOAT16":
+        return bytes_to_float16(float16_to_bytes(values))
+    if data_type == "BFLOAT16":
+        return bytes_to_bfloat16(bfloat16_to_bytes(values))
+    return bytes_to_float(float_to_bytes(values))
+
 
 class Field:
     name: str
@@ -54,6 +98,7 @@ class Vector(Field):
         ef: Union[int, None] = None,
         efc: Union[int, None] = None,
         initialcap: Union[int, None] = None,
+        data_type: str = "FLOAT32",
     ):
         super().__init__(name, alias)
         self.dim = dim
@@ -63,6 +108,7 @@ class Vector(Field):
         self.ef = ef
         self.efc = efc
         self.initialcap = initialcap
+        self.data_type = data_type
 
     def create(self, data_type: KeyDataType):
         extra: list[str] = []
@@ -82,7 +128,7 @@ class Vector(Field):
                 self.type,
                 str(6 + len(extra)),
                 "TYPE",
-                "FLOAT32",
+                self.data_type,
                 "DIM",
                 str(self.dim),
                 "DISTANCE_METRIC",
@@ -94,6 +140,10 @@ class Vector(Field):
     def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
         if type == KeyDataType.HASH:
+            if self.data_type == "FLOAT16":
+                return float16_to_bytes(data)
+            if self.data_type == "BFLOAT16":
+                return bfloat16_to_bytes(data)
             return float_to_bytes(data)
         else:
             return data

@@ -29,7 +29,6 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_join.h"
 #include "src/attribute_data_type.h"
 #include "src/expr/value.h"
 #include "src/indexes/index_base.h"
@@ -45,8 +44,6 @@
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/universal_set_fetcher.h"
 #include "src/indexes/vector_base.h"
-#include "src/indexes/vector_flat.h"
-#include "src/indexes/vector_hnsw.h"
 #include "src/metrics.h"
 #include "src/query/content_resolution.h"
 #include "src/query/planner.h"
@@ -150,30 +147,28 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
         text_index_schema, parameters.filter_parse_results.query_operations);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
-  if (vector_index->GetIndexerType() == indexes::IndexerType::kHNSW) {
-    auto vector_hnsw = dynamic_cast<indexes::VectorHNSW<float> *>(vector_index);
-
-    auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_hnsw->Search(parameters.query, parameters.k,
-                                   parameters.cancellation_token,
-                                   std::move(inline_filter), parameters.ef,
-                                   parameters.enable_partial_results);
-    Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
-        std::move(latency_sample));
-    return res;
+  // Search dispatches virtually on VectorBase, so neither the storage type
+  // (float / float16 / bfloat16) nor the ANN algorithm appears here. Only the
+  // latency metric still depends on the algorithm.
+  auto latency_sample = SAMPLE_EVERY_N(100);
+  auto res = vector_index->Search(parameters.query, parameters.k,
+                                  parameters.cancellation_token,
+                                  std::move(inline_filter), parameters.ef,
+                                  parameters.enable_partial_results);
+  switch (vector_index->GetIndexerType()) {
+    case indexes::IndexerType::kHNSW:
+      Metrics::GetStats().hnsw_vector_index_search_latency.SubmitSample(
+          std::move(latency_sample));
+      break;
+    case indexes::IndexerType::kFlat:
+      Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
+          std::move(latency_sample));
+      break;
+    default:
+      CHECK(false) << "Unsupported indexer type: "
+                   << (int)vector_index->GetIndexerType();
   }
-  if (vector_index->GetIndexerType() == indexes::IndexerType::kFlat) {
-    auto vector_flat = dynamic_cast<indexes::VectorFlat<float> *>(vector_index);
-    auto latency_sample = SAMPLE_EVERY_N(100);
-    auto res = vector_flat->Search(
-        parameters.query, parameters.k, parameters.cancellation_token,
-        std::move(inline_filter), parameters.enable_partial_results);
-    Metrics::GetStats().flat_vector_index_search_latency.SubmitSample(
-        std::move(latency_sample));
-    return res;
-  }
-  CHECK(false) << "Unsupported indexer type: "
-               << (int)vector_index->GetIndexerType();
+  return res;
 }
 
 void AppendQueue(
@@ -497,8 +492,7 @@ CalcBestMatchingPrefilteredKeys(
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
     query_magnitude = indexes::CalcReciprocalMagnitude(
-        reinterpret_cast<const float *>(parameters.query.data()),
-        parameters.query.size() / sizeof(float));
+        parameters.query, vector_index->GetVectorDataType());
   }
   auto results_appender =
       [&results, &parameters, vector_index, query_magnitude](
@@ -512,21 +506,6 @@ CalcBestMatchingPrefilteredKeys(
                           std::move(results_appender), qualified_entries,
                           /*stop_on_fetch_limit=*/false);
   return results;
-}
-
-std::string StringFormatVector(std::vector<char> vector) {
-  if (vector.size() % sizeof(float) != 0) {
-    return {vector.data(), vector.size()};
-  }
-
-  std::vector<std::string> float_strings;
-  for (size_t i = 0; i < vector.size(); i += sizeof(float)) {
-    float value;
-    std::memcpy(&value, vector.data() + i, sizeof(float));
-    float_strings.push_back(absl::StrCat(value));
-  }
-
-  return absl::StrCat("[", absl::StrJoin(float_strings, ","), "]");
 }
 
 absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
@@ -586,20 +565,38 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kVector:
         case indexes::IndexerType::kHNSW:
         case indexes::IndexerType::kFlat: {
+          const auto attribute_data_type =
+              parameters.index_schema->GetAttributeDataType().ToProto();
+          if (attribute_data_type ==
+              data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
+            // RediSearch materializes a JSON vector attribute from the
+            // document, so the caller gets back exactly what they stored. The
+            // index only holds a copy converted to the attribute's storage
+            // type, which for FLOAT16/BFLOAT16 is lossy -- serving it here
+            // would answer a different question than RediSearch does. Fall
+            // through to the main-thread key fetch, the same way a text
+            // attribute does.
+            any_value_missing = true;
+            break;
+          }
+          // Serving the indexed copy is only correct when it is byte-identical
+          // to what the caller stored, which holds for HASH alone: there the
+          // stored bytes are the blob the caller supplied. Assert rather than
+          // assume, so a third attribute data type cannot silently inherit the
+          // HASH path and start handing back a converted vector.
+          CHECK(attribute_data_type ==
+                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
+              << "Unsupported attribute data type for vector content "
+                 "materialization: "
+              << (int)attribute_data_type;
           const auto *vector_index =
               dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
           auto vector =
               vector_index->GetVectorDuringSearch(neighbor.external_id);
           if (vector.ok()) {
-            if (parameters.index_schema->GetAttributeDataType().ToProto() ==
-                data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
-              attribute_value = vmsdk::MakeUniqueValkeyString(
-                  StringFormatVector(vector.value()));
-            } else {
-              attribute_value =
-                  vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
-                      nullptr, vector->data(), vector->size()));
-            }
+            attribute_value =
+                vmsdk::UniqueValkeyString(ValkeyModule_CreateString(
+                    nullptr, vector->data(), vector->size()));
           } else {
             VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
                 << "Failed to get vector value during fetching through index "

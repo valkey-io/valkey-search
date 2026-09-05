@@ -285,6 +285,69 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             # Ensure we reset the control variable even if asserts fail
             client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
 
+class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
+    """A HASH field may not be indexed as two different vector data types.
+
+    The bytes in a hash field are interpreted according to the index's declared
+    TYPE, and the 16 bits of a FLOAT16 element and of a BFLOAT16 element are
+    unrelated values. Two indexes reading the same field at different types
+    cannot both be right, so FT.CREATE rejects the second one when their key
+    prefixes overlap.
+    """
+
+    def _create(self, client: Valkey, name: str, prefix, field: str,
+                vtype: str, dim: int = 3) -> str:
+        args = ["FT.CREATE", name, "ON", "HASH"]
+        if prefix is not None:
+            args += ["PREFIX", "1", prefix]
+        args += ["SCHEMA", field, "VECTOR", "FLAT", "6", "DIM", str(dim),
+                 "TYPE", vtype, "DISTANCE_METRIC", "L2"]
+        try:
+            client.execute_command(*args)
+            return ""
+        except Exception as e:  # noqa: BLE001 - surfacing the server message
+            return str(e)
+
+    @pytest.mark.parametrize(
+        "prefix_a,prefix_b",
+        [
+            ("k:", "k:"),        # identical prefixes
+            ("doc:", "doc:x"),   # one nested inside the other
+            ("p:", None),        # no PREFIX means every key
+        ],
+    )
+    def test_conflicting_types_rejected(self, prefix_a, prefix_b):
+        client: Valkey = self.server.get_new_client()
+        assert self._create(client, "first", prefix_a, "v", "FLOAT16") == ""
+        err = self._create(client, "second", prefix_b, "v", "BFLOAT16")
+        assert err, "second index should have been rejected"
+        assert "FLOAT16" in err and "first" in err, (
+            f"error should name the conflicting type and index: {err}"
+        )
+        # The rejected schema must not have been partially created.
+        names = client.execute_command("FT._LIST")
+        assert b"second" not in names, f"rejected index was still created: {names}"
+
+    @pytest.mark.parametrize(
+        "desc,prefix_a,field_a,type_a,prefix_b,field_b,type_b",
+        [
+            # Same type is fine -- e.g. an HNSW and a FLAT index over one field.
+            ("same type", "q:", "v", "FLOAT16", "q:", "v", "FLOAT16"),
+            # Different fields never conflict.
+            ("different fields", "r:", "v1", "FLOAT16", "r:", "v2", "BFLOAT16"),
+            # Disjoint prefixes can never share a key.
+            ("disjoint prefixes", "s:", "v", "FLOAT16", "t:", "v", "BFLOAT16"),
+        ],
+    )
+    def test_non_conflicting_combinations_allowed(
+        self, desc, prefix_a, field_a, type_a, prefix_b, field_b, type_b
+    ):
+        client: Valkey = self.server.get_new_client()
+        assert self._create(client, "one", prefix_a, field_a, type_a) == ""
+        err = self._create(client, "two", prefix_b, field_b, type_b)
+        assert err == "", f"{desc} should be allowed but was rejected: {err}"
+
+
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
     """
     Integration tests comparing Valkey memory consumption when vector memory sharing is OFF vs ON.

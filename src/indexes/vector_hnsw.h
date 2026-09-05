@@ -19,7 +19,10 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswalg.h"
@@ -30,8 +33,13 @@ namespace valkey_search::indexes {
 
 class QueryVector {
  public:
+  // `data_type` selects the element width used when normalizing; QueryVector
+  // is shared across all VectorHNSW<T> instantiations, so it cannot take the
+  // storage type as a template parameter.
   QueryVector(const std::shared_ptr<const VectorRecord> &vector_record,
-              size_t vector_record_size, bool normalize);
+              size_t vector_record_size, bool normalize,
+              data_model::VectorDataType data_type =
+                  data_model::VECTOR_DATA_TYPE_FLOAT32);
   const char *GetRawVector() const { return vector_record_->GetRawVector(); }
   float GetReciprocalMagnitude() const {
     return vector_record_->GetReciprocalMagnitude();
@@ -48,10 +56,29 @@ class QueryVector {
 };
 
 template <typename T>
-class VectorHNSW : public VectorBase {
+class VectorHNSW : public VectorType<T> {
+ protected:
+  // VectorType<T> is a dependent base, so inherited names are not found by
+  // unqualified lookup. Re-declare the ones used below (including inside
+  // thread-safety annotations, which cannot be written as member).
+  using VectorType<T>::resize_mutex_;
+  using VectorType<T>::dimensions_;
+  using VectorType<T>::normalize_;
+  using VectorType<T>::space_;
+  using VectorType<T>::CreateReply;
+  using VectorType<T>::GetCapacity;
+  using VectorType<T>::GetDataTypeSize;
+  using VectorType<T>::GetVectorAllocator;
+  using VectorType<T>::GetVectorDataSize;
+  using VectorType<T>::GetVectorDataType;
+  using VectorType<T>::IsValidSizeVector;
+  using VectorType<T>::EmitDataTypeInfo;
+  using VectorType<T>::SetProtoDataType;
+  using VectorType<T>::Init;
+
  public:
   using HNSWIndex =
-      hnswlib::HierarchicalNSW<T, QueryVector,
+      hnswlib::HierarchicalNSW<float, QueryVector,
                                std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
@@ -66,7 +93,6 @@ class VectorHNSW : public VectorBase {
       SupplementalContentChunkIter &&iter,
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
-  size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {
     return space_.get();
@@ -90,12 +116,14 @@ class VectorHNSW : public VectorBase {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
+  // Defaults must match VectorBase::Search exactly -- see the note there.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<size_t> ef_runtime = std::nullopt,
-      bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      bool enable_partial_results = false) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -116,9 +144,9 @@ class VectorHNSW : public VectorBase {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  T ComputeDistance(absl::string_view query, const VectorRecord *vector_record,
-                    float query_magnitude) const override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  float ComputeDistance(
+      absl::string_view query, const VectorRecord *vector_record,
+      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPointLockFree(internal_id);
@@ -148,7 +176,6 @@ class VectorHNSW : public VectorBase {
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_);
 
   std::unique_ptr<HNSWIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
 };
 
 }  // namespace valkey_search::indexes

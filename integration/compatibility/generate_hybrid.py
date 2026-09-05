@@ -3,7 +3,12 @@
 FT.HYBRID does not exist in the `redis/redis-stack-server` image the other
 generators use (its RediSearch is 2.x); the command was added in the Redis 8.4
 query engine. This generator therefore runs against the `redis:8` image, which
-carries a query engine new enough to answer FT.HYBRID.
+carries a query engine new enough to answer FT.HYBRID. That override is
+temporary -- see TODO(reference-image) on the class below.
+
+The LOAD clause is swept separately and every one of those answers is recorded
+`xfail`: Valkey does not implement LOAD for FT.HYBRID yet. See TODO(load) on
+test_load_clause, and integration/compatibility/unsupported_tests.md.
 
 The corpus is `hybrid text` (see data_sets.py): a text corpus with a spread of
 term frequency, document frequency and document length, plus a vector field
@@ -125,6 +130,11 @@ LINEAR_COMBINES = [
 NON_BINDING_WINDOW = "100"   # > corpus size, so WINDOW never binds
 PINNED_LIMIT = ("0", "10")
 
+# The LOAD clause every other sweep pins. `LOAD *` is the only form Valkey
+# currently honors; see test_load_clause and unsupported_tests.md.
+LOAD_ALL = ("LOAD", "*")
+NO_LOAD = ()
+
 # (knn_count, knn_args) for the VSIM clause. The count is the number of
 # arguments in the KNN block. An explicit KNN block is always emitted: the
 # Valkey parser requires one, while Redis merely defaults it, so spelling it
@@ -140,7 +150,11 @@ KNN_CLAUSES = [
 @pytest.mark.parametrize("key_type", ["hash", "json"])
 class TestHybridCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "hybrid-answers.pickle.gz"
-    # FT.HYBRID needs the Redis 8.4+ query engine; see the module docstring.
+    # TODO(reference-image): temporary. FT.HYBRID needs the Redis 8.4+ query
+    # engine, which redis/redis-stack-server does not have. A separate PR moves
+    # BaseCompatibilityTest.DOCKER_IMAGE to redis:latest for every generator;
+    # once that lands this override and CONTAINER_NAME can both be dropped and
+    # this class can inherit the shared image again.
     DOCKER_IMAGE = "redis:8"
     CONTAINER_NAME = "Generate-hybrid"
 
@@ -178,14 +192,18 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         vector_score_as=None,
         window=NON_BINDING_WINDOW,
         limit=PINNED_LIMIT,
+        load=LOAD_ALL,
         tail=(),
         excluded=False,
+        xfail=False,
     ):
         """Issue one FT.HYBRID command and record the reference answer.
 
-        `LOAD *` is emitted on every command: Redis returns only the key and
-        the fused score without it, so loading everything is what makes the two
-        engines' record shapes comparable at all.
+        `LOAD *` is the default because it is the one LOAD form Valkey handles
+        the same way Redis does; every other form is swept in test_load_clause
+        below, marked xfail. Without any LOAD, Redis returns only the key and
+        the score aliases, so `LOAD *` is what makes the two engines' record
+        shapes comparable at all.
 
         Every score alias ends in `score`, which is what makes
         compatibility_test.compare_row() compare it as a float rather than
@@ -209,7 +227,7 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             "COMBINE", method, str(len(options) + 2),
             *options, "YIELD_SCORE_AS", "hybrid_score",
         ]
-        cmd += ["LOAD", "*"]
+        cmd += list(load)
         # Pipeline stages first, then LIMIT. An explicit LIMIT is a positional
         # stage on both engines, so writing it last is what makes `GROUPBY` see
         # the whole fused set rather than only the first page.
@@ -222,8 +240,10 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         ]
         if excluded:
             self.record_excluded(cmd)
-        else:
-            self.execute_command(cmd)
+            return
+        self.execute_command(cmd)
+        if xfail:
+            self.answers[-1]["xfail"] = True
 
     # -----------------------------------------------------------------
     # The SEARCH arm: does a BM25STD score computed over this corpus reach
@@ -281,6 +301,67 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for vector in QUERY_VECTORS:
             self.hybrid(
                 key_type, "@title:alpha", vector=vector, vector_score_as="vector_score"
+            )
+
+    # -----------------------------------------------------------------
+    # The LOAD clause.
+    #
+    # TODO(load): every answer below is recorded `xfail`. Valkey does not yet
+    # implement LOAD for FT.HYBRID -- it ignores the clause and returns every
+    # schema field (for a JSON index, the whole document under `$`) whatever
+    # the caller asked for. Redis honors it. A separate PR revises LOAD
+    # handling across the aggregate pipeline; once that lands and FT.HYBRID
+    # picks it up, these should start matching, the run will report XPASS, and
+    # the `xfail=True` here plus the FT.HYBRID section of
+    # unsupported_tests.md should both come off.
+    #
+    # The forms are swept now, rather than after the fix, so that the shape of
+    # the gap is recorded against a real Redis answer and the fix has something
+    # to be measured against.
+    # -----------------------------------------------------------------
+
+    def _load_cases(self, key_type):
+        """(label, load-clause tokens, trailing stages) for the LOAD sweep."""
+        cases = [
+            # No LOAD at all: Redis replies with the key and the score
+            # aliases only.
+            ("none", NO_LOAD, []),
+            # Single field, and a subset of fields.
+            ("one-field", ["LOAD", "1", "@price"], []),
+            ("two-fields", ["LOAD", "2", "@price", "@color"], []),
+            # The document key is loadable by name.
+            ("key", ["LOAD", "1", "@__key"], []),
+            # AS renames. The count covers the AS and the alias too.
+            ("rename", ["LOAD", "3", "@price", "AS", "cost"], []),
+            ("rename-text", ["LOAD", "3", "@title", "AS", "heading"], []),
+            ("rename-plus-field",
+             ["LOAD", "4", "@price", "AS", "cost", "@color"], []),
+            # A rename has to be visible to the stages that follow it.
+            ("rename-then-sortby", ["LOAD", "3", "@price", "AS", "cost"],
+             ["SORTBY", "2", "@cost", "ASC"]),
+            ("rename-then-apply", ["LOAD", "3", "@price", "AS", "cost"],
+             ["APPLY", "@cost * 2", "AS", "doubled"]),
+            # A loaded field has to be visible to a FILTER. Valkey currently
+            # returns an empty result here rather than an error, which is the
+            # worst shape this gap takes.
+            ("load-then-filter", ["LOAD", "1", "@price"],
+             ["FILTER", "@price > 20"]),
+        ]
+        if key_type == "json":
+            # JSON paths are a second spelling of the same clause; Redis names
+            # the loaded column by the path unless AS renames it.
+            cases += [
+                ("json-path", ["LOAD", "1", "$.price"], []),
+                ("json-path-rename",
+                 ["LOAD", "3", "$.price", "AS", "cost"], []),
+            ]
+        return cases
+
+    def test_load_clause(self, key_type):
+        self.setup_data(key_type)
+        for _label, load, tail in self._load_cases(key_type):
+            self.hybrid(
+                key_type, "@title:alpha", load=load, tail=tail, xfail=True,
             )
 
     # -----------------------------------------------------------------

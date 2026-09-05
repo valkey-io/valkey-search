@@ -1,6 +1,21 @@
 # Unsupported Tests
 
-This is the list of all the unsupported tests in text-search compatibility tests.
+This is the list of every compatibility case that is not compared against the
+Redis reference answer, and why.
+
+Two markers are used, and they mean different things:
+
+- **excluded** — the command is still run against Valkey as a no-crash check,
+  but no answer is recorded and nothing is compared. Used where the two engines
+  differ by design, or where the difference lives outside the feature under
+  test.
+- **xfail** — the reference answer *is* recorded and the comparison *is* run;
+  a mismatch is the documented state of an open gap and keeps the suite green.
+  If one starts matching, the run prints a loud `XPASS` banner: the gap has
+  been closed, and both the marker and the entry here should be removed.
+
+Sections 1-4 cover the text-search suite (`generate_text.py`); section 5 covers
+the FT.HYBRID suite (`generate_hybrid.py`).
 
 ## 1. Exact Phrase Query
 
@@ -79,3 +94,62 @@ Some queries are excluded due to different behavior in escaped character search.
       2) "{\"body\":\"black\\\\,white\"}"
    ```
 
+## 5. FT.HYBRID
+
+### 5.1. The LOAD clause — TODO, marked `xfail`
+
+**Status:** open. Every answer in `test_load_clause` is recorded `xfail`.
+
+Valkey does not implement the `LOAD` clause for FT.HYBRID. It ignores whatever
+the caller asked for and returns every schema field — for a JSON index, the
+whole document under `$`. Redis honors the clause. `LOAD *` is the one form the
+two agree on, and it is what every other sweep in the suite pins.
+
+The swept forms and what each currently does:
+
+| Form | Redis | Valkey |
+| --- | --- | --- |
+| *(no LOAD)* | key + score aliases only | every schema field |
+| `LOAD 1 @price` | just `price` | every schema field |
+| `LOAD 2 @price @color` | just those two | every schema field |
+| `LOAD 1 @__key` | the document key | every schema field, no key |
+| `LOAD 3 @price AS cost` | `price` renamed to `cost` | every schema field, no `cost` |
+| `LOAD 3 @price AS cost SORTBY 2 @cost ASC` | sorts on the rename | error: field `cost` does not exist |
+| `LOAD 3 @price AS cost APPLY @cost * 2 AS doubled` | applies over the rename | error: field `cost` does not exist |
+| `LOAD 1 @price FILTER @price > 20` | filters on the loaded field | **empty result** |
+| `LOAD 1 $.price` (JSON) | column named `$.price` | whole document under `$` |
+| `LOAD 3 $.price AS cost` (JSON) | `cost` | whole document under `$` |
+
+The `FILTER` row is the worst shape this takes: no error, just a silently empty
+result.
+
+**Plan.** A separate PR revises `LOAD` handling across the aggregate pipeline;
+FT.HYBRID should be able to reuse it rather than growing its own. Once that
+lands, these answers should start matching, the run will report `XPASS`, and
+the `xfail=True` in `generate_hybrid.py::test_load_clause` and this section
+should both be removed. The forms are swept now, ahead of the fix, so the shape
+of the gap is recorded against a real Redis answer and the fix has something to
+be measured against.
+
+### 5.2. Field references under `LOAD *` on a JSON index — `excluded`
+
+**Status:** open, tracked outside this suite.
+
+Naming an indexed field in a pipeline stage — `GROUPBY 1 @color`,
+`SORTBY 2 @price ASC` — does not resolve under `LOAD *` on a JSON index,
+because the document arrives as a single `$` column. This is an FT.AGGREGATE
+limitation rather than an FT.HYBRID one: the equivalent FT.AGGREGATE query has
+the same problem. The JSON variants of `test_groupby_reduce` and the
+field-sorting cases of `test_sortby` are therefore recorded `excluded` —
+comparing them here would test that gap instead of FT.HYBRID.
+
+### 5.3. Reference engine image — TODO
+
+**Status:** temporary.
+
+`generate_hybrid.py` overrides `BaseCompatibilityTest.DOCKER_IMAGE` to
+`redis:8`, because FT.HYBRID does not exist in `redis/redis-stack-server`
+(RediSearch 2.x) and was added in the Redis 8.4 query engine. A separate PR
+moves the shared image to `redis:latest` for every generator; once that lands,
+the `DOCKER_IMAGE` / `CONTAINER_NAME` override marked `TODO(reference-image)`
+can be dropped and this generator can inherit the shared image again.

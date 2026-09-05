@@ -25,6 +25,13 @@ generate_hybrid.py, data_sets.py, text_query_builder.py, or any other source
 here is edited. Because the hash covers the whole directory, editing any one of
 them invalidates *all* the pickles, so regenerate.sh regenerates all of them.
 
+Not every generated command is compared. A generator can record an answer as
+`excluded` (run against Valkey as a no-crash check only, nothing compared) or
+as `xfail` (compared, and a mismatch is the documented state of an open gap).
+An `xfail` answer that starts matching prints a loud XPASS banner, which is the
+signal to drop the marker. Every one of them is listed, with its reason, in
+unsupported_tests.md.
+
 To add a new generator: create generate_xxx.py (subclass BaseCompatibilityTest
 with its own ANSWER_FILE_NAME, and DOCKER_IMAGE / CONTAINER_NAME if it needs a
 different reference engine) and add an entry to the GENERATORS list in

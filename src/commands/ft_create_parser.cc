@@ -270,6 +270,26 @@ absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
 std::string NotSupportedParamErrorMsg(absl::string_view param) {
   return absl::StrCat("The parameter `", param, "` is not supported");
 }
+// FILTER <expression>: an index-level predicate evaluated against each
+// candidate key during ingestion. Like the other pre-SCHEMA options this is
+// parsed from the flexible ordering loop, so it may appear anywhere before
+// SCHEMA rather than only immediately after PREFIX.
+absl::Status ParseFilter(vmsdk::ArgsIterator &itr,
+                         data_model::IndexSchema &index_schema_proto) {
+  VMSDK_ASSIGN_OR_RETURN(auto res,
+                         vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
+  if (!res) {
+    return absl::OkStatus();
+  }
+  absl::string_view filter_expr;
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter_expr));
+  if (filter_expr.empty()) {
+    return absl::InvalidArgumentError("FILTER expression cannot be empty");
+  }
+  index_schema_proto.set_filter(std::string(filter_expr));
+  return absl::OkStatus();
+}
+
 absl::Status ParseLanguage(vmsdk::ArgsIterator &itr,
                            data_model::IndexSchema &index_schema_proto) {
   data_model::Language language{data_model::Language::LANGUAGE_ENGLISH};
@@ -644,15 +664,6 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
   VMSDK_RETURN_IF_ERROR(ParsePrefixes(
       itr, index_schema_proto, vmsdk::ParseHashTag(index_schema_proto.name())));
 
-  VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kFilterParam, false, itr));
-  if (res) {
-    absl::string_view filter_expr;
-    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, filter_expr));
-    if (filter_expr.empty()) {
-      return absl::InvalidArgumentError("FILTER expression cannot be empty");
-    }
-    index_schema_proto.set_filter(std::string(filter_expr));
-  }
   // Parse schema-level text parameters before SCHEMA
   PerIndexTextParams schema_text_defaults;
   // Initialize with defaults for each parse call
@@ -684,6 +695,9 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
     // Try LANGUAGE parameter
     VMSDK_RETURN_IF_ERROR(ParseLanguage(itr, index_schema_proto));
+
+    // Try FILTER parameter
+    VMSDK_RETURN_IF_ERROR(ParseFilter(itr, index_schema_proto));
 
     VMSDK_ASSIGN_OR_RETURN(
         res, vmsdk::IsParamKeyMatch(kSkipInitialScan, false, itr));

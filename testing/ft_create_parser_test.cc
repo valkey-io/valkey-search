@@ -1188,6 +1188,63 @@ INSTANTIATE_TEST_SUITE_P(
                  "FILTER expression cannot be empty",
          },
          {
+             // FILTER is a pre-SCHEMA option like SCORE and LANGUAGE, so it
+             // must be accepted after them, not only immediately after
+             // PREFIX. It used to be parsed once before the flexible
+             // ordering loop, which made this form fail with
+             // "Unexpected parameter `FILTER`".
+             .test_name = "filter_after_score_and_language",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: SCORE 0.5 LANGUAGE english "
+                 "FILTER \"@status=='active'\" SCHEMA status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             // ... and before them, interleaved with the other options.
+             .test_name = "filter_before_score_and_skipinitialscan",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: FILTER \"@price>100\" "
+                 "SKIPINITIALSCAN SCORE 0.5 SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .skip_initial_scan = true,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // An empty expression is rejected wherever FILTER appears, not
+             // just in the position the old pre-loop parse handled.
+             .test_name = "filter_empty_expression_after_score",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"\" SCHEMA status tag ",
+             .expected_error_message =
+                 "FILTER expression cannot be empty",
+         },
+         {
              .test_name = "invalid_language_parameter_value",
              .success = false,
              .command_str = " idx1 LANGUAGE hebrew SChema hash_field1 vector "

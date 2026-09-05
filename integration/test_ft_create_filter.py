@@ -314,3 +314,66 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
         assert int(info.filter_rejected_keys) >= 2, (
             f"expected >=2 rejected keys, got {info.filter_rejected_keys}"
         )
+
+    def test_filter_accepted_in_any_pre_schema_position(self):
+        """FILTER is a pre-SCHEMA option like SCORE, LANGUAGE and
+        SKIPINITIALSCAN, so it must be accepted in any order relative to them.
+
+        It used to be parsed once before the flexible pre-SCHEMA ordering loop,
+        so it was only accepted immediately after PREFIX; any other position
+        failed with "Unexpected parameter `FILTER`, expecting `SCHEMA`".
+        """
+        client: Valkey = self.server.get_new_client()
+
+        orderings = {
+            "after_prefix": [
+                "PREFIX", "1", "ord:", "FILTER", "@price > 100",
+                "SCORE", "0.5",
+            ],
+            "after_score": [
+                "PREFIX", "1", "ord:", "SCORE", "0.5",
+                "FILTER", "@price > 100",
+            ],
+            "after_language": [
+                "PREFIX", "1", "ord:", "LANGUAGE", "english",
+                "FILTER", "@price > 100",
+            ],
+            "between_options": [
+                "PREFIX", "1", "ord:", "SKIPINITIALSCAN",
+                "FILTER", "@price > 100", "SCORE", "0.5",
+            ],
+            # NOTE: no "before PREFIX" case. PREFIX is parsed before the
+            # flexible loop, so no pre-SCHEMA option may precede it --
+            # `SCORE 0.5 PREFIX ...` and `LANGUAGE english PREFIX ...` fail
+            # the same way. That is a pre-existing PREFIX-position
+            # limitation shared by every option, not specific to FILTER.
+        }
+
+        for name, options in orderings.items():
+            index = f"ord_idx_{name}"
+            assert client.execute_command(
+                "FT.CREATE", index, "ON", "HASH", *options,
+                "SCHEMA", "price", "NUMERIC"
+            ) == b"OK", f"FT.CREATE rejected FILTER in position '{name}'"
+
+            info = FTInfoParser(client.execute_command("FT.INFO", index))
+            assert info.index_definition.get("filter") == "@price > 100", (
+                f"filter not stored for ordering '{name}': "
+                f"{info.index_definition.get('filter')!r}"
+            )
+            client.execute_command("FT.DROPINDEX", index)
+
+    def test_filter_empty_expression_rejected_in_any_position(self):
+        """An empty FILTER expression is rejected wherever FILTER appears, not
+        just in the position the old pre-loop parse handled."""
+        client: Valkey = self.server.get_new_client()
+
+        for name, options in {
+            "after_prefix": ["PREFIX", "1", "e:", "FILTER", ""],
+            "after_score": ["PREFIX", "1", "e:", "SCORE", "0.5", "FILTER", ""],
+        }.items():
+            with pytest.raises(ResponseError, match="FILTER expression cannot be empty"):
+                client.execute_command(
+                    "FT.CREATE", f"empty_idx_{name}", "ON", "HASH", *options,
+                    "SCHEMA", "price", "NUMERIC"
+                )

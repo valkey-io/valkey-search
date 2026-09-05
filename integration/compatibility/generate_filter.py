@@ -44,13 +44,34 @@ class TestFilterCompatibility(BaseCompatibilityTest):
         )
 
     def _run_hard_numbers_queries(self, key_type, dialect):
-        """Run standard queries against an index built over the hard-numbers data."""
+        """Run standard queries against an index built over the hard-numbers data.
+
+        Two probes, on n1 and on n2, because neither alone can see every row.
+
+        A NUMERIC range query cannot return a document whose value for the
+        queried field is NaN, so the @n1 probe is blind to the hash-only
+        (n1=NaN, n2=0.0, n3=0.0) row: whether the FILTER admitted or rejected
+        that row is invisible, and every comparison operator in
+        HARD_NUM_FILTER_EXPRS would pass vacuously on the one input that
+        produces an unordered comparison. n2 is finite in every row (n3 is
+        not -- the +inf row carries n3=+inf), so @n2:[-inf +inf] reaches the
+        whole corpus and pins the engines' NaN behavior.
+        """
         self.check(
             "FT.SEARCH", f"{key_type}_idx1", "@n1:[-inf +inf]",
             "DIALECT", str(dialect),
         )
         self.check(
             "FT.AGGREGATE", f"{key_type}_idx1", "@n1:[-inf +inf]",
+            "load", "1", "@__key",
+            "DIALECT", str(dialect),
+        )
+        self.check(
+            "FT.SEARCH", f"{key_type}_idx1", "@n2:[-inf +inf]",
+            "DIALECT", str(dialect),
+        )
+        self.check(
+            "FT.AGGREGATE", f"{key_type}_idx1", "@n2:[-inf +inf]",
             "load", "1", "@__key",
             "DIALECT", str(dialect),
         )

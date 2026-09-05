@@ -740,6 +740,34 @@ HARD_NUM_FILTER_EXPRS = {
     # comparison against literal infinity
     "filter num lt inf": "@n1 < +inf",
     "filter num gt ninf": "@n1 > -inf",
+    # Self-comparison, pinning the +/-inf rows (inf == inf is true) and the
+    # whole-key drop of the hash-only "nan" row (see below).
+    "filter num eq self": "@n1 == @n1",
+    "filter num ne self": "@n1 != @n1",
+    "filter num ge self": "@n1 >= @n1",
+    "filter num le self": "@n1 <= @n1",
+    # Unordered (NaN) comparison. A NaN operand is the only way a FILTER
+    # comparison can be unordered: Compare() returns kUNORDERED for nil
+    # (guarded separately, and handled as three-valued logic), for
+    # array-vs-scalar (which no filter attribute reference can produce, as
+    # every reference yields a double or a string), and for NaN.
+    #
+    # The NaN has to be *computed*: a NUMERIC field whose stored value is
+    # literally "nan" cannot test this, because both engines classify it as
+    # invalid data and drop the whole key from every index before any query
+    # can see it (valkey-search via the 1.3.0 emulate-release invalid-data
+    # rule in IndexSchema::ProcessMutation). `@n1 - @n1` on the +/-inf rows
+    # (hash:06, hash:07) is valid data that stays indexed and yields NaN,
+    # so the comparison result is observable through the @n2 probe.
+    #
+    # Redis answers an unordered comparison as though the operands were
+    # equal: ==, <= and >= admit the inf rows, while !=, < and > reject them.
+    "filter num eq nan": "(@n1 - @n1) == 0",
+    "filter num ne nan": "(@n1 - @n1) != 0",
+    "filter num lt nan": "(@n1 - @n1) < 0",
+    "filter num le nan": "(@n1 - @n1) <= 0",
+    "filter num gt nan": "(@n1 - @n1) > 0",
+    "filter num ge nan": "(@n1 - @n1) >= 0",
     # numeric monadic functions
     "filter num abs":   "abs(@n1) > 0",
     "filter num ceil":  "ceil(@n2) >= 0",

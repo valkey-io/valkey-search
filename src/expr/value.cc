@@ -562,10 +562,17 @@ Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 // not IEEE unordered comparison.
 //
 // The guard is on IsNil() specifically, not on Compare()==kUNORDERED:
-// kUNORDERED also arises from NaN (e.g. a division by zero), which is a real
-// computed value, not a missing field, and must keep the legacy comparison
-// behavior. For all non-Nil operands these fall through to the same operators
-// as before.
+// kUNORDERED also arises from NaN (e.g. inf - inf, or a division by zero),
+// which is a real computed value, not a missing field, and must keep the
+// legacy comparison behavior. For all non-Nil operands these fall through to
+// the same operators as before -- which is what Redisearch does: it answers
+// an unordered comparison as though the operands were equal (== and <= and >=
+// true, != and < and > false). Verified against Redis Stack by the
+// "filter num <op> nan" cases in HARD_NUM_FILTER_EXPRS, which reach a NaN via
+// `@n1 - @n1` on the +/-inf rows. (A NUMERIC field whose stored value is
+// literally "nan" cannot be used to test this: both engines treat it as
+// invalid data and drop the whole key from the index before any query can
+// observe it.)
 static bool EitherNil(const Value& l, const Value& r) {
   return l.IsNil() || r.IsNil();
 }
@@ -581,8 +588,7 @@ Value FilterFuncNe(const Value& l, const Value& r) {
   if (EitherNil(l, r)) {
     return Value(Value::Nil("filter !=: missing field"));
   }
-  auto res = Compare(l, r);
-  return Value(res != Ordering::kEQUAL);
+  return Value(l != r);
 }
 
 Value FilterFuncLt(const Value& l, const Value& r) {

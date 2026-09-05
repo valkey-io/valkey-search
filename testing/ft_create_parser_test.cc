@@ -675,6 +675,39 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             // Regression test for issue #1195: the same source field may be
+             // indexed multiple times under distinct aliases (e.g. once as
+             // TEXT and once as TAG). Uniqueness is keyed on the alias, not the
+             // source identifier, matching RediSearch behavior.
+             .test_name = "same_identifier_distinct_aliases_text_and_tag",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku as sku_text TEXT "
+                            "sku as sku_tag TAG ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+                 .weight = 1.0,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku_text",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kText,
+                                         },
+                                         {
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku_tag",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         }}},
+         },
+         {
              .test_name = "happy_path_skip_initial_scan",
              .success = true,
              .command_str = "idx1 on HASH SKIPINITIALSCAN SCHEMA hash_field1 as "

@@ -1355,6 +1355,171 @@ TEST_F(ValueTest, NestedArray_MixedTypesRecursive) {
   EXPECT_TRUE(inner2.GetArrayElement(1).IsDouble());
 }
 
+// --- Serialize() tests ---
+
+TEST_F(ValueTest, Serialize_Nil) {
+  Value nil;
+  EXPECT_EQ(nil.Serialize(), "");
+}
+
+TEST_F(ValueTest, Serialize_ScalarDouble) {
+  Value d(42.5);
+  EXPECT_EQ(d.Serialize(), "42.5");
+}
+
+TEST_F(ValueTest, Serialize_ScalarBool) {
+  // Scalar bool serializes via AsStringView() => "1"/"0"
+  Value t(true);
+  Value f(false);
+  EXPECT_EQ(t.Serialize(), "1");
+  EXPECT_EQ(f.Serialize(), "0");
+}
+
+TEST_F(ValueTest, Serialize_ScalarString) {
+  Value s(std::string("hello"));
+  EXPECT_EQ(s.Serialize(), "hello");
+}
+
+TEST_F(ValueTest, Serialize_EmptyArray) {
+  Value arr(std::initializer_list<Value>{});
+  EXPECT_EQ(arr.Serialize(), "[]");
+}
+
+TEST_F(ValueTest, Serialize_FlatStringArray) {
+  Value arr({Value(std::string("red")), Value(std::string("blue")),
+             Value(std::string("green"))});
+  EXPECT_EQ(arr.Serialize(), "[\"red\",\"blue\",\"green\"]");
+}
+
+TEST_F(ValueTest, Serialize_StringWithQuotes) {
+  // Strings containing quotes must be escaped
+  Value arr({Value(std::string("a\"b")), Value(std::string("c\\d"))});
+  EXPECT_EQ(arr.Serialize(), "[\"a\\\"b\",\"c\\\\d\"]");
+}
+
+TEST_F(ValueTest, Serialize_StringWithComma) {
+  // A string containing a comma must not be confused with a separator
+  Value single({Value(std::string("a,b"))});
+  Value two({Value(std::string("a")), Value(std::string("b"))});
+  EXPECT_NE(single.Serialize(), two.Serialize());
+}
+
+TEST_F(ValueTest, Serialize_BoolInArray) {
+  // Bool elements in arrays serialize as true/false, not 1/0
+  Value arr({Value(true), Value(false)});
+  EXPECT_EQ(arr.Serialize(), "[true,false]");
+}
+
+TEST_F(ValueTest, Serialize_BoolVsDouble_Disambiguation) {
+  // true and 1.0 must produce different serializations
+  Value bool_arr({Value(true)});
+  Value double_arr({Value(1.0)});
+  EXPECT_NE(bool_arr.Serialize(), double_arr.Serialize());
+}
+
+TEST_F(ValueTest, Serialize_NilInArray) {
+  Value arr({Value(std::string("x")), Value(), Value(std::string("y"))});
+  EXPECT_EQ(arr.Serialize(), "[\"x\",null,\"y\"]");
+}
+
+TEST_F(ValueTest, Serialize_NestedArray) {
+  Value inner({Value(1.0), Value(2.0)});
+  Value outer({inner, Value(std::string("end"))});
+  EXPECT_EQ(outer.Serialize(), "[[1,2],\"end\"]");
+}
+
+TEST_F(ValueTest, Serialize_MixedTypesArray) {
+  Value arr({Value(3.14), Value(true), Value(std::string("hi")), Value()});
+  EXPECT_EQ(arr.Serialize(), "[3.14,true,\"hi\",null]");
+}
+
+TEST_F(ValueTest, Serialize_DeterministicForHashing) {
+  // Same array content must always produce same serialization
+  Value a({Value(std::string("red")), Value(std::string("blue"))});
+  Value b({Value(std::string("red")), Value(std::string("blue"))});
+  EXPECT_EQ(a.Serialize(), b.Serialize());
+
+  // Different arrays must produce different serializations
+  Value c({Value(std::string("blue")), Value(std::string("red"))});
+  EXPECT_NE(a.Serialize(), c.Serialize());
+}
+
+TEST_F(ValueTest, Serialize_NegativeNumbers) {
+  Value neg(-42.5);
+  EXPECT_EQ(neg.Serialize(), "-42.5");
+
+  // -0.0 serializes as "-0" (IEEE 754 negative zero is preserved by
+  // FormatDouble)
+  Value arr({Value(-1.0), Value(-0.0), Value(0.0)});
+  EXPECT_EQ(arr.Serialize(), "[-1,-0,0]");
+}
+
+TEST_F(ValueTest, Serialize_VeryLargeAndSmallDoubles) {
+  Value large(1e18);
+  EXPECT_FALSE(large.Serialize().empty());
+
+  Value small(1e-15);
+  EXPECT_FALSE(small.Serialize().empty());
+
+  // Different magnitudes must produce different serializations
+  Value arr_large({Value(1e18)});
+  Value arr_small({Value(1e-15)});
+  EXPECT_NE(arr_large.Serialize(), arr_small.Serialize());
+}
+
+TEST_F(ValueTest, Serialize_EmptyString) {
+  // Empty string in an array should still be quoted
+  Value arr({Value(std::string("")), Value(std::string("x"))});
+  EXPECT_EQ(arr.Serialize(), "[\"\",\"x\"]");
+}
+
+TEST_F(ValueTest, Serialize_StringLooksLikeNumber) {
+  // A string "42" must serialize differently from double 42
+  Value str_arr({Value(std::string("42"))});
+  Value num_arr({Value(42.0)});
+  EXPECT_NE(str_arr.Serialize(), num_arr.Serialize());
+}
+
+TEST_F(ValueTest, Serialize_StringLooksLikeKeyword) {
+  // Strings "true", "false", "null" must be quoted, not confused with keywords
+  Value str_true({Value(std::string("true"))});
+  Value bool_true({Value(true)});
+  EXPECT_NE(str_true.Serialize(), bool_true.Serialize());
+
+  Value str_null({Value(std::string("null"))});
+  Value nil_val({Value()});
+  EXPECT_NE(str_null.Serialize(), nil_val.Serialize());
+}
+
+TEST_F(ValueTest, Serialize_SingleElementArray) {
+  Value single({Value(99.0)});
+  EXPECT_EQ(single.Serialize(), "[99]");
+}
+
+TEST_F(ValueTest, Serialize_DeeplyNestedArray) {
+  // [[["deep"]]]
+  Value deep({Value({Value({Value(std::string("deep"))})})});
+  EXPECT_EQ(deep.Serialize(), "[[[\"deep\"]]]");
+}
+
+TEST_F(ValueTest, Serialize_StringWithSpecialChars) {
+  // Newlines, tabs, brackets, and other special chars
+  Value arr({Value(std::string("a\nb")), Value(std::string("c\td")),
+             Value(std::string("[e]")), Value(std::string("{f}"))});
+  std::string s = arr.Serialize();
+  // These should be quoted but otherwise pass through (only " and \ are
+  // escaped)
+  EXPECT_NE(s.find("\"a\nb\""), std::string::npos);
+  EXPECT_NE(s.find("\"c\td\""), std::string::npos);
+  EXPECT_NE(s.find("\"[e]\""), std::string::npos);
+  EXPECT_NE(s.find("\"{f}\""), std::string::npos);
+}
+
+TEST_F(ValueTest, Serialize_AllNilArray) {
+  Value arr({Value(), Value(), Value()});
+  EXPECT_EQ(arr.Serialize(), "[null,null,null]");
+}
+
 // Regression for #1262: large integers must round-trip without precision loss.
 TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
   EXPECT_EQ(FormatDouble(20260201.0), "20260201");

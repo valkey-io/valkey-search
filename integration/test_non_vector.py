@@ -970,6 +970,118 @@ def validate_aggregate_complex_queries(client: Valkey):
         else:
             assert min_price == 2.0, f"Books min_price should be 2.0, got {min_price}"
 
+def validate_aggregate_count_distinctish(client: Valkey):
+    """
+        Test FT.AGGREGATE with COUNT_DISTINCTISH reducer.
+        Uses the 1000-record dataset: price 1-1000 (unique), rating cycles
+        through (i%100)+1.0 so each category gets 50 distinct ratings,
+        category alternates electronics/books (500 each).
+    """
+    # 1. Basic COUNT_DISTINCTISH - count distinct prices per category
+    # 500 unique prices per category, expect approximate count within error
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_distinct"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx = float(row[b'approx_distinct'])
+        assert 400 <= approx <= 600, f"Expected ~500, got {approx}"
+
+    # 2. Large dataset - count distinct ratings per category (500 records each,
+    # 50 distinct ratings per category, each repeated 10 times)
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx_ratings"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx = float(row[b'approx_ratings'])
+        # 50 distinct ratings per category, generous tolerance for HLL
+        assert 35 <= approx <= 65, f"Expected ~50, got {approx}"
+
+    # 3. Multiple COUNT_DISTINCTISH reducers in same query
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "3", "price", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_prices",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx_ratings"
+    )
+    assert result[0] == 2
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        approx_prices = float(row[b'approx_prices'])
+        approx_ratings = float(row[b'approx_ratings'])
+        # 500 distinct prices per category
+        assert 400 <= approx_prices <= 600, f"Expected ~500, got {approx_prices}"
+        # 50 distinct ratings per category
+        assert 35 <= approx_ratings <= 65, f"Expected ~50, got {approx_ratings}"
+
+    # 4. COUNT_DISTINCTISH with GROUPBY on category - verify independent
+    # counters per group
+    result = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "price", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@price", "AS", "approx_prices"
+    )
+    assert result[0] == 2
+    rows = {}
+    for i in range(1, len(result)):
+        row = dict(zip(result[i][::2], result[i][1::2]))
+        rows[row[b'category']] = float(row[b'approx_prices'])
+    # Each category has 500 unique prices
+    assert 400 <= rows[b'electronics'] <= 600
+    assert 400 <= rows[b'books'] <= 600
+
+    # 5. COUNT_DISTINCTISH vs COUNT_DISTINCT comparison
+    result_exact = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCT", "1", "@rating", "AS", "exact"
+    )
+    result_approx = client.execute_command(
+        "FT.AGGREGATE", "products", "@price:[1 1000]",
+        "LOAD", "2", "rating", "category",
+        "GROUPBY", "1", "@category",
+        "REDUCE", "COUNT_DISTINCTISH", "1", "@rating", "AS", "approx"
+    )
+    assert result_exact[0] == 2
+    assert result_approx[0] == 2
+    for i in range(1, len(result_exact)):
+        row_exact = dict(zip(result_exact[i][::2], result_exact[i][1::2]))
+        row_approx = dict(zip(result_approx[i][::2], result_approx[i][1::2]))
+        exact_val = float(row_exact[b'exact'])
+        approx_val = float(row_approx[b'approx'])
+        # Approximate should be within 15% of exact (generous for 6.5% error)
+        error = abs(exact_val - approx_val) / exact_val if exact_val > 0 else 0
+        assert error < 0.15, f"Error {error:.2%} too large: exact={exact_val}, approx={approx_val}"
+
+    # 6. Error handling - invalid argument counts
+    with pytest.raises(ResponseError):
+        client.execute_command(
+            "FT.AGGREGATE", "products", "@price:[1 1000]",
+            "LOAD", "1", "category",
+            "GROUPBY", "1", "@category",
+            "REDUCE", "COUNT_DISTINCTISH", "0"
+        )
+    with pytest.raises(ResponseError):
+        client.execute_command(
+            "FT.AGGREGATE", "products", "@price:[1 1000]",
+            "LOAD", "1", "category",
+            "GROUPBY", "1", "@category",
+            "REDUCE", "COUNT_DISTINCTISH", "2", "@price", "@rating"
+        )
+
+
 class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_basic(self):
@@ -1004,6 +1116,49 @@ class TestNonVector(ValkeySearchTestCaseBase):
         # Test RANDOM_SAMPLE functionality
         validate_random_sample_queries(client, aggregate_complex_hash_docs)
         validate_random_sample_error_queries(client)
+
+    def test_aggregate_count_distinctish(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in aggregate_complex_hash_docs:
+            assert client.execute_command(*doc) == 3
+        validate_aggregate_count_distinctish(client)
+
+    def test_aggregate_count_distinctish_array_values(self):
+        """
+            Test COUNT_DISTINCTISH with array-valued JSON fields.
+        """
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "arraytest", "ON", "JSON",
+            "PREFIX", "1", "arritem:",
+            "SCHEMA",
+            "$.group", "AS", "group", "TAG",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.tags", "AS", "tags", "TAG"
+        ) == b"OK"
+
+        # 3 distinct arrays + 1 duplicate
+        docs = [
+            ('arritem:1', '{"group":"a","price":10,"tags":["red","blue"]}'),
+            ('arritem:2', '{"group":"a","price":20,"tags":["blue","green"]}'),
+            ('arritem:3', '{"group":"a","price":30,"tags":["red","blue"]}'),
+            ('arritem:4', '{"group":"a","price":40,"tags":["red","blue","yellow"]}'),
+        ]
+        for key, val in docs:
+            client.execute_command("JSON.SET", key, "$", val)
+
+        result = client.execute_command(
+            "FT.AGGREGATE", "arraytest", "*",
+            "LOAD", "1", "tags",
+            "GROUPBY", "1", "@group",
+            "REDUCE", "COUNT_DISTINCTISH", "1", "@tags", "AS", "approx_distinct"
+        )
+        assert result[0] == 1
+        row = dict(zip(result[1][::2], result[1][1::2]))
+        approx = float(row[b'approx_distinct'])
+        # 3 distinct arrays, allow HLL tolerance
+        assert 2 <= approx <= 4, f"Expected ~3, got {approx}"
 
     def test_uningested_multi_field(self):
         """

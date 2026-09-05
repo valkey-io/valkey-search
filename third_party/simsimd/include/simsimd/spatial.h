@@ -397,6 +397,34 @@ SIMSIMD_PUBLIC void simsimd_l2sq_bf16_neon(simsimd_bf16_t const* a, simsimd_bf16
     float32x4_t diff_high_vec = vdupq_n_f32(0), diff_low_vec = vdupq_n_f32(0);
     float32x4_t sum_high_vec = vdupq_n_f32(0), sum_low_vec = vdupq_n_f32(0);
     simsimd_size_t i = 0;
+    // VALKEYSEARCH BEGIN
+    // Same change as simsimd_dot_bf16_neon: upstream's single accumulator pair
+    // makes the loop latency-bound on the FMA that closes the cycle. Four
+    // independent accumulator pairs let the widen/subtract/FMA chains overlap.
+    // The widening (vcvt_f32_bf16 is a SHLL, i.e. exact) and the accumulation
+    // are f32 here and stay f32; only the summation order changes.
+#define SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high, sum_low, offset)                                                         \
+    do {                                                                                                               \
+        bfloat16x8_t a_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i + (offset));                          \
+        bfloat16x8_t b_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i + (offset));                          \
+        float32x4_t dh = vsubq_f32(vcvt_f32_bf16(vget_high_bf16(a_vec)), vcvt_f32_bf16(vget_high_bf16(b_vec)));         \
+        float32x4_t dl = vsubq_f32(vcvt_f32_bf16(vget_low_bf16(a_vec)), vcvt_f32_bf16(vget_low_bf16(b_vec)));           \
+        sum_high = vfmaq_f32(sum_high, dh, dh);                                                                        \
+        sum_low = vfmaq_f32(sum_low, dl, dl);                                                                          \
+    } while (0)
+    float32x4_t sum_high_vec1 = vdupq_n_f32(0), sum_low_vec1 = vdupq_n_f32(0);
+    float32x4_t sum_high_vec2 = vdupq_n_f32(0), sum_low_vec2 = vdupq_n_f32(0);
+    float32x4_t sum_high_vec3 = vdupq_n_f32(0), sum_low_vec3 = vdupq_n_f32(0);
+    for (; i + 32 <= n; i += 32) {
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec, sum_low_vec, 0);
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec1, sum_low_vec1, 8);
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec2, sum_low_vec2, 16);
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec3, sum_low_vec3, 24);
+    }
+    sum_high_vec = vaddq_f32(vaddq_f32(sum_high_vec, sum_high_vec1), vaddq_f32(sum_high_vec2, sum_high_vec3));
+    sum_low_vec = vaddq_f32(vaddq_f32(sum_low_vec, sum_low_vec1), vaddq_f32(sum_low_vec2, sum_low_vec3));
+#undef SIMSIMD_L2SQ_BF16_NEON_STEP
+    // VALKEYSEARCH END
     for (; i + 8 <= n; i += 8) {
         bfloat16x8_t a_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i);
         bfloat16x8_t b_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i);

@@ -281,6 +281,7 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
     switch (fieldType) {
       case indexes::IndexerType::kTag:
       case indexes::IndexerType::kNumeric:
+      case indexes::IndexerType::kText:
       case indexes::IndexerType::kVector:
       case indexes::IndexerType::kFlat:
       case indexes::IndexerType::kHNSW:

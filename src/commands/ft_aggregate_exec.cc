@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <queue>
 #include <random>
 
@@ -302,7 +303,15 @@ class Min : public GroupBy::ReducerInstance {
       DBG << "Not new Min: " << values[0] << "\n";
     }
   }
-  expr::Value GetResult() const override { return min_; }
+  expr::Value GetResult() const override {
+    if (min_.IsNil()) {
+      // No value was folded in: report the identity of min, matching
+      // Redisearch. Written as an explicit constant because -ffast-math
+      // assumes finite arithmetic, so computing an infinity is not reliable.
+      return expr::Value(std::numeric_limits<double>::infinity());
+    }
+    return min_;
+  }
 };
 
 struct ReducerInstanceVector : GroupBy::ReducerInstance {
@@ -324,18 +333,33 @@ class Max : public GroupBy::ReducerInstance {
       max_ = values[0];
     }
   }
-  expr::Value GetResult() const override { return max_; }
+  expr::Value GetResult() const override {
+    if (max_.IsNil()) {
+      // Identity of max; see the note in Min::GetResult.
+      return expr::Value(-std::numeric_limits<double>::infinity());
+    }
+    return max_;
+  }
 };
 
 class Sum : public GroupBy::ReducerInstance {
   double sum_{0};
+  size_t count_{0};
   void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
+      count_++;
     }
   }
-  expr::Value GetResult() const override { return expr::Value(sum_); }
+  expr::Value GetResult() const override {
+    // Redisearch reports NaN, not 0, for a sum that folded no values, so the
+    // count is tracked to tell "summed to zero" from "summed nothing".
+    if (count_ == 0) {
+      return expr::Value(std::nan(""));
+    }
+    return expr::Value(sum_);
+  }
 };
 
 class Avg : public GroupBy::ReducerInstance {
@@ -349,7 +373,8 @@ class Avg : public GroupBy::ReducerInstance {
     }
   }
   expr::Value GetResult() const override {
-    return expr::Value(count_ ? sum_ / count_ : 0.0);
+    // An average over no values is NaN in Redisearch, not 0.
+    return expr::Value(count_ ? sum_ / count_ : std::nan(""));
   }
 };
 

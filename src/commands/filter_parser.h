@@ -93,7 +93,7 @@ class FilterParser {
   };
   absl::StatusOr<TokenResult> ParseQuotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      const std::optional<std::string>& field_or_default);
+      const std::optional<std::string>& field_or_default, char delim = '"');
 
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,

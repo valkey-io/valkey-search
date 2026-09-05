@@ -11,6 +11,7 @@ _COMPAT_DIR = os.path.dirname(os.path.abspath(__file__))
 GENERATORS = [
     {"generator": "generate.py",      "answers": "aggregate-answers.pickle.gz",   "cluster": True},
     {"generator": "generate_text.py", "answers": "text-search-answers.pickle.gz", "cluster": False},
+    {"generator": "generate_expr.py", "answers": "expr-answers.pickle.gz",        "cluster": False},
 ]
 
 

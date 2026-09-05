@@ -7,9 +7,11 @@ Or, to regenerate just one, cd to this directory and run pytest directly:
     pytest generate.py        # produces aggregate-answers.pickle.gz
     pytest generate_text.py   # produces text-search-answers.pickle.gz
 
-Both forms require Docker. The generators spin up redis/redis-stack-server on
-port 6380 to capture reference answers; the docker handling is sometimes flaky
-and may need to be killed manually between runs.
+Both forms require Docker. The generators spin up redis/redis-stack-server to
+capture reference answers, in a container named Generate-search-NNNN on a port
+docker assigns, so concurrent runs on one machine do not collide. A generator
+that fails part way leaves its answer file untouched rather than replacing it
+with a short one.
 
 Each pickle stores a SHA256 of every .py file in this directory. The
 compatibility integration test (integration/compatibility_test.py) verifies

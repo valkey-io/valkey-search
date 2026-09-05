@@ -92,7 +92,10 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if isinstance(x, list):
+        if x is None:
+            # RESP nil: an APPLY whose expression evaluated to nothing.
+            result = None
+        elif isinstance(x, list):
             # TOLIST reducer returns a Python list for both hash and json
             result = x
         elif key_type == "json" and isinstance(x, int):
@@ -171,6 +174,32 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
+def order_insensitive(v):
+    """Row-ordering form of a field value.
+
+    A TOLIST field comes back in a different element order from each engine, so
+    a row keyed on one would otherwise sort differently on each side and the
+    two replies would be compared row-against-the-wrong-row.
+    """
+    if isinstance(v, list):
+        return sorted(repr(order_insensitive(i)) for i in v)
+    return repr(v)
+
+
+def row_sort_key(sortkeys):
+    # Rows that tie on the sort keys are ordered by their whole content, so
+    # equal-keyed rows still line up between the two replies.
+    def key(row):
+        # A sort key can be absent from a row: a field the key never had is
+        # left out of the reply, so `sortby 2 @t2 asc` over a dataset where
+        # some documents lack t2 yields rows without it. Both engines omit it
+        # the same way, so a shared placeholder keeps those rows comparable
+        # and lets the whole-content tiebreak below order them.
+        return ([order_insensitive(row.get(k)) for k in sortkeys],
+                sorted((repr(k), order_insensitive(v)) for k, v in row.items()))
+    return key
+
+
 def unpack_result(cmd, key_type, rs, sortkeys):
     if "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
@@ -186,7 +215,7 @@ def unpack_result(cmd, key_type, rs, sortkeys):
     #
     if len(sortkeys) > 0:
         try:
-            out.sort(key=itemgetter(*sortkeys))
+            out.sort(key=row_sort_key(sortkeys))
         except KeyError:
             if sortkeys == ['__key']:
                 # we're not smart about when there is or isn't a key in the return
@@ -201,6 +230,12 @@ def unpack_result(cmd, key_type, rs, sortkeys):
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
+
+    # A numeric field can come back as a RESP nil -- GROUPBY on a field some
+    # documents lack names the group's key with one. float(None) raises, so
+    # without this two identical nil replies read as a mismatch.
+    if l is None or r is None:
+        return l is None and r is None
 
     if lnan and rnan:
         return True
@@ -300,20 +335,25 @@ def compare_results(expected, results):
         print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
     
-    if 'groupby' in cmd and 'sortby' in cmd:
-        assert False
-    if 'groupby' in cmd:
-        ix = cmd.index('groupby')
-        count = int(cmd[ix+1])
-        sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
-    elif 'sortby' in cmd:
-        ix = cmd.index('sortby')
-        count = int(cmd[ix+1]) if cmd[0] != 'ft.search' else 1
+    # Key on the *last* GROUPBY/SORTBY in the pipeline: it decides which fields
+    # the reply carries, and an earlier GROUPBY's key is gone from the output
+    # once a later stage regroups.
+    def last_index(keyword):
+        # Match exactly, as this has always done: an uppercase SORTBY in an
+        # FT.SEARCH goes down the "no sort keys" path.
+        hits = [i for i, c in enumerate(cmd) if c == keyword]
+        return hits[-1] if hits else -1
+
+    gix = last_index('groupby')
+    six = last_index('sortby')
+    if gix > six:
+        count = int(cmd[gix+1])
+        sortkeys = [cmd[gix+2+i][1:] for i in range(count)]
+    elif six >= 0:
+        count = int(cmd[six+1]) if cmd[0] != 'ft.search' else 1
         # Grab the fields after the count, stripping any leading '@'
-        sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
-        for f in ['asc', 'desc', 'ASC', 'DESC']:
-            if f in sortkeys:
-                sortkeys.remove(f)
+        sortkeys = [cmd[six+2+i][1 if cmd[six+2+i].startswith("@") else 0:] for i in range(count)]
+        sortkeys = [f for f in sortkeys if f.lower() not in ('asc', 'desc')]
     else:
         sortkeys=["__key"]
         # sortkeys=[]

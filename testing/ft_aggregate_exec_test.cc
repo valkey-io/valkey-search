@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -289,6 +290,116 @@ TEST_F(AggregateExecTest, GroupTest) {
       std::cerr << *r << "\n";
     }
   }
+}
+
+TEST_F(AggregateExecTest, GroupByArrayKeyExpandsTest) {
+  // An array group key is a multi-value field: the record joins one group per
+  // element, and one per combination when both key fields hold arrays.
+  auto make_record = [](std::vector<double> n1, std::vector<double> n2) {
+    auto rec = std::make_unique<Record>(2);
+    auto to_value = [](const std::vector<double> &elems) {
+      std::vector<expr::Value> arr;
+      arr.reserve(elems.size());
+      for (double e : elems) {
+        arr.emplace_back(e);
+      }
+      return expr::Value(std::move(arr));
+    };
+    rec->fields_[0] = to_value(n1);
+    rec->fields_[1] = to_value(n2);
+    return rec;
+  };
+
+  // {1,2} and {2,3} share the element 2, so the two records join three
+  // distinct groups: 1, 2 and 3.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {0.0}));
+    records.emplace_back(make_record({2.0, 3.0}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 3);
+  }
+  // Two array keys expand to the product of their elements.
+  {
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {10.0, 20.0, 30.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 6);
+  }
+  // An empty array has no element to group into and keys as nil.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    EXPECT_TRUE(record->fields_.at(0).IsNil());
+  }
+  // Reducer arguments are not expanded: they still see the whole array.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce tolist 1 @n1 as items");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 2);
+    auto record = records.pop_front();
+    EXPECT_TRUE(record->fields_.at(0).IsDouble());
+    EXPECT_EQ(record->fields_.at(2).ArraySize(), 2);
+  }
+}
+
+// Two array keys whose product exceeds max-group-key-expansion must be
+// refused rather than expanded.
+TEST_F(AggregateExecTest, GroupByArrayKeyExpansionLimitTest) {
+  auto to_value = [](const std::vector<double> &elems) {
+    std::vector<expr::Value> arr;
+    arr.reserve(elems.size());
+    for (double e : elems) {
+      arr.emplace_back(e);
+    }
+    return expr::Value(std::move(arr));
+  };
+  auto make_record = [&](const std::vector<double> &n1,
+                         const std::vector<double> &n2) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = to_value(n1);
+    rec->fields_[1] = to_value(n2);
+    return rec;
+  };
+
+  auto &limit = options::GetMaxGroupKeyExpansion();
+  const auto saved = limit.GetValue();
+  VMSDK_EXPECT_OK(limit.SetValue(5));
+
+  {
+    // 3 * 3 = 9 > 5.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0, 3.0}, {10.0, 20.0, 30.0}));
+    auto status = param->stages_[0]->Execute(records);
+    EXPECT_TRUE(absl::IsResourceExhausted(status)) << status;
+  }
+  {
+    // 2 * 2 = 4 <= 5, so this one is still allowed through.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {10.0, 20.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 4);
+  }
+  {
+    // Exactly at the limit: 5 * 1 = 5 is not over it.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0, 3.0, 4.0, 5.0}, {10.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 5);
+  }
+
+  VMSDK_EXPECT_OK(limit.SetValue(saved));
 }
 
 TEST_F(AggregateExecTest, ReducerTest) {

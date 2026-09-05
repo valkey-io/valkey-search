@@ -83,12 +83,17 @@ class BaseCompatibilityTest:
         self.key_type = key_type
         load_data(self.client, data_set_name, key_type)
 
-    def execute_command(self, cmd):
+    def execute_command(self, cmd, excluded=False):
         answer = {"cmd": cmd,
                   "key_type": self.key_type,
                   "data_set_name": self.data_set_name,
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
+        if excluded:
+            # Known, intentional difference from Redisearch. The answer is still
+            # captured, but the replay only checks that valkey-search does not
+            # crash on the command rather than comparing results.
+            answer["excluded"] = True
         try:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
@@ -134,7 +139,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             str(dialect),
         ]
         self.execute_command(new_cmd)
-    def check(self, dialect, *orig_cmd):
+    def check(self, dialect, *orig_cmd, excluded=False):
         '''Check Non-vector queries. Doesn't have support for '*' yet. '''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         for query in ["@n1:[-inf inf]", "@t1:{aaaaaaa*}", "-@n1:[-inf inf]", "-@t1:{aaaaaa*}"]:
@@ -151,7 +156,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 "DIALECT",
                 str(dialect),
             ]
-            self.execute_command(new_cmd)
+            self.execute_command(new_cmd, excluded=excluded)
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
@@ -465,6 +470,187 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # Sort field un-loaded, plus a LIMIT downstream.
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @n1 asc limit 0 5"
+        )
+
+    def test_aggregate_load_rename(self, key_type, dialect):
+        # The LOAD <count> includes the AS keyword and its alias.
+        self.setup_data("sortable numbers", key_type)
+        # Single rename.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as num1")
+        # Multiple renames.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as a @n2 as b")
+        # Proof: a renamed field is usable in a subsequent APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as a @n2 as b apply @a+@b as total"
+        )
+        # Renamed field reused across two APPLY stages.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as a apply @a*2 as dbl apply @dbl+@a as tripled"
+        )
+        # Mix of a renamed and a non-renamed load, both used in APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 @n2 as b apply @n1+@b as total"
+        )
+        # Rename a tag field and use it in a string APPLY. No spaces in the
+        # expression so the whitespace-split in check() keeps it one token.
+        self.check(dialect,
+            f'ft.aggregate {key_type}_idx1 * load 4 @__key @t1 as tag1 apply contains(@tag1,"one") as has_one'
+        )
+
+    def test_aggregate_load_rename_name_conflicts(self, key_type, dialect):
+        # Name conflicts created by the LOAD ... AS clause. @__key is loaded so
+        # the rows have a stable sort key for the comparison.
+        self.setup_data("sortable numbers", key_type)
+
+        # An AS name may hide a declared field: `@n1 as n2` makes the name n2
+        # refer to n1's value rather than the schema's n2 ...
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2")
+        # ... including for later pipeline stages.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2 apply @n2+100 as r"
+        )
+        # Hiding a declared field of a different type (numeric hides a tag).
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as t1")
+        # An AS name may hide the key field.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @n1 as __key")
+        # Renaming a field onto its own name is a no-op.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n1")
+        # Loading the same field twice is de-duplicated, not an error.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @__key @n2 @n2")
+
+        # KNOWN DIFFERENCES. Redisearch lets the first claim of an output name
+        # win and silently drops any later claim. valkey-search instead rejects
+        # a LOAD clause that names the same output twice when an `AS` rename is
+        # involved (see COMPATIBILITY.md, "stricter input validation"), so these
+        # commands error and are excluded from the result comparison.
+        #
+        # A rename onto the name of a field loaded earlier in the same clause.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n2 @n1 as n2",
+            excluded=True,
+        )
+        # ... and the same collision in the opposite order.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 as n2 @n2",
+            excluded=True,
+        )
+        # A rename onto the key field when the key is also loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as __key",
+            excluded=True,
+        )
+        # Two AS clauses targeting the same alias.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x",
+            excluded=True,
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply @x+1 as y",
+            excluded=True,
+        )
+
+    def test_aggregate_load_rename_json_path(self, key_type, dialect):
+        # Loading a field by its JSON path only applies to JSON keys.
+        if key_type != "json":
+            pytest.skip("JSON-path loads apply only to JSON keys")
+        self.setup_data("sortable numbers", key_type)
+        # Load by JSON path with a rename, then use the rename in APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply @a+1 as b"
+        )
+        # Load by JSON path without a rename: emitted under the path.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
+
+    def test_aggregate_json_field_names(self, key_type, dialect):
+        """Field names in the reply must be the user-facing name, not the
+        schema identifier. Only JSON can distinguish the two (its schema is
+        `$.n1 AS n1 ...`); HASH is run too so both are held to one expectation.
+
+        See issue #1243. Row alignment follows the harness rules: queries with
+        neither GROUPBY nor SORTBY are aligned on `@__key`, so it is loaded;
+        GROUPBY aligns on the grouped fields; GROUPBY and SORTBY are never
+        combined (the harness rejects that pairing outright).
+        """
+        self.setup_data("sortable numbers", key_type)
+
+        # --- LOAD: the loaded field's own name.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1")
+
+        # --- APPLY: both the source name and the computed name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as computed"
+        )
+        # APPLY writing back over the loaded field's own name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as n1"
+        )
+        # APPLY over a field that is not named in the LOAD clause.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key apply @n1*2 as doubled"
+        )
+        # APPLY over a tag field, so the name survives a string stage too.
+        self.check(dialect,
+            f'ft.aggregate {key_type}_idx1 * load 2 @__key @t1 apply upper(@t1) as shout'
+        )
+
+        # --- FILTER: names of the records that survive.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 filter @n1<@n2"
+        )
+
+        # --- GROUPBY: the grouping key is emitted under its own name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @t1 groupby 1 @t1 reduce count 0 as cnt"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Grouping on two fields.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @t2 groupby 2 @t1 @t2 reduce count 0 as cnt"
+        )
+        # NOTE: `groupby 1 @t1` with no LOAD of @t1 is deliberately omitted.
+        # Redisearch auto-loads the grouped field (15 groups, each emitting
+        # t1 and cnt); valkey-search collapses everything into one group and
+        # emits only cnt. That is a separate defect from #1243, and it makes
+        # the harness raise KeyError on the missing sort key rather than
+        # report a mismatch, which would abort the whole replay.
+        # REDUCE with no AS clause: the generated name must not embed a path.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1"
+        )
+        # TOLIST over a JSON-pathed field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # A reducer feeding a later APPLY, so the reducer's name is re-read.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply @total+1 as bumped"
+        )
+
+        # --- SORTBY does not rename what it sorts on.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 sortby 2 @n1 asc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 4 @n1 asc @n2 desc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @t1 sortby 2 @t1 asc"
+        )
+
+        # --- LIMIT after the names are established.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 sortby 2 @n1 asc limit 0 3"
+        )
+
+        # --- Multi-stage pipelines, end to end.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply @n1+10 as bumped filter @bumped>0"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply @n1+10 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
         )
 
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):

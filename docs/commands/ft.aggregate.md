@@ -12,7 +12,7 @@ Once all stages have been executed, the working set of records output from the l
 FT.AGGREGATE <index-name> <query>
     [DIALECT <dialect>]
     [INORDER]
-    [LOAD * | LOAD <count> <field> [<field> ...]]
+    [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
     [SLOP <slop>]
     [TIMEOUT <timeout>]
@@ -30,8 +30,16 @@ FT.AGGREGATE <index-name> <query>
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INORDER` (optional): Indicates that proximity matching of terms must be in order.
-- `LOAD * | LOAD <count> <field> [<field> ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
-  keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
+- `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
+
+  `<count>` is a count of the arguments that follow, not a count of fields. An `AS` keyword and its alias each count against `<count>`, so `LOAD 4 @a @b AS c` loads two fields using four arguments.
+
+  Each `<field>` may be a declared attribute name (`@price`), or, for a JSON index, a JSON path (`$.price`). A JSON path that resolves to a declared attribute is loaded as that attribute.
+
+  `AS <alias>` renames the loaded field: it is emitted under `<alias>` in the result and is referenced as `@<alias>` by later stages. Without an `AS` clause the field is emitted under the name given in the `LOAD` clause. An alias may reuse the name of a declared attribute, in which case it hides that attribute for the remainder of the pipeline. A single `LOAD` clause must not produce the same output name twice; doing so is an error.
+
+  Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
+- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.

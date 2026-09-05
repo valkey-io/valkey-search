@@ -68,6 +68,28 @@ TEST_F(TagIndexTest, AddRecordAndSearchTest) {
   EXPECT_THAT(Fetch(*entries_fetcher), testing::UnorderedElementsAre("key1"));
 }
 
+TEST_F(TagIndexTest, InvalidUtf8IsNotIndexed) {
+  const std::string invalid_utf8 = "invalid\xC3";
+
+  EXPECT_EQ(index->AddRecordResult("key1", invalid_utf8).value(),
+            RecordResult::kInvalidData);
+  EXPECT_FALSE(index->IsTracked("key1"));
+  EXPECT_EQ(index->GetUnTrackedKeyCount(), 1);
+
+  EXPECT_TRUE(index->AddRecord("key2", "valid").value());
+  EXPECT_EQ(index->ModifyRecordResult("key2", invalid_utf8).value(),
+            RecordResult::kInvalidData);
+  EXPECT_FALSE(index->IsTracked("key2"));
+  EXPECT_EQ(index->GetTrackedKeyCount(), 0);
+  EXPECT_EQ(index->GetUnTrackedKeyCount(), 2);
+
+  auto parsed_tags = FilterParser::ParseQueryTags("valid").value();
+  query::TagPredicate predicate(index.get(), alias, identifier, "valid",
+                                parsed_tags);
+  auto entries_fetcher = index->Search(predicate, false);
+  EXPECT_EQ(entries_fetcher->Size(), 0);
+}
+
 TEST_F(TagIndexTest, RemoveRecordAndSearchTest) {
   EXPECT_TRUE(index->AddRecord("key1", "tag1").value());
   EXPECT_TRUE(index->AddRecord("key2", "tag2").value());
@@ -132,6 +154,51 @@ TEST_F(TagIndexTest, KeyTrackingTest) {
   EXPECT_FALSE(index->AddRecord("key5", "  ").value());
   EXPECT_FALSE(index->ModifyRecord("key5", " ").value());
   EXPECT_TRUE(index->AddRecord("key6", " tag6 , tag7 ").value());
+}
+
+// GetTagValueDocCount feeds the BM25 IDF document frequency (dt) for tag
+// scoring: the number of documents carrying a given tag value.
+TEST_F(TagIndexTest, GetTagValueDocCountBasic) {
+  // red -> {d1, d3}, blue -> {d2, d3}, green -> {d4}.
+  EXPECT_TRUE(index->AddRecord("d1", "red").value());
+  EXPECT_TRUE(index->AddRecord("d2", "blue").value());
+  EXPECT_TRUE(index->AddRecord("d3", "red,blue").value());
+  EXPECT_TRUE(index->AddRecord("d4", "green").value());
+
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 2u);
+  EXPECT_EQ(index->GetTagValueDocCount("blue"), 2u);
+  EXPECT_EQ(index->GetTagValueDocCount("green"), 1u);
+  // Absent value -> 0 (no rax slot).
+  EXPECT_EQ(index->GetTagValueDocCount("yellow"), 0u);
+}
+
+// A tag value repeated within one document still counts that document once:
+// the posting bag is a set of doc-keys, so dt is a distinct-doc count. This
+// mirrors the doc's "tag frequency is not counted" finding (F is pinned to 1).
+TEST_F(TagIndexTest, GetTagValueDocCountDedupsRepeatedValueInDoc) {
+  EXPECT_TRUE(index->AddRecord("d1", "red").value());
+  EXPECT_TRUE(index->AddRecord("d2", "red,red,red").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 2u);
+}
+
+// Lookup normalizes the query value (lowercase) for a case-insensitive index,
+// matching how values are stored.
+TEST_F(TagIndexTest, GetTagValueDocCountCaseInsensitive) {
+  EXPECT_TRUE(index->AddRecord("d1", "Red").value());
+  EXPECT_TRUE(index->AddRecord("d2", "RED").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 2u);
+  EXPECT_EQ(index->GetTagValueDocCount("RED"), 2u);
+}
+
+// Removing a document decrements the count; emptying a value erases its slot.
+TEST_F(TagIndexTest, GetTagValueDocCountReflectsRemoval) {
+  EXPECT_TRUE(index->AddRecord("d1", "red").value());
+  EXPECT_TRUE(index->AddRecord("d2", "red").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 2u);
+  EXPECT_TRUE(index->RemoveRecord("d1").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 1u);
+  EXPECT_TRUE(index->RemoveRecord("d2").value());
+  EXPECT_EQ(index->GetTagValueDocCount("red"), 0u);
 }
 
 TEST_F(TagIndexTest, PrefixSearchHappyTest) {

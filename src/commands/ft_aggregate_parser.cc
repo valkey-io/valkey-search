@@ -43,6 +43,7 @@ constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kSlopParam{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kScorerParam{"SCORER"};
 
 std::string OutputNameFor(absl::string_view written_name,
                           absl::string_view schema_identifier) {
@@ -370,6 +371,9 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
                         GENERATE_FLAG_PARSER(AggregateParameters, inorder));
   parser.AddParamParser(kVerbatim,
                         GENERATE_FLAG_PARSER(AggregateParameters, verbatim));
+  parser.AddParamParser(kScorerParam,
+                        GENERATE_ENUM_PARSER(AggregateParameters, scorer,
+                                             *indexes::scoring::kScorerByStr));
   parser.AddParamParser(kLoadParam, ConstructLoadParser());
   parser.AddParamParser(kApplyParam, ConstructApplyParser());
   parser.AddParamParser(kFilterParam, ConstructFilterParser());

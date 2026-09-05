@@ -55,8 +55,8 @@ void FreeStemParentsCallback(void *target) {
 
 InvasivePtr<Postings> AddKeyToPostings(
     const InvasivePtr<Postings> &existing_postings,
-    const InternedStringPtr &key, FlatPositionMap *flat_map,
-    TextIndexMetadata *metadata) {
+    const InternedStringPtr &key, FlatPositionMap *flat_map, uint32_t tf,
+    uint32_t doc_len, TextIndexMetadata *metadata) {
   InvasivePtr<Postings> postings;
   if (existing_postings) {
     postings = existing_postings;
@@ -65,7 +65,7 @@ InvasivePtr<Postings> AddKeyToPostings(
     postings = InvasivePtr<Postings>::Make();
   }
 
-  postings->InsertKey(key, flat_map);
+  postings->InsertKey(key, flat_map, tf, doc_len);
   return postings;
 }
 
@@ -210,7 +210,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   return true;
 }
 
-void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
+TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
+    const InternedStringPtr &key) {
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -218,7 +219,7 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     auto node = in_progress_key_updates_.extract(key);
     // Exit early if the key contains no new text updates
     if (node.empty()) {
-      return;
+      return {};
     }
     token_positions = std::move(node.mapped());
   }
@@ -235,6 +236,16 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 
   TextIndex key_index{with_suffix_trie_};
 
+  // doc_len (total term frequency for this key) must be known before postings
+  // are inserted, so each PostingValue can carry it for the scoring hot path.
+  uint32_t doc_len = 0;
+  for (const auto &entry : token_positions) {
+    for (const auto &[_, field_mask] : entry.second.first) {
+      doc_len += field_mask.CountSetFields();
+    }
+  }
+  uint32_t norm = 0;
+
   // Index the key's tokens
   for (auto &entry : token_positions) {
     const std::string &token = entry.first;
@@ -245,11 +256,14 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
                                 std::string(token.rbegin(), token.rend()))
                           : std::nullopt;
 
-    // Update metadata from PositionMap
+    // Update metadata from PositionMap. token_freq is this key's term frequency
+    // for this token, so it also seeds the posting entry below.
     metadata_.total_positions += pos_map.size();
+    uint32_t token_freq = 0;
     for (const auto &[_, field_mask] : pos_map) {
-      metadata_.total_term_frequency += field_mask.CountSetFields();
+      token_freq += field_mask.CountSetFields();
     }
+    norm = std::max(norm, token_freq);
 
     // Create FlatPositionMap from PositionMap
     FlatPositionMap *flat_map =
@@ -269,7 +283,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       }
       bool is_new_word = !existing;
 
-      updated_target = AddKeyToPostings(existing, key, flat_map, &metadata_);
+      updated_target = AddKeyToPostings(existing, key, flat_map, token_freq,
+                                        doc_len, &metadata_);
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);
@@ -304,21 +319,30 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     }
   }
 
-  // Map the key to the newly created per-key index
+  // Map the key to the newly created per-key index and scoring info
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
+    per_key_scoring_info_[key] = {doc_len, norm};
+    metadata_.total_doc_len += doc_len;
+    metadata_.total_term_frequency += doc_len;
   }
+
+  return {doc_len, norm};
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
-  // Extract the per-key index
+  // Extract the per-key index and scoring info
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     node = per_key_text_indexes_.extract(key);
     if (node.empty()) {
       return;
+    }
+    auto scoring_node = per_key_scoring_info_.extract(key);
+    if (!scoring_node.empty()) {
+      metadata_.total_doc_len -= scoring_node.mapped().doc_len;
     }
   }
   TextIndex &key_index = node.mapped();

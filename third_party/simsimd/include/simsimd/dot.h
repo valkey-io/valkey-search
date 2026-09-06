@@ -696,6 +696,54 @@ SIMSIMD_PUBLIC void simsimd_dot_f16_fhm(simsimd_f16_t const* a, simsimd_f16_t co
 #endif // SIMSIMD_TARGET_NEON_FHM
 // VALKEYSEARCH END
 
+
+// VALKEYSEARCH BEGIN
+#if SIMSIMD_TARGET_NEON
+#pragma GCC push_options
+#pragma GCC target("arch=armv8.2-a+simd")
+#pragma clang attribute push(__attribute__((target("arch=armv8.2-a+simd"))), apply_to = function)
+
+/*  Widening a bf16 to an f32 is a 16-bit left shift: a bf16 is the high half of
+ *  the f32 encoding. Only BFMLAL needs FEAT_BF16; the widening itself does not,
+ *  so this runs on any NEON core. Cores without the feature -- Neoverse N1, and
+ *  so AWS Graviton 2 -- otherwise fall all the way to the scalar kernels, which
+ *  measured 1.25 G elem/s against 13.8 on a core that has it.
+ *
+ *  Accumulation is f32 throughout, arithmetically identical to the BFMLAL
+ *  kernels; only the widening instruction differs.
+ */
+SIMSIMD_INTERNAL float32x4_t simsimd_bf16_lo_f32_neon_(uint16x8_t v) {
+    return vreinterpretq_f32_u32(vshll_n_u16(vget_low_u16(v), 16));
+}
+SIMSIMD_INTERNAL float32x4_t simsimd_bf16_hi_f32_neon_(uint16x8_t v) {
+    return vreinterpretq_f32_u32(vshll_high_n_u16(v, 16));
+}
+
+SIMSIMD_PUBLIC void simsimd_dot_bf16_neon_shift(simsimd_bf16_t const* a, simsimd_bf16_t const* b, simsimd_size_t n,
+                                                simsimd_distance_t* result) {
+    float32x4_t s0 = vdupq_n_f32(0), s1 = vdupq_n_f32(0), s2 = vdupq_n_f32(0), s3 = vdupq_n_f32(0);
+    simsimd_size_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        uint16x8_t a0 = vld1q_u16((unsigned short const*)a + i), b0 = vld1q_u16((unsigned short const*)b + i);
+        uint16x8_t a1 = vld1q_u16((unsigned short const*)a + i + 8), b1 = vld1q_u16((unsigned short const*)b + i + 8);
+        s0 = vfmaq_f32(s0, simsimd_bf16_lo_f32_neon_(a0), simsimd_bf16_lo_f32_neon_(b0));
+        s1 = vfmaq_f32(s1, simsimd_bf16_hi_f32_neon_(a0), simsimd_bf16_hi_f32_neon_(b0));
+        s2 = vfmaq_f32(s2, simsimd_bf16_lo_f32_neon_(a1), simsimd_bf16_lo_f32_neon_(b1));
+        s3 = vfmaq_f32(s3, simsimd_bf16_hi_f32_neon_(a1), simsimd_bf16_hi_f32_neon_(b1));
+    }
+    float32x4_t acc = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
+    simsimd_f32_t tail = 0;
+    for (; i < n; ++i)
+        tail += simsimd_uncompress_bf16(((unsigned short const*)a)[i]) *
+                simsimd_uncompress_bf16(((unsigned short const*)b)[i]);
+    *result = vaddvq_f32(acc) + tail;
+}
+
+#pragma clang attribute pop
+#pragma GCC pop_options
+#endif // SIMSIMD_TARGET_NEON
+// VALKEYSEARCH END
+
 #if SIMSIMD_TARGET_SVE
 
 #pragma GCC push_options

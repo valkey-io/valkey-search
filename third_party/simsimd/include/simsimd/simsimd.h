@@ -671,6 +671,19 @@ SIMSIMD_PUBLIC void simsimd_find_metric_punned( //
             default: break;
             }
 #endif
+        // VALKEYSEARCH BEGIN
+        // A NEON core without FEAT_BF16 has no bf16 arm above and would drop to
+        // the scalar kernels. Widening by shift needs only plain NEON and keeps
+        // the same f32 accumulation.
+#if SIMSIMD_TARGET_NEON
+        if (viable & simsimd_cap_neon_k)
+            switch (kind) {
+            case simsimd_metric_dot_k: *m = (m_t)&simsimd_dot_bf16_neon_shift, *c = simsimd_cap_neon_k; return;
+            case simsimd_metric_l2sq_k: *m = (m_t)&simsimd_l2sq_bf16_neon_shift, *c = simsimd_cap_neon_k; return;
+            default: break;
+            }
+#endif
+        // VALKEYSEARCH END
 #if SIMSIMD_TARGET_HASWELL
         if (viable & simsimd_cap_haswell_k)
             switch (kind) {

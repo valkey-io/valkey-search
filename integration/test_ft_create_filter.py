@@ -5,7 +5,6 @@ from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from ft_info_parser import FTInfoParser
 import pytest
-import time
 
 
 class TestFTCreateFilter(ValkeySearchTestCaseBase):
@@ -85,7 +84,6 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
 
         # Mutate prod:2 so its price drops below the filter threshold.
         client.execute_command("HSET", "prod:2", "price", "10", "name", "beta")
-        time.sleep(0.5)
 
         # prod:2 should now be removed from the index.
         result = client.execute_command("FT.SEARCH", "price_idx", "@price:[0 +inf]")
@@ -99,7 +97,6 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
 
         # Mutate prod:2 back above the threshold — it should re-enter the index.
         client.execute_command("HSET", "prod:2", "price", "250", "name", "beta")
-        time.sleep(0.5)
 
         result = client.execute_command("FT.SEARCH", "price_idx", "@price:[0 +inf]")
         assert result[0] == 3, f"Expected 3 docs after re-qualifying mutation, got {result[0]}"
@@ -133,7 +130,6 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
 
         # Mutate doc:1 to a non-electronics category — should be removed.
         client.execute_command("HSET", "doc:1", "category", "books", "rating", "5")
-        time.sleep(0.5)
 
         result = client.execute_command("FT.SEARCH", "cat_idx", "@rating:[0 +inf]")
         assert result[0] == 1

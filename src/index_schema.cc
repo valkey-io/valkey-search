@@ -2330,4 +2330,19 @@ absl::StatusOr<expr::Value> IndexSchema::GetParam(absl::string_view s) const {
   return absl::NotFoundError(absl::StrCat("Parameter `", s, "` not found"));
 }
 
+bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
+                                 ValkeyModuleCtx *ctx,
+                                 ValkeyModuleKey *open_key,
+                                 absl::string_view key) const {
+  // stats_ is mutable and this runs on the main thread, so the record can
+  // take the stats by reference and count conversion failures directly.
+  FilterRecord record(mutated_attributes, stats_);
+  FilterEvalContext eval_ctx(ctx, open_key, key, attribute_data_type_.get());
+  auto result = compiled_filter_->Evaluate(eval_ctx, record);
+  // A Nil ("unknown") result means the filter referenced a missing field;
+  // matching Redisearch, such a document is kept. Only a definite false
+  // excludes it.
+  return result.IsNil() || result.IsTrue();
+}
+
 }  // namespace valkey_search

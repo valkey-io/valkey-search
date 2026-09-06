@@ -193,5 +193,101 @@ TEST_F(ExprTest, NotOperatorRequiresOperand) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// FT.CREATE FILTER semantics.
+//
+// ExprTest above pins APPLY semantics (UseFilterComparisonSemantics() ==
+// false). This fixture is its FILTER counterpart: it compiles with the flag
+// on, so CmpOp() selects the FilterFunc* comparisons and AndOp()/OrOp()
+// build short-circuit FilterLogical nodes instead of the eager
+// FuncLand/FuncLor. Without it the FILTER-only branches in expr.cc have no
+// unit coverage at all and are exercised only by the Redis Stack
+// compatibility suite, which needs Docker to run.
+// ---------------------------------------------------------------------------
+class FilterExprTest : public ExprTest {
+ protected:
+  struct FilterCompileContext : public CompileContext {
+    bool UseFilterComparisonSemantics() const override { return true; }
+  } fcc;
+
+  // Compile `expr` under FILTER semantics and evaluate it against record_.
+  Value Eval(absl::string_view expr) {
+    auto compiled = Expression::Compile(fcc, expr);
+    EXPECT_TRUE(compiled.ok())
+        << "failed to compile '" << expr << "': " << compiled.status();
+    if (!compiled.ok()) {
+      return Value(Value::Nil("compile failed"));
+    }
+    Expression::EvalContext ec;
+    return (*compiled)->Evaluate(ec, *record_);
+  }
+
+  void SetUp() override {
+    ExprTest::SetUp();
+    // "missing" is resolvable at compile time but absent at evaluation time,
+    // so Ref::GetValue returns a Nil -- the same shape a FILTER sees for a
+    // field the document does not carry.
+    fcc.known_attr.insert("missing");
+  }
+};
+
+// A comparison involving a missing field is "unknown", not true or false.
+// IndexSchema::EvaluateFilter keeps the document on a top-level Nil, so this
+// is what lets `@status != 'x'` still admit a document with no status field.
+TEST_F(FilterExprTest, MissingFieldComparisonYieldsNil) {
+  for (absl::string_view expr :
+       {"@missing == 1", "@missing != 1", "@missing < 1", "@missing <= 1",
+        "@missing > 1", "@missing >= 1"}) {
+    EXPECT_TRUE(Eval(expr).IsNil()) << "expected Nil from '" << expr << "'";
+  }
+  // A present field still produces a definite answer.
+  EXPECT_EQ(Eval("@one == 1"), Value(true));
+  EXPECT_EQ(Eval("@one == 2"), Value(false));
+}
+
+// Negating an unknown stays unknown, so the document is still kept.
+TEST_F(FilterExprTest, NegationPropagatesNil) {
+  EXPECT_TRUE(Eval("!(@missing == 1)").IsNil());
+  EXPECT_EQ(Eval("!(@one == 1)"), Value(false));
+  EXPECT_EQ(Eval("!(@one == 2)"), Value(true));
+}
+
+// Three-valued && / ||, and deliberately order-sensitive: a definite false
+// on the left of && short-circuits to false and excludes the document, but
+// an unknown on the left propagates and keeps it. Redisearch behaves the
+// same way, which is why FilterLogical short-circuits rather than eagerly
+// evaluating both sides like FuncLand/FuncLor.
+TEST_F(FilterExprTest, LogicalOperatorsAreThreeValuedAndOrderSensitive) {
+  EXPECT_EQ(Eval("(@one == 2) && (@missing == 1)"), Value(false));
+  EXPECT_TRUE(Eval("(@missing == 1) && (@one == 2)").IsNil());
+
+  EXPECT_EQ(Eval("(@one == 1) || (@missing == 1)"), Value(true));
+  EXPECT_TRUE(Eval("(@missing == 1) || (@one == 2)").IsNil());
+
+  // A definite operand on both sides behaves normally.
+  EXPECT_EQ(Eval("(@one == 1) && (@two == 2)"), Value(true));
+  EXPECT_EQ(Eval("(@one == 1) && (@two == 1)"), Value(false));
+  EXPECT_EQ(Eval("(@one == 2) || (@two == 2)"), Value(true));
+}
+
+// An unordered comparison -- reachable only via a NaN, since Nil is guarded
+// above and no filter attribute reference yields an array -- reads as equal,
+// matching Redisearch: ==, <= and >= are true while !=, < and > are false.
+// Regression guard for FilterFuncNe, which used to answer != as true here
+// and so admitted a document that Redisearch rejects. `0/0` is the NaN.
+TEST_F(FilterExprTest, UnorderedComparisonReadsAsEqual) {
+  EXPECT_EQ(Eval("(0/0) == 0"), Value(true));
+  EXPECT_EQ(Eval("(0/0) != 0"), Value(false));
+  EXPECT_EQ(Eval("(0/0) <= 0"), Value(true));
+  EXPECT_EQ(Eval("(0/0) >= 0"), Value(true));
+  EXPECT_EQ(Eval("(0/0) < 0"), Value(false));
+  EXPECT_EQ(Eval("(0/0) > 0"), Value(false));
+
+  // Unlike a missing field, a NaN is a real computed value: it never yields
+  // the Nil that would keep the document.
+  EXPECT_FALSE(Eval("(0/0) == 0").IsNil());
+  EXPECT_FALSE(Eval("(0/0) != 0").IsNil());
+}
+
 }  // namespace expr
 }  // namespace valkey_search

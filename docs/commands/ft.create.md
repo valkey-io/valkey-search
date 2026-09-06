@@ -39,6 +39,8 @@ FT.CREATE <index-name>
 
 - `FILTER <expression>` (optional): A boolean expression evaluated for each candidate key during ingestion; only keys for which it evaluates to true (or to an unknown/`NULL` result, following three-valued logic) are included in the index. A comparison involving a missing field yields `NULL`, so, for example, a negation such as `@status != 'active'` still admits a key that has no `status` field. The number of keys excluded by the filter is reported by `FT.INFO` as `filter_rejected_keys`.
 
+  See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
+
   Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field evaluates to a missing/`NULL` value, and a value compared against a numeric literal is promoted to a number). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
 
 - `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.

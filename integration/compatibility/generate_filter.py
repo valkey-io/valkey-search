@@ -79,9 +79,18 @@ class TestFilterCompatibility(BaseCompatibilityTest):
     def _run_hard_strings_queries(self, key_type, dialect):
         """Run standard queries against an index built over the hard-strings data.
 
-        Avoids the bare '*' query — valkey-search does not support it. Two
-        complementary queries (@s1 tag + s2 text) cover the whole document set
-        across the FILTER variants.
+        Avoids the bare '*' query -- valkey-search does not support it, so the
+        corpus has to be reached with real predicates. Three queries are
+        needed to span all seven _HARD_STRINGS rows; with fewer, a FILTER bug
+        confined to an unreached row changes no answer and passes silently:
+
+          @s1:{alpha}              -> "alpha", and "Alpha" (TAG is
+                                      case-insensitive without CASESENSITIVE)
+          @s2:bravo                -> the rows whose TEXT contains "bravo",
+                                      including "alpha-bravo", whose hyphen
+                                      would need escaping in a TAG query
+          @s1:{a|abc|abc123|zulu}  -> the four rows neither of the above
+                                      reaches
         """
         self.check(
             "FT.SEARCH", f"{key_type}_idx1", "@s1:{alpha}",
@@ -92,12 +101,21 @@ class TestFilterCompatibility(BaseCompatibilityTest):
             "DIALECT", str(dialect),
         )
         self.check(
+            "FT.SEARCH", f"{key_type}_idx1", "@s1:{a|abc|abc123|zulu}",
+            "DIALECT", str(dialect),
+        )
+        self.check(
             "FT.AGGREGATE", f"{key_type}_idx1", "@s1:{alpha}",
             "load", "1", "@__key",
             "DIALECT", str(dialect),
         )
         self.check(
             "FT.AGGREGATE", f"{key_type}_idx1", "@s2:bravo",
+            "load", "1", "@__key",
+            "DIALECT", str(dialect),
+        )
+        self.check(
+            "FT.AGGREGATE", f"{key_type}_idx1", "@s1:{a|abc|abc123|zulu}",
             "load", "1", "@__key",
             "DIALECT", str(dialect),
         )

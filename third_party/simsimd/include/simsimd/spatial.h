@@ -235,14 +235,54 @@ SIMSIMD_PUBLIC void simsimd_cos_f32_neon(simsimd_f32_t const* a, simsimd_f32_t c
 
 SIMSIMD_PUBLIC void simsimd_l2sq_f16_neon(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n,
                                           simsimd_distance_t* result) {
-    float32x4_t sum_vec = vdupq_n_f32(0);
+    // VALKEYSEARCH BEGIN
+    // Widen to f32 before subtracting, so the difference is exact: an f16
+    // minus an f16 is always representable in f32, where computing it in f16
+    // rounds. That is why l2sq cannot use the FHM kernel that dot uses --
+    // FMLAL widens during the multiply, but no widening instruction produces
+    // a difference, so an FHM l2sq has to subtract in f16 first.
+    //
+    // Eight accumulator chains and 8-element loads. The original loop read
+    // vld1_f16, four lanes, half a register, into a single accumulator, so it
+    // was both narrow and bound by the latency of the closing FMA.
+    float32x4_t d0 = vdupq_n_f32(0), d1 = vdupq_n_f32(0), d2 = vdupq_n_f32(0), d3 = vdupq_n_f32(0);
+    float32x4_t d4 = vdupq_n_f32(0), d5 = vdupq_n_f32(0), d6 = vdupq_n_f32(0), d7 = vdupq_n_f32(0);
+    float32x4_t t;
     simsimd_size_t i = 0;
+    for (; i + 32 <= n; i += 32) {
+        float16x8_t a0 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i);
+        float16x8_t b0 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i);
+        float16x8_t a1 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 8);
+        float16x8_t b1 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 8);
+        float16x8_t a2 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 16);
+        float16x8_t b2 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 16);
+        float16x8_t a3 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 24);
+        float16x8_t b3 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 24);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a0)), vcvt_f32_f16(vget_low_f16(b0))), d0 = vfmaq_f32(d0, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a0), vcvt_high_f32_f16(b0)), d1 = vfmaq_f32(d1, t, t);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a1)), vcvt_f32_f16(vget_low_f16(b1))), d2 = vfmaq_f32(d2, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a1), vcvt_high_f32_f16(b1)), d3 = vfmaq_f32(d3, t, t);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a2)), vcvt_f32_f16(vget_low_f16(b2))), d4 = vfmaq_f32(d4, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a2), vcvt_high_f32_f16(b2)), d5 = vfmaq_f32(d5, t, t);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a3)), vcvt_f32_f16(vget_low_f16(b3))), d6 = vfmaq_f32(d6, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a3), vcvt_high_f32_f16(b3)), d7 = vfmaq_f32(d7, t, t);
+    }
+    for (; i + 8 <= n; i += 8) {
+        float16x8_t a_vec = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i);
+        float16x8_t b_vec = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a_vec)), vcvt_f32_f16(vget_low_f16(b_vec))),
+        d0 = vfmaq_f32(d0, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a_vec), vcvt_high_f32_f16(b_vec)), d1 = vfmaq_f32(d1, t, t);
+    }
+    float32x4_t sum_vec = vaddq_f32(vaddq_f32(vaddq_f32(d0, d1), vaddq_f32(d2, d3)),
+                                    vaddq_f32(vaddq_f32(d4, d5), vaddq_f32(d6, d7)));
     for (; i + 4 <= n; i += 4) {
         float32x4_t a_vec = vcvt_f32_f16(vld1_f16((simsimd_f16_for_arm_simd_t const*)a + i));
         float32x4_t b_vec = vcvt_f32_f16(vld1_f16((simsimd_f16_for_arm_simd_t const*)b + i));
         float32x4_t diff_vec = vsubq_f32(a_vec, b_vec);
         sum_vec = vfmaq_f32(sum_vec, diff_vec, diff_vec);
     }
+    // VALKEYSEARCH END
 
     // In case the software emulation for `f16` scalars is enabled, the `simsimd_uncompress_f16`
     // function will run. It is extremely slow, so even for the tail, let's combine serial

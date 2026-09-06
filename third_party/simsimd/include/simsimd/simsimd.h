@@ -584,7 +584,11 @@ SIMSIMD_PUBLIC void simsimd_find_metric_punned( //
         if (viable & simsimd_cap_neon_fhm_k)
             switch (kind) {
             case simsimd_metric_dot_k: *m = (m_t)&simsimd_dot_f16_fhm, *c = simsimd_cap_neon_fhm_k; return;
-            case simsimd_metric_l2sq_k: *m = (m_t)&simsimd_l2sq_f16_fhm, *c = simsimd_cap_neon_fhm_k; return;
+            // l2sq deliberately absent: simsimd_l2sq_f16_fhm accumulates in
+            // f32 but computes a - b with vsubq_f16 first, and that rounding
+            // measures 3.40e-04 against 8.06e-07 for the NEON kernel below,
+            // which widens before it subtracts. Falling through keeps every
+            // intermediate in f32.
             default: break;
             }
 #endif

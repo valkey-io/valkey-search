@@ -485,8 +485,8 @@ constexpr double kSlack = 4.0;
 
 double AccumulationTolerance(size_t dim, double sum_abs_terms,
                              double unit_roundoff) {
-  return kSlack * unit_roundoff *
-         (1.0 + std::sqrt(static_cast<double>(dim))) * std::abs(sum_abs_terms);
+  return kSlack * unit_roundoff * (1.0 + std::sqrt(static_cast<double>(dim))) *
+         std::abs(sum_abs_terms);
 }
 
 template <typename T, typename SpaceT>
@@ -500,9 +500,9 @@ void ExpectDenseL2Matches(size_t dim) {
   // Every L2 term is a square, so the reference is already the sum of the
   // absolute term magnitudes.
   const double reference = ReferenceL2Sqr(a, b);
-  EXPECT_NEAR(CallDist(space, a.data(), b.data()), reference,
-              AccumulationTolerance(dim, reference,
-                                    KernelRoundoff<T>::kDispatched))
+  EXPECT_NEAR(
+      CallDist(space, a.data(), b.data()), reference,
+      AccumulationTolerance(dim, reference, KernelRoundoff<T>::kDispatched))
       << "dim=" << dim;
 }
 

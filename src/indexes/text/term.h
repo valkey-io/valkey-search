@@ -50,6 +50,8 @@ class TermIterator : public TextIterator {
       const FieldMaskPredicate query_field_mask, const bool require_positions,
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
       float leaf_weight = 1.0f, uint32_t num_doc_contain_term = 0,
+      uint32_t stem_num_doc_contain_term = 0,
+      uint32_t root_num_doc_contain_term = 0, bool has_root = false,
       const TextIndexSchema* text_index_schema = nullptr,
       const scoring::Scorer* scorer = nullptr);
   /* Implementation of TextIterator APIs */
@@ -95,6 +97,8 @@ class TermIterator : public TextIterator {
   FieldMaskPredicate current_field_mask_;
   const bool require_positions_;
   const bool has_original_;
+  // Whether a stem root literal iterator is present (index has_original_?1:0).
+  const bool has_root_;
 
   // Scoring inputs. leaf_weight_ is the query-tree weight applied to this leaf;
   // num_doc_contain_term_ (dt) is the per-term document count captured at build
@@ -111,6 +115,9 @@ class TermIterator : public TextIterator {
   // fallback).
   const scoring::Scorer* scorer_{nullptr};
   float idf_{0.0f};
+  // Separate IDFs for the stem inflection group and the stem root literal leaf.
+  float idf_stem_{0.0f};
+  float idf_root_{0.0f};
   float avg_doc_len_{0.0f};
 
   // Pending queue: heap of valid iterators not currently being processed.

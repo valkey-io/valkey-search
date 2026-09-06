@@ -186,4 +186,22 @@ uint32_t Postings::KeyIterator::GetDocLen() const {
   return current_->second.doc_len;
 }
 
+uint32_t CountDistinctKeys(absl::Span<Postings::KeyIterator> iterators) {
+  uint32_t count = 0;
+  while (true) {
+    const Key* min_key = nullptr;
+    for (auto& it : iterators) {
+      if (it.IsValid() && (min_key == nullptr || it.GetKey() < *min_key)) {
+        min_key = &it.GetKey();
+      }
+    }
+    if (min_key == nullptr) break;
+    ++count;
+    for (auto& it : iterators) {
+      if (it.IsValid() && it.GetKey() == *min_key) it.NextKey();
+    }
+  }
+  return count;
+}
+
 }  // namespace valkey_search::indexes::text

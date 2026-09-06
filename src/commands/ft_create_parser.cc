@@ -221,20 +221,32 @@ const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::AttributeDataType>>
     kOnDataTypeByStr({{"HASH", data_model::ATTRIBUTE_DATA_TYPE_HASH},
                       {"JSON", data_model::ATTRIBUTE_DATA_TYPE_JSON}});
+// PREFIX <count> <prefix>...: parsed from the flexible pre-SCHEMA ordering
+// loop, so it may appear anywhere before SCHEMA relative to the other
+// options. `seen` tracks whether a PREFIX clause has been consumed; the
+// caller uses it after the loop to enforce that a hash-tagged index has one,
+// which cannot be decided here because an iteration without PREFIX is normal.
 absl::Status ParsePrefixes(vmsdk::ArgsIterator &itr,
                            data_model::IndexSchema &index_schema_proto,
-                           std::optional<absl::string_view> index_hash_tag) {
+                           std::optional<absl::string_view> index_hash_tag,
+                           bool &seen) {
   uint32_t prefixes_cnt{0};
   VMSDK_ASSIGN_OR_RETURN(
       auto res, vmsdk::ParseParam(kPrefixParam, false, itr, prefixes_cnt));
   if (!res) {
-    if (index_hash_tag.has_value()) {
-      return absl::InvalidArgumentError(
-          "PREFIX parameter is required for hash-tagged indexes");
-    } else {
-      return absl::OkStatus();
-    }
+    return absl::OkStatus();
   }
+  // A second PREFIX clause is rejected rather than appended: accumulating
+  // would let repeated clauses slip past the max-prefixes bound checked
+  // below, and "PREFIX 1 a: PREFIX 1 b:" is far more likely a typo for
+  // "PREFIX 2 a: b:" than a deliberate union. This input was already an
+  // error before PREFIX joined the ordering loop, just a more confusing one
+  // ("Unexpected parameter `PREFIX`, expecting `SCHEMA`").
+  if (seen) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("`", kPrefixParam, "` specified multiple times"));
+  }
+  seen = true;
   if (prefixes_cnt > (uint32_t)itr.DistanceEnd()) {
     return absl::InvalidArgumentError(
         absl::StrCat("Bad arguments for PREFIX: `", prefixes_cnt,
@@ -661,8 +673,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError("JSON module is not loaded.");
   }
   index_schema_proto.set_attribute_data_type(on_data_type);
-  VMSDK_RETURN_IF_ERROR(ParsePrefixes(
-      itr, index_schema_proto, vmsdk::ParseHashTag(index_schema_proto.name())));
+  const auto index_hash_tag = vmsdk::ParseHashTag(index_schema_proto.name());
+  bool prefix_seen = false;
 
   // Parse schema-level text parameters before SCHEMA
   PerIndexTextParams schema_text_defaults;
@@ -689,6 +701,10 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 
     // Track current position to detect if no parameter was consumed
     auto initial_distance = itr.DistanceEnd();
+
+    // Try PREFIX parameter
+    VMSDK_RETURN_IF_ERROR(
+        ParsePrefixes(itr, index_schema_proto, index_hash_tag, prefix_seen));
 
     // Try SCORE parameter
     VMSDK_RETURN_IF_ERROR(ParseScore(itr, index_schema_proto));
@@ -721,6 +737,16 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     if (itr.DistanceEnd() == initial_distance) {
       break;
     }
+  }
+
+  // A hash-tagged index must restrict itself to keys carrying the same tag,
+  // so it requires a PREFIX clause. Checked here rather than in
+  // ParsePrefixes() because that now runs once per loop iteration, where an
+  // absent PREFIX is normal. Keyed on whether a clause was seen, not on
+  // whether any prefix was collected, so `PREFIX 0` keeps behaving as it did.
+  if (index_hash_tag.has_value() && !prefix_seen) {
+    return absl::InvalidArgumentError(
+        "PREFIX parameter is required for hash-tagged indexes");
   }
 
   // Validate global text parameters

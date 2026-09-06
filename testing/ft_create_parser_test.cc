@@ -1245,6 +1245,80 @@ INSTANTIATE_TEST_SUITE_P(
                  "FILTER expression cannot be empty",
          },
          {
+             // PREFIX is parsed from the flexible ordering loop too, so it
+             // no longer has to come first among the pre-SCHEMA options.
+             .test_name = "prefix_after_score_and_filter",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"@price>100\" "
+                 "PREFIX 1 p: SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             .test_name = "prefix_between_other_options",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SKIPINITIALSCAN PREFIX 2 a: b: LANGUAGE english "
+                 "SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"a:", "b:"},
+                  .skip_initial_scan = true,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // A hash-tagged index still requires a PREFIX clause; the check
+             // moved out of ParsePrefixes() to after the ordering loop, so it
+             // must still fire when PREFIX appears in a late position...
+             .test_name = "hash_tagged_index_with_late_prefix",
+             .success = true,
+             .command_str =
+                 "idx{a} on HASH SCORE 0.5 PREFIX 1 p{a} SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx{a}",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p{a}"},
+                  .score = 0.5,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // ... and must still reject a hash-tagged index that has other
+             // pre-SCHEMA options but no PREFIX at all.
+             .test_name = "hash_tagged_index_missing_prefix_with_options",
+             .success = false,
+             .command_str = "idx{a} on HASH SCORE 0.5 SCHEMA price numeric ",
+             .expected_error_message =
+                 "PREFIX parameter is required for hash-tagged indexes",
+         },
+         {
+             // Two PREFIX clauses are rejected outright rather than appended,
+             // so repeats cannot slip past the max-prefixes bound.
+             .test_name = "duplicate_prefix_clause",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 a: PREFIX 1 b: SCHEMA price numeric ",
+             .expected_error_message = "`PREFIX` specified multiple times",
+         },
+         {
              .test_name = "invalid_language_parameter_value",
              .success = false,
              .command_str = " idx1 LANGUAGE hebrew SChema hash_field1 vector "

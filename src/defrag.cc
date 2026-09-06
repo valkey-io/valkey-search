@@ -49,9 +49,9 @@ void OnGlobalDefragCallback(ValkeyModuleDefragCtx *ctx) {
 
   // Step 1: recover where the previous invocation stopped. On the first call of
   // a pass the stored cursor is 0, meaning "start from the beginning". A
-  // non-zero value is whatever we saved last time. DefragCursorGet fails only
-  // if core gave us no cursor at all, which is the case this module cannot
-  // resume in; treat it as "start over" and keep going.
+  // non-zero value is whatever we saved last time. A global callback is always
+  // handed a cursor, so DefragCursorGet only fails on an older core with no
+  // cursor at all; treat that as "start over" and keep going.
   unsigned long resume_from = 0;  // NOLINT(runtime/int) - core API type
   if (ValkeyModule_DefragCursorGet(ctx, &resume_from) == VALKEYMODULE_OK) {
     cursor_reads.fetch_add(1, std::memory_order_relaxed);

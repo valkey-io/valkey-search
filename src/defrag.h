@@ -35,8 +35,10 @@
 //     other scanner in defrag.c uses:
 //         cursor != 0  -> more work remains, call me again
 //         cursor == 0  -> done for this cycle
-//     A callback that never stores 0 will be invoked forever, so resetting the
-//     cursor on completion is mandatory, not optional.
+//     Resetting the cursor to 0 on completion is mandatory, not optional: a
+//     non-zero cursor keeps the whole global-defrag stage open, so a callback
+//     that never stores 0 not only runs forever but stalls defrag of the
+//     keyspace and every other module until it converges.
 //
 // This file implements the protocol end of that contract. It deliberately does
 // no index work: the sampling and rebuild path (reingestion) and the jemalloc

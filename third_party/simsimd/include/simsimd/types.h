@@ -77,6 +77,14 @@
 #if !defined(SIMSIMD_TARGET_NEON_BF16)
 #define SIMSIMD_TARGET_NEON_BF16 SIMSIMD_TARGET_NEON
 #endif // !defined(SIMSIMD_TARGET_NEON_BF16)
+// VALKEYSEARCH BEGIN
+// FEAT_FHM: the FMLAL/FMLAL2 widening f16 FMAs, which read bf16-width inputs
+// and accumulate in f32. Optional from Armv8.2, so it needs its own gate and
+// its own runtime capability bit rather than riding on NEON_F16 (FEAT_FP16).
+#if !defined(SIMSIMD_TARGET_NEON_FHM)
+#define SIMSIMD_TARGET_NEON_FHM SIMSIMD_TARGET_NEON
+#endif // !defined(SIMSIMD_TARGET_NEON_FHM)
+// VALKEYSEARCH END
 
 // Compiling for Arm: SIMSIMD_TARGET_SVE
 #if !defined(SIMSIMD_TARGET_SVE) || (SIMSIMD_TARGET_SVE && !SIMSIMD_TARGET_ARM)

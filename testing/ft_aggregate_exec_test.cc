@@ -82,12 +82,12 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-        1);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
 
@@ -111,15 +111,15 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
-        1);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n3", "n3", indexes::IndexerType::kNumeric),
-        2);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
+    EXPECT_EQ(params->AddRecordAttribute("n3", "n3", "n3",
+                                         indexes::IndexerType::kNumeric),
+              2);
 
     auto parser = CreateAggregateParser();
 
@@ -141,8 +141,9 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     AggregateParameters params(0);
     params.parse_vars_.index_interface_ = &fakeIndex;
-    params.AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-    params.AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric);
+    // Two numeric columns so the parsed stages can resolve both @n1 and @n2.
+    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
 
     auto parser = CreateAggregateParser();
     auto status = parser.Parse(params, itr);
@@ -323,36 +324,49 @@ TEST_F(AggregateExecTest, ReducerTest) {
     }
   }
 }
-// Regression test for issue #1251: re-using an alias for a different field must
-// shadow the previous binding (RediSearch LOAD/APPLY semantics) rather than
-// abort or silently corrupt the alias/slot bookkeeping.
-TEST_F(AggregateExecTest, AliasRebindShadowsPreviousBinding) {
+// Regression test for issue #1251: re-using an output name for a different
+// field must not corrupt the column bookkeeping (the original defect sized
+// records from record_indexes_by_alias_, which undercounted, so populating a
+// later column wrote out of bounds).
+//
+// Upstream resolved #1251 by letting the re-bind shadow: two columns, with the
+// name resolving to the second. This branch collapses on the output name
+// instead, which matches Redisearch -- `LOAD 4 @n1 @n2 AS n1` returns a single
+// n1 column holding n1's value (the first claim wins), and an APPLY that
+// re-uses a loaded field's name overwrites that column in place rather than
+// emitting the name twice. A LOAD clause that actually provokes this collision
+// is rejected outright by the parser; see test_aggregate_load_as.py.
+TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   auto params = std::make_unique<AggregateParameters>(0);
   params->parse_vars_.index_interface_ = &fakeIndex;
 
-  EXPECT_EQ(
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-      0);
-  EXPECT_EQ(
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-      1);
-
-  // record_info_by_index_.size() is the slot count records are sized by.
-  EXPECT_EQ(params->record_info_by_index_.size(), 2);
-
-  // Shadowed: alias n1 resolves to the new slot, but the old slot survives and
-  // stays reachable by its identifier.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
+  // Re-using the output name n1 for a different field resolves to the column
+  // already emitting that name; no second n1 column is created.
+  EXPECT_EQ(params->AddRecordAttribute("n2", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
+  EXPECT_EQ(params->record_info_by_index_.size(), 1);
   ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
-  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 1);
-  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n1"));
-  EXPECT_EQ(params->record_indexes_by_identifier_.at("n1"), 0);
-  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n2"));
-  EXPECT_EQ(params->record_indexes_by_identifier_.at("n2"), 1);
+  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 0);
+  EXPECT_EQ(params->record_info_by_index_[0].identifier_, "n1");
 
-  // Re-adding the pair currently in effect is idempotent — no new slot.
-  EXPECT_EQ(
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-      1);
+  // A distinct output name over the same field gets a column of its own, so
+  // record_info_by_index_ -- what records are sized by -- stays the count of
+  // columns actually emitted.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "alias_of_n1",
+                                       indexes::IndexerType::kNumeric),
+            1);
+  EXPECT_EQ(params->record_info_by_index_.size(), 2);
+  EXPECT_EQ(params->record_info_by_index_[1].identifier_, "n1");
+  EXPECT_EQ(params->record_indexes_by_alias_.at("alias_of_n1"), 1);
+
+  // Re-adding a pair currently in effect is idempotent -- no new column.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
 }
 
@@ -489,8 +503,10 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       vmsdk::ArgsIterator itr(argv.data(), argv.size());
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-      params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n1", "n1", "n1",
+                                 indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n2", "n2", "n2",
+                                 indexes::IndexerType::kNumeric);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";

@@ -227,6 +227,10 @@ std::vector<std::string> NormalizedKeyPrefixes(
 // of a BFLOAT16 element are unrelated values -- so at most one of them can be
 // right. Reject the schema instead of letting both exist.
 //
+// Both directions are checked: the new schema against every existing schema
+// whose key prefixes overlap, and the new schema against itself, since one
+// FT.CREATE can name the same identifier twice under two aliases.
+//
 // Only HASH is checked: a JSON attribute is identified by a path into the
 // document and is parsed from text per index, so two JSON indexes reading the
 // same path at different types each convert independently.
@@ -242,9 +246,26 @@ absl::Status ValidateNoConflictingVectorFieldTypes(
   absl::flat_hash_map<absl::string_view, data_model::VectorDataType>
       new_vector_fields;
   for (const auto &attribute : new_proto.attributes()) {
-    if (attribute.index().has_vector_index()) {
-      new_vector_fields[attribute.identifier()] =
-          attribute.index().vector_index().vector_data_type();
+    if (!attribute.index().has_vector_index()) {
+      continue;
+    }
+    const data_model::VectorDataType type =
+        attribute.index().vector_index().vector_data_type();
+    // Two aliases in one schema may name the same identifier. That reaches the
+    // same impossible state as two indexes do, without a second index for the
+    // loop below to compare against, so catch it while building the map rather
+    // than letting the later write win.
+    const auto [it, inserted] =
+        new_vector_fields.emplace(attribute.identifier(), type);
+    if (!inserted && it->second != type) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Field `", attribute.identifier(), "` is declared as both ",
+          indexes::LookupKeyByValue(*indexes::kVectorDataTypeByStr, it->second),
+          " and ",
+          indexes::LookupKeyByValue(*indexes::kVectorDataTypeByStr, type),
+          " by this index. The same hash field cannot be indexed as two "
+          "different vector data types, because the stored bytes can only be "
+          "interpreted as one of them."));
     }
   }
   if (new_vector_fields.empty()) {
@@ -304,11 +325,16 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
     return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
 
+  // Run unconditionally: the schema is also checked against itself, and a
+  // self-conflicting schema can be the first index in the database, where
+  // there is no map entry to find.
+  static const absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>
+      kNoExistingSchemas;
   auto db_entry = db_to_index_schemas_.find(db_num);
-  if (db_entry != db_to_index_schemas_.end()) {
-    VMSDK_RETURN_IF_ERROR(ValidateNoConflictingVectorFieldTypes(
-        index_schema_proto, db_entry->second));
-  }
+  VMSDK_RETURN_IF_ERROR(ValidateNoConflictingVectorFieldTypes(
+      index_schema_proto, db_entry != db_to_index_schemas_.end()
+                              ? db_entry->second
+                              : kNoExistingSchemas));
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,

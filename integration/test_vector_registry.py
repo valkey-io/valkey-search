@@ -352,6 +352,56 @@ class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
         err = self._create(client, "two", prefix_b, field_b, type_b)
         assert err == "", f"{desc} should be allowed but was rejected: {err}"
 
+    def _create_two_vector_fields(self, client: Valkey, name: str,
+                                  type_a: str, type_b: str) -> str:
+        """One FT.CREATE declaring the identifier `v` twice, under two aliases.
+
+        The aliases differ so nothing else rejects the command first; the
+        identifier -- the actual hash field name -- is the same in both.
+        """
+        args = ["FT.CREATE", name, "ON", "HASH", "PREFIX", "1", "k:", "SCHEMA",
+                "v", "AS", "v_a", "VECTOR", "FLAT", "6", "DIM", "3",
+                "TYPE", type_a, "DISTANCE_METRIC", "L2",
+                "v", "AS", "v_b", "VECTOR", "FLAT", "6", "DIM", "3",
+                "TYPE", type_b, "DISTANCE_METRIC", "L2"]
+        try:
+            client.execute_command(*args)
+            return ""
+        except Exception as e:  # noqa: BLE001 - surfacing the server message
+            return str(e)
+
+    def test_self_conflicting_schema_rejected(self):
+        """A single schema may not declare one field at two vector types.
+
+        The cross-index check is not enough: one FT.CREATE can name the same
+        hash field twice under different aliases, which reaches the same
+        impossible state -- one field, two incompatible interpretations -- but
+        never involves a second index.
+        """
+        client: Valkey = self.server.get_new_client()
+        err = self._create_two_vector_fields(client, "selfconflict",
+                                             "FLOAT16", "BFLOAT16")
+        assert err, "schema declaring `v` as both FLOAT16 and BFLOAT16 " \
+                    "should have been rejected"
+        assert "FLOAT16" in err and "v" in err, (
+            f"error should name the field and the conflicting type: {err}"
+        )
+        names = client.execute_command("FT._LIST")
+        assert b"selfconflict" not in names, (
+            f"rejected index was still created: {names}"
+        )
+
+    def test_self_consistent_schema_allowed(self):
+        """The same field twice at the *same* type stays legal.
+
+        Guards the fix against over-rejecting: two aliases over one field is
+        only a problem when the declared types disagree.
+        """
+        client: Valkey = self.server.get_new_client()
+        err = self._create_two_vector_fields(client, "selfconsistent",
+                                             "FLOAT16", "FLOAT16")
+        assert err == "", f"same-type duplicate should be allowed: {err}"
+
 
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
     """

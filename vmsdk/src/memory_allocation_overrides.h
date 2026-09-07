@@ -16,6 +16,33 @@
 
 #include "vmsdk/src/memory_allocation.h"
 
+// VMSDK_USE_VALKEY_ALLOC_OVERRIDES is defined when this build routes the
+// module's heap through ValkeyModule_Alloc/Free. When it is not defined, the
+// malloc macros and the operator new/delete replacements below are compiled
+// out and everything runs on the system allocator.
+//
+// Sanitizer builds opt out so that the sanitizer's own allocator sees every
+// allocation.
+//
+// macOS opts out as well. It is a build-only target:
+// .github/workflows/macos.yml runs build.sh with no tests, and the module is
+// never executed there. That matters because the deferral of static
+// initializers that makes the Valkey allocator usable from the very start of
+// module load (see vmsdk/deferred_init.lds and vmsdk/src/deferred_init.cc) is
+// implemented with a GNU linker script, and Mach-O has no equivalent.
+//
+// IF macOS EVER BECOMES A PRODUCTION TARGET, this problem must be solved for
+// that platform before the overrides can be enabled there. The Mach-O analogue
+// of the .init_array rename is the __DATA,__mod_init_func section, which would
+// need to be renamed at link time (ld64 -rename_section) and walked explicitly
+// from ValkeyModule_OnLoad the same way deferred_init.cc does. Simply defining
+// VMSDK_USE_VALKEY_ALLOC_OVERRIDES on macOS without that would reintroduce the
+// bug this design removes: static initializers allocating from the system
+// allocator and later being freed with ValkeyModule_Free.
+#if !defined(SAN_BUILD) && !defined(__APPLE__)
+#define VMSDK_USE_VALKEY_ALLOC_OVERRIDES 1
+#endif
+
 #if defined(__clang__)
 #define WEAK_SYMBOL __attribute__((weak))
 #else
@@ -69,7 +96,7 @@ int __wrap_posix_memalign(void** r, size_t __alignment, size_t __size) PMES;
 void* __wrap_valloc(size_t size) noexcept;
 }  // extern "C"
 
-#ifndef SAN_BUILD
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
 // NOLINTNEXTLINE
 #define malloc(...) __wrap_malloc(__VA_ARGS__)
 // NOLINTNEXTLINE
@@ -110,16 +137,12 @@ void operator delete[](void* p, std::align_val_t alignment,
                        const std::nothrow_t&) noexcept;
 void operator delete[](void* p, size_t size,
                        std::align_val_t alignment) noexcept;
-#endif  // !SAN_BUILD
+#endif  // VMSDK_USE_VALKEY_ALLOC_OVERRIDES
 
 namespace vmsdk {
-// Updates the custom allocator to perform any future allocations using the
-// Valkey allocator.
-void UseValkeyAlloc();
-
-// Switch back to the default allocator. No guarantees around atomicity. Only
-// safe in single-threaded or testing environments.
-void ResetValkeyAlloc();
+// UseValkeyAlloc, ResetValkeyAlloc and the pre-init accounting are declared in
+// memory_allocation.h, which callers can include without picking up the malloc
+// macros above.
 
 struct DisableRawSystemAllocatorReporting {
 };  // Pass this (or void) to DISABLE reporting

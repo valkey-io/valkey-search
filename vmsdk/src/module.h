@@ -15,20 +15,45 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/deferred_init.h"
+#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-#define VALKEY_MODULE(options)                                              \
+// Defines the module entry points.
+//
+// `module_name` and `module_version` must be constant-initialized (a constexpr
+// name array and version), NOT members of `options`. They are read before the
+// module's static initializers have run, at which point `options` -- which
+// holds std::list and absl::AnyInvocable members and therefore requires dynamic
+// initialization -- is still entirely zero. GCC happens to emit the
+// constant-computable members of such an object statically, but Clang does not;
+// reading options.name there yields nullptr. They must match the corresponding
+// `options` fields; vmsdk::module::OnLoad checks this once initialization is
+// complete.
+//
+// ValkeyModule_Init has to come first because it is what establishes
+// ValkeyModule_Alloc/Free, and RunDeferredStaticInitializers must allocate
+// through them. See vmsdk/src/deferred_init.cc.
+#define VALKEY_MODULE(options, module_name, module_version)                 \
   namespace {                                                               \
   extern "C" {                                                              \
   int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,  \
                           int argc) {                                       \
+    if (ValkeyModule_Init(ctx, module_name, module_version,                 \
+                          VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {     \
+      return VALKEYMODULE_ERR;                                              \
+    }                                                                       \
+    vmsdk::UseValkeyAlloc();                                                \
+    vmsdk::RunDeferredStaticInitializers();                                 \
+    /* Dynamically-initialized globals are usable from here on. */          \
     if (!vmsdk::verifyLoadedOnlyOnce()) {                                   \
       VMSDK_LOG(NOTICE, ctx) << "Module cannot be loaded more than once";   \
       return VALKEYMODULE_ERR;                                              \
     }                                                                       \
     vmsdk::TrackCurrentAsMainThread();                                      \
-    if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options);      \
+    if (auto status = vmsdk::module::OnLoad(ctx, argv, argc, options,       \
+                                            module_name, module_version);   \
         status != VALKEYMODULE_OK) {                                        \
       return status;                                                        \
     }                                                                       \
@@ -72,7 +97,8 @@ struct CommandOptions {
 };
 
 struct Options {
-  std::string name;
+  // Points at the same constexpr string passed to VALKEY_MODULE.
+  const char *name{nullptr};
   std::list<absl::string_view> acl_categories;
   vmsdk::ValkeyVersion version;
   vmsdk::ValkeyVersion minimum_valkey_server_version;
@@ -88,7 +114,8 @@ struct Options {
 };
 
 int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-           const Options &options);
+           const Options &options, const char *module_name,
+           vmsdk::ValkeyVersion module_version);
 int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
                const Options &options);
 absl::Status RegisterInfo(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc info);

@@ -11,6 +11,13 @@
 #include "utils.h"
 
 //
+// The module name. Passed to VALKEY_MODULE, which reads it before the module's
+// static initializers have run, so it must be constant-initialized -- it cannot
+// be sourced from vmsdk::module::Options. See the VALKEY_MODULE comment.
+//
+inline constexpr char kModuleName[] = "search";
+
+//
 // Set the module version to the current release
 //
 constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 2, 1);

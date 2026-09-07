@@ -56,9 +56,23 @@ struct DisableRawSystemAllocatorReporting {
 };  // Pass this (or void) to DISABLE reporting
 
 // RawSystemAllocator allocates straight from glibc, bypassing both the Valkey
-// allocator and the memory accounting. ShardedAtomic uses it because the
-// accounting counters are themselves ShardedAtomics: routing their storage
-// through the module allocator would make ReportAllocMemorySize recurse.
+// allocator and the memory accounting.
+//
+// This is not an optimization and it cannot be replaced with std::allocator.
+// The accounting counters are themselves ShardedAtomics, so
+// ReportAllocMemorySize -> ShardedAtomic::Add allocates: it constructs a
+// thread_local ThreadLocalNode, whose constructor registers it in a vector, and
+// it grows that node's value array under resize_mutex. Route those allocations
+// through the module allocator and each one calls ReportAllocMemorySize again,
+// re-entering either a thread_local's own initialization or a non-reentrant
+// absl::Mutex. Tried it: the module hangs on a futex during load, accumulating
+// no CPU time, before the server ever accepts connections.
+//
+// Allocating from Valkey but skipping the accounting would break the cycle too,
+// but ShardedAtomic is also linked into the unit test executables, where
+// ValkeyModule_Alloc is a mock that is unset until a fixture installs it. Going
+// straight to glibc is what keeps this allocator independent of everything it
+// underpins.
 template <typename T, typename Tag = void>
 struct RawSystemAllocator {
   // NOLINTNEXTLINE

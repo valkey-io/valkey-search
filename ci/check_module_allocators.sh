@@ -4,11 +4,12 @@
 # All rights reserved.
 # SPDX-License-Identifier: BSD 3-Clause
 #
-# Guards the four invariants that keep the module's heap on ValkeyModule_Alloc:
+# Guards the invariants that keep the module's heap on ValkeyModule_Alloc:
 #   1. static initializers are deferred until ValkeyModule_Alloc exists
-#   2. no code calls the system allocator directly except two vendored C libs
+#   2. the module defines the C allocator itself and imports none of it
 #   3. no C++ heap object can cross a DSO boundary (libstdc++ is static)
 #   4. nothing exported can collide with libstdc++.so.6
+#   5. no unhandled libc function hands us memory allocated by libc
 #
 # Each is verified to fail on a build that violates it; a silent pass here means
 # the module would crash at load or corrupt the heap.
@@ -24,6 +25,15 @@ if [ ! -f "${MODULE_SO}" ]; then
 fi
 
 FAILED=0
+
+# Symbols the module defines for itself in vmsdk/src/memory_allocation_c_api.cc.
+ALLOCATORS="malloc free calloc realloc aligned_alloc posix_memalign valloc
+            malloc_usable_size strdup realpath getcwd"
+
+undefined_syms() {
+    nm -D --undefined-only "$1" 2>/dev/null | sed 's/@.*//' | awk '{print $2}' |
+        sort -u
+}
 
 #
 # Check 1: static initializers are deferred.
@@ -62,41 +72,43 @@ $((INIT_ARRAY_SZ / 8)) left at load time"
 fi
 
 #
-# Check 2: no new direct calls to the system allocator.
+# Check 2: the module owns its allocator.
 #
-# The module routes C++ allocation through replaced operator new/delete and the
-# __wrap_* macros. C code that calls malloc/free directly bypasses that, and its
-# pointers can never be handed to ValkeyModule_Free. Two vendored C libraries do
-# this today; both allocate and free entirely within themselves. The allowlist
-# exists so that the set cannot silently grow.
+# memory_allocation_c_api.cc defines malloc and friends, and versionscript.lds
+# marks them local so that every reference from inside the module -- libstdc++'s
+# operator new, abseil, protobuf, gRPC, ICU, hdrhistogram, rax -- binds to them
+# rather than to libc.so.6. Two things must hold, and neither is visible without
+# checking: each name is defined here, and none is still imported from libc. An
+# import means something is allocating outside ValkeyModule_Alloc, whose memory
+# Valkey never accounts for and which crashes if it later reaches our free().
 #
-# References from .data (the __real_malloc function pointers, which are the
-# deliberate fallback) are not call sites and are ignored.
-#
-ALLOWED="libicuuc.a libhdrhistogram_c.a"
-
-for archive in $(find "${BUILD_DIR}/src" "${BUILD_DIR}/vmsdk" \
-                      "${BUILD_DIR}/third_party" "${BUILD_DIR}/icu/lib" \
-                      -name "*.a" 2>/dev/null | sort); do
-    base=$(basename "${archive}")
-    case " ${ALLOWED} " in
-        *" ${base} "*) continue ;;
-    esac
-    offenders=$(objdump -r "${archive}" 2>/dev/null | awk '
-        /file format/            { obj = $1; next }
-        /^RELOCATION RECORDS FOR/ { sec = $4; next }
-        sec ~ /^\[\.text/ {
-            sym = $3
-            sub(/[-+]0x[0-9a-f]+$/, "", sym)
-            if (sym == "malloc" || sym == "calloc" || sym == "realloc" ||
-                sym == "free" || sym == "posix_memalign" ||
-                sym == "aligned_alloc" || sym == "valloc") {
-                print "    " obj " calls " sym
-            }
-        }' | sort -u)
-    if [ -n "${offenders}" ]; then
-        echo "FAIL: ${base} calls the system allocator directly:" >&2
-        echo "${offenders}" >&2
+UNDEF=$(undefined_syms "${MODULE_SO}")
+# Names exported with GLOBAL or WEAK binding, i.e. the ones the dynamic linker
+# will happily resolve somewhere else.
+DYN_GLOBAL=$(readelf --dyn-syms -W "${MODULE_SO}" 2>/dev/null |
+             awk '$5 == "GLOBAL" || $5 == "WEAK" {sub(/@@?.*$/, "", $8);
+                                                  print $8}' | sort -u)
+for sym in ${ALLOCATORS}; do
+    if echo "${UNDEF}" | grep -qx "${sym}"; then
+        echo "FAIL: ${MODULE_SO} imports ${sym} from libc instead of using its" >&2
+        echo "      own definition. Is memory_allocation_c_api.cc still linked" >&2
+        echo "      into the module?" >&2
+        FAILED=1
+    elif ! nm "${MODULE_SO}" 2>/dev/null | grep -qE "^[0-9a-f]+ [Tt] ${sym}$"; then
+        echo "FAIL: ${MODULE_SO} does not define ${sym}." >&2
+        echo "      memory_allocation_c_api.cc is not being linked in." >&2
+        FAILED=1
+    elif echo "${DYN_GLOBAL}" | grep -qx "${sym}"; then
+        # Defined, but exported with global binding -- which means preemptible.
+        # References from inside the module then resolve through the global
+        # scope, find libc.so.6's definition first, and this one is silently
+        # bypassed: the module keeps running on the system allocator and Valkey
+        # accounts for none of it. Nothing crashes, so only this check catches
+        # it.
+        echo "FAIL: ${MODULE_SO} defines ${sym} but exports it with global" >&2
+        echo "      binding, so it is preemptible and will be bypassed in" >&2
+        echo "      favour of libc's. Is ${sym} still listed under local: in" >&2
+        echo "      vmsdk/versionscript.lds?" >&2
         FAILED=1
     fi
 done
@@ -104,18 +116,17 @@ done
 #
 # Check 3: no C++ heap object can cross a DSO boundary.
 #
-# The operator new/delete replacements only cover code linked into this .so.
-# If the module still called into libstdc++.so, an object allocated there (by
-# std::getline, std::filesystem::path, std::locale::name, ...) would be freed
-# here with ValkeyModule_Free -- a jemalloc free of a libc malloc pointer.
-# Linking libstdc++ statically removes the boundary; this confirms it stayed
-# removed.
+# The allocator above only covers code linked into this .so. If the module still
+# called into libstdc++.so.6, an object allocated there (by std::getline,
+# std::filesystem::path, std::locale::name, ...) would be freed here with
+# ValkeyModule_Free -- a jemalloc free of a libc malloc pointer. Linking
+# libstdc++ statically removes the boundary; this confirms it stayed removed.
 #
 GLIBCXX_UNDEF=$(nm -D --undefined-only "${MODULE_SO}" 2>/dev/null |
                 grep -c "GLIBCXX" || true)
 if [ "${GLIBCXX_UNDEF}" -ne 0 ]; then
     echo "FAIL: ${MODULE_SO} has ${GLIBCXX_UNDEF} undefined GLIBCXX symbols," >&2
-    echo "      so it is calling into libstdc++.so. Objects allocated there" >&2
+    echo "      so it is calling into libstdc++.so.6. Objects allocated there" >&2
     echo "      would be freed here with ValkeyModule_Free and crash. Is" >&2
     echo "      -static-libstdc++ still being passed to the linker?" >&2
     nm -D --undefined-only "${MODULE_SO}" | grep "GLIBCXX" | head -5 >&2
@@ -136,13 +147,15 @@ fi
 #
 # -Wl,--exclude-libs,ALL is what keeps this list empty. nm prints
 # libstdc++.so.6's names with an @@GLIBCXX version suffix and ours without, so
-# the suffix is stripped before comparing.
+# the suffix is stripped before comparing. Only GLOBAL/WEAK exports matter, so
+# the local entries the version script produces are filtered out.
 #
 LIBSTDCXX=$(gcc -print-file-name=libstdc++.so.6 2>/dev/null || true)
 if [ -n "${LIBSTDCXX}" ] && [ -f "${LIBSTDCXX}" ]; then
     CLASHES=$(comm -12 \
         <(nm -D --defined-only "${MODULE_SO}" |
-              awk '{sub(/@@?.*$/, "", $3); print $3}' | sort -u) \
+              awk '$2 ~ /^[TDWVBRi]$/ {sub(/@@?.*$/, "", $3); print $3}' |
+              sort -u) \
         <(nm -D --defined-only "${LIBSTDCXX}" |
               awk '{sub(/@@?.*$/, "", $3); print $3}' | sort -u))
     if [ -n "${CLASHES}" ]; then
@@ -158,10 +171,45 @@ if [ -n "${LIBSTDCXX}" ] && [ -f "${LIBSTDCXX}" ]; then
     fi
 fi
 
+#
+# Check 5: no unhandled libc function hands us libc-allocated memory.
+#
+# The module's allocator is local, so libc.so.6 never sees it and keeps using
+# its own. Memory allocated inside libc and freed inside libc is therefore
+# self-consistent. The one way a pointer crosses is a libc function that
+# allocates a result and returns it to us: we would later release it through our
+# free(), handing a libc pointer to ValkeyModule_Free.
+#
+# memory_allocation_c_api.cc handles every such function the module references
+# today -- strdup is reimplemented, realpath and getcwd abort. If a new one
+# appears, it must be handled there before this check will pass.
+#
+# Note that __realpath_chk is absent from this list on purpose: it is the
+# fortified form taking a caller-provided buffer, which does not allocate. ICU's
+# uprv_tzname uses it legitimately.
+#
+# Both the public names and the glibc-internal aliases the compiler actually
+# emits: <stdio.h> turns getline() into __getdelim(), for instance.
+ALLOCATING_LIBC="strndup __strdup __strndup
+                 getline getdelim __getdelim
+                 asprintf vasprintf __asprintf __vasprintf
+                 canonicalize_file_name get_current_dir_name
+                 scandir scandir64 tempnam wcsdup __wcsdup open_memstream"
+for sym in ${ALLOCATING_LIBC}; do
+    if echo "${UNDEF}" | grep -qx "${sym}"; then
+        echo "FAIL: ${MODULE_SO} references ${sym}(), which allocates its" >&2
+        echo "      result with libc's malloc. Freeing that pointer inside the" >&2
+        echo "      module passes it to ValkeyModule_Free and corrupts the" >&2
+        echo "      heap. Handle it in vmsdk/src/memory_allocation_c_api.cc" >&2
+        echo "      alongside strdup/realpath/getcwd." >&2
+        FAILED=1
+    fi
+done
+
 if [ "${FAILED}" -ne 0 ]; then
     echo "" >&2
-    echo "See vmsdk/src/memory_allocation_overrides.h for how module memory" >&2
-    echo "is expected to be allocated." >&2
+    echo "See vmsdk/src/memory_allocation_c_api.cc for how module memory is" >&2
+    echo "expected to be allocated." >&2
     exit 1
 fi
 

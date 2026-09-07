@@ -5,15 +5,27 @@ add_subdirectory(expr)
 add_subdirectory(query)
 add_subdirectory(utils)
 
-set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
+# The module's C allocator entry points are a direct object of the shared
+# library rather than a member of vmsdklib. Two reasons: a static archive member
+# is only pulled in to satisfy an existing undefined reference, which makes
+# whether malloc gets defined depend on link order; and vmsdklib is also linked
+# into the unit test executables, where defining malloc would override the
+# allocator for the whole test process, including libc's own startup
+# allocations. Tests therefore run entirely on the system allocator.
+set(SRCS_MODULE_LOADER
+    ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc
+    ${CMAKE_SOURCE_DIR}/vmsdk/src/memory_allocation_c_api.cc)
 
 # This is the module target
-valkey_search_add_shared_library(libsearch ${SRCS_MODULE_LOADER})
+valkey_search_add_shared_library(libsearch "${SRCS_MODULE_LOADER}")
 target_include_directories(libsearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 if(UNIX AND NOT APPLE)
   target_link_options(
     libsearch PRIVATE
     "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+  set_property(
+    TARGET libsearch APPEND PROPERTY LINK_DEPENDS
+    ${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds)
 endif()
 
 # Defer the module's C++ static initializers until ValkeyModule_Alloc has been

@@ -20,7 +20,7 @@ namespace vmsdk {
 // anything touches a dynamically-initialized global. Until it returns, every
 // such global is still zero-initialized.
 //
-// Aborts if any allocation reached the __wrap_* allocators before this point:
+// Aborts if any allocation reached the module allocators before this point:
 // that means something escaped to the system allocator during a window in which
 // nothing is supposed to allocate, and the pointer could later be handed to
 // ValkeyModule_Free. See kPreInit* in memory_allocation_overrides.cc.

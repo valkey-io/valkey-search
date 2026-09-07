@@ -33,6 +33,14 @@
 // therefore stays self-consistent; the only hazard is a pointer that crosses
 // that boundary, which is what the strdup/realpath/getcwd definitions at the
 // bottom of this file address.
+//
+// There is deliberately no fallback for the window before ValkeyModule_Alloc
+// is established. Nothing in the module allocates then -- static initializers
+// are deferred until after it is set, see vmsdk/src/deferred_init.cc -- and if
+// something ever did, ValkeyModule_Alloc is still a null function pointer, so
+// the call faults immediately at the offending call site. Valkey's crash
+// handler prints the backtrace, which localises the problem better than any
+// bookkeeping we could carry on every allocation to detect it after the fact.
 
 // Defines VMSDK_USE_VALKEY_ALLOC_OVERRIDES.
 #include "vmsdk/src/memory_allocation_overrides.h"
@@ -66,71 +74,54 @@ size_t AlignSize(size_t size, size_t alignment = 16) {
   return (size + alignment - 1) & ~(alignment - 1);
 }
 
-// Valkey cannot tell us the usable size of a pointer it did not allocate, so
-// allocations that took the fallback path are accounted as zero bytes.
-size_t SystemUsableSize(void* ptr) { return 0; }
-
 }  // namespace
 
 extern "C" {
 
 void* malloc(size_t size) noexcept {
-  if (ABSL_PREDICT_FALSE(!vmsdk::IsUsingValkeyAlloc())) {
-    vmsdk::RecordSystemAllocation(__builtin_return_address(0));
-    return vmsdk::PerformAndTrackMalloc(size, __libc_malloc, SystemUsableSize);
-  }
   // Force 16-byte alignment; Valkey may otherwise return 8-byte aligned memory.
-  return vmsdk::PerformAndTrackMalloc(AlignSize(size), ValkeyModule_Alloc,
-                                      ValkeyModule_MallocUsableSize);
+  void* ptr = ValkeyModule_Alloc(AlignSize(size));
+  if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
+    vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
+  }
+  return ptr;
 }
 
 void free(void* ptr) noexcept {
   if (ptr == nullptr) {
     return;
   }
-  if (ABSL_PREDICT_FALSE(!vmsdk::IsUsingValkeyAlloc())) {
-    vmsdk::RecordSystemAllocation(__builtin_return_address(0));
-    vmsdk::PerformAndTrackFree(ptr, __libc_free, SystemUsableSize);
-    return;
-  }
-  vmsdk::PerformAndTrackFree(ptr, ValkeyModule_Free,
-                             ValkeyModule_MallocUsableSize);
+  vmsdk::ReportFreeMemorySize(ValkeyModule_MallocUsableSize(ptr));
+  ValkeyModule_Free(ptr);
 }
 
 void* calloc(size_t nmemb, size_t size) noexcept {
-  if (ABSL_PREDICT_FALSE(!vmsdk::IsUsingValkeyAlloc())) {
-    vmsdk::RecordSystemAllocation(__builtin_return_address(0));
-    return vmsdk::PerformAndTrackCalloc(nmemb, size, __libc_calloc,
-                                        SystemUsableSize);
+  void* ptr = ValkeyModule_Calloc(nmemb, AlignSize(size));
+  if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
+    vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
   }
-  return vmsdk::PerformAndTrackCalloc(nmemb, AlignSize(size),
-                                      ValkeyModule_Calloc,
-                                      ValkeyModule_MallocUsableSize);
+  return ptr;
 }
 
 void* realloc(void* ptr, size_t size) noexcept {
   if (ABSL_PREDICT_FALSE(ptr == nullptr)) {
     return malloc(size);
   }
-  if (ABSL_PREDICT_FALSE(!vmsdk::IsUsingValkeyAlloc())) {
-    vmsdk::RecordSystemAllocation(__builtin_return_address(0));
-    return vmsdk::PerformAndTrackRealloc(ptr, size, __libc_realloc,
-                                         SystemUsableSize);
+  size_t old_size = ValkeyModule_MallocUsableSize(ptr);
+  void* new_ptr = ValkeyModule_Realloc(ptr, AlignSize(size));
+  if (ABSL_PREDICT_TRUE(new_ptr != nullptr)) {
+    vmsdk::ReportFreeMemorySize(old_size);
+    vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(new_ptr));
   }
-  return vmsdk::PerformAndTrackRealloc(ptr, AlignSize(size),
-                                       ValkeyModule_Realloc,
-                                       ValkeyModule_MallocUsableSize);
+  return new_ptr;
 }
 
 void* aligned_alloc(size_t alignment, size_t size) noexcept {
-  if (ABSL_PREDICT_FALSE(!vmsdk::IsUsingValkeyAlloc())) {
-    vmsdk::RecordSystemAllocation(__builtin_return_address(0));
-    return vmsdk::PerformAndTrackMalloc(AlignSize(size, alignment),
-                                        __libc_malloc, SystemUsableSize);
+  void* ptr = ValkeyModule_Alloc(AlignSize(size, alignment));
+  if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
+    vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
   }
-  return vmsdk::PerformAndTrackMalloc(AlignSize(size, alignment),
-                                      ValkeyModule_Alloc,
-                                      ValkeyModule_MallocUsableSize);
+  return ptr;
 }
 
 int posix_memalign(void** memptr, size_t alignment, size_t size) noexcept {
@@ -143,7 +134,7 @@ void* valloc(size_t size) noexcept {
 }
 
 size_t malloc_usable_size(void* ptr) noexcept {
-  if (ABSL_PREDICT_FALSE(ptr == nullptr || !vmsdk::IsUsingValkeyAlloc())) {
+  if (ABSL_PREDICT_FALSE(ptr == nullptr)) {
     return 0;
   }
   return ValkeyModule_MallocUsableSize(ptr);

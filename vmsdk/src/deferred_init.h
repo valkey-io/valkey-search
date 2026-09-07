@@ -16,14 +16,14 @@ namespace vmsdk {
 // relocated out of .init_array so that they do NOT run at dlopen() time.
 //
 // Must be called from ValkeyModule_OnLoad after ValkeyModule_Init has
-// established ValkeyModule_Alloc/Free and after UseValkeyAlloc(), and before
-// anything touches a dynamically-initialized global. Until it returns, every
-// such global is still zero-initialized.
+// established ValkeyModule_Alloc/Free, and before anything touches a
+// dynamically-initialized global. Until it returns, every such global is still
+// zero-initialized.
 //
-// Aborts if any allocation reached the module allocators before this point:
-// that means something escaped to the system allocator during a window in which
-// nothing is supposed to allocate, and the pointer could later be handed to
-// ValkeyModule_Free. See kPreInit* in memory_allocation_overrides.cc.
+// The initializers allocate, so the ordering against ValkeyModule_Init is what
+// keeps the module off the system allocator entirely. Get it wrong and
+// ValkeyModule_Alloc is still null, so the first allocation faults at its call
+// site rather than quietly succeeding.
 //
 // Returns the number of initializers run. Returns 0 without doing anything on
 // builds that do not apply the linker script (see GetDeferredInitializerCount).

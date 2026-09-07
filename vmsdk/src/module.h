@@ -16,7 +16,6 @@
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
 #include "vmsdk/src/deferred_init.h"
-#include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/utils.h"  // IWYU pragma: keep
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -34,7 +33,9 @@
 //
 // ValkeyModule_Init has to come first because it is what establishes
 // ValkeyModule_Alloc/Free, and RunDeferredStaticInitializers must allocate
-// through them. See vmsdk/src/deferred_init.cc.
+// through them. There is no fallback allocator: until ValkeyModule_Init runs,
+// ValkeyModule_Alloc is null and any allocation faults on the spot. See
+// vmsdk/src/deferred_init.cc.
 #define VALKEY_MODULE(options, module_name, module_version)                 \
   namespace {                                                               \
   extern "C" {                                                              \
@@ -44,7 +45,6 @@
                           VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {     \
       return VALKEYMODULE_ERR;                                              \
     }                                                                       \
-    vmsdk::UseValkeyAlloc();                                                \
     vmsdk::RunDeferredStaticInitializers();                                 \
     /* Dynamically-initialized globals are usable from here on. */          \
     if (!vmsdk::verifyLoadedOnlyOnce()) {                                   \

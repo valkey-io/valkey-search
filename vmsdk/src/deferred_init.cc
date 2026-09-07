@@ -13,10 +13,6 @@
 #include "vmsdk/src/deferred_init.h"
 
 #include <cstddef>
-#include <cstdio>
-#include <cstdlib>
-
-#include "vmsdk/src/memory_allocation.h"
 
 extern "C" {
 // Bounds of the relocated .init_array, provided by vmsdk/deferred_init.lds.
@@ -42,26 +38,8 @@ size_t RunDeferredStaticInitializers() {
       __vmsdk_init_array_end == nullptr) {
     // Static initialization was not deferred on this build (macOS, sanitizer
     // builds); it already ran at dlopen() time, legitimately using the system
-    // allocator. The invariant checked below does not apply.
+    // allocator.
     return 0;
-  }
-
-  // Where initialization *is* deferred, nothing in the module may allocate
-  // before the Valkey allocator is established. If anything did, the pointer
-  // came from the system allocator and nothing is left that can route its
-  // free() back there.
-  //
-  // Reported with fprintf/abort rather than CHECK: absl's logging globals are
-  // themselves among the initializers that have not run yet. Run addr2line on
-  // the reported address to identify the caller.
-  size_t preinit = GetPreInitAllocationCount();
-  if (preinit != 0) {
-    fprintf(stderr,
-            "FATAL: %zu allocation(s) reached the vmsdk allocators before "
-            "ValkeyModule_Alloc was established; first caller at %p. The "
-            "module cannot route these to ValkeyModule_Free.\n",
-            preinit, GetPreInitFirstCaller());
-    abort();
   }
 
   // Guard against a second module load re-running initializers.

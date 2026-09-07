@@ -39,6 +39,7 @@ Key.
 #include <vector>
 
 #include "absl/container/btree_map.h"
+#include "src/indexes/text/compact_postings.h"
 #include "src/indexes/text/flat_position_map.h"
 #include "src/utils/string_interning.h"
 
@@ -151,19 +152,11 @@ struct Postings {
    private:
     friend struct Postings;
 
-    // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, PostingValue, InternedStringPtrLess>* key_map_;
-    absl::btree_map<Key, PostingValue, InternedStringPtrLess>::const_iterator
-        current_;
-    absl::btree_map<Key, PostingValue, InternedStringPtrLess>::const_iterator
-        end_;
+    CompactPostings<PostingValue>::Iterator it_;
   };
 
  private:
-  // Cache tf in PostingValue to avoid a map lookup
-  // PostValue should be removed and restored if no extra-step
-  // Transparent comparator so LookupKey() can probe with a borrowed key.
-  absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
+  CompactPostings<PostingValue> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

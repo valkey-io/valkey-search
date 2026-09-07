@@ -315,6 +315,10 @@ class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
             ("doc:", "doc:x"),   # one nested inside the other
             ("p:", None),        # no PREFIX means every key
         ],
+        # Explicit ids: the default ones embed the key prefixes, and a colon in
+        # a test name reaches the per-test log directory, which the CI artifact
+        # upload rejects.
+        ids=["identical_prefixes", "nested_prefixes", "no_prefix"],
     )
     def test_conflicting_types_rejected(self, prefix_a, prefix_b):
         client: Valkey = self.server.get_new_client()
@@ -338,6 +342,7 @@ class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
             # Disjoint prefixes can never share a key.
             ("disjoint prefixes", "s:", "v", "FLOAT16", "t:", "v", "BFLOAT16"),
         ],
+        ids=["same_type", "different_fields", "disjoint_prefixes"],
     )
     def test_non_conflicting_combinations_allowed(
         self, desc, prefix_a, field_a, type_a, prefix_b, field_b, type_b

@@ -588,7 +588,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
                 data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
               << "Unsupported attribute data type for vector content "
                  "materialization: "
-              << (int)attribute_data_type;
+              << static_cast<int>(attribute_data_type);
           const auto *vector_index =
               dynamic_cast<const indexes::VectorBase *>(attribute_info.index);
           auto vector =

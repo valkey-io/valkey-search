@@ -14,16 +14,17 @@
 
 #include <cstddef>
 
+#ifndef __APPLE__
 extern "C" {
 // Bounds of the relocated .init_array, provided by vmsdk/deferred_init.lds.
-// Weak: builds that do not apply the linker script (macOS, sanitizer builds)
-// leave these undefined, and static initialization happens at dlopen() as
-// usual.
+// Weak: builds that do not apply the linker script (sanitizer builds) leave
+// these undefined, and static initialization happens at dlopen() as usual.
 extern void (*__vmsdk_init_array_start[])(int, char **, char **)
     __attribute__((weak));
 extern void (*__vmsdk_init_array_end[])(int, char **, char **)
     __attribute__((weak));
 }  // extern "C"
+#endif  // !__APPLE__
 
 namespace vmsdk {
 namespace {
@@ -34,11 +35,21 @@ size_t initializers_run = 0;
 size_t GetDeferredInitializerCount() { return initializers_run; }
 
 size_t RunDeferredStaticInitializers() {
+#ifdef __APPLE__
+  // Static initialization is never deferred here: the relocation is done by a
+  // GNU linker script and Mach-O has no equivalent, so the initializers already
+  // ran at dlopen() time using the system allocator.
+  //
+  // The bounds symbols cannot even be declared on this platform. ELF resolves a
+  // weak undefined symbol to a null address, which is what the check below
+  // relies on; Mach-O has no such thing, and a plain weak declaration of a
+  // missing symbol is a link error.
+  return 0;
+#else
   if (__vmsdk_init_array_start == nullptr ||
       __vmsdk_init_array_end == nullptr) {
-    // Static initialization was not deferred on this build (macOS, sanitizer
-    // builds); it already ran at dlopen() time, legitimately using the system
-    // allocator.
+    // Static initialization was not deferred on this build (sanitizer builds);
+    // it already ran at dlopen() time, legitimately using the system allocator.
     return 0;
   }
 
@@ -53,6 +64,7 @@ size_t RunDeferredStaticInitializers() {
   }
   initializers_run = count;
   return count;
+#endif  // __APPLE__
 }
 
 }  // namespace vmsdk

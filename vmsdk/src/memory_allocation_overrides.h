@@ -9,6 +9,7 @@
 #define VMSDK_SRC_MEMORY_ALLOCATION_OVERRIDES_H_
 
 #include <cstddef>
+#include <cstdlib>
 #include <type_traits>
 
 #include "vmsdk/src/memory_allocation.h"
@@ -40,15 +41,39 @@
 #define VMSDK_USE_VALKEY_ALLOC_OVERRIDES 1
 #endif
 
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
 extern "C" {
 // glibc's allocator, reached by name so that it is not captured by the module's
-// own malloc/free (see memory_allocation_c_api.cc). Used for the pre-switch
-// fallback path and by RawSystemAllocator below.
+// own malloc/free (see memory_allocation_c_api.cc). Used by RawSystemAllocator
+// below.
 void* __libc_malloc(size_t size);
 void __libc_free(void* ptr);
-void* __libc_calloc(size_t nmemb, size_t size);
-void* __libc_realloc(void* ptr, size_t size);
 }  // extern "C"
+#endif  // VMSDK_USE_VALKEY_ALLOC_OVERRIDES
+
+namespace vmsdk {
+
+// The system allocator, named so that the module's own malloc/free cannot
+// capture it. Where the module does not define those (sanitizer builds, macOS)
+// the plain names already are the system allocator, and __libc_malloc does not
+// exist outside glibc.
+inline void* RawSystemMalloc(std::size_t size) {
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
+  return __libc_malloc(size);
+#else
+  return std::malloc(size);
+#endif
+}
+
+inline void RawSystemFree(void* ptr) {
+#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
+  __libc_free(ptr);
+#else
+  std::free(ptr);
+#endif
+}
+
+}  // namespace vmsdk
 
 namespace vmsdk {
 
@@ -86,14 +111,14 @@ struct RawSystemAllocator {
     if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
       ReportAllocMemorySize(n * sizeof(T));
     }
-    return static_cast<T*>(__libc_malloc(n * sizeof(T)));
+    return static_cast<T*>(RawSystemMalloc(n * sizeof(T)));
   }
   // NOLINTNEXTLINE
   void deallocate(T* p, std::size_t) {
     if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
       ReportFreeMemorySize(sizeof(T));
     }
-    __libc_free(p);
+    RawSystemFree(p);
   }
 };
 

@@ -50,7 +50,9 @@
 // Deliberately inside the guard: <malloc.h> is glibc-only, and this file
 // compiles to nothing on the platforms that do not define the guard.
 #include <errno.h>
+#include <limits.h>
 #include <malloc.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <cstddef>
@@ -58,9 +60,15 @@
 #include <cstring>
 
 #include "absl/base/optimization.h"
-#include "absl/log/check.h"
 #include "vmsdk/src/memory_allocation.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+extern "C" {
+// glibc's fortified realpath. Declared here because <stdlib.h> only exposes it
+// when _FORTIFY_SOURCE is on. Distinct from the realpath defined below, so
+// calling it does not recurse.
+char* __realpath_chk(const char* path, char* resolved, size_t resolved_len);
+}  // extern "C"
 
 namespace {
 
@@ -164,30 +172,67 @@ char* strdup(const char* s) noexcept {
   return copy;
 }
 
-// realpath(path, nullptr) and getcwd(nullptr, 0) allocate their result with
-// glibc's malloc, and there is no way for free() above to recognise such a
-// pointer. Neither is reachable today: the only references come from
-// std::filesystem::canonical and std::filesystem::current_path, which the
-// module never calls, and they are pulled in merely because libstdc++'s
-// filesystem objects are linked. Rather than reimplement them, fail loudly if
-// that ever changes.
+// realpath(path, nullptr) and getcwd(nullptr, 0) return a buffer glibc
+// allocated with its own malloc, which free() above would hand to
+// ValkeyModule_Free. Both are reimplemented so the result comes from our
+// allocator instead.
 //
-// Note that ICU's uprv_tzname legitimately calls the fortified __realpath_chk
-// with a caller-provided buffer, which does not allocate. That is a different
-// symbol and is deliberately left alone.
+// Neither may call the libc function of the same name: that name binds to the
+// definition here and would recurse. getcwd goes straight to the kernel, and
+// realpath delegates to glibc's fortified entry point, which is a distinct
+// symbol this file does not define. ICU's uprv_tzname already calls
+// __realpath_chk directly with its own buffer, which allocates nothing.
 char* realpath(const char* path, char* resolved_path) noexcept {
-  CHECK(false) << "realpath() is not available inside the module: glibc "
-                  "allocates the result with its own malloc, which cannot be "
-                  "released through ValkeyModule_Free. Resolve the path with a "
-                  "caller-provided buffer instead.";
-  return nullptr;
+  // __realpath_chk resolves into a caller-provided buffer and __chk_fail()s if
+  // it is smaller than PATH_MAX, which is also what POSIX requires callers of
+  // realpath() to supply. Resolve into our own buffer either way, so a failure
+  // leaves the caller's untouched.
+  char resolved[PATH_MAX];
+  if (__realpath_chk(path, resolved, sizeof(resolved)) == nullptr) {
+    return nullptr;
+  }
+  if (resolved_path != nullptr) {
+    return strcpy(resolved_path, resolved);
+  }
+  return strdup(resolved);
 }
 
 char* getcwd(char* buf, size_t size) noexcept {
-  CHECK(false) << "getcwd() is not available inside the module: glibc "
-                  "allocates the result with its own malloc when buf is null, "
-                  "which cannot be released through ValkeyModule_Free.";
-  return nullptr;
+  if (buf != nullptr) {
+    // Nothing is allocated on this path.
+    if (size == 0) {
+      errno = EINVAL;
+      return nullptr;
+    }
+    if (syscall(SYS_getcwd, buf, size) < 0) {
+      return nullptr;
+    }
+    return buf;
+  }
+  // GNU extension: allocate the result. A non-zero size is a hard limit; a zero
+  // size means "however much it takes", so grow until it fits.
+  size_t capacity = (size != 0) ? size : PATH_MAX;
+  for (;;) {
+    char* cwd = static_cast<char*>(malloc(capacity));
+    if (cwd == nullptr) {
+      errno = ENOMEM;
+      return nullptr;
+    }
+    if (syscall(SYS_getcwd, cwd, capacity) >= 0) {
+      return cwd;
+    }
+    const int saved_errno = errno;
+    free(cwd);
+    if (saved_errno != ERANGE || size != 0) {
+      errno = saved_errno;
+      return nullptr;
+    }
+    if (capacity > (1u << 20)) {
+      errno = ENAMETOOLONG;
+      return nullptr;
+    }
+    capacity *= 2;
+  }
 }
 
 }  // extern "C"

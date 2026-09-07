@@ -175,6 +175,9 @@ typedef enum {
     simsimd_cap_sve_f16_k = 1 << 25,   ///< ARM SVE FP16 capability
     simsimd_cap_sve_bf16_k = 1 << 26,  ///< ARM SVE BF16 capability
     simsimd_cap_sve_i8_k = 1 << 27,    ///< ARM SVE Int8 capability
+    // VALKEYSEARCH BEGIN
+    simsimd_cap_neon_fhm_k = 1 << 28,  ///< ARM FEAT_FHM: FMLAL/FMLAL2 widening f16 FMAs
+    // VALKEYSEARCH END
 
 } simsimd_capability_t;
 
@@ -326,12 +329,20 @@ SIMSIMD_PUBLIC simsimd_capability_t simsimd_capabilities_arm(void) {
         supports_bf16 = 0;
     if (sysctlbyname("hw.optional.arm.FEAT_I8MM", &supports_i8mm, &size, NULL, 0) != 0)
         supports_i8mm = 0;
+    // VALKEYSEARCH BEGIN
+    uint32_t supports_fhm = 0;
+    if (sysctlbyname("hw.optional.arm.FEAT_FHM", &supports_fhm, &size, NULL, 0) != 0)
+        supports_fhm = 0;
+    // VALKEYSEARCH END
 
     return (simsimd_capability_t)(                                     //
         (simsimd_cap_neon_k * (supports_neon)) |                       //
         (simsimd_cap_neon_f16_k * (supports_neon && supports_fp16)) |  //
         (simsimd_cap_neon_bf16_k * (supports_neon && supports_bf16)) | //
         (simsimd_cap_neon_i8_k * (supports_neon && supports_i8mm)) |   //
+        // VALKEYSEARCH BEGIN
+        (simsimd_cap_neon_fhm_k * (supports_neon && supports_fp16 && supports_fhm)) | //
+        // VALKEYSEARCH END
         (simsimd_cap_serial_k));
 
 #elif defined(SIMSIMD_DEFINED_LINUX)
@@ -367,6 +378,11 @@ SIMSIMD_PUBLIC simsimd_capability_t simsimd_capabilities_arm(void) {
     unsigned supports_i8mm = ((id_aa64isar1_el1 >> 52) & 0xF) >= 1;
     // BF16, bits [47:44] of ID_AA64ISAR1_EL1
     unsigned supports_bf16 = ((id_aa64isar1_el1 >> 44) & 0xF) >= 1;
+    // VALKEYSEARCH BEGIN
+    // FHM, bits [51:48] of ID_AA64ISAR0_EL1: FEAT_FHM, the FMLAL/FMLSL widening
+    // half-precision FMAs. 0b0000 means not implemented, 0b0001 implemented.
+    unsigned supports_fhm = ((id_aa64isar0_el1 >> 48) & 0xF) >= 1;
+    // VALKEYSEARCH END
 
     // Now let's unpack the status flags from ID_AA64PFR0_EL1
     // https://developer.arm.com/documentation/ddi0601/2024-03/AArch64-Registers/ID-AA64PFR0-EL1--AArch64-Processor-Feature-Register-0?lang=en
@@ -400,6 +416,9 @@ SIMSIMD_PUBLIC simsimd_capability_t simsimd_capabilities_arm(void) {
         (simsimd_cap_neon_f16_k * (supports_neon && supports_fp16)) |                                 //
         (simsimd_cap_neon_bf16_k * (supports_neon && supports_bf16)) |                                //
         (simsimd_cap_neon_i8_k * (supports_neon && supports_i8mm && supports_integer_dot_products)) | //
+        // VALKEYSEARCH BEGIN
+        (simsimd_cap_neon_fhm_k * (supports_neon && supports_fp16 && supports_fhm)) |                  //
+        // VALKEYSEARCH END
         (simsimd_cap_sve_k * (supports_sve)) |                                                        //
         (simsimd_cap_sve_f16_k * (supports_sve && supports_fp16)) |                                   //
         (simsimd_cap_sve_bf16_k * (supports_sve && supports_sve_bf16)) |                              //
@@ -555,12 +574,43 @@ SIMSIMD_PUBLIC void simsimd_find_metric_punned( //
     // Half-precision floating-point vectors
     case simsimd_datatype_f16_k:
 
+        // VALKEYSEARCH BEGIN
+        // Ahead of the SVE arm on purpose. simsimd_dot_f16_sve and
+        // simsimd_l2sq_f16_sve accumulate in f16 and saturate to infinity once
+        // the running sum passes 65504; the FHM kernels accumulate in f32 and
+        // are also faster at the dimensions vector indexes use. Only dot and
+        // l2sq have FHM kernels -- anything else falls through to SVE below.
+#if SIMSIMD_TARGET_NEON_FHM
+        if (viable & simsimd_cap_neon_fhm_k)
+            switch (kind) {
+            case simsimd_metric_dot_k: *m = (m_t)&simsimd_dot_f16_fhm, *c = simsimd_cap_neon_fhm_k; return;
+            // l2sq deliberately absent: simsimd_l2sq_f16_fhm accumulates in
+            // f32 but computes a - b with vsubq_f16 first, and that rounding
+            // measures 3.40e-04 against 8.06e-07 for the NEON kernel below,
+            // which widens before it subtracts. Falling through keeps every
+            // intermediate in f32.
+            default: break;
+            }
+#endif
+        // VALKEYSEARCH END
 #if SIMSIMD_TARGET_SVE
         if (viable & simsimd_cap_sve_k)
             switch (kind) {
-            case simsimd_metric_dot_k: *m = (m_t)&simsimd_dot_f16_sve, *c = simsimd_cap_sve_k; return;
+            // VALKEYSEARCH BEGIN
+            // simsimd_dot_f16_sve and simsimd_l2sq_f16_sve are intentionally
+            // not selected. Both hold their accumulator in f16
+            // (svfloat16_t, reduced by svaddv_f16), so the running sum
+            // saturates to infinity once it passes 65504 -- which a
+            // 1536-dimension dot product of un-normalized vectors reaches
+            // easily. Falling through to the NEON arm below costs throughput
+            // on a host without FEAT_FHM but keeps every intermediate in f32.
+            //
+            // simsimd_cos_f16_sve has the same f16 accumulator and is left
+            // reachable only because no NEON or FHM cosine kernel exists to
+            // fall through to. valkey-search never requests it: cosine is
+            // served by normalizing and then using inner product.
             case simsimd_metric_cos_k: *m = (m_t)&simsimd_cos_f16_sve, *c = simsimd_cap_sve_k; return;
-            case simsimd_metric_l2sq_k: *m = (m_t)&simsimd_l2sq_f16_sve, *c = simsimd_cap_sve_k; return;
+            // VALKEYSEARCH END
             default: break;
             }
 #endif
@@ -621,6 +671,19 @@ SIMSIMD_PUBLIC void simsimd_find_metric_punned( //
             default: break;
             }
 #endif
+        // VALKEYSEARCH BEGIN
+        // A NEON core without FEAT_BF16 has no bf16 arm above and would drop to
+        // the scalar kernels. Widening by shift needs only plain NEON and keeps
+        // the same f32 accumulation.
+#if SIMSIMD_TARGET_NEON
+        if (viable & simsimd_cap_neon_k)
+            switch (kind) {
+            case simsimd_metric_dot_k: *m = (m_t)&simsimd_dot_bf16_neon_shift, *c = simsimd_cap_neon_k; return;
+            case simsimd_metric_l2sq_k: *m = (m_t)&simsimd_l2sq_bf16_neon_shift, *c = simsimd_cap_neon_k; return;
+            default: break;
+            }
+#endif
+        // VALKEYSEARCH END
 #if SIMSIMD_TARGET_HASWELL
         if (viable & simsimd_cap_haswell_k)
             switch (kind) {
@@ -920,6 +983,7 @@ SIMSIMD_PUBLIC simsimd_metric_punned_t simsimd_metric_punned( //
 SIMSIMD_DYNAMIC int simsimd_uses_neon(void);
 SIMSIMD_DYNAMIC int simsimd_uses_neon_f16(void);
 SIMSIMD_DYNAMIC int simsimd_uses_neon_bf16(void);
+SIMSIMD_DYNAMIC int simsimd_uses_neon_fhm(void); // VALKEYSEARCH
 SIMSIMD_DYNAMIC int simsimd_uses_neon_i8(void);
 SIMSIMD_DYNAMIC int simsimd_uses_sve(void);
 SIMSIMD_DYNAMIC int simsimd_uses_sve_f16(void);
@@ -1072,6 +1136,7 @@ SIMSIMD_DYNAMIC void simsimd_js_f64(simsimd_f64_t const* a, simsimd_f64_t const*
 SIMSIMD_PUBLIC int simsimd_uses_neon(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_NEON; }
 SIMSIMD_PUBLIC int simsimd_uses_neon_f16(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_NEON && SIMSIMD_NATIVE_F16; }
 SIMSIMD_PUBLIC int simsimd_uses_neon_bf16(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_NEON && SIMSIMD_NATIVE_BF16; }
+SIMSIMD_PUBLIC int simsimd_uses_neon_fhm(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_NEON_FHM; } // VALKEYSEARCH
 SIMSIMD_PUBLIC int simsimd_uses_neon_i8(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_NEON; }
 SIMSIMD_PUBLIC int simsimd_uses_sve(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_SVE; }
 SIMSIMD_PUBLIC int simsimd_uses_sve_f16(void) { return SIMSIMD_TARGET_ARM && SIMSIMD_TARGET_SVE && SIMSIMD_NATIVE_F16; }

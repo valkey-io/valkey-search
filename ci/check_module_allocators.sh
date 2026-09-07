@@ -10,6 +10,7 @@
 #   3. no C++ heap object can cross a DSO boundary (libstdc++ is static)
 #   4. nothing exported can collide with libstdc++.so.6
 #   5. no unhandled libc function hands us memory allocated by libc
+#   6. no new shared library dependency appears unreviewed
 #
 # Each is verified to fail on a build that violates it; a silent pass here means
 # the module would crash at load or corrupt the heap.
@@ -204,6 +205,66 @@ for sym in ${ALLOCATING_LIBC}; do
         echo "      alongside strdup/realpath/getcwd." >&2
         FAILED=1
     fi
+done
+
+#
+# Check 6: the set of shared libraries the module depends on is pinned.
+#
+# Every DSO the module links against is another allocator boundary: memory it
+# allocates and hands back is allocated by its allocator, not ours, and freeing
+# it here would pass it to ValkeyModule_Free. Check 5 covers libc, which is the
+# only one whose allocate-and-return functions the module calls directly. The
+# rest have been reviewed and are safe:
+#
+#   libsystemd  Only sd_is_socket_inet, sd_is_socket_sockaddr,
+#               sd_is_socket_unix and sd_listen_fds are imported. All return
+#               int; nothing crosses.
+#   libssl,     The constructors and duplicators imported (BIO_new, SSL_new,
+#   libcrypto   EVP_*_CTX_new, X509_NAME_dup, SSL_get1_peer_certificate, ...)
+#               are each paired with the matching free function, which is
+#               imported too. The raw-buffer cases (ASN1_STRING_to_UTF8, the
+#               i2d_* family with a null output pointer) must be released with
+#               OPENSSL_free, which is CRYPTO_free inside libcrypto -- so both
+#               the allocation and the free happen on the far side of the
+#               boundary, as with getaddrinfo/freeaddrinfo.
+#   libm,       No allocation.
+#   libmvec
+#   libgcc_s    Unwinder only.
+#   ld-linux    dlopen/dlsym only.
+#
+# A new entry here means a boundary nobody has looked at, so it fails the build
+# until someone does. Note that OpenSSL is deliberately dynamic: linking it
+# statically would mean rebuilding the module for every OpenSSL CVE rather than
+# picking up a distribution update.
+#
+# Only additions fail. A dependency disappearing is not a memory-safety problem
+# -- and it is how this list last changed, when -static-libstdc++ removed
+# libstdc++.so.6.
+#
+ALLOWED_NEEDED="libc.so.6 libm.so.6 libmvec.so.1 libgcc_s.so.1
+                libssl.so.3 libcrypto.so.3 libsystemd.so.0"
+
+# Unquoted, so that the newlines and indentation above collapse to single
+# spaces; the match below relies on every entry being space-delimited.
+ALLOWED_NEEDED=$(echo ${ALLOWED_NEEDED})
+
+NEEDED=$(readelf -d "${MODULE_SO}" 2>/dev/null |
+         sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+for lib in ${NEEDED}; do
+    # The dynamic loader's own name is architecture-specific.
+    case "${lib}" in
+        ld-linux-*.so.*) continue ;;
+    esac
+    case " ${ALLOWED_NEEDED} " in
+        *" ${lib} "*) continue ;;
+    esac
+    echo "FAIL: ${MODULE_SO} has a new shared library dependency: ${lib}" >&2
+    echo "      Each DSO is another allocator boundary. Check whether it has" >&2
+    echo "      functions that allocate memory and hand it to the caller: if" >&2
+    echo "      the module frees such a pointer, it goes to ValkeyModule_Free" >&2
+    echo "      and corrupts the heap. Record the finding next to check 6 in" >&2
+    echo "      this script and add it to ALLOWED_NEEDED." >&2
+    FAILED=1
 done
 
 if [ "${FAILED}" -ne 0 ]; then

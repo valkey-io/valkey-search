@@ -127,6 +127,7 @@ DEV_INTEGER_COUNTER(rdb_stats, rdb_save_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_sections_skipped);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_entries);
+DEV_INTEGER_COUNTER(rdb_stats, rdb_save_multi_exec_orphans_skipped);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_multi_exec_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_save_mutation_entries);
 DEV_INTEGER_COUNTER(rdb_stats, rdb_load_mutation_entries);
@@ -1601,15 +1602,33 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   }
   CHECK(count == 0);
   //
-  // Write out the multi/exec queued keys
+  // Write out the multi/exec queued keys.
   //
-  VMSDK_RETURN_IF_ERROR(
-      out.SaveObject<size_t>(multi_mutations_keys_.Get().size()));
-  rdb_save_multi_exec_entries.Increment(multi_mutations_keys_.Get().size());
-  VMSDK_LOG(DEBUG, nullptr) << "Writing Multi/Exec Queue, records = "
-                            << multi_mutations_keys_.Get().size();
+  // A key in multi_mutations_keys_ may no longer have an entry in
+  // tracked_mutated_records_ by the time we serialize: the queue and the map
+  // are updated on different threads, so an RDB write can observe a key whose
+  // mutation was already consumed. Serialize only keys that still have a map
+  // entry and write that count; a skipped key is re-derived from the key list /
+  // backfill on load. This mirrors ConsumeTrackedMutatedAttribute, which also
+  // treats a key missing from the map as a no-op.
+  std::vector<Key> live_multi_keys;
+  live_multi_keys.reserve(multi_mutations_keys_.Get().size());
   for (const auto &key : multi_mutations_keys_.Get()) {
-    CHECK(tracked_mutated_records_.find(key) != tracked_mutated_records_.end());
+    if (ABSL_PREDICT_FALSE(tracked_mutated_records_.find(key) ==
+                           tracked_mutated_records_.end())) {
+      rdb_save_multi_exec_orphans_skipped.Increment();
+      VMSDK_LOG(WARNING, nullptr)
+          << "Skipping orphan multi/exec key not present in mutation map: "
+          << vmsdk::config::RedactIfNeeded(key->Str());
+      continue;
+    }
+    live_multi_keys.push_back(key);
+  }
+  VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(live_multi_keys.size()));
+  rdb_save_multi_exec_entries.Increment(live_multi_keys.size());
+  VMSDK_LOG(DEBUG, nullptr)
+      << "Writing Multi/Exec Queue, records = " << live_multi_keys.size();
+  for (const auto &key : live_multi_keys) {
     VMSDK_RETURN_IF_ERROR(out.SaveString(key->Str()));
   }
   return absl::OkStatus();

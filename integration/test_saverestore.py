@@ -281,6 +281,66 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         ]
         assert reads == [len(records)]
 
+    def test_multi_exec_orphan_key_skipped_still_searchable(self):
+        # Verifies the orphan-skip path end to end:
+        #   1. reach deque/map divergence (multi/exec queue keys with no
+        #      matching mutation-map entry),
+        #   2. a save over that divergence runs correctly (no crash, keys
+        #      skipped),
+        #   3. reads still return every record.
+        #
+        # Note the divergence is NOT produced by MULTI/EXEC itself — right after
+        # EXEC the deque and map hold the same keys. It is produced by a
+        # save+reload: on load the multi/exec deque is repopulated from the RDB
+        # while the mutation map is rebuilt and then drained, so the reloaded
+        # deque keys end up with no map entry.
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("config set search.writer-threads 20")
+        index.create(self.client, True)
+        records = make_data()
+
+        # --- Persist a multi/exec queue into the RDB ------------------------
+        # Block the writers so the multi/exec entries stay queued through the
+        # save (both deque and map hold the keys here — still consistent) and
+        # thus land in the RDB multi/exec section.
+        self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
+        self.client.execute_command("MULTI")
+        for i in range(len(records)):
+            index.write_data(self.client, i, records[i])
+        self.client.execute_command("EXEC")
+        self.client.execute_command("save")
+        assert self.client.info("search")["search_rdb_save_multi_exec_entries"] == len(records)
+        self.client.execute_command("ft._debug pausepoint reset block_mutation_queue")
+        while self.get_pausepoint("block_mutation_queue") > 0:
+            time.sleep(0.1)
+
+        # --- 1. Divergence: reload -----------------------------------------
+        # On reload the multi/exec deque is repopulated from the saved list, but
+        # the mutation map is rebuilt and drained during load, so the reloaded
+        # deque keys have no matching map entry.
+        os.environ["SKIPLOGCLEAN"] = "1"
+        self.server.restart(remove_rdb=False)
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        assert self.client.info("search")["search_rdb_load_multi_exec_entries"] == len(records)
+
+        # --- 2. Save runs correctly -----------------------------------------
+        # This save serializes the reloaded multi/exec queue against the drained
+        # map, so every reloaded queue key is an orphan. Pre-fix this aborted the
+        # forked RDB writer; now the orphans are skipped and the save succeeds.
+        self.client.execute_command("save")
+        assert self.client.ping()  # server survived the save
+        i = self.client.info("search")
+        assert i["search_rdb_save_multi_exec_orphans_skipped"] == len(records)
+        assert i["search_rdb_save_multi_exec_entries"] == 0
+
+        # --- 3. Reads still return every record -----------------------------
+        # In the running server (membership came from the key list, not the
+        # skipped queue entries)...
+        verify_data(self.client, index)
+        # ...and after reloading the orphan-skipped RDB (it is self-consistent).
+        self.server.restart(remove_rdb=False)
+        verify_data(self.client, index)
+
     def test_saverestore_backfill(self):
         #
         # Delay the backfill and ensure that with new format we will trigger the backfill....

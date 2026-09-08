@@ -341,6 +341,57 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.server.restart(remove_rdb=False)
         verify_data(self.client, index)
 
+    def test_multi_exec_orphan_key_saved_on_first_save(self):
+        """A first SAVE must survive a runtime orphaned multi/exec key."""
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        self.client.execute_command("CONFIG SET search.writer-threads 2")
+        non_vector_index.create(self.client, True)
+
+        key = non_vector_index.keyname(0)
+        initial_data = non_vector_index.make_data(0)
+        updated_data = non_vector_index.make_data(0)
+        updated_data["n"] = "1"
+
+        self.client.execute_command("FT._DEBUG PAUSEPOINT SET block_mutation_queue")
+        writer_client = self.server.get_new_client()
+        writer_error = []
+
+        def write_initial_data():
+            try:
+                non_vector_index.write_data(writer_client, 0, initial_data)
+            except BaseException as exc:
+                writer_error.append(exc)
+
+        writer_thread = threading.Thread(target=write_initial_data)
+        writer_thread.start()
+
+        waiters.wait_for_true(
+            lambda: self.get_pausepoint("block_mutation_queue") > 0
+        )
+
+        # The regular write has already been tracked, but its worker is paused.
+        # The MULTI/EXEC write appends the key to the multi queue and merges
+        # into the existing mutation record.
+        self.client.execute_command("MULTI")
+        non_vector_index.write_data(self.client, 0, updated_data)
+        self.client.execute_command("EXEC")
+
+        self.client.execute_command("FT._DEBUG PAUSEPOINT RESET block_mutation_queue")
+        writer_thread.join()
+        assert writer_error == []
+        assert self.client.ping()
+
+        # The regular worker consumes the merged mutation and erases the map
+        # entry, while the multi/exec queue still contains this key. This is
+        # the state that caused the first production BGSAVE to abort.
+        self.client.execute_command("SAVE")
+        assert self.client.ping()
+        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
+        info = self.client.info("search")
+        assert info["search_rdb_save_multi_exec_orphans_skipped"] == 1
+        assert info["search_rdb_save_multi_exec_entries"] == 0
+        assert self.client.exists(key)
+
     def test_saverestore_backfill(self):
         #
         # Delay the backfill and ensure that with new format we will trigger the backfill....

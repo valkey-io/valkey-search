@@ -62,7 +62,7 @@ jobs:
           sudo -E ci/build_ubuntu.sh --run-tests --tsan --unittest-output=/workspace/test-results
 
     - name: Save ccache
-      if: github.event_name == 'push'
+      if: always() && github.event_name == 'push'
       uses: actions/cache/save@v4
       with:
         path: .ccache

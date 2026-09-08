@@ -78,17 +78,24 @@ class BaseCompatibilityTest:
         self.client.execute_command("FLUSHALL SYNC")
         time.sleep(1)
 
-    def setup_data(self, data_set_name, key_type):
+    def setup_data(self, data_set_name, key_type, vector_data_type="FLOAT32"):
         self.data_set_name = data_set_name
         self.key_type = key_type
-        load_data(self.client, data_set_name, key_type)
+        self.vector_data_type = vector_data_type
+        load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
 
-    def execute_command(self, cmd):
+    def execute_command(self, cmd, excluded=False):
         answer = {"cmd": cmd,
                   "key_type": self.key_type,
                   "data_set_name": self.data_set_name,
+                  "vector_data_type": getattr(self, "vector_data_type", "FLOAT32"),
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
                   "traceback": "".join(traceback.format_stack())}
+        if excluded:
+            # Known, intentional difference from Redisearch. The answer is still
+            # captured, but the replay only checks that valkey-search does not
+            # crash on the command rather than comparing results.
+            answer["excluded"] = True
         try:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)
@@ -108,6 +115,7 @@ class BaseCompatibilityTest:
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         self.execute_command(cmd)
 
+@pytest.mark.parametrize("vector_data_type", ["FLOAT32", "FLOAT16", "BFLOAT16"])
 @pytest.mark.parametrize("dialect", [2])
 @pytest.mark.parametrize("key_type", ["json", "hash"])
 class TestAggregateCompatibility(BaseCompatibilityTest):
@@ -125,16 +133,35 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 did_one = True
             else:
                 new_cmd += [c]
+        # Pack the query BLOB matching the index's data type so RediSearch
+        # accepts it. The compatibility consumer (`compatibility_test.py`) replays
+        # this same cmd verbatim against a Valkey-search index of the same type.
+        vdt = getattr(self, "vector_data_type", "FLOAT32")
+        if vdt == "FLOAT16":
+            blob = struct.pack(f"<{VECTOR_DIM}e", *query_vector)
+        elif vdt == "BFLOAT16":
+            # FP32 -> BF16 with round-to-nearest, ties-to-even. Mirrors the
+            # C++ bfloat16(float) constructor and indexes.bfloat16_to_bytes.
+            fp32 = struct.pack(f"<{VECTOR_DIM}f", *query_vector)
+            buf = bytearray()
+            for i in range(VECTOR_DIM):
+                u = int.from_bytes(fp32[i * 4 : i * 4 + 4], "little")
+                rounding_bias = 0x7FFF + ((u >> 16) & 1)
+                u = (u + rounding_bias) & 0xFFFFFFFF
+                buf += u.to_bytes(4, "little")[2:4]
+            blob = bytes(buf)
+        else:
+            blob = struct.pack(f"<{VECTOR_DIM}f", *query_vector)
         new_cmd += [
             "PARAMS",
             "2",
             "BLOB",
-            struct.pack(f"<{VECTOR_DIM}f", *query_vector),
+            blob,
             "DIALECT",
             str(dialect),
         ]
         self.execute_command(new_cmd)
-    def check(self, dialect, *orig_cmd):
+    def check(self, dialect, *orig_cmd, excluded=False):
         '''Check Non-vector queries. Doesn't have support for '*' yet. '''
         cmd = orig_cmd[0].split() if len(orig_cmd) == 1 else [*orig_cmd]
         for query in ["@n1:[-inf inf]", "@t1:{aaaaaaa*}", "-@n1:[-inf inf]", "-@t1:{aaaaaa*}"]:
@@ -151,14 +178,14 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 "DIALECT",
                 str(dialect),
             ]
-            self.execute_command(new_cmd)
+            self.execute_command(new_cmd, excluded=excluded)
 
     def checkall(self, dialect, *orig_cmd, **kwargs):
         '''Non-vector commands. Doesn't have support for '*' yet. '''
         self.checkvec(dialect, *orig_cmd, **kwargs)
         self.check(dialect, *orig_cmd)
 
-    def test_bad_numeric_data(self, key_type, dialect):
+    def test_bad_numeric_data(self, key_type, dialect, vector_data_type):
         self.setup_data("bad numbers", key_type)
         self.check(dialect, "ft.search", f"{key_type}_idx1", "@n1:[-inf inf]")
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[-inf inf]")
@@ -171,7 +198,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         # negation returns all surviving keys; the dropped key must be absent.
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@n1:[100 200]")
 
-    def test_bad_vector_data(self, key_type, dialect):
+    def test_bad_vector_data(self, key_type, dialect, vector_data_type):
         # Keys with a malformed (wrong-length) VECTOR field are dropped entirely
         # by Redisearch, so they must not appear in vector KNN results nor in
         # queries against this key's other (valid) fields.
@@ -193,20 +220,20 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, "ft.search", f"{key_type}_idx1", "-@t2:{electronics}")
 
     @pytest.mark.skip(reason="Needs research")
-    def test_search_reverse(self, key_type, dialect):
+    def test_search_reverse(self, key_type, dialect, vector_data_type):
         self.setup_data("reverse vector numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
         self.checkall(dialect, f"ft.search {key_type}_idx1 * limit 0 5")
 
     @pytest.mark.skip(reason="Needs research")
-    def test_search(self, key_type, dialect):
+    def test_search(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)
         self.checkall(dialect, f"ft.search {key_type}_idx1 *")
     
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
-    def test_vector_distance(self, key_type, dialect, algo, metric):
-        self.setup_data(f"vector data {metric} {algo}", key_type)
+    def test_vector_distance(self, key_type, dialect, algo, metric, vector_data_type):
+        self.setup_data(f"vector data {metric} {algo}", key_type, vector_data_type=vector_data_type)
         vector_points = [-.75, .75]
         for x in vector_points:
             for y in vector_points:
@@ -214,8 +241,32 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 1 __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.aggregate {key_type}_idx1 * load 2 __v1_score __key", query_vector=[x, y, z])
                     self.checkvec(dialect, f"ft.search {key_type}_idx1 *", query_vector=[x, y, z])
-    def test_aggregate_sortby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
+    def test_vector_return_clause(self, key_type, dialect, algo, metric,
+                                  vector_data_type):
+        """RETURN of a vector attribute, mirroring the @n1/@t1 RETURN coverage
+        already present in test_search_sortby.
+
+        The two key kinds are served differently and both are checked here:
+        a HASH vector attribute comes from the index, whose copy is the exact
+        blob the caller wrote, while a JSON one comes from the document, so it
+        reflects what the user stored rather than the index's converted copy.
+        That distinction only becomes observable with FLOAT16/BFLOAT16, where
+        the index copy is lossy -- which is precisely why this is parametrized
+        over vector_data_type.
+        """
+        self.setup_data(f"vector data {metric} {algo}", key_type,
+                        vector_data_type=vector_data_type)
+        for return_keys in ["RETURN 1 v1",
+                            "RETURN 2 v1 n1",
+                            "RETURN 3 v1 n1 t1",
+                            "RETURN 2 n1 t1"]:
+            self.checkvec(dialect,
+                          f"ft.search {key_type}_idx1 * {return_keys}")
+
+    def test_aggregate_sortby(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n2 sortby 1 @n2")
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 1 @n2")
         self.check(dialect, 
@@ -234,8 +285,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 sortby 2 @__v1_score asc"
         )
 
-    def test_aggregate_groupby(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_groupby(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @n1")
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1")
         self.check(dialect, 
@@ -297,8 +348,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
 
-    def test_aggregate_groupby_tolist(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_groupby_tolist(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         # Basic TOLIST on numeric field grouped by tag
         self.check(dialect,
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items"
@@ -347,9 +398,9 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce ToLiSt 1 @n1 as items"
         )
 
-    def test_aggregate_groupby_tolist_duplicates(self, key_type, dialect):
+    def test_aggregate_groupby_tolist_duplicates(self, key_type, dialect, vector_data_type):
         """Test TOLIST with a dataset where duplicate values exist within groups."""
-        self.setup_data("hard numbers", key_type)
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         # hard numbers has t3="all_the_same_value" for all records, and
         # numeric fields with repeated values like -0.5, 0, -0, 1, -1 in
         # various combinations. TOLIST should deduplicate within the group.
@@ -376,26 +427,280 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce tolist 1 @n1 as items"
         )
 
-    def test_aggregate_limit(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_limit(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
 
-    def test_aggregate_short_limit(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_short_limit(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 0 5")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4", knn=4)
 
-    def test_aggregate_load(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_load(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
-    def test_aggregate_numeric_dyadic_operators(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_autoload_groupby(self, key_type, dialect, vector_data_type):
+        """A field named by GROUPBY or by a REDUCE argument must be fetched even
+        when no LOAD clause covers it. Redisearch loads such fields implicitly;
+        without that the group key is missing from the reply and every record
+        falls into a single group. See issue #919.
+
+        Row alignment: GROUPBY queries are aligned by the harness on the
+        grouped fields, so no @__key is needed (and adding one would defeat the
+        point of the test).
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # Group key with no LOAD clause at all.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce count 0 as cnt"
+        )
+        # Group key absent from a LOAD that covers a different field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @n1 groupby 1 @t1 reduce count 0 as cnt"
+        )
+        # Two group keys, neither loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 2 @t1 @t2 reduce count 0 as cnt"
+        )
+        # Group key loaded, reducer argument not.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @t1 groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Neither the group key nor the reducer argument loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Several reducers over different un-loaded fields.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce sum 1 @n1 as total reduce max 1 @n2 as peak"
+        )
+        # TOLIST over an un-loaded field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # Reducer with no AS clause over an un-loaded field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * groupby 1 @t1 reduce sum 1 @n1"
+        )
+
+    def test_aggregate_autoload_sortby(self, key_type, dialect, vector_data_type):
+        """A field named by SORTBY must be fetched even when no LOAD clause
+        covers it; Redisearch loads it implicitly and emits it. See issue #919.
+
+        Row alignment: SORTBY queries are aligned by the harness on the sort
+        fields, which only exist in the reply once the field is loaded.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # Sort field not covered by the LOAD clause.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @n1 asc"
+        )
+        # No LOAD clause at all.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * sortby 2 @n1 asc")
+        # Two sort fields, neither loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 4 @n1 asc @n2 desc"
+        )
+        # Sort on an un-loaded tag field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @t1 asc"
+        )
+        # Sort field un-loaded, plus a LIMIT downstream.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key sortby 2 @n1 asc limit 0 5"
+        )
+
+    def test_aggregate_load_rename(self, key_type, dialect, vector_data_type):
+        # The LOAD <count> includes the AS keyword and its alias.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        # Single rename.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as num1")
+        # Multiple renames.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as a @n2 as b")
+        # Proof: a renamed field is usable in a subsequent APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as a @n2 as b apply @a+@b as total"
+        )
+        # Renamed field reused across two APPLY stages.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as a apply @a*2 as dbl apply @dbl+@a as tripled"
+        )
+        # Mix of a renamed and a non-renamed load, both used in APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 @n2 as b apply @n1+@b as total"
+        )
+        # Rename a tag field and use it in a string APPLY. No spaces in the
+        # expression so the whitespace-split in check() keeps it one token.
+        self.check(dialect,
+            f'ft.aggregate {key_type}_idx1 * load 4 @__key @t1 as tag1 apply contains(@tag1,"one") as has_one'
+        )
+
+    def test_aggregate_load_rename_name_conflicts(self, key_type, dialect, vector_data_type):
+        # Name conflicts created by the LOAD ... AS clause. @__key is loaded so
+        # the rows have a stable sort key for the comparison.
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # An AS name may hide a declared field: `@n1 as n2` makes the name n2
+        # refer to n1's value rather than the schema's n2 ...
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2")
+        # ... including for later pipeline stages.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2 apply @n2+100 as r"
+        )
+        # Hiding a declared field of a different type (numeric hides a tag).
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as t1")
+        # An AS name may hide the key field.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @n1 as __key")
+        # Renaming a field onto its own name is a no-op.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n1")
+        # Loading the same field twice is de-duplicated, not an error.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 3 @__key @n2 @n2")
+
+        # KNOWN DIFFERENCES. Redisearch lets the first claim of an output name
+        # win and silently drops any later claim. valkey-search instead rejects
+        # a LOAD clause that names the same output twice when an `AS` rename is
+        # involved (see COMPATIBILITY.md, "stricter input validation"), so these
+        # commands error and are excluded from the result comparison.
+        #
+        # A rename onto the name of a field loaded earlier in the same clause.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n2 @n1 as n2",
+            excluded=True,
+        )
+        # ... and the same collision in the opposite order.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 5 @__key @n1 as n2 @n2",
+            excluded=True,
+        )
+        # A rename onto the key field when the key is also loaded.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as __key",
+            excluded=True,
+        )
+        # Two AS clauses targeting the same alias.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x",
+            excluded=True,
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply @x+1 as y",
+            excluded=True,
+        )
+
+    def test_aggregate_load_rename_json_path(self, key_type, dialect, vector_data_type):
+        # Loading a field by its JSON path only applies to JSON keys.
+        if key_type != "json":
+            pytest.skip("JSON-path loads apply only to JSON keys")
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        # Load by JSON path with a rename, then use the rename in APPLY.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply @a+1 as b"
+        )
+        # Load by JSON path without a rename: emitted under the path.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
+
+    def test_aggregate_json_field_names(self, key_type, dialect, vector_data_type):
+        """Field names in the reply must be the user-facing name, not the
+        schema identifier. Only JSON can distinguish the two (its schema is
+        `$.n1 AS n1 ...`); HASH is run too so both are held to one expectation.
+
+        See issue #1243. Row alignment follows the harness rules: queries with
+        neither GROUPBY nor SORTBY are aligned on `@__key`, so it is loaded;
+        GROUPBY aligns on the grouped fields; GROUPBY and SORTBY are never
+        combined (the harness rejects that pairing outright).
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # --- LOAD: the loaded field's own name.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1")
+
+        # --- APPLY: both the source name and the computed name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as computed"
+        )
+        # APPLY writing back over the loaded field's own name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as n1"
+        )
+        # APPLY over a field that is not named in the LOAD clause.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @__key apply @n1*2 as doubled"
+        )
+        # APPLY over a tag field, so the name survives a string stage too.
+        self.check(dialect,
+            f'ft.aggregate {key_type}_idx1 * load 2 @__key @t1 apply upper(@t1) as shout'
+        )
+
+        # --- FILTER: names of the records that survive.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 filter @n1<@n2"
+        )
+
+        # --- GROUPBY: the grouping key is emitted under its own name.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 1 @t1 groupby 1 @t1 reduce count 0 as cnt"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total"
+        )
+        # Grouping on two fields.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @t2 groupby 2 @t1 @t2 reduce count 0 as cnt"
+        )
+        # NOTE: `groupby 1 @t1` with no LOAD of @t1 is deliberately omitted.
+        # Redisearch auto-loads the grouped field (15 groups, each emitting
+        # t1 and cnt); valkey-search collapses everything into one group and
+        # emits only cnt. That is a separate defect from #1243, and it makes
+        # the harness raise KeyError on the missing sort key rather than
+        # report a mismatch, which would abort the whole replay.
+        # REDUCE with no AS clause: the generated name must not embed a path.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1"
+        )
+        # TOLIST over a JSON-pathed field.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce tolist 1 @n1 as items"
+        )
+        # A reducer feeding a later APPLY, so the reducer's name is re-read.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply @total+1 as bumped"
+        )
+
+        # --- SORTBY does not rename what it sorts on.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 sortby 2 @n1 asc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 4 @n1 asc @n2 desc"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @t1 sortby 2 @t1 asc"
+        )
+
+        # --- LIMIT after the names are established.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 sortby 2 @n1 asc limit 0 3"
+        )
+
+        # --- Multi-stage pipelines, end to end.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply @n1+10 as bumped filter @bumped>0"
+        )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply @n1+10 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
+        )
+
+    def test_aggregate_numeric_dyadic_operators(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
@@ -403,8 +708,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             self.check(dialect, 
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
-    def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type, dialect):
-        self.setup_data("sortable numbers", key_type)
+    def test_aggregate_numeric_dyadic_operators_sortable_numbers(self, key_type, dialect, vector_data_type):
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
@@ -414,8 +719,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             )
 
     @pytest.mark.skip(reason="Requires a large change to the underlying comparison operations and changes to many existing tests")
-    def test_aggregate_numeric_triadic_operators(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_numeric_triadic_operators(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
         logops = ["||", "&&"] if dialect == 2 else []
@@ -425,8 +730,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     f"ft.aggregate {key_type}_idx1  * load 4 @__key @n1 @n2 @n3 apply @n1{op1}@n2{op2}@n3 as nn apply (@n1{op1}@n2) as nn1"
                 )
 
-    def test_aggregate_numeric_functions(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_numeric_functions(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         function = ["log", "abs", "ceil", "floor", "log2", "exp", "sqrt"]
         for f in function:
             self.check(dialect, 
@@ -434,8 +739,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
-    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset):
-        self.setup_data(dataset, key_type)
+    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset, vector_data_type):
+        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
 
         # String apply function "contains"
         self.check(dialect, 
@@ -531,8 +836,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
-    def test_aggregate_substr(self, key_type, dialect, dataset):
-        self.setup_data(dataset, key_type)
+    def test_aggregate_substr(self, key_type, dialect, dataset, vector_data_type):
+        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
         for offset in [0, 1, 2, 100, -1, -2, -3, -1000]:
             for len in [0, 1, 2, 100, -1, -2, -3, -1000]:
                 self.check(dialect, 
@@ -549,8 +854,8 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                     "apply_result",
         )
 
-    def test_aggregate_dyadic_ops(self, key_type, dialect):
-        self.setup_data("hard numbers", key_type)
+    def test_aggregate_dyadic_ops(self, key_type, dialect, vector_data_type):
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         values = ["-inf", "-1.5", "-1", "-0.5", "0", "0.5", "1.0", "+inf"]
         dyadic = ["+", "-", "*", "/", "^"]
         relops = ["<", "<=", "==", "!=", ">=", ">"]
@@ -572,7 +877,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "nn",
                 )
 
-    def test_search_sortby(self, key_type, dialect):
+    def test_search_sortby(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)
 
         for sort_key in ["n1", "n2"]:
@@ -582,9 +887,9 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")
 
-    def test_tag_escaped_special_chars(self, key_type, dialect):
+    def test_tag_escaped_special_chars(self, key_type, dialect, vector_data_type):
         """Escaped special characters in tag queries. Ref: #454."""
-        self.setup_data("tag special chars", key_type)
+        self.setup_data("tag special chars", key_type, vector_data_type=vector_data_type)
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\}b }")
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ a\|b }")
         self.check(dialect, "ft.search", f"{key_type}_idx1", r"@tags:{ x\}y\}z }")
@@ -615,7 +920,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     # Redis and Valkey implementations. Compatibility testing requires
     # deterministic results, so only BY-clause (sorted) mode is tested here.
 
-    def test_first_value_by_clause(self, key_type, dialect):
+    def test_first_value_by_clause(self, key_type, dialect, vector_data_type):
         """Test FIRST_VALUE with BY clause - sorted mode."""
         self.setup_data("sortable numbers", key_type)
 
@@ -654,7 +959,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"reduce first_value {nargs} {val} BY {by}{order_clause} as {alias}"
             )
 
-    def test_first_value_keyword_case(self, key_type, dialect):
+    def test_first_value_keyword_case(self, key_type, dialect, vector_data_type):
         """Test FIRST_VALUE with case-insensitive keywords."""
         self.setup_data("sortable numbers", key_type)
 
@@ -676,7 +981,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"reduce first_value 4 @n1 BY @n1 {order_kw} as first_{order_kw}"
             )
 
-    def test_first_value_edge_cases(self, key_type, dialect):
+    def test_first_value_edge_cases(self, key_type, dialect, vector_data_type):
         """Test FIRST_VALUE with edge cases like nil values."""
         self.setup_data("hard numbers", key_type)
 
@@ -706,7 +1011,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"reduce first_value 4 @n1 BY @n2 ASC as first_dup_tie"
         )
 
-    def test_first_value_errors(self, key_type, dialect):
+    def test_first_value_errors(self, key_type, dialect, vector_data_type):
         """Test FIRST_VALUE error conditions."""
         self.setup_data("sortable numbers", key_type)
         

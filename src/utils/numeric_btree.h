@@ -34,15 +34,15 @@ class NumericBTree {
     Bag keys;
 
     LeafEntry() = default;
-    LeafEntry(const LeafEntry&) = delete;
-    LeafEntry& operator=(const LeafEntry&) = delete;
-    LeafEntry(LeafEntry&&) noexcept = default;
-    LeafEntry& operator=(LeafEntry&&) noexcept = default;
+    LeafEntry(const LeafEntry &) = delete;
+    LeafEntry &operator=(const LeafEntry &) = delete;
+    LeafEntry(LeafEntry &&) noexcept = default;
+    LeafEntry &operator=(LeafEntry &&) noexcept = default;
   };
 
   NumericBTree() = default;
-  NumericBTree(const NumericBTree&) = delete;
-  NumericBTree& operator=(const NumericBTree&) = delete;
+  NumericBTree(const NumericBTree &) = delete;
+  NumericBTree &operator=(const NumericBTree &) = delete;
   ~NumericBTree() { Destroy(root_); }
 
   // Total postings across all bags.
@@ -53,10 +53,10 @@ class NumericBTree {
 
   // Returns true if (value, key) was newly added; false if (value, key)
   // already existed.
-  bool Insert(double value, const InternedStringPtr& key);
+  bool Insert(double value, const InternedStringPtr &key);
 
   // Returns true if (value, key) was found and removed.
-  bool Erase(double value, const InternedStringPtr& key);
+  bool Erase(double value, const InternedStringPtr &key);
 
   // Postings with value in [start, end] respecting inclusive flags.
   uint64_t Count(double start, double end, bool start_inclusive,
@@ -77,7 +77,7 @@ class NumericBTree {
   };
 
   struct Leaf : NodeBase {
-    Leaf* next;
+    Leaf *next;
     LeafEntry entries[kLeafCap];
     Leaf() {
       this->kind = Kind::kLeaf;
@@ -90,7 +90,7 @@ class NumericBTree {
     // Each value is unique to one leaf entry, so a single double per
     // separator is enough to disambiguate routing.
     double separators[kInternalCap];
-    NodeBase* children[kInternalCap + 1];
+    NodeBase *children[kInternalCap + 1];
     uint64_t subtree_count[kInternalCap + 1];
     Internal() {
       this->kind = Kind::kInternal;
@@ -102,14 +102,14 @@ class NumericBTree {
     }
   };
 
-  static void Destroy(NodeBase* node) {
+  static void Destroy(NodeBase *node) {
     if (!node) {
       return;
     }
     if (node->IsLeaf()) {
-      delete static_cast<Leaf*>(node);
+      delete static_cast<Leaf *>(node);
     } else {
-      auto* in = static_cast<Internal*>(node);
+      auto *in = static_cast<Internal *>(node);
       for (int i = 0; i <= in->n; ++i) {
         Destroy(in->children[i]);
       }
@@ -118,7 +118,7 @@ class NumericBTree {
   }
 
   // First leaf-entry index whose value >= v.
-  static int LeafLowerPos(const Leaf* l, double v) {
+  static int LeafLowerPos(const Leaf *l, double v) {
     int pos = 0;
     while (pos < l->n && l->entries[pos].value < v) {
       ++pos;
@@ -129,7 +129,7 @@ class NumericBTree {
   // First child index whose subtree may contain v: smallest ci with
   // (separators[ci-1] <= v and v < separators[ci]). Implemented as
   // first ci such that v < separators[ci].
-  static int InternalChildForValue(const Internal* in, double v) {
+  static int InternalChildForValue(const Internal *in, double v) {
     int i = 0;
     while (i < in->n && in->separators[i] <= v) {
       ++i;
@@ -139,7 +139,7 @@ class NumericBTree {
 
   // For value-only RankLT (count of values strictly less than v). The LE
   // variant is identical to InternalChildForValue, so callers use that.
-  static int InternalChildForValueLT(const Internal* in, double v) {
+  static int InternalChildForValueLT(const Internal *in, double v) {
     int i = 0;
     while (i < in->n && in->separators[i] < v) {
       ++i;
@@ -149,7 +149,7 @@ class NumericBTree {
 
   struct InsertOut {
     bool new_posting;         // whether a new (value, key) pair was added
-    NodeBase* split_right;    // non-null on split
+    NodeBase *split_right;    // non-null on split
     double split_sep;         // smallest value of split_right subtree
     uint64_t right_postings;  // postings in split_right; 0 when no split
   };
@@ -158,14 +158,14 @@ class NumericBTree {
     return InsertOut{added, nullptr, 0.0, 0};
   }
 
-  InsertOut InsertRec(NodeBase* node, double v, const InternedStringPtr& k) {
+  InsertOut InsertRec(NodeBase *node, double v, const InternedStringPtr &k) {
     if (node->IsLeaf()) {
-      return InsertLeaf(static_cast<Leaf*>(node), v, k);
+      return InsertLeaf(static_cast<Leaf *>(node), v, k);
     }
-    return InsertInternal(static_cast<Internal*>(node), v, k);
+    return InsertInternal(static_cast<Internal *>(node), v, k);
   }
 
-  InsertOut InsertLeaf(Leaf* l, double v, const InternedStringPtr& k) {
+  InsertOut InsertLeaf(Leaf *l, double v, const InternedStringPtr &k) {
     int pos = LeafLowerPos(l, v);
     if (pos < l->n && l->entries[pos].value == v) {
       auto [_, ins] = l->entries[pos].keys.insert(k);
@@ -184,7 +184,7 @@ class NumericBTree {
       return NoOp(true);
     }
     // Split.
-    auto* right = new Leaf();
+    auto *right = new Leaf();
     constexpr int mid = kLeafCap / 2;
     if (pos <= mid) {
       for (int i = mid; i < kLeafCap; ++i) {
@@ -224,7 +224,7 @@ class NumericBTree {
     return InsertOut{true, right, right->entries[0].value, right_postings};
   }
 
-  InsertOut InsertInternal(Internal* in, double v, const InternedStringPtr& k) {
+  InsertOut InsertInternal(Internal *in, double v, const InternedStringPtr &k) {
     int ci = InternalChildForValue(in, v);
     InsertOut sub = InsertRec(in->children[ci], v, k);
     if (sub.new_posting) {
@@ -257,7 +257,7 @@ class NumericBTree {
     // Split internal node.
     constexpr int total_seps = kInternalCap + 1;
     double seps[total_seps];
-    NodeBase* kids[total_seps + 1];
+    NodeBase *kids[total_seps + 1];
     uint64_t cnts[total_seps + 1];
     for (int i = 0; i < ci; ++i) {
       seps[i] = in->separators[i];
@@ -281,7 +281,7 @@ class NumericBTree {
     }
 
     constexpr int mid = total_seps / 2;
-    auto* right = new Internal();
+    auto *right = new Internal();
     in->n = mid;
     for (int i = 0; i < mid; ++i) {
       in->separators[i] = seps[i];
@@ -309,14 +309,14 @@ class NumericBTree {
   }
 
   // Returns true iff posting was found and removed.
-  bool EraseRec(NodeBase* node, double v, const InternedStringPtr& k) {
+  bool EraseRec(NodeBase *node, double v, const InternedStringPtr &k) {
     if (node->IsLeaf()) {
-      Leaf* l = static_cast<Leaf*>(node);
+      Leaf *l = static_cast<Leaf *>(node);
       int pos = LeafLowerPos(l, v);
       if (pos >= l->n || l->entries[pos].value != v) {
         return false;
       }
-      auto& bag = l->entries[pos].keys;
+      auto &bag = l->entries[pos].keys;
       if (bag.erase(k) == 0) {
         return false;
       }
@@ -330,7 +330,7 @@ class NumericBTree {
       }
       return true;
     }
-    Internal* in = static_cast<Internal*>(node);
+    Internal *in = static_cast<Internal *>(node);
     int ci = InternalChildForValue(in, v);
     bool ok = EraseRec(in->children[ci], v, k);
     if (!ok) {
@@ -338,7 +338,7 @@ class NumericBTree {
     }
     --in->subtree_count[ci];
 
-    NodeBase* child = in->children[ci];
+    NodeBase *child = in->children[ci];
     bool underflow =
         child->IsLeaf() ? (child->n < kLeafMin) : (child->n < kInternalMin);
     if (underflow) {
@@ -347,10 +347,10 @@ class NumericBTree {
     return true;
   }
 
-  void RebalanceChild(Internal* in, int ci) {
-    NodeBase* child = in->children[ci];
-    NodeBase* left = (ci > 0) ? in->children[ci - 1] : nullptr;
-    NodeBase* right = (ci < in->n) ? in->children[ci + 1] : nullptr;
+  void RebalanceChild(Internal *in, int ci) {
+    NodeBase *child = in->children[ci];
+    NodeBase *left = (ci > 0) ? in->children[ci - 1] : nullptr;
+    NodeBase *right = (ci < in->n) ? in->children[ci + 1] : nullptr;
     int min_n = child->IsLeaf() ? kLeafMin : kInternalMin;
 
     if (left && left->n > min_n) {
@@ -365,12 +365,12 @@ class NumericBTree {
     }
   }
 
-  void RotateFromLeft(Internal* in, int ci) {
-    NodeBase* child = in->children[ci];
-    NodeBase* left = in->children[ci - 1];
+  void RotateFromLeft(Internal *in, int ci) {
+    NodeBase *child = in->children[ci];
+    NodeBase *left = in->children[ci - 1];
     if (child->IsLeaf()) {
-      Leaf* L = static_cast<Leaf*>(left);
-      Leaf* R = static_cast<Leaf*>(child);
+      Leaf *L = static_cast<Leaf *>(left);
+      Leaf *R = static_cast<Leaf *>(child);
       uint64_t moved = L->entries[L->n - 1].keys.size();
       for (int i = R->n; i > 0; --i) {
         R->entries[i] = std::move(R->entries[i - 1]);
@@ -383,8 +383,8 @@ class NumericBTree {
       in->subtree_count[ci - 1] -= moved;
       in->subtree_count[ci] += moved;
     } else {
-      Internal* L = static_cast<Internal*>(left);
-      Internal* R = static_cast<Internal*>(child);
+      Internal *L = static_cast<Internal *>(left);
+      Internal *R = static_cast<Internal *>(child);
       uint64_t moved = L->subtree_count[L->n];
       for (int i = R->n; i > 0; --i) {
         R->separators[i] = R->separators[i - 1];
@@ -406,12 +406,12 @@ class NumericBTree {
     }
   }
 
-  void RotateFromRight(Internal* in, int ci) {
-    NodeBase* child = in->children[ci];
-    NodeBase* right = in->children[ci + 1];
+  void RotateFromRight(Internal *in, int ci) {
+    NodeBase *child = in->children[ci];
+    NodeBase *right = in->children[ci + 1];
     if (child->IsLeaf()) {
-      Leaf* L = static_cast<Leaf*>(child);
-      Leaf* R = static_cast<Leaf*>(right);
+      Leaf *L = static_cast<Leaf *>(child);
+      Leaf *R = static_cast<Leaf *>(right);
       uint64_t moved = R->entries[0].keys.size();
       L->entries[L->n] = std::move(R->entries[0]);
       ++L->n;
@@ -424,8 +424,8 @@ class NumericBTree {
       in->subtree_count[ci] += moved;
       in->subtree_count[ci + 1] -= moved;
     } else {
-      Internal* L = static_cast<Internal*>(child);
-      Internal* R = static_cast<Internal*>(right);
+      Internal *L = static_cast<Internal *>(child);
+      Internal *R = static_cast<Internal *>(right);
       uint64_t moved = R->subtree_count[0];
       L->separators[L->n] = in->separators[ci];
       L->children[L->n + 1] = R->children[0];
@@ -447,13 +447,13 @@ class NumericBTree {
     }
   }
 
-  void MergeAdjacent(Internal* in, int i) {
-    NodeBase* L = in->children[i];
-    NodeBase* R = in->children[i + 1];
+  void MergeAdjacent(Internal *in, int i) {
+    NodeBase *L = in->children[i];
+    NodeBase *R = in->children[i + 1];
     uint64_t merged_count = in->subtree_count[i] + in->subtree_count[i + 1];
     if (L->IsLeaf()) {
-      Leaf* LL = static_cast<Leaf*>(L);
-      Leaf* RR = static_cast<Leaf*>(R);
+      Leaf *LL = static_cast<Leaf *>(L);
+      Leaf *RR = static_cast<Leaf *>(R);
       for (int j = 0; j < RR->n; ++j) {
         LL->entries[LL->n + j] = std::move(RR->entries[j]);
       }
@@ -461,8 +461,8 @@ class NumericBTree {
       LL->next = RR->next;
       delete RR;
     } else {
-      Internal* LL = static_cast<Internal*>(L);
-      Internal* RR = static_cast<Internal*>(R);
+      Internal *LL = static_cast<Internal *>(L);
+      Internal *RR = static_cast<Internal *>(R);
       LL->separators[LL->n] = in->separators[i];
       for (int j = 0; j < RR->n; ++j) {
         LL->separators[LL->n + 1 + j] = RR->separators[j];
@@ -490,12 +490,12 @@ class NumericBTree {
 
   uint64_t RankLT(double v) const { return RankRec(root_, v, true); }
   uint64_t RankLE(double v) const { return RankRec(root_, v, false); }
-  uint64_t RankRec(NodeBase* node, double v, bool strict) const {
+  uint64_t RankRec(NodeBase *node, double v, bool strict) const {
     if (!node) {
       return 0;
     }
     if (node->IsLeaf()) {
-      Leaf* l = static_cast<Leaf*>(node);
+      Leaf *l = static_cast<Leaf *>(node);
       uint64_t r = 0;
       for (int i = 0; i < l->n; ++i) {
         bool ok =
@@ -507,7 +507,7 @@ class NumericBTree {
       }
       return r;
     }
-    Internal* in = static_cast<Internal*>(node);
+    Internal *in = static_cast<Internal *>(node);
     int ci =
         strict ? InternalChildForValueLT(in, v) : InternalChildForValue(in, v);
     uint64_t r = 0;
@@ -526,11 +526,11 @@ class NumericBTree {
    public:
     Iterator() = default;
     bool IsEnd() const { return leaf_ == nullptr; }
-    const InternedStringPtr& operator*() const {
+    const InternedStringPtr &operator*() const {
       DCHECK(leaf_);
       return *bag_iter_;
     }
-    const InternedStringPtr* operator->() const {
+    const InternedStringPtr *operator->() const {
       DCHECK(leaf_);
       return bag_iter_.operator->();
     }
@@ -539,13 +539,13 @@ class NumericBTree {
       return leaf_->entries[entry_idx_].value;
     }
 
-    Iterator& operator++() {
+    Iterator &operator++() {
       DCHECK(leaf_);
       ++bag_iter_;
       AdvanceIfBagExhausted();
       return *this;
     }
-    bool operator==(const Iterator& o) const {
+    bool operator==(const Iterator &o) const {
       if (leaf_ != o.leaf_) {
         return false;
       }
@@ -554,11 +554,11 @@ class NumericBTree {
       }
       return entry_idx_ == o.entry_idx_ && bag_iter_ == o.bag_iter_;
     }
-    bool operator!=(const Iterator& o) const { return !(*this == o); }
+    bool operator!=(const Iterator &o) const { return !(*this == o); }
 
    private:
     friend class NumericBTree;
-    Iterator(const Leaf* l, int entry_idx) : leaf_(l), entry_idx_(entry_idx) {
+    Iterator(const Leaf *l, int entry_idx) : leaf_(l), entry_idx_(entry_idx) {
       if (leaf_ && entry_idx_ < leaf_->n) {
         bag_iter_ = leaf_->entries[entry_idx_].keys.begin();
         AdvanceIfBagExhausted();
@@ -587,7 +587,7 @@ class NumericBTree {
       }
     }
 
-    const Leaf* leaf_{nullptr};
+    const Leaf *leaf_{nullptr};
     int entry_idx_{0};
     Bag::const_iterator bag_iter_{};
   };
@@ -611,17 +611,17 @@ class NumericBTree {
 
  private:
   Iterator DescendForValue(double v, bool strict) const {
-    NodeBase* node = root_;
+    NodeBase *node = root_;
     if (!node) {
       return Iterator();
     }
     while (!node->IsLeaf()) {
-      Internal* in = static_cast<Internal*>(node);
+      Internal *in = static_cast<Internal *>(node);
       int ci = strict ? InternalChildForValueLT(in, v)
                       : InternalChildForValue(in, v);
       node = in->children[ci];
     }
-    Leaf* l = static_cast<Leaf*>(node);
+    Leaf *l = static_cast<Leaf *>(node);
     int i = 0;
     if (strict) {
       while (i < l->n && l->entries[i].value < v) {
@@ -634,7 +634,7 @@ class NumericBTree {
     }
     if (i >= l->n) {
       // Walk to next leaf.
-      Leaf* next_leaf = l->next;
+      Leaf *next_leaf = l->next;
       if (!next_leaf) {
         return Iterator();
       }
@@ -643,8 +643,8 @@ class NumericBTree {
     return Iterator(l, i);
   }
 
-  NodeBase* root_{nullptr};
-  Leaf* first_leaf_{nullptr};
+  NodeBase *root_{nullptr};
+  Leaf *first_leaf_{nullptr};
   size_t total_postings_{0};
   size_t unique_values_{0};
 
@@ -660,9 +660,9 @@ class NumericBTree {
   double cached_max_{std::numeric_limits<double>::lowest()};
 };
 
-inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
+inline bool NumericBTree::Insert(double value, const InternedStringPtr &key) {
   if (!root_) {
-    auto* l = new Leaf();
+    auto *l = new Leaf();
     l->entries[0].value = value;
     l->entries[0].keys.insert(key);
     l->n = 1;
@@ -680,7 +680,7 @@ inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
   }
   ++total_postings_;
   if (r.split_right) {
-    auto* new_root = new Internal();
+    auto *new_root = new Internal();
     new_root->separators[0] = r.split_sep;
     new_root->children[0] = root_;
     new_root->children[1] = r.split_right;
@@ -699,7 +699,7 @@ inline bool NumericBTree::Insert(double value, const InternedStringPtr& key) {
   return true;
 }
 
-inline bool NumericBTree::Erase(double value, const InternedStringPtr& key) {
+inline bool NumericBTree::Erase(double value, const InternedStringPtr &key) {
   if (!root_) {
     return false;
   }
@@ -710,16 +710,16 @@ inline bool NumericBTree::Erase(double value, const InternedStringPtr& key) {
   --total_postings_;
   if (root_->IsLeaf()) {
     if (root_->n == 0) {
-      delete static_cast<Leaf*>(root_);
+      delete static_cast<Leaf *>(root_);
       root_ = nullptr;
       first_leaf_ = nullptr;
       cached_min_ = std::numeric_limits<double>::max();
       cached_max_ = std::numeric_limits<double>::lowest();
     }
   } else {
-    auto* in = static_cast<Internal*>(root_);
+    auto *in = static_cast<Internal *>(root_);
     if (in->n == 0) {
-      NodeBase* new_root = in->children[0];
+      NodeBase *new_root = in->children[0];
       in->children[0] = nullptr;
       delete in;
       root_ = new_root;

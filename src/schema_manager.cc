@@ -22,6 +22,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
@@ -32,11 +33,11 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/rdb_section.pb.h"
 #include "src/rdb_serialization.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -142,14 +143,14 @@ SchemaManager::SchemaManager(
   }
 }
 
-absl::Status GenerateIndexAlreadyExistsError(uint32_t db_num,
+absl::Status GenerateIndexAlreadyExistsError(int db_num,
                                              absl::string_view name) {
   return absl::AlreadyExistsError(
       absl::StrFormat("Index %s in database %d already exists.", name, db_num));
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::LookupInternal(
-    uint32_t db_num, absl::string_view name) const {
+    int db_num, absl::string_view name) const {
   auto db_itr = db_to_index_schemas_.find(db_num);
   if (db_itr == db_to_index_schemas_.end()) {
     return absl::NotFoundError(absl::StrCat(
@@ -174,7 +175,7 @@ absl::Status SchemaManager::ImportIndexSchema(
     std::shared_ptr<IndexSchema> index_schema) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
 
-  uint32_t db_num = index_schema->GetDBNum();
+  int db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
@@ -189,14 +190,151 @@ absl::Status SchemaManager::ImportIndexSchema(
   return absl::OkStatus();
 }
 
+namespace {
+
+// Two prefix lists can match a common key iff some prefix of one is a prefix
+// of the other. The empty prefix matches every key, so a list containing it
+// intersects everything.
+bool KeyPrefixesIntersect(const std::vector<std::string> &a,
+                          const std::vector<std::string> &b) {
+  for (const auto &pa : a) {
+    for (const auto &pb : b) {
+      if (absl::StartsWith(pa, pb) || absl::StartsWith(pb, pa)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// IndexSchema normalizes an empty prefix list to a single empty prefix,
+// meaning "every key". Apply the same rule when reading a proto that has not
+// been turned into an IndexSchema yet, so both sides compare alike.
+std::vector<std::string> NormalizedKeyPrefixes(
+    const data_model::IndexSchema &proto) {
+  std::vector<std::string> prefixes(proto.subscribed_key_prefixes().begin(),
+                                    proto.subscribed_key_prefixes().end());
+  if (prefixes.empty()) {
+    prefixes.emplace_back("");
+  }
+  return prefixes;
+}
+
+// A HASH vector attribute is identified by the hash field name, and the bytes
+// held in that field are interpreted according to the index's declared TYPE.
+// Two indexes that read the same field as different types therefore disagree
+// about what the very same bytes mean -- the 16 bits of a FLOAT16 element and
+// of a BFLOAT16 element are unrelated values -- so at most one of them can be
+// right. Reject the schema instead of letting both exist.
+//
+// Both directions are checked: the new schema against every existing schema
+// whose key prefixes overlap, and the new schema against itself, since one
+// FT.CREATE can name the same identifier twice under two aliases.
+//
+// Only HASH is checked: a JSON attribute is identified by a path into the
+// document and is parsed from text per index, so two JSON indexes reading the
+// same path at different types each convert independently.
+absl::Status ValidateNoConflictingVectorFieldTypes(
+    const data_model::IndexSchema &new_proto,
+    const absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>
+        &existing_schemas) {
+  if (new_proto.attribute_data_type() !=
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+    return absl::OkStatus();
+  }
+
+  absl::flat_hash_map<absl::string_view, data_model::VectorDataType>
+      new_vector_fields;
+  for (const auto &attribute : new_proto.attributes()) {
+    if (!attribute.index().has_vector_index()) {
+      continue;
+    }
+    const data_model::VectorDataType type =
+        attribute.index().vector_index().vector_data_type();
+    // Two aliases in one schema may name the same identifier. That reaches the
+    // same impossible state as two indexes do, without a second index for the
+    // loop below to compare against, so catch it while building the map rather
+    // than letting the later write win.
+    const auto [it, inserted] =
+        new_vector_fields.emplace(attribute.identifier(), type);
+    if (!inserted && it->second != type) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Field `", attribute.identifier(), "` is declared as both ",
+          indexes::LookupKeyByValue(*indexes::kVectorDataTypeByStr, it->second),
+          " and ",
+          indexes::LookupKeyByValue(*indexes::kVectorDataTypeByStr, type),
+          " by this index. The same hash field cannot be indexed as two "
+          "different vector data types, because the stored bytes can only be "
+          "interpreted as one of them."));
+    }
+  }
+  if (new_vector_fields.empty()) {
+    return absl::OkStatus();
+  }
+
+  const std::vector<std::string> new_prefixes =
+      NormalizedKeyPrefixes(new_proto);
+
+  for (const auto &[existing_name, existing_schema] : existing_schemas) {
+    if (existing_schema->GetAttributeDataType().ToProto() !=
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
+      continue;
+    }
+    if (!KeyPrefixesIntersect(new_prefixes,
+                              existing_schema->GetKeyPrefixes())) {
+      continue;
+    }
+    for (const auto &[_, existing_attribute] :
+         existing_schema->GetAttributes()) {
+      const auto *existing_vector = dynamic_cast<const indexes::VectorBase *>(
+          existing_attribute.GetIndex().get());
+      if (existing_vector == nullptr) {
+        continue;
+      }
+      auto it = new_vector_fields.find(existing_attribute.GetIdentifier());
+      if (it == new_vector_fields.end()) {
+        continue;
+      }
+      const data_model::VectorDataType existing_type =
+          existing_vector->GetVectorDataType();
+      if (existing_type == it->second) {
+        continue;
+      }
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Field `", existing_attribute.GetIdentifier(),
+          "` is already indexed as ",
+          indexes::LookupKeyByValue(*indexes::kVectorDataTypeByStr,
+                                    existing_type),
+          " by index `", existing_name,
+          "`, whose key prefixes overlap this one. The same hash field cannot "
+          "be indexed as two different vector data types, because the stored "
+          "bytes can only be interpreted as one of them."));
+    }
+  }
+  return absl::OkStatus();
+}
+
+}  // namespace
+
 absl::Status SchemaManager::CreateIndexSchemaInternal(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
-  uint32_t db_num = index_schema_proto.db_num();
+  int db_num = static_cast<int>(index_schema_proto.db_num());
   const std::string &name = index_schema_proto.name();
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
     return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
+
+  // Run unconditionally: the schema is also checked against itself, and a
+  // self-conflicting schema can be the first index in the database, where
+  // there is no map entry to find.
+  static const absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>
+      kNoExistingSchemas;
+  auto db_entry = db_to_index_schemas_.find(db_num);
+  VMSDK_RETURN_IF_ERROR(ValidateNoConflictingVectorFieldTypes(
+      index_schema_proto, db_entry != db_to_index_schemas_.end()
+                              ? db_entry->second
+                              : kNoExistingSchemas));
 
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
@@ -231,8 +369,9 @@ SchemaManager::CreateIndexSchema(
                              coordinator::ObjName(index_schema_proto.db_num(),
                                                   index_schema_proto.name()))
             .ok()) {
-      return GenerateIndexAlreadyExistsError(index_schema_proto.db_num(),
-                                             index_schema_proto.name());
+      return GenerateIndexAlreadyExistsError(
+          static_cast<int>(index_schema_proto.db_num()),
+          index_schema_proto.name());
     }
     auto any_proto = std::make_unique<google::protobuf::Any>();
     any_proto->PackFrom(index_schema_proto);
@@ -254,7 +393,7 @@ SchemaManager::CreateIndexSchema(
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
-    uint32_t db_num, absl::string_view name) const {
+    int db_num, absl::string_view name) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
@@ -264,8 +403,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>>
-SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
-                                         absl::string_view name) {
+SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   auto existing_entry = LookupInternal(db_num, name);
   if (!existing_entry.ok()) {
     return GenerateIndexNotFoundError(db_num, name);
@@ -282,7 +420,7 @@ SchemaManager::RemoveIndexSchemaInternal(uint32_t db_num,
   return result;
 }
 
-absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
+absl::Status SchemaManager::RemoveIndexSchema(int db_num,
                                               const absl::string_view name) {
   if (coordinator_enabled_) {
     // In coordinated mode, use the metadata_manager as the source of truth.
@@ -310,7 +448,7 @@ absl::Status SchemaManager::RemoveIndexSchema(uint32_t db_num,
 }
 
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
-    uint32_t db_num) const {
+    int db_num) const {
   // Copy out the state at the time of the call. Due to the copy - this
   // should not be used in performance critical paths like FT.SEARCH.
   absl::flat_hash_set<std::string> names;
@@ -325,7 +463,7 @@ absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDBInternal(
 }
 
 absl::flat_hash_set<std::string> SchemaManager::GetIndexSchemasInDB(
-    uint32_t db_num) const {
+    int db_num) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   return GetIndexSchemasInDBInternal(db_num);
 }
@@ -615,7 +753,6 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
       schema->OnLoadingEnded(ctx);
     }
   }
-  VectorExternalizer::Instance().ProcessEngineUpdateQueue();
 }
 
 void SchemaManager::PerformBackfill(ValkeyModuleCtx *ctx, uint32_t batch_size) {
@@ -691,7 +828,7 @@ absl::Status SchemaManager::LoadIndex(
                                                   std::move(index_schema_pb),
                                                   std::move(supplemental_iter)),
                          _ << "Failed to load index schema from RDB!");
-  uint32_t db_num = index_schema->GetDBNum();
+  int db_num = index_schema->GetDBNum();
   const std::string &name = index_schema->GetName();
 
   // In diskless load scenarios, we stage the index to allow serving from
@@ -783,7 +920,7 @@ void SchemaManager::OnShutdownCallback(ValkeyModuleCtx *ctx,
 }
 
 void SchemaManager::PopulateFingerprintVersionFromMetadata(
-    uint32_t db_num, absl::string_view name, uint64_t fingerprint,
+    int db_num, absl::string_view name, uint64_t fingerprint,
     uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);

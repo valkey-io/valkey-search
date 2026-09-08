@@ -35,6 +35,7 @@ target_link_libraries(search PUBLIC hnswlib_vmsdk)
 target_link_libraries(search PUBLIC vmsdklib)
 target_link_libraries(search PUBLIC valkey_module)
 target_link_libraries(search PUBLIC content_resolution)
+target_link_libraries(search PUBLIC scoring)
 
 set(SRCS_SEARCH_HEADER ${CMAKE_CURRENT_LIST_DIR}/search.h)
 

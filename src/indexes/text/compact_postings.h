@@ -22,12 +22,14 @@ namespace valkey_search::indexes::text {
 // trivially-copyable value, tuned for the many-small / few-large distribution
 // of a text index's per-term document lists. Following the tagged-pointer idea
 // of BagOfInternedStringPtrs (PR #1026), the whole object is exactly 8 bytes
-// and picks one of three heap representations from the bottom two bits of
+// and picks one of four heap representations from the bottom two bits of
 // storage_:
 //
 //   storage_ == 0                -> empty
 //   storage_ low 2 bits == 00    -> Single: heap Entry, one key/value pair
-//   storage_ low 2 bits == 01    -> SmallVec: heap array of up to 4 entries,
+//   storage_ low 2 bits == 10    -> Double: heap array of exactly 2 entries,
+//                                   sorted by key
+//   storage_ low 2 bits == 01    -> SmallVec: heap array of 3..4 entries,
 //                                   sorted by key for binary search
 //   storage_ low 2 bits == 11    -> Map: heap btree_map for 5+ entries
 //
@@ -116,10 +118,12 @@ class CompactPostings {
   Iterator GetIterator() const;
 
   // Test-only: the current representation, for white-box mode-transition tests.
-  enum class TestMode { kEmpty, kSingle, kSmallVec, kMap };
+  enum class TestMode { kEmpty, kSingle, kDouble, kSmallVec, kMap };
   TestMode TestModeForTesting() const {
     if (storage_ == 0) return TestMode::kEmpty;
     switch (storage_ & kTagMask) {
+      case kDoubleTag:
+        return TestMode::kDouble;
       case kSmallVecTag:
         return TestMode::kSmallVec;
       case kMapTag:
@@ -135,6 +139,12 @@ class CompactPostings {
     Value value;
   };
 
+  static constexpr size_t kDoubleCap = 2;
+  struct Double {
+    size_t count{0};
+    Entry entries[kDoubleCap];
+  };
+
   static constexpr size_t kSmallVecCap = 4;
   struct SmallVec {
     size_t count{0};
@@ -144,16 +154,21 @@ class CompactPostings {
   static constexpr uintptr_t kTagMask = 0x3;
   static constexpr uintptr_t kSingleTag = 0;
   static constexpr uintptr_t kSmallVecTag = 1;
+  static constexpr uintptr_t kDoubleTag = 2;
   static constexpr uintptr_t kMapTag = 3;
 
   bool IsSingle() const {
     return storage_ != 0 && (storage_ & kTagMask) == kSingleTag;
   }
+  bool IsDouble() const { return (storage_ & kTagMask) == kDoubleTag; }
   bool IsSmallVec() const { return (storage_ & kTagMask) == kSmallVecTag; }
   bool IsMap() const { return (storage_ & kTagMask) == kMapTag; }
 
   Entry* GetSingle() const {
     return reinterpret_cast<Entry*>(storage_ & ~kTagMask);
+  }
+  Double* GetDouble() const {
+    return reinterpret_cast<Double*>(storage_ & ~kTagMask);
   }
   SmallVec* GetSmallVec() const {
     return reinterpret_cast<SmallVec*>(storage_ & ~kTagMask);
@@ -164,11 +179,27 @@ class CompactPostings {
   void SetSingle(Entry* p) {
     storage_ = reinterpret_cast<uintptr_t>(p) | kSingleTag;
   }
+  void SetDouble(Double* p) {
+    storage_ = reinterpret_cast<uintptr_t>(p) | kDoubleTag;
+  }
   void SetSmallVec(SmallVec* p) {
     storage_ = reinterpret_cast<uintptr_t>(p) | kSmallVecTag;
   }
   void SetMap(MapType* p) {
     storage_ = reinterpret_cast<uintptr_t>(p) | kMapTag;
+  }
+
+  // Entries and count for the active array mode (Double or SmallVec), whose
+  // layouts share the {count, entries...} prefix.
+  const Entry* ArrayView(size_t* count) const {
+    if ((storage_ & kTagMask) == kDoubleTag) {
+      auto* a = GetDouble();
+      *count = a->count;
+      return a->entries;
+    }
+    auto* a = GetSmallVec();
+    *count = a->count;
+    return a->entries;
   }
 
   template <typename K>
@@ -178,6 +209,7 @@ class CompactPostings {
   static size_t SmallVecLowerBound(const SmallVec* vec, const Key& key);
   void PromoteToMap(const Key& key, const Value& value);
   void DemoteToSmallVec();
+  void DemoteToDouble();
   void Clear();
 
   uintptr_t storage_ = 0;
@@ -187,6 +219,8 @@ template <typename Value>
 size_t CompactPostings<Value>::size() const {
   if (storage_ == 0) return 0;
   switch (storage_ & kTagMask) {
+    case kDoubleTag:
+      return GetDouble()->count;
     case kSmallVecTag:
       return GetSmallVec()->count;
     case kMapTag:
@@ -209,16 +243,36 @@ bool CompactPostings<Value>::Insert(const Key& key, const Value& value) {
     case kSingleTag: {
       auto* single = GetSingle();
       if (RawInternedPtr(single->key) == RawInternedPtr(key)) return false;
-      auto* vec = new SmallVec();
+      auto* dbl = new Double();
       if (less(key, single->key)) {
-        vec->entries[0] = Entry{key, value};
-        vec->entries[1] = std::move(*single);
+        dbl->entries[0] = Entry{key, value};
+        dbl->entries[1] = std::move(*single);
       } else {
-        vec->entries[0] = std::move(*single);
-        vec->entries[1] = Entry{key, value};
+        dbl->entries[0] = std::move(*single);
+        dbl->entries[1] = Entry{key, value};
       }
-      vec->count = 2;
+      dbl->count = 2;
       delete single;
+      SetDouble(dbl);
+      return true;
+    }
+    case kDoubleTag: {
+      auto* dbl = GetDouble();
+      size_t pos = 0;
+      while (pos < dbl->count && less(dbl->entries[pos].key, key)) ++pos;
+      if (pos < dbl->count &&
+          RawInternedPtr(dbl->entries[pos].key) == RawInternedPtr(key)) {
+        return false;
+      }
+      auto* vec = new SmallVec();
+      size_t j = 0;
+      for (size_t i = 0; i < dbl->count; ++i) {
+        if (i == pos) vec->entries[j++] = Entry{key, value};
+        vec->entries[j++] = std::move(dbl->entries[i]);
+      }
+      if (pos == dbl->count) vec->entries[j++] = Entry{key, value};
+      vec->count = dbl->count + 1;
+      delete dbl;
       SetSmallVec(vec);
       return true;
     }
@@ -260,6 +314,19 @@ bool CompactPostings<Value>::Erase(const Key& key, Value* out) {
       storage_ = 0;
       return true;
     }
+    case kDoubleTag: {
+      auto* dbl = GetDouble();
+      for (size_t i = 0; i < dbl->count; ++i) {
+        if (RawInternedPtr(dbl->entries[i].key) != RawInternedPtr(key))
+          continue;
+        if (out) *out = dbl->entries[i].value;
+        auto* single = new Entry{std::move(dbl->entries[1 - i])};
+        delete dbl;
+        SetSingle(single);
+        return true;
+      }
+      return false;
+    }
     case kSmallVecTag: {
       auto* vec = GetSmallVec();
       size_t pos = SmallVecLowerBound(vec, key);
@@ -273,11 +340,7 @@ bool CompactPostings<Value>::Erase(const Key& key, Value* out) {
       }
       vec->entries[vec->count - 1] = Entry{};
       --vec->count;
-      if (vec->count == 1) {
-        auto* single = new Entry{std::move(vec->entries[0])};
-        delete vec;
-        SetSingle(single);
-      }
+      if (vec->count == 2) DemoteToDouble();
       return true;
     }
     case kMapTag: {
@@ -305,21 +368,23 @@ const Value* CompactPostings<Value>::FindImpl(const K& key) const {
       return RawInternedPtr(single->key) == RawInternedPtr(key) ? &single->value
                                                                 : nullptr;
     }
+    case kDoubleTag:
     case kSmallVecTag: {
-      auto* vec = GetSmallVec();
+      size_t count;
+      const Entry* entries = ArrayView(&count);
       InternedStringPtrLess less;
-      size_t lo = 0, hi = vec->count;
+      size_t lo = 0, hi = count;
       while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        if (less(vec->entries[mid].key, key)) {
+        if (less(entries[mid].key, key)) {
           lo = mid + 1;
         } else {
           hi = mid;
         }
       }
-      if (lo < vec->count &&
-          RawInternedPtr(vec->entries[lo].key) == RawInternedPtr(key)) {
-        return &vec->entries[lo].value;
+      if (lo < count &&
+          RawInternedPtr(entries[lo].key) == RawInternedPtr(key)) {
+        return &entries[lo].value;
       }
       return nullptr;
     }
@@ -374,9 +439,23 @@ void CompactPostings<Value>::DemoteToSmallVec() {
 }
 
 template <typename Value>
+void CompactPostings<Value>::DemoteToDouble() {
+  auto* vec = GetSmallVec();
+  auto* dbl = new Double();
+  dbl->entries[0] = std::move(vec->entries[0]);
+  dbl->entries[1] = std::move(vec->entries[1]);
+  dbl->count = 2;
+  delete vec;
+  SetDouble(dbl);
+}
+
+template <typename Value>
 void CompactPostings<Value>::Clear() {
   if (storage_ == 0) return;
   switch (storage_ & kTagMask) {
+    case kDoubleTag:
+      delete GetDouble();
+      break;
     case kSmallVecTag:
       delete GetSmallVec();
       break;
@@ -397,11 +476,13 @@ typename CompactPostings<Value>::Iterator CompactPostings<Value>::GetIterator()
   if (storage_ == 0) return it;
 
   switch (storage_ & kTagMask) {
+    case kDoubleTag:
     case kSmallVecTag: {
-      auto* vec = GetSmallVec();
+      size_t count;
+      const Entry* entries = ArrayView(&count);
       it.mode_ = Iterator::Mode::kSmallVec;
-      it.vec_data_ = vec->entries;
-      it.vec_count_ = vec->count;
+      it.vec_data_ = entries;
+      it.vec_count_ = count;
       break;
     }
     case kMapTag: {

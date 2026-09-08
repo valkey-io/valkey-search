@@ -84,8 +84,9 @@ TEST_F(CompactPostingsTest, ModeTransitionsOnGrowth) {
   m.Insert(keys[0], 0);
   EXPECT_EQ(m.TestModeForTesting(), TestMode::kSingle);
   m.Insert(keys[1], 1);
-  EXPECT_EQ(m.TestModeForTesting(), TestMode::kSmallVec);
+  EXPECT_EQ(m.TestModeForTesting(), TestMode::kDouble);
   m.Insert(keys[2], 2);
+  EXPECT_EQ(m.TestModeForTesting(), TestMode::kSmallVec);
   m.Insert(keys[3], 3);
   EXPECT_EQ(m.TestModeForTesting(), TestMode::kSmallVec);
   EXPECT_EQ(m.size(), 4u);
@@ -113,13 +114,14 @@ TEST_F(CompactPostingsTest, ModeTransitionsOnShrink) {
   EXPECT_EQ(m.TestModeForTesting(), TestMode::kSmallVec);
   EXPECT_EQ(m.size(), 4u);
 
-  // Down to 2 entries stays in SmallVec.
+  // Down to 3 stays in SmallVec; down to 2 demotes to Double.
   m.Erase(keys[3], nullptr);
-  m.Erase(keys[2], nullptr);
   EXPECT_EQ(m.TestModeForTesting(), TestMode::kSmallVec);
+  m.Erase(keys[2], nullptr);
+  EXPECT_EQ(m.TestModeForTesting(), TestMode::kDouble);
   EXPECT_EQ(m.size(), 2u);
 
-  // 2 -> 1 demotes SmallVec to Single.
+  // 2 -> 1 demotes Double to Single.
   m.Erase(keys[1], nullptr);
   EXPECT_EQ(m.TestModeForTesting(), TestMode::kSingle);
   EXPECT_EQ(m.size(), 1u);

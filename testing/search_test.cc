@@ -1724,6 +1724,15 @@ INSTANTIATE_TEST_SUITE_P(
          .baselines = {"@color:{red}"},
          .filter = "@color:{red|Red}",
          .expected = [](const auto &b) { return b[0]; }},
+        // Same for prefix values: GetPrefixMatchDocCount applies the index's
+        // case rules, so {re*|RE*} would otherwise credit the same
+        // representative value twice.
+        {.test_name = "TagUnionPrefixCaseVariantsScoreOnce",
+         .docs = {{"d1", "aa bb", "red"}, {"d2", "aa bb", "blue"}},
+         .key = "d1",
+         .baselines = {"@color:{re*}"},
+         .filter = "@color:{re*|RE*}",
+         .expected = [](const auto &b) { return b[0]; }},
     }),
     [](const TestParamInfo<ScoreCase> &info) { return info.param.test_name; });
 

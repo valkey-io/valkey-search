@@ -895,6 +895,9 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       const bool case_sensitive = tag_index->IsCaseSensitive();
       absl::flat_hash_set<std::string> seen;
       for (const auto &value : tag_pred->GetTags()) {
+        std::string norm =
+            case_sensitive ? value : absl::AsciiStrToLower(value);
+        if (!seen.insert(norm).second) continue;
         // A prefix value (`foo*`) is scored as an expansion: ScoreNode credits
         // a single representative matched value per document (never the sum).
         // Which value that is depends on the document, so only the prefix is
@@ -903,9 +906,6 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
           leaf.tag_prefixes.push_back(value);
           continue;
         }
-        std::string norm =
-            case_sensitive ? value : absl::AsciiStrToLower(value);
-        if (!seen.insert(norm).second) continue;
         uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
             tag_index->GetTagValueDocCount(value), total_docs));
         // A value absent from the index (dt == 0) has no matching document and

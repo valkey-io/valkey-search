@@ -164,12 +164,14 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
-  // Get stem root and all stem parents for a search term
+  // Get stem root and all stem parents for a search term. out_distinct_docs, if
+  // set, receives StemParents::distinct_docs (untouched if the root is absent).
   std::string GetAllStemVariants(
       absl::string_view search_term,
       absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
           &words_to_search,
-      uint64_t stem_enabled_mask, bool lock_needed);
+      uint64_t stem_enabled_mask, bool lock_needed,
+      uint32_t *out_distinct_docs = nullptr);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }

@@ -11,7 +11,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/types/span.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
@@ -208,28 +207,22 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
     absl::InlinedVector<absl::string_view,
                         indexes::text::kStemVariantsInlineCapacity>
         stem_variants;
+    // Stem leaf dt: distinct docs over the variants, counted at ingestion.
     std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, stem_field_mask, true);
+        text_string, stem_variants, stem_field_mask, true,
+        &stem_num_doc_contain_term);
     // Stem root literal: its own BM25 leaf with its own dt (industry-standard
     // leaf 2).
     if (stemmed != text_string) {
       has_root = TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators,
                                        &root_num_doc_contain_term);
     }
-    // Stem inflection group: variants should all exist from ingestion. dt is
-    // the DISTINCT doc count across their postings, not a sum (avoids
-    // over-counting a doc that holds several inflections).
-    absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                        indexes::text::kStemVariantsInlineCapacity>
-        stem_count_iters;
+    // Stem inflection group: variants should all exist from ingestion.
     for (const auto &variant : stem_variants) {
       bool found =
           TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
       CHECK(found) << "Word in stem tree not found in index - ingestion issue";
-      stem_count_iters.push_back(key_iterators.back());
     }
-    stem_num_doc_contain_term =
-        indexes::text::CountDistinctKeys(absl::MakeSpan(stem_count_iters));
   }
 
   // TermIterator will use query_field_mask when has_original is true,

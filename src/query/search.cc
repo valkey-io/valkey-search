@@ -30,7 +30,6 @@
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
-#include "absl/types/span.h"
 #include "src/attribute_data_type.h"
 #include "src/expr/value.h"
 #include "src/indexes/index_base.h"
@@ -759,8 +758,10 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         absl::InlinedVector<absl::string_view,
                             indexes::text::kStemVariantsInlineCapacity>
             stem_variants;
+        uint32_t stem_distinct_docs = 0;
         const std::string stemmed = text_index_schema->GetAllStemVariants(
-            word, stem_variants, stem_field_mask, /*lock_needed=*/true);
+            word, stem_variants, stem_field_mask, /*lock_needed=*/true,
+            &stem_distinct_docs);
 
         // Leaf 2: the stem root literal, its own posting/IDF — only when it
         // differs from the query word (else it is Leaf 1) and is itself
@@ -770,23 +771,16 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         }
 
         // Leaf 3: the stem inflection group. F sums the per-doc frequencies of
-        // every inflection; dt is the DISTINCT doc count across their postings
-        // (a doc holding several inflections counts once), matching the
-        // in-iterator path.
+        // every inflection; dt is the distinct doc count counted at ingestion.
         TermGroup stem;
-        absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                            indexes::text::kStemVariantsInlineCapacity + 1>
-            stem_iters;
         for (const auto &variant : stem_variants) {
           if (auto postings = prefix.FindPostingsTarget(variant)) {
-            stem_iters.push_back(postings->GetKeyIterator());
             stem.postings.push_back(std::move(postings));
           }
         }
         if (!stem.postings.empty()) {
-          const uint32_t dt = std::min<uint32_t>(
-              indexes::text::CountDistinctKeys(absl::MakeSpan(stem_iters)),
-              total_docs);
+          const uint32_t dt =
+              std::min<uint32_t>(stem_distinct_docs, total_docs);
           stem.idf = scorer->PrecomputeIDF({total_docs, dt});
           leaf.groups.push_back(std::move(stem));
         }

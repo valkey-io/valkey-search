@@ -7,6 +7,7 @@
 
 #include "src/indexes/text/text_index.h"
 
+#include <absl/container/flat_hash_set.h>
 #include <absl/container/inlined_vector.h>
 #include <absl/container/node_hash_map.h>
 #include <absl/strings/string_view.h>
@@ -308,11 +309,13 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
               existing = InvasivePtr<StemParents>::Make();
             }
             for (const auto &orig : originals) {
-              if (std::find(existing->begin(), existing->end(), orig) ==
-                  existing->end()) {
-                existing->push_back(orig);
+              if (std::find(existing->parents.begin(), existing->parents.end(),
+                            orig) == existing->parents.end()) {
+                existing->parents.push_back(orig);
               }
             }
+            // One stem_mappings entry per (key, root), so the key counts once.
+            ++existing->distinct_docs;
             return existing;
           });
       stem_tree_.MutateTarget(stemmed, stem_mutate_fn);
@@ -347,6 +350,8 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   }
   TextIndex &key_index = node.mapped();
   std::vector<std::string> empty_words;
+  // Roots this key incremented; a set, so each is decremented exactly once.
+  absl::flat_hash_set<std::string> stem_roots;
 
   auto iter = key_index.GetPrefix().GetWordIterator("");
   while (!iter.Done()) {
@@ -362,6 +367,20 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       {
         absl::ReaderMutexLock tree_read(&text_index_mutex_);
         existing = text_index_->GetPrefix().FindPostingsTarget(word_str);
+      }
+
+      // Only stem-enabled fields were counted, and the field mask is only
+      // readable before the key leaves the postings below.
+      if ((stem_text_field_mask_ != 0u) && existing) {
+        auto key_iter = existing->GetKeyIterator();
+        if (key_iter.SkipForwardKey(key) &&
+            key_iter.ContainsFields(stem_text_field_mask_)) {
+          std::string stem(word_str);
+          lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
+          if (stem != word_str) {
+            stem_roots.insert(std::move(stem));
+          }
+        }
       }
 
       InvasivePtr<Postings> updated_target;
@@ -380,8 +399,24 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     iter.Next();
   }
 
-  if (!empty_words.empty() && (stem_text_field_mask_ != 0u)) {
+  if ((!empty_words.empty() || !stem_roots.empty()) &&
+      (stem_text_field_mask_ != 0u)) {
     absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
+    // Before the parent removals below, which can drop a root's target.
+    auto stem_uncount_fn = CreateSimpleTargetMutateFn<StemParents>(
+        [](InvasivePtr<StemParents> existing) {
+          if (existing) {
+            // Saturate: a wrapped counter would silently zero the leaf's IDF.
+            DCHECK_GT(existing->distinct_docs, 0u);
+            if (existing->distinct_docs > 0) {
+              --existing->distinct_docs;
+            }
+          }
+          return existing;
+        });
+    for (const auto &root : stem_roots) {
+      stem_tree_.MutateTarget(root, stem_uncount_fn);
+    }
     for (const auto &word : empty_words) {
       std::string stem(word);
       lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
@@ -391,14 +426,17 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
               // The term may not exist in the stem tree if it was only present
               // in NOSTEM fields.
               if (existing) {
-                CHECK(!existing->empty())
+                CHECK(!existing->parents.empty())
                     << "Stem tree entry should not be empty";
-                auto it = std::find(existing->begin(), existing->end(), word);
-                if (it != existing->end()) {
-                  *it = std::move(existing->back());
-                  existing->pop_back();
+                auto it = std::find(existing->parents.begin(),
+                                    existing->parents.end(), word);
+                if (it != existing->parents.end()) {
+                  *it = std::move(existing->parents.back());
+                  existing->parents.pop_back();
                 }
-                if (existing->empty()) {
+                if (existing->parents.empty()) {
+                  // No parent left, so no document can hold an inflection.
+                  DCHECK_EQ(existing->distinct_docs, 0u);
                   existing.Clear();
                 }
               }
@@ -426,7 +464,7 @@ std::string TextIndexSchema::GetAllStemVariants(
     absl::string_view search_term,
     absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
         &words_to_search,
-    uint64_t stem_enabled_mask, bool lock_needed) {
+    uint64_t stem_enabled_mask, bool lock_needed, uint32_t *out_distinct_docs) {
   // Stem the search term
   std::string stemmed(search_term);
   lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
@@ -442,7 +480,11 @@ std::string TextIndexSchema::GetAllStemVariants(
   if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
     const auto &parents_ptr = stem_iter.GetStemParentsTarget();
     if (parents_ptr) {
-      const auto &parents = *parents_ptr;
+      const auto &parents = parents_ptr->parents;
+      // The whole group's df, even when max_expansions truncates the words.
+      if (out_distinct_docs != nullptr) {
+        *out_distinct_docs = parents_ptr->distinct_docs;
+      }
       uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();
       uint32_t count = 0;
       for (const auto &parent : parents) {

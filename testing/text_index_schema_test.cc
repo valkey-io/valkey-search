@@ -5,9 +5,12 @@
  *
  */
 
+#include <optional>
 #include <thread>
 #include <vector>
 
+#include "absl/container/inlined_vector.h"
+#include "absl/strings/string_view.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
@@ -31,7 +34,69 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
         " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words,
         4);
   }
+
+  // Stages a stemmed field 0 and commits, as an indexed document would.
+  void CommitStemmed(TextIndexSchema &schema, const InternedStringPtr &key,
+                     absl::string_view content) {
+    auto staged = schema.StageAttributeData(key, content, 0, /*stem=*/true,
+                                            /*suffix=*/false);
+    ASSERT_TRUE(staged.ok());
+    schema.CommitKeyData(key);
+  }
+
+  // The stem-inflection leaf's df for a word's root, as scoring reads it.
+  // Returns nullopt when the root has no stem-tree entry.
+  std::optional<uint32_t> StemDistinctDocs(TextIndexSchema &schema,
+                                           absl::string_view word) {
+    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
+        variants;
+    uint32_t distinct_docs = 0;
+    schema.GetAllStemVariants(word, variants, /*stem_enabled_mask=*/1,
+                              /*lock_needed=*/true, &distinct_docs);
+    if (variants.empty()) return std::nullopt;
+    return distinct_docs;
+  }
 };
+
+// A document counts once per stem root however many inflections it holds, so
+// the count is documents, not (document, inflection) pairs.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsCountsDocumentOncePerRoot) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  CommitStemmed(*schema, StringInternStore::Intern("doc1"), "running runs");
+  CommitStemmed(*schema, StringInternStore::Intern("doc2"), "runs");
+  CommitStemmed(*schema, StringInternStore::Intern("doc3"), "swimming");
+
+  // doc1 holds two inflections of "run" but is one document; summing the two
+  // posting lists instead would give 3.
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 2);
+  EXPECT_EQ(StemDistinctDocs(*schema, "swimming"), 1);
+}
+
+// Deletion must undo exactly the one increment the document made.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsDecrementsOnDelete) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  CommitStemmed(*schema, key1, "running runs");
+  CommitStemmed(*schema, key2, "runs");
+  ASSERT_EQ(StemDistinctDocs(*schema, "running"), 2);
+
+  // Dropping the two-inflection document decrements once, not twice.
+  schema->DeleteKeyData(key1);
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 1);
+
+  // The last document leaves no parents, so the root drops out of the tree.
+  schema->DeleteKeyData(key2);
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), std::nullopt);
+}
 
 // Concurrent CommitKeyData calls with overlapping words must
 //  not crash or corrupt the index.

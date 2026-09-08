@@ -17,7 +17,7 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
 )
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, run_in_thread
 from valkeytestframework.util import waiters
 
 SCORE_ABS_TOL = 1e-5
@@ -603,3 +603,41 @@ class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
             keys, scores = search(client, IDX_MAIN, query)
             assert keys and scores == pytest.approx({k: 0.0 for k in keys}), \
                 f"expected all-zero scores for {query!r}, got {scores}"
+
+    def test_scoring_disabled_zeroes_recomputed_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        stat = lambda field: int(client.info("SEARCH")["search_" + field])
+        pausepoint = lambda verb: client.execute_command(
+            "FT._DEBUG PAUSEPOINT", verb, "block_mutation_queue")
+
+        def score_across_mutation(body):
+            """Parks doc:1's index update so its db sequence number runs ahead
+            of the index's: the query blocks on the contention check, then
+            resumes into the content fetch, which rescores doc:1 through
+            SingleDocumentScorer. Returns (scores, docs rescored there)."""
+            revals, blocked = stat("predicate_revalidation"), stat(
+                "text_query_blocked_count")
+            pausepoint("SET")
+            hset = run_in_thread(lambda: self.server.get_new_client().hset(
+                "doc:1", "body", body))[0]
+            waiters.wait_for_true(lambda: int(pausepoint("TEST")) > 0)
+            searcher, res, _ = run_in_thread(
+                lambda: search(self.server.get_new_client(), IDX_MAIN, "hello"))
+            waiters.wait_for_true(
+                lambda: stat("text_query_blocked_count") > blocked)
+            pausepoint("RESET")
+            for thread in (hset, searcher):
+                thread.join()
+            return res[0][1], stat("predicate_revalidation") - revals
+
+        # Baseline: the recompute runs and yields a non-zero score.
+        scores, rescored = score_across_mutation("hello hello world")
+        assert rescored >= 1 and scores["doc:1"] > 0.0, scores
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same window, switch on: still revalidated and kept, now scored 0.
+        scores, rescored = score_across_mutation("hello hello")
+        assert rescored >= 1, "recompute path never ran"
+        assert scores == pytest.approx({k: 0.0 for k in scores}), scores

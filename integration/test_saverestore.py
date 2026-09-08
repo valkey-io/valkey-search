@@ -13,6 +13,7 @@ from indexes import *
 import pytest
 import logging
 from util import waiters
+from utils import run_in_thread
 import threading
 from ft_info_parser import FTInfoParser
 from typing import Any, List
@@ -282,27 +283,12 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         assert reads == [len(records)]
 
     def test_multi_exec_orphan_key_skipped_still_searchable(self):
-        # Verifies the orphan-skip path end to end:
-        #   1. reach deque/map divergence (multi/exec queue keys with no
-        #      matching mutation-map entry),
-        #   2. a save over that divergence runs correctly (no crash, keys
-        #      skipped),
-        #   3. reads still return every record.
-        #
-        # Note the divergence is NOT produced by MULTI/EXEC itself — right after
-        # EXEC the deque and map hold the same keys. It is produced by a
-        # save+reload: on load the multi/exec deque is repopulated from the RDB
-        # while the mutation map is rebuilt and then drained, so the reloaded
-        # deque keys end up with no map entry.
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         self.client.execute_command("config set search.writer-threads 20")
         index.create(self.client, True)
         records = make_data()
 
-        # --- Persist a multi/exec queue into the RDB ------------------------
-        # Block the writers so the multi/exec entries stay queued through the
-        # save (both deque and map hold the keys here — still consistent) and
-        # thus land in the RDB multi/exec section.
+        # Persist a consistent queue so reload can create the orphan.
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("MULTI")
         for i in range(len(records)):
@@ -314,35 +300,25 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         while self.get_pausepoint("block_mutation_queue") > 0:
             time.sleep(0.1)
 
-        # --- 1. Divergence: reload -----------------------------------------
-        # On reload the multi/exec deque is repopulated from the saved list, but
-        # the mutation map is rebuilt and drained during load, so the reloaded
-        # deque keys have no matching map entry.
+        # Reload drains the mutation map but restores the queued keys.
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert self.client.info("search")["search_rdb_load_multi_exec_entries"] == len(records)
 
-        # --- 2. Save runs correctly -----------------------------------------
-        # This save serializes the reloaded multi/exec queue against the drained
-        # map, so every reloaded queue key is an orphan. Pre-fix this aborted the
-        # forked RDB writer; now the orphans are skipped and the save succeeds.
+        # The orphan must be skipped and the rewritten RDB must remain readable.
         self.client.execute_command("save")
-        assert self.client.ping()  # server survived the save
+        assert self.client.ping()
         i = self.client.info("search")
         assert i["search_rdb_save_multi_exec_orphans_skipped"] == len(records)
         assert i["search_rdb_save_multi_exec_entries"] == 0
 
-        # --- 3. Reads still return every record -----------------------------
-        # In the running server (membership came from the key list, not the
-        # skipped queue entries)...
+        # The serialized key list keeps the records searchable.
         verify_data(self.client, index)
-        # ...and after reloading the orphan-skipped RDB (it is self-consistent).
         self.server.restart(remove_rdb=False)
         verify_data(self.client, index)
 
     def test_multi_exec_orphan_key_saved_on_first_save(self):
-        """A first SAVE must survive a runtime orphaned multi/exec key."""
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         self.client.execute_command("CONFIG SET search.writer-threads 2")
         non_vector_index.create(self.client, True)
@@ -352,41 +328,30 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         updated_data = non_vector_index.make_data(0)
         updated_data["n"] = "1"
 
+        # Keep the queued key below the two-worker drain threshold.
         self.client.execute_command("FT._DEBUG PAUSEPOINT SET block_mutation_queue")
         writer_client = self.server.get_new_client()
-        writer_error = []
-
-        def write_initial_data():
-            try:
-                non_vector_index.write_data(writer_client, 0, initial_data)
-            except BaseException as exc:
-                writer_error.append(exc)
-
-        writer_thread = threading.Thread(target=write_initial_data)
-        writer_thread.start()
+        writer_thread, _, writer_error = run_in_thread(
+            lambda: non_vector_index.write_data(writer_client, 0, initial_data)
+        )
 
         waiters.wait_for_true(
             lambda: self.get_pausepoint("block_mutation_queue") > 0
         )
 
-        # The regular write has already been tracked, but its worker is paused.
-        # The MULTI/EXEC write appends the key to the multi queue and merges
-        # into the existing mutation record.
+        # MULTI/EXEC merges into the tracked record and leaves K queued.
         self.client.execute_command("MULTI")
         non_vector_index.write_data(self.client, 0, updated_data)
         self.client.execute_command("EXEC")
 
+        # The worker now erases K from the map while the queue retains it.
         self.client.execute_command("FT._DEBUG PAUSEPOINT RESET block_mutation_queue")
         writer_thread.join()
-        assert writer_error == []
-        assert self.client.ping()
+        assert writer_error[0] is None
 
-        # The regular worker consumes the merged mutation and erases the map
-        # entry, while the multi/exec queue still contains this key. This is
-        # the state that caused the first production BGSAVE to abort.
+        # The first SAVE must skip the orphan instead of aborting.
         self.client.execute_command("SAVE")
         assert self.client.ping()
-        self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         info = self.client.info("search")
         assert info["search_rdb_save_multi_exec_orphans_skipped"] == 1
         assert info["search_rdb_save_multi_exec_entries"] == 0

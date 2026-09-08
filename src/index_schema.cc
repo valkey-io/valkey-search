@@ -601,7 +601,8 @@ void AppendMutatedAttribute(
   auto index = attribute.GetIndex();
 
   if (indexes::IsVectorIndex(index)) {
-    auto *vector_base = dynamic_cast<indexes::VectorBase *>(index.get());
+    auto *vector_base = static_cast<indexes::VectorBase *>(index.get());
+    CHECK(vector_base);
     if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
       VectorRegistry::Instance().DedupOrConstruct(
           key, nullptr, attribute_data_type, db_num, vector_base);

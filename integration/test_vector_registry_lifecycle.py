@@ -1273,39 +1273,85 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         assert len(self.client.execute_command("FT._LIST")) == 0
 
     @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
-    def test_multi_index_concurrent_ingest_and_drop(self, algo: str):
-        """Verify thread safety during concurrent ingestion while dropping an index."""
-        import threading
-
+    @pytest.mark.parametrize("pausepoint", ["block_mutation_queue", "mutation_processing"])
+    def test_multi_index_concurrent_ingest_and_drop(self, algo: str, pausepoint: str):
+        """Verify thread safety during concurrent ingestion while dropping an index.
+        Tests both dropping while tasks are queued (block_mutation_queue) and while 
+        tasks are actively executing and holding a shared_ptr to the schema (mutation_processing)."""
         idx_a = self.build_index(name="conc_a", algo=algo)
         idx_b = self.build_index(name="conc_b", algo=algo)
         idx_a.create(self.client, wait_for_backfill=True)
         idx_b.create(self.client, wait_for_backfill=True)
 
-        errors = []
+        # 1. Pause background mutation tasks
+        self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", pausepoint)
+        
+        # 2. Write data; since workers are paused, mutations will accumulate/hang
+        count = 50
+        for i in range(count):
+            self.write_key(idx_a, f"conc_{i}", [float(i + j) for j in range(DIM)])
 
-        def worker_ingest():
-            try:
-                for i in range(50):
-                    vec = [float(i + j) for j in range(DIM)]
-                    self.client.hset(f"doc:conc_{i}", "vec", float_to_bytes(vec))
-            except Exception as e:
-                errors.append(e)
+        # 3. Wait until we see at least some tasks blocked at the pausepoint
+        waiters.wait_for_true(
+            lambda: int(self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", pausepoint)) > 0
+        )
 
-        t = threading.Thread(target=worker_ingest)
-        t.start()
-
-        # Concurrently drop index A while worker is writing
+        # 4. Drop index A while the mutation tasks are explicitly frozen
         idx_a.drop(self.client)
 
-        t.join()
-        assert not errors, f"Ingestion worker encountered errors: {errors}"
+        # 5. Resume mutation processing
+        self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint)
 
-        # Wait for index B to finish indexing all 50 keys
-        self.wait_for_docs(idx_b, 50)
-        assert self.registry_stat("entry_cnt") == 50
+        # 6. Wait for index B to finish indexing all keys (it survived the drop of A)
+        self.wait_for_docs(idx_b, count)
+        assert self.registry_stat("entry_cnt") == count
 
-        # Drop index B
+        # 7. Drop index B
+        idx_b.drop(self.client)
+        waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
+
+    @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
+    def test_multi_index_partial_backfill_state(self, algo: str):
+        """Verify registry behaves correctly when a key exists but is only populated
+        in one of two matching indexes due to backfill sequence/pausing."""
+        idx_a = self.build_index(name="partial_a", algo=algo)
+        idx_b = self.build_index(name="partial_b", algo=algo)
+        
+        # 1. Write data BEFORE index creation
+        count = 10
+        for i in range(count):
+            self.write_key(idx_a, f"partial_{i}", [float(i + j) for j in range(DIM)])
+            
+        # 2. Create index A and wait for it to fully backfill
+        idx_a.create(self.client, wait_for_backfill=True)
+        self.wait_for_docs(idx_a, count)
+        assert self.registry_stat("entry_cnt") == count
+        
+        # 3. Pause mutation queue so we can freeze index B's backfill mid-flight
+        self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", "block_mutation_queue")
+        
+        # 4. Create index B. It starts backfilling, but background threads will pause
+        idx_b.create(self.client, wait_for_backfill=False)
+        waiters.wait_for_true(
+            lambda: int(self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "TEST", "block_mutation_queue")) > 0
+        )
+        
+        # At this point, the documents are fully indexed in idx_a, but stuck in the queue for idx_b.
+        # VectorRegistry has them tracked due to idx_a.
+        
+        # 5. Drop idx_a! The registry must not untrack the entries if idx_b still needs them.
+        idx_a.drop(self.client)
+        
+        # 6. Unpause index B's backfill
+        self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", "block_mutation_queue")
+        
+        # 7. Wait for index B to finish its backfill
+        self.wait_for_docs(idx_b, count)
+        
+        # The registry should still have `count` entries
+        assert self.registry_stat("entry_cnt") == count
+        
+        # 8. Drop index B and verify clean up
         idx_b.drop(self.client)
         waiters.wait_for_equal(lambda: self.registry_stat("entry_cnt"), 0, timeout=10)
 

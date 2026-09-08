@@ -56,7 +56,7 @@ TEST_F(VectorRegistryTest, DedupOrConstructBasicAndDedup) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index1);
   EXPECT_NE(rec1, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
 
   // 2. DedupOrConstruct with identical content deduplicates and returns
   // matching record
@@ -65,7 +65,7 @@ TEST_F(VectorRegistryTest, DedupOrConstructBasicAndDedup) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index2);
   EXPECT_EQ(rec1, rec2);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 1);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
 }
 
 TEST_F(VectorRegistryTest, PayloadChangeReplacesRecord) {
@@ -84,7 +84,7 @@ TEST_F(VectorRegistryTest, PayloadChangeReplacesRecord) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec1, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
 
   // Ingest mutated payload
   std::vector<float> vec2 = {3.0f, 4.0f};
@@ -98,14 +98,14 @@ TEST_F(VectorRegistryTest, PayloadChangeReplacesRecord) {
   EXPECT_NE(rec2, nullptr);
   EXPECT_NE(rec1, rec2);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
 
   // Subsequent call with vec2 deduplicates
   auto rec2_dup = registry.DedupOrConstruct(
       key, valkey_vec2.get(),
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_EQ(rec2, rec2_dup);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 1);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
 }
 
 TEST_F(VectorRegistryTest, DedupOrConstructWithNullptr) {
@@ -286,16 +286,16 @@ TEST_F(VectorRegistryTest, JsonVectorTrackingAndDeduplication) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON, 0, &index);
   EXPECT_NE(rec1, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 
   auto rec2 = registry.DedupOrConstruct(
       key, valkey_vec.get(),
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON, 0, &index);
   EXPECT_EQ(rec1, rec2);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 1);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
   // Hash sharing is not attempted for JSON
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 
   // Overwriting JSON key with invalid size evicts from tracked_vectors_
   std::vector<float> bad_data = {1.0f, 2.0f};
@@ -335,7 +335,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyAlreadySharedNoOp) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 }
 
 TEST_F(VectorRegistryTest, VectorSharingDisabled) {
@@ -358,7 +358,7 @@ TEST_F(VectorRegistryTest, VectorSharingDisabled) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec1, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 
   auto rec2 = registry.DedupOrConstruct(
       key, valkey_vec.get(),
@@ -366,8 +366,8 @@ TEST_F(VectorRegistryTest, VectorSharingDisabled) {
   EXPECT_NE(rec2, nullptr);
   EXPECT_EQ(rec1, rec2);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 }
 
 TEST_F(VectorRegistryTest, ShareWithValkeyOpenKeyFails) {
@@ -391,7 +391,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyOpenKeyFails) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 }
 
 TEST_F(VectorRegistryTest, ShareWithValkeyHasStringRefFails) {
@@ -417,7 +417,7 @@ TEST_F(VectorRegistryTest, ShareWithValkeyHasStringRefFails) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 }
 
 TEST_F(VectorRegistryTest, ShareWithValkeySetStringRefFails) {
@@ -446,8 +446,8 @@ TEST_F(VectorRegistryTest, ShareWithValkeySetStringRefFails) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_errors.GetTotal(), 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_errors, 1);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 0);
 }
 
 TEST_F(VectorRegistryTest, ShareWithValkeySuccess) {
@@ -476,8 +476,8 @@ TEST_F(VectorRegistryTest, ShareWithValkeySuccess) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_hits.GetTotal(), 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_errors.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().hash_sharing_hits, 1);
+  EXPECT_EQ(registry.GetStats().hash_sharing_errors, 0);
 }
 
 TEST_F(VectorRegistryTest, NoCollisionBetweenDifferentDBs) {
@@ -528,7 +528,7 @@ TEST_F(VectorRegistryTest, ForceHashSharingErrorFallback) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index);
   EXPECT_NE(rec, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().hash_sharing_errors.GetTotal(), 1);
+  EXPECT_EQ(registry.GetStats().hash_sharing_errors, 1);
   VMSDK_EXPECT_OK(vmsdk::debug::ControlledSet("ForceHashSharingError", "0"));
 }
 
@@ -560,7 +560,7 @@ TEST_F(VectorRegistryTest, MultipleIndexesShareRecordViaDedup) {
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0, &index1);
   ASSERT_NE(rec1, nullptr);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
 
   // 2. Second index dedups and gets the exact same record pointer
   auto rec2 = registry.DedupOrConstruct(
@@ -569,7 +569,7 @@ TEST_F(VectorRegistryTest, MultipleIndexesShareRecordViaDedup) {
   ASSERT_NE(rec2, nullptr);
   EXPECT_EQ(rec1, rec2);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 1);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 1);
 
   // 3. First index drops its reference; second index's record remains fully
   // valid
@@ -641,7 +641,7 @@ TEST_F(VectorRegistryTest,
   ASSERT_NE(rec_large, nullptr);
   EXPECT_NE(rec_small, rec_large);
   EXPECT_EQ(registry.GetStats().entry_cnt, 1);
-  EXPECT_EQ(registry.GetStats().dedup_cnt.GetTotal(), 0);
+  EXPECT_EQ(registry.GetStats().dedup_cnt, 0);
 }
 
 TEST_F(VectorRegistryTest, FlushDBPreservesOtherDBEntries) {

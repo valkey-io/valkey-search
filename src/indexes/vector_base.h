@@ -302,7 +302,9 @@ class VectorBase : public IndexBase {
 
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
-  Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
+  FixedSizeAllocator *GetVectorAllocator() const {
+    return vector_allocator_.get();
+  }
   int GetDimensions() const { return dimensions_; }
   // Provided by VectorType<T> so the per-element byte width and format
   // conversion come from sizeof(T) + if-constexpr on T instead of a

@@ -31,6 +31,7 @@
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
+#include "src/utils/allocator.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "src/vector_registry.h"
@@ -393,15 +394,19 @@ static vmsdk::info_field::Integer vector_registry_entry_cnt(
 static vmsdk::info_field::Integer vector_registry_shared_externally_cnt(
     "vector_registry", "vector_registry_shared_externally_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance().GetStats().hash_sharing_hits.GetTotal();
+      return VectorRegistry::Instance().GetStats().hash_sharing_hits;
     }));
 
 static vmsdk::info_field::Integer vector_registry_shared_externally_errors(
     "vector_registry", "vector_registry_shared_externally_errors",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance()
-          .GetStats()
-          .hash_sharing_errors.GetTotal();
+      return VectorRegistry::Instance().GetStats().hash_sharing_errors;
+    }));
+
+static vmsdk::info_field::Integer vector_registry_dedup_cnt(
+    "vector_registry", "vector_registry_dedup_cnt",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetStats().dedup_cnt;
     }));
 
 static vmsdk::info_field::Integer vector_registry_sharing_active(
@@ -414,6 +419,18 @@ static vmsdk::info_field::Integer vector_registry_pending_unshare_cnt(
     "vector_registry", "vector_registry_pending_unshare_cnt",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorRegistry::Instance().GetPendingUnsharesCount();
+    }));
+
+static vmsdk::info_field::Integer vector_registry_active_allocations(
+    "vector_registry", "vector_registry_active_allocations",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return FixedSizeAllocator::GlobalActiveAllocations();
+    }));
+
+static vmsdk::info_field::Integer vector_registry_chunk_count(
+    "vector_registry", "vector_registry_chunk_count",
+    vmsdk::info_field::IntegerBuilder().Dev().Computed([]() -> long long {
+      return FixedSizeAllocator::GlobalChunkCount();
     }));
 
 static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(

@@ -22,6 +22,16 @@ def _get_vmsdk_info(client: Valkey) -> dict[str, str]:
     return info_data
 
 
+
+def _get_active_allocations(client: Valkey, index_name: str = None, attr_name: str = "vec") -> int:
+    info = _get_vmsdk_info(client)
+    return int(info.get("vector_registry_active_allocations", 0))
+
+
+def _get_chunk_count(client: Valkey) -> int:
+    info = _get_vmsdk_info(client)
+    return int(info.get("vector_registry_chunk_count", 0))
+
 def _get_vector_registry_stats(client: Valkey) -> dict[str, int]:
     raw_stats = client.execute_command("FT._DEBUG", "VECTOR_SHARING_STATS")
     stats_data = {}
@@ -102,6 +112,12 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             lambda: int(_get_vmsdk_info(client)["vector_registry_entry_cnt"]),
             0,
         )
+        waiters.wait_for_equal(
+            lambda: int(_get_vmsdk_info(client)["vector_registry_pending_unshare_cnt"]),
+            0,
+        )
+        assert _get_active_allocations(client) == 0
+        assert _get_chunk_count(client) == 0
 
         # 5. Reverify that issuing hget still returns expected values
         for key, expected_bytes in expected_vectors.items():
@@ -140,6 +156,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         # 1. Initial stats should be 0
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
         assert stats["hash_sharing_errors"] == 0
         assert stats["hash_sharing_hits"] == 0
 
@@ -161,6 +178,8 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 2
+        info = _get_vmsdk_info(client)
+        assert int(info["vector_registry_dedup_cnt"]) == 1
 
         # 4. Update document with a DIFFERENT vector
         vec_data2 = [3.0] * dim
@@ -180,6 +199,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         )
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -210,6 +230,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         # 1. Initial stats should be 0
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
 
         # 2. Ingest a vector and verify increments
         key1 = "doc:1"
@@ -238,6 +259,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -268,6 +290,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         # 1. Initial stats should be 0
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
 
         # 2. Ingest a vector along with another field
         key1 = "doc:1"
@@ -299,6 +322,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
     @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
@@ -327,6 +351,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
 
         num_docs = 5
         raw_vectors = {}
@@ -348,12 +373,18 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == num_docs
 
-        # Drop the index and verify entry count drops to 0
+        # Drop the index and verify entry count and pending unshares drop to 0
         vector_index.drop(client)
         waiters.wait_for_equal(
             lambda: _get_vector_registry_stats(client)["entry_cnt"],
             0,
         )
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["pending_unshare_cnt"],
+            0,
+        )
+        assert _get_active_allocations(client) == 0
+        assert _get_chunk_count(client) == 0
 
         # Reverify that the documents still exist and have valid values
         for key, expected_val in raw_vectors.items():

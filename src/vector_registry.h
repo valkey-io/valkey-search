@@ -21,7 +21,6 @@
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -85,10 +84,10 @@ class VectorRegistry {
                             uint64_t subevent, void *data);
 
   struct Stats {
-    size_t entry_cnt;
-    vmsdk::ShardedAtomic<uint64_t> hash_sharing_errors;
-    vmsdk::ShardedAtomic<uint64_t> hash_sharing_hits;
-    vmsdk::ShardedAtomic<uint64_t> dedup_cnt;
+    size_t entry_cnt{0};
+    uint64_t hash_sharing_errors{0};
+    uint64_t hash_sharing_hits{0};
+    uint64_t dedup_cnt{0};
   };
   const Stats &GetStats() const;
 

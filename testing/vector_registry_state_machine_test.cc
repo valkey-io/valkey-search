@@ -528,14 +528,14 @@ constexpr absl::string_view kKey = "prefix:1";
 
 // Create: vector field present and valid.
 TEST_P(VectorRegistryStateMachineTest, CreateWithValidVector) {
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
 
   WriteKey(kKey, FieldState::kValid, 1.0f);
 
   auto record = ExpectTracked(kKey, 1.0f);
   EXPECT_NE(record, nullptr);
   EXPECT_EQ(GetStats().entry_cnt, 1);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+  EXPECT_EQ(GetStats().hash_sharing_hits,
             hits_before + (SharingExpected() ? 1u : 0u));
   if (GetParam().mixed_schema) {
     EXPECT_TRUE(numeric_index_->IsTracked(StringInternStore::Intern(kKey)));
@@ -545,25 +545,25 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithValidVector) {
 
 // Create: vector field present but not a usable vector.
 TEST_P(VectorRegistryStateMachineTest, CreateWithInvalidVector) {
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
 
   WriteKey(kKey, FieldState::kInvalid);
 
   ExpectNotTracked(kKey);
   EXPECT_EQ(GetStats().entry_cnt, 0);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
+  EXPECT_EQ(GetStats().hash_sharing_hits, hits_before);
   EXPECT_FALSE(IndexTracks(kKey));
 }
 
 // Create: vector field not present on the key.
 TEST_P(VectorRegistryStateMachineTest, CreateWithAbsentVector) {
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
 
   WriteKey(kKey, FieldState::kAbsent);
 
   ExpectNotTracked(kKey);
   EXPECT_EQ(GetStats().entry_cnt, 0);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
+  EXPECT_EQ(GetStats().hash_sharing_hits, hits_before);
   EXPECT_FALSE(IndexTracks(kKey));
 }
 
@@ -574,18 +574,18 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithAbsentVector) {
 TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithDifferentValid) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
   auto first = ExpectTracked(kKey, 1.0f);
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
-  const uint64_t dedup_before = GetStats().dedup_cnt.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
+  const uint64_t dedup_before = GetStats().dedup_cnt;
 
   WriteKey(kKey, FieldState::kValid, 5.0f);
 
   auto second = ExpectTracked(kKey, 5.0f);
   EXPECT_NE(first, second)
       << "changed payload must produce a new record pointer";
-  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 1)
+  EXPECT_EQ(GetStats().dedup_cnt, dedup_before + 1)
       << "ExpectTracked verification of new payload adds 1 dedup hit";
   EXPECT_EQ(GetStats().entry_cnt, 1);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+  EXPECT_EQ(GetStats().hash_sharing_hits,
             hits_before + (SharingExpected() ? 1u : 0u));
 }
 
@@ -594,18 +594,18 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithDifferentValid) {
 TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithIdenticalValid) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
   auto first = ExpectTracked(kKey, 1.0f);
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
-  const uint64_t dedup_before = GetStats().dedup_cnt.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
+  const uint64_t dedup_before = GetStats().dedup_cnt;
 
   WriteKey(kKey, FieldState::kValid, 1.0f);
 
   auto second = ExpectTracked(kKey, 1.0f);
   EXPECT_EQ(first, second)
       << "identical payload must reuse the exact same record pointer";
-  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 2)
+  EXPECT_EQ(GetStats().dedup_cnt, dedup_before + 2)
       << "identical payload ingestion (+1) and ExpectTracked verification (+1)";
   EXPECT_EQ(GetStats().entry_cnt, 1);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+  EXPECT_EQ(GetStats().hash_sharing_hits,
             hits_before + (SharingExpected() ? 1u : 0u))
       << "re-sharing an unchanged record";
 }
@@ -639,26 +639,26 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithAbsent) {
 TEST_P(VectorRegistryStateMachineTest, OverwriteInvalidWithValid) {
   WriteKey(kKey, FieldState::kInvalid);
   ExpectNotTracked(kKey);
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
 
   WriteKey(kKey, FieldState::kValid, 3.0f);
 
   ExpectTracked(kKey, 3.0f);
   EXPECT_EQ(GetStats().entry_cnt, 1);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+  EXPECT_EQ(GetStats().hash_sharing_hits,
             hits_before + (SharingExpected() ? 1u : 0u));
 }
 
 TEST_P(VectorRegistryStateMachineTest, OverwriteAbsentWithValid) {
   WriteKey(kKey, FieldState::kAbsent);
   ExpectNotTracked(kKey);
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
 
   WriteKey(kKey, FieldState::kValid, 3.0f);
 
   ExpectTracked(kKey, 3.0f);
   EXPECT_EQ(GetStats().entry_cnt, 1);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+  EXPECT_EQ(GetStats().hash_sharing_hits,
             hits_before + (SharingExpected() ? 1u : 0u));
 }
 
@@ -701,8 +701,8 @@ TEST_P(VectorRegistryStateMachineTest, NonVectorFieldChangeLeavesVectorAlone) {
   }
   WriteKey(kKey, FieldState::kValid, 1.0f);
   auto first = ExpectTracked(kKey, 1.0f);
-  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
-  const uint64_t dedup_before = GetStats().dedup_cnt.GetTotal();
+  const uint64_t hits_before = GetStats().hash_sharing_hits;
+  const uint64_t dedup_before = GetStats().dedup_cnt;
 
   // Same vector, different tag.
   keyspace_[std::string(kKey)][TagIdentifier()] = "furniture";
@@ -710,9 +710,9 @@ TEST_P(VectorRegistryStateMachineTest, NonVectorFieldChangeLeavesVectorAlone) {
 
   auto second = ExpectTracked(kKey, 1.0f);
   EXPECT_EQ(first, second);
-  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 2);
+  EXPECT_EQ(GetStats().dedup_cnt, dedup_before + 2);
   EXPECT_EQ(GetStats().entry_cnt, 1);
-  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
+  EXPECT_EQ(GetStats().hash_sharing_hits, hits_before);
 }
 
 // A valid vector alongside an invalid non-vector field. Whatever the

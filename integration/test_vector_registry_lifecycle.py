@@ -19,6 +19,7 @@ import pytest
 import valkey
 from valkey import Valkey
 from indexes import Index, KeyDataType, Numeric, Tag, Vector, float_to_bytes
+from utils import run_in_thread
 from valkey_search_test_case import LOGS_DIR, ValkeySearchTestCaseDebugMode
 from valkeytestframework.util import waiters
 from valkeytestframework.conftest import resource_port_tracker  # noqa: F401
@@ -93,9 +94,11 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
             name, fields, prefixes=["doc"], type=key_type
         )
 
-    def write_key(self, index: Index, suffix: str, vec, mixed: bool = False):
+    def write_key(self, index: Index, suffix: str, vec, mixed: bool = False, client=None):
         """Write one key holding `vec`, or omitting the vector field entirely
         when `vec` is None. Returns the key name."""
+        if client is None:
+            client = self.client
         key = f"doc:{suffix}"
         if index.type == KeyDataType.HASH:
             data = {} if vec is None else {"vec": float_to_bytes(vec)}
@@ -103,14 +106,14 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
                 data |= {"num": "10", "tag": "a"}
             if not data:
                 data = {"other": "x"}
-            self.client.hset(key, mapping=data)
+            client.hset(key, mapping=data)
         else:
             parts = [] if vec is None else [f'"vec":{list(vec)}']
             if mixed:
                 parts += ['"num":10', '"tag":"a"']
             if not parts:
                 parts = ['"other":"x"']
-            self.client.execute_command(
+            client.execute_command(
                 "JSON.SET", key, "$", "{" + ",".join(parts) + "}"
             )
         return key
@@ -1286,10 +1289,17 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         # 1. Pause background mutation tasks
         self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "SET", pausepoint)
         
-        # 2. Write data; since workers are paused, mutations will accumulate/hang
+        # 2. Write data in a background thread using a separate client connection.
+        # Live user writes block the calling client until the mutation completes,
+        # so executing writes asynchronously is required while workers are paused.
         count = 50
-        for i in range(count):
-            self.write_key(idx_a, f"conc_{i}", [float(i + j) for j in range(DIM)])
+        writer_client = self.server.get_new_client()
+        writer_thread, _, writer_err = run_in_thread(
+            lambda: [
+                self.write_key(idx_a, f"conc_{i}", [float(i + j) for j in range(DIM)], client=writer_client)
+                for i in range(count)
+            ]
+        )
 
         # 3. Wait until we see at least some tasks blocked at the pausepoint
         waiters.wait_for_true(
@@ -1299,8 +1309,12 @@ class TestVectorRegistryLifecycle(ValkeySearchTestCaseDebugMode):
         # 4. Drop index A while the mutation tasks are explicitly frozen
         idx_a.drop(self.client)
 
-        # 5. Resume mutation processing
+        # 5. Resume mutation processing and wait for background writes to finish
         self.client.execute_command("FT._DEBUG", "PAUSEPOINT", "RESET", pausepoint)
+        writer_thread.join()
+        writer_client.close()
+        if writer_err[0] is not None:
+            raise writer_err[0]
 
         # 6. Wait for index B to finish indexing all keys (it survived the drop of A)
         self.wait_for_docs(idx_b, count)

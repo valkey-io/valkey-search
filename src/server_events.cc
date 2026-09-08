@@ -28,7 +28,8 @@ void OnFlushDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                        uint64_t subevent, void *data) {
   if (subevent & VALKEYMODULE_SUBEVENT_FLUSHDB_END) {
     auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
-    SchemaManager::Instance().OnFlushDBCallback(ctx, eid, subevent, flush_info);
+    SchemaManager::Instance().OnFlushEndDBCallback(ctx, eid, subevent,
+                                                   flush_info);
     VectorRegistry::Instance().OnFlushDB(flush_info);
   }
 }

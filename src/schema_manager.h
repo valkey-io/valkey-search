@@ -65,6 +65,14 @@ class SchemaManager {
   // TODO Investigate storing aggregated counters to optimize stats
   // generation.
   uint64_t GetNumberOfIndexSchemas() const;
+  // Number of index schemas that have been restored into the staging set
+  // during a replication RDB load but not yet swapped live. Main thread only:
+  // reads a MainThreadAccessGuard, which CHECK-fails off the main thread.
+  uint64_t GetNumberOfStagedIndexSchemas() const;
+  // True while a replication RDB load is staging index schemas, i.e. between
+  // LOADING_REPL_START and the swap in OnLoadingEnded. Main thread only, for
+  // the same reason as above.
+  bool IsStagingIndicesForReplicationLoad() const;
   uint64_t GetNumberOfAttributes() const;
   uint64_t GetNumberOfTextAttributes() const;
   uint64_t GetNumberOfTagAttributes() const;

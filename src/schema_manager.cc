@@ -543,6 +543,22 @@ uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
   return num_schemas;
 }
 
+bool SchemaManager::IsStagingIndicesForReplicationLoad() const {
+  return staging_indices_due_to_repl_load_.Get();
+}
+
+uint64_t SchemaManager::GetNumberOfStagedIndexSchemas() const {
+  /* No mutex here, unlike GetNumberOfIndexSchemas: staged_db_to_index_schemas_
+   * is guarded by MainThreadAccessGuard rather than db_to_index_schemas_mutex_,
+   * matching every other access to it. */
+  const auto &staged = staged_db_to_index_schemas_.Get();
+  uint64_t num_schemas = 0;
+  for (const auto &[db_num, schema_map] : staged) {
+    num_schemas += schema_map.size();
+  }
+  return num_schemas;
+}
+
 uint64_t SchemaManager::GetNumberOfAttributes() const {
   return GetAttributeCountByType(AttributeType::ALL);
 }
@@ -968,19 +984,27 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
 static vmsdk::info_field::Integer number_of_indexes(
     "index_stats", "number_of_indexes",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      // Consider indexes pending RDB load. The residual is only meaningful
-      // while a load is actually in progress. RDB sections can include
-      // non-index sections, so this residual must not affect the at-rest
-      // count.
       auto &stats = Metrics::GetStats();
+      auto &schema_manager = SchemaManager::Instance();
+      /* Indexes still pending an RDB load, i.e. counted in the saved total
+       * but not yet restored. The residual is only meaningful while a load is
+       * actually in progress, so it must not affect the at-rest count. */
       uint64_t pending = 0;
       if (stats.rdb_restore_in_progress.load()) {
-        uint64_t total = stats.rdb_restore_total_indexes.load();
-        uint64_t completed = stats.rdb_restore_completed_indexes.load();
+        const uint64_t total = stats.rdb_restore_total_indexes.load();
+        const uint64_t completed = stats.rdb_restore_completed_indexes.load();
         // Unsigned subtraction: guard rather than let it wrap.
         pending = total > completed ? total - completed : 0;
       }
-      return SchemaManager::Instance().GetNumberOfIndexSchemas() + pending;
+      /* During a replication load the live set is about to be discarded and
+       * replaced wholesale by the staged set, so the incoming set is what the
+       * replica actually has. Counting the live set here instead would report
+       * the union of the old and new sets, and counting neither would let the
+       * number decay toward zero as staging progressed. */
+      if (schema_manager.IsStagingIndicesForReplicationLoad()) {
+        return schema_manager.GetNumberOfStagedIndexSchemas() + pending;
+      }
+      return schema_manager.GetNumberOfIndexSchemas() + pending;
     }));
 static vmsdk::info_field::Integer number_of_attributes(
     "index_stats", "number_of_attributes",

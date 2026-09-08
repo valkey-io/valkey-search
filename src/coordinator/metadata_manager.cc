@@ -684,8 +684,9 @@ absl::Status MetadataManager::LoadMetadata(
                                             /*prefer_incoming=*/true));
   }
 
-  // Increment completed section counter for restore progress tracking
-  Metrics::GetStats().rdb_restore_completed_indexes++;
+  /* Deliberately does not touch rdb_restore_completed_indexes. That counter
+   * tracks index schemas only; the total it is compared against comes from
+   * SnapshotInfo::num_indexes, which excludes this section. */
   return absl::OkStatus();
 }
 

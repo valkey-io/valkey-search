@@ -13,6 +13,7 @@
 #include "absl/status/status.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/metrics.h"
 #include "src/version.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -290,6 +291,26 @@ class RDBSerializationTest : public vmsdk::ValkeyTest {
         .callbacks_struct = std::move(callbacks_struct),
     };
   }
+  // Reads and validates the SnapshotInfo section that PerformRDBSave always
+  // writes as the first section, returning the recorded index count.
+  uint64_t ExpectSnapshotInfoSection(FakeSafeRDB& fake_rdb) {
+    auto serialized = fake_rdb.LoadString();
+    VMSDK_EXPECT_OK_STATUSOR(serialized);
+    data_model::RDBSection section;
+    EXPECT_TRUE(section.ParseFromString(
+        std::string(vmsdk::ToStringView(serialized.value().get()))));
+    EXPECT_EQ(section.type(), data_model::RDB_SECTION_SNAPSHOT_INFO);
+    EXPECT_EQ(section.supplemental_count(), 0);
+    EXPECT_TRUE(section.has_snapshot_info_contents());
+    return section.snapshot_info_contents().num_indexes();
+  }
+  // Serializes a SnapshotInfo section into the RDB, as a newer writer would.
+  void SaveSnapshotInfoSection(FakeSafeRDB& fake_rdb, uint64_t num_indexes) {
+    data_model::RDBSection section;
+    section.set_type(data_model::RDB_SECTION_SNAPSHOT_INFO);
+    section.mutable_snapshot_info_contents()->set_num_indexes(num_indexes);
+    VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(section.SerializeAsString()));
+  }
 };
 
 TEST_F(RDBSerializationTest, RegisterModuleTypeHappyPath) {
@@ -374,7 +395,9 @@ TEST_F(RDBSerializationTest, PerformRDBSaveOneRDBSection) {
   EXPECT_EQ(sem_ver.value(), 0x0100ff);
   auto section_count = fake_rdb.LoadUnsigned();
   VMSDK_EXPECT_OK_STATUSOR(section_count);
-  EXPECT_EQ(section_count.value(), 1);
+  // One content section plus the SnapshotInfo section.
+  EXPECT_EQ(section_count.value(), 2);
+  EXPECT_EQ(ExpectSnapshotInfoSection(fake_rdb), 1);
   auto section_data = fake_rdb.LoadString();
   VMSDK_EXPECT_OK_STATUSOR(section_data);
   EXPECT_EQ(vmsdk::ToStringView(section_data.value().get()), "test-string");
@@ -415,7 +438,10 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSection) {
   EXPECT_EQ(sem_ver.value(), 0x0200ff);  // Larger of the two
   auto section_count = fake_rdb.LoadUnsigned();
   VMSDK_EXPECT_OK(section_count);
-  EXPECT_EQ(section_count.value(), 2);  // Sum of the counts
+  // Sum of the counts, plus the SnapshotInfo section.
+  EXPECT_EQ(section_count.value(), 3);
+  // Only the INDEX_SCHEMA callback counts toward the index total.
+  EXPECT_EQ(ExpectSnapshotInfoSection(fake_rdb), 1);
 
   // Could be saved in either order - doesn't matter.
   auto section_data = fake_rdb.LoadString();
@@ -500,7 +526,9 @@ TEST_F(RDBSerializationTest, PerformRDBSaveTwoRDBSectionOneEmpty) {
   EXPECT_EQ(sem_ver.value(), 0x0100ff);
   auto section_count = fake_rdb.LoadUnsigned();
   VMSDK_EXPECT_OK(section_count);
-  EXPECT_EQ(section_count.value(), 1);
+  // The zero-count callback contributes nothing, but SnapshotInfo is added.
+  EXPECT_EQ(section_count.value(), 2);
+  EXPECT_EQ(ExpectSnapshotInfoSection(fake_rdb), 1);
 
   auto section_data = fake_rdb.LoadString();
   VMSDK_EXPECT_OK_STATUSOR(section_data);
@@ -621,6 +649,226 @@ TEST_F(RDBSerializationTest, PerformRDBLoadRDBSectionCallbackFailure) {
   VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(serialized));
   EXPECT_EQ(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer).code(),
             absl::StatusCode::kInternal);
+}
+
+// A failed load must not leave rdb_restore_in_progress stuck true, which would
+// also permanently inflate the number_of_indexes info field.
+TEST_F(RDBSerializationTest, PerformRDBLoadFailureClearsRestoreInProgress) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
+  data_model::RDBSection section;
+  section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+  std::string serialized = section.SerializeAsString();
+
+  auto test_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
+      .WillOnce([](ValkeyModuleCtx* ctx,
+                   std::unique_ptr<data_model::RDBSection> section,
+                   SupplementalContentIter&& iter) {
+        return absl::InternalError("test");
+      });
+  RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
+                      std::move(test_cb.callbacks_struct));
+
+  VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(serialized));
+  EXPECT_EQ(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer).code(),
+            absl::StatusCode::kInternal);
+  EXPECT_FALSE(Metrics::GetStats().rdb_restore_in_progress);
+}
+
+// Only INDEX_SCHEMA sections count toward num_indexes, so a save with just a
+// metadata section records zero indexes.
+TEST_F(RDBSerializationTest, PerformRDBSaveMetadataOnlyRecordsZeroIndexes) {
+  FakeSafeRDB fake_rdb;
+  auto test_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
+      .WillOnce(
+          [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+            VMSDK_EXPECT_OK(rdb->SaveStringBuffer("metadata"));
+            return absl::OkStatus();
+          });
+  EXPECT_CALL(*test_cb.mock_callbacks,
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_AFTER_RDB))
+      .WillOnce(testing::Return(1));
+  EXPECT_CALL(*test_cb.mock_callbacks,
+              minimum_semantic_version(testing::_, testing::_))
+      .WillOnce(testing::Return(0x0100ff));
+  RegisterRDBCallback(data_model::RDB_SECTION_GLOBAL_METADATA,
+                      std::move(test_cb.callbacks_struct));
+
+  VMSDK_EXPECT_OK(
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_AFTER_RDB));
+  auto sem_ver = fake_rdb.LoadUnsigned();
+  VMSDK_EXPECT_OK_STATUSOR(sem_ver);
+  auto section_count = fake_rdb.LoadUnsigned();
+  VMSDK_EXPECT_OK_STATUSOR(section_count);
+  EXPECT_EQ(section_count.value(), 2);
+  EXPECT_EQ(ExpectSnapshotInfoSection(fake_rdb), 0);
+}
+
+// The SnapshotInfo section must not raise the minimum semantic version, since
+// that would make older modules reject the whole RDB rather than skip it.
+TEST_F(RDBSerializationTest, PerformRDBSaveSnapshotInfoDoesNotRaiseMinVersion) {
+  FakeSafeRDB fake_rdb;
+  auto test_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*test_cb.mock_callbacks, save(testing::_, testing::_, testing::_))
+      .WillOnce(
+          [](ValkeyModuleCtx* ctx, SafeRDB* rdb, int when) -> absl::Status {
+            VMSDK_EXPECT_OK(rdb->SaveStringBuffer("test-string"));
+            return absl::OkStatus();
+          });
+  EXPECT_CALL(*test_cb.mock_callbacks,
+              section_count(&fake_ctx_, VALKEYMODULE_AUX_AFTER_RDB))
+      .WillOnce(testing::Return(1));
+  EXPECT_CALL(*test_cb.mock_callbacks,
+              minimum_semantic_version(testing::_, testing::_))
+      .WillOnce(testing::Return(0x0100ff));
+  RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
+                      std::move(test_cb.callbacks_struct));
+
+  VMSDK_EXPECT_OK(
+      PerformRDBSave(&fake_ctx_, &fake_rdb, VALKEYMODULE_AUX_AFTER_RDB));
+  auto sem_ver = fake_rdb.LoadUnsigned();
+  VMSDK_EXPECT_OK_STATUSOR(sem_ver);
+  EXPECT_EQ(sem_ver.value(), 0x0100ff);
+}
+
+// A SnapshotInfo section is authoritative: the index total comes from it and
+// not from section arithmetic.
+TEST_F(RDBSerializationTest, PerformRDBLoadSnapshotInfoSetsTotalIndexes) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
+  SaveSnapshotInfoSection(fake_rdb, 7);
+
+  VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_total_indexes, 7);
+  EXPECT_EQ(fake_rdb.buffer_.rdbuf()->in_avail(), 0);
+}
+
+// Duplicates are tolerated rather than failing the load; the last one wins.
+TEST_F(RDBSerializationTest, PerformRDBLoadDuplicateSnapshotInfoLastWins) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(2));
+  SaveSnapshotInfoSection(fake_rdb, 3);
+  SaveSnapshotInfoSection(fake_rdb, 9);
+
+  VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_total_indexes, 9);
+}
+
+// A malformed SnapshotInfo section must not fail the load; the derived total
+// is retained instead.
+TEST_F(RDBSerializationTest, PerformRDBLoadSnapshotInfoWithoutContents) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
+  data_model::RDBSection section;
+  section.set_type(data_model::RDB_SECTION_SNAPSHOT_INFO);
+  VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(section.SerializeAsString()));
+
+  VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
+  // No metadata callback registered, so the derived total is the raw count.
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_total_indexes, 1);
+}
+
+// Pre-SnapshotInfo RDB, non-coordinated mode: every section is an index.
+TEST_F(RDBSerializationTest, PerformRDBLoadLegacyNonCoordinatedTotalIndexes) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(2));
+
+  auto test_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
+      .Times(2)
+      .WillRepeatedly([](ValkeyModuleCtx* ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter&& iter) {
+        return absl::OkStatus();
+      });
+  RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
+                      std::move(test_cb.callbacks_struct));
+
+  for (int i = 0; i < 2; i++) {
+    data_model::RDBSection section;
+    section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+    VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(section.SerializeAsString()));
+  }
+
+  VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_total_indexes, 2);
+}
+
+// Pre-SnapshotInfo RDB, coordinated mode: one section is global metadata, so
+// the index count is one less than the section count.
+TEST_F(RDBSerializationTest, PerformRDBLoadLegacyCoordinatedTotalIndexes) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(3));
+
+  auto index_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*index_cb.mock_callbacks,
+              load(testing::_, testing::_, testing::_))
+      .Times(2)
+      .WillRepeatedly([](ValkeyModuleCtx* ctx,
+                         std::unique_ptr<data_model::RDBSection> section,
+                         SupplementalContentIter&& iter) {
+        return absl::OkStatus();
+      });
+  RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
+                      std::move(index_cb.callbacks_struct));
+
+  auto metadata_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*metadata_cb.mock_callbacks,
+              load(testing::_, testing::_, testing::_))
+      .WillOnce([](ValkeyModuleCtx* ctx,
+                   std::unique_ptr<data_model::RDBSection> section,
+                   SupplementalContentIter&& iter) {
+        return absl::OkStatus();
+      });
+  RegisterRDBCallback(data_model::RDB_SECTION_GLOBAL_METADATA,
+                      std::move(metadata_cb.callbacks_struct));
+
+  for (int i = 0; i < 2; i++) {
+    data_model::RDBSection section;
+    section.set_type(data_model::RDB_SECTION_INDEX_SCHEMA);
+    VMSDK_EXPECT_OK(fake_rdb.SaveStringBuffer(section.SerializeAsString()));
+  }
+  data_model::RDBSection metadata_section;
+  metadata_section.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  VMSDK_EXPECT_OK(
+      fake_rdb.SaveStringBuffer(metadata_section.SerializeAsString()));
+
+  VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_total_indexes, 2);
+}
+
+// The legacy coordinated adjustment must not underflow on a single-section RDB.
+TEST_F(RDBSerializationTest, PerformRDBLoadLegacyCoordinatedSingleSection) {
+  FakeSafeRDB fake_rdb;
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(kModuleVersion));
+  VMSDK_EXPECT_OK(fake_rdb.SaveUnsigned(1));
+
+  auto metadata_cb = GenerateRDBSectionCallbacks();
+  EXPECT_CALL(*metadata_cb.mock_callbacks,
+              load(testing::_, testing::_, testing::_))
+      .WillOnce([](ValkeyModuleCtx* ctx,
+                   std::unique_ptr<data_model::RDBSection> section,
+                   SupplementalContentIter&& iter) {
+        return absl::OkStatus();
+      });
+  RegisterRDBCallback(data_model::RDB_SECTION_GLOBAL_METADATA,
+                      std::move(metadata_cb.callbacks_struct));
+
+  data_model::RDBSection metadata_section;
+  metadata_section.set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  VMSDK_EXPECT_OK(
+      fake_rdb.SaveStringBuffer(metadata_section.SerializeAsString()));
+
+  VMSDK_EXPECT_OK(PerformRDBLoad(&fake_ctx_, &fake_rdb, kCurrentEncVer));
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_total_indexes, 0);
 }
 
 }  // namespace

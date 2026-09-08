@@ -73,17 +73,15 @@ class ProximityIterator : public TextIterator {
            current_field_mask_ != 0ULL && query_field_mask_ != 0ULL;
   }
 
-  // Aggregate score: sum of children's weighted scores.
+  // Aggregate score: sum of children's already-weighted scores, scaled by this
+  // group's own weight.
   float GetScore() const override {
     float total = 0.0f;
     for (const auto& iter : iters_) {
-      total += iter->GetScore() * iter->GetWeight();
+      total += iter->GetScore();
     }
-    return total;
+    return total * weight_;
   }
-
-  // Group weight applied by the parent (or read at the root) to this composite.
-  float GetWeight() const override { return weight_; }
 
  private:
   // List of all the Text Predicates contained in the Proximity AND.

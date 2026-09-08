@@ -27,8 +27,11 @@
 #include "absl/synchronization/mutex.h"
 #include "absl/time/time.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
@@ -63,8 +66,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
                           attribute_identifier, attribute_data_type, db_num));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
 
     index->algo_ = std::make_unique<HNSWIndex>(
@@ -103,8 +105,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
                           attribute_identifier, attribute_data_type->ToProto(),
                           db_num),
         vmsdk::DestructByMainThread<VectorHNSW<T>>{});
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
 
     index->algo_ = std::make_unique<HNSWIndex>();
     // initial_cap needs to be provided to retain the original initial_cap if
@@ -121,7 +122,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       if (!is_marked_deleted) {
         return std::shared_ptr<VectorRecord>(nullptr);
       }
-      T reciprocal_magnitude = CalcReciprocalMagnitude(
+      float reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
@@ -147,17 +148,18 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
                           absl::string_view attribute_identifier,
                           data_model::AttributeDataType attribute_data_type,
                           int db_num)
-    : VectorBase(IndexerType::kHNSW, dimensions, attribute_data_type,
-                 attribute_identifier, db_num) {}
+    : VectorType<T>(IndexerType::kHNSW, dimensions, attribute_data_type,
+                    attribute_identifier, db_num) {}
 
 QueryVector::QueryVector(
     const std::shared_ptr<const VectorRecord> &vector_record,
-    size_t vector_record_size, bool normalize)
+    size_t vector_record_size, bool normalize,
+    data_model::VectorDataType data_type)
     : vector_record_(vector_record) {
   if (normalize) {
     normalized_vector_ = NormalizeVector(
         absl::string_view(vector_record_->GetRawVector(), vector_record_size),
-        vector_record_->GetReciprocalMagnitude());
+        data_type, vector_record_->GetReciprocalMagnitude());
   }
 }
 template <typename T>
@@ -168,7 +170,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
       absl::ReaderMutexLock lock(&resize_mutex_);
 
       algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
-                                  normalize_),
+                                  normalize_, GetVectorDataType()),
                       internal_id, algo_->allow_replace_deleted_);
       return absl::OkStatus();
     } catch (const std::exception &e) {
@@ -188,17 +190,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
 
 template <typename T>
 int VectorHNSW<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
-  if constexpr (std::is_same_v<T, float>) {
-    ValkeyModule_ReplyWithSimpleString(
-        ctx,
-        std::string(LookupKeyByValue(
-                        *kVectorDataTypeByStr,
-                        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32))
-            .c_str());
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
-  }
+  EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   ValkeyModule_ReplyWithArray(ctx, 8);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
@@ -226,7 +218,7 @@ absl::Status VectorHNSW<T>::SaveIndexImpl(
                         const std::shared_ptr<const VectorRecord> &record,
                         bool is_marked_deleted) {
     if (normalize && !is_marked_deleted) {
-      return NormalizeVector(
+      return NormalizeVector<T>(
           absl::string_view(record->GetRawVector(), vector_size));
     }
     return std::vector<char>(record->GetRawVector(),
@@ -286,7 +278,7 @@ absl::Status VectorHNSW<T>::AlgoDeleteRecord(uint64_t label) {
   absl::string_view unnorm_vector(stored_record->GetRawVector(),
                                   GetVectorDataSize());
 
-  auto norm_record = NormalizeVector(unnorm_vector);
+  auto norm_record = NormalizeVector<T>(unnorm_vector);
 
   absl::string_view norm_view(norm_record.data(), norm_record.size());
   auto vector_record =
@@ -302,9 +294,9 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
   try {
     absl::ReaderMutexLock lock(&resize_mutex_);
     // addPoint() routes an existing label to an in-place update.
-    algo_->addPoint(
-        QueryVector(std::move(vector_record), GetVectorDataSize(), normalize_),
-        internal_id, /*replace_deleted=*/false);
+    algo_->addPoint(QueryVector(std::move(vector_record), GetVectorDataSize(),
+                                normalize_, GetVectorDataType()),
+                    internal_id, /*replace_deleted=*/false);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
@@ -350,16 +342,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  T reciprocal_magnitude =
-      normalize_
-          ? CalcReciprocalMagnitude(
-                reinterpret_cast<const float *>(query.data()), dimensions_)
-          : kDefaultMagnitude;
+  float reciprocal_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(
+                       reinterpret_cast<const T *>(query.data()), dimensions_)
+                 : kDefaultMagnitude;
   try {
     CancelCondition cancel_condition(cancellation_token);
     QueryVector embedding(VectorRecord::Construct(query, reciprocal_magnitude,
                                                   GetVectorAllocator()),
-                          query.size(), normalize_);
+                          query.size(), normalize_, GetVectorDataType());
     auto res = algo_->searchKnn(embedding, count, ef_runtime, filter.get(),
                                 &cancel_condition);
     if (!enable_partial_results && cancellation_token->IsCancelled()) {
@@ -388,9 +379,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // by ensuring the exploration covers the full neighborhood.
   auto perform_search =
       [this, &filter, max_candidates, &cancellation_token](
-          absl::string_view query_view, T reciprocal_magnitude)
+          absl::string_view query_view, float reciprocal_magnitude)
           ABSL_NO_THREAD_SAFETY_ANALYSIS
-      -> absl::StatusOr<std::priority_queue<std::pair<T, hnswlib::labeltype>>> {
+      -> absl::StatusOr<std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
       QueryVector embedding(
@@ -407,12 +398,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     }
   };
 
-  auto nq = NormalizeQueryIfNeeded(query);
-  T reciprocal_magnitude =
-      normalize_
-          ? CalcReciprocalMagnitude(
-                reinterpret_cast<const float *>(nq.view.data()), dimensions_)
-          : static_cast<T>(kDefaultMagnitude);
+  auto nq = this->NormalizeQueryIfNeeded(query);
+  float reciprocal_magnitude =
+      this->normalize_
+          ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
+          : kDefaultMagnitude;
   VMSDK_ASSIGN_OR_RETURN(auto raw_results,
                          perform_search(nq.view, reciprocal_magnitude));
 
@@ -426,11 +416,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     if (cancellation_token->IsCancelled()) {
       break;
     }
-    float clamped_dist = ClampCosineDistance(static_cast<float>(dist));
+    float clamped_dist = this->ClampCosineDistance(static_cast<float>(dist));
     if (clamped_dist > radius) {
       continue;
     }
-    auto key = GetKeyDuringSearch(label);
+    auto key = this->GetKeyDuringSearch(label);
     if (!key.ok()) {
       continue;
     }
@@ -442,14 +432,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
 template <typename T>
 void VectorHNSW<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
-  data_model::VectorDataType data_type;
-  if constexpr (std::is_same_v<T, float>) {
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
-  } else {
-    DCHECK(false) << "Unsupported type: " << typeid(T).name();
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
-  }
-  vector_index_proto->set_vector_data_type(data_type);
+  SetProtoDataType(vector_index_proto);
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto hnsw_algorithm_proto = std::make_unique<data_model::HNSWAlgorithm>();
   hnsw_algorithm_proto->set_ef_construction(GetEfConstruction());
@@ -460,9 +443,9 @@ void VectorHNSW<T>::ToProtoImpl(
 }
 
 template <typename T>
-T VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                 const VectorRecord *vector_record,
-                                 float query_magnitude) const {
+float VectorHNSW<T>::ComputeDistance(absl::string_view query,
+                                     const VectorRecord *vector_record,
+                                     float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -481,5 +464,7 @@ size_t VectorHNSW<T>::GetLabelCount() const {
 }
 
 template class VectorHNSW<float>;
+template class VectorHNSW<float16>;
+template class VectorHNSW<bfloat16>;
 
 }  // namespace valkey_search::indexes

@@ -1985,7 +1985,10 @@ TEST_F(ScoreTextQueryTestBase, ScoreIsSafeAgainstCommitsOnTheSameWord) {
 
   for (int i = 0; i < 500; ++i) {
     auto score = document_scorer->Score(target);
-    ASSERT_TRUE(score.has_value());
+    EXPECT_TRUE(score.has_value());
+    if (!score.has_value()) {
+      break;
+    }
     EXPECT_FLOAT_EQ(*score, *expected);
   }
   stop.store(true, std::memory_order_relaxed);

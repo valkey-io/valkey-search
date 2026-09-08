@@ -1205,7 +1205,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
         float raw = 0.0f;
         if (score_in_drain) {
           if (auto *text_iter = iterator->GetTextIterator()) {
-            raw = text_iter->GetScore() * text_iter->GetWeight();
+            raw = text_iter->GetScore();
           }
         }
         if (needs_dedup) {

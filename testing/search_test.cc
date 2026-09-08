@@ -1998,7 +1998,11 @@ TEST_F(ScoreTextQueryTestBase, ScoreIsSafeAgainstCommitsOnTheSameWord) {
 // The pre-build gate must stay equivalent to GetContentProcessing() !=
 // kNoContent. No subclass overrides it: every operation that fetches content on
 // the main thread does so with no_content == false.
-TEST(RecomputeScorerGateTest, DefaultsToContentFetchingQueries) {
+// Fixture required: UnitTestSearchParameters -> cancel::Make ->
+// ValkeyModule_Milliseconds needs the mock module alive.
+class RecomputeScorerGateTest : public vmsdk::ValkeyTest {};
+
+TEST_F(RecomputeScorerGateTest, DefaultsToContentFetchingQueries) {
   UnitTestSearchParameters params;
   params.no_content = false;
   EXPECT_TRUE(params.WillFetchContentOnMainThread());

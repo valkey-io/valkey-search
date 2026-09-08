@@ -114,11 +114,13 @@ class Text : public IndexBase {
    public:
     EntriesFetcher(size_t size,
                    const std::shared_ptr<text::TextIndex> &text_index,
-                   text::FieldMaskPredicate field_mask, bool require_positions)
+                   text::FieldMaskPredicate field_mask, bool require_positions,
+                   float or_weight_multiplier)
         : size_(size),
           text_index_(text_index),
           field_mask_(field_mask),
-          require_positions_(require_positions) {}
+          require_positions_(require_positions),
+          or_weight_multiplier_(or_weight_multiplier) {}
 
     size_t Size() const override;
 
@@ -134,6 +136,8 @@ class Text : public IndexBase {
     const query::TextPredicate *predicate_;
     text::FieldMaskPredicate field_mask_;
     bool require_positions_;
+    // Product of the enclosing OR group weights, which no iterator carries.
+    float or_weight_multiplier_;
   };
 
   size_t GetTextFieldNumber() const { return text_field_number_; }

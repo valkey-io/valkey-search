@@ -77,12 +77,12 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
 
 - `FLAT:` This algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
-  - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
+  - `TYPE [FLOAT32 | FLOAT16 | BFLOAT16]` (required): Element data type. `FLOAT16` and `BFLOAT16` halve the memory used per vector at some cost in precision; see [Supported Data Types](../topics/search-data-formats.md#supported-data-types).
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm
   - `INITIAL_CAP <size>` (optional): Initial index size.
 - `HNSW:` The HNSW algorithm provides approximate answers, but operates substantially faster than `FLAT`.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
-  - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
+  - `TYPE [FLOAT32 | FLOAT16 | BFLOAT16]` (required): Element data type. `FLOAT16` and `BFLOAT16` halve the memory used per vector at some cost in precision; see [Supported Data Types](../topics/search-data-formats.md#supported-data-types).
   - `INITIAL_CAP <size>` (optional): Initial index size.
   - `M <number>` (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.

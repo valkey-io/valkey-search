@@ -305,6 +305,8 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         self.server.restart(remove_rdb=False)
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         assert self.client.info("search")["search_rdb_load_multi_exec_entries"] == len(records)
+        # Let reload mutations drain so the queued keys are orphaned.
+        waiters.wait_for_true(lambda: self.mutation_queue_size() == 0)
 
         # The orphan must be skipped and the rewritten RDB must remain readable.
         self.client.execute_command("save")

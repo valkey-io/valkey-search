@@ -252,7 +252,8 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions,
-      /*stem_field_mask=*/0, /*has_original=*/false, GetWeight(),
+      /*stem_field_mask=*/0, /*has_original=*/false,
+      GetWeight() * or_weight_multiplier,
       /*num_doc_contain_term=*/0, GetTextIndexSchema().get(), GetScorer(),
       std::move(per_term_dt));
 }
@@ -283,7 +284,8 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
   }
   return std::make_unique<indexes::text::TermIterator>(
       std::move(key_iterators), field_mask, require_positions,
-      /*stem_field_mask=*/0, /*has_original=*/false, GetWeight(),
+      /*stem_field_mask=*/0, /*has_original=*/false,
+      GetWeight() * or_weight_multiplier,
       /*num_doc_contain_term=*/0, GetTextIndexSchema().get(), GetScorer(),
       std::move(per_term_dt));
 }
@@ -305,7 +307,8 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
       text_index->GetPrefix(), GetTextString(), GetDistance(), max_words);
   return std::make_unique<indexes::text::TermIterator>(
       std::move(expansion.key_iterators), field_mask, require_positions,
-      /*stem_field_mask=*/0, /*has_original=*/false, GetWeight(),
+      /*stem_field_mask=*/0, /*has_original=*/false,
+      GetWeight() * or_weight_multiplier,
       /*num_doc_contain_term=*/0, GetTextIndexSchema().get(), GetScorer(),
       std::move(expansion.per_term_dt));
 }

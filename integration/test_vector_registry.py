@@ -95,7 +95,7 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             got_bytes = client.hget(key, "vec")
             assert got_bytes == expected_bytes, f"HGET returned unexpected value for key {key}"
 
-        # 4. Drop the index and ensure vector registry indicates it is empty
+        # 4. Drop the index
         vector_index.drop(client)
 
         waiters.wait_for_equal(
@@ -142,8 +142,6 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         assert stats["entry_cnt"] == 0
         assert stats["hash_sharing_errors"] == 0
         assert stats["hash_sharing_hits"] == 0
-        assert stats["lookup_record_hits"] == 0
-        assert stats["lookup_record_misses"] == 0
 
         # 2. Ingest a vector and verify increments
         key1 = "doc:1"
@@ -154,34 +152,25 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 1
-        # LookupRecord is called exactly once during AddRecord for the new document
-        assert stats["lookup_record_hits"] == 1
-        assert stats["lookup_record_misses"] == 0
 
         # 3. Update document with the EXACT SAME vector
         client.hset(key1, mapping={"vec": vec_bytes1})
 
         # Since HSET overwrites the reference with a raw string,
-        # Track reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
-        # AddRecord also calls LookupRecord (Hit).
+        # DedupOrConstruct reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 2
-        assert stats["lookup_record_hits"] == 2
-        assert stats["lookup_record_misses"] == 0
 
         # 4. Update document with a DIFFERENT vector
         vec_data2 = [3.0] * dim
         vec_bytes2 = float_to_bytes(vec_data2)
         client.hset(key1, mapping={"vec": vec_bytes2})
 
-        # Track sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
-        # AddRecord calls LookupRecord (Hit).
+        # DedupOrConstruct sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 3
-        assert stats["lookup_record_hits"] == 3
-        assert stats["lookup_record_misses"] == 0
 
         # 5. Delete the document and verify drop in entry count
         client.delete(key1)
@@ -192,27 +181,29 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
 
+    @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
         ("HNSW", "L2"),
         ("HNSW", "COSINE"),
         ("FLAT", "L2"),
         ("FLAT", "COSINE"),
     ])
-    def test_vector_registry_deletion_coverage(self, index_type: str, distance_metric: str):
+    def test_vector_registry_deletion_coverage(self, data_type: KeyDataType, index_type: str, distance_metric: str):
         """
-        Verify that document deletion correctly erases the registry entry for both index types
-        and both distance metrics. By starting from 0 and asserting the count drops to 0,
-        we mathematically guarantee that the specific key was the one erased.
+        Verify that document deletion correctly erases the registry entry for both index types,
+        both distance metrics, and both HASH and JSON data types. By starting from 0 and asserting
+        the count drops to 0, we mathematically guarantee that the specific key was the one erased.
         """
         client: Valkey = self.server.get_new_client()
         dim = 8
-        index_name = f"del_cov_{index_type}_{distance_metric}"
+        data_type_str = "hash" if data_type == KeyDataType.HASH else "json"
+        index_name = f"del_cov_{data_type_str}_{index_type}_{distance_metric}"
 
         vector_index = Index(
             index_name,
             [Vector("vec", dim, type=index_type, distance=distance_metric)],
             prefixes=["doc:"],
-            type=KeyDataType.HASH,
+            type=data_type,
         )
         vector_index.create(client)
 
@@ -223,8 +214,11 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         # 2. Ingest a vector and verify increments
         key1 = "doc:1"
         vec_data1 = [1.0] * dim
-        vec_bytes1 = float_to_bytes(vec_data1)
-        client.hset(key1, mapping={"vec": vec_bytes1})
+        if data_type == KeyDataType.HASH:
+            vec_bytes1 = float_to_bytes(vec_data1)
+            client.hset(key1, mapping={"vec": vec_bytes1})
+        else:
+            client.execute_command("JSON.SET", key1, "$", f'{{"vec":{vec_data1}}}')
 
         waiters.wait_for_equal(
             lambda: vector_index.info(client).num_docs,
@@ -244,6 +238,130 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+
+    @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
+    @pytest.mark.parametrize("index_type,distance_metric", [
+        ("HNSW", "L2"),
+        ("HNSW", "COSINE"),
+        ("FLAT", "L2"),
+        ("FLAT", "COSINE"),
+    ])
+    def test_vector_registry_missing_field_coverage(self, data_type: KeyDataType, index_type: str, distance_metric: str):
+        """
+        Verify that removing the vector field (HDEL for HASH, JSON.DEL for JSON) or updating
+        the record without the vector field removes the entry from the vector registry by
+        verifying that the entry count drops to 0.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        data_type_str = "hash" if data_type == KeyDataType.HASH else "json"
+        index_name = f"missing_cov_{data_type_str}_{index_type}_{distance_metric}"
+
+        vector_index = Index(
+            index_name,
+            [Vector("vec", dim, type=index_type, distance=distance_metric)],
+            prefixes=["doc:"],
+            type=data_type,
+        )
+        vector_index.create(client)
+
+        # 1. Initial stats should be 0
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+
+        # 2. Ingest a vector along with another field
+        key1 = "doc:1"
+        vec_data1 = [1.0] * dim
+        if data_type == KeyDataType.HASH:
+            vec_bytes1 = float_to_bytes(vec_data1)
+            client.hset(key1, mapping={"vec": vec_bytes1, "other": "val"})
+        else:
+            client.execute_command("JSON.SET", key1, "$", f'{{"vec":{vec_data1},"other":"val"}}')
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            1,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 1
+
+        # 3. Remove the vector field while keeping the document alive, and verify drop to 0 in vector registry
+        if data_type == KeyDataType.HASH:
+            client.hdel(key1, "vec")
+        else:
+            client.execute_command("JSON.DEL", key1, "$.vec")
+
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["entry_cnt"],
+            0,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+
+    @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
+    @pytest.mark.parametrize("index_type,distance_metric", [
+        ("HNSW", "L2"),
+        ("HNSW", "COSINE"),
+        ("FLAT", "L2"),
+        ("FLAT", "COSINE"),
+    ])
+    def test_vector_registry_drop_index_coverage(self, data_type: KeyDataType, index_type: str, distance_metric: str):
+        """
+        Verify that dropping an index erases all its tracked entries from the vector registry,
+        while leaving the underlying hash/json keys alive with valid values.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        data_type_str = "hash" if data_type == KeyDataType.HASH else "json"
+        index_name = f"drop_cov_{data_type_str}_{index_type}_{distance_metric}"
+
+        vector_index = Index(
+            index_name,
+            [Vector("vec", dim, type=index_type, distance=distance_metric)],
+            prefixes=["doc:"],
+            type=data_type,
+        )
+        vector_index.create(client)
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+
+        num_docs = 5
+        raw_vectors = {}
+        for i in range(num_docs):
+            key = f"doc:{i}"
+            vec_data = [float(i + j) for j in range(dim)]
+            if data_type == KeyDataType.HASH:
+                vec_bytes = float_to_bytes(vec_data)
+                raw_vectors[key] = vec_bytes
+                client.hset(key, mapping={"vec": vec_bytes})
+            else:
+                raw_vectors[key] = vec_data
+                client.execute_command("JSON.SET", key, "$", f'{{"vec":{vec_data}}}')
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            num_docs,
+        )
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == num_docs
+
+        # Drop the index and verify entry count drops to 0
+        vector_index.drop(client)
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["entry_cnt"],
+            0,
+        )
+
+        # Reverify that the documents still exist and have valid values
+        for key, expected_val in raw_vectors.items():
+            if data_type == KeyDataType.HASH:
+                assert client.hget(key, "vec") == expected_val
+            else:
+                res = client.execute_command("JSON.GET", key, "$.vec")
+                assert res is not None
 
     def test_hash_sharing_errors_coverage(self):
         """

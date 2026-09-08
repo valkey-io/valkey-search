@@ -396,22 +396,6 @@ static vmsdk::info_field::Integer vector_registry_shared_externally_cnt(
       return VectorRegistry::Instance().GetStats().hash_sharing_hits.GetTotal();
     }));
 
-static vmsdk::info_field::Integer vector_registry_get_record_hits(
-    "vector_registry", "vector_registry_get_record_hits",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance()
-          .GetStats()
-          .lookup_record_hits.GetTotal();
-    }));
-
-static vmsdk::info_field::Integer vector_registry_get_record_misses(
-    "vector_registry", "vector_registry_get_record_misses",
-    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      return VectorRegistry::Instance()
-          .GetStats()
-          .lookup_record_misses.GetTotal();
-    }));
-
 static vmsdk::info_field::Integer vector_registry_shared_externally_errors(
     "vector_registry", "vector_registry_shared_externally_errors",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
@@ -424,6 +408,12 @@ static vmsdk::info_field::Integer vector_registry_sharing_active(
     "vector_registry", "vector_registry_sharing_active",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
       return VectorRegistry::Instance().IsSharingActive() ? 1 : 0;
+    }));
+
+static vmsdk::info_field::Integer vector_registry_pending_unshare_cnt(
+    "vector_registry", "vector_registry_pending_unshare_cnt",
+    vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
+      return VectorRegistry::Instance().GetPendingUnsharesCount();
     }));
 
 static vmsdk::info_field::Integer ft_internal_update_process_failures_cnt(
@@ -1263,6 +1253,7 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
 
   // Apply command line arguments and initialize the module
   VMSDK_RETURN_IF_ERROR(LoadAndParseArgv(ctx, argv, argc));
+  VectorRegistry::Construct(ctx_);
   VMSDK_RETURN_IF_ERROR(Startup(ctx));
 
   ValkeyModule_SetModuleOptions(
@@ -1272,7 +1263,6 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
   VMSDK_LOG(NOTICE, ctx) << "Json "
                          << (IsJsonModuleSupported(ctx) ? "" : "not ")
                          << "supported!";
-  VectorRegistry::Construct(ctx_);
   ValkeyModule_Assert(vmsdk::info_field::Validate(ctx));
   VMSDK_LOG(DEBUG, ctx) << "Search module completed initialization!";
   return absl::OkStatus();
@@ -1303,8 +1293,10 @@ bool ValkeySearch::IsChildProcess() {
 }
 
 void ValkeySearch::OnUnload(ValkeyModuleCtx *ctx) {
-  ValkeyModule_FreeThreadSafeContext(ctx_);
   reader_thread_pool_ = nullptr;
+  writer_thread_pool_ = nullptr;
+  VectorRegistry::Destruct();
+  ValkeyModule_FreeThreadSafeContext(ctx_);
 }
 
 std::shared_ptr<vmsdk::cluster_map::ClusterMap>

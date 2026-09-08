@@ -75,6 +75,14 @@ struct StateMachineTestCase {
   std::string name;
 };
 
+inline void PrintTo(const StateMachineTestCase &test_case, std::ostream *os) {
+  *os << (test_case.name.empty()
+              ? absl::StrCat("{", test_case.json ? "JSON" : "HASH", ", ",
+                             test_case.mixed_schema ? "Mixed" : "VectorOnly",
+                             ", Sharing", test_case.sharing ? "On" : "Off", "}")
+              : test_case.name);
+}
+
 // A shared reference handed to the engine by ValkeyModule_HashSetStringRef.
 struct SharedRef {
   const char *buf;
@@ -197,7 +205,7 @@ class VectorRegistryStateMachineTest
   // ---- fake engine -------------------------------------------------------
   static VectorRegistryStateMachineTest *current_test_;
 
-  // Shared-API entry point used by JsonAttributeDataType::GetRecord. Returns
+  // Shared-API entry point used by JsonAttributeDataType::GetAttribute. Returns
   // the raw JSON text for the requested path, exactly as the JSON module
   // would: a one-element array wrapping the value.
   static int JsonGetValue(ValkeyModuleKey *key, const char *path,
@@ -433,41 +441,15 @@ class VectorRegistryStateMachineTest
     if (auto *pool = ValkeySearch::Instance().GetWriterThreadPool()) {
       WaitWorkerTasksAreCompleted(*pool);
     }
+    kMockValkeyModule->RunPendingOneShots();
   }
 
-  // ---- observation -------------------------------------------------------
-  std::pair<std::shared_ptr<indexes::VectorRecord>, size_t> Lookup(
-      absl::string_view key) const {
-    return VectorRegistry::Instance().LookupRecord(
-        StringInternStore::Intern(key),
-        vector_index_->GetInternedAttributeIdentifier(), 0);
-  }
-
-  static size_t EntryCount() {
-    return VectorRegistry::Instance().GetStats().entry_cnt;
-  }
-  static uint64_t SharingHits() {
-    return VectorRegistry::Instance().GetStats().hash_sharing_hits.GetTotal();
+  static const VectorRegistry::Stats &GetStats() {
+    return VectorRegistry::Instance().GetStats();
   }
 
   bool IndexTracks(absl::string_view key) const {
     return vector_index_->IsTracked(StringInternStore::Intern(key));
-  }
-
-  // True when the engine currently holds a shared reference for the key's
-  // vector field that points at `record`'s payload.
-  bool SharesBuffer(absl::string_view key,
-                    const indexes::VectorRecord *record) const {
-    auto key_it = shared_refs_.find(std::string(key));
-    if (key_it == shared_refs_.end()) {
-      return false;
-    }
-    auto field_it = key_it->second.find(VectorIdentifier());
-    if (field_it == key_it->second.end()) {
-      return false;
-    }
-    return field_it->second.buf == record->GetRawVector() &&
-           field_it->second.len == kVectorBytes;
   }
 
   bool HasSharedRef(absl::string_view key) const {
@@ -481,26 +463,12 @@ class VectorRegistryStateMachineTest
     return GetParam().sharing && !GetParam().json;
   }
 
-  // The registry exists to make the buffer the engine points at and the buffer
-  // the index holds be the same object. A JSON document stores the vector as
-  // text, so there is no engine-side buffer to unify with and nothing for the
-  // registry to do: JSON keys are deliberately never registered. (The registry
-  // is keyed by {db, key, attribute}, so it performs no cross-key dedup that
-  // JSON could otherwise benefit from.)
-  static bool RegistrationExpected() { return !GetParam().json; }
-
-  static size_t ExpectedEntries(size_t hash_entries) {
-    return RegistrationExpected() ? hash_entries : 0;
-  }
-
   // Asserts the index holds exactly the bytes of a valid vector at `scale` for
   // `key`, and that the registry and engine-side sharing state match what this
-  // data type is supposed to produce. Returns the registered record, or nullptr
-  // for data types that are not registered.
-  std::shared_ptr<indexes::VectorRecord> ExpectTracked(absl::string_view key,
-                                                       float scale) {
-    // Index-side effect, asserted for every data type: the vector actually
-    // reached the index with the right bytes.
+  // data type is supposed to produce. Leverages DedupOrConstruct return value
+  // to check that the returned vector record matches what is expected.
+  const indexes::VectorRecord *ExpectTracked(absl::string_view key,
+                                             float scale) {
     EXPECT_TRUE(IndexTracks(key)) << "index does not track " << key;
     auto indexed =
         vector_index_->GetVectorDuringSearch(StringInternStore::Intern(key));
@@ -510,39 +478,44 @@ class VectorRegistryStateMachineTest
                 absl::string_view(VectorAtScale(scale)));
     }
 
-    auto [record, size] = Lookup(key);
-    if (!RegistrationExpected()) {
-      EXPECT_EQ(record, nullptr)
-          << key
-          << " must not be registered: its vector cannot be shared "
-             "with the engine, so a registry entry would only pin "
-             "memory";
-      EXPECT_FALSE(HasSharedRef(key));
-      return nullptr;
-    }
-    EXPECT_NE(record, nullptr) << "key " << key << " is not in the registry";
-    if (!record) {
-      return nullptr;
-    }
-    EXPECT_EQ(size, kVectorBytes);
-    EXPECT_EQ(absl::string_view(record->GetRawVector(), size),
-              absl::string_view(VectorAtScale(scale)));
+    EXPECT_GT(GetStats().entry_cnt, 0u)
+        << "key " << key << " is not in the registry";
     if (SharingExpected()) {
-      EXPECT_TRUE(SharesBuffer(key, record.get()))
+      EXPECT_TRUE(HasSharedRef(key))
           << "engine is not sharing the registry's buffer for " << key;
     } else {
       EXPECT_FALSE(HasSharedRef(key))
           << "engine unexpectedly holds a shared reference for " << key;
     }
+
+    // Leverage DedupOrConstruct return value to check if the returned vector
+    // record pointer matches what is expected to verify that indeed the
+    // registry holds the expected reference to the vector record.
+    auto interned_key = StringInternStore::Intern(key);
+    auto vec_val = VectorValue(FieldState::kValid, scale);
+    auto vector_valkey_str = vmsdk::MakeUniqueValkeyString(*vec_val);
+    if (GetParam().json) {
+      vector_valkey_str =
+          vector_index_->NormalizeStringAttribute(std::move(vector_valkey_str));
+    }
+    auto attr_type =
+        GetParam().json
+            ? data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON
+            : data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+    auto check_tracked = VectorRegistry::Instance().DedupOrConstruct(
+        interned_key, vector_valkey_str.get(), attr_type, 0,
+        vector_index_.get());
+    const auto *record = check_tracked.vector_record.get();
+    EXPECT_NE(record, nullptr);
+    if (record) {
+      EXPECT_EQ(absl::string_view(record->GetRawVector(), kVectorBytes),
+                absl::string_view(VectorAtScale(scale)));
+    }
     return record;
   }
 
   void ExpectNotTracked(absl::string_view key) {
-    auto [record, size] = Lookup(key);
-    EXPECT_EQ(record, nullptr) << "key " << key << " is still in the registry";
-    EXPECT_EQ(size, 0u);
-    EXPECT_FALSE(HasSharedRef(key))
-        << "engine still holds a shared reference for " << key;
+    EXPECT_FALSE(IndexTracks(key)) << "index still tracks " << key;
   }
 };
 
@@ -555,13 +528,15 @@ constexpr absl::string_view kKey = "prefix:1";
 
 // Create: vector field present and valid.
 TEST_P(VectorRegistryStateMachineTest, CreateWithValidVector) {
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
 
   WriteKey(kKey, FieldState::kValid, 1.0f);
 
   auto record = ExpectTracked(kKey, 1.0f);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
-  EXPECT_EQ(SharingHits(), hits_before + (SharingExpected() ? 1u : 0u));
+  EXPECT_NE(record, nullptr);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+            hits_before + (SharingExpected() ? 1u : 0u));
   if (GetParam().mixed_schema) {
     EXPECT_TRUE(numeric_index_->IsTracked(StringInternStore::Intern(kKey)));
     EXPECT_TRUE(tag_index_->IsTracked(StringInternStore::Intern(kKey)));
@@ -570,25 +545,25 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithValidVector) {
 
 // Create: vector field present but not a usable vector.
 TEST_P(VectorRegistryStateMachineTest, CreateWithInvalidVector) {
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
 
   WriteKey(kKey, FieldState::kInvalid);
 
   ExpectNotTracked(kKey);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
-  EXPECT_EQ(SharingHits(), hits_before);
+  EXPECT_EQ(GetStats().entry_cnt, 0);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
   EXPECT_FALSE(IndexTracks(kKey));
 }
 
 // Create: vector field not present on the key.
 TEST_P(VectorRegistryStateMachineTest, CreateWithAbsentVector) {
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
 
   WriteKey(kKey, FieldState::kAbsent);
 
   ExpectNotTracked(kKey);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
-  EXPECT_EQ(SharingHits(), hits_before);
+  EXPECT_EQ(GetStats().entry_cnt, 0);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
   EXPECT_FALSE(IndexTracks(kKey));
 }
 
@@ -599,17 +574,19 @@ TEST_P(VectorRegistryStateMachineTest, CreateWithAbsentVector) {
 TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithDifferentValid) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
   auto first = ExpectTracked(kKey, 1.0f);
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t dedup_before = GetStats().dedup_cnt.GetTotal();
 
   WriteKey(kKey, FieldState::kValid, 5.0f);
 
   auto second = ExpectTracked(kKey, 5.0f);
-  if (RegistrationExpected()) {
-    ASSERT_NE(second, nullptr);
-    EXPECT_NE(first, second) << "changed payload must produce a new record";
-  }
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
-  EXPECT_EQ(SharingHits(), hits_before + (SharingExpected() ? 1u : 0u));
+  EXPECT_NE(first, second)
+      << "changed payload must produce a new record pointer";
+  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 1)
+      << "ExpectTracked verification of new payload adds 1 dedup hit";
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+            hits_before + (SharingExpected() ? 1u : 0u));
 }
 
 // valid -> byte-identical valid: the record must be reused (that is the whole
@@ -617,42 +594,44 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithDifferentValid) {
 TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithIdenticalValid) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
   auto first = ExpectTracked(kKey, 1.0f);
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t dedup_before = GetStats().dedup_cnt.GetTotal();
 
   WriteKey(kKey, FieldState::kValid, 1.0f);
 
   auto second = ExpectTracked(kKey, 1.0f);
-  if (RegistrationExpected()) {
-    EXPECT_EQ(first, second) << "identical payload must reuse the same record";
-  }
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
-  EXPECT_EQ(SharingHits(), hits_before + (SharingExpected() ? 1u : 0u))
+  EXPECT_EQ(first, second)
+      << "identical payload must reuse the exact same record pointer";
+  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 2)
+      << "identical payload ingestion (+1) and ExpectTracked verification (+1)";
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+            hits_before + (SharingExpected() ? 1u : 0u))
       << "re-sharing an unchanged record";
 }
 
-// valid -> invalid: the key no longer has an indexable vector, so the registry
-// must not keep serving the superseded payload.
+// valid -> invalid: the key no longer has an indexable vector.
 TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithInvalid) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
-  static_cast<void>(ExpectTracked(kKey, 1.0f));
+  ExpectTracked(kKey, 1.0f);
 
   WriteKey(kKey, FieldState::kInvalid);
 
   EXPECT_FALSE(IndexTracks(kKey));
   ExpectNotTracked(kKey);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 
 // valid -> field deleted (key still exists).
 TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithAbsent) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
-  static_cast<void>(ExpectTracked(kKey, 1.0f));
+  ExpectTracked(kKey, 1.0f);
 
   WriteKey(kKey, FieldState::kAbsent);
 
   EXPECT_FALSE(IndexTracks(kKey));
   ExpectNotTracked(kKey);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 
 // --- overwrite of a key that does not currently hold a valid vector ------
@@ -660,38 +639,40 @@ TEST_P(VectorRegistryStateMachineTest, OverwriteValidWithAbsent) {
 TEST_P(VectorRegistryStateMachineTest, OverwriteInvalidWithValid) {
   WriteKey(kKey, FieldState::kInvalid);
   ExpectNotTracked(kKey);
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
 
   WriteKey(kKey, FieldState::kValid, 3.0f);
 
-  static_cast<void>(ExpectTracked(kKey, 3.0f));
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
-  EXPECT_EQ(SharingHits(), hits_before + (SharingExpected() ? 1u : 0u));
+  ExpectTracked(kKey, 3.0f);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+            hits_before + (SharingExpected() ? 1u : 0u));
 }
 
 TEST_P(VectorRegistryStateMachineTest, OverwriteAbsentWithValid) {
   WriteKey(kKey, FieldState::kAbsent);
   ExpectNotTracked(kKey);
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
 
   WriteKey(kKey, FieldState::kValid, 3.0f);
 
-  static_cast<void>(ExpectTracked(kKey, 3.0f));
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
-  EXPECT_EQ(SharingHits(), hits_before + (SharingExpected() ? 1u : 0u));
+  ExpectTracked(kKey, 3.0f);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(),
+            hits_before + (SharingExpected() ? 1u : 0u));
 }
 
 // --- whole-key deletion --------------------------------------------------
 
 TEST_P(VectorRegistryStateMachineTest, DeleteKeyRemovesRegistryEntry) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
-  static_cast<void>(ExpectTracked(kKey, 1.0f));
+  ExpectTracked(kKey, 1.0f);
 
   DeleteKey(kKey);
 
   EXPECT_FALSE(IndexTracks(kKey));
   ExpectNotTracked(kKey);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 
 // A second key must be untouched by the first key's deletion.
@@ -699,15 +680,15 @@ TEST_P(VectorRegistryStateMachineTest, DeleteKeyLeavesOtherKeysTracked) {
   constexpr absl::string_view kOther = "prefix:2";
   WriteKey(kKey, FieldState::kValid, 1.0f);
   WriteKey(kOther, FieldState::kValid, 9.0f);
-  static_cast<void>(ExpectTracked(kKey, 1.0f));
-  static_cast<void>(ExpectTracked(kOther, 9.0f));
-  EXPECT_EQ(EntryCount(), ExpectedEntries(2));
+  ExpectTracked(kKey, 1.0f);
+  ExpectTracked(kOther, 9.0f);
+  EXPECT_EQ(GetStats().entry_cnt, 2);
 
   DeleteKey(kKey);
 
   ExpectNotTracked(kKey);
-  static_cast<void>(ExpectTracked(kOther, 9.0f));
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
+  ExpectTracked(kOther, 9.0f);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
 }
 
 // --- non-vector fields ---------------------------------------------------
@@ -720,18 +701,18 @@ TEST_P(VectorRegistryStateMachineTest, NonVectorFieldChangeLeavesVectorAlone) {
   }
   WriteKey(kKey, FieldState::kValid, 1.0f);
   auto first = ExpectTracked(kKey, 1.0f);
-  const uint64_t hits_before = SharingHits();
+  const uint64_t hits_before = GetStats().hash_sharing_hits.GetTotal();
+  const uint64_t dedup_before = GetStats().dedup_cnt.GetTotal();
 
   // Same vector, different tag.
   keyspace_[std::string(kKey)][TagIdentifier()] = "furniture";
   Notify(kKey);
 
   auto second = ExpectTracked(kKey, 1.0f);
-  if (RegistrationExpected()) {
-    EXPECT_EQ(first, second);
-  }
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
-  EXPECT_EQ(SharingHits(), hits_before);
+  EXPECT_EQ(first, second);
+  EXPECT_EQ(GetStats().dedup_cnt.GetTotal(), dedup_before + 2);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
+  EXPECT_EQ(GetStats().hash_sharing_hits.GetTotal(), hits_before);
 }
 
 // A valid vector alongside an invalid non-vector field. Whatever the
@@ -745,10 +726,10 @@ TEST_P(VectorRegistryStateMachineTest, InvalidNonVectorFieldWithValidVector) {
            {.numeric = FieldState::kInvalid, .tag = FieldState::kValid});
 
   if (IndexTracks(kKey)) {
-    static_cast<void>(ExpectTracked(kKey, 1.0f));
+    ExpectTracked(kKey, 1.0f);
   } else {
     ExpectNotTracked(kKey);
-    EXPECT_EQ(EntryCount(), ExpectedEntries(0));
+    EXPECT_EQ(GetStats().entry_cnt, 1);
   }
 }
 
@@ -758,15 +739,15 @@ TEST_P(VectorRegistryStateMachineTest, InvalidNonVectorFieldWithValidVector) {
 // hand the engine back plain values.
 TEST_P(VectorRegistryStateMachineTest, DroppingIndexUntracksAndDetaches) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
-  static_cast<void>(ExpectTracked(kKey, 1.0f));
-  EXPECT_EQ(EntryCount(), ExpectedEntries(1));
+  ExpectTracked(kKey, 1.0f);
+  EXPECT_EQ(GetStats().entry_cnt, 1);
 
   index_schema_.reset();
   vector_index_.reset();
   numeric_index_.reset();
   tag_index_.reset();
 
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
   EXPECT_FALSE(HasSharedRef(kKey))
       << "engine still holds a reference into freed registry memory";
   // The value must survive the detach, as a plain (unshared) value.
@@ -776,12 +757,11 @@ TEST_P(VectorRegistryStateMachineTest, DroppingIndexUntracksAndDetaches) {
 
 // --- key replaced by a value of the wrong type ---------------------------
 
-// ProcessKeyspaceNotification bails out before TrackRecord when the key is not
-// of the schema's data type, so a key whose type changes under an existing
-// registry entry never reaches the untrack path.
+// ProcessKeyspaceNotification untracks the key when its type changes under an
+// existing registry entry.
 TEST_P(VectorRegistryStateMachineTest, KeyReplacedByWrongTypeIsUntracked) {
   WriteKey(kKey, FieldState::kValid, 1.0f);
-  static_cast<void>(ExpectTracked(kKey, 1.0f));
+  ExpectTracked(kKey, 1.0f);
 
   // The key still exists but now holds a value of another type -- e.g. after
   // RENAME/RESTORE REPLACE/COPY REPLACE over an existing hash, which replaces
@@ -794,7 +774,7 @@ TEST_P(VectorRegistryStateMachineTest, KeyReplacedByWrongTypeIsUntracked) {
   Notify(kKey);
 
   ExpectNotTracked(kKey);
-  EXPECT_EQ(EntryCount(), ExpectedEntries(0));
+  EXPECT_EQ(GetStats().entry_cnt, 0);
 }
 
 std::vector<StateMachineTestCase> AllCases() {

@@ -387,7 +387,7 @@ TEST_F(ValkeySearchTest, FullSyncFork) {
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   EXPECT_FALSE(reader_thread_pool->IsSuspended());
-  absl::SleepFor(absl::Seconds(5));
+  absl::SleepFor(absl::Milliseconds(1100));
   ValkeyModuleEvent eid;
   ValkeyModuleCtx fake_ctx;
   ValkeySearch::Instance().OnServerCronCallback(&fake_ctx, eid, 0, nullptr);

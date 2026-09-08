@@ -14,7 +14,12 @@
 # The script is install-only: it does not build the module. After it completes,
 # `./build.sh` is expected to succeed. It is idempotent and safe to re-run.
 #
-# NOTE: Only Amazon Linux 2023 is supported today. 
+# SCOPE: this script currently automates dependency installation for Amazon
+# Linux 2023 only. That is a limitation of this script, not of valkey-search --
+# the module builds on a range of platforms (see the build instructions in
+# README.md). On other distributions, install the equivalent packages listed in
+# install_amazon_linux() below and run ./build.sh directly, or add a case to the
+# distro dispatch at the bottom of this file.
 
 # Minimum GCC major version required to build valkey-search.
 GCC_MIN_VERSION=12
@@ -76,8 +81,8 @@ function ensure_gcc_amazon_linux() {
     /usr/local/bin/g++ --version
 }
 
-# Detect the distro and dispatch. Extend with additional cases (e.g. ubuntu)
-# as more build environments are supported.
+# Detect the distro and dispatch. Add cases here (e.g. an apt-based branch for
+# ubuntu) to automate installation on additional build environments.
 if [ -f /etc/os-release ]; then
     . /etc/os-release
 else
@@ -88,17 +93,18 @@ fi
 case "${ID}" in
     amzn)
         # ID=amzn covers both Amazon Linux 2 (VERSION_ID=2) and AL2023
-        # (VERSION_ID=2023). Only AL2023 is supported; reject anything else
-        # before we start installing AL2023-only packages (e.g. gcc14).
+        # (VERSION_ID=2023). This script only automates AL2023; reject anything
+        # else before we start installing AL2023-only packages (e.g. gcc14).
         if [[ "${VERSION_ID}" != "2023" ]]; then
-            LOG_ERROR "Unsupported Amazon Linux version '${VERSION_ID}'. Only Amazon Linux 2023 is currently supported."
+            LOG_ERROR "This script only automates dependency installation for Amazon Linux 2023 (found version '${VERSION_ID}')."
             exit 1
         fi
         install_amazon_linux
         ;;
     *)
-        LOG_ERROR "Unsupported distro '${ID}'. Only Amazon Linux 2023 (amzn) is currently supported."
-        LOG_ERROR "Add a case for '${ID}' in ci/install_deps.sh to support it."
+        LOG_ERROR "This script only automates dependency installation for Amazon Linux 2023; it has no case for distro '${ID}'."
+        LOG_ERROR "valkey-search itself builds on other platforms: install the equivalent packages manually and run ./build.sh,"
+        LOG_ERROR "or add a case for '${ID}' to the dispatch in ci/install_deps.sh."
         exit 1
         ;;
 esac

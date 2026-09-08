@@ -1634,12 +1634,19 @@ class HierarchicalNSW
     std::unique_lock<std::mutex> lock_el(link_list_locks_[cur_c]);
     int curlevel = getRandomLevel(mult_);
     if (level > 0) curlevel = level;
-    if (curlevel <= maxlevelcopy) {
+    // If the current enterpoint_node_ is marked deleted (a tombstone)
+    // and the new element reaches the top level (curlevel == maxlevelcopy),
+    // keep templock held so enterpoint_node_ can be self-healed and updated to
+    // the new alive element upon exit.
+    bool should_heal_root =
+        ((signed)enterpoint_node_ != -1 && curlevel == maxlevelcopy &&
+         isMarkedDeleted(enterpoint_node_));
+    if (curlevel < maxlevelcopy ||
+        (curlevel == maxlevelcopy && !should_heal_root)) {
       templock.unlock();
     }
     element_levels_[cur_c] = curlevel;
     tableint currObj = enterpoint_node_;
-    tableint enterpoint_copy = enterpoint_node_;
 
     memset((*data_level0_memory_)[cur_c] + offsetLevel0_, 0,
            size_data_per_element_);
@@ -1688,7 +1695,6 @@ class HierarchicalNSW
         }
       }
 
-      bool epDeleted = isMarkedDeleted(enterpoint_copy);
       for (int level = std::min(curlevel, maxlevelcopy); level >= 0; level--) {
         if (level > maxlevelcopy || level < 0)  // possible?
           throw std::runtime_error("Level error");
@@ -1697,11 +1703,24 @@ class HierarchicalNSW
                             std::vector<std::pair<dist_t, tableint>>,
                             CompareByFirst>
             top_candidates = searchBaseLayer(currObj, data_point, level);
-        if (epDeleted) {
+        // If all reachable candidates in this layer are tombstones,
+        // searchBaseLayer() returns an empty queue. In this case, provide
+        // fallback neighbors so mutuallyConnectNewElement() does not fail:
+        // 1) Fall back to currObj, geometrically the closest waypoint reached
+        //    during greedy descent.
+        // 2) If the global enterpoint_node_ is alive and distinct, also connect
+        //    to it to link into the alive subgraph.
+        if (top_candidates.empty()) {
           top_candidates.emplace(
-              EvaluateDistance(data_point, GetDataByInternalId(enterpoint_copy),
-                               true),
-              enterpoint_copy);
+              EvaluateDistance(data_point, GetDataByInternalId(currObj),
+                               isMarkedDeleted(currObj)),
+              currObj);
+          tableint ep = enterpoint_node_;
+          if ((signed)ep != -1 && ep != currObj && !isMarkedDeleted(ep)) {
+            top_candidates.emplace(
+                EvaluateDistance(data_point, GetDataByInternalId(ep), false),
+                ep);
+          }
           if (top_candidates.size() > ef_construction_) top_candidates.pop();
         }
         currObj = mutuallyConnectNewElement(data_point, cur_c, top_candidates,
@@ -1713,8 +1732,9 @@ class HierarchicalNSW
       maxlevel_ = curlevel;
     }
 
-    // Releasing lock for the maximum level
-    if (curlevel > maxlevelcopy) {
+    // Update enterpoint_node_ if level increased or if self-healing a tombstone
+    // root.
+    if (curlevel > maxlevelcopy || should_heal_root) {
       enterpoint_node_ = cur_c;
       maxlevel_ = curlevel;
     }

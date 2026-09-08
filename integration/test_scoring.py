@@ -640,4 +640,5 @@ class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
         # Same window, switch on: still revalidated and kept, now scored 0.
         scores, rescored = score_across_mutation("hello hello")
         assert rescored >= 1, "recompute path never ran"
+        assert "doc:1" in scores, scores
         assert scores == pytest.approx({k: 0.0 for k in scores}), scores

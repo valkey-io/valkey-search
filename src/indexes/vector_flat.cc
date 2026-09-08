@@ -273,8 +273,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
   // The actual match count is unknown ahead of time, so use a modest initial
   // capacity that covers typical result sets without over-allocating.
   neighbors.reserve(128);
-  auto status =
-      this->ForEachTrackedKey([&](const InternedStringPtr &key) -> absl::Status {
+  auto status = this->ForEachTrackedKey(
+      [&](const InternedStringPtr &key) -> absl::Status {
         if (cancellation_token->IsCancelled()) {
           return absl::CancelledError("SearchRange cancelled");
         }

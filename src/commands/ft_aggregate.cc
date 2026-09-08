@@ -94,7 +94,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters& params) {
         continue;
       }
       if (std::find_if(loads_to_process.begin(), loads_to_process.end(),
-                       [&name](const LoadField &f) {
+                       [&name](const LoadField& f) {
                          return f.identifier == name;
                        }) == loads_to_process.end()) {
         loads_to_process.push_back(
@@ -102,9 +102,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters& params) {
       }
     }
 
-    for (const auto &load : loads_to_process) {
-      const std::string &identifier = load.identifier;
-      const std::string &alias = load.alias;  // output name (== identifier
+    for (const auto& load : loads_to_process) {
+      const std::string& identifier = load.identifier;
+      const std::string& alias = load.alias;  // output name (== identifier
                                               // when there is no AS clause)
       const bool renamed = load.renamed;
       // Apply a LOAD ... AS rename to an attribute already present in the
@@ -357,7 +357,7 @@ absl::Status CreateRecordsFromNeighbors(
     size_t key_index, size_t scores_index, RecordSet& records) {
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
-  for (auto &n : neighbors) {
+  for (auto& n : neighbors) {
     // One slot per record column. Not record_indexes_by_alias_.size(): that
     // map holds a name per resolvable alias, which is neither an over- nor an
     // under-count of the columns (a rename adds a key without adding a column;
@@ -403,7 +403,7 @@ absl::Status CreateRecordsFromNeighbors(
       //    corruption in #1251 went undetected into an out-of-bounds write.
       CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
       for (size_t i = 0; i < rec->fields_.size(); ++i) {
-        const auto &info = parameters.record_info_by_index_[i];
+        const auto& info = parameters.record_info_by_index_[i];
         auto itr = n.attribute_contents->find(info.identifier_);
         if (itr == n.attribute_contents->end()) {
           continue;
@@ -428,7 +428,7 @@ absl::Status CreateRecordsFromNeighbors(
       // 2/ Anything fetched that no column sources is passed through as an
       //    extra field. This is how LOAD * surfaces the contents of a key,
       //    since it builds no columns of its own.
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
+      for (auto& [name, records_map_value] : *n.attribute_contents) {
         if (parameters.record_identifiers_.contains(name)) {
           continue;
         }

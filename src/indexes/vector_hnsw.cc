@@ -381,7 +381,8 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
       [this, &filter, max_candidates, &cancellation_token](
           absl::string_view query_view, float reciprocal_magnitude)
           ABSL_NO_THREAD_SAFETY_ANALYSIS
-      -> absl::StatusOr<std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
+      -> absl::StatusOr<
+          std::priority_queue<std::pair<float, hnswlib::labeltype>>> {
     try {
       CancelCondition cancel_condition(cancellation_token);
       QueryVector embedding(

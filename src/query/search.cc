@@ -1454,8 +1454,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     // the other dedup user (tag) adds 0 and is scored by the extra step.
     absl::flat_hash_map<const char *, size_t> seen_at;
     if (needs_dedup) {
-      seen_at.reserve(
-          std::min(qualified_entries, kInitialNeighborReserveSize));
+      seen_at.reserve(std::min(qualified_entries, kInitialNeighborReserveSize));
     }
     while (!entries_fetchers.empty()) {
       auto fetcher = std::move(entries_fetchers.front());

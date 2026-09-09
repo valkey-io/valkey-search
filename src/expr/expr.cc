@@ -28,6 +28,17 @@ using ExprPtr = std::unique_ptr<Expression>;
 constexpr absl::string_view kInvalidOrMissingExpression{
     "Invalid or missing expression"};
 
+// 1.3.0 fix shared by every expression site: a reference to a field the key
+// does not have propagates as missing, rather than the operator or function
+// substituting a reason of its own -- which read as "evaluated to nothing" and
+// so kept the record and the alias. Returns true when the new (propagating)
+// behavior should be taken. Single counter for all the sites below.
+static bool MissingPropagates() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "expr_missing_propagates", [] { return true; },
+      [] { return false; });
+}
+
 struct Constant : Expression {
   Constant(std::string constant) : constant_(std::move(constant)) {}
   Constant(double constant) : constant_(constant) {}
@@ -74,12 +85,15 @@ struct AttributeValue : Expression {
 struct Not : Expression {
   Not(ExprPtr &&p) : expr_(std::move(p)) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
-    auto Primary = expr_->Evaluate(ctx, record).AsBool();
-    if (Primary) {
-      return Value(!*Primary);
-    } else {
-      return Value{};
+    auto value = expr_->Evaluate(ctx, record);
+    // AsBool reads a nil as false, so without this `!(@absent)` answers true
+    // -- a wrong value rather than merely an unpropagated one.
+    if (value.IsMissing() && MissingPropagates()) {
+      return Value::Missing();
     }
+    // AsBool has a result for every other alternative, so the optional is
+    // always engaged; the dereference is safe.
+    return Value(!*value.AsBool());
   }
   void Dump(std::ostream &os) const override {
     os << '!';
@@ -118,12 +132,22 @@ struct FunctionCall : Expression {
   absl::InlinedVector<ExprPtr, 4> params_;
 };
 
-template <Value (*func1)(const Value &o)>
+// Redisearch drops a record whose expression reached for a field the key does
+// not have, so a missing argument short-circuits the whole call. exists() is
+// the exception: answering that question *is* its job, so it asks for the
+// missing value with kMissingIsAnArgument.
+constexpr bool kMissingIsAnArgument = true;
+
+template <Value (*func1)(const Value &o), bool pass_missing = false>
 Value MonadicFunctionProxy(
     Expression::EvalContext &ctx, const Expression::Record &record,
     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 1);
-  return (*func1)(params[0]->Evaluate(ctx, record));
+  auto value = params[0]->Evaluate(ctx, record);
+  if (!pass_missing && value.IsMissing() && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func1)(value);
 };
 
 template <Value (*func2)(const Value &l, const Value &r)>
@@ -131,8 +155,12 @@ Value DyadicFunctionProxy(Expression::EvalContext &ctx,
                           const Expression::Record &record,
                           const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 2);
-  return (*func2)(params[0]->Evaluate(ctx, record),
-                  params[1]->Evaluate(ctx, record));
+  auto l = params[0]->Evaluate(ctx, record);
+  auto r = params[1]->Evaluate(ctx, record);
+  if ((l.IsMissing() || r.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func2)(l, r);
 };
 
 template <Value (*func3)(const Value &l, const Value &m, const Value &r)>
@@ -140,9 +168,14 @@ Value TriadicFunctionProxy(
     Expression::EvalContext &ctx, const Expression::Record &record,
     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 3);
-  return (*func3)(params[0]->Evaluate(ctx, record),
-                  params[1]->Evaluate(ctx, record),
-                  params[2]->Evaluate(ctx, record));
+  auto l = params[0]->Evaluate(ctx, record);
+  auto m = params[1]->Evaluate(ctx, record);
+  auto r = params[2]->Evaluate(ctx, record);
+  if ((l.IsMissing() || m.IsMissing() || r.IsMissing()) &&
+      MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func3)(l, m, r);
 };
 
 using Func = Value (*)(Expression::EvalContext &ctx,
@@ -169,7 +202,11 @@ Value ProxyTimefmt(Expression::EvalContext &ctx,
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
   }
-  return FuncTimefmt(params[0]->Evaluate(ctx, record), fmt);
+  auto value = params[0]->Evaluate(ctx, record);
+  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return FuncTimefmt(value, fmt);
 }
 
 Value ProxyParsetime(Expression::EvalContext &ctx,
@@ -180,7 +217,11 @@ Value ProxyParsetime(Expression::EvalContext &ctx,
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
   }
-  return FuncParsetime(params[0]->Evaluate(ctx, record), fmt);
+  auto value = params[0]->Evaluate(ctx, record);
+  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return FuncParsetime(value, fmt);
 }
 
 struct FunctionTableEntry {
@@ -190,7 +231,7 @@ struct FunctionTableEntry {
 };
 
 static std::map<std::string, FunctionTableEntry> function_table{
-    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists>}},
+    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>}},
 
     {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>}},
     {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>}},
@@ -262,6 +303,15 @@ struct Dyadic : Expression {
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto lvalue = lexpr_->Evaluate(ctx, record);
     auto rvalue = rexpr_->Evaluate(ctx, record);
+    // Redisearch drops a record whose APPLY expression reached for a field the
+    // key does not have, however deep in the expression that reference sat.
+    // Without this the operator manufactures its own reason ("Add requires
+    // numeric operands"), which reads as "evaluated to nothing" and keeps the
+    // record. Safe only because a field named by a stage is now loaded
+    // implicitly, so an unpopulated slot means the key really lacks it.
+    if ((lvalue.IsMissing() || rvalue.IsMissing()) && MissingPropagates()) {
+      return Value::Missing();
+    }
     return (*func_)(lvalue, rvalue);
   }
   void Dump(std::ostream &os) const override {

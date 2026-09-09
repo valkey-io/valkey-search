@@ -27,7 +27,7 @@ for build_dir in .build-release .build-debug \
                  .build-release-asan .build-debug-asan \
                  .build-release-tsan .build-debug-tsan; do
     candidate="${ROOT_DIR}/${build_dir}/integration/env/bin/python3"
-    if [ -x "${candidate}" ]; then
+    if [ -x "${candidate}" ] && "${candidate}" -m pytest --version >/dev/null 2>&1; then
         PYTHON="${candidate}"
         break
     fi

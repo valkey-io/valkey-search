@@ -1,4 +1,5 @@
 import pytest, traceback, valkey, time, struct
+import random
 import sys, os
 import pickle
 import gzip
@@ -13,10 +14,20 @@ TEST_MARKER = "*" * 100
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
-SYSTEM_R_ADDRESS = ('localhost', 6380)
+# Every generator used to run a container literally named "Generate-search"
+# on a fixed port 6380, so two checkouts generating at once on one machine
+# shared both: the second `docker run` replaced the first one's server and the
+# first run collapsed mid-generation. 6380 also belongs to
+# testing/integration/vector_search_integration_test.py, so the clash was not
+# only between generators.
+#
+# The name now carries a per-run suffix, and the port is left to docker --
+# publishing to port 0 has the kernel hand out one that is free, which a
+# randomly chosen number cannot promise.
+CONTAINER_PREFIX = "Generate-search"
 class ClientRSystem(ClientSystem):
-    def __init__(self):
-        super().__init__(SYSTEM_R_ADDRESS)
+    def __init__(self, address):
+        super().__init__(address)
         try:
             self.client.execute_command("FT.CONFIG SET TIMEOUT 0")
         except:
@@ -45,14 +56,26 @@ class BaseCompatibilityTest:
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
+        cls.container_name = f"{CONTAINER_PREFIX}-{random.randint(1000, 9999)}"
+        if os.system(f"docker run --rm -d --name {cls.container_name} "
+                     f"-p 0:6379 redis/redis-stack-server") != 0:
             print("Failed to start Redis Stack server, please check your Docker setup.")
             sys.exit(1)
-        print("Started Generate-search server")
+        port = cls._published_port()
+        if port is None:
+            os.system(f"docker stop {cls.container_name}")
+            print(f"Could not read the published port of {cls.container_name}.")
+            sys.exit(1)
+        cls.address = ("localhost", port)
+        print(f"Started {cls.container_name} server on port {port}")
+        # teardown_class has no route to the pytest session, and it must not
+        # write an answer file from a run that did not finish. Set it up front
+        # so that a run which never reaches a test is treated as incomplete.
+        cls.session = None
         cls.answers = []
         # add reply count to check redis non-empty answer
         cls.replied_count = 0
-        cls.client = ClientRSystem()
+        cls.client = ClientRSystem(cls.address)
         while True:
             try:
                 cls.client.execute_command("PING")
@@ -63,9 +86,71 @@ class BaseCompatibilityTest:
         print("Done initializing")
 
     @classmethod
+    def _published_port(cls):
+        """The host port docker chose for the container's 6379.
+
+        `docker port` prints one line per binding -- the IPv4 and IPv6 forms
+        name the same port. The mapping exists as soon as the container is
+        created, but the daemon can take a moment to report it, so this
+        retries rather than losing a run to that race.
+        """
+        for _ in range(40):
+            out = os.popen(f"docker port {cls.container_name} 6379").read().strip()
+            if out:
+                return int(out.splitlines()[0].rsplit(":", 1)[1])
+            time.sleep(.25)
+        return None
+
+    @pytest.fixture(autouse=True)
+    def _remember_session(self, request):
+        type(self).session = request.session
+
+    @classmethod
     def teardown_class(cls):
-        print("Stopping Generate-search server")
-        os.system("docker stop Generate-search")
+        print(f"Stopping {cls.container_name} server")
+        os.system(f"docker stop {cls.container_name}")
+
+        # A generator that died part way collected only some of its answers.
+        # Writing them replaces a complete answer file with a short one that
+        # still satisfies the sources-hash check, so the loss stays invisible
+        # until someone counts the answers -- a flaky docker start once cut
+        # text-search from 42612 answers to 11000 this way. Leave the file
+        # alone; pytest's non-zero exit stops regenerate.sh.
+        if cls.session is None:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: no test reported in, "
+                  f"so the run never started properly.")
+            return
+        if cls.session.testsfailed:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: "
+                  f"{cls.session.testsfailed} test(s) failed, so the "
+                  f"{len(cls.answers)} answers collected are incomplete.")
+            return
+
+        # A run that was narrowed to a subset is short for the same reason a
+        # failed one is, and just as quietly: `pytest generate_array.py -k
+        # test_filter_missing_field` took that answer file from 490 answers to
+        # 8. Only a whole, unfiltered, unaborted run may write.
+        option = cls.session.config.option
+        narrowed = [
+            flag
+            for flag, value in (
+                ("-k", getattr(option, "keyword", "")),
+                ("-m", getattr(option, "markexpr", "")),
+                ("--deselect", getattr(option, "deselect", None)),
+                ("--last-failed", getattr(option, "last_failed", False)),
+            )
+            if value
+        ]
+        if any("::" in arg for arg in cls.session.config.args):
+            narrowed.append("a test id")
+        if cls.session.shouldstop:
+            narrowed.append("an early exit")
+        if narrowed:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: {', '.join(narrowed)} "
+                  f"narrowed the run, so the {len(cls.answers)} answers "
+                  f"collected are incomplete.")
+            return
+
         print("Dumping ", len(cls.answers), " answers")
         payload = {
             "sources_hash": compute_sources_hash(),

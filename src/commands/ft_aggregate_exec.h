@@ -19,7 +19,9 @@ namespace aggregate {
 
 class Record : public expr::Expression::Record {
  public:
-  Record(size_t fields) : fields_(fields) {}
+  // Slots start out missing: only the attributes the key actually has get
+  // assigned, and the reply leaves the rest out.
+  Record(size_t fields) : fields_(fields, expr::Value::Missing()) {}
   std::vector<expr::Value> fields_;
   std::vector<std::pair<std::string, expr::Value>> extra_fields_;
   bool operator==(const Record& r) const {

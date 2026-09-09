@@ -967,7 +967,12 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!fmtstr) {
     return Value(Value::Nil("timefmt: format has no string representation"));
   }
-  if (fmtstr->empty()) {
+  // A format whose first byte is NUL is empty as far as strftime is concerned:
+  // it takes a NUL-terminated C string, so the value is truncated to nothing.
+  // A raw vector blob reaches here that way. Treat it as the empty format
+  // rather than letting it fall through to the loop below, which cannot tell
+  // "produced no output" from "buffer too small" and would grow forever.
+  if (fmtstr->empty() || (*fmtstr)[0] == 0) {
     // 1.2.1 fix: empty format → Nil (matches Redisearch).
     // Pre-1.2.1: returned an empty string as a fast-path.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
@@ -982,11 +987,20 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
 
+  // strftime() returns 0 both when the buffer is too small and when the format
+  // legitimately produces no output, and the two are indistinguishable. The
+  // guard above rules out the reachable case, but any other zero-output format
+  // would still send an unbounded doubling loop into an OOM kill. Cap the
+  // growth and report no output instead.
+  static constexpr size_t kMaxTimefmtResult = 1 << 20;
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
   while ((result_bytes = strftime(result.data(), result.size(), fmt_z.c_str(),
                                   &tm)) == 0) {
+    if (result.size() >= kMaxTimefmtResult) {
+      return Value(Value::Nil("timefmt: format produced no output"));
+    }
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);

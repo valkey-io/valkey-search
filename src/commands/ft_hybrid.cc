@@ -180,6 +180,56 @@ void RestoreAliases(std::vector<indexes::Neighbor> &neighbors,
   }
 }
 
+// Copies the aggregate's LOAD-derived return attributes onto the parameters
+// that drive the fused content fetch. They are the same list the FT.AGGREGATE
+// search would have carried; a copy rather than a move because the aggregate
+// keeps its own for the reply. ReturnAttribute holds UniqueValkeyStrings, so
+// each has to be rebuilt rather than assigned.
+// Marks every fused neighbor as content-resolved.
+//
+// A neighbor carries `attribute_contents` once its content has been resolved,
+// and both content passes -- the fused resolver's and the aggregate
+// pipeline's -- skip a neighbor that already has it. A neighbor that no arm
+// attached a score alias to, and that the fetch skipped or found nothing for,
+// has none at all; leaving it unset would send the aggregate pass off to the
+// database for it after this command already resolved content once.
+void MarkContentResolved(std::vector<indexes::Neighbor> &neighbors) {
+  for (auto &n : neighbors) {
+    if (!n.attribute_contents.has_value()) {
+      n.attribute_contents.emplace();
+    }
+  }
+}
+
+// Whether the resolved LOAD clause asks for any database field at all. `LOAD *`
+// asks for all of them and leaves the attribute list empty by convention, so it
+// is checked separately.
+bool WantsNoDatabaseContent(const aggregate::AggregateParameters &agg) {
+  return !agg.loadall_ && agg.return_attributes.empty();
+}
+
+std::vector<query::ReturnAttribute> CopyReturnAttributes(
+    const std::vector<query::ReturnAttribute> &src) {
+  std::vector<query::ReturnAttribute> out;
+  out.reserve(src.size());
+  for (const auto &a : src) {
+    out.push_back(query::ReturnAttribute{
+        .identifier = a.identifier
+                          ? vmsdk::MakeUniqueValkeyString(
+                                vmsdk::ToStringView(a.identifier.get()))
+                          : vmsdk::UniqueValkeyString(),
+        .attribute_alias = a.attribute_alias ? vmsdk::MakeUniqueValkeyString(
+                                                   vmsdk::ToStringView(
+                                                       a.attribute_alias.get()))
+                                             : vmsdk::UniqueValkeyString(),
+        .alias = a.alias ? vmsdk::MakeUniqueValkeyString(
+                               vmsdk::ToStringView(a.alias.get()))
+                         : vmsdk::UniqueValkeyString(),
+    });
+  }
+  return out;
+}
+
 // SearchParameters used to drive the SINGLE, atomic, post-fusion content
 // resolution for a local FT.HYBRID. ResolveContent runs the mutation/contention
 // check and fetches the database fields for the whole fused neighbor list at
@@ -191,7 +241,10 @@ class FusedResolver : public query::SearchParameters {
  public:
   std::unique_ptr<MultiSearchParameters> envelope;
   absl::flat_hash_map<std::string, RecordsMap> saved_aliases;
-  // FT.HYBRID always runs the contention check on the fused result.
+  // FT.HYBRID always runs the contention check on the fused result, even when
+  // the LOAD clause asks for no database field: the check is what makes the
+  // multi-arm result atomic, and that is worth having whatever the reply
+  // carries. ResolveContent skips only the fetch when no_content is set.
   query::ContentProcessing GetContentProcessing() const override {
     return query::kContentionCheckRequired;
   }
@@ -207,6 +260,7 @@ class FusedResolver : public query::SearchParameters {
  private:
   void DoComplete(std::unique_ptr<query::SearchParameters> /*self*/) {
     RestoreAliases(search_result.neighbors, saved_aliases);
+    MarkContentResolved(search_result.neighbors);
     // Preserve whatever status ResolveContent produced (e.g. an index-dropped
     // error). Forcing OkStatus here would turn a content-resolution failure
     // into a silent empty-but-successful reply.
@@ -235,6 +289,11 @@ void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   resolver->db_num = params->db_num;
   resolver->cancellation_token = params->cancellation_token;
   resolver->enable_partial_results = params->enable_partial_results;
+  if (params->agg != nullptr) {
+    resolver->return_attributes =
+        CopyReturnAttributes(params->agg->return_attributes);
+    resolver->no_content = WantsNoDatabaseContent(*params->agg);
+  }
   resolver->saved_aliases = SaveAndClearAliases(fused);
   resolver->search_result.total_count = fused.size();
   resolver->search_result.neighbors = std::move(fused);
@@ -257,10 +316,18 @@ void ResolveFusedContentInline(ValkeyModuleCtx *ctx,
   FusedResolver resolver;
   resolver.index_schema = params.index_schema;
   resolver.db_num = params.db_num;
-  query::ProcessNeighborsForReply(ctx,
-                                  params.index_schema->GetAttributeDataType(),
-                                  fused, resolver, std::nullopt);
+  if (params.agg != nullptr) {
+    resolver.return_attributes =
+        CopyReturnAttributes(params.agg->return_attributes);
+    resolver.no_content = WantsNoDatabaseContent(*params.agg);
+  }
+  if (!resolver.no_content) {
+    query::ProcessNeighborsForReply(ctx,
+                                    params.index_schema->GetAttributeDataType(),
+                                    fused, resolver, std::nullopt);
+  }
   RestoreAliases(fused, saved);
+  MarkContentResolved(fused);
 }
 
 }  // namespace query

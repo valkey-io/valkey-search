@@ -2,28 +2,35 @@ To regenerate every compatibility pickle answer file, from the repo root run:
 
     ./integration/compatibility/regenerate.sh
 
-Or, to regenerate just one, cd to this directory and run pytest directly:
+It works from the GENERATORS list in __init__.py, so it stays correct as
+generators come and go. Today that list is:
 
-    pytest generate.py         # produces aggregate-answers.pickle.gz
-    pytest generate_text.py    # produces text-search-answers.pickle.gz
-    pytest generate_hybrid.py  # produces hybrid-answers.pickle.gz
+    generate.py         -> aggregate-answers.pickle.gz
+    generate_text.py    -> text-search-answers.pickle.gz
+    generate_array.py   -> array-input-answers.pickle.gz
+    generate_hybrid.py  -> hybrid-answers.pickle.gz
 
-All forms require Docker. Each generator spins up a reference engine on port
-6380 to capture answers; the docker handling is sometimes flaky and may need to
-be killed manually between runs.
+Or, to regenerate just one, cd to this directory and run pytest on it -- but
+note that a run narrowed with -k, or one that fails part way, deliberately
+declines to write its answer file, because a partial run would replace a
+complete file with a short one.
 
-The reference image is per-generator (BaseCompatibilityTest.DOCKER_IMAGE):
-generate.py and generate_text.py use redis/redis-stack-server, while
-generate_hybrid.py uses redis:8, because FT.HYBRID does not exist in the
-redis-stack image's RediSearch 2.x.
+Both forms require Docker. The generators spin up a reference engine to capture
+answers, in a container named Generate-search-NNNN on a port docker assigns, so
+concurrent runs on one machine do not collide. A generator that fails part way
+leaves its answer file untouched rather than replacing it with a short one.
+
+The image is per-generator (BaseCompatibilityTest.DOCKER_IMAGE). Most use
+redis/redis-stack-server; generate_hybrid.py overrides it to redis:8, because
+FT.HYBRID does not exist in the redis-stack image's RediSearch 2.x.
 
 Each pickle stores a SHA256 of every .py file in this directory. The
 compatibility integration test (integration/compatibility_test.py) verifies
 that hash on load and fails if it does not match the current sources -- this
-forces a regeneration whenever generate.py, generate_text.py,
-generate_hybrid.py, data_sets.py, text_query_builder.py, or any other source
-here is edited. Because the hash covers the whole directory, editing any one of
-them invalidates *all* the pickles, so regenerate.sh regenerates all of them.
+forces a regeneration whenever any source here is edited -- a generator,
+data_sets.py, text_query_builder.py, or __init__.py itself. Because the hash
+covers the whole directory, editing any one of them invalidates *all* the
+pickles, so regenerate.sh regenerates all of them.
 
 Not every generated command is compared. A generator can record an answer as
 `excluded` (run against Valkey as a no-crash check only, nothing compared) or
@@ -32,9 +39,14 @@ An `xfail` answer that starts matching prints a loud XPASS banner, which is the
 signal to drop the marker. Every one of them is listed, with its reason, in
 unsupported_tests.md.
 
+generate_expr.py and expr-answers.pickle.gz are not in GENERATORS and so are
+neither regenerated nor verified. The pickle also predates the hash wrapper
+(it is a bare list of answers rather than a {sources_hash, answers} dict), so
+nothing reads it today. Either register it or delete both.
+
 To add a new generator: create generate_xxx.py (subclass BaseCompatibilityTest
-with its own ANSWER_FILE_NAME, and DOCKER_IMAGE / CONTAINER_NAME if it needs a
-different reference engine) and add an entry to the GENERATORS list in
+with its own ANSWER_FILE_NAME, and DOCKER_IMAGE if it needs a different
+reference engine) and add an entry to the GENERATORS list in
 __init__.py. regenerate.sh and compatibility_test.py both read from that list.
 
 To bypass the hash check (e.g. when generating a small pickle locally for

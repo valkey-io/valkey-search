@@ -438,6 +438,147 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             )
 
 
+class TestFtHybridLoad(ValkeySearchTestCaseDebugMode):
+    """The LOAD clause. FT.HYBRID routes it through the same resolution
+    FT.AGGREGATE uses, so the clause names the columns the reply carries, `AS`
+    renames them, and a rename is visible to the stages after it. Pinned
+    against Redis by integration/compatibility/generate_hybrid.py.
+
+    `LOAD ... AS` is gated on search.emulate-release >= 1.3.0 (see
+    COMPATIBILITY.md), which is why this runs under debug-mode: the ceiling has
+    to be lifted to the release that carries the fix."""
+
+    INDEX = "idx"
+    Q = _vec(1.0, 0.0, 0.0, 0.0)
+    LOAD_AS_RELEASE = "1.3.0"
+
+    def client_at_load_as_release(self) -> Valkey:
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", self.LOAD_AS_RELEASE)
+        return client
+
+    def setup_index(self, client: Valkey) -> None:
+        client.execute_command(
+            "FT.CREATE", self.INDEX,
+            "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA",
+            "title", "TEXT", "NOSTEM",
+            "color", "TAG",
+            "price", "NUMERIC",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+        )
+        for i in range(5):
+            client.hset(
+                f"doc:{i}",
+                mapping={
+                    "title": "hello world",
+                    "color": ["red", "blue"][i % 2],
+                    "price": i * 10,
+                    "vec": _vec(1.0 + i, 0.0, 0.0, 0.0),
+                },
+            )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 5,
+            timeout=10)
+
+    def _rows(self, client, *extra):
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "ts",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+            "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "hs",
+            *extra,
+            "LIMIT", "0", "10",
+            "PARAMS", "2", "q", self.Q,
+        )
+        return [
+            {bytes(rec[i]): rec[i + 1] for i in range(0, len(rec), 2)}
+            for rec in result[1:]
+        ]
+
+    def test_load_names_the_columns_returned(self):
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for load, expected in [
+            (["LOAD", "1", "@price"], {b"price"}),
+            (["LOAD", "2", "@price", "@color"], {b"price", b"color"}),
+            (["LOAD", "1", "@__key"], {b"__key"}),
+        ]:
+            for row in self._rows(client, *load):
+                # The score aliases ride along with whatever was loaded.
+                assert set(row) - {b"hs", b"ts"} == expected, \
+                    f"{load} returned {sorted(row)}"
+
+    def test_load_star_returns_every_field(self):
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for row in self._rows(client, "LOAD", "*"):
+            assert {b"title", b"color", b"price", b"vec"} <= set(row), sorted(row)
+
+    def test_no_load_returns_key_and_scores_only(self):
+        """With no LOAD clause, the reply is the document key and the score
+        aliases -- no database field is fetched at all."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for row in self._rows(client):
+            assert set(row) - {b"hs", b"ts"} == {b"__key"}, sorted(row)
+
+    def test_load_as_renames_an_existing_field(self):
+        client = self.client_at_load_as_release()
+        self.setup_index(client)
+        rows = self._rows(client, "LOAD", "3", "@price", "AS", "cost")
+        assert rows
+        for row in rows:
+            assert b"cost" in row, sorted(row)
+            assert b"price" not in row, "the original name must not also appear"
+        # The renamed column still carries the field's values.
+        assert {int(r[b"cost"]) for r in rows} == {0, 10, 20, 30, 40}
+
+    def test_load_as_renames_onto_another_fields_name(self):
+        """An alias that collides with a different indexed field resolves to
+        the renamed column, not to the field it shadows."""
+        client = self.client_at_load_as_release()
+        self.setup_index(client)
+        rows = self._rows(client, "LOAD", "3", "@price", "AS", "color")
+        assert rows
+        # `color` now carries prices, not the tag values it would otherwise.
+        assert {int(r[b"color"]) for r in rows} == {0, 10, 20, 30, 40}
+
+    def test_load_as_rename_is_visible_to_later_stages(self):
+        client = self.client_at_load_as_release()
+        self.setup_index(client)
+        rows = self._rows(
+            client, "LOAD", "3", "@price", "AS", "cost",
+            "APPLY", "@cost * 2", "AS", "doubled")
+        assert rows
+        for row in rows:
+            assert int(row[b"doubled"]) == 2 * int(row[b"cost"]), sorted(row)
+
+        rows = self._rows(
+            client, "LOAD", "3", "@price", "AS", "cost",
+            "SORTBY", "2", "@cost", "ASC")
+        assert [int(r[b"cost"]) for r in rows] == [0, 10, 20, 30, 40]
+
+        rows = self._rows(
+            client, "LOAD", "6", "@price", "AS", "amount", "@color", "AS", "hue",
+            "GROUPBY", "1", "@hue", "REDUCE", "SUM", "1", "@amount", "AS", "total")
+        assert {r[b"hue"]: int(r[b"total"]) for r in rows} == {
+            b"red": 0 + 20 + 40, b"blue": 10 + 30}
+
+    def test_load_of_an_unknown_field_is_rejected(self):
+        """Redis returns no column for a field the index does not have;
+        valkey-search rejects the command. Tracked in
+        integration/compatibility/unsupported_tests.md section 5.1."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError, match=r"does not exist"):
+            self._rows(client, "LOAD", "1", "@nosuchfield")
+
+
 class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
     """Result framing and score conventions: how many rows come back, what
     WINDOW bounds, what number the VSIM arm reports, and how LINEAR combines
@@ -526,6 +667,9 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
             "SEARCH", "@title:hello",
             "VSIM", "@vec", "$q", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
             "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+            # The title is read back below, so it has to be loaded: without a
+            # LOAD clause the reply is the key and the score aliases only.
+            "LOAD", "*",
             "LIMIT", "0", "100",
             "PARAMS", "2", "q", self.Q,
         )
@@ -589,7 +733,8 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
             unnamed = self._hybrid(client, *extra)
             for rec in unnamed[1:]:
                 keys = set(self._rec_to_dict(rec))
-                assert not any(k.startswith(b"__") for k in keys), \
+                # `__key` is a legitimate column; the fused score is not.
+                assert b"__hybrid_score" not in keys, \
                     f"unnamed fused score leaked into the reply: {keys}"
 
     @staticmethod

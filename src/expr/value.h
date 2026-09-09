@@ -27,17 +27,46 @@ class Value {
  public:
   class Nil {
    public:
-    Nil() : reason_("ctor") {}
-    explicit Nil(std::string reason) : reason_(std::move(reason)) {}
-    std::string GetReason() const { return reason_; }
+    // A Nil records *why* there is no value, because the two cases reply
+    // differently: a field the key never had is left out of the reply, while
+    // an expression that evaluated to nothing is named with a nil value.
+    // That is what Redisearch does.
+    //
+    // Constructing a Nil gives the second. The absent-field case has to be
+    // asked for by name, through Value::Missing(), so that a Value nobody
+    // initialised -- a reducer's accumulator, say -- cannot silently drop a
+    // field from the reply. Getting it wrong the other way shows up as an
+    // extra nil field, which the compatibility tests catch.
+    static constexpr absl::string_view kMissing{"missing"};
+    // Written out rather than defaulted, and missing_ initialised here rather
+    // than in place: a default member initialiser inside a nested class is not
+    // parsed until the enclosing Value is complete, so a defaulted Nil() reads
+    // as deleted when Value declares its std::variant member.
+    Nil() : missing_(false) {}
+    explicit Nil(std::string reason)
+        : missing_(false), reason_(std::move(reason)) {}
+    std::string GetReason() const {
+      return missing_ ? std::string(kMissing) : reason_;
+    }
+    bool IsMissing() const { return missing_; }
 
    private:
+    friend class Value;
+    static Nil MakeMissing() {
+      Nil nil;
+      nil.missing_ = true;
+      return nil;
+    }
+    bool missing_;
     std::string reason_;
   };
   using Array = std::shared_ptr<std::vector<Value>>;
 
   Value() : value_(Nil()){};
   explicit Value(Nil n) : value_(n) {}
+  // A field the key never had. Record slots start out this way; anything else
+  // without a value carries a reason instead.
+  static Value Missing() { return Value(Nil::MakeMissing()); }
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
   explicit Value(double d);
@@ -57,6 +86,9 @@ class Value {
 
   // test for type of Value
   bool IsNil() const;
+  // Nil because the key never had this field, rather than because something
+  // evaluated to nothing.
+  bool IsMissing() const;
   bool IsBool() const;
   bool IsDouble() const;
   bool IsString() const;

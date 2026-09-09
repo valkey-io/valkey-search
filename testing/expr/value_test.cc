@@ -11,6 +11,8 @@
 #include <cstring>
 #include <limits>
 #include <random>
+#include <sstream>
+#include <vector>
 
 #include "gtest/gtest.h"
 #include "src/valkey_search_options.h"
@@ -782,7 +784,8 @@ TEST_F(ValueTest, ArrayComparison_DifferingLength) {
 }
 
 TEST_F(ValueTest, ArrayComparison_ArrayVsScalar) {
-  // Test vector vs scalar comparisons (should be UNORDERED)
+  // An array compares as the empty string, so every non-empty scalar sorts
+  // above it.
   Value vec({Value(1.0), Value(2.0), Value(3.0)});
   Value scalar_double(1.0);
   Value scalar_string(std::string("test"));
@@ -790,40 +793,40 @@ TEST_F(ValueTest, ArrayComparison_ArrayVsScalar) {
   Value scalar_nil;
 
   // Array vs double
-  EXPECT_EQ(Compare(vec, scalar_double), Ordering::kUNORDERED);
-  EXPECT_EQ(Compare(scalar_double, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_double);   // UNORDERED treated as equal by ==
-  EXPECT_FALSE(vec != scalar_double);  // UNORDERED not treated as != by !=
+  EXPECT_EQ(Compare(vec, scalar_double), Ordering::kLESS);
+  EXPECT_EQ(Compare(scalar_double, vec), Ordering::kGREATER);
+  EXPECT_FALSE(vec == scalar_double);
+  EXPECT_TRUE(vec != scalar_double);
 
   // Array vs string
-  EXPECT_EQ(Compare(vec, scalar_string), Ordering::kUNORDERED);
-  EXPECT_EQ(Compare(scalar_string, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_string);
+  EXPECT_EQ(Compare(vec, scalar_string), Ordering::kLESS);
+  EXPECT_EQ(Compare(scalar_string, vec), Ordering::kGREATER);
+  EXPECT_FALSE(vec == scalar_string);
 
   // Array vs bool
-  EXPECT_EQ(Compare(vec, scalar_bool), Ordering::kUNORDERED);
-  EXPECT_EQ(Compare(scalar_bool, vec), Ordering::kUNORDERED);
-  EXPECT_TRUE(vec == scalar_bool);
+  EXPECT_EQ(Compare(vec, scalar_bool), Ordering::kLESS);
+  EXPECT_EQ(Compare(scalar_bool, vec), Ordering::kGREATER);
+  EXPECT_FALSE(vec == scalar_bool);
 
-  // Array vs nil
+  // Array vs nil stays UNORDERED: Nil is handled before any string form.
   EXPECT_EQ(Compare(vec, scalar_nil), Ordering::kUNORDERED);
   EXPECT_EQ(Compare(scalar_nil, vec), Ordering::kUNORDERED);
   EXPECT_TRUE(vec == scalar_nil);
 
   // Empty vector vs scalar
   Value empty_vec({});
-  EXPECT_EQ(Compare(empty_vec, scalar_double), Ordering::kUNORDERED);
-  EXPECT_EQ(Compare(scalar_double, empty_vec), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(empty_vec, scalar_double), Ordering::kLESS);
+  EXPECT_EQ(Compare(scalar_double, empty_vec), Ordering::kGREATER);
 
   // Single-element vector vs scalar
   Value single_vec({Value(42.0)});
-  EXPECT_EQ(Compare(single_vec, Value(42.0)), Ordering::kUNORDERED);
-  EXPECT_EQ(Compare(Value(42.0), single_vec), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(single_vec, Value(42.0)), Ordering::kLESS);
+  EXPECT_EQ(Compare(Value(42.0), single_vec), Ordering::kGREATER);
 
   // Nested vector vs scalar
   Value nested({Value({Value(1.0)})});
-  EXPECT_EQ(Compare(nested, scalar_double), Ordering::kUNORDERED);
-  EXPECT_EQ(Compare(scalar_double, nested), Ordering::kUNORDERED);
+  EXPECT_EQ(Compare(nested, scalar_double), Ordering::kLESS);
+  EXPECT_EQ(Compare(scalar_double, nested), Ordering::kGREATER);
 }
 
 // Test vector serialization to RESP format
@@ -1173,87 +1176,52 @@ TEST_F(ValueTest, NestedArray_EmptyInnerArrays) {
 
 // Operations on nested vectors tests
 
-TEST_F(ValueTest, NestedArray_ScalarFunctionRecursiveApplication) {
-  // Test that scalar functions recursively apply to nested elements
-  // Create nested vector of strings: [["HELLO", "WORLD"], ["FOO", "BAR"]]
+// The unary functions Redisearch accepts over an array collapse it to a scalar
+// rather than mapping over the elements: nan for the numeric ones, Nil for the
+// case-folding ones. Element-wise mapping survives only where Redisearch
+// rejects the query outright (arithmetic, strlen, startswith, contains).
+TEST_F(ValueTest, Array_CaseFunctionsCollapse) {
+  // ARRAY postdates these fixes, so exercise their current behavior.
+  ScopedEmulateRelease scope({1, 2, 1});
   Value nested =
       Value({Value({Value(std::string("HELLO")), Value(std::string("WORLD"))}),
              Value({Value(std::string("FOO")), Value(std::string("BAR"))})});
 
-  // Apply FuncLower - should recursively lowercase all strings
-  Value result = FuncLower(nested);
+  EXPECT_TRUE(FuncLower(nested).IsNil());
+  EXPECT_TRUE(FuncUpper(nested).IsNil());
 
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-
-  // Verify first inner vector
-  Value inner1 = result.GetArrayElement(0);
-  EXPECT_TRUE(inner1.IsArray());
-  EXPECT_EQ(inner1.ArraySize(), 2);
-  EXPECT_EQ(*inner1.GetArrayElement(0).AsString(), "hello");
-  EXPECT_EQ(*inner1.GetArrayElement(1).AsString(), "world");
-
-  // Verify second inner vector
-  Value inner2 = result.GetArrayElement(1);
-  EXPECT_TRUE(inner2.IsArray());
-  EXPECT_EQ(inner2.ArraySize(), 2);
-  EXPECT_EQ(*inner2.GetArrayElement(0).AsString(), "foo");
-  EXPECT_EQ(*inner2.GetArrayElement(1).AsString(), "bar");
+  Value flat =
+      Value({Value(std::string("HELLO")), Value(std::string("WORLD"))});
+  EXPECT_TRUE(FuncLower(flat).IsNil());
+  EXPECT_TRUE(FuncUpper(flat).IsNil());
 }
 
-TEST_F(ValueTest, NestedArray_MathFunctionRecursiveApplication) {
-  // Test that math functions recursively apply to nested elements
-  // Create nested vector: [[1.5, 2.7], [3.2, 4.9]]
+TEST_F(ValueTest, Array_MathFunctionsCollapseToNan) {
+  ScopedEmulateRelease scope({1, 2, 1});
   Value nested =
       Value({Value({Value(1.5), Value(2.7)}), Value({Value(3.2), Value(4.9)})});
+  Value flat = Value({Value(1.5), Value(2.7)});
 
-  // Apply FuncFloor - should recursively floor all numbers
-  Value result = FuncFloor(nested);
-
-  EXPECT_TRUE(result.IsArray());
-  EXPECT_EQ(result.ArraySize(), 2);
-
-  // Verify first inner vector
-  Value inner1 = result.GetArrayElement(0);
-  EXPECT_TRUE(inner1.IsArray());
-  EXPECT_EQ(inner1.ArraySize(), 2);
-  EXPECT_EQ(inner1.GetArrayElement(0).GetDouble(), 1.0);
-  EXPECT_EQ(inner1.GetArrayElement(1).GetDouble(), 2.0);
-
-  // Verify second inner vector
-  Value inner2 = result.GetArrayElement(1);
-  EXPECT_TRUE(inner2.IsArray());
-  EXPECT_EQ(inner2.ArraySize(), 2);
-  EXPECT_EQ(inner2.GetArrayElement(0).GetDouble(), 3.0);
-  EXPECT_EQ(inner2.GetArrayElement(1).GetDouble(), 4.0);
+  for (const Value &v : {nested, flat}) {
+    for (auto fn : {&FuncFloor, &FuncCeil, &FuncAbs, &FuncLog, &FuncLog2,
+                    &FuncExp, &FuncSqrt}) {
+      Value result = fn(v);
+      EXPECT_TRUE(result.IsDouble());
+      EXPECT_EQ(*result.AsString(), "nan");
+    }
+  }
 }
 
-TEST_F(ValueTest, NestedArray_ThreeLevelRecursiveApplication) {
-  // Test recursive application on 3-level nested vector
-  // Create: [[[1.1, 2.2]], [[3.3, 4.4]]]
-  Value nested = Value({Value({Value({Value(1.1), Value(2.2)})}),
-                        Value({Value({Value(3.3), Value(4.4)})})});
-
-  // Apply FuncCeil - should recursively ceil all numbers
-  Value result = FuncCeil(nested);
+TEST_F(ValueTest, Array_ElementWiseFunctionsSurvive) {
+  // strlen broadcasts: Redisearch rejects strlen() over an array, so the
+  // element-wise result cannot disagree with a query it accepts.
+  Value flat = Value({Value(std::string("ab")), Value(std::string("cde"))});
+  Value result = FuncStrlen(flat);
 
   EXPECT_TRUE(result.IsArray());
   EXPECT_EQ(result.ArraySize(), 2);
-
-  // Navigate to innermost vectors and verify
-  Value level2_1 = result.GetArrayElement(0);
-  EXPECT_TRUE(level2_1.IsArray());
-  Value level3_1 = level2_1.GetArrayElement(0);
-  EXPECT_TRUE(level3_1.IsArray());
-  EXPECT_EQ(level3_1.GetArrayElement(0).GetDouble(), 2.0);
-  EXPECT_EQ(level3_1.GetArrayElement(1).GetDouble(), 3.0);
-
-  Value level2_2 = result.GetArrayElement(1);
-  EXPECT_TRUE(level2_2.IsArray());
-  Value level3_2 = level2_2.GetArrayElement(0);
-  EXPECT_TRUE(level3_2.IsArray());
-  EXPECT_EQ(level3_2.GetArrayElement(0).GetDouble(), 4.0);
-  EXPECT_EQ(level3_2.GetArrayElement(1).GetDouble(), 5.0);
+  EXPECT_EQ(result.GetArrayElement(0).GetDouble(), 2.0);
+  EXPECT_EQ(result.GetArrayElement(1).GetDouble(), 3.0);
 }
 
 TEST_F(ValueTest, NestedArray_ArithmeticWithScalar) {
@@ -1365,9 +1333,54 @@ TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
   EXPECT_EQ(FormatDouble(0.0), "0");
   EXPECT_EQ(FormatDouble(-20260201.0), "-20260201");
   EXPECT_EQ(FormatDouble(-0.5), "-0.5");
+  // Non-integral values take Redisearch's 12 significant digits, so this is
+  // no longer the shortest round-trip form #1264 originally asserted. No
+  // dataset carries a value near DBL_MAX; the compatibility-relevant half of
+  // this test is the integral cases above.
   EXPECT_EQ(FormatDouble(std::numeric_limits<double>::max()),
-            "1.7976931348623157e+308");
+            "1.79769313486e+308");
   EXPECT_EQ(Value(20260201.0).AsString().value(), "20260201");
+}
+
+// The integral path renders in fixed notation so Redisearch's "1700000000"
+// is matched rather than shortest-round-trip's "1.7e+09"; above 1e17 the value
+// falls back to to_chars, whose exponent form Redisearch has no counterpart
+// for in any dataset we test.
+TEST_F(ValueTest, FormatDoubleIntegralUsesFixedNotation) {
+  EXPECT_EQ(FormatDouble(1700000000.0), "1700000000");        // epoch seconds
+  EXPECT_EQ(FormatDouble(1700000000123.0), "1700000000123");  // epoch millis
+  EXPECT_EQ(FormatDouble(9007199254740992.0), "9007199254740992");  // 2^53
+
+  // Straddle the fixed-vs-scientific switch. 99999999999999999.0 is not
+  // representable and rounds up to 1e17, so the largest double below the
+  // threshold is 99999999999999984.
+  EXPECT_EQ(FormatDouble(99999999999999984.0), "99999999999999984");
+  EXPECT_EQ(FormatDouble(1e16), "10000000000000000");
+  EXPECT_EQ(FormatDouble(1e17), "1e+17");
+  EXPECT_EQ(FormatDouble(-1e16), "-10000000000000000");
+  EXPECT_EQ(FormatDouble(-1e17), "-1e+17");
+
+  // Non-integral, zero and the infinities keep to_chars' rendering.
+  EXPECT_EQ(FormatDouble(1.5), "1.5");
+  EXPECT_EQ(FormatDouble(-0.0), "-0");
+  EXPECT_EQ(FormatDouble(std::numeric_limits<double>::infinity()), "inf");
+  EXPECT_EQ(FormatDouble(-std::numeric_limits<double>::infinity()), "-inf");
+}
+
+// Streaming an array used to reach operator<<'s CHECK(false). GroupKey streams
+// its elements, so expanding a multi-value GROUPBY key aborted any DBG build.
+TEST_F(ValueTest, StreamArrayValue) {
+  std::ostringstream os;
+  os << Value({Value(1.0), Value("two"), Value(true)});
+  EXPECT_EQ(os.str(), "[Dble(1),'two',Bool(true)]");
+
+  std::ostringstream empty;
+  empty << Value(std::vector<Value>{});
+  EXPECT_EQ(empty.str(), "[]");
+
+  std::ostringstream nested;
+  nested << Value({Value({Value(1.0), Value(2.0)}), Value(3.0)});
+  EXPECT_EQ(nested.str(), "[[Dble(1),Dble(2)],Dble(3)]");
 }
 
 }  // namespace valkey_search::expr

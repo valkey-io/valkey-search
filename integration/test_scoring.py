@@ -12,9 +12,12 @@ import struct
 
 import pytest
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, run_in_thread
 from valkeytestframework.util import waiters
 
 SCORE_ABS_TOL = 1e-5
@@ -205,6 +208,34 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert keys == ["doc:6", "doc:4", "doc:3", "doc:2", "doc:7", "doc:1"]
         assert or_groups == pytest.approx({**hello_world, "doc:6": 3.404279},
                                           abs=SCORE_ABS_TOL)
+
+        # A nested OR is still one flat union: doc:6 matches both inner branches
+        # and accumulates rare + unique, doc:8 only rare.
+        _, rare = search(client, IDX_MAIN, "rare")
+        _, unique = search(client, IDX_MAIN, "unique")
+        keys, nested_or = search(client, IDX_MAIN, "hello | (rare | unique)")
+        assert keys == ["doc:6", "doc:8", "doc:5", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert nested_or == pytest.approx(
+            {**hello,
+             "doc:6": rare["doc:6"] + unique["doc:6"],
+             "doc:8": rare["doc:8"]},
+            abs=SCORE_ABS_TOL)
+
+        # Group weights accumulate down both OR levels before reaching a leaf:
+        # hello scales by 2*2, rare by 2*2*3, unique by 2*2*2. doc:6 sums the two
+        # inner branches at their own multipliers.
+        keys, weighted_nested_or = search(
+            client, IDX_MAIN,
+            "((hello)=>{$weight:2} | ((rare)=>{$weight:3} | "
+            "(unique)=>{$weight:2})=>{$weight:2})=>{$weight:2}")
+        assert keys == ["doc:6", "doc:8", "doc:5", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert weighted_nested_or == pytest.approx(
+            {**{k: 4 * v for k, v in hello.items()},
+             "doc:6": 12 * rare["doc:6"] + 8 * unique["doc:6"],
+             "doc:8": 12 * rare["doc:8"]},
+            abs=SCORE_ABS_TOL)
 
         # Three-leaf AND accumulates every leaf.
         keys, three_leaf = search(client, IDX_MAIN, "hello world one")
@@ -546,3 +577,68 @@ class TestScoring(ValkeySearchTestCaseBase):
         wait_indexed(client, IDX_MAIN, 8)
         _, restored = search(client, IDX_MAIN, "hello")
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
+
+
+# The kill switch is a dev config, so it needs debug-mode to be settable.
+class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
+
+    def test_scoring_disabled_zeroes_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+
+        # Pure text is scored in-iterator; text+tag takes the extra step.
+        queries = ["hello", "hello @cat:{a}"]
+
+        # Baseline: scores are non-zero, so the zeroes below are the switch
+        # working rather than an empty result.
+        for query in queries:
+            _, scores = search(client, IDX_MAIN, query)
+            assert scores and all(v > 0.0 for v in scores.values()), \
+                f"expected non-zero scores for {query!r}, got {scores}"
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same queries still match the same docs; every score is now 0.
+        for query in queries:
+            keys, scores = search(client, IDX_MAIN, query)
+            assert keys and scores == pytest.approx({k: 0.0 for k in keys}), \
+                f"expected all-zero scores for {query!r}, got {scores}"
+
+    def test_scoring_disabled_zeroes_recomputed_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        stat = lambda field: int(client.info("SEARCH")["search_" + field])
+        pausepoint = lambda verb: client.execute_command(
+            "FT._DEBUG PAUSEPOINT", verb, "block_mutation_queue")
+
+        def score_across_mutation(body):
+            """Parks doc:1's index update so its db sequence number runs ahead
+            of the index's: the query blocks on the contention check, then
+            resumes into the content fetch, which rescores doc:1 through
+            SingleDocumentScorer. Returns (scores, docs rescored there)."""
+            revals, blocked = stat("predicate_revalidation"), stat(
+                "text_query_blocked_count")
+            pausepoint("SET")
+            hset = run_in_thread(lambda: self.server.get_new_client().hset(
+                "doc:1", "body", body))[0]
+            waiters.wait_for_true(lambda: int(pausepoint("TEST")) > 0)
+            searcher, res, _ = run_in_thread(
+                lambda: search(self.server.get_new_client(), IDX_MAIN, "hello"))
+            waiters.wait_for_true(
+                lambda: stat("text_query_blocked_count") > blocked)
+            pausepoint("RESET")
+            for thread in (hset, searcher):
+                thread.join()
+            return res[0][1], stat("predicate_revalidation") - revals
+
+        # Baseline: the recompute runs and yields a non-zero score.
+        scores, rescored = score_across_mutation("hello hello world")
+        assert rescored >= 1 and scores["doc:1"] > 0.0, scores
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same window, switch on: still revalidated and kept, now scored 0.
+        scores, rescored = score_across_mutation("hello hello")
+        assert rescored >= 1, "recompute path never ran"
+        assert "doc:1" in scores, scores
+        assert scores == pytest.approx({k: 0.0 for k in scores}), scores

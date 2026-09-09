@@ -1090,8 +1090,6 @@ class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_json_tag_query_wildcard_path(self):
         client: Valkey = self.server.get_new_client()
-        assert client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", "1.2.1") == b"OK"
 
         assert client.execute_command(
             "FT.CREATE", "idx_wildcard_json_tag",

@@ -320,7 +320,7 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
 vmsdk::UniqueValkeyString Tag::NormalizeStringAttribute(
     vmsdk::UniqueValkeyString input) const {
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 2, 1, "json_tag_wildcard_array",
+      1, 3, 0, "json_tag_wildcard_array",
       [&] {
         if (!input) {
           return std::move(input);

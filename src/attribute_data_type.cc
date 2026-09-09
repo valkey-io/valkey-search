@@ -31,8 +31,8 @@ void ResetJsonLoadedCache() { is_json_loaded = std::nullopt; }
 
 absl::StatusOr<vmsdk::UniqueValkeyString> HashAttributeDataType::GetAttribute(
     [[maybe_unused]] ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
-    [[maybe_unused]] absl::string_view key,
-    absl::string_view identifier) const {
+    [[maybe_unused]] absl::string_view key, absl::string_view identifier,
+    [[maybe_unused]] bool preserve_json_array) const {
   vmsdk::VerifyMainThread();
   ValkeyModuleString *attribute{nullptr};
   ValkeyModule_HashGet(open_key, VALKEYMODULE_HASH_CFIELDS, identifier.data(),
@@ -226,9 +226,8 @@ absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetAttribute(
     ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
     absl::string_view identifier, bool preserve_json_array) const {
   vmsdk::UniqueValkeyString attribute;
-  VMSDK_RETURN_IF_ERROR(
-      GetJsonAttribute(ctx, open_key, key, identifier, &attribute,
-                       preserve_json_array));
+  VMSDK_RETURN_IF_ERROR(GetJsonAttribute(ctx, open_key, key, identifier,
+                                         &attribute, preserve_json_array));
   return attribute;
 }
 

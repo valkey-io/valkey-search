@@ -194,6 +194,7 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
         args["search.rdb_read_v2"] = "yes"
+        args["search.writer-threads"] = "20"
         return args
     
     def mutation_queue_size(self):
@@ -251,7 +252,6 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def test_multi_exec_queue(self):
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
-        self.client.execute_command("config set search.writer-threads 20")
         index.create(self.client, True)
         records = make_data()
         #
@@ -284,7 +284,6 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
 
     def test_multi_exec_orphan_key_skipped_still_searchable(self):
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
-        self.client.execute_command("config set search.writer-threads 20")
         index.create(self.client, True)
         records = make_data()
 
@@ -406,7 +405,6 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         #
         # test that overwrites of keys that are marked as backfilling properly get converted to non-backfills
         #
-        self.client.execute_command("config set search.writer-threads 20")
         self.client.execute_command("CONFIG SET search.info-developer-visible yes")
         self.client.execute_command("ft._debug PAUSEPOINT SET block_mutation_queue")
         load_data(self.client)

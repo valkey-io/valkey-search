@@ -8,8 +8,10 @@
 #include "vmsdk/src/thread_pool.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -20,6 +22,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
@@ -63,10 +66,10 @@ ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
       sample_queue_size_(sample_queue_size),
       wait_time_samples_(sample_queue_size, 0.0) {}
 
-void ThreadPool::StartWorkers() {
+absl::Status ThreadPool::StartWorkers() {
   CHECK(!started_);
   started_ = true;
-  IncrThreadCountBy(initial_thread_count_);
+  return IncrThreadCountBy(initial_thread_count_);
 }
 
 absl::StatusOr<double> ThreadPool::GetAvgCPUPercentage() {
@@ -294,11 +297,22 @@ size_t ThreadPool::QueueSize() const {
       [](size_t sum, const auto &tasks) { return sum + tasks.size(); });
 }
 
-void ThreadPool::IncrThreadCountBy(size_t count) {
+absl::Status ThreadPool::IncrThreadCountBy(size_t count) {
   for (size_t i = 0; i < count; ++i) {
     std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
     ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
-    pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
+    int rc = CreateThread(&thread_ptr->thread_id, RunWorkerThread, context);
+    if (rc != 0) {
+      delete context;
+      if (rc == EAGAIN) {
+        return absl::ResourceExhaustedError(absl::StrCat(
+            "Failed to create worker thread ", i + 1, " of ", count,
+            " for pool \"", name_prefix_, "\": ", std::strerror(rc)));
+      }
+      return absl::InternalError(absl::StrCat(
+          "Failed to create worker thread ", i + 1, " of ", count,
+          " for pool \"", name_prefix_, "\": ", std::strerror(rc)));
+    }
     size_t thread_num = threads_.Size();
     thread_ptr->name = name_prefix_ + std::to_string(thread_num);
 #ifndef __APPLE__
@@ -306,6 +320,7 @@ void ThreadPool::IncrThreadCountBy(size_t count) {
 #endif
     threads_.Add(thread_ptr);
   }
+  return absl::OkStatus();
 }
 
 void ThreadPool::DecrThreadCountBy(size_t count, bool sync) {
@@ -346,16 +361,17 @@ size_t ThreadPool::Size() const {
   });
 }
 
-void ThreadPool::Resize(size_t count, bool wait_for_resize) {
+absl::Status ThreadPool::Resize(size_t count, bool wait_for_resize) {
   size_t current_size = Size();
   if (count == current_size) {
-    return;
+    return absl::OkStatus();
   } else if (count > current_size) {
     // We need to add more threads
-    IncrThreadCountBy(count - current_size);
+    return IncrThreadCountBy(count - current_size);
   } else {
     // Shutdown "current_size - count" threads
     DecrThreadCountBy(current_size - count, wait_for_resize);
+    return absl::OkStatus();
   }
 }
 

@@ -45,7 +45,12 @@ void UpdateThreadPoolCount(vmsdk::ThreadPool *pool, long long new_value) {
   if (!pool) {
     return;
   }
-  pool->Resize(new_value);
+  auto status = pool->Resize(new_value);
+  if (!status.ok()) {
+    VMSDK_LOG(WARNING, nullptr)
+        << "Failed to resize thread pool to " << new_value
+        << " threads: " << status.message();
+  }
 }
 
 absl::Status ValidateLogLevel(const int value) {

@@ -1178,15 +1178,15 @@ absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
       "read-worker-", options::GetReaderThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
-  reader_thread_pool_->StartWorkers();
+  VMSDK_RETURN_IF_ERROR(reader_thread_pool_->StartWorkers());
   writer_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
       "write-worker-", options::GetWriterThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
-  writer_thread_pool_->StartWorkers();
+  VMSDK_RETURN_IF_ERROR(writer_thread_pool_->StartWorkers());
   utility_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
       "util-worker-", options::GetUtilityThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());
-  utility_thread_pool_->StartWorkers();
+  VMSDK_RETURN_IF_ERROR(utility_thread_pool_->StartWorkers());
 
   VMSDK_LOG(NOTICE, ctx) << "use_coordinator: "
                          << options::GetUseCoordinator().GetValue()

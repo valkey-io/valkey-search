@@ -155,7 +155,7 @@ jobs:
 
   benchmark:
     needs: resolve
-    runs-on: [self-hosted, valkey-search-arm-pr]
+    runs-on: [self-hosted, ec2-al-2023-pr-benchmarking-arm64]
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '1440') }}
     env:
       # Module configuration
@@ -255,52 +255,36 @@ jobs:
           echo "✓ Dataset directory linked to persistent cache: $DATASET_CACHE"
           ls -lh "$PERF_BENCHMARK_PATH/" | grep datasets
 
-      - name: Install dependencies
+      # Fetch a trusted copy of the CI scripts from the base branch tip.
+      # base_ref names a branch in the target repo, so a fork PR cannot modify
+      # its contents, and (unlike base_sha) its tip always contains the current
+      # installer even for PRs that forked before it was added.
+      - name: Checkout trusted CI scripts (base branch)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ needs.resolve.outputs.base_ref }}
+          path: valkey-search-trusted-ci
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Install the valkey-search build dependencies and toolchain via the
+      # single maintained script (ci/install_deps.sh).
+      - name: Install build dependencies and toolchain
+        working-directory: valkey-search-trusted-ci
+        run: |
+          # The installer only exists on base branches that carry
+          # it. If a benchmarked PR targets a branch without it, fail fast with
+          # an actionable message instead of a cryptic 127 from a missing file.
+          if [[ ! -x ./ci/install_deps.sh ]]; then
+            echo "::error::ci/install_deps.sh not found on base branch '${{ needs.resolve.outputs.base_ref }}'. This branch must contain the installer to run the benchmark; rebase it onto a revision that includes ci/install_deps.sh."
+            exit 1
+          fi
+          ./ci/install_deps.sh
+
+      - name: Install benchmark Python dependencies
         working-directory: ${{ env.PERF_BENCHMARK_DIR }}
-        run: |
-          sudo dnf groupinstall "Development Tools" -y
-          sudo dnf install -y gcc gcc-c++ cmake \
-              ninja-build \
-              python3-devel \
-              openssl-devel \
-              systemd-devel \
-              bzip2-devel \
-              libffi-devel \
-              perf
-
-          gcc --version
-          g++ --version
-
-          pip install --require-hashes -r requirements.txt
-
-      - name: Ensure GCC >= 12 (required for valkey-search build)
-        # NOTE: This uses AL2023-specific packages. Update if runner OS changes.
-        run: |
-          GCC_MIN_VERSION=12
-          CURRENT_VERSION=0
-
-          if /usr/local/bin/gcc --version 2>/dev/null; then
-            CURRENT_VERSION=$(/usr/local/bin/gcc -dumpversion | cut -d. -f1)
-          fi
-
-          if [[ "$CURRENT_VERSION" -ge "$GCC_MIN_VERSION" ]]; then
-            echo "✓ GCC $CURRENT_VERSION already available at /usr/local/bin/gcc (>= $GCC_MIN_VERSION)"
-            /usr/local/bin/gcc --version
-            /usr/local/bin/g++ --version
-          else
-            echo "GCC >= $GCC_MIN_VERSION not found (current: $CURRENT_VERSION) — installing GCC 14 from AL2023 repos..."
-            sudo dnf install -y gcc14 gcc14-c++
-
-            # Create symlinks in /usr/local/bin so builds pick up GCC 14 by default
-            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/gcc
-            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/g++
-            sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/cc
-            sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/c++
-
-            echo "✓ GCC 14 installed and symlinked"
-            /usr/local/bin/gcc --version
-            /usr/local/bin/g++ --version
-          fi
+        run: pip install --require-hashes -r requirements.txt
 
       - name: Build valkey_ram (for dataset-enabled valkey-benchmark)
         working-directory: valkey_ram
@@ -509,6 +493,7 @@ jobs:
           echo "Datasets persist at /home/ec2-user/search-datasets-cache"
           rm -rf "${{ github.workspace }}/comparison.md" \
                  "${{ github.workspace }}/valkey_ram" \
+                 "${{ github.workspace }}/valkey-search-trusted-ci" \
                  "$CORE_PATH" \
                  "$MODULE_PATH" \
                  "$MODULE_BASELINE_PATH" \

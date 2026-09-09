@@ -68,8 +68,8 @@ class TextTest : public ::testing::Test {
 
   // Helper to create custom schema with specific settings
   std::shared_ptr<text::TextIndexSchema> CreateCustomSchema(
-      const std::string& punctuation = "", bool stemming = true,
-      const std::vector<std::string>& stop_words = {},
+      const std::string &punctuation = "", bool stemming = true,
+      const std::vector<std::string> &stop_words = {},
       bool with_offsets = false) {
     std::string punct = punctuation.empty()
                             ? " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
@@ -80,7 +80,7 @@ class TextTest : public ::testing::Test {
   }
 
   // Helper to check if a token exists in the prefix tree
-  bool TokenExists(const std::string& token,
+  bool TokenExists(const std::string &token,
                    std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
     auto iter =
@@ -90,7 +90,7 @@ class TextTest : public ::testing::Test {
 
   // Helper to get postings for a token
   text::InvasivePtr<text::Postings> GetPostingsForToken(
-      const std::string& token,
+      const std::string &token,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
     auto iter =
@@ -103,7 +103,7 @@ class TextTest : public ::testing::Test {
 
   // Stages a single Text attribute update from the key and then commits the key
   // update to the schema-level text index structures.
-  void AddRecordAndCommitKey(Text* text_index, const InternedStringPtr& key,
+  void AddRecordAndCommitKey(Text *text_index, const InternedStringPtr &key,
                              absl::string_view data,
                              std::shared_ptr<text::TextIndexSchema> schema) {
     auto result = text_index->AddRecord(key, data);
@@ -114,7 +114,7 @@ class TextTest : public ::testing::Test {
 
   // Adds the record to the default text index
   void AddRecordAndCommitKey(
-      const InternedStringPtr& key, absl::string_view data,
+      const InternedStringPtr &key, absl::string_view data,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     auto active_schema = schema ? schema : text_index_schema_;
     AddRecordAndCommitKey(text_index_.get(), key, data, active_schema);
@@ -122,10 +122,10 @@ class TextTest : public ::testing::Test {
 
   // Validate that the index structure matches expected results
   void ValidateIndexStructure(
-      const TextIndexTestCase& test_case,
+      const TextIndexTestCase &test_case,
       std::shared_ptr<text::TextIndexSchema> schema = nullptr) {
     // Validate each expected token exists with correct properties
-    for (const auto& token : test_case.expected_tokens) {
+    for (const auto &token : test_case.expected_tokens) {
       EXPECT_TRUE(TokenExists(token, schema))
           << "Token '" << token
           << "' should exist in index for: " << test_case.description;
@@ -140,7 +140,7 @@ class TextTest : public ::testing::Test {
           << "' in: " << test_case.description;
 
       // Choose the appropriate frequency map based on the mode
-      const auto& expected_frequencies =
+      const auto &expected_frequencies =
           test_case.with_offsets ? test_case.expected_frequencies_positional
                                  : test_case.expected_frequencies_boolean;
 
@@ -166,7 +166,7 @@ class TextIndexParameterizedTest
       public ::testing::WithParamInterface<TextIndexTestCase> {};
 
 TEST_P(TextIndexParameterizedTest, ValidateIndexStructure) {
-  const auto& test_case = GetParam();
+  const auto &test_case = GetParam();
 
   std::shared_ptr<text::TextIndexSchema> active_schema = text_index_schema_;
 
@@ -389,7 +389,7 @@ TEST_F(TextTest, StemmingBehavior) {
 
   // Stemming behavior depends on the stemmer implementation
   // This test ensures stemming doesn't break the indexing pipeline
-  auto& prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
+  auto &prefix_tree = stemming_schema->GetTextIndex()->GetPrefix();
 
   // Should create some tokens (exact form depends on stemmer)
   bool has_tokens = false;

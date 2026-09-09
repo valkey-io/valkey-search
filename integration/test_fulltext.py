@@ -2304,9 +2304,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
         assert info_data["num_docs"] == 9
-        # Current behavior: doc:9 tag is not rejected
-        assert info_data["hash_indexing_failures"] == 4  # doc: 5, doc:6, doc:7, doc:8
-        assert info_data["num_records"] == 5 # doc:1 to 4 , doc:9
+        assert info_data["hash_indexing_failures"] == 5  # doc:5 to doc:9
+        assert info_data["num_records"] == 4 # doc:1 to 4
         # Query parsing: Verify tokenization handles non-ASCII
         assert client.execute_command("FT.SEARCH", "idx", "“smart")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
@@ -2320,7 +2319,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx", b"invalid\xff")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx",  b"%invalid\xff%")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1 #tag with non utf8 gives result
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 0
         with pytest.raises(ResponseError) as e:
             client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
         assert "Invalid filter expression" in str(e.value)

@@ -302,6 +302,139 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   EXPECT_EQ(thread_pool.threads_.Size(), 0);
 }
 
+TEST_F(ThreadPoolTest, ResizeWhileSuspended) {
+  ThreadPool thread_pool("test-pool", 4);
+  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+
+  // CONFIG SET can resize a pool at any time, including while a fork holds it
+  // suspended.
+  thread_pool.Resize(16);
+  thread_pool.Resize(2);
+  thread_pool.Resize(8);
+
+  // Workers created during the suspension must wait before taking a task.
+  absl::Notification notification;
+  EXPECT_TRUE(thread_pool.Schedule([&notification]() { notification.Notify(); },
+                                   ThreadPool::Priority::kHigh));
+  EXPECT_FALSE(notification.WaitForNotificationWithTimeout(absl::Seconds(1)));
+
+  // Resuming must not wait for workers that were retired during the suspension.
+  StopWatch stop_watch;
+  VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(5));
+  EXPECT_TRUE(notification.WaitForNotificationWithTimeout(absl::Seconds(5)));
+  thread_pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, RepeatedResizeWhileSuspended) {
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+
+  // Workers retired while suspended must exit and get cleaned up on their
+  // own; otherwise each resize up adds replacements and threads accumulate.
+  constexpr size_t kCycles = 20;
+  for (size_t i = 0; i < kCycles; ++i) {
+    thread_pool.Resize(8);
+    thread_pool.Resize(1);
+    thread_pool.JoinTerminatedWorkers();
+  }
+
+  // All retired workers must be cleaned up while the pool is still suspended,
+  // leaving only the survivor.
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (absl::Now() < deadline) {
+    thread_pool.JoinTerminatedWorkers();
+    if (thread_pool.threads_.Size() == 1) {
+      break;
+    }
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  EXPECT_EQ(thread_pool.threads_.Size(), 1u);
+  EXPECT_EQ(thread_pool.Size(), 1u);
+
+  VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  thread_pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, SynchronousResizeWhileSuspended) {
+  ThreadPool thread_pool("test-pool", 4);
+  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+
+  // A synchronous resize waits for the retired workers to finish, which they
+  // can only do if the suspension lets them exit.
+  StopWatch stop_watch;
+  thread_pool.Resize(1, /*wait_for_resize=*/true);
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(5));
+  EXPECT_EQ(thread_pool.Size(), 1u);
+
+  VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  thread_pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, ResizeDownWithQueuedTasks) {
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+
+  // Keep the only worker busy so tasks pile up behind it.
+  absl::Notification started, release;
+  EXPECT_TRUE(thread_pool.Schedule(
+      [&started, &release]() {
+        started.Notify();
+        release.WaitForNotification();
+      },
+      ThreadPool::Priority::kHigh));
+  std::atomic<int> executed{0};
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule([&executed]() { ++executed; },
+                                     ThreadPool::Priority::kHigh));
+  }
+  started.WaitForNotification();
+
+  // A retired worker must exit without draining the queue.
+  thread_pool.Resize(0);
+  release.Notify();
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (thread_pool.threads_.Size() > 0 && absl::Now() < deadline) {
+    thread_pool.JoinTerminatedWorkers();
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  EXPECT_EQ(thread_pool.threads_.Size(), 0u);
+  EXPECT_EQ(executed.load(), 0);
+  EXPECT_EQ(thread_pool.QueueSize(), 5u);
+
+  // The queued tasks run once the pool is resized back up.
+  thread_pool.Resize(1);
+  thread_pool.JoinWorkers();
+  EXPECT_EQ(executed.load(), 5);
+}
+
+TEST_F(ThreadPoolTest, ConcurrentResizeAndSuspendResume) {
+  ThreadPool thread_pool("test-pool", 4);
+  thread_pool.StartWorkers();
+  std::atomic_bool stop{false};
+  // Stands in for the config-set path resizing the pool, plus the cron callback
+  // cleaning up the workers it retired.
+  std::thread resizer([&thread_pool, &stop]() {
+    for (size_t i = 0; !stop; ++i) {
+      thread_pool.Resize(i % 2 == 0 ? 1 : 4);
+      thread_pool.JoinTerminatedWorkers();
+      absl::SleepFor(absl::Milliseconds(1));
+    }
+  });
+  for (size_t i = 0; i < 200; ++i) {
+    VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+    // Give the resizer a chance to run inside the suspension window.
+    absl::SleepFor(absl::Milliseconds(1));
+    VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  }
+  stop = true;
+  resizer.join();
+  thread_pool.JoinWorkers();
+}
+
 namespace {
 constexpr size_t kThreadCount = 2;
 std::shared_ptr<absl::BlockingCounter> ScheduleTasks(

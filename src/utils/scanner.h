@@ -347,6 +347,19 @@ class Scanner {
   uint8_t last_utf8_byte_len_{0};
 };
 
+inline bool IsValidUtf8(absl::string_view text) {
+  Scanner scanner(text);
+
+  while (scanner.GetPosition() < text.size()) {
+    if (scanner.NextUtf8() == Scanner::kEOF) {
+      break;
+    }
+  }
+
+  return scanner.GetInvalidUtf8Count() == 0 &&
+         scanner.GetPosition() == text.size();
+}
+
 }  // namespace utils
 }  // namespace valkey_search
 

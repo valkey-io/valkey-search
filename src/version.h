@@ -99,7 +99,12 @@ constexpr vmsdk::ValkeyVersion kRelease11(1, 1, 0);
 constexpr vmsdk::ValkeyVersion kRelease12(1, 2, 0);
 
 //
-// Release 1.3, added support for multi-language full text search.
+// Release 1.3, added support for:
+// 1. multi-language full text search.
+// 2. low-precision vector storage types (FLOAT16 and BFLOAT16).
+// Index schemas that use either type stamp this
+// minimum version so older modules refuse to load them rather than
+// misinterpret 2-byte vector data as FLOAT32.
 //
 constexpr vmsdk::ValkeyVersion kRelease13(1, 3, 0);
 

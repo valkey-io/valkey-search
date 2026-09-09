@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory>
+#include <new>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
@@ -20,8 +22,8 @@ namespace vmsdk {
 
 // A high-performance sharded atomic counter that supports template types.
 // It uses Thread-Local Storage (TLS) to allow zero-contention writes.
-// Note: This implements a Global Counter behavior per type T.
-// All instances of ShardedAtomic<T> will share the same underlying sum.
+// Each instance of ShardedAtomic receives a unique dynamic index, allowing
+// independent counters without needing template tags.
 template <typename T>
 class ShardedAtomic {
  public:
@@ -29,56 +31,118 @@ class ShardedAtomic {
   // Public API
   // ------------------------------------------------------------------------
 
-  // THE HOT PATH (Write)
-  // Cost: ~1-2 CPU Cycles (MOV + ADD). No LOCK prefix.
-  inline void Add(T n) {
-    ThreadLocalNode& node = GetLocalNode();
+  ShardedAtomic() : index_(CounterRegistry::Instance().AllocateIndex()) {
+    ref_keeper_ = std::shared_ptr<size_t>(new size_t(index_), [](size_t *p) {
+      CounterRegistry::Instance().FreeIndex(*p);
+      delete p;
+    });
+  }
 
-    // Optimistic Load -> Add -> Store
-    // Since this thread is the exclusive writer to 'node', we don't need atomic
-    // RMW. We use relaxed ordering to avoid memory fences, relying on the
-    // single-writer invariant.
-    T current = node.value.load(std::memory_order_relaxed);
-    node.value.store(current + n, std::memory_order_relaxed);
+  // THE HOT PATH (Write)
+  inline void Add(T n) {
+    ThreadLocalNode &node = GetLocalNode();
+    if (ABSL_PREDICT_FALSE(index_ >= node.capacity)) {
+      node.EnsureCapacity(index_ + 1);
+    }
+    T current = node.values[index_].load(std::memory_order_relaxed);
+    node.values[index_].store(current + n, std::memory_order_relaxed);
   }
 
   inline void Subtract(T n) {
-    ThreadLocalNode& node = GetLocalNode();
-
-    T current = node.value.load(std::memory_order_relaxed);
-    node.value.store(current - n, std::memory_order_relaxed);
+    ThreadLocalNode &node = GetLocalNode();
+    if (ABSL_PREDICT_FALSE(index_ >= node.capacity)) {
+      node.EnsureCapacity(index_ + 1);
+    }
+    T current = node.values[index_].load(std::memory_order_relaxed);
+    node.values[index_].store(current - n, std::memory_order_relaxed);
   }
+
+  // Prefix increment
+  inline ShardedAtomic &operator++() {
+    Add(1);
+    return *this;
+  }
+
+  // Postfix increment
+  inline void operator++(int) { Add(1); }
+
+  // Prefix decrement
+  inline ShardedAtomic &operator--() {
+    Subtract(1);
+    return *this;
+  }
+
+  // Postfix decrement
+  inline void operator--(int) { Subtract(1); }
 
   // THE COLD PATH (Read)
-  // Cost: Mutex Lock + Vector Iteration (O(N) active threads)
-  // Default allows fuzzy reads (relaxed) for maximum performance.
   T GetTotal(std::memory_order order = std::memory_order_relaxed) const {
-    return CounterRegistry::Instance().GetTotal(order);
+    return CounterRegistry::Instance().GetTotal(index_, order);
   }
 
-  void Reset() const { return CounterRegistry::Instance().Reset(); }
+  void Reset() const { CounterRegistry::Instance().Reset(index_); }
 
  private:
-  // Forward declaration
-  struct ThreadLocalNode;
+  // ThreadLocalNode is the TLS container for unbounded dynamic counters
+  struct alignas(64) ThreadLocalNode {
+    std::atomic<T> *values{nullptr};
+    size_t capacity{0};
+    mutable absl::Mutex resize_mutex;
 
-  // Private Registry: Manages active nodes for this specific type T
+    ThreadLocalNode();
+    ~ThreadLocalNode();
+    void EnsureCapacity(size_t min_capacity);
+  };
+
+  // Private Registry: Manages active nodes and dynamic indices for this
+  // specific type T
   class CounterRegistry {
    public:
-    static CounterRegistry& Instance() {
+    static CounterRegistry &Instance() {
       static CounterRegistry instance;
       return instance;
     }
 
-    void Register(ThreadLocalNode* node) {
+    size_t AllocateIndex() {
+      absl::MutexLock lock(&mutex_);
+      size_t index;
+      if (!free_indices_.empty()) {
+        index = free_indices_.back();
+        free_indices_.pop_back();
+      } else {
+        index = next_index_++;
+        retired_totals_.push_back(0);
+      }
+      return index;
+    }
+
+    void FreeIndex(size_t index) {
+      absl::MutexLock lock(&mutex_);
+      if (index < retired_totals_.size()) {
+        retired_totals_[index] = 0;
+        for (auto *node : nodes_) {
+          absl::MutexLock node_lock(&node->resize_mutex);
+          if (index < node->capacity) {
+            node->values[index].store(0, std::memory_order_relaxed);
+          }
+        }
+        free_indices_.push_back(index);
+      }
+    }
+
+    void Register(ThreadLocalNode *node) {
       absl::MutexLock lock(&mutex_);
       nodes_.push_back(node);
     }
 
-    void Unregister(ThreadLocalNode* node) {
+    void Unregister(ThreadLocalNode *node) {
       absl::MutexLock lock(&mutex_);
-      retired_total_.fetch_add(node->value.load(std::memory_order_relaxed),
-                               std::memory_order_relaxed);
+      absl::MutexLock node_lock(&node->resize_mutex);
+      for (size_t i = 0; i < node->capacity; ++i) {
+        if (i < retired_totals_.size()) {
+          retired_totals_[i] += node->values[i].load(std::memory_order_relaxed);
+        }
+      }
       auto it = std::find(nodes_.begin(), nodes_.end(), node);
       if (it != nodes_.end()) {
         *it = nodes_.back();
@@ -86,60 +150,115 @@ class ShardedAtomic {
       }
     }
 
-    T GetTotal(std::memory_order order) const {
-      T total = retired_total_.load(order);
-      // We lock purely to ensure the vector doesn't change size (iterators
-      // validity)
+    T GetTotal(size_t index, std::memory_order order) const {
       absl::ReaderMutexLock lock(&mutex_);
-
-      for (const auto* node : nodes_) {
-        total += node->value.load(order);
+      T total = 0;
+      if (index < retired_totals_.size()) {
+        total = retired_totals_[index];
+      }
+      for (const auto *node : nodes_) {
+        absl::MutexLock node_lock(&node->resize_mutex);
+        if (index < node->capacity) {
+          total += node->values[index].load(order);
+        }
       }
       return total;
     }
 
-    void Reset() {
-      // We lock purely to ensure the vector doesn't change size (iterators
-      // validity)
+    void Reset(size_t index) {
       absl::ReaderMutexLock lock(&mutex_);
-      retired_total_.store(0, std::memory_order_seq_cst);
-      for (auto* node : nodes_) {
-        // Forcibly set value to 0.
-        node->value.store(0, std::memory_order_seq_cst);
+      if (index < retired_totals_.size()) {
+        retired_totals_[index] = 0;
+      }
+      for (auto *node : nodes_) {
+        absl::MutexLock node_lock(&node->resize_mutex);
+        if (index < node->capacity) {
+          node->values[index].store(0, std::memory_order_seq_cst);
+        }
       }
     }
 
    private:
     mutable absl::Mutex mutex_;
-    std::vector<ThreadLocalNode*,
-                RawSystemAllocator<ThreadLocalNode*,
+    std::vector<ThreadLocalNode *,
+                RawSystemAllocator<ThreadLocalNode *,
                                    DisableRawSystemAllocatorReporting>>
         nodes_ ABSL_GUARDED_BY(mutex_);
-    // Carries over the value of threads that have exited. A ThreadLocalNode can
-    // hold a non-zero value at exit when an increment and its matching
-    // decrement happen on different threads (e.g. memory allocated on a worker
-    // thread and freed on the main thread); discarding it would make the
-    // reported total memory inaccurate.
-    std::atomic<T> retired_total_{0};
+
+    std::vector<T, RawSystemAllocator<T, DisableRawSystemAllocatorReporting>>
+        retired_totals_ ABSL_GUARDED_BY(mutex_);
+
+    std::vector<size_t,
+                RawSystemAllocator<size_t, DisableRawSystemAllocatorReporting>>
+        free_indices_ ABSL_GUARDED_BY(mutex_);
+
+    size_t next_index_ ABSL_GUARDED_BY(mutex_){0};
   };
 
-  // ThreadLocalNode is the TLS container
-  struct alignas(64) ThreadLocalNode {
-    std::atomic<T> value{0};
-
-    ThreadLocalNode() { CounterRegistry::Instance().Register(this); }
-
-    ~ThreadLocalNode() { CounterRegistry::Instance().Unregister(this); }
-  };
-
-  // Helper to access the unique TLS node for the current thread
-  static ThreadLocalNode& GetLocalNode() {
-    // C++ guarantees this is initialized once per thread (lazily)
-    // and destroyed when the thread exits.
+  static ThreadLocalNode &GetLocalNode() {
     static thread_local ThreadLocalNode node;
     return node;
   }
+
+ private:
+  size_t index_;
+  std::shared_ptr<size_t> ref_keeper_;
 };
+
+// ------------------------------------------------------------------------
+// Out-of-line method definitions
+// ------------------------------------------------------------------------
+
+template <typename T>
+ShardedAtomic<T>::ThreadLocalNode::ThreadLocalNode() {
+  CounterRegistry::Instance().Register(this);
+}
+
+template <typename T>
+ShardedAtomic<T>::ThreadLocalNode::~ThreadLocalNode() {
+  CounterRegistry::Instance().Unregister(this);
+  if (values) {
+    RawSystemAllocator<std::atomic<T>, DisableRawSystemAllocatorReporting>
+        alloc;
+    alloc.deallocate(values, capacity);
+  }
+}
+
+template <typename T>
+void ShardedAtomic<T>::ThreadLocalNode::EnsureCapacity(size_t min_capacity) {
+  if (ABSL_PREDICT_TRUE(min_capacity <= capacity)) {
+    return;
+  }
+
+  absl::MutexLock lock(&resize_mutex);
+  if (min_capacity <= capacity) {
+    return;
+  }
+
+  size_t new_capacity =
+      std::max(capacity * 2, std::max(min_capacity, (size_t)64));
+
+  RawSystemAllocator<std::atomic<T>, DisableRawSystemAllocatorReporting> alloc;
+  std::atomic<T> *new_values = alloc.allocate(new_capacity);
+
+  for (size_t i = 0; i < capacity; ++i) {
+    new (new_values + i)
+        std::atomic<T>(values[i].load(std::memory_order_relaxed));
+  }
+  for (size_t i = capacity; i < new_capacity; ++i) {
+    new (new_values + i) std::atomic<T>(0);
+  }
+
+  std::atomic<T> *old_values = values;
+  size_t old_capacity = capacity;
+
+  values = new_values;
+  capacity = new_capacity;
+
+  if (old_values) {
+    alloc.deallocate(old_values, old_capacity);
+  }
+}
 
 }  // namespace vmsdk
 

@@ -34,6 +34,7 @@ Key.
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,19 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
+// Btree value: the position map pointer plus the key's (immutable) term
+// frequency and document length, co-located so the scoring hot path reads them
+// straight off the merge iterator instead of decoding the separately allocated
+// FlatPositionMap block (tf) or probing the per-key scoring map (doc_len).
+struct PostingValue {
+  FlatPositionMap* map;
+  uint32_t tf;
+  uint32_t doc_len;
+};
+// doc_len fills the padding after tf, so PostingValue stays 16 bytes.
+static_assert(sizeof(PostingValue) == 16,
+              "doc_len should fill existing padding, not grow PostingValue");
+
 struct Postings {
   struct KeyIterator;
 
@@ -78,8 +92,11 @@ struct Postings {
   // Are there any postings in this object?
   bool IsEmpty() const;
 
-  // Insert the key with FlatPositionMap
-  void InsertKey(const Key& key, FlatPositionMap* flat_map);
+  // Insert the key with FlatPositionMap, the key's term frequency for this term
+  // and its document length. tf must equal the total field occurrences in
+  // flat_map; the caller already computes it while building the position map.
+  void InsertKey(const Key& key, FlatPositionMap* flat_map, uint32_t tf,
+                 uint32_t doc_len);
 
   // Remove a key and all positions for it
   void RemoveKey(const Key& key, TextIndexMetadata* metadata);
@@ -92,6 +109,10 @@ struct Postings {
 
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
+
+  // Look up the posting entry (tf + doc_len) for a specific key in one find,
+  // only used in extra-step scoring. Returns nullopt if the key is absent.
+  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -121,17 +142,28 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // get tf for the current key, only used in iterator scoring
+    size_t GetTermFrequency() const;
+
+    // get the document length for the current key (scoring hot path)
+    uint32_t GetDocLen() const;
+
    private:
     friend struct Postings;
 
     // Iterator state - pointer to key_to_positions map
-    const absl::btree_map<Key, FlatPositionMap*>* key_map_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator current_;
-    absl::btree_map<Key, FlatPositionMap*>::const_iterator end_;
+    const absl::btree_map<Key, PostingValue, InternedStringPtrLess>* key_map_;
+    absl::btree_map<Key, PostingValue, InternedStringPtrLess>::const_iterator
+        current_;
+    absl::btree_map<Key, PostingValue, InternedStringPtrLess>::const_iterator
+        end_;
   };
 
  private:
-  absl::btree_map<Key, FlatPositionMap*> key_to_positions_;
+  // Cache tf in PostingValue to avoid a map lookup
+  // PostValue should be removed and restored if no extra-step
+  // Transparent comparator so LookupKey() can probe with a borrowed key.
+  absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
 };
 
 }  // namespace valkey_search::indexes::text

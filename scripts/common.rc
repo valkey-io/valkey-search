@@ -171,9 +171,18 @@ function setup_valkey_server() {
   fi
 
   # Clone and build it
-  VALKEY_VERSION="${VALKEY_VERSION:=9.0.1}"
+  VALKEY_VERSION="${VALKEY_VERSION:=9.1}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
+  
+  local version_stamp_file="${VALKEY_SERVER_HOME_DIR}/.valkey_version_stamp"
+  if [ -d "${VALKEY_SERVER_HOME_DIR}" ]; then
+    if [ ! -f "${version_stamp_file}" ] || [ "$(cat "${version_stamp_file}")" != "${VALKEY_VERSION}" ]; then
+      LOG_INFO "Stale Valkey version detected (needed ${VALKEY_VERSION}). Wiping ${VALKEY_SERVER_HOME_DIR} and rebuilding..."
+      rm -rf "${VALKEY_SERVER_HOME_DIR}"
+    fi
+  fi
+
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
     LOG_INFO "Cloning valkey-server@${VALKEY_VERSION} into ${VALKEY_SERVER_HOME_DIR}"
     git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
@@ -193,6 +202,23 @@ function setup_valkey_server() {
   if [ ! -z "${SAN_BUILD}" ] && [[ "${SAN_BUILD}" != "no" ]]; then
     VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
     LOG_INFO "Building Valkey with Sanitizer options: -DBUILD_SANITIZER=${SAN_BUILD}"
+
+    # On Linux, make libstdc++ a direct dependency of valkey-server for
+    # sanitizer builds. libasan intercepts C++ __cxa_throw and at startup
+    # looks up the real one in libstdc++. If libstdc++ isn't loaded yet at
+    # that point, it caches nullptr and every later `throw` triggers a
+    # fatal libasan CHECK. Loading libstdc++ from valkey-server's own
+    # NEEDED list guarantees it's there early enough for the lookup to
+    # succeed. --no-as-needed keeps it linked despite Valkey's C sources
+    # not referencing any C++ symbols; push/pop scopes that override to
+    # just -lstdc++. These are GNU ld / ELF-specific flags, and macOS
+    # sanitizer builds use libc++ instead of libstdc++, so this only
+    # applies to Linux.
+    if [[ "${UNAME_S}" == "Linux" ]]; then
+      export LDFLAGS="${LDFLAGS} -Wl,--push-state,--no-as-needed,-lstdc++,--pop-state"
+      LOG_INFO "Forcing libstdc++ into valkey-server DT_NEEDED for reliable ASAN __cxa_throw interception (LDFLAGS: ${LDFLAGS})"
+    fi
+
     # Temporary workaround until these are merged into core upstream:
     # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.
     # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/util.c#L640-L642
@@ -216,6 +242,7 @@ function setup_valkey_server() {
   cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
   make -j$(num_proc)
   popd >/dev/null
+  echo "${VALKEY_VERSION}" > "${version_stamp_file}"
   export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
   export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
   LOG_INFO "VALKEY_SERVER_PATH => ${VALKEY_SERVER_PATH}"

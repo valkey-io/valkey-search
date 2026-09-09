@@ -50,13 +50,15 @@ CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 struct NeighborComparator {
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
-    // Primary sort: by distance
-    // We use a max heap, to pop off the furthest vector during aggregation.
+    // Max heap on distance, to pop off the furthest vector during KNN
+    // aggregation. Hybrid text=>[KNN] sets score to text relevance, so key on
+    // distance (not score) to evict correctly. Non-vector queries all have
+    // distance 0 and are never evicted (see AddResult), falling to the
+    // tie-break.
     if (a.distance != b.distance) {
       return a.distance < b.distance;
     }
     // Secondary sort: by key for consistent ordering when distances are equal.
-    // Primarily used in non vector queries without scores (distance = 0).
     // The full string compare is required because for external keys there is no
     // guarantee of the stability of the InternedStringPtr across invocations.
     return a.external_id->Str() > b.external_id->Str();
@@ -143,7 +145,8 @@ struct SearchPartitionResultsTracker {
       }
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
-          neighbor_entry->score(), std::move(attribute_contents)};
+          neighbor_entry->distance(), std::move(attribute_contents)};
+      neighbor.score = neighbor_entry->score();
       AddResult(neighbor);
     }
   }
@@ -315,6 +318,8 @@ absl::Status PerformSearchFanoutAsync(
     coordinator::ClientPool *coordinator_client_pool,
     std::unique_ptr<SearchParameters> parameters,
     vmsdk::ThreadPool *thread_pool) {
+  // Queue depth admission check is in commands.cc (before BlockedClient
+  // creation) so that returning an error doesn't crash the blocked client.
   auto request = coordinator::ParametersToGRPCSearchRequest(*parameters);
   uint64_t index_size = parameters->index_schema->GetDbKeyInfoSize();
   uint32_t min_index_size =
@@ -388,9 +393,9 @@ absl::Status PerformSearchFanoutAsync(
     // At 30 requests, it takes ~600 micros to enqueue all the requests.
     // Putting this into the background thread pool will save us time on
     // machines with multiple cores.
-    std::string target_address =
-        absl::StrCat(node.socket_address.primary_endpoint, ":",
-                     coordinator::GetCoordinatorPort(node.socket_address.port));
+    std::string target_address = coordinator::FormatAddressWithPort(
+        node.socket_address.primary_endpoint,
+        coordinator::GetCoordinatorPort(node.socket_address.port));
     if (search_targets.size() >=
             valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
         thread_pool->Size() > 1) {

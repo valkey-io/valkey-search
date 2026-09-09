@@ -6,10 +6,12 @@
 
 #include "src/expr/value.h"
 
+#include <charconv>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
 
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
@@ -37,9 +39,19 @@ static bool IsInf(const double& d) {
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
 }
 
+// Redisearch has no string form for an array and compares it as the empty
+// string -- `@array == ""` is true there, for an empty and a populated array
+// alike. Matching that keeps string comparisons against an array compatible.
+static constexpr absl::string_view kArrayAsString{""};
+
 Value::Value(double d) { value_ = d; }
 
 bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
+
+bool Value::IsMissing() const {
+  auto nil = std::get_if<Nil>(&value_);
+  return nil && nil->IsMissing();
+}
 
 bool Value::IsBool() const { return std::get_if<bool>(&value_); }
 
@@ -53,8 +65,10 @@ bool Value::IsString() const {
 bool Value::IsArray() const { return std::holds_alternative<Array>(value_); }
 
 size_t Value::ArraySize() const {
-  CHECK(IsArray());
-  return std::get<Array>(value_)->size();
+  if (auto vec_ptr = std::get_if<Array>(&value_)) {
+    return (*vec_ptr)->size();
+  }
+  return 0;
 }
 
 bool Value::IsEmptyArray() const {
@@ -92,11 +106,29 @@ std::string FormatDouble(double d) {
     } else {
       return "nan";
     }
-  } else {
-    char storage[50];
-    size_t output_chars = snprintf(storage, sizeof(storage), "%.11g", d);
-    return {storage, output_chars};
   }
+  char storage[32];
+  // Redisearch splits on integrality, and so does this. Integers print in
+  // fixed notation: "%.12g" would turn an epoch-millisecond 1700000000123
+  // into "1.70000000012e+12" (the #1262 precision loss), and shortest-
+  // round-trip to_chars would shorten 1700000000 to "1.7e+09". Above 2^53
+  // integrality is an artifact of the binary representation, and the fixed
+  // expansion of a value like 1e300 would not fit storage, so the fixed path
+  // stops at 1e17 -- still well past epoch microseconds.
+  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
+                                   std::chars_format::fixed, 0);
+    CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
+                             << d << ": " << std::make_error_code(ec).message();
+    return {storage, ptr};
+  }
+  // Everything else takes Redisearch's 12 significant digits. to_chars would
+  // render sqrt(50) as 7.0710678118654755 where Redisearch says
+  // 7.07106781187, and that difference reaches the reply.
+  size_t output_chars = snprintf(storage, sizeof(storage), "%.12g", d);
+  CHECK(output_chars < sizeof(storage))
+      << "FormatDouble overflowed formatting " << d;
+  return {storage, output_chars};
 }
 
 std::optional<bool> Value::AsBool() const {
@@ -108,6 +140,10 @@ std::optional<bool> Value::AsBool() const {
       return true;
     }
     return !(*result == 0.0);
+  }
+  if (IsArray()) {
+    // Redisearch reads an array as truthy; empty follows the string rule below.
+    return !IsEmptyArray();
   }
   // 1.2.1 fix: non-empty strings are truthy (matches Redisearch). Pre-1.2.1
   // every non-numeric value (Nil, both string variants) evaluated to false.
@@ -168,6 +204,8 @@ std::optional<absl::string_view> Value::AsStringView() const {
     return *result;
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return absl::string_view(*result);
+  } else if (std::holds_alternative<Array>(value_)) {
+    return kArrayAsString;
   } else {
     return std::nullopt;
   }
@@ -182,8 +220,8 @@ std::optional<std::string> Value::AsString() const {
     return std::string(*result);
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
-  } else if (auto result = std::get_if<Value::Array>(&value_)) {
-    return "";
+  } else if (std::holds_alternative<Array>(value_)) {
+    return std::string(kArrayAsString);
   } else {
     return std::nullopt;
   }
@@ -219,6 +257,19 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   } else if (v.IsString()) {
     // IsString() guarantees AsStringView() succeeds.
     return os << "'" << *v.AsStringView() << "'";
+  } else if (v.IsArray()) {
+    // GroupKey streams its elements, and expanding a multi-value key puts
+    // arrays here, so this has to render rather than abort. Elements recurse,
+    // which also covers nested arrays.
+    auto array = v.GetArray();
+    os << '[';
+    for (size_t i = 0; i < array->size(); ++i) {
+      if (i > 0) {
+        os << ',';
+      }
+      os << (*array)[i];
+    }
+    return os << ']';
   }
   CHECK(false);
 }
@@ -285,13 +336,17 @@ Ordering Compare(const Value& l, const Value& r) {
 
   // Array comparisons
   if (l.IsArray() && r.IsArray()) {
+    // Lexicographic comparison for array-array
     auto lvec = l.GetArray();
     auto rvec = r.GetArray();
 
+    // Compare element-by-element until mismatch found
     size_t min_size = std::min(lvec->size(), rvec->size());
-    if (min_size > 0) {
-      // Match RediSearch behavior by only comparing first elements
-      return Compare((*lvec)[0], (*rvec)[0]);
+    for (size_t i = 0; i < min_size; ++i) {
+      Ordering cmp = Compare((*lvec)[i], (*rvec)[i]);
+      if (cmp != Ordering::kEQUAL) {
+        return cmp;
+      }
     }
 
     // All elements equal, compare by length
@@ -301,10 +356,9 @@ Ordering Compare(const Value& l, const Value& r) {
       return Ordering::kGREATER;
     }
     return Ordering::kEQUAL;
-  } else if (l.IsArray() || r.IsArray()) {
-    // Array vs scalar
-    return Ordering::kUNORDERED;
   }
+  // Array vs scalar falls through to the string comparison below, where the
+  // array compares as kArrayAsString -- what Redisearch does.
 
   // Need to handle non-equivalent types.
   // Prefer to promote to double unless that fails.
@@ -318,58 +372,220 @@ Ordering Compare(const Value& l, const Value& r) {
   return CompareStrings(*l.AsStringView(), *r.AsStringView());
 }
 
-Value FuncAdd(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() + rv.value());
-  } else {
-    return Value(Value::Nil("Add requires numeric operands"));
+// Vector error message generation functions
+
+static std::string MakeLengthMismatchError(size_t length1, size_t length2) {
+  return "Length mismatch: vectors have lengths " + std::to_string(length1) +
+         " and " + std::to_string(length2);
+}
+
+static std::string MakeIndexOutOfBoundsError(int64_t index, size_t length) {
+  return "Index out of bounds: index " + std::to_string(index) +
+         ", vector length " + std::to_string(length);
+}
+
+static std::string MakeElementError(size_t index, const std::string& reason) {
+  return "Element error at index " + std::to_string(index) + ": " + reason;
+}
+
+// Vector operation helper functions
+
+Value ApplyToElements(const Value::Array vec,
+                      std::function<Value(const Value&)> func) {
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec->size());
+
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result = func((*vec)[i]);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
   }
+
+  return Value(result);
+}
+
+Value ApplyWithScalar(const Value::Array vec, const Value& scalar,
+                      std::function<Value(const Value&, const Value&)> func,
+                      bool scalar_on_left) {
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec->size());
+
+  for (size_t i = 0; i < vec->size(); ++i) {
+    Value elem_result =
+        scalar_on_left ? func(scalar, (*vec)[i]) : func((*vec)[i], scalar);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
+}
+
+Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
+                       std::function<Value(const Value&, const Value&)> func) {
+  if (vec1->size() != vec2->size()) {
+    std::string error_msg = MakeLengthMismatchError(vec1->size(), vec2->size());
+    return Value(Value::Nil(error_msg));
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  result->reserve(vec1->size());
+
+  for (size_t i = 0; i < vec1->size(); ++i) {
+    Value elem_result = func((*vec1)[i], (*vec2)[i]);
+    if (elem_result.IsNil()) {
+      // Propagate error with index information
+      std::string error_msg =
+          MakeElementError(i, elem_result.GetNil().GetReason());
+      return Value(Value::Nil(error_msg));
+    }
+    result->push_back(std::move(elem_result));
+  }
+
+  return Value(result);
+}
+
+Value FuncAdd(const Value& l, const Value& r) {
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() + rv.value());
+    } else {
+      return Value(Value::Nil("Add requires numeric operands"));
+    }
+  }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncAdd, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncAdd, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncAdd);
 }
 
 Value FuncSub(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() - rv.value());
-  } else {
-    return Value(Value::Nil("Subtract requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() - rv.value());
+    } else {
+      return Value(Value::Nil("Subtract requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncSub, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncSub, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncSub);
 }
 
 Value FuncMul(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(lv.value() * rv.value());
-  } else {
-    return Value(Value::Nil("Multiply requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(lv.value() * rv.value());
+    } else {
+      return Value(Value::Nil("Multiply requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncMul, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncMul, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncMul);
 }
 
 Value FuncDiv(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    if (rv.value() == 0) {
-      return Value(std::nan(""));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      if (rv.value() == 0) {
+        return Value(std::nan(""));
+      } else {
+        return Value(lv.value() / rv.value());
+      }
     } else {
-      return Value(lv.value() / rv.value());
+      return Value(Value::Nil("Divide requires numeric operands"));
     }
-  } else {
-    return Value(Value::Nil("Divide requires numeric operands"));
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncDiv, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncDiv, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncDiv);
 }
 
 Value FuncPower(const Value& l, const Value& r) {
-  auto lv = l.AsDouble();
-  auto rv = r.AsDouble();
-  if (lv && rv) {
-    return Value(std::pow(lv.value(), rv.value()));
-  } else {
-    return Value(Value::Nil("Power requires numeric operands"));
+  // Case 1: Both scalars (existing behavior)
+  if (!l.IsArray() && !r.IsArray()) {
+    auto lv = l.AsDouble();
+    auto rv = r.AsDouble();
+    if (lv && rv) {
+      return Value(std::pow(lv.value(), rv.value()));
+    } else {
+      return Value(Value::Nil("Power requires numeric operands"));
+    }
   }
+
+  // Case 2: Left is vector, right is scalar (broadcast)
+  if (l.IsArray() && !r.IsArray()) {
+    return ApplyWithScalar(l.GetArray(), r, FuncPower, false);
+  }
+
+  // Case 3: Left is scalar, right is vector (broadcast)
+  if (!l.IsArray() && r.IsArray()) {
+    return ApplyWithScalar(r.GetArray(), l, FuncPower, true);
+  }
+
+  // Case 4: Both are vectors (element-wise)
+  return ApplyElementWise(l.GetArray(), r.GetArray(), FuncPower);
 }
 
 Value FuncLt(const Value& l, const Value& r) { return Value(l < r); }
@@ -482,7 +698,7 @@ Value FuncSqrt(const Value& o) {
 
 Value FuncStrlen(const Value& o) {
   if (o.IsArray()) {
-    return Value();
+    return ApplyToElements(o.GetArray(), FuncStrlen);
   }
   auto os = o.AsStringView();
   if (!os) {
@@ -492,9 +708,25 @@ Value FuncStrlen(const Value& o) {
 }
 
 Value FuncStartswith(const Value& l, const Value& r) {
-  if (l.IsArray() || r.IsArray()) {
-    return Value();
+  bool l_is_vec = l.IsArray();
+  bool r_is_vec = r.IsArray();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetArray(), r, FuncStartswith, false);
   }
+
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetArray(), l, FuncStartswith, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetArray(), r.GetArray(), FuncStartswith);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -509,10 +741,25 @@ Value FuncStartswith(const Value& l, const Value& r) {
 }
 
 Value FuncContains(const Value& l, const Value& r) {
-  if (l.IsArray() || r.IsArray()) {
-    return Value();
+  bool l_is_vec = l.IsArray();
+  bool r_is_vec = r.IsArray();
+
+  // Case 1: Left is vector, right is scalar (broadcast)
+  if (l_is_vec && !r_is_vec) {
+    return ApplyWithScalar(l.GetArray(), r, FuncContains, false);
   }
 
+  // Case 2: Left is scalar, right is vector (broadcast)
+  if (!l_is_vec && r_is_vec) {
+    return ApplyWithScalar(r.GetArray(), l, FuncContains, true);
+  }
+
+  // Case 3: Both are vectors (element-wise)
+  if (l_is_vec && r_is_vec) {
+    return ApplyElementWise(l.GetArray(), r.GetArray(), FuncContains);
+  }
+
+  // Case 4: Both scalars (existing behavior)
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -533,7 +780,7 @@ Value FuncContains(const Value& l, const Value& r) {
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
-    return Value(Value::Nil("Invalid type for substr. Expected string"));
+    return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
   }
 
   auto ls = l.AsStringView();
@@ -565,9 +812,6 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
-  if (o.IsArray()) {
-    return Value();
-  }
   // 1.2.1 fix: refuse non-string inputs (matches Redisearch — lower(0) → Nil).
   // Pre-1.2.1: passed numeric/bool through via AsStringView, returning
   // their string form unchanged.
@@ -594,9 +838,6 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
-  if (o.IsArray()) {
-    return Value();
-  }
   // See FuncLower above for rationale.
   if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
                            1, 2, 1, "upper_non_string_to_nil",
@@ -828,6 +1069,126 @@ Value FuncMinute(const Value& o) {
   return RoundToPeriod(o, 60.0, "minute: timestamp not a number",
                        "minute: timestamp is not finite",
                        "minute: timestamp is before the epoch");
+}
+
+// Vector-specific functions
+
+Value FuncArrayLen(const Value& vec) {
+  if (!vec.IsArray()) {
+    return Value(Value::Nil("vectorlen: operand is not a vector"));
+  }
+  return Value(static_cast<double>(vec.ArraySize()));
+}
+
+Value FuncArrayAt(const Value& vec, const Value& index) {
+  if (!vec.IsArray()) {
+    return Value(Value::Nil("vectorat: first operand is not a vector"));
+  }
+
+  auto idx = index.AsInteger();
+  if (!idx) {
+    return Value(Value::Nil("vectorat: index is not an integer"));
+  }
+
+  size_t vec_size = vec.ArraySize();
+  if (*idx < 0 || static_cast<size_t>(*idx) >= vec_size) {
+    return Value(Value::Nil(MakeIndexOutOfBoundsError(*idx, vec_size)));
+  }
+
+  return vec.GetArrayElement(static_cast<size_t>(*idx));
+}
+
+Value FuncIsArray(const Value& val) { return Value(val.IsArray()); }
+
+Value FuncFlatten(const Value& vec, const Value& depth) {
+  if (!vec.IsArray()) {
+    return Value(Value::Nil("flatten: first operand is not a vector"));
+  }
+
+  auto depth_int = depth.AsInteger();
+  if (!depth_int) {
+    return Value(Value::Nil("flatten: depth is not an integer"));
+  }
+
+  if (*depth_int <= 0) {
+    return vec;
+  }
+
+  auto result = std::make_shared<std::vector<Value>>();
+  auto input_vec = vec.GetArray();
+
+  for (const auto& elem : *input_vec) {
+    if (elem.IsArray() && *depth_int > 0) {
+      // Recursively flatten nested vectors
+      Value flattened =
+          FuncFlatten(elem, Value(static_cast<double>(*depth_int - 1)));
+      if (flattened.IsNil()) {
+        return flattened;  // Propagate error
+      }
+      auto flattened_vec = flattened.GetArray();
+      result->insert(result->end(), flattened_vec->begin(),
+                     flattened_vec->end());
+    } else {
+      result->push_back(elem);
+    }
+  }
+
+  return Value(result);
+}
+
+Value DeserializeValueFromResp(ValkeyModuleCallReply* reply) {
+  if (reply == nullptr) {
+    return Value(Value::Nil("null reply"));
+  }
+
+  int reply_type = ValkeyModule_CallReplyType(reply);
+
+  switch (reply_type) {
+    case VALKEYMODULE_REPLY_NULL: {
+      return Value(Value::Nil("null"));
+    }
+
+    case VALKEYMODULE_REPLY_INTEGER: {
+      long long val = ValkeyModule_CallReplyInteger(reply);
+      return Value(static_cast<double>(val));
+    }
+
+    case VALKEYMODULE_REPLY_STRING: {
+      size_t len;
+      const char* str = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (str == nullptr) {
+        return Value(Value::Nil("invalid string"));
+      }
+      return Value(std::string(str, len));
+    }
+
+    case VALKEYMODULE_REPLY_ARRAY: {
+      size_t array_len = ValkeyModule_CallReplyLength(reply);
+      auto vec = std::make_shared<std::vector<Value>>();
+      vec->reserve(array_len);
+
+      for (size_t i = 0; i < array_len; ++i) {
+        ValkeyModuleCallReply* elem =
+            ValkeyModule_CallReplyArrayElement(reply, i);
+        vec->push_back(DeserializeValueFromResp(elem));
+      }
+
+      return Value(vec);
+    }
+
+    case VALKEYMODULE_REPLY_ERROR: {
+      size_t len;
+      const char* err = ValkeyModule_CallReplyStringPtr(reply, &len);
+      if (err == nullptr) {
+        return Value(Value::Nil("error"));
+      }
+      return Value(Value::Nil(err));
+    }
+
+    default: {
+      return Value(Value::Nil("unsupported reply type"));
+    }
+  }
 }
 
 }  // namespace expr

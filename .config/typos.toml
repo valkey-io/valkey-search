@@ -34,6 +34,8 @@ DrOpInDeX = "DrOpInDeX"
 updat = "updat" # Used for stem matching
 Clangd = "Clangd"
 mak = "mak" # Turkish suffix *mak in compatibility exclusion comments
+mis = "mis"     # "mis-strides", "mis-decode" in the SIMD kernel tests
+SHLL = "SHLL"   # AArch64 shift-left-long instruction
 
 [type.cpp]
 extend-ignore-re = [

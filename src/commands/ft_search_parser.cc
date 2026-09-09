@@ -54,51 +54,6 @@ vmsdk::config::Number &GetMaxKnn() {
 
 namespace {
 
-absl::Status Verify(query::SearchParameters &parameters) {
-  // Only verify the vector KNN parameters for vector based queries.
-  if (!parameters.IsNonVectorQuery()) {
-    if (parameters.query.empty()) {
-      return absl::InvalidArgumentError("Invalid Query Syntax");
-    }
-    if (parameters.ef.has_value()) {
-      auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
-      VMSDK_RETURN_IF_ERROR(
-          vmsdk::VerifyRange(parameters.ef.value(), 1, max_ef_runtime_value))
-          << "`EF_RUNTIME` must be a positive integer greater than 0 and "
-             "cannot "
-             "exceed "
-          << max_ef_runtime_value << ".";
-    }
-    auto max_knn_value = options::GetMaxKnn().GetValue();
-    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-        << "KNN parameter must be a positive integer greater than 0 and cannot "
-           "exceed "
-        << max_knn_value << ".";
-  }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(query::kTimeoutParam,
-                     " must be a positive integer greater than 0 and "
-                     "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
-  }
-  if (parameters.dialect < 2 || parameters.dialect > 4) {
-    return absl::InvalidArgumentError(
-        "DIALECT requires a non negative integer >=2 and <= 4");
-  }
-
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
-  return absl::OkStatus();
-}
-
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {

@@ -161,8 +161,10 @@ TEST_F(TextIndexSchemaTest, NormReflectsMaxTermFrequency) {
   // with_offsets=true so duplicate tokens get distinct positions
   std::vector<std::string> empty_stop_words;
   auto schema = std::make_shared<TextIndexSchema>(
-      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-      true, empty_stop_words, 4);
+      CreateLanguage(data_model::LANGUAGE_ENGLISH,
+                     " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+                     empty_stop_words),
+      true, 4);
   data_model::TextIndex proto;
   auto text = std::make_shared<Text>(proto, schema);
 

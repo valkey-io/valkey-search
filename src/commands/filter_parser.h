@@ -155,7 +155,7 @@ class FilterParser {
   // Appends the multi-byte codepoint at pos_ to dest and advances pos_.
   // Caller must ensure pos_ points to a lead byte >= 0x80.
   void ConsumeNonAsciiByte(std::string& dest);
-  
+
   // Parses a QMA block after `=> {`. Returns the weight value on success.
   absl::StatusOr<double> ParseQMABlock();
   // If the parser is positioned at a `=> { ... }` QMA block, consumes it and

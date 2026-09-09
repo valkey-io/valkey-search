@@ -416,7 +416,7 @@ TEST_F(TextTest, FuzzySearchAcrossMultiByteEdgeSplit) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "بالعالم");
   AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "اختبار");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
   auto results = text::FuzzySearch::Search(tree, "بالعالم", /*max_distance=*/0,
                                            /*max_words=*/100);
   ASSERT_EQ(results.size(), 1u);
@@ -429,7 +429,7 @@ TEST_F(TextTest, FuzzySearchAcrossMultiByteEdgeSplit) {
 TEST_F(TextTest, FuzzySearchCodePointDistance) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "¡hola");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
   auto exact = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/0,
                                          /*max_words=*/100);
   EXPECT_EQ(exact.size(), 0u);
@@ -448,7 +448,7 @@ TEST_F(TextTest, FuzzySearchCodePointDistance) {
 TEST_F(TextTest, FuzzySearchMultiByteTransposition) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "café");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
   auto exact = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/0,
                                          /*max_words=*/100);
   EXPECT_EQ(exact.size(), 0u);
@@ -469,7 +469,7 @@ TEST_F(TextTest, FuzzySearchAcrossThreeByteEdgeSplit) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "ぁ");
   AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "あ");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
   auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
                                            /*max_words=*/100);
   ASSERT_EQ(results.size(), 1u);
@@ -489,7 +489,7 @@ TEST_F(TextTest, FuzzyTranspositionAcrossEdgeSplit) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "café");
   AddRecordAndCommitKey(StringInternStore::Intern("doc:2"), "cafx");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
 
   // "caéf" is "café" with the last two code points transposed.
   // The transposition crosses the edge split at "caf"|"é..." vs "caf"|"x".
@@ -516,7 +516,7 @@ TEST_F(TextTest, FuzzySearchAcrossFourByteEdgeSplit) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:2"),
                         "\xF0\x9F\x98\x81");  // 😁
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
 
   // Exact match for 😀 at distance 0
   auto results = text::FuzzySearch::Search(
@@ -544,7 +544,7 @@ TEST_F(TextTest, FuzzyPruningOnPartialEdge) {
   AddRecordAndCommitKey(StringInternStore::Intern("doc:ja2"), "あ");
   AddRecordAndCommitKey(StringInternStore::Intern("doc:en"), "xyz");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
 
   // Searching "ぁ" at distance 0 — "xyz" subtree should be pruned
   // (completely different code points, distance would be >> 0).
@@ -559,7 +559,7 @@ TEST_F(TextTest, FuzzyPruningOnPartialEdge) {
                                          /*max_words=*/100);
   ASSERT_EQ(fuzzy.size(), 2u);
   // Verify "xyz" is not in results
-  for (const auto& r : fuzzy) {
+  for (const auto &r : fuzzy) {
     EXPECT_NE(r.GetKey()->Str(), "doc:en");
   }
 }
@@ -573,7 +573,7 @@ TEST_F(TextTest, FuzzyMultiByteDistance2) {
   // "München" — contains ü (U+00FC, 2 bytes)
   AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "münchen");
 
-  const auto& tree = text_index_schema_->GetTextIndex()->GetPrefix();
+  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
 
   // "munchen" differs by: ü→u (1 substitution). Distance 1 should match.
   auto d1 = text::FuzzySearch::Search(tree, "munchen", /*max_distance=*/1,
@@ -622,9 +622,9 @@ class TextMultiLanguageTest : public ::testing::Test {
     return std::make_unique<Text>(proto, schema);
   }
 
-  void IndexDocument(Text* text_index,
+  void IndexDocument(Text *text_index,
                      std::shared_ptr<text::TextIndexSchema> schema,
-                     const std::string& key_name, absl::string_view data) {
+                     const std::string &key_name, absl::string_view data) {
     auto key = StringInternStore::Intern(key_name);
     auto result = text_index->AddRecord(key, data);
     ASSERT_TRUE(result.ok()) << result.status();
@@ -633,7 +633,7 @@ class TextMultiLanguageTest : public ::testing::Test {
   }
 
   bool TokenExists(std::shared_ptr<text::TextIndexSchema> schema,
-                   const std::string& token) {
+                   const std::string &token) {
     auto iter = schema->GetTextIndex()->GetPrefix().GetWordIterator(token);
     return !iter.Done();
   }

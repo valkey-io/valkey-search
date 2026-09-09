@@ -2254,7 +2254,7 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   }
   if (has_low_precision_vector) {
     return kRelease13;
-  }   
+  }
   if (has_text_index) {
     auto lang =
         indexes::text::LanguageRegistry::Instance().Get(unpacked->language());

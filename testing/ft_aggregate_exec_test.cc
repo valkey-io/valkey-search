@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -82,12 +83,12 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-        1);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
 
@@ -111,15 +112,15 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
-        1);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n3", "n3", indexes::IndexerType::kNumeric),
-        2);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
+    EXPECT_EQ(params->AddRecordAttribute("n3", "n3", "n3",
+                                         indexes::IndexerType::kNumeric),
+              2);
 
     auto parser = CreateAggregateParser();
 
@@ -141,8 +142,9 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     AggregateParameters params(0);
     params.parse_vars_.index_interface_ = &fakeIndex;
-    params.AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-    params.AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric);
+    // Two numeric columns so the parsed stages can resolve both @n1 and @n2.
+    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
 
     auto parser = CreateAggregateParser();
     auto status = parser.Parse(params, itr);
@@ -291,6 +293,116 @@ TEST_F(AggregateExecTest, GroupTest) {
   }
 }
 
+TEST_F(AggregateExecTest, GroupByArrayKeyExpandsTest) {
+  // An array group key is a multi-value field: the record joins one group per
+  // element, and one per combination when both key fields hold arrays.
+  auto make_record = [](std::vector<double> n1, std::vector<double> n2) {
+    auto rec = std::make_unique<Record>(2);
+    auto to_value = [](const std::vector<double> &elems) {
+      std::vector<expr::Value> arr;
+      arr.reserve(elems.size());
+      for (double e : elems) {
+        arr.emplace_back(e);
+      }
+      return expr::Value(std::move(arr));
+    };
+    rec->fields_[0] = to_value(n1);
+    rec->fields_[1] = to_value(n2);
+    return rec;
+  };
+
+  // {1,2} and {2,3} share the element 2, so the two records join three
+  // distinct groups: 1, 2 and 3.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {0.0}));
+    records.emplace_back(make_record({2.0, 3.0}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 3);
+  }
+  // Two array keys expand to the product of their elements.
+  {
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {10.0, 20.0, 30.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 6);
+  }
+  // An empty array has no element to group into and keys as nil.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    EXPECT_TRUE(record->fields_.at(0).IsNil());
+  }
+  // Reducer arguments are not expanded: they still see the whole array.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce tolist 1 @n1 as items");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 2);
+    auto record = records.pop_front();
+    EXPECT_TRUE(record->fields_.at(0).IsDouble());
+    EXPECT_EQ(record->fields_.at(2).ArraySize(), 2);
+  }
+}
+
+// Two array keys whose product exceeds max-group-key-expansion must be
+// refused rather than expanded.
+TEST_F(AggregateExecTest, GroupByArrayKeyExpansionLimitTest) {
+  auto to_value = [](const std::vector<double> &elems) {
+    std::vector<expr::Value> arr;
+    arr.reserve(elems.size());
+    for (double e : elems) {
+      arr.emplace_back(e);
+    }
+    return expr::Value(std::move(arr));
+  };
+  auto make_record = [&](const std::vector<double> &n1,
+                         const std::vector<double> &n2) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = to_value(n1);
+    rec->fields_[1] = to_value(n2);
+    return rec;
+  };
+
+  auto &limit = options::GetMaxGroupKeyExpansion();
+  const auto saved = limit.GetValue();
+  VMSDK_EXPECT_OK(limit.SetValue(5));
+
+  {
+    // 3 * 3 = 9 > 5.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0, 3.0}, {10.0, 20.0, 30.0}));
+    auto status = param->stages_[0]->Execute(records);
+    EXPECT_TRUE(absl::IsResourceExhausted(status)) << status;
+  }
+  {
+    // 2 * 2 = 4 <= 5, so this one is still allowed through.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {10.0, 20.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 4);
+  }
+  {
+    // Exactly at the limit: 5 * 1 = 5 is not over it.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0, 3.0, 4.0, 5.0}, {10.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 5);
+  }
+
+  VMSDK_EXPECT_OK(limit.SetValue(saved));
+}
+
 TEST_F(AggregateExecTest, ReducerTest) {
   struct Testcase {
     std::string text_;
@@ -323,36 +435,49 @@ TEST_F(AggregateExecTest, ReducerTest) {
     }
   }
 }
-// Regression test for issue #1251: re-using an alias for a different field must
-// shadow the previous binding (RediSearch LOAD/APPLY semantics) rather than
-// abort or silently corrupt the alias/slot bookkeeping.
-TEST_F(AggregateExecTest, AliasRebindShadowsPreviousBinding) {
+// Regression test for issue #1251: re-using an output name for a different
+// field must not corrupt the column bookkeeping (the original defect sized
+// records from record_indexes_by_alias_, which undercounted, so populating a
+// later column wrote out of bounds).
+//
+// Upstream resolved #1251 by letting the re-bind shadow: two columns, with the
+// name resolving to the second. This branch collapses on the output name
+// instead, which matches Redisearch -- `LOAD 4 @n1 @n2 AS n1` returns a single
+// n1 column holding n1's value (the first claim wins), and an APPLY that
+// re-uses a loaded field's name overwrites that column in place rather than
+// emitting the name twice. A LOAD clause that actually provokes this collision
+// is rejected outright by the parser; see test_aggregate_load_as.py.
+TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   auto params = std::make_unique<AggregateParameters>(0);
   params->parse_vars_.index_interface_ = &fakeIndex;
 
-  EXPECT_EQ(
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-      0);
-  EXPECT_EQ(
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-      1);
-
-  // record_info_by_index_.size() is the slot count records are sized by.
-  EXPECT_EQ(params->record_info_by_index_.size(), 2);
-
-  // Shadowed: alias n1 resolves to the new slot, but the old slot survives and
-  // stays reachable by its identifier.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
+  // Re-using the output name n1 for a different field resolves to the column
+  // already emitting that name; no second n1 column is created.
+  EXPECT_EQ(params->AddRecordAttribute("n2", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
+  EXPECT_EQ(params->record_info_by_index_.size(), 1);
   ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
-  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 1);
-  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n1"));
-  EXPECT_EQ(params->record_indexes_by_identifier_.at("n1"), 0);
-  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n2"));
-  EXPECT_EQ(params->record_indexes_by_identifier_.at("n2"), 1);
+  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 0);
+  EXPECT_EQ(params->record_info_by_index_[0].identifier_, "n1");
 
-  // Re-adding the pair currently in effect is idempotent — no new slot.
-  EXPECT_EQ(
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-      1);
+  // A distinct output name over the same field gets a column of its own, so
+  // record_info_by_index_ -- what records are sized by -- stays the count of
+  // columns actually emitted.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "alias_of_n1",
+                                       indexes::IndexerType::kNumeric),
+            1);
+  EXPECT_EQ(params->record_info_by_index_.size(), 2);
+  EXPECT_EQ(params->record_info_by_index_[1].identifier_, "n1");
+  EXPECT_EQ(params->record_indexes_by_alias_.at("alias_of_n1"), 1);
+
+  // Re-adding a pair currently in effect is idempotent -- no new column.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
 }
 
@@ -489,8 +614,10 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       vmsdk::ArgsIterator itr(argv.data(), argv.size());
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-      params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n1", "n1", "n1",
+                                 indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n2", "n2", "n2",
+                                 indexes::IndexerType::kNumeric);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";

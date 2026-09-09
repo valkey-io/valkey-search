@@ -18,13 +18,13 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
 )
 
-# The compatibility pickles capture Redisearch behavior, which is the
-# compatible target. Run Valkey Search with search.emulate-release pinned to the
-# release that fixes the invalid-data compatibility defect so the compatible
-# (whole-key-drop) behavior is exercised. This requires debug-mode (the value is
-# above kModuleVersion), which the *DebugMode base classes enable. Datasets
-# without invalid data are unaffected by this setting.
-COMPAT_EMULATE_RELEASE = "1.3.0"
+# The compatibility pickles capture Redisearch behavior, which is the compatible
+# target for every emulate-release-gated compatibility fix. Pin the replay to the
+# maximum release so all such fixes are enabled regardless of the version each
+# was introduced in. This requires debug-mode (the value is above
+# kModuleVersion), which the *DebugMode base classes enable. Datasets that do not
+# exercise a gated fix are unaffected by this setting.
+COMPAT_EMULATE_RELEASE = "65535.255.255"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -89,10 +89,17 @@ def json_load(s):
         return None
 
 def parse_field(x, key_type):
+    """Normalize a field name from a reply.
+
+    This deliberately does NOT strip a leading "$.". Doing so used to hide
+    issue #1243: on a JSON index valkey-search emitted the schema identifier
+    ($.n1) where Redisearch emits the attribute name (n1), and stripping the
+    prefix made the two compare equal.
+    """
     if isinstance(x, bytes):
         return parse_field(x.decode("utf-8"), key_type)
     if isinstance(x, str):
-        return x[2::] if x.startswith("$.") else x
+        return x
     if isinstance(x, int):
         return x
     print("Unknown type ", type(x))
@@ -100,7 +107,10 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if isinstance(x, list):
+        if x is None:
+            # RESP nil: an APPLY whose expression evaluated to nothing.
+            result = None
+        elif isinstance(x, list):
             # TOLIST reducer returns a Python list for both hash and json
             result = x
         elif key_type == "json" and isinstance(x, int):
@@ -206,6 +216,32 @@ def unpack_hybrid_result(rs, key_type):
         })
     return out
 
+def order_insensitive(v):
+    """Row-ordering form of a field value.
+
+    A TOLIST field comes back in a different element order from each engine, so
+    a row keyed on one would otherwise sort differently on each side and the
+    two replies would be compared row-against-the-wrong-row.
+    """
+    if isinstance(v, list):
+        return sorted(repr(order_insensitive(i)) for i in v)
+    return repr(v)
+
+
+def row_sort_key(sortkeys):
+    # Rows that tie on the sort keys are ordered by their whole content, so
+    # equal-keyed rows still line up between the two replies.
+    def key(row):
+        # A sort key can be absent from a row: a field the key never had is
+        # left out of the reply, so `sortby 2 @t2 asc` over a dataset where
+        # some documents lack t2 yields rows without it. Both engines omit it
+        # the same way, so a shared placeholder keeps those rows comparable
+        # and lets the whole-content tiebreak below order them.
+        return ([order_insensitive(row.get(k)) for k in sortkeys],
+                sorted((repr(k), order_insensitive(v)) for k, v in row.items()))
+    return key
+
+
 def unpack_result(cmd, key_type, rs, sortkeys):
     if "ft.hybrid" in cmd[0].lower():
         out = unpack_hybrid_result(rs, key_type)
@@ -223,7 +259,7 @@ def unpack_result(cmd, key_type, rs, sortkeys):
     #
     if len(sortkeys) > 0:
         try:
-            out.sort(key=itemgetter(*sortkeys))
+            out.sort(key=row_sort_key(sortkeys))
         except KeyError:
             if sortkeys == ['__key']:
                 # we're not smart about when there is or isn't a key in the return
@@ -242,6 +278,12 @@ def unpack_result(cmd, key_type, rs, sortkeys):
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
+
+    # A numeric field can come back as a RESP nil -- GROUPBY on a field some
+    # documents lack names the group's key with one. float(None) raises, so
+    # without this two identical nil replies read as a mismatch.
+    if l is None or r is None:
+        return l is None and r is None
 
     if lnan and rnan:
         return True
@@ -341,31 +383,25 @@ def compare_results(expected, results):
         print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
     
-    # Keyword lookup is case-insensitive: generators spell these either way
-    # (generate.py lowercases, generate_hybrid.py uses the documented casing),
-    # and a missed keyword silently degrades to comparing rows positionally.
-    lower_cmd = [c.lower() if isinstance(c, str) else None for c in cmd]
+    # Key on the *last* GROUPBY/SORTBY in the pipeline: it decides which fields
+    # the reply carries, and an earlier GROUPBY's key is gone from the output
+    # once a later stage regroups.
+    def last_index(keyword):
+        # Match exactly, as this has always done: an uppercase SORTBY in an
+        # FT.SEARCH goes down the "no sort keys" path.
+        hits = [i for i, c in enumerate(cmd) if c == keyword]
+        return hits[-1] if hits else -1
 
-    if 'groupby' in lower_cmd and 'sortby' in lower_cmd:
-        assert False
-    if 'groupby' in lower_cmd:
-        ix = lower_cmd.index('groupby')
-        count = int(cmd[ix+1])
-        sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
-    elif 'sortby' in lower_cmd:
-        ix = lower_cmd.index('sortby')
-        if lower_cmd[0] == 'ft.search':
-            # FT.SEARCH takes a bare `SORTBY <field>` -- no leading count, so
-            # the field sits one past the keyword, not two.
-            fields = [cmd[ix+1]]
-        else:
-            count = int(cmd[ix+1])
-            fields = [cmd[ix+2+i] for i in range(count)]
-        # Strip any leading '@'
-        sortkeys = [f[1:] if f.startswith("@") else f for f in fields]
-        for f in ['asc', 'desc', 'ASC', 'DESC']:
-            if f in sortkeys:
-                sortkeys.remove(f)
+    gix = last_index('groupby')
+    six = last_index('sortby')
+    if gix > six:
+        count = int(cmd[gix+1])
+        sortkeys = [cmd[gix+2+i][1:] for i in range(count)]
+    elif six >= 0:
+        count = int(cmd[six+1]) if cmd[0] != 'ft.search' else 1
+        # Grab the fields after the count, stripping any leading '@'
+        sortkeys = [cmd[six+2+i][1 if cmd[six+2+i].startswith("@") else 0:] for i in range(count)]
+        sortkeys = [f for f in sortkeys if f.lower() not in ('asc', 'desc')]
     else:
         sortkeys=["__key"]
         # sortkeys=[]
@@ -482,12 +518,18 @@ def mark_as_xpassed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
-        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
+    next_data_set = (expected['data_set_name'], expected['key_type'],
+                     expected.get('schema_type'),
+                     expected.get('vector_data_type', 'FLOAT32'))
+    if next_data_set != data_set:
+        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'],
+              "vector_data_type:", expected.get('vector_data_type', 'FLOAT32'))
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
+        load_data(client, expected['data_set_name'], expected['key_type'],
+                  schema_type=expected.get('schema_type', 'default'),
+                  vector_data_type=expected.get('vector_data_type', 'FLOAT32'))
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
-        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
+        data_set = next_data_set
 
     # for the excluded queries with known difference
     # just run in valkey to make sure they do not crash
@@ -568,6 +610,17 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         )
 
         data_set = next_data_set
+
+    # for the excluded queries with known difference
+    # just run in valkey to make sure they do not crash
+    if expected.get("excluded"):
+        try:
+            print(f"Running excluded CLUSTER query (no-crash check): {expected['cmd']}")
+            cluster_client.execute_command(*expected["cmd"])
+            print("Excluded CLUSTER query completed without crash")
+        except Exception as e:
+            print(f"Excluded CLUSTER query raised: {e} for cmd {expected['cmd']}")
+        return data_set
 
     result = {}
     try:
@@ -736,7 +789,15 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+        for primary in self.get_all_primary_clients():
+            primary.execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
+        # Cluster mode does not yet thread vector_data_type through the
+        # data-loading path, so restrict the cluster compatibility run to FP32
+        # entries. FP16 single-node coverage is exercised by TestAnswersCMD.
+        answers = [a for a in answers if a.get("vector_data_type", "FLOAT32") == "FLOAT32"]
         # Pin every primary to the compatible (whole-key-drop) behavior so the
         # invalid-data datasets match the Redisearch reference answers.
         for node_idx in range(self.CLUSTER_SIZE):
@@ -752,7 +813,8 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
                 test_case=self,
             )
 
-        if correct_answers != len(answers):
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if failed_tests:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")

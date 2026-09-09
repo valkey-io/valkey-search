@@ -1,0 +1,188 @@
+/*
+ * Copyright (c) 2026, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
+#include "src/indexes/vector_type.h"
+
+#include <memory>
+#include <string>
+#include <type_traits>
+#include <vector>
+
+#include "absl/log/check.h"
+#include "absl/strings/numbers.h"
+#include "absl/strings/str_split.h"
+#include "absl/strings/string_view.h"
+#include "absl/strings/strip.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
+#include "src/indexes/vector_base.h"
+#include "third_party/hnswlib/hnswlib.h"
+#include "third_party/hnswlib/space_ip.h"
+#include "third_party/hnswlib/space_ip_bfloat16.h"
+#include "third_party/hnswlib/space_ip_fp16.h"
+#include "third_party/hnswlib/space_l2.h"
+#include "third_party/hnswlib/space_l2_bfloat16.h"
+#include "third_party/hnswlib/space_l2_fp16.h"
+#include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
+
+namespace valkey_search::indexes {
+
+namespace {
+
+// Constructs the right hnswlib space for T + metric. Kept private to
+// this TU -- callers reach it via VectorType<T>::Init below. Note that
+// SpaceInterface is templated on the distance dtype (float); the storage
+// element type is baked into the concrete space class chosen here.
+template <typename StorageT>
+std::unique_ptr<hnswlib::SpaceInterface<float>> CreateSpace(
+    int dimensions, data_model::DistanceMetric distance_metric) {
+  const bool is_ip =
+      distance_metric == data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
+      distance_metric == data_model::DistanceMetric::DISTANCE_METRIC_IP;
+  if constexpr (std::is_same_v<StorageT, float>) {
+    if (is_ip) {
+      return std::make_unique<hnswlib::InnerProductSpace>(dimensions);
+    }
+    return std::make_unique<hnswlib::L2Space>(dimensions);
+  } else if constexpr (std::is_same_v<StorageT, float16>) {
+    if (is_ip) {
+      return std::make_unique<hnswlib::InnerProductSpaceFP16>(dimensions);
+    }
+    return std::make_unique<hnswlib::L2SpaceFP16>(dimensions);
+  } else if constexpr (std::is_same_v<StorageT, bfloat16>) {
+    if (is_ip) {
+      return std::make_unique<hnswlib::InnerProductSpaceBF16>(dimensions);
+    }
+    return std::make_unique<hnswlib::L2SpaceBF16>(dimensions);
+  } else {
+    // Compile error rather than a runtime fallthrough. The previous fallback
+    // DCHECK'd and returned a FLOAT32 space, but DCHECK is a no-op in release
+    // builds -- so a storage type added without an arm here would silently get
+    // a space that reads its 2-byte elements as 4-byte floats. Matches the
+    // static_assert in VectorDataTypeEnumFor below.
+    static_assert(sizeof(StorageT) == 0, "no hnswlib space for this T");
+  }
+}
+
+// Compile-time mapping from T to its data_model::VectorDataType enum.
+// If a new element type is added, add its arm here plus one arm in
+// CreateSpace above and NormalizeStringRecord below; both leaves'
+// ToProtoImpl / RespondWithInfoImpl stay unchanged.
+template <typename T>
+constexpr data_model::VectorDataType VectorDataTypeEnumFor() {
+  if constexpr (std::is_same_v<T, float>) {
+    return data_model::VECTOR_DATA_TYPE_FLOAT32;
+  } else if constexpr (std::is_same_v<T, float16>) {
+    return data_model::VECTOR_DATA_TYPE_FLOAT16;
+  } else if constexpr (std::is_same_v<T, bfloat16>) {
+    return data_model::VECTOR_DATA_TYPE_BFLOAT16;
+  } else {
+    // Force a compile error rather than a silent runtime UNSPECIFIED --
+    // adding a new T without adding an arm here is a bug we want caught
+    // at build time.
+    static_assert(sizeof(T) == 0, "no VectorDataType enum for this T");
+  }
+}
+
+}  // namespace
+
+template <typename T>
+data_model::VectorDataType VectorType<T>::GetVectorDataType() const {
+  return VectorDataTypeEnumFor<T>();
+}
+
+template <typename T>
+void VectorType<T>::Init(data_model::DistanceMetric distance_metric) {
+  space_ = CreateSpace<T>(dimensions_, distance_metric);
+  distance_metric_ = distance_metric;
+  if (distance_metric == data_model::DistanceMetric::DISTANCE_METRIC_COSINE) {
+    normalize_ = true;
+  }
+}
+
+template <typename T>
+float VectorType<T>::ComputeReciprocalMagnitude(
+    absl::string_view record) const {
+  return CalcReciprocalMagnitude(reinterpret_cast<const T *>(record.data()),
+                                 record.size() / sizeof(T));
+}
+
+template <typename T>
+void VectorType<T>::EmitDataTypeInfo(ValkeyModuleCtx *ctx) const {
+  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
+  // LookupKeyByValue returns a string_view, whose data() is not guaranteed
+  // NUL-terminated; materialize it before handing it to the C API.
+  //
+  // Review suggested ValkeyModule_ReplyWithStringBuffer here to avoid the
+  // allocation. It cannot be used: it emits a RESP bulk string where
+  // ReplyWithSimpleString emits a simple string, so FT.INFO would report
+  // data_type as $7\r\nFLOAT32 rather than +FLOAT32. That is an observable
+  // protocol change for every client, which is not worth one small allocation
+  // on an administrative command.
+  ValkeyModule_ReplyWithSimpleString(
+      ctx, std::string(LookupKeyByValue(*kVectorDataTypeByStr,
+                                        VectorDataTypeEnumFor<T>()))
+               .c_str());
+}
+
+template <typename T>
+void VectorType<T>::SetProtoDataType(
+    data_model::VectorIndex *vector_index_proto) const {
+  vector_index_proto->set_vector_data_type(VectorDataTypeEnumFor<T>());
+}
+
+template <typename T>
+vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringRecord(
+    vmsdk::UniqueValkeyString record) const {
+  auto record_str = vmsdk::ToStringView(record.get());
+  if (absl::ConsumePrefix(&record_str, "[")) {
+    absl::ConsumeSuffix(&record_str, "]");
+  }
+  std::string binary_string;
+  // The payload is expected to hold `dimensions_` elements. Reserving that up
+  // front means the common case never reallocates, and costs nothing when the
+  // element count turns out to differ.
+  binary_string.reserve(dimensions_ * sizeof(T));
+  // Iterate the splitter directly rather than collecting into a
+  // std::vector<std::string>: absl::StrSplit yields string_views into the
+  // record, so no per-element buffer is allocated.
+  for (absl::string_view element :
+       absl::StrSplit(record_str, ',', absl::SkipWhitespace())) {
+    float value;
+    if (!absl::SimpleAtof(element, &value)) {
+      return nullptr;
+    }
+    // Append the storage-typed bytes in place. Building a temporary
+    // std::string per element allocated once per dimension, which for a
+    // 1536-dimension vector was 1536 allocations per ingested record.
+    if constexpr (std::is_same_v<T, float>) {
+      binary_string.append(reinterpret_cast<const char *>(&value),
+                           sizeof(float));
+    } else if constexpr (std::is_same_v<T, float16>) {
+      const float16 fp16_value = static_cast<float16>(value);
+      binary_string.append(reinterpret_cast<const char *>(&fp16_value),
+                           sizeof(float16));
+    } else if constexpr (std::is_same_v<T, bfloat16>) {
+      const bfloat16 bf16_value = float_to_bfloat16(value);
+      binary_string.append(reinterpret_cast<const char *>(&bf16_value),
+                           sizeof(bfloat16));
+    } else {
+      static_assert(sizeof(T) == 0,
+                    "NormalizeStringRecord not yet wired for this T");
+    }
+  }
+  return vmsdk::MakeUniqueValkeyString(binary_string);
+}
+
+template class VectorType<float>;
+template class VectorType<float16>;
+template class VectorType<bfloat16>;
+
+}  // namespace valkey_search::indexes

@@ -27,6 +27,8 @@ DeBuG = "DeBuG"
 DrOpInDeX = "DrOpInDeX"
 updat = "updat" # Used for stem matching
 Clangd = "Clangd"
+mis = "mis"     # "mis-strides", "mis-decode" in the SIMD kernel tests
+SHLL = "SHLL"   # AArch64 shift-left-long instruction
 
 [type.cpp]
 extend-ignore-re = [

@@ -147,11 +147,13 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
     """Common base class for the various Search test cases"""
 
     def normalize_dir_name(self, name: str) -> str:
-        """Replace special chars from a string with an underscore"""
-        chars_to_replace: str = "!@#$%^&*() -~[]{}><+"
-        for char in chars_to_replace:
-            name = name.replace(char, "_")
-        return name
+        """Replace special chars from a string with an underscore.
+
+        An allowlist rather than a denylist: this name becomes a directory that
+        CI uploads as an artifact, and the uploader rejects paths containing
+        characters such as ':' -- which a parametrized test id can easily carry.
+        """
+        return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
         """A template method, must be implemented by subclasses

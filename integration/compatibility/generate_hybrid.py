@@ -6,9 +6,9 @@ query engine. This generator therefore runs against the `redis:8` image, which
 carries a query engine new enough to answer FT.HYBRID. That override is
 temporary -- see TODO(reference-image) on the class below.
 
-The LOAD clause is swept separately and every one of those answers is recorded
-`xfail`: Valkey does not implement LOAD for FT.HYBRID yet. See TODO(load) on
-test_load_clause, and integration/compatibility/unsupported_tests.md.
+The LOAD clause is swept separately, in test_load_clause. One form is still
+recorded `xfail` -- loading a field the index does not have; see
+TODO(load-unknown-field) and integration/compatibility/unsupported_tests.md.
 
 The corpus is `hybrid text` (see data_sets.py): a text corpus with a spread of
 term frequency, document frequency and document length, plus a vector field
@@ -130,8 +130,8 @@ LINEAR_COMBINES = [
 NON_BINDING_WINDOW = "100"   # > corpus size, so WINDOW never binds
 PINNED_LIMIT = ("0", "10")
 
-# The LOAD clause every other sweep pins. `LOAD *` is the only form Valkey
-# currently honors; see test_load_clause and unsupported_tests.md.
+# The LOAD clause every other sweep pins, so that those sweeps are about
+# scoring rather than about which columns come back. test_load_clause varies it.
 LOAD_ALL = ("LOAD", "*")
 NO_LOAD = ()
 
@@ -153,10 +153,9 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     # TODO(reference-image): temporary. FT.HYBRID needs the Redis 8.4+ query
     # engine, which redis/redis-stack-server does not have. A separate PR moves
     # BaseCompatibilityTest.DOCKER_IMAGE to redis:latest for every generator;
-    # once that lands this override and CONTAINER_NAME can both be dropped and
-    # this class can inherit the shared image again.
+    # once that lands this override can be dropped and this class can inherit
+    # the shared image again.
     DOCKER_IMAGE = "redis:8"
-    CONTAINER_NAME = "Generate-hybrid"
 
     DATA_SET = "hybrid text"
 
@@ -199,11 +198,10 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     ):
         """Issue one FT.HYBRID command and record the reference answer.
 
-        `LOAD *` is the default because it is the one LOAD form Valkey handles
-        the same way Redis does; every other form is swept in test_load_clause
-        below, marked xfail. Without any LOAD, Redis returns only the key and
-        the score aliases, so `LOAD *` is what makes the two engines' record
-        shapes comparable at all.
+        `LOAD *` is the default so that every other sweep sees the whole
+        document and stays about scoring; test_load_clause is where the clause
+        itself is varied. Without any LOAD, both engines reply with just the
+        key and the score aliases.
 
         Every score alias ends in `score`, which is what makes
         compatibility_test.compare_row() compare it as a float rather than
@@ -306,63 +304,87 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     # -----------------------------------------------------------------
     # The LOAD clause.
     #
-    # TODO(load): every answer below is recorded `xfail`. Valkey does not yet
-    # implement LOAD for FT.HYBRID -- it ignores the clause and returns every
-    # schema field (for a JSON index, the whole document under `$`) whatever
-    # the caller asked for. Redis honors it. A separate PR revises LOAD
-    # handling across the aggregate pipeline; once that lands and FT.HYBRID
-    # picks it up, these should start matching, the run will report XPASS, and
-    # the `xfail=True` here plus the FT.HYBRID section of
-    # unsupported_tests.md should both come off.
+    # FT.HYBRID honors LOAD the way FT.AGGREGATE does: it names the columns the
+    # reply carries, `AS` renames them, and the rename is visible to the stages
+    # that follow. These are compared normally.
     #
-    # The forms are swept now, rather than after the fix, so that the shape of
-    # the gap is recorded against a real Redis answer and the fix has something
-    # to be measured against.
+    # The one form still recorded `xfail` is a LOAD naming a field the index
+    # does not have; see TODO(load-unknown-field) below.
     # -----------------------------------------------------------------
 
     def _load_cases(self, key_type):
-        """(label, load-clause tokens, trailing stages) for the LOAD sweep."""
+        """(load-clause tokens, trailing stages) for the LOAD sweep."""
         cases = [
-            # No LOAD at all: Redis replies with the key and the score
-            # aliases only.
-            ("none", NO_LOAD, []),
-            # Single field, and a subset of fields.
-            ("one-field", ["LOAD", "1", "@price"], []),
-            ("two-fields", ["LOAD", "2", "@price", "@color"], []),
+            # No LOAD at all: the document key and the score aliases.
+            (NO_LOAD, []),
+            # A single field, and a subset of fields.
+            (["LOAD", "1", "@price"], []),
+            (["LOAD", "2", "@price", "@color"], []),
             # The document key is loadable by name.
-            ("key", ["LOAD", "1", "@__key"], []),
-            # AS renames. The count covers the AS and the alias too.
-            ("rename", ["LOAD", "3", "@price", "AS", "cost"], []),
-            ("rename-text", ["LOAD", "3", "@title", "AS", "heading"], []),
-            ("rename-plus-field",
-             ["LOAD", "4", "@price", "AS", "cost", "@color"], []),
+            (["LOAD", "1", "@__key"], []),
+            # Renaming an existing field. The LOAD count covers the `AS` and
+            # the alias too.
+            (["LOAD", "3", "@price", "AS", "cost"], []),
+            (["LOAD", "3", "@title", "AS", "heading"], []),
+            (["LOAD", "4", "@price", "AS", "cost", "@color"], []),
+            # Renaming to a name that is already another field of the index:
+            # the alias has to resolve to the renamed column, not the field it
+            # collides with.
+            (["LOAD", "3", "@price", "AS", "color"], []),
+            # Renaming two fields at once.
+            (["LOAD", "6", "@price", "AS", "a", "@color", "AS", "b"], []),
+            # (Renaming onto an output name the same clause already claims --
+            # `LOAD 4 @color @price AS color` -- is rejected by valkey-search
+            # as stricter input validation, a documented divergence covered by
+            # the FT.AGGREGATE suite. Nothing FT.HYBRID-specific, so not swept
+            # again here.)
             # A rename has to be visible to the stages that follow it.
-            ("rename-then-sortby", ["LOAD", "3", "@price", "AS", "cost"],
+            (["LOAD", "3", "@price", "AS", "cost"],
              ["SORTBY", "2", "@cost", "ASC"]),
-            ("rename-then-apply", ["LOAD", "3", "@price", "AS", "cost"],
+            (["LOAD", "3", "@price", "AS", "cost"],
              ["APPLY", "@cost * 2", "AS", "doubled"]),
-            # A loaded field has to be visible to a FILTER. Valkey currently
-            # returns an empty result here rather than an error, which is the
-            # worst shape this gap takes.
-            ("load-then-filter", ["LOAD", "1", "@price"],
-             ["FILTER", "@price > 20"]),
+            (["LOAD", "6", "@price", "AS", "a", "@color", "AS", "b"],
+             ["GROUPBY", "1", "@b", "REDUCE", "SUM", "1", "@a", "AS", "total"]),
+            # A loaded field has to be visible to a FILTER.
+            (["LOAD", "1", "@price"], ["FILTER", "@price > 20"]),
         ]
         if key_type == "json":
-            # JSON paths are a second spelling of the same clause; Redis names
-            # the loaded column by the path unless AS renames it.
+            # A JSON path is an identifier the index schema does not carry as
+            # an attribute name -- LOAD resolves it to the attribute behind the
+            # path, and `AS` renames the column that comes back.
             cases += [
-                ("json-path", ["LOAD", "1", "$.price"], []),
-                ("json-path-rename",
-                 ["LOAD", "3", "$.price", "AS", "cost"], []),
+                (["LOAD", "1", "$.price"], []),
+                (["LOAD", "3", "$.price", "AS", "cost"], []),
+                (["LOAD", "3", "$.price", "AS", "cost"],
+                 ["APPLY", "@cost + 1", "AS", "bumped"]),
             ]
         return cases
 
     def test_load_clause(self, key_type):
         self.setup_data(key_type)
-        for _label, load, tail in self._load_cases(key_type):
-            self.hybrid(
-                key_type, "@title:alpha", load=load, tail=tail, xfail=True,
-            )
+        for load, tail in self._load_cases(key_type):
+            self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
+
+    # TODO(load-unknown-field): Redis lets a LOAD name a field the index does
+    # not have and simply returns no column for it; Valkey rejects the command
+    # with "Index field `x` does not exist". FT.AGGREGATE does the same thing
+    # on the same input, so this is not an FT.HYBRID gap -- when it is fixed
+    # for the aggregate pipeline these should start matching, the run will
+    # report XPASS, and both the `xfail=True` here and the entry in
+    # unsupported_tests.md should come off.
+    def test_load_unknown_field(self, key_type):
+        self.setup_data(key_type)
+        cases = [
+            ["LOAD", "1", "@nosuchfield"],
+            ["LOAD", "3", "@nosuchfield", "AS", "mystery"],
+            ["LOAD", "2", "@price", "@nosuchfield"],
+        ]
+        if key_type == "hash":
+            # A JSON path against a HASH index names nothing, the same way an
+            # unknown attribute does.
+            cases += [["LOAD", "1", "$.price"]]
+        for load in cases:
+            self.hybrid(key_type, "@title:alpha", load=load, xfail=True)
 
     # -----------------------------------------------------------------
     # Defaults. These are the cases the sweeps above deliberately pin, so

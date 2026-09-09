@@ -44,6 +44,7 @@
 #include "src/schema_manager.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "src/version.h"
 #include "testing/common.h"
 #include "third_party/hnswlib/hnswlib.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/space_ip.h"
@@ -3195,5 +3196,86 @@ TEST_F(IndexSchemaScoreFieldTest, KeyspaceNotificationDeletesRegistryEntry) {
           key, hnsw_index->GetInternedAttributeIdentifier(), 0);
   EXPECT_EQ(res_record_after, nullptr);
 }
+
+// GetMinVersion must move an index schema to the 1.3 floor if and ONLY IF it
+// uses one of the new low-precision vector storage types. Nothing else about a
+// schema may push it to 1.3, or older modules would needlessly refuse to load
+// schemas they can in fact interpret.
+namespace {
+
+data_model::IndexSchema MakeSchemaWithVectorType(
+    data_model::VectorDataType data_type) {
+  data_model::IndexSchema schema;
+  schema.set_name("idx");
+  auto *attr = schema.add_attributes();
+  attr->set_alias("v");
+  attr->set_identifier("v");
+  auto *vector_index = attr->mutable_index()->mutable_vector_index();
+  vector_index->set_dimension_count(4);
+  vector_index->set_vector_data_type(data_type);
+  vector_index->set_distance_metric(
+      data_model::DistanceMetric::DISTANCE_METRIC_L2);
+  vector_index->mutable_flat_algorithm()->set_block_size(100);
+  return schema;
+}
+
+vmsdk::ValkeyVersion MinVersionOf(const data_model::IndexSchema &schema) {
+  google::protobuf::Any any;
+  any.PackFrom(schema);
+  auto version = IndexSchema::GetMinVersion(any);
+  CHECK_OK(version);
+  return *version;
+}
+
+TEST(IndexSchemaMinVersionTest, Float32VectorDoesNotRequire13) {
+  EXPECT_LT(MinVersionOf(
+                MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT32)),
+            kRelease13);
+}
+
+TEST(IndexSchemaMinVersionTest, Float16VectorRequires13) {
+  EXPECT_EQ(MinVersionOf(
+                MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT16)),
+            kRelease13);
+}
+
+TEST(IndexSchemaMinVersionTest, BFloat16VectorRequires13) {
+  EXPECT_EQ(MinVersionOf(MakeSchemaWithVectorType(
+                data_model::VECTOR_DATA_TYPE_BFLOAT16)),
+            kRelease13);
+}
+
+// A text index moves the floor to 1.2, not 1.3 -- i.e. the 1.3 gate is not
+// entangled with any other feature.
+TEST(IndexSchemaMinVersionTest, TextIndexDoesNotRequire13) {
+  data_model::IndexSchema schema;
+  schema.set_name("idx");
+  auto *attr = schema.add_attributes();
+  attr->set_alias("t");
+  attr->set_identifier("t");
+  attr->mutable_index()->mutable_text_index();
+  EXPECT_EQ(MinVersionOf(schema), kRelease12);
+}
+
+// A non-zero db_num moves the floor to 1.1, not 1.3.
+TEST(IndexSchemaMinVersionTest, DbNumDoesNotRequire13) {
+  auto schema = MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT32);
+  schema.set_db_num(3);
+  EXPECT_EQ(MinVersionOf(schema), kRelease11);
+}
+
+// Low precision wins over every other contributor, since 1.3 is the highest
+// floor any of them can demand.
+TEST(IndexSchemaMinVersionTest, LowPrecisionDominatesOtherContributors) {
+  auto schema = MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_BFLOAT16);
+  schema.set_db_num(3);
+  auto *attr = schema.add_attributes();
+  attr->set_alias("t");
+  attr->set_identifier("t");
+  attr->mutable_index()->mutable_text_index();
+  EXPECT_EQ(MinVersionOf(schema), kRelease13);
+}
+
+}  // namespace
 
 }  // namespace valkey_search

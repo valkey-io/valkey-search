@@ -29,10 +29,13 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -72,13 +75,48 @@ class VectorRecord {
   char data_[0];  // flexible array member
 };
 
-float CalcReciprocalMagnitude(const float *src, size_t size);
+// Computes 1/||v|| over `size` elements of storage type T. Templated because
+// FLOAT16/BFLOAT16 vectors are 2 bytes per element: reading them as float
+// would both walk off the end of the buffer and produce garbage magnitudes.
+// The accumulation is always done in float regardless of T.
+template <typename T>
+float CalcReciprocalMagnitude(const T *src, size_t size);
 
+extern template float CalcReciprocalMagnitude<float>(const float *, size_t);
+extern template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
+extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
+                                                        size_t);
+
+// Verify the running CPU exposes a SIMD-targeted BF16 path required by the
+// current simsimd build. Returns OkStatus when:
+//   - This build of simsimd does not enable native BF16 (the serial path is
+//     then bit-correct), or
+//   - The CPU advertises Haswell/Genoa/Sapphire on x86, or NEON-BF16/SVE-BF16
+//     on ARM.
+// Otherwise returns FailedPreconditionError; callers should refuse to create
+// or load a BFLOAT16 index on this host. Called at index-create / RDB-load
+// time rather than module load so that nodes lacking a SIMD BF16 path can
+// still serve FLOAT32 and FLOAT16 indexes.
+absl::Status CheckSimsimdBf16Capability();
+
+// Scales `record` by `reciprocal_magnitude`, interpreting it as elements of
+// storage type T. The scale is applied in float and rounded once back into T.
+template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float reciprocal_magnitude);
 
+template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
+
+// Runtime-dispatched variants, for the few call sites that hold only a
+// data-type enum rather than a compile-time T (VectorRegistry, QueryVector).
+float CalcReciprocalMagnitude(absl::string_view record,
+                              data_model::VectorDataType data_type);
+
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  data_model::VectorDataType data_type,
+                                  float reciprocal_magnitude);
 
 // Default score value used when no scorer has been applied yet.
 inline constexpr float kDefaultScore = 0.0f;
@@ -161,7 +199,9 @@ const absl::NoDestructor<
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
-    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32}});
+    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
+                          {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -247,8 +287,29 @@ class VectorBase : public IndexBase {
   virtual size_t GetLabelCount() const { return 0; }
   Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
   int GetDimensions() const { return dimensions_; }
+  // Provided by VectorType<T> so the per-element byte width and format
+  // conversion come from sizeof(T) + if-constexpr on T instead of a
+  // runtime switch on GetVectorDataType().
   vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
+      vmsdk::UniqueValkeyString record) const override = 0;
+  // Returns the vector data type enum. Used to disambiguate FLOAT16 from
+  // BFLOAT16 wherever a byte width alone is ambiguous -- both are 2 bytes, so
+  // a size-based check would silently route the wrong format.
+  virtual data_model::VectorDataType GetVectorDataType() const = 0;
+  // KNN entry point, dispatched virtually so callers hold a VectorBase* and
+  // never need to know the storage type or the ANN algorithm. `ef_runtime` is
+  // meaningful only to HNSW; FLAT ignores it.
+  //
+  // The default arguments must stay identical here and in every override.
+  // C++ binds default arguments statically, so differing defaults would make
+  // the same call mean different things depending on the static type of the
+  // pointer it went through.
+  virtual absl::StatusOr<std::vector<Neighbor>> Search(
+      absl::string_view query, uint64_t count,
+      cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool enable_partial_results = false) = 0;
   bool IsValidSizeVector(absl::string_view record) const {
     return record.size() == GetVectorDataSize();
   }
@@ -257,7 +318,7 @@ class VectorBase : public IndexBase {
   }
 
  protected:
-  VectorBase(IndexerType indexer_type, int dimensions,
+  VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
@@ -271,7 +332,7 @@ class VectorBase : public IndexBase {
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator,
-            sizeof(VectorRecord) + dimensions * sizeof(float), true))
+            sizeof(VectorRecord) + dimensions * element_size, true))
 #endif  // !SAN_BUILD
   {
   }
@@ -280,9 +341,6 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
-  template <typename T>
-  void Init(int dimensions, data_model::DistanceMetric distance_metric,
-            std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
 
   virtual absl::Status AddRecordImpl(
       uint64_t internal_id,
@@ -294,6 +352,10 @@ class VectorBase : public IndexBase {
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
+  // Computes 1/||record|| interpreting `record` as elements of the concrete
+  // storage type. Implemented by VectorType<T>; VectorBase cannot know the
+  // element width.
+  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex *vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(

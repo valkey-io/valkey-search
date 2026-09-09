@@ -206,6 +206,34 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert or_groups == pytest.approx({**hello_world, "doc:6": 3.404279},
                                           abs=SCORE_ABS_TOL)
 
+        # A nested OR is still one flat union: doc:6 matches both inner branches
+        # and accumulates rare + unique, doc:8 only rare.
+        _, rare = search(client, IDX_MAIN, "rare")
+        _, unique = search(client, IDX_MAIN, "unique")
+        keys, nested_or = search(client, IDX_MAIN, "hello | (rare | unique)")
+        assert keys == ["doc:6", "doc:8", "doc:5", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert nested_or == pytest.approx(
+            {**hello,
+             "doc:6": rare["doc:6"] + unique["doc:6"],
+             "doc:8": rare["doc:8"]},
+            abs=SCORE_ABS_TOL)
+
+        # Group weights accumulate down both OR levels before reaching a leaf:
+        # hello scales by 2*2, rare by 2*2*3, unique by 2*2*2. doc:6 sums the two
+        # inner branches at their own multipliers.
+        keys, weighted_nested_or = search(
+            client, IDX_MAIN,
+            "((hello)=>{$weight:2} | ((rare)=>{$weight:3} | "
+            "(unique)=>{$weight:2})=>{$weight:2})=>{$weight:2}")
+        assert keys == ["doc:6", "doc:8", "doc:5", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert weighted_nested_or == pytest.approx(
+            {**{k: 4 * v for k, v in hello.items()},
+             "doc:6": 12 * rare["doc:6"] + 8 * unique["doc:6"],
+             "doc:8": 12 * rare["doc:8"]},
+            abs=SCORE_ABS_TOL)
+
         # Three-leaf AND accumulates every leaf.
         keys, three_leaf = search(client, IDX_MAIN, "hello world one")
         assert keys == ["doc:2", "doc:7", "doc:3", "doc:1", "doc:4"]

@@ -1,21 +1,35 @@
-To regenerate both compatibility pickle answer files, from the repo root run:
+To regenerate every compatibility pickle answer file, from the repo root run:
 
     ./integration/compatibility/regenerate.sh
 
-Or, to regenerate just one, cd to this directory and run pytest directly:
+It works from the GENERATORS list in __init__.py, so it stays correct as
+generators come and go. Today that list is:
 
-    pytest generate.py        # produces aggregate-answers.pickle.gz
-    pytest generate_text.py   # produces text-search-answers.pickle.gz
+    generate.py         -> aggregate-answers.pickle.gz
+    generate_text.py    -> text-search-answers.pickle.gz
+    generate_array.py   -> array-input-answers.pickle.gz
 
-Both forms require Docker. The generators spin up redis/redis-stack-server on
-port 6380 to capture reference answers; the docker handling is sometimes flaky
-and may need to be killed manually between runs.
+Or, to regenerate just one, cd to this directory and run pytest on it -- but
+note that a run narrowed with -k, or one that fails part way, deliberately
+declines to write its answer file, because a partial run would replace a
+complete file with a short one.
+
+Both forms require Docker. The generators spin up redis/redis-stack-server to
+capture reference answers, in a container named Generate-search-NNNN on a port
+docker assigns, so concurrent runs on one machine do not collide. A generator
+that fails part way leaves its answer file untouched rather than replacing it
+with a short one.
 
 Each pickle stores a SHA256 of every .py file in this directory. The
 compatibility integration test (integration/compatibility_test.py) verifies
 that hash on load and fails if it does not match the current sources -- this
-forces a regeneration whenever generate.py, generate_text.py, data_sets.py,
-text_query_builder.py, or any other source here is edited.
+forces a regeneration whenever any source here is edited -- a generator,
+data_sets.py, text_query_builder.py, or __init__.py itself.
+
+generate_expr.py and expr-answers.pickle.gz are not in GENERATORS and so are
+neither regenerated nor verified. The pickle also predates the hash wrapper
+(it is a bare list of answers rather than a {sources_hash, answers} dict), so
+nothing reads it today. Either register it or delete both.
 
 To add a new generator: create generate_xxx.py (subclass BaseCompatibilityTest
 with its own ANSWER_FILE_NAME) and add an entry to the GENERATORS list in

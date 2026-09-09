@@ -142,7 +142,7 @@ TEST_F(TagIndexTest, ModifyRecordWithEmptyString) {
 }
 
 TEST_F(TagIndexTest, NormalizeStringRecordConvertsWildcardJsonArrayFormat) {
-  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
   auto normalized = index->NormalizeStringAttribute(
       vmsdk::MakeUniqueValkeyString("[\"Seoul\",\"New York\"]"));
   ASSERT_TRUE(normalized);
@@ -150,7 +150,7 @@ TEST_F(TagIndexTest, NormalizeStringRecordConvertsWildcardJsonArrayFormat) {
 }
 
 TEST_F(TagIndexTest, NormalizeStringRecordPreservesLiteralArrayDelimiter) {
-  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 1}));
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
   data_model::TagIndex tag_index_proto;
   tag_index_proto.set_separator("|");
   auto pipe_index =

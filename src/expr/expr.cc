@@ -309,7 +309,15 @@ struct Dyadic : Expression {
     // numeric operands"), which reads as "evaluated to nothing" and keeps the
     // record. Safe only because a field named by a stage is now loaded
     // implicitly, so an unpopulated slot means the key really lacks it.
-    if ((lvalue.IsMissing() || rvalue.IsMissing()) && MissingPropagates()) {
+    // `&&` is the exception, measured against Redis 8: a missing operand
+    // there is simply falsy, so the record is kept and the alias replies 0,
+    // whichever side the reference sat on. Letting the operator run gives
+    // exactly that, because AsBool() already reads a nil as false. Redis 8
+    // also truncates the result stream after such a row, which is not
+    // reproduced here; see known_differences.md.
+    const bool logical_and = name_ == "&&";
+    if (!logical_and && (lvalue.IsMissing() || rvalue.IsMissing()) &&
+        MissingPropagates()) {
       return Value::Missing();
     }
     return (*func_)(lvalue, rvalue);

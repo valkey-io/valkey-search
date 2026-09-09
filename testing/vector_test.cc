@@ -77,7 +77,7 @@ static void ExpectNeighborsNear(const std::vector<NeighborTest> &act,
   std::sort(sorted_exp.begin(), sorted_exp.end(), compare_by_id);
   for (size_t j = 0; j < sorted_act.size(); ++j) {
     EXPECT_EQ(sorted_act[j].external_id, sorted_exp[j].external_id);
-    EXPECT_NEAR(sorted_act[j].distance, sorted_exp[j].distance, tolerance);
+    EXPECT_NEAR(sorted_act[j].score, sorted_exp[j].score, tolerance);
   }
 }
 
@@ -343,7 +343,7 @@ void TestIndex(T *index, int dimensions, int vector_size,
       bool found = false;
       for (const auto &neighbors : res.value()) {
         if (neighbors.external_id == IndexToKey(i)) {
-          EXPECT_LT(neighbors.distance - res.value()[0].distance, 0.0001);
+          EXPECT_LT(neighbors.score - res.value()[0].score, 0.0001);
           found = true;
           break;
         }
@@ -1306,6 +1306,17 @@ TEST_F(VectorIndexTest, LoadValidatesSingleVector) {
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
 }
 
+// Regression: a small index may legitimately have a max_level greater than its
+// element count, because HNSW draws each node's level from an independent
+// random distribution. A single element forced to level 2 (max_level == 2,
+// curr_element_count == 1) must load successfully. This previously failed the
+// (incorrect) "max_level exceeds the element count" validation, which crashed
+// the server on RDB restore of e.g. a single zero-length-key HNSW index.
+TEST_F(VectorIndexTest, LoadValidatesSingleVectorWithHighLevel) {
+  auto golden = BuildGoldenChunks({2}, kGoldenMax);
+  VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
+}
+
 TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   auto golden = MultiLayerGolden();
   hnswlib::L2Space space{kDimensions};
@@ -1362,7 +1373,17 @@ TEST_F(VectorIndexTest, RejectHeaderMaxLevelTooLarge) {
   auto h = GetHeader(golden);
   h.set_max_level(1000);
   SetHeader(&golden, h);
-  ExpectReject(std::move(golden), "max_level exceeds the element count");
+  ExpectReject(std::move(golden), "max level above expected range");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMaxLevelEntryPointMismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_max_level(100);
+  SetHeader(&golden, h);
+  // A max_level inconsistent with the actual per-element levels is caught by
+  // the global entry-point invariant (the entry point must be a tallest node).
+  ExpectReject(std::move(golden), "enterpoint node is not at max_level");
 }
 
 TEST_F(VectorIndexTest, RejectHeaderSerializeSizeMismatch) {

@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include "src/indexes/scoring/scorer.h"
 #include "vmsdk/src/info.h"  // IWYU pragma: keep
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/utils.h"
@@ -61,6 +62,12 @@ const config::Boolean &GetSkipCorruptedInternalUpdateEntries();
 /// Return the log level
 config::Enum &GetLogLevel();
 
+/// Return the scorer FT.SEARCH uses when the query omits SCORER
+config::Enum &GetDefaultScorer();
+
+/// Return true when the scoring kill switch is engaged
+bool IsScoringDisabled();
+
 /// Return the configuration entry for HNSW allow_replace_deleted flag
 const config::Boolean &GetHNSWAllowReplaceDeleted();
 
@@ -104,6 +111,10 @@ config::Number &GetThreadPoolWaitTimeSamples();
 /// Return the maximum number of words to search in text operations (prefix,
 /// suffix, fuzzy)
 config::Number &GetMaxTermExpansions();
+
+/// Return the maximum number of group keys one record may expand to when
+/// GROUPBY is given multi-value fields
+config::Number &GetMaxGroupKeyExpansion();
 
 /// Return the minimum TAG prefix length for wildcard queries (excluding '*')
 config::Number &GetTagMinPrefixLength();

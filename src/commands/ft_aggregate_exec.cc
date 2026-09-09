@@ -389,7 +389,12 @@ static expr::Value NumericReducerArg(const expr::Value &value) {
     return value;
   }
   if (value.IsArray()) {
-    return expr::Value(0.0);
+    // Redis 8 folds only numbers, and an array is not one, so it contributes
+    // nothing and the group answers the identity. (redis-stack read an array
+    // as 0, which is what this used to return.) Ungated like the rest of the
+    // array handling: TOLIST is newer than 1.2.1, so there is no released
+    // behavior to preserve.
+    return expr::Value(expr::Value::Nil("reducer: array is not a number"));
   }
   if (!MinMaxIsNumeric()) {
     return value;

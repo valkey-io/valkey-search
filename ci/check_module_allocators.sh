@@ -36,6 +36,25 @@ undefined_syms() {
         sort -u
 }
 
+# Names a library defines with a binding the dynamic linker resolves against.
+#
+# GLOBAL, WEAK and UNIQUE all participate; LOCAL does not, which is why the
+# version script marks the allocator entry points local. UNIQUE is
+# STB_GNU_UNIQUE, and it matters that this is read from readelf's Bind column
+# rather than from nm: nm renders UNIQUE as a lowercase "u", which looks exactly
+# like a local symbol and is trivially excluded by a filter meant to drop
+# locals. The locale facet ids that check 4 exists to catch are UNIQUE, so
+# dropping that class silently defeats the check.
+#
+# Version suffixes are stripped: libstdc++.so.6 carries @@GLIBCXX_3.4 and the
+# module does not.
+exported_syms() {
+    readelf --dyn-syms -W "$1" 2>/dev/null |
+        awk 'NR > 3 && $7 != "UND" && $8 != "" &&
+             ($5 == "GLOBAL" || $5 == "WEAK" || $5 == "UNIQUE") {
+                 sub(/@@?.*$/, "", $8); print $8 }' | sort -u
+}
+
 #
 # Check 1: static initializers are deferred.
 #
@@ -86,9 +105,7 @@ fi
 UNDEF=$(undefined_syms "${MODULE_SO}")
 # Names exported with GLOBAL or WEAK binding, i.e. the ones the dynamic linker
 # will happily resolve somewhere else.
-DYN_GLOBAL=$(readelf --dyn-syms -W "${MODULE_SO}" 2>/dev/null |
-             awk '$5 == "GLOBAL" || $5 == "WEAK" {sub(/@@?.*$/, "", $8);
-                                                  print $8}' | sort -u)
+DYN_GLOBAL=$(exported_syms "${MODULE_SO}")
 for sym in ${ALLOCATORS}; do
     if echo "${UNDEF}" | grep -qx "${sym}"; then
         echo "FAIL: ${MODULE_SO} imports ${sym} from libc instead of using its" >&2
@@ -146,19 +163,15 @@ fi
 # and its become one object while the facet arrays stay separate, so the first
 # ostream insertion dereferences the wrong facet and segfaults at module load.
 #
-# -Wl,--exclude-libs,ALL is what keeps this list empty. nm prints
-# libstdc++.so.6's names with an @@GLIBCXX version suffix and ours without, so
-# the suffix is stripped before comparing. Only GLOBAL/WEAK exports matter, so
-# the local entries the version script produces are filtered out.
+# -Wl,--exclude-libs,ALL is what keeps this list empty. Both sides are compared
+# using exported_syms above, which deliberately includes UNIQUE bindings -- the
+# facet ids are that class, so excluding it would leave this check unable to see
+# the collision it is named for.
 #
 LIBSTDCXX=$(gcc -print-file-name=libstdc++.so.6 2>/dev/null || true)
 if [ -n "${LIBSTDCXX}" ] && [ -f "${LIBSTDCXX}" ]; then
-    CLASHES=$(comm -12 \
-        <(nm -D --defined-only "${MODULE_SO}" |
-              awk '$2 ~ /^[TDWVBRi]$/ {sub(/@@?.*$/, "", $3); print $3}' |
-              sort -u) \
-        <(nm -D --defined-only "${LIBSTDCXX}" |
-              awk '{sub(/@@?.*$/, "", $3); print $3}' | sort -u))
+    CLASHES=$(comm -12 <(exported_syms "${MODULE_SO}") \
+                       <(exported_syms "${LIBSTDCXX}"))
     if [ -n "${CLASHES}" ]; then
         NCLASH=$(echo "${CLASHES}" | wc -l)
         echo "FAIL: ${MODULE_SO} exports ${NCLASH} symbol(s) that" >&2

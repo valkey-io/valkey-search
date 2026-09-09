@@ -65,6 +65,9 @@ config::Enum &GetLogLevel();
 /// Return the scorer FT.SEARCH uses when the query omits SCORER
 config::Enum &GetDefaultScorer();
 
+/// Return true when the scoring kill switch is engaged
+bool IsScoringDisabled();
+
 /// Return the configuration entry for HNSW allow_replace_deleted flag
 const config::Boolean &GetHNSWAllowReplaceDeleted();
 

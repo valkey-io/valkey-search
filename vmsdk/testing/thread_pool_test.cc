@@ -948,9 +948,16 @@ TEST(ThreadPoolPthreadCreateFailureTest, StartWorkersSurfacesFailure) {
   // was never added to the pool.
   EXPECT_EQ(pool.Size(), 2);
 
+  // The failed worker never ran WorkerThread(), so it never registered as an
+  // active worker; suspension must not wait on it and must complete quickly.
+  StopWatch stop_watch;
+  VMSDK_EXPECT_OK(pool.SuspendWorkers());
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(1));
+  VMSDK_EXPECT_OK(pool.ResumeWorkers());
+
   // The pool must remain internally consistent: no dead entry should be left
   // behind to hang or crash JoinWorkers().
-  StopWatch stop_watch;
+  stop_watch.Reset();
   pool.JoinWorkers();
   EXPECT_LT(stop_watch.Duration(), absl::Seconds(1));
 }

@@ -6,7 +6,170 @@
       "DANGEROUS",
       "SEARCH"
     ],
-    "arguments": [],
+    "arity": -2,
+    "arguments": [
+      {
+        "name": "subcommand",
+        "type": "oneof",
+        "arguments": [
+          {
+            "name": "VECTOR_SHARING_STATS",
+            "type": "pure-token",
+            "token": "VECTOR_SHARING_STATS"
+          },
+          {
+            "name": "SHOW_INFO",
+            "type": "pure-token",
+            "token": "SHOW_INFO"
+          },
+          {
+            "name": "PAUSEPOINT",
+            "type": "block",
+            "token": "PAUSEPOINT",
+            "arguments": [
+              {
+                "name": "action",
+                "type": "oneof",
+                "arguments": [
+                  { "name": "LIST", "type": "pure-token", "token": "LIST" },
+                  {
+                    "name": "SET",
+                    "type": "block",
+                    "token": "SET",
+                    "arguments": [
+                      { "name": "pausepoint", "type": "string" }
+                    ]
+                  },
+                  {
+                    "name": "RESET",
+                    "type": "block",
+                    "token": "RESET",
+                    "arguments": [
+                      { "name": "pausepoint", "type": "string" }
+                    ]
+                  },
+                  {
+                    "name": "TEST",
+                    "type": "block",
+                    "token": "TEST",
+                    "arguments": [
+                      { "name": "pausepoint", "type": "string" }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "CONTROLLED_VARIABLE",
+            "type": "block",
+            "token": "CONTROLLED_VARIABLE",
+            "arguments": [
+              {
+                "name": "action",
+                "type": "oneof",
+                "arguments": [
+                  { "name": "LIST", "type": "pure-token", "token": "LIST" },
+                  {
+                    "name": "GET",
+                    "type": "block",
+                    "token": "GET",
+                    "arguments": [
+                      { "name": "variable", "type": "string" }
+                    ]
+                  },
+                  {
+                    "name": "SET",
+                    "type": "block",
+                    "token": "SET",
+                    "arguments": [
+                      { "name": "variable", "type": "string" },
+                      { "name": "value", "type": "string" }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "TEXTINFO",
+            "type": "block",
+            "token": "TEXTINFO",
+            "arguments": [
+              {
+                "name": "index",
+                "type": "string",
+                "multiple": true
+              }
+            ]
+          },
+          {
+            "name": "STRINGPOOLSTATS",
+            "type": "pure-token",
+            "token": "STRINGPOOLSTATS"
+          },
+          {
+            "name": "SHOW_METADATA",
+            "type": "pure-token",
+            "token": "SHOW_METADATA"
+          },
+          {
+            "name": "SHOW_INDEXSCHEMAS",
+            "type": "pure-token",
+            "token": "SHOW_INDEXSCHEMAS"
+          },
+          {
+            "name": "LIST_METRICS",
+            "type": "block",
+            "token": "LIST_METRICS",
+            "arguments": [
+              {
+                "name": "type",
+                "type": "oneof",
+                "arguments": [
+                  { "name": "APP", "type": "pure-token", "token": "APP" },
+                  { "name": "DEV", "type": "pure-token", "token": "DEV" }
+                ]
+              },
+              {
+                "name": "NAMES_ONLY",
+                "type": "pure-token",
+                "token": "NAMES_ONLY",
+                "optional": true
+              }
+            ]
+          },
+          {
+            "name": "LIST_CONFIGS",
+            "type": "block",
+            "token": "LIST_CONFIGS",
+            "arguments": [
+              {
+                "name": "VERBOSE",
+                "type": "pure-token",
+                "token": "VERBOSE",
+                "optional": true
+              },
+              {
+                "name": "filter",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                  { "name": "APP", "type": "pure-token", "token": "APP" },
+                  { "name": "DEV", "type": "pure-token", "token": "DEV" },
+                  { "name": "HIDDEN", "type": "pure-token", "token": "HIDDEN" }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "HELP",
+            "type": "pure-token",
+            "token": "HELP"
+          }
+        ]
+      }
+    ],
     "complexity": "O(1)",
     "group": "search",
     "module_since": "1.1.0",

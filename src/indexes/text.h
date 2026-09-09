@@ -38,7 +38,7 @@ namespace valkey_search::indexes {
  */
 class Text : public IndexBase {
  public:
-  explicit Text(const data_model::TextIndex& text_index_proto,
+  explicit Text(const data_model::TextIndex &text_index_proto,
                 std::shared_ptr<text::TextIndexSchema> text_index_schema);
 
   std::shared_ptr<text::TextIndexSchema> GetTextIndexSchema() const {
@@ -47,27 +47,27 @@ class Text : public IndexBase {
   bool IsStemmingEnabled() const { return !no_stem_; }
   bool WithSuffixTrie() const { return with_suffix_trie_; }
   double Weight() const { return weight_; }
-  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr& key,
+  absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
                                          absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<bool> RemoveRecord(
-      const InternedStringPtr& key,
+      const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr& key,
+  absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr &key,
                                             absl::string_view data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
-  int RespondWithInfo(ValkeyModuleCtx* ctx) const override;
-  bool IsTracked(const InternedStringPtr& key) const override;
+  int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
+  bool IsTracked(const InternedStringPtr &key) const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {
     return absl::OkStatus();
   }
 
   inline absl::Status ForEachTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& key : tracked_keys_) {
+    for (const auto &key : tracked_keys_) {
       VMSDK_RETURN_IF_ERROR(fn(key));
     }
     return absl::OkStatus();
@@ -78,12 +78,12 @@ class Text : public IndexBase {
     return untracked_keys_.size();
   }
 
-  bool IsUnTracked(const InternedStringPtr& key) const override {
+  bool IsUnTracked(const InternedStringPtr &key) const override {
     absl::MutexLock lock(&index_mutex_);
     return untracked_keys_.contains(key);
   }
 
-  void UnTrack(const InternedStringPtr& key) override
+  void UnTrack(const InternedStringPtr &key) override
       ABSL_LOCKS_EXCLUDED(index_mutex_) {
     CHECK(!IsTracked(key));
     absl::MutexLock lock(&index_mutex_);
@@ -91,10 +91,10 @@ class Text : public IndexBase {
   }
 
   absl::Status ForEachUnTrackedKey(
-      absl::AnyInvocable<absl::Status(const InternedStringPtr&)> fn)
+      absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn)
       const override {
     absl::MutexLock lock(&index_mutex_);
-    for (const auto& key : untracked_keys_) {
+    for (const auto &key : untracked_keys_) {
       VMSDK_RETURN_IF_ERROR(fn(key));
     }
     return absl::OkStatus();
@@ -105,7 +105,7 @@ class Text : public IndexBase {
 
   uint32_t GetMutationWeight() const override;
 
-  InternedStringPtr GetRawValue(const InternedStringPtr& key) const
+  InternedStringPtr GetRawValue(const InternedStringPtr &key) const
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  public:
@@ -113,17 +113,19 @@ class Text : public IndexBase {
   class EntriesFetcher : public EntriesFetcherBase {
    public:
     EntriesFetcher(size_t size,
-                   const std::shared_ptr<text::TextIndex>& text_index,
-                   text::FieldMaskPredicate field_mask, bool require_positions)
+                   const std::shared_ptr<text::TextIndex> &text_index,
+                   text::FieldMaskPredicate field_mask, bool require_positions,
+                   float or_weight_multiplier)
         : size_(size),
           text_index_(text_index),
           field_mask_(field_mask),
-          require_positions_(require_positions) {}
+          require_positions_(require_positions),
+          or_weight_multiplier_(or_weight_multiplier) {}
 
     size_t Size() const override;
 
     std::unique_ptr<text::TextIterator> BuildTextIterator(
-        const query::TextPredicate* predicate);
+        const query::TextPredicate *predicate);
 
     // Factory method that creates the appropriate text iterator
     // based on the text predicate's operation type.
@@ -131,9 +133,11 @@ class Text : public IndexBase {
 
     size_t size_;
     std::shared_ptr<text::TextIndex> text_index_;
-    const query::TextPredicate* predicate_;
+    const query::TextPredicate *predicate_;
     text::FieldMaskPredicate field_mask_;
     bool require_positions_;
+    // Product of the enclosing OR group weights, which no iterator carries.
+    float or_weight_multiplier_;
   };
 
   size_t GetTextFieldNumber() const { return text_field_number_; }

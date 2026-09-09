@@ -2,8 +2,10 @@ __pycache__/
 resolved_deps.py
 *.swp
 compile_commands.json
+.clangd
 .devcontainer/devcontainer.json
 .devcontainer/._devcontainer.json
+.ssh-agent*.sock
 .codelite/
 .cache/
 build-*
@@ -16,9 +18,16 @@ integration/valkeytestframework*
 dump.rdb
 test-data*
 integration/test-data/
-.kiro/
 venv/
 env/
 .venv/
 .env/
 .build_log
+integration/module/*.so
+
+# Core dumps. The test binaries abort at teardown under a gtest_filter (the
+# IsMainThread CHECK in vmsdk/src/utils.h), leaving core.<pid> in the repo
+# root. Matched narrowly so a source file named core.cc or core.py, or a
+# directory named core/, is not silently ignored.
+/core
+core.[0-9]*

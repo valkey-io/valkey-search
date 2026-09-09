@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
+#include <algorithm>
+#include <limits>
 #include "src/commands/ft_aggregate_parser.h"
 
 #include "absl/container/flat_hash_map.h"
@@ -421,6 +423,65 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
         AddRecordAttribute(name, name, name, indexes::IndexerType::kNone);
   }
   return std::make_unique<Attribute>(name, new_index);
+}
+
+// SORTBY's retention bound is a property of the whole pipeline, not of the
+// SORTBY clause alone. Measured on redis:latest over 10000 documents:
+//
+//   SORTBY, no MAX, no LIMIT          ->    10 rows   (the default)
+//   SORTBY MAX 50, no LIMIT           ->    50 rows   (MAX sets the bound)
+//   SORTBY MAX 0, no LIMIT            ->    10 rows   (MAX 0 means "unset")
+//   SORTBY + LIMIT 0 1000             ->  1000 rows   (a LIMIT raises it)
+//   SORTBY MAX 5 + LIMIT 0 100        ->   100 rows   (a LIMIT outranks MAX)
+//   SORTBY + LIMIT 500 100            ->   100 rows   (the offset counts too)
+//   LIMIT 0 1000 then SORTBY          ->  1000 rows   (already bounded)
+//
+// Before this, SORTBY always truncated to its own max_, so a later LIMIT could
+// only ever see 10 records: `LIMIT 0 1000` returned 10, and `LIMIT 500 100`
+// returned nothing at all, because the offset fell past the end of the ten
+// records that survived. Paging through sorted results was broken beyond the
+// first page.
+void ResolveSortByBounds(AggregateParameters &params) {
+  auto &stages = params.stages_;
+  for (size_t i = 0; i < stages.size(); ++i) {
+    auto *sortby = dynamic_cast<SortBy *>(stages[i].get());
+    if (sortby == nullptr) {
+      continue;
+    }
+    const size_t parsed_max = sortby->max_;
+    // MAX 0 is how Redis spells "no MAX", so it falls back to the default.
+    size_t resolved = parsed_max == 0 ? SortBy::kDefaultMax : parsed_max;
+
+    const Limit *following = nullptr;
+    for (size_t j = i + 1; j < stages.size(); ++j) {
+      if (auto *limit = dynamic_cast<Limit *>(stages[j].get())) {
+        following = limit;
+        break;
+      }
+    }
+    if (following != nullptr) {
+      // Keep at least what that LIMIT can ask for, offset included. Saturate
+      // rather than wrap: a huge offset just means "retain everything".
+      const size_t need =
+          following->offset_ > SortBy::kUnbounded - following->limit_
+              ? SortBy::kUnbounded
+              : following->offset_ + following->limit_;
+      resolved = std::max(resolved, need);
+    } else {
+      // No LIMIT downstream. One upstream has already bounded the stream, so
+      // sorting all of what arrives is what Redis does; truncating again here
+      // would drop rows the LIMIT already paid for.
+      for (size_t j = 0; j < i; ++j) {
+        if (dynamic_cast<Limit *>(stages[j].get()) != nullptr) {
+          resolved = SortBy::kUnbounded;
+          break;
+        }
+      }
+    }
+    sortby->max_ = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "sortby_max_follows_limit", [&] { return resolved; },
+        [&] { return parsed_max; });
+  }
 }
 
 std::ostream &operator<<(std::ostream &os, const AggregateParameters &agg) {

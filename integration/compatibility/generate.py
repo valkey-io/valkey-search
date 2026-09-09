@@ -518,6 +518,35 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
 
+    def test_aggregate_sortby_limit_window(self, key_type, dialect, vector_data_type):
+        """SORTBY paired with a LIMIT that reaches past SORTBY's own bound.
+
+        SORTBY keeps only a bounded number of records, and every other
+        SORTBY+LIMIT case in this suite asks for at most 5 rows at an offset of
+        at most 2, which fits inside that bound whatever it is. These do not:
+        `sortable numbers` holds 15 documents, so a count of 15 exceeds the
+        bound and an offset of 12 starts past it. Without them a SORTBY that
+        silently truncates to its default looks correct.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        # Count past the bound: all 15 rows, not the first few.
+        self.check(dialect, f"{base} limit 0 15")
+        # Offset past the bound: the last 3 rows, not an empty reply.
+        self.check(dialect, f"{base} limit 12 5")
+        # An offset beyond the data is empty for a different reason, and should
+        # stay empty.
+        self.check(dialect, f"{base} limit 20 5")
+        # An explicit MAX smaller than the LIMIT: the LIMIT wins.
+        self.check(dialect, f"{base} max 3 limit 0 15")
+        # MAX 0 means no MAX, so the default bound applies.
+        self.check(dialect, f"{base} max 0")
+        # MAX alone sets the bound when no LIMIT follows.
+        self.check(dialect, f"{base} max 12")
+        # A LIMIT ahead of the SORTBY has already bounded the stream.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 limit 0 14 sortby 2 @n1 asc")
+
     def test_aggregate_short_limit(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")

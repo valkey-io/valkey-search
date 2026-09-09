@@ -96,40 +96,34 @@ Some queries are excluded due to different behavior in escaped character search.
 
 ## 5. FT.HYBRID
 
-### 5.1. The LOAD clause — TODO, marked `xfail`
+### 5.1. Loading a field the index does not have — TODO, marked `xfail`
 
-**Status:** open. Every answer in `test_load_clause` is recorded `xfail`.
+**Status:** open, and not FT.HYBRID-specific.
 
-Valkey does not implement the `LOAD` clause for FT.HYBRID. It ignores whatever
-the caller asked for and returns every schema field — for a JSON index, the
-whole document under `$`. Redis honors the clause. `LOAD *` is the one form the
-two agree on, and it is what every other sweep in the suite pins.
+Redis lets a `LOAD` clause name a field the index does not have and simply
+returns no column for it. valkey-search rejects the whole command:
 
-The swept forms and what each currently does:
+```
+127.0.0.1:6379> FT.HYBRID idx SEARCH @title:alpha VSIM @vec $q KNN 2 K 10 LOAD 1 @nosuchfield ...
+(error) Index field `nosuchfield` does not exist
+```
 
-| Form | Redis | Valkey |
-| --- | --- | --- |
-| *(no LOAD)* | key + score aliases only | every schema field |
-| `LOAD 1 @price` | just `price` | every schema field |
-| `LOAD 2 @price @color` | just those two | every schema field |
-| `LOAD 1 @__key` | the document key | every schema field, no key |
-| `LOAD 3 @price AS cost` | `price` renamed to `cost` | every schema field, no `cost` |
-| `LOAD 3 @price AS cost SORTBY 2 @cost ASC` | sorts on the rename | error: field `cost` does not exist |
-| `LOAD 3 @price AS cost APPLY @cost * 2 AS doubled` | applies over the rename | error: field `cost` does not exist |
-| `LOAD 1 @price FILTER @price > 20` | filters on the loaded field | **empty result** |
-| `LOAD 1 $.price` (JSON) | column named `$.price` | whole document under `$` |
-| `LOAD 3 $.price AS cost` (JSON) | `cost` | whole document under `$` |
+The same input produces the same error from FT.AGGREGATE, so this belongs to
+the aggregate pipeline's LOAD handling rather than to FT.HYBRID. A JSON path
+against a HASH index (`LOAD 1 $.price` on a hash index) names nothing in the
+same way and is rejected the same way. `test_load_unknown_field` sweeps both
+shapes, marked `xfail`.
 
-The `FILTER` row is the worst shape this takes: no error, just a silently empty
-result.
+When the aggregate pipeline accepts an unknown field, these will start
+matching, the run will print `XPASS`, and both the `xfail=True` in
+`generate_hybrid.py::test_load_unknown_field` and this section should be
+removed.
 
-**Plan.** A separate PR revises `LOAD` handling across the aggregate pipeline;
-FT.HYBRID should be able to reuse it rather than growing its own. Once that
-lands, these answers should start matching, the run will report `XPASS`, and
-the `xfail=True` in `generate_hybrid.py::test_load_clause` and this section
-should both be removed. The forms are swept now, ahead of the fix, so the shape
-of the gap is recorded against a real Redis answer and the fix has something to
-be measured against.
+Every other `LOAD` form is compared normally, in `test_load_clause`: field
+subsets, `@__key`, `AS` renames of an existing field, a rename onto another
+field's name, two renames at once, renames referenced by a following `SORTBY`,
+`APPLY` or `GROUPBY`, and — on a JSON index — loads and renames written as a
+JSON path.
 
 ### 5.2. Field references under `LOAD *` on a JSON index — `excluded`
 
@@ -137,11 +131,15 @@ be measured against.
 
 Naming an indexed field in a pipeline stage — `GROUPBY 1 @color`,
 `SORTBY 2 @price ASC` — does not resolve under `LOAD *` on a JSON index,
-because the document arrives as a single `$` column. This is an FT.AGGREGATE
-limitation rather than an FT.HYBRID one: the equivalent FT.AGGREGATE query has
-the same problem. The JSON variants of `test_groupby_reduce` and the
-field-sorting cases of `test_sortby` are therefore recorded `excluded` —
-comparing them here would test that gap instead of FT.HYBRID.
+because the document arrives as a single `$` column. Writing the field into the
+LOAD clause explicitly (`LOAD 1 @color GROUPBY 1 @color`) works; only the
+implicit `LOAD *` form does not.
+
+This is an FT.AGGREGATE limitation rather than an FT.HYBRID one: the equivalent
+FT.AGGREGATE query has the same problem. The JSON variants of
+`test_groupby_reduce` and the field-sorting cases of `test_sortby` are
+therefore recorded `excluded` — comparing them here would test that gap instead
+of FT.HYBRID.
 
 ### 5.3. Reference engine image — TODO
 
@@ -151,5 +149,5 @@ comparing them here would test that gap instead of FT.HYBRID.
 `redis:8`, because FT.HYBRID does not exist in `redis/redis-stack-server`
 (RediSearch 2.x) and was added in the Redis 8.4 query engine. A separate PR
 moves the shared image to `redis:latest` for every generator; once that lands,
-the `DOCKER_IMAGE` / `CONTAINER_NAME` override marked `TODO(reference-image)`
-can be dropped and this generator can inherit the shared image again.
+the `DOCKER_IMAGE` override marked `TODO(reference-image)` can be dropped and
+this generator can inherit the shared image again.

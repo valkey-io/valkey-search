@@ -149,7 +149,10 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
       EXPECT_FALSE(params.loadall_);
       EXPECT_EQ(params.loads_.size(), loads_test.value_->size());
       for (auto i = 0; i < loads_test.value_->size(); ++i) {
-        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i]);
+        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i].identifier);
+        // No AS clause in these cases (and the rename gate is off by default),
+        // so the output alias mirrors the identifier.
+        EXPECT_EQ(params.loads_[i].alias, params.loads_[i].identifier);
       }
     }
     EXPECT_EQ(params.inorder, inorder_test.value_);

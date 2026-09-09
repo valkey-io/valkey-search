@@ -80,7 +80,9 @@ set(INDEXES_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/text_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/vector_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/vector_registry_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/vector_registry_state_machine_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/space_distance_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_normalize_test.cc)
 
 add_executable(indexes_test ${INDEXES_TEST_SOURCES})
 target_include_directories(indexes_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

@@ -67,7 +67,8 @@ VectorRegistry::LookupRecord(
 std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
     const InternedStringPtr &key, const InternedStringPtr &attribute_identifier,
     ValkeyModuleString *vector, Allocator *allocator,
-    const data_model::AttributeDataType &attribute_data_type, int db_num) {
+    const data_model::AttributeDataType &attribute_data_type, int db_num,
+    data_model::VectorDataType vector_data_type) {
   vmsdk::VerifyMainThread();
   RegistryKey search_key{
       .db_num = db_num,
@@ -131,9 +132,8 @@ std::shared_ptr<indexes::VectorRecord> VectorRegistry::Track(
       }
 
       if (!vector_record) {
-        float reciprocal_magnitude = indexes::CalcReciprocalMagnitude(
-            reinterpret_cast<const float *>(vector_str.data()),
-            vector_str.size() / sizeof(float));
+        float reciprocal_magnitude =
+            indexes::CalcReciprocalMagnitude(vector_str, vector_data_type);
         vector_record = indexes::VectorRecord::Construct(
             vector_str, reciprocal_magnitude, allocator);
       }

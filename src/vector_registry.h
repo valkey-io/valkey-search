@@ -50,12 +50,16 @@ class VectorRegistry {
   // external sharing. If vector is nullptr, untracks and removes the record
   // from the registry for the given key and attribute. Returns the shared
   // VectorRecord pointer (reusing existing instance if payload matches).
+  // `vector_data_type` gives the element width of the payload; the registry
+  // is otherwise type-agnostic but must compute the reciprocal magnitude over
+  // correctly sized elements.
   std::shared_ptr<indexes::VectorRecord> Track(
       const InternedStringPtr &key,
       const InternedStringPtr &attribute_identifier, ValkeyModuleString *vector,
       Allocator *allocator,
-      const data_model::AttributeDataType &attribute_data_type, int db_num)
-      ABSL_LOCKS_EXCLUDED(mutex_);
+      const data_model::AttributeDataType &attribute_data_type, int db_num,
+      data_model::VectorDataType vector_data_type =
+          data_model::VECTOR_DATA_TYPE_FLOAT32) ABSL_LOCKS_EXCLUDED(mutex_);
 
   // Retrieves the tracked VectorRecord and raw payload byte size for a given
   // key and attribute. Increments lookup_record_hits if found, or

@@ -47,7 +47,15 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     // moved). Fall through to content fetch.
   }
 
-  // 4. Content fetch + filter via ProcessNeighborsForReply
+  // 4. Content fetch + filter via ProcessNeighborsForReply.
+  //
+  // A caller that wants no content still comes through here for the checks
+  // above -- FT.HYBRID runs the contention check whatever its LOAD clause
+  // asked for -- but there is nothing to fetch for it.
+  if (params->no_content) {
+    params->QueryCompleteMainThread(std::move(params));
+    return;
+  }
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
   const auto& attribute_data_type =
       params->index_schema->GetAttributeDataType();

@@ -476,16 +476,16 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       env.agg->suppressed_reply_field_ = std::string(kInternalHybridScore);
     }
     // Pre-populate the two reserved record slots that AggregateParameters
-    // expects: __key at index 0 and the score alias at index 1. Mirrors the
-    // setup at ft_aggregate.cc:94-97. Without this, MakeReference fails when
-    // any APPLY/FILTER/SORTBY references @<score_alias>.
-    CHECK_EQ(env.agg->AddRecordAttribute("__key", "__key",
+    // expects: __key at kKeyColumn and the score alias at kScoreColumn.
+    // Mirrors AggregateParameters::ParseCommand. Without this, MakeReference
+    // fails when any APPLY/FILTER/SORTBY references @<score_alias>.
+    CHECK_EQ(env.agg->AddRecordAttribute("__key", "__key", "__key",
                                          indexes::IndexerType::kNone),
-             0u);
+             aggregate::AggregateParameters::kKeyColumn);
     auto score_sv = vmsdk::ToStringView(env.agg->score_as.get());
-    CHECK_EQ(env.agg->AddRecordAttribute(score_sv, score_sv,
+    CHECK_EQ(env.agg->AddRecordAttribute(score_sv, score_sv, score_sv,
                                          indexes::IndexerType::kNone),
-             1u);
+             aggregate::AggregateParameters::kScoreColumn);
   }
   // The aggregate parser uses parse_vars_.index_interface_ during expression
   // compilation (APPLY/FILTER/REDUCE) to resolve @<field> references. Stack
@@ -566,6 +566,30 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
                        ": `", next_or.value(), "`"));
     }
   }
+
+  // With no LOAD clause at all, FT.HYBRID replies with the document key and
+  // the score aliases. FT.AGGREGATE has no such default -- it loads `__key`
+  // only when the LOAD clause names it -- so ask for it here, before the
+  // clause is resolved.
+  if (env.agg->loads_.empty() && !env.agg->loadall_) {
+    env.agg->loads_.push_back(aggregate::LoadField{
+        .identifier = "__key", .alias = "__key", .renamed = false});
+  }
+
+  // Turn the LOAD clause into record columns and into the return_attributes
+  // the fused content fetch reads, the same way FT.AGGREGATE does at the end
+  // of its own parse. Without this the fetch has no attribute list and pulls
+  // every field of every key, so LOAD would name columns but never narrow the
+  // reply.
+  VMSDK_RETURN_IF_ERROR(aggregate::ManipulateReturnsClause(*env.agg));
+
+  // ManipulateReturnsClause sets no_content when the LOAD clause asks for no
+  // database field. For FT.AGGREGATE that means there is nothing to read off
+  // a record; for FT.HYBRID there always is, because fusion injects the
+  // per-arm score aliases into each neighbor's attribute_contents. Leaving
+  // no_content set would drop them from the reply. What is *fetched* is
+  // narrowed by the resolver's return_attributes, not by this flag.
+  env.agg->no_content = false;
 
   // FT.HYBRID bounds its reply at 10 rows when the caller writes no LIMIT --
   // unlike FT.AGGREGATE, which returns everything. An explicit LIMIT stays

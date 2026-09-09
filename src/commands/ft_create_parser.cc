@@ -732,7 +732,11 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     return absl::InvalidArgumentError(
         "Index schema must have at least one attribute");
   }
-  std::set<absl::string_view> identifier_names;
+  // Uniqueness is keyed on the attribute alias (the AS name), not the source
+  // identifier. This matches RediSearch, which allows the same source field to
+  // be indexed multiple times under distinct aliases (e.g. once as TEXT and
+  // once as TAG). See issue #1195.
+  std::set<absl::string_view> attribute_aliases;
   size_t text_fields_count = 0;
   while (itr.HasNext()) {
     absl::string_view attribute_identifier;
@@ -743,13 +747,12 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
                            schema_text_defaults),
         _.SetPrepend() << "Invalid field type for field `"
                        << attribute_identifier << "`: ");
-    if (identifier_names.find(attribute->identifier()) !=
-        identifier_names.end()) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Duplicate field in schema - ", attribute->identifier()));
+    if (attribute_aliases.find(attribute->alias()) != attribute_aliases.end()) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Duplicate field in schema - ", attribute->alias()));
     }
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
-        identifier_names.size() + 1, std::nullopt, max_attributes_value))
+        attribute_aliases.size() + 1, std::nullopt, max_attributes_value))
         << "The maximum number of attributes cannot exceed "
         << max_attributes_value << ".";
     if (attribute->index().index_type_case() ==
@@ -761,7 +764,7 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       ++text_fields_count;
     }
 
-    identifier_names.insert(attribute->identifier());
+    attribute_aliases.insert(attribute->alias());
   }
   return index_schema_proto;
 }

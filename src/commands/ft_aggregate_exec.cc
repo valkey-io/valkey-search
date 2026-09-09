@@ -107,9 +107,17 @@ absl::Status Limit::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// 1.3.0 fix: Redisearch drops a record whose APPLY expression reached for a
+// field the key does not have, rather than replying with the alias unset.
+static bool ApplyDropsMissingField() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "apply_drops_missing_field", [] { return true; },
+      [] { return false; });
+}
+
 void SetField(Record &record, Attribute &dest, expr::Value value) {
   if (record.fields_.size() <= dest.record_index_) {
-    record.fields_.resize(dest.record_index_ + 1);
+    record.fields_.resize(dest.record_index_ + 1, expr::Value::Missing());
   }
   record.fields_[dest.record_index_] = value;
 }
@@ -118,9 +126,21 @@ absl::Status Apply::Execute(RecordSet &records) const {
   DBG << "Executing APPLY with expr: " << *expr_ << "\n";
   agg_apply_stages.Increment();
   agg_apply_records.Increment(records.size());
-  for (auto &r : records) {
-    SetField(*r, *name_, expr_->Evaluate(ctx, *r));
+  // Redisearch drops a record whose APPLY expression referenced a field the
+  // key does not have, rather than replying with the alias unset. Only a
+  // *missing* value does this: an expression that ran and produced nothing --
+  // abs() of a string, say -- keeps the record and replies nan or nil.
+  RecordSet kept(records.agg_params_);
+  while (!records.empty()) {
+    auto r = records.pop_front();
+    auto value = expr_->Evaluate(ctx, *r);
+    if (value.IsMissing() && ApplyDropsMissingField()) {
+      continue;
+    }
+    SetField(*r, *name_, value);
+    kept.push_back(std::move(r));
   }
+  records.swap(kept);
   return absl::OkStatus();
 }
 
@@ -192,6 +212,45 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// Redisearch treats an array group key as a multi-value field: the record joins
+// one group per element, and one per combination when several key fields hold
+// arrays. Reducer arguments are not expanded -- they still see the whole array.
+static absl::StatusOr<std::vector<GroupKey>> ExpandGroupKeys(
+    const absl::InlinedVector<expr::Value, 4> &key_values) {
+  // A record with several large array keys would otherwise produce the product
+  // of their lengths in group keys.
+  const size_t max_expansion = options::GetMaxGroupKeyExpansion().GetValue();
+  std::vector<GroupKey> keys(1);
+  for (const auto &value : key_values) {
+    absl::InlinedVector<expr::Value, 4> alternatives;
+    if (!value.IsArray()) {
+      alternatives.emplace_back(value);
+    } else if (value.IsEmptyArray()) {
+      // Nothing to group into: Redisearch keys these as nil.
+      alternatives.emplace_back(expr::Value::Nil("empty array group key"));
+    } else {
+      auto array = value.GetArray();
+      alternatives.assign(array->begin(), array->end());
+    }
+    // Divide rather than multiply: the product would wrap before the compare.
+    // alternatives is never empty -- every branch above pushes an element.
+    if (keys.size() > max_expansion / alternatives.size()) {
+      return absl::ResourceExhaustedError(
+          absl::StrCat("GROUPBY over multi-value fields exceeds ",
+                       max_expansion, " group keys for a single record"));
+    }
+    std::vector<GroupKey> expanded;
+    expanded.reserve(keys.size() * alternatives.size());
+    for (const auto &key : keys) {
+      for (const auto &alternative : alternatives) {
+        expanded.emplace_back(key).keys_.emplace_back(alternative);
+      }
+    }
+    keys.swap(expanded);
+  }
+  return keys;
+}
+
 absl::Status GroupBy::Execute(RecordSet &records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
@@ -209,26 +268,42 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
     } else {
       CHECK(record_field_count == record->fields_.size());
     }
-    GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
     // Skip them?
+    absl::InlinedVector<expr::Value, 4> key_values;
+    bool multi_value = false;
     for (auto &g : groups_) {
-      k.keys_.emplace_back(g->GetValue(ctx, *record));
+      key_values.emplace_back(g->GetValue(ctx, *record));
+      multi_value |= key_values.back().IsArray();
     }
-    DBG << "Record: " << *record << " GroupKey: " << k << "\n";
-    auto [group_it, inserted] = groups.try_emplace(std::move(k));
-    if (inserted) {
-      DBG << "Was inserted, now have " << groups.size() << " groups\n";
-      for (auto &reducer : reducers_) {
-        group_it->second.emplace_back(reducer->MakeInstance());
-      }
+    std::vector<GroupKey> keys;
+    if (multi_value) {
+      VMSDK_ASSIGN_OR_RETURN(keys, ExpandGroupKeys(key_values));
+    } else {
+      keys.emplace_back().keys_ = std::move(key_values);
     }
-    for (auto i = 0; i < reducers_.size(); ++i) {
+    // The record joins every group its keys expand to, with one evaluation of
+    // the reducer arguments shared between them.
+    absl::InlinedVector<ArgVector, 4> args_by_reducer;
+    for (auto &reducer : reducers_) {
       ArgVector args;
-      for (auto &nargs : reducers_[i]->args_) {
+      for (auto &nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
-      group_it->second[i]->ProcessRecord(args);
+      args_by_reducer.emplace_back(std::move(args));
+    }
+    for (auto &k : keys) {
+      DBG << "Record: " << *record << " GroupKey: " << k << "\n";
+      auto [group_it, inserted] = groups.try_emplace(std::move(k));
+      if (inserted) {
+        DBG << "Was inserted, now have " << groups.size() << " groups\n";
+        for (auto &reducer : reducers_) {
+          group_it->second.emplace_back(reducer->MakeInstance());
+        }
+      }
+      for (auto i = 0; i < reducers_.size(); ++i) {
+        group_it->second[i]->ProcessRecord(args_by_reducer[i]);
+      }
     }
   }
   for (auto &group : groups) {
@@ -236,7 +311,14 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
     RecordPtr record = std::make_unique<Record>(record_field_count);
     CHECK(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
-      SetField(*record, *groups_[i], group.first.keys_[i]);
+      // The group exists, so its key is an output of this stage rather than a
+      // field the key never had: Redisearch names it with a nil rather than
+      // leaving it out. ExpandGroupKeys already says this for an empty array.
+      auto key = group.first.keys_[i];
+      if (key.IsMissing()) {
+        key = expr::Value(expr::Value::Nil("absent group key"));
+      }
+      SetField(*record, *groups_[i], key);
     }
     CHECK(reducers_.size() == group.second.size());
     agg_reducer_stages.Increment(reducers_.size());
@@ -294,23 +376,59 @@ class RandomSample : public GroupBy::ReducerInstance {
   size_t seen_count_ = 0;
 };
 
+// 1.3.0 fix: MIN and MAX are strictly numeric in Redisearch. Anything that is
+// not a number reads as 0 rather than becoming the reducer's result, and a
+// group that saw no value at all answers 0 rather than dropping its alias.
+// One counter covers both halves of the one rule.
+static bool MinMaxIsNumeric() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "reduce_minmax_numeric", [] { return true; },
+      [] { return false; });
+}
+
+static expr::Value NumericReducerArg(const expr::Value &value) {
+  // Nil passes through for the caller to skip, and a value that is already a
+  // number needs no decision, so neither consults the gate. An array has no
+  // 1.2.1 behavior to preserve -- arrays cannot occur there, TOLIST being
+  // newer than that release -- so that half is not gated either.
+  if (value.IsNil() || value.IsDouble()) {
+    return value;
+  }
+  if (value.IsArray()) {
+    return expr::Value(0.0);
+  }
+  if (!MinMaxIsNumeric()) {
+    return value;
+  }
+  auto number = value.AsDouble();
+  return number ? expr::Value(*number) : expr::Value(0.0);
+}
+
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecord(const ArgVector &values) override {
-    if (values[0].IsNil()) {
+  void ProcessRecord(const ArgVector &raw) override {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (min_.IsNil()) {
-      DBG << "First Value Min is " << values[0] << "\n";
-      min_ = values[0];
-    } else if (min_ > values[0]) {
-      DBG << " New Min: " << values[0] << "\n";
-      min_ = values[0];
+      DBG << "First Value Min is " << value << "\n";
+      min_ = value;
+    } else if (min_ > value) {
+      DBG << " New Min: " << value << "\n";
+      min_ = value;
     } else {
-      DBG << "Not new Min: " << values[0] << "\n";
+      DBG << "Not new Min: " << value << "\n";
     }
   }
-  expr::Value GetResult() const override { return min_; }
+  // A group whose every input was nil replies 0 in Redisearch, for a string
+  // field as much as a numeric one -- MIN is numeric, so 0 is its identity.
+  expr::Value GetResult() const override {
+    if (!min_.IsNil()) {
+      return min_;
+    }
+    return MinMaxIsNumeric() ? expr::Value(0.0) : min_;
+  }
 };
 
 struct ReducerInstanceVector : GroupBy::ReducerInstance {
@@ -322,17 +440,24 @@ struct ReducerInstanceVector : GroupBy::ReducerInstance {
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecord(const ArgVector &values) override {
-    if (values[0].IsNil()) {
+  void ProcessRecord(const ArgVector &raw) override {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (max_.IsNil()) {
-      max_ = values[0];
-    } else if (max_ < values[0]) {
-      max_ = values[0];
+      max_ = value;
+    } else if (max_ < value) {
+      max_ = value;
     }
   }
-  expr::Value GetResult() const override { return max_; }
+  // As for Min: nothing seen replies 0, not a missing field.
+  expr::Value GetResult() const override {
+    if (!max_.IsNil()) {
+      return max_;
+    }
+    return MinMaxIsNumeric() ? expr::Value(0.0) : max_;
+  }
 };
 
 class Sum : public GroupBy::ReducerInstance {
@@ -364,13 +489,24 @@ class Avg : public GroupBy::ReducerInstance {
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector &values) override {
-    auto val = values[0].AsDouble();
+  void Accumulate(const expr::Value &value) {
+    // Redisearch spreads an array across the sample, unlike SUM and AVG, which
+    // read it as a single unconvertible value and so contribute nothing.
+    if (value.IsArray()) {
+      for (const auto &element : *value.GetArray()) {
+        Accumulate(element);
+      }
+      return;
+    }
+    auto val = value.AsDouble();
     if (val) {
       sum_ += *val;
       sq_sum_ += (*val) * (*val);
       count_++;
     }
+  }
+  void ProcessRecord(const ArgVector &values) override {
+    Accumulate(values[0]);
   }
   expr::Value GetResult() const override {
     if (count_ <= 1) {
@@ -423,7 +559,14 @@ class FirstValue : public GroupBy::ReducerInstance {
     }
   }
 
-  expr::Value GetResult() const override { return result_value_; }
+  // Unlike MIN and MAX, Redisearch names the alias with a nil here rather
+  // than an identity value. The default Value is Nil(kMissing), which
+  // ReplyWithValue drops, so say why there is no value instead.
+  expr::Value GetResult() const override {
+    return result_value_.IsMissing()
+               ? expr::Value(expr::Value::Nil("no values"))
+               : result_value_;
+  }
 };
 
 class CountDistinct : public GroupBy::ReducerInstance {
@@ -788,7 +931,20 @@ bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     std::string_view name, indexes::IndexerType indexer_type,
                     const expr::Value &value, int dialect) {
   if (value.IsNil()) {
-    return false;
+    // 1.3.0 fix: a field the key never had stays out of the reply, but
+    // something that evaluated to nothing is named with a nil value, which is
+    // what Redisearch does. Before the fix every nil was left out.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_nil_alias_named",
+        [&] {
+          if (value.IsMissing()) {
+            return false;
+          }
+          ValkeyModule_ReplyWithSimpleString(ctx, name.data());
+          ValkeyModule_ReplyWithNull(ctx);
+          return true;
+        },
+        [] { return false; });
   }
 
   // Handle array values with RESP array serialization
@@ -829,17 +985,14 @@ absl::StatusOr<std::pair<size_t, size_t>> PrepareNeighborRecords(
   std::optional<std::string> vector_identifier;
 
   if (parameters.load_key) {
-    key_index = parameters.AddRecordAttribute("__key", "__key",
-                                              indexes::IndexerType::kNone);
+    key_index = AggregateParameters::kKeyColumn;
   }
   if (parameters.IsVectorQuery()) {
     VMSDK_ASSIGN_OR_RETURN(
         vector_identifier,
         parameters.index_schema->GetIdentifier(parameters.attribute_alias));
 
-    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                 indexes::IndexerType::kNone);
+    scores_index = AggregateParameters::kScoreColumn;
   }
 
   query::ProcessNeighborsForReply(
@@ -877,6 +1030,11 @@ absl::Status CreateRecordsFromNeighbors(
   auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
 
   for (auto &n : neighbors) {
+    // One slot per record column. Not record_indexes_by_alias_.size(): that
+    // map holds a name per resolvable alias, which is neither an over- nor an
+    // under-count of the columns (a rename adds a key without adding a column;
+    // two columns reading one field add a column per output name). Size by the
+    // column table itself.
     auto rec =
         std::make_unique<Record>(parameters.record_info_by_index_.size());
 
@@ -891,44 +1049,49 @@ absl::Status CreateRecordsFromNeighbors(
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       bool should_drop_record = false;
 
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
-        auto value = vmsdk::ToStringView(records_map_value.value.get());
-        std::optional<size_t> record_index;
-
-        if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
-            by_alias != parameters.record_indexes_by_alias_.end()) {
-          record_index = by_alias->second;
-          CHECK(record_index < rec->fields_.size());
-        } else if (auto by_identifier =
-                       parameters.record_indexes_by_identifier_.find(name);
-                   by_identifier !=
-                   parameters.record_indexes_by_identifier_.end()) {
-          record_index = by_identifier->second;
-          CHECK(record_index < rec->fields_.size());
+      // 1/ Each column pulls its own value out of the fetched records, keyed
+      //    by the identifier that column sources. Columns whose identifier was
+      //    not fetched (__key, the score, and columns synthesized by a later
+      //    pipeline stage) are left as they are.
+      //
+      //    The record was sized from record_info_by_index_, so indexing it by
+      //    a field index is in range. CHECK rather than assert: asserts are
+      //    compiled out of release builds, which is how the slot-bookkeeping
+      //    corruption in #1251 went undetected into an out-of-bounds write.
+      CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
+      for (size_t i = 0; i < rec->fields_.size(); ++i) {
+        const auto &info = parameters.record_info_by_index_[i];
+        auto itr = n.attribute_contents->find(info.identifier_);
+        if (itr == n.attribute_contents->end()) {
+          continue;
         }
-
-        if (record_index) {
-          indexes::IndexerType indexer_type =
-              parameters.record_info_by_index_[*record_index].data_type_;
-          auto processed_value =
-              ProcessFieldValue(value, indexer_type, data_type);
-
-          if (processed_value.ok()) {
-            rec->fields_[*record_index] = std::move(*processed_value);
-          } else {
-            if (indexer_type != indexes::IndexerType::kNumeric) {
-              should_drop_record = true;
-              break;
-            }
-          }
-        } else {
-          rec->extra_fields_.push_back(
-              std::make_pair(std::string(name), expr::Value(value)));
+        auto processed_value =
+            ProcessFieldValue(vmsdk::ToStringView(itr->second.value.get()),
+                              info.data_type_, data_type);
+        if (processed_value.ok()) {
+          rec->fields_[i] = std::move(*processed_value);
+        } else if (info.data_type_ != indexes::IndexerType::kNumeric) {
+          // For JSON unquote failures, drop the entire record
+          should_drop_record = true;
+          break;
         }
+        // For numeric failures, skip the field but continue with the record
       }
 
       if (should_drop_record) {
-        continue;
+        continue;  // Skip adding this record to the set
+      }
+
+      // 2/ Anything fetched that no column sources is passed through as an
+      //    extra field. This is how LOAD * surfaces the contents of a key,
+      //    since it builds no columns of its own.
+      for (auto &[name, records_map_value] : *n.attribute_contents) {
+        if (parameters.record_identifiers_.contains(name)) {
+          continue;
+        }
+        rec->extra_fields_.push_back(std::make_pair(
+            std::string(name),
+            expr::Value(vmsdk::ToStringView(records_map_value.value.get()))));
       }
     }
 
@@ -971,13 +1134,13 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
     CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
       if (!parameters.suppressed_reply_field_.empty() &&
-          parameters.record_info_by_index_[i].identifier_ ==
+          parameters.record_info_by_index_[i].output_name_ ==
               parameters.suppressed_reply_field_) {
         continue;
       }
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].identifier_,
+              parameters.record_info_by_index_[i].output_name_,
               parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
               parameters.dialect)) {
         array_count += 2;

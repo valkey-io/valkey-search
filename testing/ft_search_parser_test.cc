@@ -20,6 +20,7 @@
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/commands/ft_aggregate_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -378,6 +379,33 @@ TEST_P(FTSearchParserTest, Parse) {
       }
     }
   }
+}
+
+class MaxTimeoutConfigTest : public vmsdk::ValkeyTest {};
+
+TEST_F(MaxTimeoutConfigTest, AppliesToSearchAndAggregate) {
+  auto &max_timeout_ms = options::GetMaxTimeoutMs();
+  const auto saved_max_timeout_ms = max_timeout_ms.GetValue();
+
+  VMSDK_EXPECT_OK(max_timeout_ms.SetValue(100));
+
+  SearchCommand search_parameters(0);
+  search_parameters.timeout_ms = 100;
+  VMSDK_EXPECT_OK(VerifyQueryString(search_parameters));
+  search_parameters.timeout_ms = 101;
+  EXPECT_EQ(VerifyQueryString(search_parameters).message(),
+            "TIMEOUT must be a positive integer greater than 0 and cannot "
+            "exceed 100.");
+
+  aggregate::AggregateParameters aggregate_parameters(0);
+  aggregate_parameters.timeout_ms = 100;
+  VMSDK_EXPECT_OK(VerifyQueryString(aggregate_parameters));
+  aggregate_parameters.timeout_ms = 101;
+  EXPECT_EQ(VerifyQueryString(aggregate_parameters).message(),
+            "TIMEOUT must be a positive integer greater than 0 and cannot "
+            "exceed 100.");
+
+  VMSDK_EXPECT_OK(max_timeout_ms.SetValue(saved_max_timeout_ms));
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -58,8 +58,8 @@ class BaseCompatibilityTest:
             
         cls.container_name = f"{CONTAINER_PREFIX}-{random.randint(1000, 9999)}"
         if os.system(f"docker run --rm -d --name {cls.container_name} "
-                     f"-p 0:6379 redis/redis-stack-server") != 0:
-            print("Failed to start Redis Stack server, please check your Docker setup.")
+                     f"-p 0:6379 redis:latest") != 0:
+            print("Failed to start Redis server, please check your Docker setup.")
             sys.exit(1)
         port = cls._published_port()
         if port is None:

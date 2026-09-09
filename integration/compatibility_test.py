@@ -234,6 +234,16 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             assert False
     return out
 
+def _is_numeric(x):
+    # nan/-nan don't survive float() on every platform, so name them explicitly.
+    if x in ("nan", "-nan", b"nan", b"-nan"):
+        return True
+    try:
+        float(x)
+        return True
+    except (ValueError, TypeError):
+        return False
+
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
@@ -329,8 +339,22 @@ def compare_row(l, r, key_type):
             except json.decoder.JSONDecodeError:
                 print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
                 return False
-        elif l[lks[i]] != r[rks[i]]:
-            print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
+        else:
+            lv, rv = l[lks[i]], r[rks[i]]
+            # Exact match is the fast path, which is what every loaded/stored
+            # field hits.
+            if lv == rv:
+                continue
+            # Values differ byte-for-byte. If both are numeric, fall back to the
+            # tolerant numeric compare -- it treats nan/-nan as equal and uses
+            # math.isclose, absorbing the two engines' differing float precision
+            # and negative-zero formatting on any server-computed numeric field
+            # (APPLY results, GROUPBY reducers). Non-numeric values (concat/
+            # lower/substr/timefmt string results, tags, keys) stay an exact
+            # match.
+            if _is_numeric(lv) and _is_numeric(rv) and compare_number_eq(lv, rv):
+                continue
+            print("mismatch field: ", lks[i], " and ", rks[i], " ", lv, "!=", rv)
             return False
     return True            
     

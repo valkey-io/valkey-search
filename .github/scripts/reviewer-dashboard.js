@@ -109,7 +109,13 @@ function shape(node, firstPassPool, maintainerPool) {
     if (!latest[login] || (r.submittedAt || '') >= (latest[login].submittedAt || '')) latest[login] = r;
   }
 
-  const universe = new Set([...requested, ...Object.keys(latest), autoFP, autoMT]
+  // Include only reviewers GitHub itself lists in the PR's Reviewers box:
+  // currently-requested reviewers (`requested`) plus anyone who has submitted a
+  // review (`latest`). The auto-assign comment (autoFP/autoMT) is NOT an
+  // inclusion source — it's a permanent record that survives reviewer swaps, so
+  // adding from it kept showing people who were later un-requested and never
+  // reviewed. It's still used below to *label* an included reviewer as 🤖 auto.
+  const universe = new Set([...requested, ...Object.keys(latest)]
     .filter(Boolean).filter(l => l !== author));
 
   const firstPass = [], maintainers = [], other = [];
@@ -122,7 +128,7 @@ function shape(node, firstPassPool, maintainerPool) {
     else other.push(entry);
   }
 
-  const hasAuto = !!(autoFP || autoMT);
+  const hasAuto = [...universe].some(l => l === autoFP || l === autoMT);
   const hasManual = [...universe].some(l => l !== autoFP && l !== autoMT);
   let via = '—';
   if (hasAuto && hasManual) via = 'Mixed';

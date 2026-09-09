@@ -144,6 +144,59 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
       << vmsdk::config::RedactIfNeeded(name) << " (size: " << db_size << ")";
 }
 
+namespace {
+
+// Builds one vector index, loading it from RDB when `iter` is present and
+// creating it empty otherwise. Templated on both the algorithm and the storage
+// type because those are the only things that vary across the six
+// algorithm x data-type combinations; writing them out longhand duplicated
+// this body six times and let per-arm details (notably the BFLOAT16 capability
+// probe) drift apart unnoticed.
+template <template <typename> class AlgoT, typename T>
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::Attribute &attribute,
+    const data_model::VectorIndex &vector_index_proto,
+    std::optional<SupplementalContentChunkIter> &iter) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto index,
+      iter.has_value()
+          ? AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                                  vector_index_proto, attribute.identifier(),
+                                  std::move(*iter), index_schema->GetDBNum())
+          : AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
+                             index_schema->GetAttributeDataType().ToProto(),
+                             index_schema->GetDBNum()));
+  return index;
+}
+
+// Selects the storage type for `AlgoT` from the schema's declared data type.
+// BFLOAT16 additionally requires a SIMD-safe BF16 path on this CPU; that check
+// lives here so it cannot be forgotten for one algorithm and not the other.
+template <template <typename> class AlgoT>
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::Attribute &attribute,
+    const data_model::VectorIndex &vector_index_proto,
+    std::optional<SupplementalContentChunkIter> &iter) {
+  switch (vector_index_proto.vector_data_type()) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return CreateVectorIndex<AlgoT, float>(ctx, index_schema, attribute,
+                                             vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return CreateVectorIndex<AlgoT, float16>(ctx, index_schema, attribute,
+                                               vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
+      return CreateVectorIndex<AlgoT, bfloat16>(ctx, index_schema, attribute,
+                                                vector_index_proto, iter);
+    default:
+      return absl::InvalidArgumentError("Unsupported vector data type.");
+  }
+}
+
+}  // namespace
+
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
@@ -165,58 +218,19 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
           index.text_index(), index_schema->GetTextIndexSchema());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
-      switch (index.vector_index().algorithm_case()) {
-        case data_model::VectorIndex::kHnswAlgorithm: {
-          switch (index.vector_index().vector_data_type()) {
-            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorHNSW<float>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorHNSW<float>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            default: {
-              return absl::InvalidArgumentError(
-                  "Unsupported vector data type.");
-            }
-          }
-        }
-        case data_model::VectorIndex::kFlatAlgorithm: {
-          switch (index.vector_index().vector_data_type()) {
-            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              // TODO: Create an empty index in case of an error
-              // loading the index contents from RDB.
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorFlat<float>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorFlat<float>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            default: {
-              return absl::InvalidArgumentError(
-                  "Unsupported vector data type.");
-            }
-          }
-        }
-        default: {
+      // TODO: Create an empty index in case of an error loading the index
+      // contents from RDB.
+      const auto &vector_index_proto = index.vector_index();
+      switch (vector_index_proto.algorithm_case()) {
+        case data_model::VectorIndex::kHnswAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorHNSW>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        case data_model::VectorIndex::kFlatAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorFlat>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
-        }
       }
-      break;
     }
     default: {
       return absl::InvalidArgumentError("Unsupported index type.");
@@ -604,7 +618,9 @@ void TrackRecord(const Key &key, const Attribute &attribute,
       vector_base ? vector_base->GetInternedAttributeIdentifier()
                   : StringInternStore::Intern(attribute.GetIdentifier()),
       record, vector_base ? vector_base->GetVectorAllocator() : nullptr,
-      attribute_data_type, db_num);
+      attribute_data_type, db_num,
+      vector_base ? vector_base->GetVectorDataType()
+                  : data_model::VECTOR_DATA_TYPE_FLOAT32);
 }
 
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
@@ -1203,6 +1219,18 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+  // The index_definition block gained the score_field pair and switched
+  // default_score from a hardcoded "1" bulk string to the configured score as
+  // a double in 1.3.0. Pre-1.3.0: a 6-element array with no score_field and a
+  // literal "1" for default_score (SCORE only accepted 1.0 at the time, so the
+  // literal was always accurate). Evaluated once per reply so the element count
+  // and the emitted pairs cannot disagree, and so the INFO counter records one
+  // use per FT.INFO call rather than one per affected field. See
+  // COMPATIBILITY.md.
+  const bool score_info_fixed = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_info_score_field", [] { return true; },
+      [] { return false; });
+
   int arrSize = 28;
   // Text-attribute info fields
   if (text_index_schema_) {
@@ -1214,7 +1242,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithArray(ctx, score_info_fixed ? 8 : 6);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -1224,11 +1252,15 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
-  ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
+  if (score_info_fixed) {
+    ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
 
-  ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
+    ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
+    ValkeyModule_ReplyWithSimpleString(
+        ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
+  } else {
+    ValkeyModule_ReplyWithCString(ctx, "1");
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -2208,13 +2240,22 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
         "calculation");
   }
   bool has_text_index = false;
+  bool has_low_precision_vector = false;
   for (const auto &attr : unpacked->attributes()) {
     if (attr.index().has_text_index()) {
       has_text_index = true;
-      break;
+    }
+    if (attr.index().has_vector_index()) {
+      const auto dt = attr.index().vector_index().vector_data_type();
+      if (dt == data_model::VECTOR_DATA_TYPE_FLOAT16 ||
+          dt == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
+        has_low_precision_vector = true;
+      }
     }
   }
-  if (has_text_index) {
+  if (has_low_precision_vector) {
+    return kRelease13;
+  } else if (has_text_index) {
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

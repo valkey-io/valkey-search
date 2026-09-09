@@ -18,13 +18,13 @@ from valkey_search_test_case import (
     ValkeySearchTestCaseDebugMode,
 )
 
-# The compatibility pickles capture Redisearch behavior, which is the
-# compatible target. Run Valkey Search with search.emulate-release pinned to the
-# release that fixes the invalid-data compatibility defect so the compatible
-# (whole-key-drop) behavior is exercised. This requires debug-mode (the value is
-# above kModuleVersion), which the *DebugMode base classes enable. Datasets
-# without invalid data are unaffected by this setting.
-COMPAT_EMULATE_RELEASE = "1.3.0"
+# The compatibility pickles capture Redisearch behavior, which is the compatible
+# target for every emulate-release-gated compatibility fix. Pin the replay to the
+# maximum release so all such fixes are enabled regardless of the version each
+# was introduced in. This requires debug-mode (the value is above
+# kModuleVersion), which the *DebugMode base classes enable. Datasets that do not
+# exercise a gated fix are unaffected by this setting.
+COMPAT_EMULATE_RELEASE = "65535.255.255"
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
@@ -81,10 +81,17 @@ def json_load(s):
         return None
 
 def parse_field(x, key_type):
+    """Normalize a field name from a reply.
+
+    This deliberately does NOT strip a leading "$.". Doing so used to hide
+    issue #1243: on a JSON index valkey-search emitted the schema identifier
+    ($.n1) where Redisearch emits the attribute name (n1), and stripping the
+    prefix made the two compare equal.
+    """
     if isinstance(x, bytes):
         return parse_field(x.decode("utf-8"), key_type)
     if isinstance(x, str):
-        return x[2::] if x.startswith("$.") else x
+        return x
     if isinstance(x, int):
         return x
     print("Unknown type ", type(x))
@@ -411,12 +418,18 @@ def mark_as_failed(testname):
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
-    if (expected['data_set_name'], expected['key_type'], expected.get('schema_type')) != data_set:
-        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'])
+    next_data_set = (expected['data_set_name'], expected['key_type'],
+                     expected.get('schema_type'),
+                     expected.get('vector_data_type', 'FLOAT32'))
+    if next_data_set != data_set:
+        print("Loading data set:", expected['data_set_name'], "key type:", expected['key_type'],
+              "vector_data_type:", expected.get('vector_data_type', 'FLOAT32'))
         client.execute_command("FLUSHALL SYNC")
-        load_data(client, expected['data_set_name'], expected['key_type'], schema_type=expected.get('schema_type', 'default'))
+        load_data(client, expected['data_set_name'], expected['key_type'],
+                  schema_type=expected.get('schema_type', 'default'),
+                  vector_data_type=expected.get('vector_data_type', 'FLOAT32'))
         waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, f"{expected['key_type']}_idx1"))
-        data_set = (expected['data_set_name'], expected['key_type'], expected.get("schema_type"))
+        data_set = next_data_set
 
     # for the excluded queries with known difference
     # just run in valkey to make sure they do not crash
@@ -490,6 +503,17 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         )
 
         data_set = next_data_set
+
+    # for the excluded queries with known difference
+    # just run in valkey to make sure they do not crash
+    if expected.get("excluded"):
+        try:
+            print(f"Running excluded CLUSTER query (no-crash check): {expected['cmd']}")
+            cluster_client.execute_command(*expected["cmd"])
+            print("Excluded CLUSTER query completed without crash")
+        except Exception as e:
+            print(f"Excluded CLUSTER query raised: {e} for cmd {expected['cmd']}")
+        return data_set
 
     result = {}
     try:
@@ -639,7 +663,15 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
 
         data_set = None
         cluster_client = self.new_cluster_client()
+        for primary in self.get_all_primary_clients():
+            primary.execute_command(
+                "CONFIG", "SET", "search.emulate-release", COMPAT_EMULATE_RELEASE
+            )
 
+        # Cluster mode does not yet thread vector_data_type through the
+        # data-loading path, so restrict the cluster compatibility run to FP32
+        # entries. FP16 single-node coverage is exercised by TestAnswersCMD.
+        answers = [a for a in answers if a.get("vector_data_type", "FLOAT32") == "FLOAT32"]
         # Pin every primary to the compatible (whole-key-drop) behavior so the
         # invalid-data datasets match the Redisearch reference answers.
         for node_idx in range(self.CLUSTER_SIZE):
@@ -655,7 +687,8 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
                 test_case=self,
             )
 
-        if correct_answers != len(answers):
+        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if failed_tests:
                 print(">>>>>>>>> Failed Tests <<<<<<<<<")

@@ -13,6 +13,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -25,8 +26,11 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/rdb_serialization.h"
@@ -56,8 +60,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
                           attribute_identifier, attribute_data_type, db_num));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_,
                                     vector_index_proto.initial_cap());
@@ -93,15 +96,14 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
                           attribute_identifier, attribute_data_type->ToProto(),
                           db_num),
         vmsdk::DestructByMainThread<VectorFlat<T>>{});
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_);
     RDBChunkInputStream input(std::move(iter));
 
     auto generator = [allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data) {
-      T reciprocal_magnitude = CalcReciprocalMagnitude(
+      float reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
@@ -123,8 +125,8 @@ VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type, int db_num)
-    : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier, db_num),
+    : VectorType<T>(IndexerType::kFlat, dimensions, attribute_data_type,
+                    attribute_identifier, db_num),
       block_size_(block_size) {}
 
 template <typename T>
@@ -218,6 +220,7 @@ template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    [[maybe_unused]] std::optional<size_t> ef_runtime,
     bool enable_partial_results) {
   if (!IsValidSizeVector(query)) {
     return absl::InvalidArgumentError(absl::StrCat(
@@ -226,10 +229,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         dimensions_ * GetDataTypeSize(), ")."));
   }
   float reciprocal_magnitude =
-      normalize_
-          ? CalcReciprocalMagnitude(
-                reinterpret_cast<const float *>(query.data()), dimensions_)
-          : 1.0f;
+      normalize_ ? CalcReciprocalMagnitude(
+                       reinterpret_cast<const T *>(query.data()), dimensions_)
+                 : 1.0f;
 
   try {
     CancelCondition canceler(cancellation_token);
@@ -251,9 +253,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 }
 
 template <typename T>
-T VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                 const VectorRecord *vector_record,
-                                 float query_magnitude) const {
+float VectorFlat<T>::ComputeDistance(absl::string_view query,
+                                     const VectorRecord *vector_record,
+                                     float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -261,14 +263,7 @@ T VectorFlat<T>::ComputeDistance(absl::string_view query,
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
-  data_model::VectorDataType data_type;
-  if constexpr (std::is_same_v<T, float>) {
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
-  } else {
-    DCHECK(false) << "Unsupported type: " << typeid(T).name();
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
-  }
-  vector_index_proto->set_vector_data_type(data_type);
+  SetProtoDataType(vector_index_proto);
 
   auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
   flat_algorithm_proto->set_block_size(block_size_);
@@ -278,17 +273,7 @@ void VectorFlat<T>::ToProtoImpl(
 
 template <typename T>
 int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
-  if constexpr (std::is_same_v<T, float>) {
-    ValkeyModule_ReplyWithSimpleString(
-        ctx,
-        std::string(LookupKeyByValue(
-                        *kVectorDataTypeByStr,
-                        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32))
-            .c_str());
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
-  }
+  EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   ValkeyModule_ReplyWithArray(ctx, 4);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
@@ -311,7 +296,7 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
                         const std::shared_ptr<const VectorRecord> &record) {
     if (normalize) {
-      return NormalizeVector(
+      return NormalizeVector<T>(
           absl::string_view(record->GetRawVector(), vector_size));
     }
     return std::vector<char>(record->GetRawVector(),
@@ -333,5 +318,7 @@ std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVector(
 }
 
 template class VectorFlat<float>;
+template class VectorFlat<float16>;
+template class VectorFlat<bfloat16>;
 
 }  // namespace valkey_search::indexes

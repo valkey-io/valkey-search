@@ -169,7 +169,7 @@ const STATE_OPEN = '<!--BOARD_STATE';
 const STATE_CLOSE = 'BOARD_STATE-->';
 
 function loadState(body) {
-  const empty = { notes: {}, priority: {}, stage: {}, reviewed: {}, claims: {}, prioritySynced: {}, log: [], processed: [] };
+  const empty = { notes: {}, priority: {}, stage: {}, reviewed: {}, claims: {}, prioritySynced: {}, priorityPending: {}, log: [], processed: [] };
   if (!body) return empty;
   // Parse the LAST marker pair: the real state block is always appended at the
   // very end, so any earlier occurrence (e.g. a note or log line that happens to
@@ -202,7 +202,8 @@ function loadState(body) {
     const processed = Array.isArray(p.processed) ? p.processed.filter(Number.isFinite).slice(-200) : [];
     return {
       notes: p.notes || {}, priority: p.priority || {}, stage: p.stage || {},
-      reviewed: p.reviewed || {}, claims: p.claims || {}, prioritySynced: p.prioritySynced || {},
+      reviewed: p.reviewed || {}, claims: p.claims || {},
+      prioritySynced: p.prioritySynced || {}, priorityPending: p.priorityPending || {},
       log, processed,
     };
   } catch (e) {
@@ -371,18 +372,51 @@ const bucket = p => (p == null || p === 4) ? 4 : p;
 // If Bl === Ln they already agree. Otherwise whichever side changed since S wins;
 // if BOTH changed (a genuine conflict) the LABEL wins — the documented source of
 // truth — because labels are visible in the PR list and in GitHub search.
+//
+// When the board wins we record the target in state.priorityPending[n] and keep
+// re-issuing the label op every run until the PR's labels actually converge to
+// it (or the board is moved off the target). This is what makes a failed or
+// PARTIAL label write safe: a half-written label set (e.g. a stale P2 left behind
+// when its removal failed) must NOT be read as a fresh label-side change and flip
+// the decision to label-wins — while a push is pending, the board target is
+// authoritative and simply retried. prioritySynced is advanced only once the two
+// genuinely agree, so it always reflects a fully-landed state.
+//
 // Returns label write ops: [{ number, add: [name], remove: [name] }].
 // When canWriteLabels is false (reading a different repo, e.g. the fork demo) the
 // board always adopts the label value: a pure mirror that never writes back.
 function reconcilePriority(prs, state, canWriteLabels) {
   const ops = [];
+  const pushOp = (n, Bl, priorityLabels) => {
+    const target = Bl != null ? `P${Bl}` : null;
+    const remove = (priorityLabels || []).filter(name => name !== target);
+    const add = (target && !(priorityLabels || []).includes(target)) ? [target] : [];
+    if (add.length || remove.length) ops.push({ number: n, add, remove });
+  };
   for (const pr of prs) {
     const n = pr.number;
     const B = state.priority[n] != null ? state.priority[n] : null;
     const Bl = (B === 1 || B === 2 || B === 3) ? B : null; // label-space board value
     const Ln = pr.labelPriority != null ? pr.labelPriority : null;
-    const S = state.prioritySynced[n];
+    const P = state.priorityPending[n];    // board target actively being pushed to labels
 
+    // A board push is in flight (a prior run decided board-wins; the label write
+    // may not have fully landed). Keep pushing that target until the labels
+    // converge — never let a partially-written label set flip to label-wins.
+    if (canWriteLabels && P !== undefined) {
+      if (Bl === P) {
+        if (Ln === P) {                    // labels reached the target → done
+          delete state.priorityPending[n];
+          state.prioritySynced[n] = Bl;
+        } else {                           // write failed / partial → retry from current labels
+          pushOp(n, Bl, pr.priorityLabels);
+        }
+        continue;
+      }
+      delete state.priorityPending[n];     // board moved off the target → push superseded
+    }
+
+    const S = state.prioritySynced[n];
     if (Bl === Ln) { state.prioritySynced[n] = Bl; continue; }
 
     let winner;
@@ -404,16 +438,11 @@ function reconcilePriority(prs, state, canWriteLabels) {
       state.priority[n] = Ln;            // adopt the label into the board (null clears)
       state.prioritySynced[n] = Ln;
     } else {
-      // Board wins: emit a label op but do NOT advance prioritySynced here. The
-      // label write happens after this returns and may fail; if we recorded Bl now,
-      // a failed write would look like a label-side change next run and revert the
-      // board. Leaving prioritySynced untouched means a failed write simply re-emits
-      // the same op (a retry), and the "already agree" branch records the synced
-      // value once the labels actually match.
-      const target = Bl != null ? `P${Bl}` : null;
-      const remove = (pr.priorityLabels || []).filter(name => name !== target);
-      const add = (target && !(pr.priorityLabels || []).includes(target)) ? [target] : [];
-      if (add.length || remove.length) ops.push({ number: n, add, remove });
+      // Board wins: open a pending push and emit the op. prioritySynced is NOT
+      // advanced here — it moves only when the labels actually reach the target
+      // (the pending branch above), so a failed/partial write just retries.
+      state.priorityPending[n] = Bl;
+      pushOp(n, Bl, pr.priorityLabels);
     }
   }
   return ops;
@@ -798,7 +827,7 @@ module.exports = async ({ github, context, core }) => {
 
   // Prune state for PRs no longer open (merged/closed drop off the board).
   const openNums = new Set(prs.map(p => p.number));
-  for (const key of ['notes', 'priority', 'stage', 'reviewed', 'claims', 'prioritySynced']) {
+  for (const key of ['notes', 'priority', 'stage', 'reviewed', 'claims', 'prioritySynced', 'priorityPending']) {
     for (const n of Object.keys(state[key])) {
       if (!openNums.has(Number(n))) delete state[key][n];
     }
@@ -853,12 +882,13 @@ module.exports = async ({ github, context, core }) => {
   for (const id of toDelete) { if (await del(id)) cleared++; }
   if (cleared) core.info(`Cleared ${cleared} processed comment(s).`);
 
-  // 6. Push board→label changes. reconcilePriority deliberately does NOT advance
-  // prioritySynced for these, so a failed write can't desync: the next run just
-  // re-emits the same op (a retry), and the "already agree" branch records the
-  // synced value once the labels match. Add BEFORE remove so a partial failure
-  // never drops the target priority label (worst case: a harmless stray label).
-  // Requires pull-requests: write; sameRepo only.
+  // 6. Push board→label changes. reconcilePriority tracks these as a pending push
+  // and does NOT advance prioritySynced until the labels converge, so a failed or
+  // partial write can't desync: the next run re-issues the op from the then-current
+  // labels (a retry) and only records the synced value once they match. Add BEFORE
+  // remove so a partial failure never drops the target priority label (worst case:
+  // a stray label the pending retry then cleans up). Requires pull-requests: write;
+  // sameRepo only.
   if (sameRepo && labelOps.length) {
     let synced = 0;
     for (const op of labelOps) {

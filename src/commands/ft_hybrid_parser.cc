@@ -39,10 +39,14 @@ constexpr absl::string_view kRrfKw{"RRF"};
 constexpr absl::string_view kLinearKw{"LINEAR"};
 constexpr absl::string_view kFunctionKw{"FUNCTION"};
 constexpr absl::string_view kExprKw{"EXPR"};
+// K when the caller does not say. Matches Redis, which applies the same
+// default when the KNN block is omitted entirely.
+constexpr uint64_t kDefaultKnnK = 10;
 constexpr absl::string_view kKnnKw{"KNN"};
 constexpr absl::string_view kRangeKw{"RANGE"};
 constexpr absl::string_view kKKw{"K"};
 constexpr absl::string_view kEfRuntimeKw{"EF_RUNTIME"};
+constexpr absl::string_view kShardKRatioKw{"SHARD_K_RATIO"};
 constexpr absl::string_view kRadiusKw{"RADIUS"};
 constexpr absl::string_view kEpsilonKw{"EPSILON"};
 constexpr absl::string_view kConstantKw{"CONSTANT"};
@@ -169,9 +173,13 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
   return absl::OkStatus();
 }
 
-// VSIM arm: VSIM @field $param (KNN <count> K <k> [EF_RUNTIME <ef>]
-//                              | RANGE <count> RADIUS <r> [EPSILON <e>])
-//           [YIELD_SCORE_AS name]
+// VSIM arm: VSIM @field $param
+//             [ KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <r>]
+//             | RANGE <count> RADIUS <r> [EPSILON <e>] ]
+//             [YIELD_SCORE_AS name]
+//
+// The KNN/RANGE block is optional; omitting it means KNN with the default K.
+// YIELD_SCORE_AS names the arm and sits after the block, never inside it.
 absl::Status ParseVsimClause(MultiSearchParameters &env,
                              vmsdk::ArgsIterator &itr, bool *vsim_uses_range) {
   *vsim_uses_range = false;
@@ -201,19 +209,48 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
   }
   arm->parse_vars.query_vector_string = param_sv;
 
-  // Mode: KNN | RANGE
-  VMSDK_ASSIGN_OR_RETURN(auto mode_sv, itr.GetStringView());
-  itr.Next();
+  // Mode: [KNN <count> ...] | [RANGE <count> ...]
+  //
+  // The block is optional. Omitting it means KNN with the default K, which is
+  // what Redis does; `VSIM @vec $q YIELD_SCORE_AS vs` and `VSIM @vec $q
+  // COMBINE ...` both land here with the next token already belonging to an
+  // enclosing clause.
+  arm->k = kDefaultKnnK;
+  absl::string_view mode_sv;
+  bool has_mode_block = false;
+  if (auto next_or = itr.GetStringView(); next_or.ok()) {
+    auto next = next_or.value();
+    has_mode_block = absl::EqualsIgnoreCase(next, kKnnKw) ||
+                     absl::EqualsIgnoreCase(next, kRangeKw);
+    if (!has_mode_block && !IsTopLevelKeyword(next) &&
+        !absl::EqualsIgnoreCase(next, kYieldScoreAsKw)) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("VSIM expects KNN or RANGE, got `", next, "`"));
+    }
+    if (has_mode_block) {
+      mode_sv = next;
+      itr.Next();
+    }
+  }
   uint32_t inner_count = 0;
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, inner_count));
-  if (absl::EqualsIgnoreCase(mode_sv, kKnnKw)) {
-    // KNN <count> K <k> [EF_RUNTIME <ef>] [YIELD_SCORE_AS <name>]
-    arm->k = 10;  // default
+  if (has_mode_block) {
+    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, inner_count));
+  }
+  // With no block there is nothing to read, and the defaults set above stand.
+  if (has_mode_block && absl::EqualsIgnoreCase(mode_sv, kKnnKw)) {
+    // KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <r>]
+    //
+    // YIELD_SCORE_AS is deliberately NOT accepted here: it names the arm, not
+    // the KNN search, and belongs after the block (see the VSIM tail below).
+    // Redis rejects it inside the block too.
     auto inner_itr_or = itr.SubIterator(inner_count);
-    if (!inner_itr_or.ok()) {
+    if (!inner_itr_or.ok() && inner_count > 0) {
       return inner_itr_or.status();
     }
-    auto inner_itr = inner_itr_or.value();
+    // `KNN 0` is an empty block: the defaults stand, exactly as when the block
+    // is left out. SubIterator rejects a zero distance, so it is not asked.
+    auto inner_itr = inner_count > 0 ? inner_itr_or.value()
+                                     : vmsdk::ArgsIterator(nullptr, 0);
     itr.Next(inner_count);
     while (inner_itr.HasNext()) {
       VMSDK_ASSIGN_OR_RETURN(auto kw, inner_itr.GetStringView());
@@ -224,10 +261,14 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
         unsigned ef = 0;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, ef));
         arm->ef = ef;
-      } else if (absl::EqualsIgnoreCase(kw, kYieldScoreAsKw)) {
-        VMSDK_ASSIGN_OR_RETURN(auto alias_sv, inner_itr.GetStringView());
-        inner_itr.Next();
-        arm->score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
+      } else if (absl::EqualsIgnoreCase(kw, kShardKRatioKw)) {
+        // Parsed and discarded. It tunes how much of K each shard returns
+        // during a cluster fanout; this implementation does not use it, and
+        // the value does not change the result of a query, only how much work
+        // the shards do to produce it. Accepted so a command written for Redis
+        // is not rejected here.
+        double shard_k_ratio = 0.0;
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, shard_k_ratio));
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Unknown VSIM KNN sub-arg: `", kw, "`"));
@@ -238,10 +279,11 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
     // Validate the RANGE shape; ParseFtHybridCommand returns
     // UnimplementedError after parse completes.
     auto inner_itr_or = itr.SubIterator(inner_count);
-    if (!inner_itr_or.ok()) {
+    if (!inner_itr_or.ok() && inner_count > 0) {
       return inner_itr_or.status();
     }
-    auto inner_itr = inner_itr_or.value();
+    auto inner_itr = inner_count > 0 ? inner_itr_or.value()
+                                     : vmsdk::ArgsIterator(nullptr, 0);
     itr.Next(inner_count);
     bool seen_radius = false;
     while (inner_itr.HasNext()) {
@@ -257,10 +299,6 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       } else if (absl::EqualsIgnoreCase(kw, kEpsilonKw)) {
         double epsilon = 0.0;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, epsilon));
-      } else if (absl::EqualsIgnoreCase(kw, kYieldScoreAsKw)) {
-        VMSDK_ASSIGN_OR_RETURN(auto alias_sv, inner_itr.GetStringView());
-        inner_itr.Next();
-        (void)alias_sv;
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Unknown VSIM RANGE sub-arg: `", kw, "`"));
@@ -269,9 +307,6 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
     if (!seen_radius) {
       return absl::InvalidArgumentError("VSIM RANGE requires RADIUS");
     }
-  } else {
-    return absl::InvalidArgumentError(
-        absl::StrCat("VSIM expects KNN or RANGE, got `", mode_sv, "`"));
   }
 
   // VSIM-scoped tail subclauses (top-level YIELD_SCORE_AS for VSIM).

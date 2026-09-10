@@ -121,27 +121,42 @@ removed.
 
 Every other `LOAD` form is compared normally, in `test_load_clause`: field
 subsets, `@__key`, `AS` renames of an existing field, a rename onto another
-field's name, two renames at once, renames referenced by a following `SORTBY`,
-`APPLY` or `GROUPBY`, and — on a JSON index — loads and renames written as a
-JSON path.
+field's name, two renames at once, and renames referenced by a following
+`SORTBY`, `APPLY` or `GROUPBY`.
 
-### 5.2. Field references under `LOAD *` on a JSON index — `excluded`
+### 5.2. The suite sweeps HASH keys only
 
-**Status:** open, tracked outside this suite.
+**Status:** deliberate.
 
-Naming an indexed field in a pipeline stage — `GROUPBY 1 @color`,
-`SORTBY 2 @price ASC` — does not resolve under `LOAD *` on a JSON index,
-because the document arrives as a single `$` column. Writing the field into the
-LOAD clause explicitly (`LOAD 1 @color GROUPBY 1 @color`) works; only the
-implicit `LOAD *` form does not.
+`generate_hybrid.py` runs against HASH indexes and does not sweep JSON. Naming
+an indexed field in a pipeline stage — `GROUPBY 1 @color`, `SORTBY 2 @price
+ASC` — does not resolve under `LOAD *` on a JSON index, because the document
+arrives as a single `$` column. That is an FT.AGGREGATE limitation being fixed
+on its own branch: the equivalent FT.AGGREGATE query has the same problem, and
+the fix has to be backported to the 1.2 release separately. Sweeping JSON here
+would pin that gap rather than test FT.HYBRID, which has no key-type-specific
+code of its own.
 
-This is an FT.AGGREGATE limitation rather than an FT.HYBRID one: the equivalent
-FT.AGGREGATE query has the same problem. The JSON variants of
-`test_groupby_reduce` and the field-sorting cases of `test_sortby` are
-therefore recorded `excluded` — comparing them here would test that gap instead
-of FT.HYBRID.
+### 5.3. An incomplete KNN block — valkey accepts, Redis rejects
 
-### 5.3. Reference engine image — TODO
+**Status:** deliberate leniency, not swept.
+
+Redis requires the `KNN` block, when present, to carry a positive even
+argument count and to include `K`:
+
+```
+KNN 0                  (error) Invalid argument count: 0
+KNN 2 EF_RUNTIME 40    (error) Missing required argument K
+```
+
+valkey-search accepts both and applies the same default K of 10 that either
+engine applies when the block is left out entirely. Nothing in an answer
+differs — an accepted command returns what the equivalent complete command
+returns — so recording these would only pin a permanent error-message
+mismatch. `testing/ft_hybrid_parser_test.cc` covers them instead, and the
+sweep in `generate_hybrid.py` stays to the forms both engines accept.
+
+### 5.4. Reference engine image — TODO
 
 **Status:** temporary.
 

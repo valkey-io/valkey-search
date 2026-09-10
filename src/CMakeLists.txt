@@ -5,15 +5,102 @@ add_subdirectory(expr)
 add_subdirectory(query)
 add_subdirectory(utils)
 
-set(SRCS_MODULE_LOADER ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc)
+# The module's C allocator entry points are a direct object of the shared
+# library rather than a member of vmsdklib. Two reasons: a static archive member
+# is only pulled in to satisfy an existing undefined reference, which makes
+# whether malloc gets defined depend on link order; and vmsdklib is also linked
+# into the unit test executables, where defining malloc would override the
+# allocator for the whole test process, including libc's own startup
+# allocations. Tests therefore run entirely on the system allocator.
+set(SRCS_MODULE_LOADER
+    ${CMAKE_CURRENT_LIST_DIR}/module_loader.cc
+    ${CMAKE_SOURCE_DIR}/vmsdk/src/memory_allocation_c_api.cc)
 
 # This is the module target
-valkey_search_add_shared_library(libsearch ${SRCS_MODULE_LOADER})
+valkey_search_add_shared_library(libsearch "${SRCS_MODULE_LOADER}")
 target_include_directories(libsearch PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 if(UNIX AND NOT APPLE)
   target_link_options(
     libsearch PRIVATE
     "LINKER:--version-script=${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds")
+  set_property(
+    TARGET libsearch APPEND PROPERTY LINK_DEPENDS
+    ${CMAKE_SOURCE_DIR}/vmsdk/versionscript.lds)
+endif()
+
+# Defer the module's C++ static initializers until ValkeyModule_Alloc has been
+# established, so that they allocate from Valkey rather than the system
+# allocator. See vmsdk/deferred_init.lds and vmsdk/src/deferred_init.cc.
+#
+# Sanitizer builds are excluded: the sanitizer emits its own constructor into
+# .init_array to register global redzones, and that must run at dlopen(). They
+# do not use the Valkey allocator at all, so there is nothing to defer for.
+# macOS is excluded because Mach-O has no linker scripts; it is a build-only
+# target and likewise does not use the Valkey allocator.
+# Link libstdc++ into the module rather than using libstdc++.so.
+#
+# REQUIRED for correctness, not an optimization. The module replaces global
+# operator new/delete so that C++ allocation goes to ValkeyModule_Alloc, but a
+# replacement only covers code linked into this .so -- the module is dlopen'd
+# with local scope and versionscript.lds hides _Znwm/_ZdlPv, so libstdc++.so
+# keeps using libc malloc. Any heap object allocated inside libstdc++.so and
+# destroyed here would then be passed to ValkeyModule_Free, which is a jemalloc
+# free of a non-jemalloc pointer -- an immediate crash.
+#
+# That is not hypothetical: std::getline lives in libstdc++.so and grows the
+# caller's std::string with libc malloc. vmsdk::helper::ParseCPUInfo, reached
+# from a static initializer, does exactly this and segfaults at module load
+# without this flag. It only appeared once the allocator switch moved to the top
+# of ValkeyModule_OnLoad; previously these paths ran before the switch.
+#
+# Linking libstdc++ statically puts that code inside the module, where the
+# operator new/delete replacements apply, and leaves the module with zero
+# undefined GLIBCXX symbols -- so no C++ heap object can cross a DSO boundary.
+# ci/check_module_allocators.sh enforces that.
+if(UNIX AND NOT APPLE AND NOT SAN_BUILD)
+  target_link_options(libsearch PRIVATE -static-libstdc++)
+
+  # ...and hide everything that came from a static archive, libstdc++.a
+  # included. Static linking alone is not enough, because versionscript.lds is
+  # "global: *" and so exports the statically linked libstdc++ symbols -- among
+  # them the locale facet ids, such as std::num_put<char>::id.
+  #
+  # Those ids are STB_GNU_UNIQUE ("u" in nm output), which the dynamic linker
+  # unifies to a single instance process-wide, RTLD_LOCAL notwithstanding. As
+  # soon as any other module that links libstdc++.so.6 dynamically is loaded --
+  # valkey-json does, and the integration tests load it before search -- our
+  # facet id object and libstdc++.so.6's become the same object. std::locale::
+  # id::_M_id() then hands us an index into that library's facet numbering while
+  # our own facet array is a separate one, and the first ostream insertion
+  # dereferences the wrong facet and segfaults. It reproduces as a crash inside
+  # std::ostream::_M_insert<unsigned long> during module load.
+  #
+  # Hiding the archive symbols keeps them out of .dynsym, so they are no longer
+  # unique and each library keeps a self-consistent set of facet ids. Only
+  # ValkeyModule_OnLoad/OnUnload need to be exported, and they come from
+  # module_loader.cc.o rather than an archive, so they are unaffected. The
+  # module consumes JSON's shared API through ValkeyModule_GetSharedAPI (a
+  # function pointer from the server) and exports none of its own, so nothing
+  # depends on these symbols being visible.
+  #
+  # ci/check_module_allocators.sh enforces this.
+  target_link_options(libsearch PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
+
+if(UNIX AND NOT APPLE AND NOT SAN_BUILD)
+  target_link_options(
+    libsearch PRIVATE
+    "LINKER:-T,${CMAKE_SOURCE_DIR}/vmsdk/deferred_init.lds")
+  set_property(
+    TARGET libsearch APPEND PROPERTY LINK_DEPENDS
+    ${CMAKE_SOURCE_DIR}/vmsdk/deferred_init.lds)
+
+  add_custom_command(
+    TARGET libsearch
+    POST_BUILD
+    COMMAND ${CMAKE_SOURCE_DIR}/ci/check_module_allocators.sh
+            $<TARGET_FILE:libsearch> ${CMAKE_BINARY_DIR}
+    COMMENT "Verifying static-init deferral and allocator usage")
 endif()
 
 target_link_libraries(libsearch PUBLIC keyspace_event_manager)

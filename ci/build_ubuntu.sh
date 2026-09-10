@@ -130,7 +130,9 @@ function save_unittest_output() {
     echo Results Directory is ${result_dir}
     ls -l ${result_dir}/tests
     cp -r -P ${result_dir}/tests ${UNITTEST_OUTPUT}
-    cp ${result_dir}/tests.out ${UNITTEST_OUTPUT}
+    if [ -f "${result_dir}/tests.out" ]; then
+        cp "${result_dir}/tests.out" ${UNITTEST_OUTPUT}
+    fi
 }
 
 function cleanup() {

@@ -17,6 +17,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "vmsdk/src/sharded_atomic.h"
 
 namespace valkey_search {
 
@@ -85,6 +86,19 @@ FixedSizeAllocator::~FixedSizeAllocator() {
   }
 }
 
+namespace {
+vmsdk::ShardedAtomic<int64_t> global_active_allocations;
+vmsdk::ShardedAtomic<int64_t> global_chunk_count;
+}  // namespace
+
+uint64_t FixedSizeAllocator::GlobalActiveAllocations() {
+  return static_cast<uint64_t>(global_active_allocations.GetNonNegativeTotal());
+}
+
+uint64_t FixedSizeAllocator::GlobalChunkCount() {
+  return static_cast<uint64_t>(global_chunk_count.GetNonNegativeTotal());
+}
+
 size_t FixedSizeAllocator::ChunkCount() const {
   absl::MutexLock lock(&mutex_);
   auto size = fully_used_chunks_.Size();
@@ -112,6 +126,7 @@ char *FixedSizeAllocator::Allocate() {
   auto ptr = current_chunk_->free_list.top();
   current_chunk_->free_list.pop();
   ++active_allocations_;
+  global_active_allocations.Add(1);
 
   HandleChunkEntryUsageChange(current_chunk_, old_free_group);
   if (!current_chunk_) {
@@ -162,12 +177,14 @@ void FixedSizeAllocator::AllocateChunk() {
   chunks_grouped_by_free_entries_[CalcChunkFreeGroup(
                                       current_chunk_->entries_in_chunk)]
       .PushBack(current_chunk_);
+  global_chunk_count.Add(1);
 }
 
 void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
   {
     absl::MutexLock lock(&mutex_);
     --active_allocations_;
+    global_active_allocations.Subtract(1);
 
     int free_group = CalcChunkFreeGroup(chunk->free_list.size());
     chunk->free_list.push(ptr);
@@ -180,6 +197,7 @@ void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
         current_chunk_ = nullptr;
       }
       delete chunk;
+      global_chunk_count.Subtract(1);
     }
     SelectCurrentChunk();
   }

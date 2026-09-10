@@ -1286,6 +1286,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   for (const auto &prefix : subscribed_key_prefixes_) {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
+  // Emitted between prefixes and default_score, and only when the index has
+  // one, because that is where and when Redis emits it.
+  if (compiled_filter_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "filter");
+    ValkeyModule_ReplyWithSimpleString(ctx, filter_expression_str_.c_str());
+  }
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
   if (score_info_fixed) {
     ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
@@ -1295,11 +1301,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
         ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
   } else {
     ValkeyModule_ReplyWithCString(ctx, "1");
-  }
-
-  if (compiled_filter_) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "filter");
-    ValkeyModule_ReplyWithSimpleString(ctx, filter_expression_str_.c_str());
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");

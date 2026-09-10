@@ -965,9 +965,12 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
     def test_search_sortby(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)
 
+        # n1/n2 are unique in "sortable numbers", so NOCONTENT (ids only) has a
+        # deterministic order and can be compared directly. Guards #1215:
+        # SORTBY + NOCONTENT must return sorted ids, not insertion order.
         for sort_key in ["n1", "n2"]:
             for direction in ["ASC", "DESC", ""]:
-                for return_keys in ["", "RETURN 2 @n1 @t1"]:
+                for return_keys in ["", "RETURN 2 @n1 @t1", "NOCONTENT"]:
                     for wsk in ["", "WITHSORTKEYS"]:
                         for limit in ["LIMIT 0 5", "LIMIT 2 3", ""]:
                             self.check(dialect, f"ft.search {key_type}_idx1 * SORTBY {sort_key} {direction} {return_keys} {limit} {wsk}")

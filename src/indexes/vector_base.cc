@@ -319,9 +319,6 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     const InternedStringPtr &key) {
-  if (key->Str().empty()) {
-    return std::nullopt;
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
@@ -341,9 +338,6 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
                                               float magnitude) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
@@ -360,9 +354,6 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     const InternedStringPtr &key, float magnitude,
     const VectorRecord *vector_record) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   absl::ReaderMutexLock lock(&resize_mutex_);
   const VectorRecord *stored_record;
   {

@@ -627,10 +627,10 @@ void AppendMutatedAttribute(
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
-  auto key_cstr = vmsdk::ToStringView(key);
-  if (key_cstr.empty() || is_destructing_) {
+  if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
+  auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
 

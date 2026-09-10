@@ -419,12 +419,9 @@ function reconcilePriority(prs, state, canWriteLabels) {
         }
         continue;
       }
-      // Board moved off the pending target. If the pending write actually landed
-      // (labels reached P), record P as the synced baseline first — otherwise the
-      // completed write looks like a fresh label-side change below and could revert
-      // the NEWER board value (e.g. P1 synced → /priority P2 writes+pends → /priority
-      // P3 before the next run would wrongly resolve to the leftover P2). Then
-      // reconcile the new board value against the corrected baseline.
+      // Board moved off the pending target. If that write landed (labels reached
+      // P), record P as synced first so the completed write isn't misread as a
+      // fresh label edit and revert the newer board value.
       if (Ln === P) state.prioritySynced[n] = P;
       delete state.priorityPending[n];
     }

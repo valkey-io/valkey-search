@@ -40,6 +40,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -1352,14 +1353,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "language");
-  switch (language_) {
-    case data_model::LANGUAGE_ENGLISH:
-      ValkeyModule_ReplyWithSimpleString(ctx, "english");
-      break;
-    default:
-      ValkeyModule_ReplyWithSimpleString(ctx, "english");
-      break;
-  }
+  ValkeyModule_ReplyWithSimpleString(
+      ctx,
+      std::string(
+          indexes::text::LanguageRegistry::Instance().Get(language_)->Name())
+          .c_str());
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
@@ -2298,7 +2296,19 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   }
   if (has_low_precision_vector) {
     return kRelease13;
-  } else if (has_text_index) {
+  }
+  if (has_text_index) {
+    auto lang =
+        indexes::text::LanguageRegistry::Instance().Get(unpacked->language());
+    if (!lang) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          data_model::Language_Name(unpacked->language()),
+          " is not supported in module version ", kModuleVersion.ToString()));
+    }
+    auto min_lang_version = lang->MinRequiredVersion();
+    if (min_lang_version > kRelease12) {
+      return min_lang_version;
+    }
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

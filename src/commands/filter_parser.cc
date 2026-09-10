@@ -27,8 +27,9 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/query/predicate.h"
+#include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/status/status_macros.h"
 
@@ -443,6 +444,19 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     results.is_match_all = true;
     return results;
   }
+  // Malformed UTF-8, compat-gated (see COMPATIBILITY.md):
+  //   >= 1.3.0: reject the whole expression (all field types).
+  //   <  1.3.0: 1.2 behavior — only TEXT tokens substitute U+FFFD (below);
+  //             tag/numeric keep raw bytes for exact match.
+  if (!utils::Scanner::IsValidUtf8(expression_)) {
+    VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "filter_parser_invalid_utf8_expression",
+        []() -> absl::Status {
+          return absl::InvalidArgumentError(
+              "Invalid UTF-8 in query expression");
+        },
+        []() -> absl::Status { return absl::OkStatus(); }));
+  }
   filter_identifiers_.clear();
   pos_ = 0;
   VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
@@ -544,6 +558,38 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
 
+// --- Multi-byte helpers for non-ASCII punctuation detection ---
+
+bool FilterParser::IsNonAsciiDelimiter(
+    const indexes::text::PunctuationSet& punct) {
+  // Decode the multi-byte codepoint at pos_ and check if it's a delimiter.
+  utils::Scanner s(expression_.substr(pos_));
+  utils::Scanner::Char cp = s.NextUtf8();
+  if (cp == utils::Scanner::kInvalidCp || cp == utils::Scanner::kEOF) {
+    return false;
+  }
+  if (punct.Contains(static_cast<uint32_t>(cp))) {
+    pos_ += s.LastUtf8ByteLen();
+    return true;
+  }
+  return false;
+}
+
+void FilterParser::ConsumeNonAsciiByte(std::string& dest) {
+  // Append the full multi-byte sequence starting at pos_. If the sequence is
+  // malformed, substitute U+FFFD (legacy < 1.3.0 tolerate behavior — the
+  // upfront rejection in Parse() only fires for >= 1.3.0).
+  utils::Scanner s(expression_.substr(pos_));
+  utils::Scanner::Char cp = s.NextUtf8();
+  uint8_t len = s.LastUtf8ByteLen();
+  if (cp == utils::Scanner::kInvalidCp) {
+    utils::Scanner::PushBackUtf8(dest, 0xFFFD);
+  } else {
+    dest.append(expression_.data() + pos_, len);
+  }
+  pos_ += len;
+}
+
 // Handles backslash escaping for both quoted and unquoted text
 // Escape Syntax:
 // \\ -> \
@@ -551,14 +597,16 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
 // \<non-punctuation> -> (break to new token)<non-punctuation>...
 // \<EOL> -> Return error
 absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
-    const indexes::text::Lexer& lexer, std::string& processed_content) {
+    const indexes::text::PunctuationSet& punct,
+    std::string& processed_content) {
   if (!Match('\\', false)) {
     // No backslash, continue normal processing of the same token.
     return true;
   }
   if (!IsEnd()) {
     char next_ch = Peek();
-    if (next_ch == '\\' || lexer.IsPunctuation(next_ch)) {
+    if (next_ch == '\\' ||
+        punct.Contains(static_cast<unsigned char>(next_ch))) {
       // If Double backslash, retain the double backslash
       // If Single backslash with punct on right, retain the char on right
       processed_content.push_back(next_ch);
@@ -567,7 +615,7 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
       return true;
     } else {
       // Backslash before non-punctuation
-      if (lexer.IsPunctuation('\\')) {
+      if (punct.Contains(static_cast<unsigned char>('\\'))) {
         // Backslash is punctuation → break to new token (standard unicode
         // segmentation)
         return false;
@@ -594,11 +642,13 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
-  const auto& lexer = text_index_schema->GetLexer();
+  const auto& language = text_index_schema->GetLanguage();
+  const auto& punct = language.GetPunctuationSet();
   std::string processed_content;
+
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
-                           HandleBackslashEscape(lexer, processed_content));
+                           HandleBackslashEscape(punct, processed_content));
     if (!should_continue) {
       break;
     }
@@ -606,14 +656,25 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     char ch = Peek();
     if (ch == '"') break;
     if (ch == '\\') continue;  // Don't break on backslash
-    if (lexer.IsPunctuation(ch)) break;
+    // Check if the character is a word boundary (punctuation).
+    if (utils::Scanner::IsAscii(static_cast<unsigned char>(ch))) {
+      if (punct.Contains(static_cast<unsigned char>(ch))) break;
+    } else {
+      // Non-ASCII: decode codepoint and check for non-ASCII punctuation
+      // (e.g., French «», Arabic ،). If it's a delimiter, break.
+      if (IsNonAsciiDelimiter(punct)) break;
+      // Not a delimiter — consume the full multi-byte sequence as word content.
+      ConsumeNonAsciiByte(processed_content);
+      continue;
+    }
     processed_content.push_back(ch);
     ++pos_;
   }
+
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  lexer.NormalizeLowerCaseInPlace(processed_content);
+  language.NormalizeInPlace(processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -639,16 +700,18 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
-  const auto& lexer = text_index_schema->GetLexer();
+  const auto& language = text_index_schema->GetLanguage();
+  const auto& punct = language.GetPunctuationSet();
   std::string processed_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
   size_t leading_percent_count = 0;
   size_t trailing_percent_count = 0;
   bool break_on_query_syntax = false;
+
   while (!IsEnd()) {
     VMSDK_ASSIGN_OR_RETURN(bool should_continue,
-                           HandleBackslashEscape(lexer, processed_content));
+                           HandleBackslashEscape(punct, processed_content));
     if (!should_continue) {
       break;
     }
@@ -706,14 +769,24 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
       }
     }
     if (ch == '\\') continue;  // Don't break on backslash
-    // Break on all punctuation characters.
-    if (lexer.IsPunctuation(ch)) break;
+    // Check if the character is a word boundary (punctuation).
+    if (utils::Scanner::IsAscii(static_cast<unsigned char>(ch))) {
+      if (punct.Contains(static_cast<unsigned char>(ch))) break;
+    } else {
+      // Non-ASCII: decode codepoint and check for non-ASCII punctuation.
+      if (IsNonAsciiDelimiter(punct)) break;
+      // Not a delimiter — consume the full multi-byte sequence as word content.
+      ConsumeNonAsciiByte(processed_content);
+      continue;
+    }
     // Regular character
     processed_content.push_back(ch);
     ++pos_;
   }
-  lexer.NormalizeLowerCaseInPlace(processed_content);
+
+  language.NormalizeInPlace(processed_content);
   FieldMaskPredicate field_mask;
+
   // Build predicate directly based on detected pattern
   if (leading_percent_count > 0) {
     if (trailing_percent_count == leading_percent_count &&
@@ -763,7 +836,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else {
     // Term predicate handling:
     bool exact = options_.verbatim;
-    if (lexer.IsStopWord(processed_content) || processed_content.empty()) {
+    if (language.IsStopWord(processed_content) || processed_content.empty()) {
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }
@@ -863,7 +936,16 @@ FilterParser::ParseTextTokens(
     // If this happens, we are either done (at the end of the prefilter string)
     // or were on a punctuation character which should be consumed.
     if (token_start == pos_) {
-      ++pos_;
+      // For non-ASCII punctuation, advance by the full codepoint byte length
+      // so multi-byte punctuation (e.g. Arabic ، U+060C) is consumed
+      // atomically — advancing 1 byte would split the sequence.
+      if (!utils::Scanner::IsAscii(static_cast<unsigned char>(Peek()))) {
+        utils::Scanner s(expression_.substr(pos_));
+        s.NextUtf8();
+        pos_ += s.LastUtf8ByteLen();
+      } else {
+        ++pos_;
+      }
     }
   }
   std::unique_ptr<query::Predicate> pred;

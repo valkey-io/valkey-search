@@ -31,14 +31,12 @@
 #include "rax/rax.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/posting.h"
 #include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/rax_wrapper.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/memory_tracker.h"
-
-struct sb_stemmer;
 
 namespace valkey_search::indexes::text {
 
@@ -99,8 +97,7 @@ class TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(data_model::Language language, const std::string &punctuation,
-                  bool with_offsets, const std::vector<std::string> &stop_words,
+  TextIndexSchema(std::shared_ptr<const Language> language, bool with_offsets,
                   uint32_t min_stem_size);
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
@@ -120,7 +117,7 @@ class TextIndexSchema {
   bool HasTextOffsets() const { return with_offsets_; }
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
-  Lexer GetLexer() const { return lexer_; }
+  const Language &GetLanguage() const { return *language_; }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
@@ -241,7 +238,7 @@ class TextIndexSchema {
   // Prevent concurrent mutations to per-key text index map and scoring info
   mutable std::mutex per_key_text_indexes_mutex_;
 
-  Lexer lexer_;
+  std::shared_ptr<const Language> language_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a

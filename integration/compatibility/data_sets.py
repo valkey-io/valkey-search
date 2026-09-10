@@ -993,6 +993,36 @@ MISSING_FIELD_FILTER_EXPRS = {
     "filter bare num ge nil":    "@rating>=3",
 }
 
+# Filter expressions that reference fields by their SCHEMA *alias*.
+#
+# Run against _alias_schema, where every alias differs from its identifier
+# (`status AS st`, `$.price AS pr`), so a match proves the alias resolved --
+# with alias and identifier identical, as in the default schema, the two
+# resolution paths are indistinguishable.
+#
+# Redis resolves the alias and only the alias: with `color AS c` declared,
+# `@c` matches while `@color` (the identifier) returns nothing, for HASH and
+# JSON alike. The identifier form is deliberately not covered here; see the
+# note in generate_filter._run_alias_queries.
+ALIAS_FILTER_EXPRS = {
+    # TAG and NUMERIC aliases, the two simplest resolutions.
+    "filter alias tag eq":    "@st == 'active'",
+    "filter alias tag ne":    "@st != 'inactive'",
+    "filter alias num gt":    "@pr > 100",
+    "filter alias num range": "@pr >= 50 && @pr <= 200",
+    # An alias on each side of a boolean, so neither operand can be the only
+    # one being resolved.
+    "filter alias and":       "@st == 'active' && @pr > 100",
+    "filter alias or":        "@cat == 'electronics' || @rt > 4",
+    # Alias inside a function call rather than a bare comparison.
+    "filter alias exists":    "exists(@rt)",
+    "filter alias contains":  "contains(@ttl, 'slow')",
+    # Aliases whose rows are missing the underlying field (FILTER_DOCS R6/R7/R8
+    # omit category/rating/status), so alias resolution is exercised on the
+    # missing-value path too.
+    "filter alias missing":   "@cat == 'food' || @st == 'pending'",
+}
+
 FILTER_DATASETS = {
     "filter base":               None,
     "filter tag eq":             "@status=='active'",
@@ -1008,6 +1038,7 @@ FILTER_DATASETS = {
     **MISSING_FIELD_FILTER_EXPRS,
     **HARD_NUM_FILTER_EXPRS,
     **HARD_STR_FILTER_EXPRS,
+    **ALIAS_FILTER_EXPRS,
 }
 
 def _filter_docs_schema(key_type):
@@ -1021,6 +1052,26 @@ def _filter_docs_schema(key_type):
         "$.status AS status TAG", "$.price AS price NUMERIC",
         "$.category AS category TAG", "$.title AS title TEXT NOSTEM",
         "$.rating AS rating NUMERIC",
+    ]
+
+def _alias_schema(key_type):
+    """Schema for the alias FILTER tests, over the FILTER_DOCS dataset.
+
+    Every field is declared with an `AS <alias>` that differs from its
+    identifier, so a FILTER can only match by resolving the alias. The
+    hash schema needs the explicit `AS` for this: the default hash schema
+    above leaves alias and identifier identical, which cannot tell the two
+    resolution paths apart.
+    """
+    if key_type == "hash":
+        return [
+            "status AS st TAG", "price AS pr NUMERIC", "category AS cat TAG",
+            "title AS ttl TEXT NOSTEM", "rating AS rt NUMERIC",
+        ]
+    return [
+        "$.status AS st TAG", "$.price AS pr NUMERIC",
+        "$.category AS cat TAG", "$.title AS ttl TEXT NOSTEM",
+        "$.rating AS rt NUMERIC",
     ]
 
 def _hard_numbers_schema(key_type):
@@ -1064,6 +1115,10 @@ def compute_filter_data_sets(dataset_name):
         schema_fn, docs_fn = _hard_numbers_schema, _hard_numbers_docs
     elif dataset_name in HARD_STR_FILTER_EXPRS:
         schema_fn, docs_fn = _hard_strings_schema, _hard_strings_docs
+    elif dataset_name in ALIAS_FILTER_EXPRS:
+        schema_fn = _alias_schema
+        def docs_fn(kt):
+            return [(f"{kt}:{i:02d}", dict(doc)) for i, doc in enumerate(FILTER_DOCS)]
     else:
         schema_fn = _filter_docs_schema
         def docs_fn(kt):

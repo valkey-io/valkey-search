@@ -2,6 +2,7 @@ import pytest
 from .generate import BaseCompatibilityTest
 from .data_sets import (
     load_data,
+    ALIAS_FILTER_EXPRS,
     HARD_NUM_FILTER_EXPRS,
     HARD_STR_FILTER_EXPRS,
     MISSING_FIELD_FILTER_EXPRS,
@@ -119,6 +120,49 @@ class TestFilterCompatibility(BaseCompatibilityTest):
             "load", "1", "@__key",
             "DIALECT", str(dialect),
         )
+
+    def _run_alias_queries(self, key_type, dialect):
+        """Run standard queries against an index built over the alias schema.
+
+        Every field in _alias_schema is declared `<identifier> AS <alias>`
+        with the two differing, so both the FILTER and these probes have to
+        resolve the alias. Probes mirror _run_filter_queries but by alias:
+        @pr for price, @st for status.
+
+        Only the alias form is covered. Redis resolves the alias and nothing
+        else -- with `status AS st` declared, a FILTER on `@status` matches no
+        document at all, on HASH and JSON alike -- so an identifier-form case
+        would pin a behaviour that is arguably a Redis wart rather than an
+        intended contract.
+        """
+        self.check(
+            "FT.SEARCH", f"{key_type}_idx1", "@pr:[0 +inf]",
+            "DIALECT", str(dialect),
+        )
+        self.check(
+            "FT.SEARCH", f"{key_type}_idx1", "@st:{active}",
+            "DIALECT", str(dialect),
+        )
+        self.check(
+            "FT.AGGREGATE", f"{key_type}_idx1", "@pr:[0 +inf]",
+            "load", "1", "@__key",
+            "DIALECT", str(dialect),
+        )
+        self.check(
+            "FT.AGGREGATE", f"{key_type}_idx1", "@st:{active}",
+            "load", "1", "@__key",
+            "DIALECT", str(dialect),
+        )
+
+    # Table-driven tests over filters that reference fields by SCHEMA alias.
+    # Covers HASH and JSON through the key_type parametrization.
+    @pytest.mark.parametrize(
+        "dataset", sorted(ALIAS_FILTER_EXPRS.keys()),
+        ids=lambda d: d.replace(" ", "_"),
+    )
+    def test_filter_alias(self, key_type, dialect, dataset):
+        self.setup_data(dataset, key_type)
+        self._run_alias_queries(key_type, dialect)
 
     def test_filter_base(self, key_type, dialect):
         self.setup_data("filter base", key_type)

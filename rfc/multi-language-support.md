@@ -594,14 +594,21 @@ and related [comments](https://github.com/valkey-io/valkey-rfc/pull/24/changes#r
    based on the value of its `LANGUAGE_FIELD`. Queries would need a
    `LANGUAGE` argument on `FT.SEARCH` to select the language used at
    query time.
-2. **`FILTER` in `FT.CREATE`.** Rather than allowing multiple languages
-   into one index, a `FILTER` clause on `FT.CREATE` (an arbitrary
-   expression evaluated against each document's fields) can restrict
-   membership so that each index still holds exactly one language, even
-   when the underlying corpus is mixed. For example, an English index
-   would include only documents where `@language == "English"`. This
-   approach avoids the semantic complexity of a mixed-language index
-   while covering the same use case.
+2. **`FILTER` in `FT.CREATE`.** Rather than allowing multiple
+   languages into one index, the `FILTER` clause on `FT.CREATE`
+   restricts index membership so that each index still holds exactly one
+   language, even when the underlying corpus is mixed. `FILTER` accepts
+   an expression in the aggregation expression language (the same
+   language used by the `FILTER` step in `FT.AGGREGATE`). The expression
+   is evaluated against each document's fields at ingestion time; only
+   documents for which it is truthy are added to the index. If a
+   document is later mutated so that it no longer satisfies the filter,
+   it is removed from the index. For example, a French index would
+   include only documents where `@lang == "french"`. This approach
+   avoids the semantic complexity of a mixed-language index while
+   covering the same use case. See
+   [Usage example 8](#8-separating-languages-with-filter-in-ftcreate)
+   for a concrete illustration.
 
 
 ## Usage examples
@@ -757,7 +764,8 @@ FT.SEARCH it_nostem "corriamo" DIALECT 2
 
 Since an index holds a single language, deployments with mixed-language
 corpora create one index per language and route documents by key prefix
-(or, in a future release, by `FILTER` on a language field):
+(or by `FILTER` on a language field — see
+[example 8](#8-separating-languages-with-filter-in-ftcreate)):
 
 ```text
 FT.CREATE en_idx ON HASH PREFIX 1 doc:en: LANGUAGE english SCHEMA body TEXT
@@ -769,3 +777,57 @@ HSET doc:ru:1 body "Быстрая коричневая лиса."
 FT.SEARCH en_idx "quick" DIALECT 2   # matches doc:en:1
 FT.SEARCH ru_idx "быстрый" DIALECT 2 # stems to "быстр", matches doc:ru:1
 ```
+
+### 8. Separating languages with `FILTER` in `FT.CREATE`
+
+The key-prefix approach in example 7 requires the application to
+partition documents into separate key namespaces. With `FILTER`,
+documents can share a single prefix and carry a field that indicates
+their language — each index self-partitions at ingestion time without
+requiring distinct key prefixes.
+
+```text
+# All documents share the "product:" prefix and carry a "lang" field.
+# Create one index per language, each restricted by FILTER.
+FT.CREATE fr_products ON HASH PREFIX 1 product:
+    FILTER '@lang == "french"'
+    LANGUAGE french
+    SCHEMA title TEXT lang TAG
+
+FT.CREATE es_products ON HASH PREFIX 1 product:
+    FILTER '@lang == "spanish"'
+    LANGUAGE spanish
+    SCHEMA title TEXT lang TAG
+
+# Ingest a mixed-language corpus under a common prefix.
+HSET product:1 title "chaussures de sport" lang french
+HSET product:2 title "zapatos deportivos"  lang spanish
+HSET product:3 title "chapeau élégant"     lang french
+HSET product:4 title "sombrero elegante"   lang spanish
+
+# The FILTER ensures fr_products contains only product:1 and product:3
+# (lang == "french"), and es_products contains only product:2 and
+# product:4 (lang == "spanish").
+
+# French stemming: "chaussure" (singular) matches "chaussures" (plural)
+# because the French Snowball stemmer reduces both to the same root.
+FT.SEARCH fr_products "chaussure" DIALECT 2
+  → 1 result: product:1
+
+# Spanish stemming: "zapato" (singular) matches "zapatos" (plural).
+FT.SEARCH es_products "zapato" DIALECT 2
+  → 1 result: product:2
+
+# Each index only contains its own language's documents, so French
+# queries never see Spanish documents and vice versa — no TAG filter
+# needed at query time.
+FT.SEARCH fr_products "sombrero" DIALECT 2
+  → 0 results  (product:4 was never indexed in fr_products)
+```
+
+Compared to the key-prefix approach (example 7), `FILTER` removes the
+need for the application to encode the language in the key name. This is
+especially useful when migrating an existing dataset that already uses a
+uniform key prefix, or when multiple dimensions (language, region,
+tenant) need to coexist — each can be a separate `FILTER` expression
+without combinatorial key-prefix schemes.

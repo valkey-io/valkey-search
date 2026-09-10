@@ -1,6 +1,6 @@
 from valkey.client import Valkey
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import ValkeySearchTestCaseBase, ValkeySearchTestCaseDebugMode
 from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from ft_info_parser import FTInfoParser
@@ -386,3 +386,138 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
                     "FT.CREATE", f"empty_idx_{name}", "ON", "HASH", *options,
                     "SCHEMA", "price", "NUMERIC"
                 )
+
+
+class TestFTCreateFilterSaveRestore(ValkeySearchTestCaseDebugMode):
+    """The FILTER expression must survive an RDB round trip.
+
+    The expression lives only in the index schema, not in any indexed key, so
+    if it were dropped from the RDB the index would come back looking healthy
+    while silently admitting everything it used to reject.
+    """
+
+    def test_filter_survives_rdb_reload(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "rdb_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "rdb:",
+            "FILTER", "@price > 100",
+            "SCHEMA", "price", "NUMERIC", "name", "TAG"
+        ) == b"OK"
+
+        client.execute_command("HSET", "rdb:keep1", "price", "500", "name", "a")
+        client.execute_command("HSET", "rdb:keep2", "price", "300", "name", "b")
+        client.execute_command("HSET", "rdb:drop1", "price", "10",  "name", "c")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rdb_idx")
+
+        def indexed_keys():
+            res = client.execute_command(
+                "FT.SEARCH", "rdb_idx", "@price:[-inf +inf]", "NOCONTENT")
+            return {res[i] for i in range(1, len(res))}
+
+        before = indexed_keys()
+        assert before == {b"rdb:keep1", b"rdb:keep2"}, f"before reload: {before}"
+
+        info = FTInfoParser(client.execute_command("FT.INFO", "rdb_idx"))
+        assert info.index_definition.get("filter") == "@price > 100"
+
+        # Round trip through the RDB.
+        client.execute_command("SAVE")
+        client.execute_command("DEBUG", "RELOAD")
+
+        # The index is still there, still carrying its expression.
+        assert b"rdb_idx" in client.execute_command("FT._LIST")
+        info = FTInfoParser(client.execute_command("FT.INFO", "rdb_idx"))
+        assert info.index_definition.get("filter") == "@price > 100", (
+            f"filter lost across reload: {info.index_definition.get('filter')!r}"
+        )
+
+        # The same documents are indexed, and the rejected one did not sneak
+        # back in as part of the reload's own backfill.
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rdb_idx")
+        after = indexed_keys()
+        assert after == before, f"after reload: {after}, before: {before}"
+
+        # The restored filter is live, not just recorded: it must still reject
+        # and still admit on writes made after the reload.
+        client.execute_command("HSET", "rdb:drop2", "price", "20",  "name", "d")
+        client.execute_command("HSET", "rdb:keep3", "price", "900", "name", "e")
+        assert indexed_keys() == {b"rdb:keep1", b"rdb:keep2", b"rdb:keep3"}
+
+    def test_filter_survives_rdb_reload_hash_aliased(self):
+        """Same round trip for a HASH index whose filter references an alias.
+
+        Separate from the non-aliased case above because only this one can
+        catch a filter that reloads as an undeclared-field read: with
+        `status AS st`, resolving `@st` against the key instead of the schema
+        looks for a hash member literally named "st", finds nothing, and the
+        filter silently stops rejecting anything.
+        """
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "rdb_alias_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "ra:",
+            "FILTER", "@st == 'active'",
+            "SCHEMA", "status", "AS", "st", "TAG", "price", "AS", "pr", "NUMERIC"
+        ) == b"OK"
+
+        client.execute_command("HSET", "ra:keep", "status", "active",   "price", "500")
+        client.execute_command("HSET", "ra:drop", "status", "inactive", "price", "300")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rdb_alias_idx")
+
+        def indexed_keys():
+            res = client.execute_command(
+                "FT.SEARCH", "rdb_alias_idx", "@pr:[-inf +inf]", "NOCONTENT")
+            return {res[i] for i in range(1, len(res))}
+
+        assert indexed_keys() == {b"ra:keep"}
+
+        client.execute_command("SAVE")
+        client.execute_command("DEBUG", "RELOAD")
+
+        info = FTInfoParser(client.execute_command("FT.INFO", "rdb_alias_idx"))
+        assert info.index_definition.get("filter") == "@st == 'active'"
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rdb_alias_idx")
+        assert indexed_keys() == {b"ra:keep"}, (
+            "filter stopped rejecting after reload -- the alias no longer "
+            "resolves to the schema attribute"
+        )
+
+    def test_filter_survives_rdb_reload_json(self):
+        """Same round trip for a JSON index, whose filter references an alias."""
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "rdb_json_idx",
+            "ON", "JSON",
+            "PREFIX", "1", "rj:",
+            "FILTER", "@pr > 100",
+            "SCHEMA", "$.price", "AS", "pr", "NUMERIC"
+        ) == b"OK"
+
+        client.execute_command("JSON.SET", "rj:keep", "$", '{"price":500}')
+        client.execute_command("JSON.SET", "rj:drop", "$", '{"price":10}')
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rdb_json_idx")
+
+        def indexed_keys():
+            res = client.execute_command(
+                "FT.SEARCH", "rdb_json_idx", "@pr:[-inf +inf]", "NOCONTENT")
+            return {res[i] for i in range(1, len(res))}
+
+        assert indexed_keys() == {b"rj:keep"}
+
+        client.execute_command("SAVE")
+        client.execute_command("DEBUG", "RELOAD")
+
+        info = FTInfoParser(client.execute_command("FT.INFO", "rdb_json_idx"))
+        assert info.index_definition.get("filter") == "@pr > 100"
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "rdb_json_idx")
+        assert indexed_keys() == {b"rj:keep"}
+
+        client.execute_command("JSON.SET", "rj:drop2", "$", '{"price":20}')
+        client.execute_command("JSON.SET", "rj:keep2", "$", '{"price":900}')
+        assert indexed_keys() == {b"rj:keep", b"rj:keep2"}

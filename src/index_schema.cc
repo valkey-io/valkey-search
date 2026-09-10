@@ -283,10 +283,16 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
-  if (!res->filter_expression_str_.empty()) {
-    VMSDK_ASSIGN_OR_RETURN(
-        res->compiled_filter_,
-        expr::Expression::Compile(*res, res->filter_expression_str_));
+  // Compiling the FILTER resolves every @reference against the attributes, so
+  // it can only run once they exist. On the RDB path they do not yet:
+  // skip_attributes means they arrive below as supplemental content, and
+  // LoadIndex calls CompileFilter() once they have. Compiling here against an
+  // empty schema would fail outright for JSON -- taking the whole aux section
+  // and the RDB load down with it -- and for HASH would resolve every
+  // reference to an undeclared-field read of the key, which agrees when alias
+  // and identifier match and silently stops filtering when they differ.
+  if (!skip_attributes) {
+    VMSDK_RETURN_IF_ERROR(res->CompileFilter());
   }
 
   if (!reload && index_schema_proto.skip_initial_scan()) {
@@ -1872,6 +1878,11 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                 SkipSupplementalContent(supplemental_iter, "mutation queue"));
           } else {
             if (index_schema) {
+              // The attributes arrived with the INDEX_CONTENT sections above,
+              // so the FILTER resolves now -- and has to, before
+              // LoadIndexExtension replays keys through
+              // ProcessKeyspaceNotification, which evaluates it.
+              VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
               VMSDK_RETURN_IF_ERROR(index_schema->LoadIndexExtension(
                   ctx, RDBChunkInputStream(supplemental_iter.IterateChunks())));
               if (!supplemental_content->mutation_queue_header()
@@ -1897,6 +1908,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
+  // Idempotent: covers a stream that carried no INDEX_EXTENSION section, so
+  // the index still has its filter for everything ingested after the load.
+  VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   std::move(mark_destructing_on_error)
@@ -2357,6 +2371,15 @@ IndexSchema::MakeReference(absl::string_view name, bool create) {
   }
   return std::make_unique<FilterAttributeReference>(
       std::string(name), indexes::IndexerType::kNone, data_type);
+}
+
+absl::Status IndexSchema::CompileFilter() {
+  if (filter_expression_str_.empty() || compiled_filter_) {
+    return absl::OkStatus();
+  }
+  VMSDK_ASSIGN_OR_RETURN(compiled_filter_, expr::Expression::Compile(
+                                               *this, filter_expression_str_));
+  return absl::OkStatus();
 }
 
 absl::StatusOr<expr::Value> IndexSchema::GetParam(absl::string_view s) const {

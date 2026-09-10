@@ -440,6 +440,10 @@ class IndexSchema : public KeyspaceEventSubscription,
     return attributes_;
   }
 
+  // Compile the FILTER against the current attributes. Separate from Create()
+  // because the RDB path only has its attributes once the supplemental
+  // content has been read. Idempotent; a no-op when there is no FILTER.
+  absl::Status CompileFilter();
   bool HasFilter() const { return compiled_filter_ != nullptr; }
   const std::string &GetFilterExpression() const {
     return filter_expression_str_;

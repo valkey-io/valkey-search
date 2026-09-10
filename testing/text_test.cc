@@ -628,7 +628,8 @@ class TextMultiLanguageTest : public ::testing::Test {
                      std::shared_ptr<text::TextIndexSchema> schema,
                      const std::string &key_name, absl::string_view data) {
     auto key = StringInternStore::Intern(key_name);
-    auto result = text_index->AddRecord(key, data);
+    auto result = text_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     ASSERT_TRUE(result.ok()) << result.status();
     ASSERT_EQ(result.value(), indexes::RecordResult::kAdded);
     schema->CommitKeyData(key);
@@ -684,7 +685,8 @@ TEST_F(TextMultiLanguageTest, DeleteCleansNonEnglishStemTree) {
 
   auto key = StringInternStore::Intern("doc:1");
   {
-    auto result = text_index->AddRecord(key, "continuellement");
+    auto result = text_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString("continuellement")));
     ASSERT_TRUE(result.ok());
     schema->CommitKeyData(key);
   }

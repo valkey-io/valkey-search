@@ -31,7 +31,7 @@ struct FuzzySearch {
   // The DP matrix is sized by code point count (not bytes): é→è costs 1 edit.
   static absl::InlinedVector<Postings::KeyIterator,
                              kWordExpansionInlineCapacity>
-  Search(const Rax &tree, absl::string_view pattern, size_t max_distance,
+  Search(const Rax& tree, absl::string_view pattern, size_t max_distance,
          uint32_t max_words) {
     absl::InlinedVector<indexes::text::Postings::KeyIterator,
                         kWordExpansionInlineCapacity>

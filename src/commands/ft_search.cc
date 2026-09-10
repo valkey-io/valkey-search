@@ -341,8 +341,6 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
     return true;  // Early reply sent, stop processing
   }
 
-  // SORTBY needs content loaded and sorted first, so only take the fast
-  // NOCONTENT path when no post-search processing is required.
   if (command.NoProcessingRequired()) {
     SendReplyNoContent(ctx, search_result, command);
     return true;  // Early reply sent, stop processing
@@ -406,8 +404,7 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 
   ApplySorting(search_result.neighbors, *this);
 
-  // 3. Serialize neighbors based on query type. NOCONTENT only reaches here
-  // with SORTBY: reply ids-only, now sorted.
+  // 3. Serialize neighbors based on query type
   if (no_content) {
     SendReplyNoContent(ctx, search_result, *this);
   } else if (IsNonVectorQuery()) {

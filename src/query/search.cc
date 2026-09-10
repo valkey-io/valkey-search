@@ -1846,7 +1846,7 @@ absl::Status query::SearchParameters::PostParseQueryString() {
 }
 
 ContentProcessing SearchParameters::GetContentProcessing() const {
-  if (no_content && !RequiresCompleteResults()) {
+  if (NoProcessingRequired()) {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.

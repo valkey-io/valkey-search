@@ -342,8 +342,8 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
   }
 
   // SORTBY needs content loaded and sorted first, so only take the fast
-  // NOCONTENT path when there is no sort.
-  if (command.no_content && !command.sortby_parameter.has_value()) {
+  // NOCONTENT path when no post-search processing is required.
+  if (command.NoProcessingRequired()) {
     SendReplyNoContent(ctx, search_result, command);
     return true;  // Early reply sent, stop processing
   }

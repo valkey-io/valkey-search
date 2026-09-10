@@ -264,6 +264,14 @@ struct SearchParameters {
     return sortby_parameter.has_value();
   }
 
+  // True when the search needs no post-search processing: the reply is ids-only
+  // (NOCONTENT) and nothing (e.g. SORTBY) requires the full result set to be
+  // loaded and reordered first. Single source of truth for whether the query
+  // can complete on the background thread and skip content loading.
+  bool NoProcessingRequired() const {
+    return no_content && !RequiresCompleteResults();
+  }
+
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
   ContentProcessing GetContentProcessing() const;

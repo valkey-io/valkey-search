@@ -34,4 +34,15 @@ local:
   _Znam*;
   _ZdlPv*;
   _ZdaPv*;
+  /*
+   * libstdc++ symbols instantiated in direct translation units (e.g. in debug
+   * builds without inlining) must remain local so they do not collide with
+   * libstdc++.so.6.
+   */
+  _ZNSt*;
+  _ZNKSt*;
+  _ZSt*;
+  _ZTISt*;
+  _ZTVSt*;
+  _ZTSSt*;
 };

@@ -874,12 +874,11 @@ absl::Status SchemaManager::LoadIndex(
   return absl::OkStatus();
 }
 
-void SchemaManager::OnFlushDBCallback(ValkeyModuleCtx *ctx,
-                                      ValkeyModuleEvent eid, uint64_t subevent,
-                                      void *data) {
-  if (subevent & VALKEYMODULE_SUBEVENT_FLUSHDB_END) {
-    SchemaManager::Instance().OnFlushDBEnded(ctx);
-  }
+void SchemaManager::OnFlushEndDBCallback(ValkeyModuleCtx *ctx,
+                                         [[maybe_unused]] ValkeyModuleEvent eid,
+                                         [[maybe_unused]] uint64_t subevent,
+                                         [[maybe_unused]] void *data) {
+  SchemaManager::Instance().OnFlushDBEnded(ctx);
 }
 
 void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,

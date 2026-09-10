@@ -4,19 +4,20 @@
  * SPDX-License-Identifier: BSD 3-Clause
  *
  */
-
+#ifndef SAN_BUILD
 #include "src/utils/allocator.h"
 
 #include <cstddef>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "gtest/gtest.h"
 #include "src/utils/intrusive_ref_count.h"
+#include "vmsdk/src/sharded_atomic.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
-#ifndef SAN_BUILD
 namespace valkey_search {
 
 namespace {
@@ -27,16 +28,26 @@ TEST_P(AllocatorTest, BasicFixedSizeAllocator) {
   const size_t size = 11;
   auto memory_alignment = GetParam();
 
+  auto base_allocations = FixedSizeAllocator::GlobalActiveAllocations();
+  auto base_chunks = FixedSizeAllocator::GlobalChunkCount();
+
   auto allocator =
       CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   EXPECT_EQ(allocator->ActiveAllocations(), 0);
   EXPECT_EQ(allocator->ChunkCount(), 0);
+  EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(), base_allocations);
+  EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks);
   char *ptr = allocator->Allocate(size);
   EXPECT_EQ(allocator->ActiveAllocations(), 1);
   EXPECT_EQ(allocator->ChunkCount(), 1);
+  EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(),
+            base_allocations + 1);
+  EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks + 1);
   Allocator::Free(ptr);
   EXPECT_EQ(allocator->ActiveAllocations(), 0);
   EXPECT_EQ(allocator->ChunkCount(), 0);
+  EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(), base_allocations);
+  EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks);
 #if defined(__APPLE__)
   // Page on macOS is 16K, while on Linux it is usually 4K
   EXPECT_EQ(EntriesFitInChunk(size, kChunkBufferPages), 14894);
@@ -50,6 +61,9 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunks) {
   const size_t chunks = 3;
   auto memory_alignment = GetParam();
 
+  auto base_allocations = FixedSizeAllocator::GlobalActiveAllocations();
+  auto base_chunks = FixedSizeAllocator::GlobalChunkCount();
+
   auto allocator =
       CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   {
@@ -61,11 +75,16 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunks) {
     }
     EXPECT_EQ(allocator->ChunkCount(), chunks);
     EXPECT_EQ(allocator->ActiveAllocations(), chunks * entries_fit_in_chunk);
+    EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(),
+              base_allocations + chunks * entries_fit_in_chunk);
+    EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks + chunks);
     for (auto &buffer : buffers) {
       Allocator::Free(buffer);
     }
     EXPECT_EQ(allocator->ChunkCount(), 0);
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
+    EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(), base_allocations);
+    EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks);
   }
 }
 
@@ -127,6 +146,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
   const size_t size = 256;
   const size_t chunks = 4;
   auto memory_alignment = GetParam();
+  auto base_allocations = FixedSizeAllocator::GlobalActiveAllocations();
+  auto base_chunks = FixedSizeAllocator::GlobalChunkCount();
   auto allocator =
       CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
   {
@@ -141,6 +162,9 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
     }
     EXPECT_EQ(allocator->ChunkCount(), chunks);
     EXPECT_EQ(allocator->ActiveAllocations(), chunks * entries_fit_in_chunk);
+    EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(),
+              base_allocations + chunks * entries_fit_in_chunk);
+    EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks + chunks);
     size_t freed = FreeBuffer(buffers, 0, 3);
     freed += FreeBuffer(buffers, 2, entries_fit_in_chunk);
     freed += FreeBuffer(buffers, 1, 2);
@@ -149,6 +173,9 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
     EXPECT_EQ(allocator->ChunkCount(), chunks - 2);
     EXPECT_EQ(allocator->ActiveAllocations(),
               chunks * entries_fit_in_chunk - freed);
+    EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks + chunks - 2);
+    EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(),
+              base_allocations + chunks * entries_fit_in_chunk - freed);
 
     VerifyAllocationChunk(*allocator, buffers, 1, 2);
     VerifyAllocationChunk(*allocator, buffers, 0, 3);
@@ -160,6 +187,9 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
     EXPECT_EQ(allocator->ChunkCount(), chunks - 1);
     EXPECT_EQ(allocator->ActiveAllocations(),
               (chunks - 2) * entries_fit_in_chunk + 1);
+    EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks + chunks - 1);
+    EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(),
+              base_allocations + (chunks - 2) * entries_fit_in_chunk + 1);
     for (auto &chunk : buffers) {
       for (auto &buffer : chunk) {
         Allocator::Free(buffer);
@@ -167,6 +197,8 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithDeleteChunks) {
     }
     EXPECT_EQ(allocator->ChunkCount(), 0);
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
+    EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(), base_allocations);
+    EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks);
   }
 }
 
@@ -212,6 +244,66 @@ TEST_P(AllocatorTest, FixedSizeAllocatorMultipleChunksWithFreeEntries) {
     EXPECT_EQ(allocator->ChunkCount(), 0);
     EXPECT_EQ(allocator->ActiveAllocations(), 0);
   }
+}
+
+TEST_P(AllocatorTest, FixedSizeAllocatorCrossThreadAllocFree) {
+  auto memory_alignment = GetParam();
+  const size_t size = 64;
+  const size_t num_allocs = 50;
+
+  auto base_allocations = FixedSizeAllocator::GlobalActiveAllocations();
+  auto base_chunks = FixedSizeAllocator::GlobalChunkCount();
+
+  auto allocator =
+      CREATE_UNIQUE_PTR(FixedSizeAllocator, size, memory_alignment);
+
+  std::vector<char *> buffers;
+  buffers.reserve(num_allocs);
+
+  // Thread 1 performs all allocations.
+  std::thread alloc_thread([&]() {
+    for (size_t i = 0; i < num_allocs; ++i) {
+      buffers.push_back(allocator->Allocate(size));
+    }
+  });
+  alloc_thread.join();
+
+  EXPECT_EQ(allocator->ActiveAllocations(), num_allocs);
+  EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(),
+            base_allocations + num_allocs);
+  EXPECT_GT(FixedSizeAllocator::GlobalChunkCount(), base_chunks);
+
+  // Thread 2 (which has 0 prior allocations in its TLS counter) frees all
+  // buffers.
+  std::thread free_thread([&]() {
+    for (char *ptr : buffers) {
+      Allocator::Free(ptr);
+    }
+  });
+  free_thread.join();
+
+  EXPECT_EQ(allocator->ActiveAllocations(), 0);
+  EXPECT_EQ(allocator->ChunkCount(), 0);
+  EXPECT_EQ(FixedSizeAllocator::GlobalActiveAllocations(), base_allocations);
+  EXPECT_EQ(FixedSizeAllocator::GlobalChunkCount(), base_chunks);
+}
+
+TEST(ShardedAtomicTest, GetNonNegativeTotal) {
+  vmsdk::ShardedAtomic<int64_t> counter;
+  EXPECT_EQ(counter.GetTotal(), 0);
+  EXPECT_EQ(counter.GetNonNegativeTotal(), 0);
+
+  counter.Add(10);
+  EXPECT_EQ(counter.GetTotal(), 10);
+  EXPECT_EQ(counter.GetNonNegativeTotal(), 10);
+
+  counter.Subtract(15);
+  EXPECT_EQ(counter.GetTotal(), -5);
+  EXPECT_EQ(counter.GetNonNegativeTotal(), 0);
+
+  counter.Add(5);
+  EXPECT_EQ(counter.GetTotal(), 0);
+  EXPECT_EQ(counter.GetNonNegativeTotal(), 0);
 }
 
 INSTANTIATE_TEST_SUITE_P(AllocatorTests, AllocatorTest,

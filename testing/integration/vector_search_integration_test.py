@@ -712,6 +712,46 @@ class VectorSearchIntegrationTest(VSSTestCase):
             self.assertEqual(got[0], len(expected))
             self.assertEqual(got[1:], want)
 
+    def test_sortby_nocontent_cross_shard(self):
+        # Regression for #1215 in cluster mode: NOCONTENT + SORTBY must return a
+        # globally sorted result even when the matching documents are spread
+        # across shards. This exercises the coordinator path where remote shards
+        # have to fetch the sort field (not just ids) so the merge can order
+        # them; before the fix remote shards returned ids only and the result
+        # was unsorted.
+        self.valkey_conn.execute_command(
+            "FT.CREATE", "xshardidx", "SCHEMA",
+            "t", "TAG", "n", "NUMERIC", "SORTABLE",
+        )
+        time.sleep(1)
+        # Distinct values in an order unrelated to the key order (13 and 101 are
+        # coprime, so (i*13+7) % 101 is a permutation for i in 0..29).
+        values = {f"c{i}": (i * 13 + 7) % 101 for i in range(30)}
+        for key, v in values.items():
+            self.valkey_conn.hset(key, mapping={"t": "a", "n": v})
+        time.sleep(1)
+
+        # Precondition: the keys really do span more than one shard, otherwise
+        # this would silently degrade to a single-node test.
+        def shard_of(key):
+            slot = self.valkey_conn.keyslot(key)
+            return slot // ((16384 + len(self.valkey_ports) - 1) // len(self.valkey_ports))
+        self.assertGreater(len({shard_of(k) for k in values}), 1)
+
+        ordered = [k.encode() for k, _ in sorted(values.items(), key=lambda kv: kv[1])]
+
+        # Full result set and a top-k slice (top-k exercises the cross-shard
+        # partial_sort merge, not just a full sort).
+        for limit in (len(ordered), 5):
+            for order, full in (("ASC", ordered), ("DESC", list(reversed(ordered)))):
+                got = self.valkey_conn.execute_command(
+                    "FT.SEARCH", "xshardidx", "@t:{a}",
+                    "SORTBY", "n", order, "NOCONTENT", "LIMIT", "0", str(limit),
+                    target_nodes=self.valkey_conn.RANDOM,
+                )
+                self.assertEqual(got[0], len(ordered))
+                self.assertEqual(got[1:], full[:limit])
+
     def test_coordinator_server_port(self):
         for idx, port in enumerate(self.valkey_ports):
             # Connect to each node in the cluster

@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from .data_sets import SORTKEY_PREFIX_DATA_SET
+from .data_sets import SORTKEY_NIL_DATA_SET, SORTKEY_PREFIX_DATA_SET
 from .generate import BaseCompatibilityTest
 
 '''
@@ -47,3 +47,31 @@ class TestSortKeyPrefixCompatibility(BaseCompatibilityTest):
                    "PARAMS", "2", "B", b"AAAAAAAA", # identical vector in SORTKEY_PREFIX_DATA_SET
                    "SORTBY", "dist", "ASC", "WITHSORTKEYS",
                    "RETURN", "1", "dist", "DIALECT", "2")
+
+    def test_withsortkeys_absent_is_nil(self, key_type):
+        # Absent sort keys (issue #1353 item 5): a document lacking the
+        # SORTBY field, and WITHSORTKEYS without SORTBY (single-document
+        # match keeps the reply order-deterministic for the raw compare).
+        self.setup_data(SORTKEY_NIL_DATA_SET, key_type)
+        time.sleep(0.5)
+        self.check("FT.SEARCH", f"{key_type}_idx1", "@m:{all}",
+                   "SORTBY", "p", "ASC", "WITHSORTKEYS",
+                   "RETURN", "1", "m", "DIALECT", "2")
+        self.check("FT.SEARCH", f"{key_type}_idx1", "@m:{solo}",
+                   "WITHSORTKEYS", "RETURN", "1", "m", "DIALECT", "2")
+
+    def test_knn_withsortkeys_absent_is_nil(self, key_type):
+        # KNN-path variants. The sort field p stays in RETURN so the case
+        # does not depend on the KNN content-population defect for
+        # non-RETURNed SORTBY fields.
+        self.setup_data(SORTKEY_NIL_DATA_SET, key_type)
+        time.sleep(0.5)
+        self.check("FT.SEARCH", f"{key_type}_idx1",
+                   "@m:{all}=>[KNN 3 @vec $B]",
+                   "PARAMS", "2", "B", b"AAAAAAAA",
+                   "SORTBY", "p", "ASC", "WITHSORTKEYS",
+                   "RETURN", "1", "p", "DIALECT", "2")
+        self.check("FT.SEARCH", f"{key_type}_idx1",
+                   "@m:{solo}=>[KNN 1 @vec $B]",
+                   "PARAMS", "2", "B", b"AAAAAAAA",
+                   "WITHSORTKEYS", "RETURN", "1", "m", "DIALECT", "2")

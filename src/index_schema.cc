@@ -703,6 +703,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
   // simply removed and is not filter-evaluated. When a key is rejected, all of
   // its attributes are converted to deletes so any previously indexed entry is
   // removed, and the rejection is counted for FT.INFO.
+  bool filter_rejected = false;
   if (compiled_filter_ && key_obj &&
       !EvaluateFilter(mutated_attributes, ctx, key_obj.get(), key_cstr)) {
     for (auto &attr : mutated_attributes) {
@@ -710,6 +711,7 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       attr.second.deletion_type = indexes::DeletionType::kRecord;
     }
     ++stats_.filter_rejected_keys;
+    filter_rejected = true;
   }
 
   if (added) {
@@ -731,8 +733,13 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       default:
         CHECK(false);
     }
+    // A rejected key is not in the index, so it must not be tracked as one:
+    // it is passed as a delete so UpdateDbInfoKey drops it from db_key_info_
+    // rather than inserting it with an all-deletes attribute set. Otherwise
+    // it inflates FT.INFO num_docs (which is db_key_info_.size()) and lands
+    // in the RDB key list that SaveIndexExtension writes.
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
-                    key_obj == nullptr, document_score);
+                    key_obj == nullptr || filter_rejected, document_score);
   }
 }
 

@@ -78,9 +78,14 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
 
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "price_idx")
 
+        def num_docs():
+            return int(FTInfoParser(
+                client.execute_command("FT.INFO", "price_idx")).num_docs)
+
         # All three should be indexed.
         result = client.execute_command("FT.SEARCH", "price_idx", "@price:[0 +inf]")
         assert result[0] == 3, f"Expected 3 docs initially, got {result[0]}"
+        assert num_docs() == 3, f"num_docs={num_docs()} before mutation"
 
         # Mutate prod:2 so its price drops below the filter threshold.
         client.execute_command("HSET", "prod:2", "price", "10", "name", "beta")
@@ -90,6 +95,13 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
         assert result[0] == 2, f"Expected 2 docs after mutation, got {result[0]}"
         returned_keys = {result[i] for i in range(1, len(result), 2)}
         assert returned_keys == {b"prod:1", b"prod:3"}
+        # An overwrite that fails the filter must un-track the key, not merely
+        # empty its attributes: a key counted as a document but absent from
+        # every index is what inflates num_docs and puts the key into the RDB.
+        assert num_docs() == 2, (
+            f"num_docs={num_docs()} after an overwrite failed the filter; "
+            "the rejected key is still tracked as a document"
+        )
 
         # Verify prod:2 is specifically not found.
         result = client.execute_command("FT.SEARCH", "price_idx", "@name:{beta}")
@@ -102,6 +114,7 @@ class TestFTCreateFilter(ValkeySearchTestCaseBase):
         assert result[0] == 3, f"Expected 3 docs after re-qualifying mutation, got {result[0]}"
         returned_keys = {result[i] for i in range(1, len(result), 2)}
         assert returned_keys == {b"prod:1", b"prod:2", b"prod:3"}
+        assert num_docs() == 3, f"num_docs={num_docs()} after re-qualifying"
 
     def test_filter_with_string_comparison(self):
         """Test FILTER with string-based expressions."""

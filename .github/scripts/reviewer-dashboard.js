@@ -410,19 +410,24 @@ function reconcilePriority(prs, state, canWriteLabels) {
     // may not have fully landed). Keep pushing that target until the labels
     // converge — never let a partially-written label set flip to label-wins.
     if (canWriteLabels && P !== undefined) {
+      // Converged means the label set is *exactly* the target — not merely that
+      // the strongest label matches it. A stray extra label (e.g. [P1,P2] when a
+      // P2 removal failed) must keep retrying, not be mistaken for done.
+      const converged = (P == null) ? Ln == null
+                                    : (Ln === P && pr.priorityLabels.length === 1);
       if (Bl === P) {
-        if (Ln === P) {                    // labels reached the target → done
+        if (converged) {                   // labels reached the target → done
           delete state.priorityPending[n];
           state.prioritySynced[n] = Bl;
-        } else {                           // write failed / partial → retry from current labels
+        } else {                           // write failed / partial / stray → retry
           pushOp(n, Bl, pr.priorityLabels);
         }
         continue;
       }
-      // Board moved off the pending target. If that write landed (labels reached
-      // P), record P as synced first so the completed write isn't misread as a
-      // fresh label edit and revert the newer board value.
-      if (Ln === P) state.prioritySynced[n] = P;
+      // Board moved off the pending target. If that write fully landed (labels
+      // are exactly P), record P as synced first so the completed write isn't
+      // misread as a fresh label edit and revert the newer board value.
+      if (converged) state.prioritySynced[n] = P;
       delete state.priorityPending[n];
     }
 

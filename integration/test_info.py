@@ -44,6 +44,7 @@ class TestVSSBasic(ValkeySearchTestCaseBase):
             "search_vector_registry_shared_externally_cnt",
             "search_vector_registry_shared_externally_errors",
             "search_vector_registry_sharing_active",
+            "search_vector_registry_dedup_cnt",
             "search_number_of_attributes",
             "search_number_of_indexes",
             "search_total_indexed_documents",
@@ -100,7 +101,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             m.decode('utf-8') if isinstance(m, bytes) else m 
             for m in actual_metrics
         )
-        # Expected baseline: 70 APP metrics as of current implementation
+        # Expected baseline: 71 APP metrics as of current implementation
         # This list should be updated intentionally when metrics are added/removed
         expected_metrics = {
             # Counts uses of the legacy (incompatible) invalid-data handling
@@ -164,6 +165,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "writer_queue_size",
             "writer_resumed_cnt",
             "writer_suspension_expired_cnt",
+            "vector_registry_dedup_cnt",
             "vector_registry_entry_cnt",
             "vector_registry_pending_unshare_cnt",
             "vector_registry_shared_externally_cnt",

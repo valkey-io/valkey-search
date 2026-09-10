@@ -694,12 +694,14 @@ class VectorSearchIntegrationTest(VSSTestCase):
             "FT.CREATE", "sortidx", "SCHEMA",
             "t", "TAG", "n", "NUMERIC", "SORTABLE",
         )
-        time.sleep(1)
         # n values chosen so numeric order differs from insertion order.
         values = {f"k{i}": v for i, v in enumerate([50, 10, 40, 20, 30])}
         for key, v in values.items():
             self.valkey_conn.hset(key, mapping={"t": "a", "n": v})
-        time.sleep(1)
+        # Wait until every shard has indexed its writes.
+        utils.wait_for_search_count(
+            self.valkey_conn, "sortidx", "@t:{a}", len(values), timeout=30
+        )
 
         expected = [k.encode() for k, _ in sorted(values.items(), key=lambda kv: kv[1])]
 
@@ -728,9 +730,9 @@ class VectorSearchIntegrationTest(VSSTestCase):
         values = {f"c{i}": (i * 13 + 7) % 101 for i in range(30)}
         for key, v in values.items():
             self.valkey_conn.hset(key, mapping={"t": "a", "n": v})
-        # Wait for indexing to drain.
-        utils.wait_for_empty_writer_queue_size(
-            self.valkey_conn, "xshardidx", timeout=30
+        # Wait until every shard has indexed its writes.
+        utils.wait_for_search_count(
+            self.valkey_conn, "xshardidx", "@t:{a}", len(values), timeout=30
         )
 
         # Precondition: the keys really do span more than one shard, otherwise

@@ -586,6 +586,40 @@ def wait_for_empty_writer_queue_size(
         time.sleep(1)
 
 
+def wait_for_search_count(
+    client: valkey.ValkeyCluster,
+    index_name: str,
+    query: str,
+    expected: int,
+    timeout: int = 30,
+):
+    """Poll FT.SEARCH until it reports the expected total match count.
+
+    Works in cluster mode: the count comes back from the coordinator's merged
+    result, so this waits until every shard has indexed its writes. Preferred
+    over a fixed sleep, which is racy under load.
+    """
+    start = time.time()
+    last = None
+    while True:
+        try:
+            got = client.execute_command(
+                "FT.SEARCH", index_name, query, "NOCONTENT", "LIMIT", "0", "0",
+                target_nodes=client.RANDOM,
+            )
+            last = got[0]
+            if last == expected:
+                return
+        except valkey.exceptions.ResponseError as e:
+            last = str(e)
+        if time.time() - start > timeout:
+            raise AssertionError(
+                f"Timed out waiting for {expected} matches of {query!r} in "
+                f"{index_name}; last saw {last}"
+            )
+        time.sleep(0.1)
+
+
 class RandomIntervalTask:
     """Randomly executes a task at a random interval.
 

@@ -17,6 +17,7 @@
 namespace valkey_search {
 namespace options {
 vmsdk::config::Number &GetMaxKnn();
+vmsdk::config::Number &GetMaxTimeoutMs();
 }  // namespace options
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters);

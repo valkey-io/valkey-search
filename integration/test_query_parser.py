@@ -278,6 +278,12 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             client.execute_command(
                 "FT.SEARCH", "grpidx", "@f1:()", "NOCONTENT")
 
+        # A field modifier inside the group is a syntax error, matching
+        # RediSearch (e.g. @f1:(foo | @f2:foo) is rejected, not accepted).
+        with pytest.raises(ResponseError):
+            client.execute_command(
+                "FT.SEARCH", "grpidx", "@f1:(foo | @f2:foo)", "NOCONTENT")
+
     def test_tag_min_prefix_length_config(self):
         """
         Test that search.tag-min-prefix-length dynamically controls TAG wildcard

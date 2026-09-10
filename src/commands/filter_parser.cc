@@ -1107,6 +1107,11 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       bool non_text = false;
       bool field_scoped_group = false;
       if (Peek() == '@') {
+        // A field modifier inside a field-scoped group is a syntax error,
+        // matching RediSearch (e.g. @f1:(a|@f2:b) is rejected).
+        if (default_field.has_value()) {
+          return UnexpectedChar(expression_, pos_);
+        }
         std::string parsed_field;
         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
         field_name = parsed_field;

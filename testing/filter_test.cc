@@ -1810,16 +1810,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "}\n",
         },
         {
-            .test_name = "text_field_group_inner_override",
-            // Explicit field inside the group overrides the scoped default.
+            .test_name = "text_field_group_inner_field_modifier_rejected",
+            // A field modifier inside a field-scoped group is a syntax error,
+            // matching RediSearch.
             .filter = "@text_field1:(word | @text_field2:hello)",
-            .create_success = true,
-            .evaluate_success = true,
-            .key = "key1",
-            .expected_tree_structure = "OR{\n"
-                                       "  TEXT-TERM(\"word\", field_mask=1)\n"
-                                       "  TEXT-TERM(\"hello\", field_mask=2)\n"
-                                       "}\n",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 22: `@`",
         },
         {
             .test_name = "text_field_group_empty",

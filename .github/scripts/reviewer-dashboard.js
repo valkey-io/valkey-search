@@ -45,7 +45,7 @@ async function gatherPRs(github, owner, repo) {
             reviewRequests(first:30) { nodes { requestedReviewer { __typename ... on User { login } } } }
             reviews(first:100) { nodes { author { login } state submittedAt } }
             comments(first:100) { nodes { author { login } body } }
-            labels(first:20) { nodes { name } }
+            labels(first:100) { nodes { name } }
             commits(last:1) { nodes { commit { statusCheckRollup { state } } } }
           }
         }
@@ -404,11 +404,16 @@ function reconcilePriority(prs, state, canWriteLabels) {
       state.priority[n] = Ln;            // adopt the label into the board (null clears)
       state.prioritySynced[n] = Ln;
     } else {
+      // Board wins: emit a label op but do NOT advance prioritySynced here. The
+      // label write happens after this returns and may fail; if we recorded Bl now,
+      // a failed write would look like a label-side change next run and revert the
+      // board. Leaving prioritySynced untouched means a failed write simply re-emits
+      // the same op (a retry), and the "already agree" branch records the synced
+      // value once the labels actually match.
       const target = Bl != null ? `P${Bl}` : null;
       const remove = (pr.priorityLabels || []).filter(name => name !== target);
       const add = (target && !(pr.priorityLabels || []).includes(target)) ? [target] : [];
       if (add.length || remove.length) ops.push({ number: n, add, remove });
-      state.prioritySynced[n] = Bl;
     }
   }
   return ops;
@@ -848,18 +853,21 @@ module.exports = async ({ github, context, core }) => {
   for (const id of toDelete) { if (await del(id)) cleared++; }
   if (cleared) core.info(`Cleared ${cleared} processed comment(s).`);
 
-  // 6. Push board→label changes. After state is durable, so a failed label write
-  // can't desync: prioritySynced already records the intended value, and the next
-  // run recomputes the same op. Requires pull-requests: write; sameRepo only.
+  // 6. Push board→label changes. reconcilePriority deliberately does NOT advance
+  // prioritySynced for these, so a failed write can't desync: the next run just
+  // re-emits the same op (a retry), and the "already agree" branch records the
+  // synced value once the labels match. Add BEFORE remove so a partial failure
+  // never drops the target priority label (worst case: a harmless stray label).
+  // Requires pull-requests: write; sameRepo only.
   if (sameRepo && labelOps.length) {
     let synced = 0;
     for (const op of labelOps) {
       try {
-        for (const name of op.remove) {
-          await github.rest.issues.removeLabel({ owner: hostOwner, repo: hostRepo, issue_number: op.number, name });
-        }
         if (op.add.length) {
           await github.rest.issues.addLabels({ owner: hostOwner, repo: hostRepo, issue_number: op.number, labels: op.add });
+        }
+        for (const name of op.remove) {
+          await github.rest.issues.removeLabel({ owner: hostOwner, repo: hostRepo, issue_number: op.number, name });
         }
         synced++;
       } catch (e) { core.warning(`Could not sync labels on #${op.number}: ${e.message}`); }

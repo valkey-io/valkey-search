@@ -35,7 +35,7 @@ local:
   _ZdlPv*;
   _ZdaPv*;
   /*
-   * libstdc++ symbols instantiated in direct translation units (e.g. in debug
+   * libstdc++ symbols instantiated in direct translation units (in debug
    * builds without inlining) must remain local so they do not collide with
    * libstdc++.so.6.
    */

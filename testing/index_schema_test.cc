@@ -119,7 +119,7 @@ class IndexSchemaSubscriptionTest
 TEST_P(IndexSchemaSubscriptionTest, OnKeyspaceNotificationTest) {
   const IndexSchemaSubscriptionTestCase &test_case = GetParam();
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
 
   // Get initial metrics values to compare after operations
   auto &metrics = Metrics::GetStats();
@@ -629,7 +629,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
   // is dropped prematurely while there are pending mutations in the worker
   // thread pool
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   VMSDK_EXPECT_OK(mutations_thread_pool.SuspendWorkers());
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   std::string index_schema_name_str("index_schema_name");
@@ -700,7 +700,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DropIndexPrematurely) {
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -714,7 +714,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, EmptyKeyPrefixesTest) {
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, DuplicateKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
 
   std::vector<absl::string_view> key_prefixes = {"pre", "pre"};
   std::string index_schema_name_str("index_schema_name");
@@ -730,7 +730,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, DuplicateKeyPrefixesTest) {
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, PrefixIsPrefixedByAnotherTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {"pre", "prefix"};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -745,7 +745,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, PrefixIsPrefixedByAnotherTest) {
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -770,7 +770,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, IndexSchemaInDifferentDBTest) {
 TEST_F(IndexSchemaSubscriptionSimpleTest,
        DBHasMatchingKeyWithWrongModuleTypeTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -798,7 +798,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -819,7 +819,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, KeyspaceNotificationWithNullptrTest) {
 TEST_F(IndexSchemaSubscriptionSimpleTest,
        ReplaceKeyTypeHashToJsonTriggersDeletion) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -864,7 +864,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 TEST_F(IndexSchemaSubscriptionSimpleTest,
        ReplaceKeyTypeJsonToHashTriggersDeletion) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {"prefix:"};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -907,7 +907,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest,
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, GetKeyPrefixesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {
       "prefix:", "prefix1:", "prefix2:"};
   std::string index_schema_name_str("index_schema_name");
@@ -923,7 +923,7 @@ TEST_F(IndexSchemaSubscriptionSimpleTest, GetKeyPrefixesTest) {
 
 TEST_F(IndexSchemaSubscriptionSimpleTest, GetEventTypesTest) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes = {"unused"};
   std::string index_schema_name_str("index_schema_name");
   auto index_schema =
@@ -957,7 +957,7 @@ class IndexSchemaBackfillTest
 TEST_P(IndexSchemaBackfillTest, PerformBackfillTest) {
   const auto &test_case = GetParam();
   MockThreadPool thread_pool("writer-thread-pool-", 5);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   std::vector<absl::string_view> key_prefixes;
   std::ranges::transform(test_case.key_prefixes,
                          std::back_inserter(key_prefixes),
@@ -1071,7 +1071,7 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_NoOngoingBackfillTest) {
   std::vector<absl::string_view> key_prefixes = {"unused"};
   std::string index_schema_name_str("index_schema_name");
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   ValkeyModuleCtx parent_ctx;
   ValkeyModuleCtx scan_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(&parent_ctx))
@@ -1099,7 +1099,7 @@ TEST_F(IndexSchemaBackfillTest, PerformBackfill_SwapDB) {
   std::vector<absl::string_view> key_prefixes = {"unused"};
   std::string index_schema_name_str("index_schema_name");
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   int starting_db = 0;
   int db_to_swap = 1;
   ValkeyModuleCtx parent_ctx;
@@ -1730,7 +1730,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
 TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
   auto mock_index = std::make_shared<MockIndex>();
   absl::flat_hash_map<std::string, uint64_t> keys_in_index = {
       {"key1", 1}, {"key2", 2}, {"key3", 3}};
@@ -1792,7 +1792,7 @@ TEST_F(IndexSchemaRDBTest, LoadEndedDeletesOrphanedKeys) {
 class IndexSchemaFriendTest : public ValkeySearchTest {
   void SetUp() override {
     ValkeySearchTest::SetUp();
-    mutations_thread_pool.StartWorkers();
+    VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
     index_schema =
         MockIndexSchema::Create(&fake_ctx, index_schema_name_str, key_prefixes,
                                 std::make_unique<HashAttributeDataType>(),
@@ -2381,7 +2381,7 @@ TEST_F(IndexSchemaRDBTest, DrainMutationQueueOnSaveEnabled) {
   VMSDK_EXPECT_OK(drain_config.SetValue(true));
 
   vmsdk::ThreadPool mutations_thread_pool("test-mutations-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
 
   std::vector<absl::string_view> key_prefixes = {"test:"};
   std::string index_schema_name_str("drain_test_index");
@@ -3015,7 +3015,7 @@ class IndexSchemaScoreFieldTest : public ValkeySearchTest {};
 
 TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
 
   std::vector<absl::string_view> key_prefixes = {"product:"};
   // Create schema with SCORE_FIELD "priority" and default score 0.5
@@ -3086,7 +3086,7 @@ TEST_F(IndexSchemaScoreFieldTest, IngestsDocumentScoreFromScoreField) {
 
 TEST_F(IndexSchemaScoreFieldTest, FallsBackToDefaultScoreWhenFieldMissing) {
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
 
   std::vector<absl::string_view> key_prefixes = {"product:"};
   auto index_schema =

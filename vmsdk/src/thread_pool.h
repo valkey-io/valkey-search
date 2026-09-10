@@ -48,7 +48,10 @@ class ThreadPool {
   ThreadPool& operator=(const ThreadPool&) = delete;
   enum class StopMode { kGraceful, kAbrupt };
 
-  void StartWorkers();
+  /// Start the pool's initial workers. Returns an error if any worker's
+  /// pthread_create() fails; workers started before the failure remain
+  /// usable.
+  absl::Status StartWorkers();
 
   /// Notify all active workers to terminate and join them. In addition, this
   /// method will internally call `JoinTerminatedWorkers`
@@ -78,8 +81,10 @@ class ThreadPool {
 
   /// Resize the pool size to `count` threads. If `wait_for_resize` is `true`,
   /// this method waits for resize operation to complete; otherwise, the resize
-  /// operation is done asynchronously.
-  void Resize(size_t count, bool wait_for_resize = false);
+  /// operation is done asynchronously. Returns an error if growing the pool
+  /// hits a pthread_create() failure; the pool is left at whatever size was
+  /// reached before the failure.
+  absl::Status Resize(size_t count, bool wait_for_resize = false);
 
   /// A struct representing a worker thread
   struct Thread {
@@ -128,6 +133,16 @@ class ThreadPool {
   /// Resize the sample queue and clear existing samples
   void ResizeSampleQueue(size_t new_size);
 
+ protected:
+  /// Creates one worker pthread. Overridable so tests can inject a
+  /// pthread_create() failure deterministically instead of relying on actual
+  /// resource exhaustion (e.g. ulimit -u, which isn't enforced in every
+  /// environment tests run in).
+  virtual int CreateThread(pthread_t* thread_id, void* (*start_routine)(void*),
+                           void* arg) {
+    return pthread_create(thread_id, nullptr, start_routine, arg);
+  }
+
  private:
   /// Track wait time sample and update running average
   void AddWaitTimeSample(std::chrono::steady_clock::time_point enqueue_time)
@@ -139,7 +154,7 @@ class ThreadPool {
   /// Returns nullopt if no tasks available
   std::optional<absl::AnyInvocable<void()>> TryGetNextTask()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
-  void IncrThreadCountBy(size_t count);
+  absl::Status IncrThreadCountBy(size_t count);
   void DecrThreadCountBy(size_t count, bool sync);
 
   /// Wait while the pool is suspended, unless `thread` is already retired.

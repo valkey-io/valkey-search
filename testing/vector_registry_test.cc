@@ -400,7 +400,7 @@ TEST_F(VectorRegistryTest,
   SetHashRegistrationSupported(registry, false);
 
   vmsdk::ThreadPool mutations_thread_pool("writer-thread-pool-", 1);
-  mutations_thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(mutations_thread_pool.StartWorkers());
 
   auto dimensions = 100;
   auto hnsw_index = indexes::VectorHNSW<float>::Create(

@@ -8,13 +8,16 @@
 #include "vmsdk/src/thread_pool.h"
 
 #include <atomic>
+#include <cerrno>
 #include <condition_variable>  // NOLINT(build/c++11)
 #include <cstddef>
 #include <memory>
-#include <mutex>   // NOLINT(build/c++11)
+#include <mutex>  // NOLINT(build/c++11)
+#include <string>
 #include <thread>  // NOLINT(build/c++11)
 #include <vector>
 
+#include "absl/status/status.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
@@ -50,7 +53,7 @@ TEST_F(ThreadPoolTest, StartAndJoin) {
   ThreadPool thread_pool("test-pool", 10);
   EXPECT_FALSE(thread_pool.SuspendWorkers().ok());
   StopWatch stop_watch;
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   thread_pool.JoinWorkers();
   EXPECT_LT(stop_watch.Duration(), absl::Seconds(1));
   EXPECT_FALSE(thread_pool.SuspendWorkers().ok());
@@ -61,7 +64,7 @@ TEST_P(ThreadPoolTest, StartSuspendAndJoin) {
   auto priority = GetParam();
   ThreadPool thread_pool("test-pool", 10);
   StopWatch stop_watch;
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
   thread_pool.JoinWorkers();
   EXPECT_LT(stop_watch.Duration(), absl::Seconds(1));
@@ -73,7 +76,7 @@ TEST_P(ThreadPoolTest, SuspendAndResume) {
   auto priority = GetParam();
   ThreadPool thread_pool("test-pool", 3);
   StopWatch stop_watch;
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   absl::Notification notification;
   VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
   EXPECT_TRUE(thread_pool.Schedule([&notification]() { notification.Notify(); },
@@ -88,7 +91,7 @@ TEST_P(ThreadPoolTest, AbruptMarkForStop) {
   const size_t thread_count = 3;
   ThreadPool thread_pool("test-pool", thread_count);
 
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   absl::BlockingCounter blocking_refcount(thread_count);
 
   for (size_t i = 0; i < thread_count * 10; ++i) {
@@ -120,7 +123,7 @@ TEST_P(ThreadPoolTest, GracefulMarkForStop) {
   const size_t thread_count = 3;
   ThreadPool thread_pool("test-pool", thread_count);
 
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   absl::BlockingCounter blocking_refcount(thread_count * 3);
 
   for (size_t i = 0; i < thread_count * 3; ++i) {
@@ -147,7 +150,7 @@ TEST_P(ThreadPoolTest, SuspendAndResumeLongTask) {
   auto test = [](bool with_delay, ThreadPool::Priority priority) {
     ThreadPool thread_pool("test-pool", 3);
     absl::BlockingCounter blocking_refcount(3);
-    thread_pool.StartWorkers();
+    VMSDK_EXPECT_OK(thread_pool.StartWorkers());
     StopWatch stop_watch;
     EXPECT_TRUE(thread_pool.Schedule(
         [&blocking_refcount]() {
@@ -182,7 +185,7 @@ TEST_P(ThreadPoolTest, SuspendAndResumeLongTask) {
 TEST_P(ThreadPoolTest, EnqueueAndExecuteTasks) {
   auto priority = GetParam();
   ThreadPool thread_pool("test-pool", 10);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   auto blocking_refcount =
       std::make_shared<absl::BlockingCounter>(thread_pool.Size());
   for (size_t i = 0; i < thread_pool.Size(); ++i) {
@@ -201,7 +204,7 @@ TEST_P(ThreadPoolTest, EnqueueAndExecuteTasks) {
 TEST_P(ThreadPoolTest, VerifyFifo) {
   auto priority = GetParam();
   ThreadPool thread_pool("test-pool", 1);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   std::vector<MockTask> mock_tasks(1000);
   absl::BlockingCounter blocking_refcount(mock_tasks.size());
   size_t task_id = 0;
@@ -222,7 +225,7 @@ TEST_P(ThreadPoolTest, VerifyFifo) {
 TEST_P(ThreadPoolTest, ConcurrentWorkers) {
   auto priority = GetParam();
   ThreadPool thread_pool("test-pool", 5);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   std::vector<MockTask> mock_tasks(thread_pool.Size());
   std::mutex mutex;
   std::condition_variable condition;
@@ -278,23 +281,23 @@ TEST_F(ThreadPoolTest, priority) {
   }
   EXPECT_GE(thread_pool.QueueSize(), tasks * 2);
   // Now that tasks have been loaded to the thread pool, start the workers
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   // Wait for all tasks to finish
   pending_tasks.Wait();
 }
 TEST_F(ThreadPoolTest, DynamicSizing) {
   const size_t thread_count = 10;
   ThreadPool thread_pool("test-pool", thread_count);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   EXPECT_EQ(thread_pool.Size(), thread_count);
 
-  thread_pool.Resize(5, true);
+  VMSDK_EXPECT_OK(thread_pool.Resize(5, true));
   EXPECT_EQ(thread_pool.Size(), 5);
 
   thread_pool.JoinTerminatedWorkers();
 
   EXPECT_EQ(thread_pool.Size(), 5);
-  thread_pool.Resize(15, true);
+  VMSDK_EXPECT_OK(thread_pool.Resize(15, true));
 
   EXPECT_EQ(thread_pool.Size(), 15);
   thread_pool.JoinWorkers();
@@ -304,14 +307,14 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
 
 TEST_F(ThreadPoolTest, ResizeWhileSuspended) {
   ThreadPool thread_pool("test-pool", 4);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
 
   // CONFIG SET can resize a pool at any time, including while a fork holds it
   // suspended.
-  thread_pool.Resize(16);
-  thread_pool.Resize(2);
-  thread_pool.Resize(8);
+  VMSDK_EXPECT_OK(thread_pool.Resize(16));
+  VMSDK_EXPECT_OK(thread_pool.Resize(2));
+  VMSDK_EXPECT_OK(thread_pool.Resize(8));
 
   // Workers created during the suspension must wait before taking a task.
   absl::Notification notification;
@@ -329,15 +332,15 @@ TEST_F(ThreadPoolTest, ResizeWhileSuspended) {
 
 TEST_F(ThreadPoolTest, RepeatedResizeWhileSuspended) {
   ThreadPool thread_pool("test-pool", 1);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
 
   // Workers retired while suspended must exit and get cleaned up on their
   // own; otherwise each resize up adds replacements and threads accumulate.
   constexpr size_t kCycles = 20;
   for (size_t i = 0; i < kCycles; ++i) {
-    thread_pool.Resize(8);
-    thread_pool.Resize(1);
+    VMSDK_EXPECT_OK(thread_pool.Resize(8));
+    VMSDK_EXPECT_OK(thread_pool.Resize(1));
     thread_pool.JoinTerminatedWorkers();
   }
 
@@ -360,13 +363,13 @@ TEST_F(ThreadPoolTest, RepeatedResizeWhileSuspended) {
 
 TEST_F(ThreadPoolTest, SynchronousResizeWhileSuspended) {
   ThreadPool thread_pool("test-pool", 4);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
 
   // A synchronous resize waits for the retired workers to finish, which they
   // can only do if the suspension lets them exit.
   StopWatch stop_watch;
-  thread_pool.Resize(1, /*wait_for_resize=*/true);
+  VMSDK_EXPECT_OK(thread_pool.Resize(1, /*wait_for_resize=*/true));
   EXPECT_LT(stop_watch.Duration(), absl::Seconds(5));
   EXPECT_EQ(thread_pool.Size(), 1u);
 
@@ -376,7 +379,7 @@ TEST_F(ThreadPoolTest, SynchronousResizeWhileSuspended) {
 
 TEST_F(ThreadPoolTest, ResizeDownWithQueuedTasks) {
   ThreadPool thread_pool("test-pool", 1);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
 
   // Keep the only worker busy so tasks pile up behind it.
   absl::Notification started, release;
@@ -394,7 +397,7 @@ TEST_F(ThreadPoolTest, ResizeDownWithQueuedTasks) {
   started.WaitForNotification();
 
   // A retired worker must exit without draining the queue.
-  thread_pool.Resize(0);
+  VMSDK_EXPECT_OK(thread_pool.Resize(0));
   release.Notify();
   const absl::Time deadline = absl::Now() + absl::Seconds(5);
   while (thread_pool.threads_.Size() > 0 && absl::Now() < deadline) {
@@ -406,20 +409,20 @@ TEST_F(ThreadPoolTest, ResizeDownWithQueuedTasks) {
   EXPECT_EQ(thread_pool.QueueSize(), 5u);
 
   // The queued tasks run once the pool is resized back up.
-  thread_pool.Resize(1);
+  VMSDK_EXPECT_OK(thread_pool.Resize(1));
   thread_pool.JoinWorkers();
   EXPECT_EQ(executed.load(), 5);
 }
 
 TEST_F(ThreadPoolTest, ConcurrentResizeAndSuspendResume) {
   ThreadPool thread_pool("test-pool", 4);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   std::atomic_bool stop{false};
   // Stands in for the config-set path resizing the pool, plus the cron callback
   // cleaning up the workers it retired.
   std::thread resizer([&thread_pool, &stop]() {
     for (size_t i = 0; !stop; ++i) {
-      thread_pool.Resize(i % 2 == 0 ? 1 : 4);
+      VMSDK_EXPECT_OK(thread_pool.Resize(i % 2 == 0 ? 1 : 4));
       thread_pool.JoinTerminatedWorkers();
       absl::SleepFor(absl::Milliseconds(1));
     }
@@ -470,7 +473,7 @@ TEST_F(ThreadPoolTest, TestCPUUsage) {
   EXPECT_EQ(thread_pool.GetAvgCPUPercentage().value(), 0.0);
   // Initializing the threads with first simple tasks
   auto blocking_counter = ScheduleTasks(thread_pool, atomic_flag, modulo);
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   blocking_counter->Wait();
   absl::SleepFor(absl::Milliseconds(100));
   // Expect current CPU avg to be around 0
@@ -511,7 +514,7 @@ class ThreadPoolFairnessTest : public ::testing::Test {
  protected:
   ThreadPoolFairnessTest() : thread_pool_("fairness-test-pool", 4) {}
 
-  void SetUp() override { thread_pool_.StartWorkers(); }
+  void SetUp() override { VMSDK_EXPECT_OK(thread_pool_.StartWorkers()); }
 
   void TearDown() override { thread_pool_.JoinWorkers(); }
 
@@ -763,7 +766,7 @@ TEST_P(ThreadPoolFairnessDistributionTest, StatisticalDistribution) {
   EXPECT_EQ(thread_pool.QueueSize(), total_tasks);
 
   // 3. Start the worker and let it execute exactly half the tasks
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
 
   // 4. Wait for exactly half the tasks to complete (pool will auto-suspend)
   counter.Wait();
@@ -831,7 +834,7 @@ TEST_P(ThreadPoolFairnessDistributionTest, MaxPriorityPreservation) {
         ThreadPool::Priority::kMax));
   }
 
-  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.StartWorkers());
   counter.Wait();
 
   // Validate only  kMax tasks should have executed
@@ -855,7 +858,7 @@ TEST_P(ThreadPoolFairnessDistributionTest, MaxPriorityPreservation) {
 TEST_F(ThreadPoolTest, QueueWaitTimeTracking) {
   // Test that our queue wait time tracking works correctly
   ThreadPool pool("test", 2);
-  pool.StartWorkers();
+  VMSDK_EXPECT_OK(pool.StartWorkers());
 
   // Initially, no queue wait time should be recorded
   auto initial_wait_time = pool.GetRecentQueueWaitTime();
@@ -883,7 +886,7 @@ TEST_F(ThreadPoolTest, QueueWaitTimeTracking) {
 TEST_F(ThreadPoolTest, QueueWaitTimeWithDifferentPriorities) {
   // Test queue wait time tracking with different priority tasks
   ThreadPool pool("test", 1);  // Single thread to ensure queuing
-  pool.StartWorkers();
+  VMSDK_EXPECT_OK(pool.StartWorkers());
 
   // Schedule high priority tasks
   for (int i = 0; i < 3; ++i) {
@@ -906,6 +909,68 @@ TEST_F(ThreadPoolTest, QueueWaitTimeWithDifferentPriorities) {
   auto wait_time = pool.GetRecentQueueWaitTime();
   ASSERT_TRUE(wait_time.ok());
   EXPECT_GT(wait_time.value(), 0.0);
+
+  pool.JoinWorkers();
+}
+
+namespace {
+// A ThreadPool that fails pthread_create() on a chosen 0-indexed call,
+// instead of relying on actual resource exhaustion (e.g. ulimit -u, which
+// isn't enforced by every environment tests run in).
+class FailAtNthThreadCreationPool : public ThreadPool {
+ public:
+  FailAtNthThreadCreationPool(const std::string& name, size_t num_threads,
+                              size_t fail_at_index)
+      : ThreadPool(name, num_threads), fail_at_index_(fail_at_index) {}
+
+ protected:
+  int CreateThread(pthread_t* thread_id, void* (*start_routine)(void*),
+                   void* arg) override {
+    if (call_count_++ == fail_at_index_) {
+      return EAGAIN;
+    }
+    return ThreadPool::CreateThread(thread_id, start_routine, arg);
+  }
+
+ private:
+  size_t fail_at_index_;
+  size_t call_count_ = 0;
+};
+}  // namespace
+
+TEST(ThreadPoolPthreadCreateFailureTest, StartWorkersSurfacesFailure) {
+  // Fail creation of the 3rd worker (0-indexed: 2) out of 5.
+  FailAtNthThreadCreationPool pool("test-pool", 5, /*fail_at_index=*/2);
+  absl::Status status = pool.StartWorkers();
+
+  EXPECT_TRUE(absl::IsResourceExhausted(status)) << status;
+  // Only the workers created before the failure are counted; the failed one
+  // was never added to the pool.
+  EXPECT_EQ(pool.Size(), 2);
+
+  // The failed worker never ran WorkerThread(), so it never registered as an
+  // active worker; suspension must not wait on it and must complete quickly.
+  StopWatch stop_watch;
+  VMSDK_EXPECT_OK(pool.SuspendWorkers());
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(1));
+  VMSDK_EXPECT_OK(pool.ResumeWorkers());
+
+  // The pool must remain internally consistent: no dead entry should be left
+  // behind to hang or crash JoinWorkers().
+  stop_watch.Reset();
+  pool.JoinWorkers();
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(1));
+}
+
+TEST(ThreadPoolPthreadCreateFailureTest, ResizeSurfacesFailure) {
+  FailAtNthThreadCreationPool pool("test-pool", 2, /*fail_at_index=*/3);
+  VMSDK_EXPECT_OK(pool.StartWorkers());
+  EXPECT_EQ(pool.Size(), 2);
+
+  // Grow to 5: creation attempts for indices 2, 3, 4 -- index 3 fails.
+  absl::Status status = pool.Resize(5, /*wait_for_resize=*/true);
+  EXPECT_TRUE(absl::IsResourceExhausted(status)) << status;
+  EXPECT_EQ(pool.Size(), 3);
 
   pool.JoinWorkers();
 }

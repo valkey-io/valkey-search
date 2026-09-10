@@ -18,6 +18,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/log/check.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
@@ -58,17 +59,17 @@ void TestableValkeySearch::InitThreadPools(std::optional<size_t> readers,
   if (readers) {
     reader_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("reader-pool", *readers);
-    reader_thread_pool_->StartWorkers();
+    CHECK_OK(reader_thread_pool_->StartWorkers());
   }
   if (writers) {
     writer_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("writer-pool", *writers);
-    writer_thread_pool_->StartWorkers();
+    CHECK_OK(writer_thread_pool_->StartWorkers());
   }
   if (utility) {
     utility_thread_pool_ =
         std::make_unique<vmsdk::ThreadPool>("utility-pool", *utility);
-    utility_thread_pool_->StartWorkers();
+    CHECK_OK(utility_thread_pool_->StartWorkers());
   }
 }
 

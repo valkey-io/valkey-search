@@ -723,13 +723,15 @@ class VectorSearchIntegrationTest(VSSTestCase):
             "FT.CREATE", "xshardidx", "SCHEMA",
             "t", "TAG", "n", "NUMERIC", "SORTABLE",
         )
-        time.sleep(1)
         # Distinct values in an order unrelated to the key order (13 and 101 are
         # coprime, so (i*13+7) % 101 is a permutation for i in 0..29).
         values = {f"c{i}": (i * 13 + 7) % 101 for i in range(30)}
         for key, v in values.items():
             self.valkey_conn.hset(key, mapping={"t": "a", "n": v})
-        time.sleep(1)
+        # Wait for indexing to drain.
+        utils.wait_for_empty_writer_queue_size(
+            self.valkey_conn, "xshardidx", timeout=30
+        )
 
         # Precondition: the keys really do span more than one shard, otherwise
         # this would silently degrade to a single-node test.

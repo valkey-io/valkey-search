@@ -133,7 +133,6 @@ class RemoteResponderSearch : public query::SearchParameters {
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(vmsdk::IsMainThread());
-    // NOCONTENT + SORTBY also completes here, since sorting loads content.
     CHECK(!no_content || RequiresCompleteResults());
     QueryCompleteImpl();
   }

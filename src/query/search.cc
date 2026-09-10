@@ -1846,7 +1846,6 @@ absl::Status query::SearchParameters::PostParseQueryString() {
 }
 
 ContentProcessing SearchParameters::GetContentProcessing() const {
-  // NOCONTENT can skip content loading unless SORTBY needs the sort field.
   if (no_content && !RequiresCompleteResults()) {
     return kNoContent;
   }

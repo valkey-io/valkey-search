@@ -103,22 +103,24 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
 
 #### SVS compression
 
-SVS supports several compression modes that reduce memory footprint at the cost of some recall:
+SVS supports several compression modes that reduce memory footprint at the cost of some recall.
 
-| Compression | Description |
-|---|---|
-| `NONE` | No compression (FP32). Default. |
-| `FP16` | Half-precision float. ~2× smaller than FP32. |
-| `LVQ4` | 4-bit LVQ scalar quantization. |
-| `LVQ8` | 8-bit LVQ scalar quantization. |
-| `LVQ4X4` | Two-level LVQ: 4-bit primary, 4-bit secondary reranking. |
-| `LVQ4X8` | Two-level LVQ: 4-bit primary, 8-bit secondary reranking. |
-| `LEANVEC4X4` | LeanVec: learned projection + 4-bit primary, 4-bit secondary. |
-| `LEANVEC4X8` | LeanVec: learned projection + 4-bit primary, 8-bit secondary. |
-| `LEANVEC8X8` | LeanVec: learned projection + 8-bit primary, 8-bit secondary. |
-| `SQ8` | Scalar quantization (1 byte/dimension). ~4× memory reduction vs FP32, no training phase required. |
+> **v1 scope:** only the open compression types (`NONE`, `FP16`, `SQ8`) are supported in `v1-cpp-baseline`. The LVQ and LeanVec variants are proprietary to the Intel SVS runtime and are deferred to v2. They remain wired in the code for PoC continuity but are not part of the v1 supported surface.
 
-LeanVec learns a low-dimensional projection (PCA-style) from a training sample, which can yield better recall-per-memory than LVQ for high-dimensional embeddings (≥ 768 dimensions). LeanVec requires two additional parameters:
+| Compression | Description | v1 |
+|---|---|---|
+| `NONE` | No compression (FP32). Default. | ✓ |
+| `FP16` | Half-precision float. ~2× smaller than FP32. | ✓ |
+| `SQ8` | Scalar quantization (1 byte/dimension). ~4× memory reduction vs FP32, no training phase required. | ✓ |
+| `LVQ4` | 4-bit LVQ scalar quantization. | v2 (proprietary) |
+| `LVQ8` | 8-bit LVQ scalar quantization. | v2 (proprietary) |
+| `LVQ4X4` | Two-level LVQ: 4-bit primary, 4-bit secondary reranking. | v2 (proprietary) |
+| `LVQ4X8` | Two-level LVQ: 4-bit primary, 8-bit secondary reranking. | v2 (proprietary) |
+| `LEANVEC4X4` | LeanVec: learned projection + 4-bit primary, 4-bit secondary. | v2 (proprietary) |
+| `LEANVEC4X8` | LeanVec: learned projection + 4-bit primary, 8-bit secondary. | v2 (proprietary) |
+| `LEANVEC8X8` | LeanVec: learned projection + 8-bit primary, 8-bit secondary. | v2 (proprietary) |
+
+LeanVec learns a low-dimensional projection (PCA-style) from a training sample, which can yield better recall-per-memory than LVQ for high-dimensional embeddings (≥ 768 dimensions). LeanVec requires two additional parameters (**v2 (proprietary)**):
 
   - `LEANVEC_DIMS <N>` (required when using `LEANVEC*`): Target reduced dimensionality for the primary graph traversal. Must be less than `DIM`. A typical starting point is `DIM / 4` (e.g., 192 for 768-d vectors).
   - `LEANVEC_TRAINING_THRESHOLD <N>` (optional): Number of vectors to buffer before training the projection matrices and building the index. Default is 10000. The index is unavailable for search until this threshold is reached — `FT.INFO` will show `state: training` and `FT.SEARCH` will return an error until training completes.

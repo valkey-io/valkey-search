@@ -8,6 +8,32 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_SVS_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_SVS_H_
 
+// =============================================================================
+// v1 scope (v1-cpp-baseline):
+//   - Open compression only: FP32 (NONE), FP16, SQ8.
+//   - Proprietary compression types (LVQ4/LVQ8/LVQ4X4/LVQ4X8 and all
+//     LEANVEC* variants) are wired throughout this header for continuity
+//     with the PoC implementation but are DEFERRED to v2. They require
+//     the proprietary Intel SVS runtime and are not part of the v1
+//     open-source scope.
+//
+// v2 follow-on work (deferred, not in v1):
+//   - Deferred compression via Intel SVS PR #326 (currently open) —
+//     removes the hand-rolled kStaging state machine and delegates
+//     LeanVec training to the runtime via
+//     DynamicIndexParams::deferred_compression_threshold.
+//   - LeanVec OOD training (LEANVEC_OOD / LEANVEC_OOD_QUERY_COUNT
+//     FT.CREATE parameters).
+//   - Runtime-owned batch ingest via Intel SVS PR #348 (add_points
+//     2-step refactor) — when this lands upstream, the pending_buffer_
+//     / FlushBuffer path in this file becomes redundant and should be
+//     removed.
+//
+// Migration target: the C API + submodule conversion (phase 1) will
+// re-express this wrapper against the SVS C API. Symbols marked
+// "v2-only" below can be removed at that time.
+// =============================================================================
+
 #include <svs/runtime/api_defs.h>
 #include <svs/runtime/dynamic_vamana_index.h>
 #include <svs/runtime/training.h>
@@ -40,6 +66,11 @@ namespace valkey_search::indexes {
 // construction. LeanVec defers SVS-graph construction until the buffered
 // vectors reach the training threshold; until then the index is kStaging
 // and search is rejected.
+//
+// v2-only: kStaging is only ever set for LeanVec (proprietary). For the
+// v1 open-compression set (FP32/FP16/SQ8) the index is kReady from
+// construction. The whole state machine goes away when Intel SVS PR #326
+// (deferred compression) lands.
 enum class SVSIndexState { kStaging, kReady };
 
 // Per-dimension epsilon factor for distance-based vector matching.
@@ -56,11 +87,11 @@ struct SVSBuildConfig {
   float alpha = 1.2f;
   size_t search_window_size = 10;
   data_model::SVSCompressionType compression = data_model::SVS_COMPRESSION_NONE;
-  // LeanVec-only: target reduced dimensionality for the projection. 0 means
-  // unset (only valid when compression is non-LeanVec).
+  // v2-only (proprietary): target reduced dimensionality for the LeanVec
+  // projection. 0 means unset (only valid when compression is non-LeanVec).
   size_t leanvec_dims = 0;
-  // LeanVec-only: number of vectors to accumulate before training matrices
-  // and constructing the index. Default 10000.
+  // v2-only (proprietary): number of vectors to accumulate before training
+  // matrices and constructing the LeanVec index. Default 10000.
   size_t leanvec_training_threshold = 10000;
   // When true, skip the intern store and use SVS native APIs for vector
   // retrieval and distance computation.
@@ -74,6 +105,8 @@ struct SVSBuildConfig {
 
 // True when the compression type uses LeanVec, which requires a training
 // set before the SVS index can be constructed.
+//
+// v2-only (proprietary): all LEANVEC* variants are deferred to v2.
 inline bool IsLeanVecCompression(data_model::SVSCompressionType c) {
   return c == data_model::SVS_COMPRESSION_LEANVEC4X4 ||
          c == data_model::SVS_COMPRESSION_LEANVEC4X8 ||
@@ -150,13 +183,22 @@ class VectorSVS : public VectorBase {
             absl::string_view attribute_identifier,
             data_model::AttributeDataType attribute_data_type);
 
-  // Flush buffered vectors to SVS graph
+  // Flush buffered vectors to SVS graph.
+  //
+  // NOTE: the pending_buffer_ / FlushBuffer batch-ingest path is used by
+  // all v1 open-compression types (FP32/FP16/SQ8) and by v2 LeanVec/LVQ.
+  // Retained because upstream DynamicVamanaIndex::add() lacks a batched
+  // low-overhead ingest path. Intel SVS PR #348 (add_points 2-step) will
+  // supersede this — remove pending_buffer_ + FlushBuffer when it lands.
   absl::Status FlushBuffer() ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
 
   // Train LeanVec matrices on the buffered vectors, build a
   // DynamicVamanaIndexLeanVec, and ingest the buffer as the first batch.
   // Transitions index_state_ from kStaging to kReady. Called from
   // AddRecordImpl when the buffer reaches leanvec_training_threshold.
+  //
+  // v2-only (proprietary). Superseded by Intel SVS PR #326 (deferred
+  // compression) when it lands upstream.
   absl::Status TrainAndBuildLeanVecIndex()
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(index_mutex_);
 
@@ -174,11 +216,15 @@ class VectorSVS : public VectorBase {
 
   // kStaging until LeanVec training completes; kReady from the start for
   // non-LeanVec compression types.
+  //
+  // v2-only: in v1 (open compressions FP32/FP16/SQ8) this is always kReady.
   SVSIndexState index_state_ ABSL_GUARDED_BY(index_mutex_){
       SVSIndexState::kReady};
   // LeanVec compression matrices (raw owning pointer; destroyed via
   // svs::runtime::v0::LeanVecTrainingData::destroy after the index is
   // built or in the destructor).
+  //
+  // v2-only (proprietary).
   svs::runtime::v0::LeanVecTrainingData* leanvec_training_data_
       ABSL_GUARDED_BY(index_mutex_){nullptr};
 
@@ -190,7 +236,10 @@ class VectorSVS : public VectorBase {
   // Space interface for distance computation in pre-filter path
   std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
 
-  // Buffering for benchmarking (simple 10K batch approach)
+  // Batch-ingest buffer. All compression types (v1 open + v2 proprietary)
+  // route AddRecordImpl through this buffer; FlushBuffer drains it into
+  // the SVS graph. Remove when Intel SVS PR #348 lands upstream and the
+  // runtime owns batching directly.
   static constexpr size_t kBufferSize = 10000;
   struct PendingInsert {
     uint64_t internal_id;

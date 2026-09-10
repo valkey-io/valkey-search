@@ -5,6 +5,20 @@
  *
  */
 
+// =============================================================================
+// v1 scope (v1-cpp-baseline):
+//   - Open compression only: FP32 (NONE), FP16, SQ8.
+//   - Proprietary compression types (LVQ4/LVQ8/LVQ4X4/LVQ4X8 and all
+//     LEANVEC* variants) are wired in this file for continuity with the
+//     PoC implementation but are DEFERRED to v2. They require the
+//     proprietary Intel SVS runtime.
+//
+// See src/indexes/vector_svs.h for the full v1/v2 scope note, including
+// upstream Intel SVS PRs (#326 deferred compression, #348 add_points
+// 2-step) that will supersede the LeanVec staging state machine and the
+// pending_buffer_ / FlushBuffer batch-ingest path once they land.
+// =============================================================================
+
 #include "src/indexes/vector_svs.h"
 
 #include <setjmp.h>

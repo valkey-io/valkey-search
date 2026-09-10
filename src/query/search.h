@@ -339,7 +339,7 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate);
+    bool negate, float or_weight_multiplier = 1.0f);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

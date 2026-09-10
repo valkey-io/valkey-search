@@ -7,11 +7,15 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <cmath>
 #include <queue>
+#include <random>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -96,9 +100,17 @@ absl::Status Limit::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// 1.3.0 fix: Redisearch drops a record whose APPLY expression reached for a
+// field the key does not have, rather than replying with the alias unset.
+static bool ApplyDropsMissingField() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "apply_drops_missing_field", [] { return true; },
+      [] { return false; });
+}
+
 void SetField(Record &record, Attribute &dest, expr::Value value) {
   if (record.fields_.size() <= dest.record_index_) {
-    record.fields_.resize(dest.record_index_ + 1);
+    record.fields_.resize(dest.record_index_ + 1, expr::Value::Missing());
   }
   record.fields_[dest.record_index_] = value;
 }
@@ -107,9 +119,21 @@ absl::Status Apply::Execute(RecordSet &records) const {
   DBG << "Executing APPLY with expr: " << *expr_ << "\n";
   agg_apply_stages.Increment();
   agg_apply_records.Increment(records.size());
-  for (auto &r : records) {
-    SetField(*r, *name_, expr_->Evaluate(ctx, *r));
+  // Redisearch drops a record whose APPLY expression referenced a field the
+  // key does not have, rather than replying with the alias unset. Only a
+  // *missing* value does this: an expression that ran and produced nothing --
+  // abs() of a string, say -- keeps the record and replies nan or nil.
+  RecordSet kept(records.agg_params_);
+  while (!records.empty()) {
+    auto r = records.pop_front();
+    auto value = expr_->Evaluate(ctx, *r);
+    if (value.IsMissing() && ApplyDropsMissingField()) {
+      continue;
+    }
+    SetField(*r, *name_, value);
+    kept.push_back(std::move(r));
   }
+  records.swap(kept);
   return absl::OkStatus();
 }
 
@@ -181,6 +205,45 @@ absl::Status SortBy::Execute(RecordSet &records) const {
   return absl::OkStatus();
 }
 
+// Redisearch treats an array group key as a multi-value field: the record joins
+// one group per element, and one per combination when several key fields hold
+// arrays. Reducer arguments are not expanded -- they still see the whole array.
+static absl::StatusOr<std::vector<GroupKey>> ExpandGroupKeys(
+    const absl::InlinedVector<expr::Value, 4> &key_values) {
+  // A record with several large array keys would otherwise produce the product
+  // of their lengths in group keys.
+  const size_t max_expansion = options::GetMaxGroupKeyExpansion().GetValue();
+  std::vector<GroupKey> keys(1);
+  for (const auto &value : key_values) {
+    absl::InlinedVector<expr::Value, 4> alternatives;
+    if (!value.IsArray()) {
+      alternatives.emplace_back(value);
+    } else if (value.IsEmptyArray()) {
+      // Nothing to group into: Redisearch keys these as nil.
+      alternatives.emplace_back(expr::Value::Nil("empty array group key"));
+    } else {
+      auto array = value.GetArray();
+      alternatives.assign(array->begin(), array->end());
+    }
+    // Divide rather than multiply: the product would wrap before the compare.
+    // alternatives is never empty -- every branch above pushes an element.
+    if (keys.size() > max_expansion / alternatives.size()) {
+      return absl::ResourceExhaustedError(
+          absl::StrCat("GROUPBY over multi-value fields exceeds ",
+                       max_expansion, " group keys for a single record"));
+    }
+    std::vector<GroupKey> expanded;
+    expanded.reserve(keys.size() * alternatives.size());
+    for (const auto &key : keys) {
+      for (const auto &alternative : alternatives) {
+        expanded.emplace_back(key).keys_.emplace_back(alternative);
+      }
+    }
+    keys.swap(expanded);
+  }
+  return keys;
+}
+
 absl::Status GroupBy::Execute(RecordSet &records) const {
   DBG << "Executing GROUPBY with groups: " << groups_.size()
       << " and reducers: " << reducers_.size() << "\n";
@@ -198,26 +261,42 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
     } else {
       CHECK(record_field_count == record->fields_.size());
     }
-    GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
     // Skip them?
+    absl::InlinedVector<expr::Value, 4> key_values;
+    bool multi_value = false;
     for (auto &g : groups_) {
-      k.keys_.emplace_back(g->GetValue(ctx, *record));
+      key_values.emplace_back(g->GetValue(ctx, *record));
+      multi_value |= key_values.back().IsArray();
     }
-    DBG << "Record: " << *record << " GroupKey: " << k << "\n";
-    auto [group_it, inserted] = groups.try_emplace(std::move(k));
-    if (inserted) {
-      DBG << "Was inserted, now have " << groups.size() << " groups\n";
-      for (auto &reducer : reducers_) {
-        group_it->second.emplace_back(reducer->MakeInstance());
-      }
+    std::vector<GroupKey> keys;
+    if (multi_value) {
+      VMSDK_ASSIGN_OR_RETURN(keys, ExpandGroupKeys(key_values));
+    } else {
+      keys.emplace_back().keys_ = std::move(key_values);
     }
-    for (auto i = 0; i < reducers_.size(); ++i) {
+    // The record joins every group its keys expand to, with one evaluation of
+    // the reducer arguments shared between them.
+    absl::InlinedVector<ArgVector, 4> args_by_reducer;
+    for (auto &reducer : reducers_) {
       ArgVector args;
-      for (auto &nargs : reducers_[i]->args_) {
+      for (auto &nargs : reducer->args_) {
         args.emplace_back(nargs->Evaluate(ctx, *record));
       }
-      group_it->second[i]->ProcessRecord(args);
+      args_by_reducer.emplace_back(std::move(args));
+    }
+    for (auto &k : keys) {
+      DBG << "Record: " << *record << " GroupKey: " << k << "\n";
+      auto [group_it, inserted] = groups.try_emplace(std::move(k));
+      if (inserted) {
+        DBG << "Was inserted, now have " << groups.size() << " groups\n";
+        for (auto &reducer : reducers_) {
+          group_it->second.emplace_back(reducer->MakeInstance());
+        }
+      }
+      for (auto i = 0; i < reducers_.size(); ++i) {
+        group_it->second[i]->ProcessRecord(args_by_reducer[i]);
+      }
     }
   }
   for (auto &group : groups) {
@@ -225,7 +304,14 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
     RecordPtr record = std::make_unique<Record>(record_field_count);
     CHECK(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
-      SetField(*record, *groups_[i], group.first.keys_[i]);
+      // The group exists, so its key is an output of this stage rather than a
+      // field the key never had: Redisearch names it with a nil rather than
+      // leaving it out. ExpandGroupKeys already says this for an empty array.
+      auto key = group.first.keys_[i];
+      if (key.IsMissing()) {
+        key = expr::Value(expr::Value::Nil("absent group key"));
+      }
+      SetField(*record, *groups_[i], key);
     }
     CHECK(reducers_.size() == group.second.size());
     agg_reducer_stages.Increment(reducers_.size());
@@ -245,23 +331,97 @@ class Count : public GroupBy::ReducerInstance {
   expr::Value GetResult() const override { return expr::Value(double(count_)); }
 };
 
+class RandomSample : public GroupBy::ReducerInstance {
+ public:
+  static constexpr size_t kMaxSampleSize = 1000;
+
+  explicit RandomSample(size_t sample_size)
+      : samples_(std::make_shared<std::vector<expr::Value>>()),
+        sample_size_(sample_size) {}
+
+  void ProcessRecord(const ArgVector &values) override {
+    if (values[0].IsNil()) return;
+    // Reservoir sampling algorithm (Algorithm R)
+    seen_count_++;
+    if (seen_count_ <= sample_size_) {
+      samples_->push_back(values[0]);
+    } else {
+      std::uniform_int_distribution<size_t> dist(0, seen_count_ - 1);
+      size_t j = dist(Rng());
+      if (j < sample_size_) {
+        (*samples_)[j] = values[0];
+      }
+    }
+  }
+
+  expr::Value GetResult() const override { return expr::Value(samples_); }
+
+ private:
+  // Thread-local RNG shared across all RandomSample instances in a query,
+  // avoiding per-instance std::random_device overhead.
+  static std::mt19937 &Rng() {
+    thread_local std::mt19937 rng(std::random_device{}());
+    return rng;
+  }
+
+  std::shared_ptr<std::vector<expr::Value>> samples_;
+  size_t sample_size_;
+  size_t seen_count_ = 0;
+};
+
+// 1.3.0 fix: MIN and MAX are strictly numeric in Redisearch. Anything that is
+// not a number reads as 0 rather than becoming the reducer's result, and a
+// group that saw no value at all answers 0 rather than dropping its alias.
+// One counter covers both halves of the one rule.
+static bool MinMaxIsNumeric() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "reduce_minmax_numeric", [] { return true; },
+      [] { return false; });
+}
+
+static expr::Value NumericReducerArg(const expr::Value &value) {
+  // Nil passes through for the caller to skip, and a value that is already a
+  // number needs no decision, so neither consults the gate. An array has no
+  // 1.2.1 behavior to preserve -- arrays cannot occur there, TOLIST being
+  // newer than that release -- so that half is not gated either.
+  if (value.IsNil() || value.IsDouble()) {
+    return value;
+  }
+  if (value.IsArray()) {
+    return expr::Value(0.0);
+  }
+  if (!MinMaxIsNumeric()) {
+    return value;
+  }
+  auto number = value.AsDouble();
+  return number ? expr::Value(*number) : expr::Value(0.0);
+}
+
 class Min : public GroupBy::ReducerInstance {
   expr::Value min_;
-  void ProcessRecord(const ArgVector &values) override {
-    if (values[0].IsNil()) {
+  void ProcessRecord(const ArgVector &raw) override {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (min_.IsNil()) {
-      DBG << "First Value Min is " << values[0] << "\n";
-      min_ = values[0];
-    } else if (min_ > values[0]) {
-      DBG << " New Min: " << values[0] << "\n";
-      min_ = values[0];
+      DBG << "First Value Min is " << value << "\n";
+      min_ = value;
+    } else if (min_ > value) {
+      DBG << " New Min: " << value << "\n";
+      min_ = value;
     } else {
-      DBG << "Not new Min: " << values[0] << "\n";
+      DBG << "Not new Min: " << value << "\n";
     }
   }
-  expr::Value GetResult() const override { return min_; }
+  // A group whose every input was nil replies 0 in Redisearch, for a string
+  // field as much as a numeric one -- MIN is numeric, so 0 is its identity.
+  expr::Value GetResult() const override {
+    if (!min_.IsNil()) {
+      return min_;
+    }
+    return MinMaxIsNumeric() ? expr::Value(0.0) : min_;
+  }
 };
 
 struct ReducerInstanceVector : GroupBy::ReducerInstance {
@@ -273,17 +433,24 @@ struct ReducerInstanceVector : GroupBy::ReducerInstance {
 
 class Max : public GroupBy::ReducerInstance {
   expr::Value max_;
-  void ProcessRecord(const ArgVector &values) override {
-    if (values[0].IsNil()) {
+  void ProcessRecord(const ArgVector &raw) override {
+    const expr::Value value = NumericReducerArg(raw[0]);
+    if (value.IsNil()) {
       return;
     }
     if (max_.IsNil()) {
-      max_ = values[0];
-    } else if (max_ < values[0]) {
-      max_ = values[0];
+      max_ = value;
+    } else if (max_ < value) {
+      max_ = value;
     }
   }
-  expr::Value GetResult() const override { return max_; }
+  // As for Min: nothing seen replies 0, not a missing field.
+  expr::Value GetResult() const override {
+    if (!max_.IsNil()) {
+      return max_;
+    }
+    return MinMaxIsNumeric() ? expr::Value(0.0) : max_;
+  }
 };
 
 class Sum : public GroupBy::ReducerInstance {
@@ -315,13 +482,24 @@ class Avg : public GroupBy::ReducerInstance {
 class Stddev : public GroupBy::ReducerInstance {
   double sum_{0}, sq_sum_{0};
   size_t count_{0};
-  void ProcessRecord(const ArgVector &values) override {
-    auto val = values[0].AsDouble();
+  void Accumulate(const expr::Value &value) {
+    // Redisearch spreads an array across the sample, unlike SUM and AVG, which
+    // read it as a single unconvertible value and so contribute nothing.
+    if (value.IsArray()) {
+      for (const auto &element : *value.GetArray()) {
+        Accumulate(element);
+      }
+      return;
+    }
+    auto val = value.AsDouble();
     if (val) {
       sum_ += *val;
       sq_sum_ += (*val) * (*val);
       count_++;
     }
+  }
+  void ProcessRecord(const ArgVector &values) override {
+    Accumulate(values[0]);
   }
   expr::Value GetResult() const override {
     if (count_ <= 1) {
@@ -374,7 +552,14 @@ class FirstValue : public GroupBy::ReducerInstance {
     }
   }
 
-  expr::Value GetResult() const override { return result_value_; }
+  // Unlike MIN and MAX, Redisearch names the alias with a nil here rather
+  // than an identity value. The default Value is Nil(kMissing), which
+  // ReplyWithValue drops, so say why there is no value instead.
+  expr::Value GetResult() const override {
+    return result_value_.IsMissing()
+               ? expr::Value(expr::Value::Nil("no values"))
+               : result_value_;
+  }
 };
 
 class CountDistinct : public GroupBy::ReducerInstance {
@@ -420,6 +605,98 @@ class ToList : public GroupBy::ReducerInstance {
     return expr::Value(ordered_values_);
   }
 };
+
+struct RandomSampleReducer : GroupBy::Reducer {
+  size_t sample_size_ = 0;
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    return std::make_unique<RandomSample>(sample_size_);
+  }
+};
+
+// Custom parser for RANDOM_SAMPLE: compiles both args as expressions (so the
+// base Reducer::operator<< produces a correct auto-alias), then evaluates the
+// sample-size arg at parse time to validate it.
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
+  auto r = std::make_unique<RandomSampleReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 2) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+  std::string field_text;
+  std::string size_text;
+  for (uint32_t i = 0; i < cnt; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
+                           _ << "Missing Reducer argument " << i);
+    auto arg_sv = vmsdk::ToStringView(arg);
+    if (i == 0) {
+      field_text = arg_sv;
+    } else {
+      size_text = arg_sv;
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
+    r->args_.emplace_back(std::move(expr));
+  }
+
+  // Evaluate the sample-size expression (arg 1) at parse time.
+  expr::Expression::EvalContext ctx;
+  Record record(parameters.record_info_by_index_.size());
+  auto size_opt = r->args_[1]->Evaluate(ctx, record).AsDouble();
+  if (!size_opt.has_value() || !std::isfinite(*size_opt) || *size_opt < 0 ||
+      *size_opt != std::floor(*size_opt)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        name, " sample size must be a non-negative integer constant"));
+  }
+  if (*size_opt > static_cast<double>(RandomSample::kMaxSampleSize)) {
+    return absl::OutOfRangeError(absl::StrCat(
+        name, " sample size must be <= ", RandomSample::kMaxSampleSize));
+  }
+  r->sample_size_ = static_cast<size_t>(*size_opt);
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  } else {
+    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+    // "__generated_alias" + reducer + comma-joined args with the leading '@'
+    // stripped, lowercasing the whole thing; the legacy form is
+    // "REDUCER(args)". See COMPATIBILITY.md.
+    const std::vector<absl::string_view> alias_args{field_text, size_text};
+    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_reducer_default_alias",
+        [&] {
+          auto name = absl::StrCat(
+              "__generated_alias", r->name_,
+              absl::StrJoin(alias_args, ",",
+                            [](std::string *out, absl::string_view arg) {
+                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                            }));
+          absl::AsciiStrToLower(&name);
+          return name;
+        },
+        [&] {
+          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
+                              ")");
+        });
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
 
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
@@ -597,6 +874,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"FIRST_VALUE", &FirstValueReducerParser},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},
+    {"RANDOM_SAMPLE", &RandomSampleReducerParser},
     {"STDDEV", &BasicReducerParser<Stddev, 1, 1>},
     {"SUM", &BasicReducerParser<Sum, 1, 1>},
     {"TOLIST", &BasicReducerParser<ToList, 1, 1>},

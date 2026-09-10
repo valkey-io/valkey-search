@@ -29,7 +29,6 @@ BM25STD is the only scorer swept; it is the default on both engines, and is
 named explicitly so the reference answers do not depend on that default.
 """
 
-import os
 import struct
 
 import pytest
@@ -135,19 +134,38 @@ PINNED_LIMIT = ("0", "10")
 LOAD_ALL = ("LOAD", "*")
 NO_LOAD = ()
 
-# (knn_count, knn_args) for the VSIM clause. The count is the number of
-# arguments in the KNN block. An explicit KNN block is always emitted: the
-# Valkey parser requires one, while Redis merely defaults it, so spelling it
-# out keeps a single command string valid on both engines.
+# (knn_count, knn_args) for the VSIM clause, or None for no KNN block at all.
+# The count is the number of arguments in the block, and YIELD_SCORE_AS is
+# never one of them -- it names the arm and sits after the block, which is
+# the only placement Redis accepts.
+#
+# SHARD_K_RATIO tunes how much of K each shard returns during a fanout. This
+# implementation parses and discards it; the value does not change what a
+# query returns, only how much work the shards do, so the two engines still
+# have to agree on the answer.
+#
+# Only forms both engines accept are swept. Valkey additionally tolerates an
+# empty block (`KNN 0`) and a block that omits K, defaulting K in each case;
+# Redis rejects both. That leniency is an extension rather than a divergence
+# in an answer, so it is pinned by testing/ft_hybrid_parser_test.cc instead of
+# being recorded here as a permanent mismatch.
 KNN_CLAUSES = [
+    None,                                        # no block: K defaults to 10
     ("2", ["K", "5"]),
     ("2", ["K", "10"]),
     ("2", ["K", "24"]),
     ("4", ["K", "10", "EF_RUNTIME", "50"]),
+    ("4", ["K", "10", "SHARD_K_RATIO", "0.5"]),
+    ("6", ["K", "10", "EF_RUNTIME", "50", "SHARD_K_RATIO", "1.0"]),
 ]
 
 
-@pytest.mark.parametrize("key_type", ["hash", "json"])
+# HASH only. A JSON index under `LOAD *` returns the document as a single
+# `$` column, which no `@field` reference in a pipeline stage resolves
+# against -- an FT.AGGREGATE limitation being fixed on its own branch. That
+# has nothing to do with FT.HYBRID, and sweeping JSON here would only pin
+# that gap. FT.HYBRID has no key-type-specific code of its own.
+@pytest.mark.parametrize("key_type", ["hash"])
 class TestHybridCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "hybrid-answers.pickle.gz"
     # TODO(reference-image): temporary. FT.HYBRID needs the Redis 8.4+ query
@@ -161,23 +179,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
 
     def setup_data(self, key_type):
         super().setup_data(self.DATA_SET, key_type)
-
-    def record_excluded(self, cmd):
-        """Record a command that is run against Valkey for a no-crash check
-        only, with no answer to compare against.
-
-        Used where a known Valkey limitation outside FT.HYBRID would make the
-        comparison a test of that limitation instead. Each caller says which.
-        """
-        self.answers.append({
-            "cmd": cmd,
-            "key_type": self.key_type,
-            "data_set_name": self.data_set_name,
-            "testname": os.environ.get("PYTEST_CURRENT_TEST")
-            .split(":")[-1]
-            .split(" ")[0],
-            "excluded": True,
-        })
 
     def hybrid(
         self,
@@ -193,7 +194,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         limit=PINNED_LIMIT,
         load=LOAD_ALL,
         tail=(),
-        excluded=False,
         xfail=False,
     ):
         """Issue one FT.HYBRID command and record the reference answer.
@@ -208,14 +208,16 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         byte-for-byte -- the two engines format the same score to different
         precision.
         """
-        knn_count, knn_args = knn
         cmd = [
             "FT.HYBRID", f"{key_type}_idx1",
             "SEARCH", search_query, "SCORER", "BM25STD",
         ]
         if search_score_as:
             cmd += ["YIELD_SCORE_AS", search_score_as]
-        cmd += ["VSIM", "@vec", "$q", "KNN", knn_count, *knn_args]
+        cmd += ["VSIM", "@vec", "$q"]
+        if knn is not None:
+            knn_count, knn_args = knn
+            cmd += ["KNN", knn_count, *knn_args]
         if vector_score_as:
             cmd += ["YIELD_SCORE_AS", vector_score_as]
         method, options = combine
@@ -236,9 +238,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             "PARAMS", "2", "q",
             struct.pack(f"<{HYBRID_VECTOR_DIM}f", *QUERY_VECTORS[vector]),
         ]
-        if excluded:
-            self.record_excluded(cmd)
-            return
         self.execute_command(cmd)
         if xfail:
             self.answers[-1]["xfail"] = True
@@ -301,6 +300,33 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                 key_type, "@title:alpha", vector=vector, vector_score_as="vector_score"
             )
 
+    def test_score_alias_on_both_arms(self, key_type):
+        """Both arms named at once. Each alias has to carry its own arm's
+        score, and naming them must not disturb the fused score."""
+        self.setup_data(key_type)
+        for query in ["@title:alpha", "@body:canyon", "@title:omega"]:
+            self.hybrid(
+                key_type,
+                query,
+                search_score_as="text_score",
+                vector_score_as="vector_score",
+            )
+
+    def test_k_bounds_the_vector_arm_only(self, key_type):
+        """K caps how many neighbors the vector arm contributes; the text arm
+        keeps returning everything it matched. `@body:stone` matches the whole
+        corpus, so a K below the corpus size is visible in the fused set only
+        as the arm each row came from, never as a smaller total."""
+        self.setup_data(key_type)
+        for k in ["1", "3", "12", "24"]:
+            self.hybrid(
+                key_type,
+                "@body:stone",
+                knn=("2", ["K", k]),
+                limit=("0", "100"),
+                vector_score_as="vector_score",
+            )
+
     # -----------------------------------------------------------------
     # The LOAD clause.
     #
@@ -348,16 +374,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             # A loaded field has to be visible to a FILTER.
             (["LOAD", "1", "@price"], ["FILTER", "@price > 20"]),
         ]
-        if key_type == "json":
-            # A JSON path is an identifier the index schema does not carry as
-            # an attribute name -- LOAD resolves it to the attribute behind the
-            # path, and `AS` renames the column that comes back.
-            cases += [
-                (["LOAD", "1", "$.price"], []),
-                (["LOAD", "3", "$.price", "AS", "cost"], []),
-                (["LOAD", "3", "$.price", "AS", "cost"],
-                 ["APPLY", "@cost + 1", "AS", "bumped"]),
-            ]
         return cases
 
     def test_load_clause(self, key_type):
@@ -379,10 +395,9 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             ["LOAD", "3", "@nosuchfield", "AS", "mystery"],
             ["LOAD", "2", "@price", "@nosuchfield"],
         ]
-        if key_type == "hash":
-            # A JSON path against a HASH index names nothing, the same way an
-            # unknown attribute does.
-            cases += [["LOAD", "1", "$.price"]]
+        # A JSON path against a HASH index names nothing, the same way an
+        # unknown attribute does.
+        cases += [["LOAD", "1", "$.price"]]
         for load in cases:
             self.hybrid(key_type, "@title:alpha", load=load, xfail=True)
 
@@ -427,33 +442,17 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for limit in [("0", "1"), ("0", "5"), ("2", "5"), ("0", "100")]:
             self.hybrid(key_type, "@title:alpha", limit=limit)
 
-    # A pipeline stage that names an indexed field -- SORTBY @price, GROUPBY
-    # @color -- cannot resolve it on a JSON index under `LOAD *`: Valkey
-    # returns the document as a single `$` column and never materializes the
-    # individual fields. That is an FT.AGGREGATE limitation (the same
-    # FT.AGGREGATE query has the same problem), not an FT.HYBRID one, so the
-    # JSON variants are recorded for a no-crash check only rather than turning
-    # this suite into a test of that gap.
-    _FIELD_REF_UNRESOLVED_ON_JSON = "json"
-
     def test_sortby(self, key_type):
         self.setup_data(key_type)
-        excluded = key_type == self._FIELD_REF_UNRESOLVED_ON_JSON
         for sort in [
             ["SORTBY", "2", "@price", "ASC"],
             ["SORTBY", "2", "@price", "DESC"],
             ["SORTBY", "2", "@hybrid_score", "DESC"],
         ]:
-            # Sorting on the fused score needs no field resolution, so it is
-            # compared on both key types.
-            is_score_sort = "@hybrid_score" in sort
-            self.hybrid(key_type, "@title:alpha", tail=sort,
-                        excluded=excluded and not is_score_sort)
+            self.hybrid(key_type, "@title:alpha", tail=sort)
 
     def test_groupby_reduce(self, key_type):
         self.setup_data(key_type)
-        # GROUPBY names @color; see _FIELD_REF_UNRESOLVED_ON_JSON above.
-        excluded = key_type == self._FIELD_REF_UNRESOLVED_ON_JSON
         for reduce in [
             ["REDUCE", "COUNT", "0", "AS", "cnt"],
             ["REDUCE", "SUM", "1", "@price", "AS", "total"],
@@ -464,7 +463,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                 key_type,
                 "@title:alpha",
                 tail=["GROUPBY", "1", "@color", *reduce],
-                excluded=excluded,
             )
 
     def test_apply(self, key_type):

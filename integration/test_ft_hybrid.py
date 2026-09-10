@@ -137,7 +137,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         result = client.execute_command(
             "FT.HYBRID", self.INDEX,
             "SEARCH", "@title:hello", "YIELD_SCORE_AS", "sscore",
-            "VSIM", "@vec", "$q", "KNN", "4", "K", "5",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
             "YIELD_SCORE_AS", "vscore",
             "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "hscore",
             "APPLY", "@hscore", "AS", "h2",
@@ -171,7 +171,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         result = client.execute_command(
             "FT.HYBRID", self.INDEX,
             "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
-            "VSIM", "@vec", "$q", "KNN", "4", "K", "10", "YIELD_SCORE_AS", "v",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
             "COMBINE", "FUNCTION", "4", "EXPR", "@v + 1",
             "YIELD_SCORE_AS", "h",
             "PARAMS", "2", "q", self.Q,
@@ -198,7 +198,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             # SEARCH arm is itself a vector query against $q (arm score = @s).
             "SEARCH", "*=>[KNN 10 @vec $q]", "YIELD_SCORE_AS", "s",
             # VSIM arm uses a different query vector $q2 (arm score = @v).
-            "VSIM", "@vec", "$q2", "KNN", "4", "K", "10", "YIELD_SCORE_AS", "v",
+            "VSIM", "@vec", "$q2", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
             "COMBINE", "FUNCTION", "4", "EXPR", "@s * 10 + @v",
             "YIELD_SCORE_AS", "h",
             "PARAMS", "4", "q", self.Q, "q2", q2,
@@ -367,6 +367,117 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
                 "VSIM", "@vec", "$q", "RANGE", "2", "EPSILON", "0.05",
                 "PARAMS", "2", "q", self.Q,
             )
+
+    # ---------------------------------------------------------------------
+    # VSIM clause shape. What the parse settled on is unit-tested in
+    # testing/ft_hybrid_parser_test.cc; these cover what it does to a reply.
+    # ---------------------------------------------------------------------
+
+    def test_k_bounds_the_vector_arm_only(self):
+        """K caps how many documents the VSIM arm contributes. It says nothing
+        about the SEARCH arm, which keeps returning everything it matches."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        # `@title:hello` matches all 10 documents, so any cap the vector arm's
+        # K imposed on it would be visible as a shrinking `s` count.
+        for k, expected_vector_arm in [(1, 1), (3, 3), (10, 10)]:
+            result = client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", str(k),
+                "YIELD_SCORE_AS", "v",
+                "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+                "LIMIT", "0", "100",
+                "PARAMS", "2", "q", self.Q,
+            )
+            rows = [self._rec_to_dict(rec) for rec in result[1:]]
+            text_arm = sum(1 for d in rows if b"s" in d)
+            vector_arm = sum(1 for d in rows if b"v" in d)
+            assert text_arm == 10, \
+                f"K={k} narrowed the text arm to {text_arm}"
+            assert vector_arm == expected_vector_arm, \
+                f"K={k} gave {vector_arm} vector-arm rows"
+
+    def test_knn_block_may_be_omitted(self):
+        """With no KNN block the arm runs with the default K of 10, which is
+        every document here."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "YIELD_SCORE_AS", "v",
+            "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+            "LIMIT", "0", "100",
+            "PARAMS", "2", "q", self.Q,
+        )
+        rows = [self._rec_to_dict(rec) for rec in result[1:]]
+        assert sum(1 for d in rows if b"v" in d) == 10
+
+    def test_shard_k_ratio_is_accepted_and_ignored(self):
+        """SHARD_K_RATIO tunes how much of K each shard returns during a
+        fanout. This implementation does not use it, but a command written for
+        Redis must not be rejected -- and the value must not change the
+        result."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        def fused_scores(*knn_args):
+            result = client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", *knn_args, "YIELD_SCORE_AS", "v",
+                "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+                "LOAD", "1", "@title",
+                "SORTBY", "2", "@h", "DESC",
+                "LIMIT", "0", "100",
+                "PARAMS", "2", "q", self.Q,
+            )
+            return [self._rec_to_dict(rec).get(b"h") for rec in result[1:]]
+
+        baseline = fused_scores("KNN", "2", "K", "5")
+        for ratio in ("0.1", "0.5", "1.0"):
+            assert fused_scores(
+                "KNN", "4", "K", "5", "SHARD_K_RATIO", ratio) == baseline, \
+                f"SHARD_K_RATIO {ratio} changed the result"
+
+    def test_yield_score_as_inside_the_knn_block_is_rejected(self):
+        """YIELD_SCORE_AS names the arm, not the KNN search, so it belongs
+        after the block. Redis rejects this spelling too."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError, match=r"Unknown VSIM KNN sub-arg"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                # count 4 pulls YIELD_SCORE_AS and its alias into the block.
+                "VSIM", "@vec", "$q", "KNN", "4", "K", "5",
+                "YIELD_SCORE_AS", "v",
+                "PARAMS", "2", "q", self.Q,
+            )
+
+    def test_ef_runtime_is_accepted_on_the_vsim_arm(self):
+        """EF_RUNTIME is an HNSW search-effort knob; it must not change which
+        documents come back for a K this small, only how hard the index
+        works to find them."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        def scores(*knn_args):
+            result = client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", *knn_args, "YIELD_SCORE_AS", "v",
+                "COMBINE", "RRF", "4", "WINDOW", "100", "YIELD_SCORE_AS", "h",
+                "SORTBY", "2", "@h", "DESC",
+                "LIMIT", "0", "100",
+                "PARAMS", "2", "q", self.Q,
+            )
+            return [self._rec_to_dict(rec).get(b"v") for rec in result[1:]]
+
+        # Omitted (index default) and overridden agree on this corpus.
+        assert scores("KNN", "2", "K", "5") == \
+            scores("KNN", "4", "K", "5", "EF_RUNTIME", "200")
 
     # ---------------------------------------------------------------------
     # SEARCH-arm vector content (Valkey super-set over the Redis spec).
@@ -1106,7 +1217,7 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
             lambda: self.server.get_new_client().execute_command(
                 "FT.HYBRID", self.INDEX,
                 "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
-                "VSIM", "@vec", "$q", "KNN", "4", "K", "5",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
                 "YIELD_SCORE_AS", "v",
                 "PARAMS", "2", "q", q))
         # Release the mutation; both the parked HSET AND the FT.HYBRID's
@@ -1189,7 +1300,7 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
                 res = client.execute_command(
                     "FT.HYBRID", self.INDEX,
                     "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
-                    "VSIM", "@vec", "$q", "KNN", "4", "K", str(N),
+                    "VSIM", "@vec", "$q", "KNN", "2", "K", str(N),
                     "YIELD_SCORE_AS", "v",
                     "PARAMS", "2", "q", q)
                 for rec in res[1:]:
@@ -1279,7 +1390,7 @@ class TestFtHybridClusterFunctionMerge(ValkeySearchClusterTestCase):
         result = client.execute_command(
             "FT.HYBRID", self.INDEX,
             "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
-            "VSIM", "@vec", "$q", "KNN", "4", "K", str(n_docs * 4),
+            "VSIM", "@vec", "$q", "KNN", "2", "K", str(n_docs * 4),
             "YIELD_SCORE_AS", "v",
             "COMBINE", "FUNCTION", "4", "EXPR", "@s * 10 + @v",
             "YIELD_SCORE_AS", "h",
@@ -1327,7 +1438,7 @@ class TestFtHybridClusterFunctionMerge(ValkeySearchClusterTestCase):
         result = client.execute_command(
             "FT.HYBRID", self.INDEX,
             "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
-            "VSIM", "@vec", "$q", "KNN", "4", "K", str(n_docs * 4),
+            "VSIM", "@vec", "$q", "KNN", "2", "K", str(n_docs * 4),
             "YIELD_SCORE_AS", "v",
             "COMBINE", "FUNCTION", "4", "EXPR", "@v",
             "YIELD_SCORE_AS", "h",

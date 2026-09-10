@@ -50,6 +50,7 @@ set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc

@@ -1212,6 +1212,8 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
             >= 1,
             timeout=5)
 
+        blocked_before = client.info("SEARCH").get(
+            "search_text_query_blocked_count", 0)
         # Issue FT.HYBRID — both arms run against the still-pre-mutation index.
         hyb_thread, res, err = run_in_thread(
             lambda: self.server.get_new_client().execute_command(
@@ -1220,6 +1222,15 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
                 "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
                 "YIELD_SCORE_AS", "v",
                 "PARAMS", "2", "q", q))
+        # The query must be parked behind the mutation before it is released.
+        # Without this wait the release frequently wins the race, both arms
+        # then run against the post-mutation index, and doc:1 legitimately
+        # appears in the VSIM arm alone -- which looks like a violation but is
+        # only a test that let the mutation land first.
+        waiters.wait_for_true(
+            lambda: client.info("SEARCH")["search_text_query_blocked_count"]
+            >= blocked_before + 1,
+            timeout=5)
         # Release the mutation; both the parked HSET AND the FT.HYBRID's
         # post-fusion contention check unblock; the resolver re-runs once the
         # mutation applies and replies with post-mutation content.

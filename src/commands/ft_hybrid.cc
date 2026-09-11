@@ -267,7 +267,11 @@ absl::StatusOr<RecordsMap> FetchRecordForRevalidation(
 // why this runs before the merge rather than patching the merged list.
 //
 // Only keys whose mutation sequence number moved are touched. For every other
-// neighbor this is one integer compare.
+// neighbor this is one integer compare, and an arm that holds no mutated
+// document is handed to fusion exactly as its search produced it -- nothing is
+// dropped, rewritten or re-sorted. Re-sorting one on the strength of having
+// looked at it would be a bug, not a no-op: an arm's order carries meaning
+// fusion reads, and only the arm itself knows how it was ordered.
 //
 // What it deliberately does not do: recover a document the mutation made newly
 // matching, or newly near enough to enter the vector arm's top K. Those were
@@ -337,6 +341,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
     }
     std::unique_ptr<query::SingleDocumentScorer> document_scorer;
     std::vector<char> drop(neighbors.size(), 0);
+    size_t dropped = 0;
     bool rescored = false;
 
     for (size_t j = 0; j < neighbors.size(); ++j) {
@@ -347,6 +352,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         // The index no longer tracks the key at all, which is what a deleting
         // mutation leaves behind. No arm should still be offering it.
         drop[j] = 1;
+        ++dropped;
         continue;
       }
       if (*db_seq == n.sequence_number) {
@@ -362,6 +368,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         // The key is gone, or unreadable. Either way this arm no longer
         // matches it.
         drop[j] = 1;
+        ++dropped;
         continue;
       }
       const RecordsMap &records = *fetched;
@@ -370,6 +377,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
           /*recompute_score_override=*/!arm_score_is_distance);
       if (!verification.matches) {
         drop[j] = 1;
+        ++dropped;
         continue;
       }
       if (arm_score_is_distance) {
@@ -379,6 +387,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         auto record = records.find(*vector_identifier[i]);
         if (record == records.end()) {
           drop[j] = 1;
+          ++dropped;
           continue;
         }
         auto distance = vector_index->RecomputeDistance(
@@ -394,18 +403,24 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
       }
     }
 
-    size_t kept = 0;
-    for (size_t j = 0; j < neighbors.size(); ++j) {
-      if (drop[j]) {
-        continue;
+    // An arm none of whose documents was mutated is left exactly as the search
+    // produced it: not compacted, not renumbered, and not re-sorted. Both
+    // blocks below are reachable only from the branches above that actually
+    // rewrote something.
+    if (dropped > 0) {
+      size_t kept = 0;
+      for (size_t j = 0; j < neighbors.size(); ++j) {
+        if (drop[j]) {
+          continue;
+        }
+        if (kept != j) {
+          neighbors[kept] = std::move(neighbors[j]);
+        }
+        ++kept;
       }
-      if (kept != j) {
-        neighbors[kept] = std::move(neighbors[j]);
-      }
-      ++kept;
+      neighbors.resize(kept);
+      params.per_arm_results[i].total_count = kept;
     }
-    neighbors.resize(kept);
-    params.per_arm_results[i].total_count = kept;
 
     // Dropping preserves order, so only a fresh score can have put the arm out
     // of order.

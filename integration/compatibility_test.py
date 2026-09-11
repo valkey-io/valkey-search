@@ -167,6 +167,13 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
             rows += [row]
     return rows
 
+def unpack_search_result_nocontent(rs, has_sortkeys):
+    # NOCONTENT replies carry no per-row field lists:
+    #   plain:        [count, key1, key2, ...]
+    #   WITHSORTKEYS: [count, key1, #sortkey1, key2, #sortkey2, ...]
+    step = 2 if has_sortkeys else 1
+    return [{"__key": rs[i]} for i in range(1, len(rs), step)]
+
 def unpack_agg_result(rs, key_type):
     # Skip the first gibberish int
     try:
@@ -214,7 +221,12 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         # where the expected result (from pickle) may not have sort keys even
         # if the command requested them.
         has_sortkeys = result_has_sortkeys(rs)
-        out = unpack_search_result(rs, key_type, has_sortkeys)
+        if any(isinstance(c, str) and c.lower() == "nocontent" for c in cmd):
+            # NOCONTENT replies carry no field lists, so the row-pair unpacking
+            # below runs off the end of the reply. Unpack ids only.
+            out = unpack_search_result_nocontent(rs, has_sortkeys)
+        else:
+            out = unpack_search_result(rs, key_type, has_sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -364,6 +376,14 @@ def compare_results(expected, results):
     else:
         sortkeys=["__key"]
         # sortkeys=[]
+
+    # NOCONTENT rows are ids only, so the SORTBY field isn't in them to re-sort
+    # on. Both engines already return ids in SORTBY order, so compare them
+    # positionally (empty sortkeys => no re-sort).
+    if cmd[0].lower() == "ft.search" and any(
+        isinstance(c, str) and c.lower() == "nocontent" for c in cmd
+    ):
+        sortkeys = []
 
     # If both failed, it's a wrong search cmd and we can exit
     if expected["exception"] and results["exception"]:

@@ -341,7 +341,7 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
     return true;  // Early reply sent, stop processing
   }
 
-  if (command.no_content) {
+  if (command.NoProcessingRequired()) {
     SendReplyNoContent(ctx, search_result, command);
     return true;  // Early reply sent, stop processing
   }
@@ -405,7 +405,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   ApplySorting(search_result.neighbors, *this);
 
   // 3. Serialize neighbors based on query type
-  if (IsNonVectorQuery()) {
+  if (no_content) {
+    SendReplyNoContent(ctx, search_result, *this);
+  } else if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {
     SerializeNeighbors(ctx, search_result, *this);

@@ -153,22 +153,11 @@ class PredicateEvaluator : public query::Evaluator {
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
 
-// Result of a main-thread content-fetch revalidation of a neighbor.
-struct FilterVerification {
-  bool matches{false};
-  // Present only when the neighbor was reached via the mutation-walk
-  // (db_seq != sequence_number) for a NON-vector query: the document's score
-  // recomputed through the same Scorer seam ScoreTextQuery uses, so it is on
-  // the same scale as the shard-side score. nullopt on the fast (no-mutation)
-  // path and for vector queries, whose Neighbor.score is a KNN distance that
-  // must never be overwritten.
-  std::optional<float> recomputed_score;
-};
-
 FilterVerification VerifyFilter(
     const query::SearchParameters &parameters, const RecordsMap &records,
     const indexes::Neighbor &n,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer) {
+    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::optional<bool> recompute_score_override) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return {true, std::nullopt};
@@ -186,9 +175,11 @@ FilterVerification VerifyFilter(
   // ScoreTextQuery uses (search.cc: ResolveLeaves -> ScoreNode ->
   // Scorer::ComposeDocumentScore). Text leaves are scored via Scorer::ScoreLeaf
   // (never TextIterator::GetScore) and numeric/tag leaves via 1.0 * weight,
-  // identical to ScoreNode. Vector queries are skipped because there
-  // Neighbor.score is a KNN distance, not a relevance score.
-  const bool recompute_score = parameters.IsNonVectorQuery();
+  // identical to ScoreNode. A query whose Neighbor.score is a KNN distance
+  // rather than a relevance score is skipped: by default that means any vector
+  // query, and FT.HYBRID overrides the choice per arm.
+  const bool recompute_score =
+      recompute_score_override.value_or(parameters.IsNonVectorQuery());
   auto recompute = [&](EvaluationResult &result) -> FilterVerification {
     if (!result.matches || !recompute_score) {
       return {result.matches, std::nullopt};

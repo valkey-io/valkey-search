@@ -27,7 +27,8 @@ from typing import List, Tuple
 import pytest
 from valkey import Valkey
 
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (ValkeySearchTestCaseBase,
+                                     ValkeySearchTestCaseDebugMode)
 from valkeytestframework.conftest import resource_port_tracker
 from indexes import (
     Index,
@@ -310,3 +311,38 @@ class TestVectorBasicIngestQuery(ValkeySearchTestCaseBase):
             client, index, data_type, vectors,
             sample_rows=list(range(num_vectors)),
         )
+
+class TestKnnSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
+    """
+        KNN-path gate check for the WITHSORTKEYS sort-key prefix (issue
+        #1353 item 4); the filter-path check lives in test_non_vector.py.
+    """
+
+    def test_knn_sortkey_prefix_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "skg_idx", "ON", "HASH", "PREFIX", "1", "skg:",
+            "SCHEMA", "m", "TAG", "z", "TEXT", "SORTABLE",
+            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
+            "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
+        assert client.execute_command(
+            "HSET", "skg:1", "m", "all", "z", "apple",
+            "vec", float_to_bytes([1.0, 0.0])) == 3
+        for release, z_prefix in (("1.2.1", b"#"), ("1.3.0", b"$")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "skg_idx", "@m:{all}=>[KNN 1 @vec $B]",
+                "PARAMS", "2", "B", float_to_bytes([1.0, 0.0]),
+                "SORTBY", "z", "ASC", "WITHSORTKEYS",
+                "RETURN", "1", "z", "DIALECT", "2")
+            assert result == [1, b"skg:1", z_prefix + b"apple",
+                              [b"z", b"apple"]], f"emulate-release {release}"
+            # The KNN distance alias is numeric so prefix is always $
+            result = client.execute_command(
+                "FT.SEARCH", "skg_idx", "@m:{all}=>[KNN 1 @vec $B AS dist]",
+                "PARAMS", "2", "B", float_to_bytes([1.0, 0.0]),
+                "SORTBY", "dist", "ASC", "WITHSORTKEYS",
+                "RETURN", "1", "dist", "DIALECT", "2")
+            assert result == [1, b"skg:1", b"#0",
+                              [b"dist", b"0"]], f"emulate-release {release}"

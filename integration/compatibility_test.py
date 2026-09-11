@@ -388,6 +388,17 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
+    # The sortkey-prefix cases assert the sort-key bytes, which the generic
+    # unpack path below discards (unpack_search_result drops the sort-key
+    # element). Their replies are fully deterministic, so compare them raw.
+    if expected.get("data_set_name") == SORTKEY_PREFIX_DATA_SET:
+        if expected["result"] == results["result"]:
+            return True
+        print(f"CMD: {cmd}")
+        print(f"RL: {printable_result(expected['result'])}")
+        print(f"VK: {printable_result(results['result'])}")
+        return False
+
     # Output raw results
     # print("Raw expected result:", expected["result"])
     rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
@@ -590,8 +601,11 @@ def _load_answers_with_hash_check(answer_file_name):
     Set SKIP_COMPATIBILITY_HASH_CHECK=1 to bypass the hash check (useful when
     manually generating a small pickle for local testing).
     """
+    root_dir = os.getenv("ROOT_DIR") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
     pickle_path = os.path.join(
-        os.getenv("ROOT_DIR"), "integration/compatibility", answer_file_name
+        root_dir, "integration/compatibility", answer_file_name
     )
     with gzip.open(pickle_path, "rb") as f:
         payload = pickle.load(f)

@@ -1140,6 +1140,34 @@ def compute_filter_data_sets(dataset_name):
     return data
 
 ### Helper Functions ###
+### Sort key prefix data set (issue #1353, item 4) ###
+#
+# Fixture for the WITHSORTKEYS sort-key prefix cases (generate_sortkey.py).
+# future JSON variant: add SETS/CREATES "json" entries here.
+SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
+
+
+def compute_sortkey_data_sets():
+    schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
+              "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2")
+    docs = [
+        ("hash:skp1", {"m": "all", "z": "zebra", "t": "cat", "n": "3",
+                       "f": "3.5", "vec": b"CCCCCCCC"}),
+        ("hash:skp2", {"m": "all", "z": "apple", "t": "ant", "n": "1",
+                       "f": "1.5", "vec": b"AAAAAAAA"}),
+        ("hash:skp3", {"m": "all", "z": "mango", "t": "bee", "n": "2",
+                       "f": "2.5", "vec": b"BBBBBBBB"}),
+    ]
+    return {
+        SORTKEY_PREFIX_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
+            ],
+        }
+    }
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
@@ -1147,6 +1175,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
+        elif data_set == SORTKEY_PREFIX_DATA_SET:
+            data_source = "sortkey"
         else:
             data_source = "vector"
 
@@ -1157,6 +1187,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case "filter":
             data = compute_filter_data_sets(data_set)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]

@@ -26,7 +26,7 @@ vmsdk::UniqueValkeyString FilterEvalContext::GetKeyField(
   if (open_key_ == nullptr || data_type_ == nullptr) {
     return nullptr;
   }
-  auto record = data_type_->GetRecord(ctx_, open_key_, key_, identifier);
+  auto record = data_type_->GetAttribute(ctx_, open_key_, key_, identifier);
   if (!record.ok()) {
     return nullptr;
   }
@@ -39,10 +39,10 @@ expr::Value FilterAttributeReference::GetValue(
   const auto& filter_record = static_cast<const FilterRecord&>(record);
   const auto& attrs = filter_record.GetMutatedAttributes();
   auto itr = attrs.find(alias_);
-  if (itr == attrs.end() || !itr->second.data) {
+  if (itr == attrs.end() || itr->second.IsNull()) {
     return expr::Value(expr::Value::Nil("Field Missing"));
   }
-  auto data_view = vmsdk::ToStringView(itr->second.data.get());
+  auto data_view = itr->second.GetStringView();
   if (type_ == indexes::IndexerType::kNumeric) {
     double d;
     if (absl::SimpleAtod(data_view, &d)) {

@@ -378,11 +378,17 @@ void ApplySorting(std::vector<indexes::Neighbor>& neighbors,
     return;
   }
 
-  // If no SORTBY specified for non-vector queries, apply default sort:
+  // If no SORTBY specified for vector range queries, apply default sort:
   // ascending by distance, then ascending by key (lexicographic).
   // This matches Redis default behavior for range queries.
+  //
+  // Guard on num_vr_predicates (not IsNonVectorQuery) so that pure text/tag/
+  // numeric queries keep the score-descending order established by
+  // SearchResult::TrimResults. For those queries distance == 0 for all
+  // neighbors, so sorting by distance would silently overwrite the relevance
+  // ordering with an arbitrary key-ascending re-sort.
   if (!parameters.sortby_parameter.has_value()) {
-    if (parameters.IsNonVectorQuery()) {
+    if (parameters.num_vr_predicates > 0) {
       auto default_compare = [](const indexes::Neighbor& a,
                                 const indexes::Neighbor& b) -> bool {
         if (a.distance != b.distance) return a.distance < b.distance;

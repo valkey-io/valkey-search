@@ -798,9 +798,7 @@ def compute_sortkey_data_sets():
 ### RETURN clause data set (issue #1353, item 7) ###
 #
 # Fixture for the repeated-RETURN-clause cases (generate_return.py). One
-# document, no SORTBY in any query: ordering, tie-break, sort-key and
-# numeric-formatting divergences cannot reach these asserts. `p` is an
-# integer so its bytes are format-stable.
+# document, no SORTBY in any query to avoid hitting other #1353 divergence
 RETURN_CLAUSE_DATA_SET = "return clause"
 
 

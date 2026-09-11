@@ -21,7 +21,6 @@ class TestSortKeyPrefixCompatibility(BaseCompatibilityTest):
 
     def test_withsortkeys_prefix_by_field_type(self, key_type):
         self.setup_data(SORTKEY_PREFIX_DATA_SET, key_type)
-        time.sleep(0.5)  # tiny data set; give indexing a moment
         for field in self.SORTABLE_FIELDS:
             self.check("FT.SEARCH", f"{key_type}_idx1", "@m:{all}",
                        "SORTBY", field, "ASC", "WITHSORTKEYS",

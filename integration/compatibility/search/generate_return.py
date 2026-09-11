@@ -18,7 +18,6 @@ class TestReturnClauseCompatibility(BaseCompatibilityTest):
 
     def test_repeated_return_clauses(self, key_type):
         self.setup_data(RETURN_CLAUSE_DATA_SET, key_type)
-        time.sleep(0.5)  # tiny data set; give indexing a moment
         idx = f"{key_type}_idx1"
         for tail in (
             # A later RETURN overrides an earlier RETURN 0 (the item-7 case).

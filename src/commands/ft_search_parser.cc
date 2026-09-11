@@ -369,7 +369,7 @@ absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
-  
+
   // last "RETURN 0" will also behave like NOCONTENT.
   // notice return_no_fields can be overwritten within a command
   // when there are multiple RETURN's, hence it's merged at the end

@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
@@ -36,7 +35,7 @@ struct FuzzySearch {
   };
 
   // Returns matched terms for all words within edit distance <= max_distance
-  static Expansion Search(const Rax& tree, absl::string_view pattern,
+  static Expansion Search(const Rax &tree, absl::string_view pattern,
                           size_t max_distance, uint32_t max_words) {
     Expansion result;
 
@@ -67,20 +66,20 @@ struct FuzzySearch {
       Rax::PathIterator iter, absl::string_view pattern, size_t max_distance,
       std::string word,   // Current word being built
       char prev_tree_ch,  // Previous character (for transposition detection)
-      absl::InlinedVector<size_t, 32>&
-          prev_prev,  // Row i-2 of DP matrix (for transposition)
-      absl::InlinedVector<size_t, 32>&
-          prev,  // Row i-1 of DP matrix (previous row)
-      absl::InlinedVector<size_t, 32>&
-          curr,  // Row i of DP matrix (current row being computed)
-      Expansion& result, uint32_t max_words, uint32_t& word_count) {
+      absl::InlinedVector<size_t, 32>
+          &prev_prev,  // Row i-2 of DP matrix (for transposition)
+      absl::InlinedVector<size_t, 32>
+          &prev,  // Row i-1 of DP matrix (previous row)
+      absl::InlinedVector<size_t, 32>
+          &curr,  // Row i of DP matrix (current row being computed)
+      Expansion &result, uint32_t max_words, uint32_t &word_count) {
     // Iterate over children at current tree level
     while (!iter.Done() && word_count < max_words) {
       absl::string_view edge = iter.GetChildEdge();
       std::string new_word = word;
       // Minimum edit distance in the current DP row after processing the edge.
       // Used for pruning: if min_dist > max_distance, skip entire subtree.
-      size_t min_dist;
+      size_t min_dist = 0;
 
       // SAVE STATE: Each child must start with same parent state
       auto saved_prev_prev = prev_prev;

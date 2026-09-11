@@ -12,9 +12,12 @@ import struct
 
 import pytest
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, run_in_thread
 from valkeytestframework.util import waiters
 
 SCORE_ABS_TOL = 1e-5
@@ -756,3 +759,68 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, combined = search(client, IDX_TAG_PREFIX,
                              "@cat:{red*} @rank:[0 100]")
         assert combined == pytest.approx(prefix, abs=SCORE_ABS_TOL)
+
+
+# The kill switch is a dev config, so it needs debug-mode to be settable.
+class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
+
+    def test_scoring_disabled_zeroes_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+
+        # Pure text is scored in-iterator; text+tag takes the extra step.
+        queries = ["hello", "hello @cat:{a}"]
+
+        # Baseline: scores are non-zero, so the zeroes below are the switch
+        # working rather than an empty result.
+        for query in queries:
+            _, scores = search(client, IDX_MAIN, query)
+            assert scores and all(v > 0.0 for v in scores.values()), \
+                f"expected non-zero scores for {query!r}, got {scores}"
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same queries still match the same docs; every score is now 0.
+        for query in queries:
+            keys, scores = search(client, IDX_MAIN, query)
+            assert keys and scores == pytest.approx({k: 0.0 for k in keys}), \
+                f"expected all-zero scores for {query!r}, got {scores}"
+
+    def test_scoring_disabled_zeroes_recomputed_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        stat = lambda field: int(client.info("SEARCH")["search_" + field])
+        pausepoint = lambda verb: client.execute_command(
+            "FT._DEBUG PAUSEPOINT", verb, "block_mutation_queue")
+
+        def score_across_mutation(body):
+            """Parks doc:1's index update so its db sequence number runs ahead
+            of the index's: the query blocks on the contention check, then
+            resumes into the content fetch, which rescores doc:1 through
+            SingleDocumentScorer. Returns (scores, docs rescored there)."""
+            revals, blocked = stat("predicate_revalidation"), stat(
+                "text_query_blocked_count")
+            pausepoint("SET")
+            hset = run_in_thread(lambda: self.server.get_new_client().hset(
+                "doc:1", "body", body))[0]
+            waiters.wait_for_true(lambda: int(pausepoint("TEST")) > 0)
+            searcher, res, _ = run_in_thread(
+                lambda: search(self.server.get_new_client(), IDX_MAIN, "hello"))
+            waiters.wait_for_true(
+                lambda: stat("text_query_blocked_count") > blocked)
+            pausepoint("RESET")
+            for thread in (hset, searcher):
+                thread.join()
+            return res[0][1], stat("predicate_revalidation") - revals
+
+        # Baseline: the recompute runs and yields a non-zero score.
+        scores, rescored = score_across_mutation("hello hello world")
+        assert rescored >= 1 and scores["doc:1"] > 0.0, scores
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same window, switch on: still revalidated and kept, now scored 0.
+        scores, rescored = score_across_mutation("hello hello")
+        assert rescored >= 1, "recompute path never ran"
+        assert "doc:1" in scores, scores
+        assert scores == pytest.approx({k: 0.0 for k in scores}), scores

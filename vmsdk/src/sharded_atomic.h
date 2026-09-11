@@ -80,6 +80,12 @@ class ShardedAtomic {
     return CounterRegistry::Instance().GetTotal(index_, order);
   }
 
+  T GetNonNegativeTotal(
+      std::memory_order order = std::memory_order_relaxed) const {
+    T total = GetTotal(order);
+    return total > 0 ? total : 0;
+  }
+
   void Reset() const { CounterRegistry::Instance().Reset(index_); }
 
  private:

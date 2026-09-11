@@ -23,6 +23,7 @@
 #include "ft_create_parser.h"
 #include "ft_search_parser.h"
 #include "src/query/search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -186,8 +187,25 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 3, 0, "ft_search_return_last_wins",
+            [&]() {
+              // Repeated RETURN clauses are last-one-wins: a later clause
+              // replaces an earlier one, including an earlier `RETURN 0`.
+              // The no-fields decision is folded into no_content after the
+              // whole command is parsed (ParseCommand), so it cannot cancel
+              // a sticky NOCONTENT keyword.
+              parameters.return_attributes.clear();
+              parameters.return_no_fields = (cnt == 0);
+            },
+            [&]() {
+              // Legacy: `RETURN 0` latched no_content for the whole command
+              // and repeated RETURN clauses accumulated fields.
+              if (cnt == 0) {
+                parameters.no_content = true;
+              }
+            });
         if (cnt == 0) {
-          parameters.no_content = true;
           return absl::OkStatus();
         }
         for (uint32_t i = 0; i < cnt; ++i) {
@@ -351,6 +369,13 @@ absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
+  
+  // last "RETURN 0" will also behave like NOCONTENT.
+  // notice return_no_fields can be overwritten within a command
+  // when there are multiple RETURN's, hence it's merged at the end
+  // instead of on the fly
+  no_content = no_content || return_no_fields;
+
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));

@@ -388,8 +388,11 @@ def compare_results(expected, results):
 
     # The sortkey-prefix cases assert the sort-key bytes, which the generic
     # unpack path below discards (unpack_search_result drops the sort-key
-    # element). Their replies are fully deterministic, so compare them raw.
-    if expected.get("data_set_name") == SORTKEY_PREFIX_DATA_SET:
+    # element). The return-clause cases produce no-content replies whose
+    # 1-element stride the unpacker cannot parse. Both data sets are fully
+    # deterministic, so compare them raw.
+    if expected.get("data_set_name") in (SORTKEY_PREFIX_DATA_SET,
+                                         RETURN_CLAUSE_DATA_SET):
         if expected["result"] == results["result"]:
             return True
         print(f"CMD: {cmd}")

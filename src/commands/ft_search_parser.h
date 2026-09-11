@@ -42,6 +42,12 @@ struct SearchCommand : public QueryCommand {
 
   bool with_sort_keys{false};
   bool with_scores{false};
+  
+  // True when the last RETURN clause was `RETURN 0`; folded into no_content
+  // after parsing (ParseCommand).
+  // This is separate from SearchParameters.no_content during parsing
+  // as there can be many or none return clause, and only the last RETURN is effective
+  bool return_no_fields{false};
 };
 
 }  // namespace valkey_search

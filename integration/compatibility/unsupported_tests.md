@@ -156,7 +156,47 @@ returns — so recording these would only pin a permanent error-message
 mismatch. `testing/ft_hybrid_parser_test.cc` covers them instead, and the
 sweep in `generate_hybrid.py` stays to the forms both engines accept.
 
-### 5.4. Reference engine image — TODO
+### 5.4. Per-arm score aliases in a pipeline stage — TODO, marked `xfail`
+
+**Status:** open.
+
+A per-arm `YIELD_SCORE_AS` alias reaches the reply on both engines, but only
+Redis lets a later stage refer to it:
+
+```
+FT.HYBRID idx SEARCH @title:alpha YIELD_SCORE_AS ts
+              VSIM @vec $q KNN 2 K 10 YIELD_SCORE_AS vs
+              COMBINE RRF 2 YIELD_SCORE_AS hs
+              LOAD 1 @price SORTBY 2 @vs DESC ...
+Redis:  sorts by the VSIM arm's score
+Valkey: (error) Index field `vs` does not exist
+```
+
+Redis resolves such an alias in a `SORTBY` under every `LOAD` clause except
+`LOAD *`, where it rejects it as "Property `vs` not loaded nor in schema".
+valkey-search rejects it under every `LOAD` clause, at parse time, because the
+stage parser resolves `@name` against the index schema and a score alias is
+not a field. The `COMBINE` alias is reachable in stages on both engines; only
+the per-arm ones are not.
+
+`test_sortby_per_arm_score_is_reachable` sweeps the shapes Redis accepts,
+marked `xfail`. `test_sortby_every_kind_of_column` and
+`test_pipeline_stages_over_scores` sweep the rest, including the `LOAD *`
+forms both engines reject and the `APPLY`, `FILTER` and `GROUPBY` references
+neither resolves.
+
+Two Redis behaviours here are not worth matching and are deliberately not
+swept. Under a non-`LOAD *` clause, an `APPLY` or `FILTER` over a per-arm
+alias returns an empty result set with a `SEARCH_VALUE_NOT_FOUND` warning
+rather than an error, and a `GROUPBY` reducer over one returns `-inf` for most
+groups. Those are soft failures, not a capability; recording them would pin
+Redis's degraded answer as the target.
+
+When the aliases become reachable these will start matching, the run will
+print `XPASS`, and both the `xfail=True` in `generate_hybrid.py` and this
+section should be removed.
+
+### 5.5. Reference engine image — TODO
 
 **Status:** temporary.
 

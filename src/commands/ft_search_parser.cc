@@ -34,6 +34,7 @@ namespace valkey_search {
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};
 constexpr int kMaxKnn{100000};
+constexpr absl::string_view kMaxTimeoutMsConfig{"max-timeout-ms"};
 
 /// Register the "--max-knn" flag. Controls the max KNN parameter for vector
 /// search.
@@ -45,9 +46,24 @@ static auto max_knn =
         .WithValidationCallback(CHECK_RANGE(1, kMaxKnn, kMaxKnnConfig))
         .Build();
 
+/// Register the "--max-timeout-ms" flag. Controls the maximum allowed TIMEOUT
+/// value, in milliseconds, for FT.SEARCH and FT.AGGREGATE.
+static auto max_timeout_ms =
+    vmsdk::config::NumberBuilder(kMaxTimeoutMsConfig,   // name
+                                 query::kMaxTimeoutMs,  // default timeout
+                                 1,                     // min timeout
+                                 query::kMaxTimeoutMs)  // max timeout
+        .WithValidationCallback(
+            CHECK_RANGE(1, query::kMaxTimeoutMs, kMaxTimeoutMsConfig))
+        .Build();
+
 namespace options {
 vmsdk::config::Number &GetMaxKnn() {
   return dynamic_cast<vmsdk::config::Number &>(*max_knn);
+}
+
+vmsdk::config::Number &GetMaxTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_timeout_ms);
 }
 
 }  // namespace options
@@ -75,12 +91,13 @@ absl::Status Verify(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
@@ -302,12 +319,13 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(

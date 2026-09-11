@@ -52,8 +52,9 @@ class VectorType : public VectorBase {
 
   // Convert an ASCII "[1.0, 2.0, ...]" query into a binary payload sized
   // sizeof(T) per element, with the format conversion appropriate to T.
-  vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
+  vmsdk::UniqueValkeyString NormalizeStringAttribute(
+      vmsdk::UniqueValkeyString attribute) const override;
+  float ComputeReciprocalMagnitude(absl::string_view record) const override;
 
  protected:
   VectorType(IndexerType indexer_type, int dimensions,
@@ -63,7 +64,6 @@ class VectorType : public VectorBase {
                    attribute_identifier, db_num) {}
 
   size_t GetDataTypeSize() const override { return sizeof(T); }
-  float ComputeReciprocalMagnitude(absl::string_view record) const override;
 
   // Build `space_` from the distance metric and stamp distance_metric_
   // and normalize_ on the base. Called by the leaves' Create() /

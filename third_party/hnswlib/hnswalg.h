@@ -69,7 +69,7 @@ class HierarchicalNSW
   std::mutex global;
   std::vector<std::mutex> link_list_locks_;
 
-  tableint enterpoint_node_{0};
+  std::atomic<tableint> enterpoint_node_{0};
 
   size_t size_links_level0_{0};
   size_t offsetData_{0}, offsetLevel0_{0}, label_offset_{0};
@@ -160,7 +160,8 @@ class HierarchicalNSW
         std::unique_ptr<VisitedListPool>(new VisitedListPool(1, max_elements));
 
     // initializations for special treatment of the first node
-    enterpoint_node_ = -1;
+    enterpoint_node_.store(static_cast<tableint>(-1),
+                           std::memory_order_relaxed);
     maxlevel_ = -1;
 
     linkLists_ = std::make_unique<ChunkedArray>(
@@ -839,7 +840,7 @@ class HierarchicalNSW
     size += sizeof(label_offset_);
     size += sizeof(offsetData_);
     size += sizeof(maxlevel_);
-    size += sizeof(enterpoint_node_);
+    size += sizeof(tableint);
     size += sizeof(maxM_);
 
     size += sizeof(maxM0_);
@@ -870,7 +871,8 @@ class HierarchicalNSW
     header.set_label_offset(label_offset_);
     header.set_offset_data(size_links_level0_);
     header.set_max_level(maxlevel_);
-    header.set_enterpoint_node(enterpoint_node_);
+    header.set_enterpoint_node(
+        enterpoint_node_.load(std::memory_order_relaxed));
     header.set_max_m(maxM_);
     header.set_max_m_0(maxM0_);
     header.set_m(M_);
@@ -962,7 +964,8 @@ class HierarchicalNSW
         header->serialize_size_data_per_element();
     label_offset_ = header->label_offset();
     maxlevel_ = header->max_level();
-    enterpoint_node_ = header->enterpoint_node();
+    enterpoint_node_.store(header->enterpoint_node(),
+                           std::memory_order_relaxed);
     maxM_ = header->max_m();
     maxM0_ = header->max_m_0();
     M_ = header->m();
@@ -1029,7 +1032,8 @@ class HierarchicalNSW
         // Sanity upper bound on the maxlevel_ to ensure an entrypoint with
         // a crazy large level and corresponding linked list isn't loaded.
         loadCheck(maxlevel_ <= 256, "max level above expected range");
-        loadCheck(enterpoint_node_ < target_element_count,
+        loadCheck(enterpoint_node_.load(std::memory_order_relaxed) <
+                      target_element_count,
                   "enterpoint_node is out of range");
       }
 
@@ -1160,8 +1164,10 @@ class HierarchicalNSW
     // short-circuit also guards the array access if validation is disabled and
     // enterpoint_node_ is out of range.
     if (cur_element_count_ > 0) {
-      loadCheck(enterpoint_node_ < cur_element_count_ &&
-                    element_levels_[enterpoint_node_] == maxlevel_,
+      tableint enterpoint_node =
+          enterpoint_node_.load(std::memory_order_relaxed);
+      loadCheck(enterpoint_node < cur_element_count_ &&
+                    element_levels_[enterpoint_node] == maxlevel_,
                 "enterpoint node is not at max_level");
     }
     // Every upper-level link must target a slot that actually exists at that
@@ -1419,7 +1425,7 @@ class HierarchicalNSW
     SetDataByInternalId(internalId, std::move(dataPoint));
 
     int maxLevelCopy = maxlevel_;
-    tableint entryPointCopy = enterpoint_node_;
+    tableint entryPointCopy = enterpoint_node_.load(std::memory_order_relaxed);
     // If point to be updated is entry point and graph just contains single
     // element then just return.
     if (entryPointCopy == internalId && cur_element_count_ == 1) return;
@@ -1638,15 +1644,16 @@ class HierarchicalNSW
     // and the new element reaches the top level (curlevel == maxlevelcopy),
     // keep templock held so enterpoint_node_ can be self-healed and updated to
     // the new alive element upon exit.
+    tableint enterpoint_node = enterpoint_node_.load(std::memory_order_acquire);
     bool should_heal_root =
-        ((signed)enterpoint_node_ != -1 && curlevel == maxlevelcopy &&
-         isMarkedDeleted(enterpoint_node_));
+        ((signed)enterpoint_node != -1 && curlevel == maxlevelcopy &&
+         isMarkedDeleted(enterpoint_node));
     if (curlevel < maxlevelcopy ||
         (curlevel == maxlevelcopy && !should_heal_root)) {
       templock.unlock();
     }
     element_levels_[cur_c] = curlevel;
-    tableint currObj = enterpoint_node_;
+    tableint currObj = enterpoint_node;
 
     memset((*data_level0_memory_)[cur_c] + offsetLevel0_, 0,
            size_data_per_element_);
@@ -1715,7 +1722,7 @@ class HierarchicalNSW
               EvaluateDistance(data_point, GetDataByInternalId(currObj),
                                isMarkedDeleted(currObj)),
               currObj);
-          tableint ep = enterpoint_node_;
+          tableint ep = enterpoint_node_.load(std::memory_order_acquire);
           if ((signed)ep != -1 && ep != currObj && !isMarkedDeleted(ep)) {
             top_candidates.emplace(
                 EvaluateDistance(data_point, GetDataByInternalId(ep), false),
@@ -1728,14 +1735,14 @@ class HierarchicalNSW
       }
     } else {
       // Do nothing for the first element
-      enterpoint_node_ = 0;
+      enterpoint_node_.store(0, std::memory_order_release);
       maxlevel_ = curlevel;
     }
 
     // Update enterpoint_node_ if level increased or if self-healing a tombstone
     // root.
     if (curlevel > maxlevelcopy || should_heal_root) {
-      enterpoint_node_ = cur_c;
+      enterpoint_node_.store(cur_c, std::memory_order_release);
       maxlevel_ = curlevel;
     }
     return cur_c;
@@ -1757,10 +1764,9 @@ class HierarchicalNSW
     std::priority_queue<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
-    tableint currObj = enterpoint_node_;
-    dist_t curdist =
-        EvaluateDistance(query_data, GetDataByInternalId(enterpoint_node_),
-                         isMarkedDeleted(enterpoint_node_));
+    tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
+    dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj),
+                                      isMarkedDeleted(currObj));
 
     for (int level = maxlevel_; level > 0; level--) {
       bool changed = true;
@@ -1824,10 +1830,9 @@ class HierarchicalNSW
     std::vector<std::pair<dist_t, labeltype>> result;
     if (cur_element_count_ == 0) return result;
 
-    tableint currObj = enterpoint_node_;
-    dist_t curdist =
-        EvaluateDistance(query_data, GetDataByInternalId(enterpoint_node_),
-                         isMarkedDeleted(enterpoint_node_));
+    tableint currObj = enterpoint_node_.load(std::memory_order_acquire);
+    dist_t curdist = EvaluateDistance(query_data, GetDataByInternalId(currObj),
+                                      isMarkedDeleted(currObj));
 
     for (int level = maxlevel_; level > 0; level--) {
       bool changed = true;

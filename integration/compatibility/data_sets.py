@@ -295,6 +295,9 @@ def compute_data_sets(vector_data_type="FLOAT32"):
     data["bad vectors"] = {}
     data["hard strings"] = {}
     data["tag special chars"] = {}
+    data["array inputs"] = {}
+    data["array inputs empty"] = {}
+    data["array compare"] = {}
     vec_algos = ["flat", "hnsw"]
     metrics = ["cosine", "ip", "l2"]
     for algo in vec_algos:
@@ -512,6 +515,104 @@ def compute_data_sets(vector_data_type="FLOAT32"):
             )
             for i in range(20)
         ]
+        #
+        # Array inputs: feeds the ARRAY-valued (TOLIST) downstream tests.
+        # Three t1 groups of three keys each, so a TOLIST over a group yields a
+        # multi-element array. Properties the tests rely on:
+        #   - groups ga and gc collect the same n1 values, so two different
+        #     groups produce *equal* arrays (array as a group key);
+        #   - n2 repeats within gb and gc, so tolist(@n2) is shorter than
+        #     tolist(@n1) there and array/array operations see both a matching
+        #     and a mismatched length in one reply;
+        #   - n1 mixes negative, fractional and positive values (log/sqrt);
+        #   - t2 mixes case and repeats across groups (lower/upper/startswith);
+        #   - n3 is a unix timestamp and t3 a parseable date, one per group.
+        #
+        array_input_rows = [
+            # t1,   n1,   n2,          n3, t2,          t3
+            ("ga",    1,   10, 1700000000, "apple",     "2024-01-01"),
+            ("ga",    2,   20, 1700086400, "Banana",    "2024-01-01"),
+            ("ga",    3,   30, 1700172800, "cherry",    "2024-01-01"),
+            ("gb",   -1,    5, 1700259200, "delta",     "2024-01-02"),
+            ("gb",  0.5,    5, 1700345600, "Echo",      "2024-01-02"),
+            ("gb",    4,   25, 1700432000, "foxtrot",   "2024-01-02"),
+            ("gc",    1,  100, 1700518400, "apple",     "2024-01-03"),
+            ("gc",    2,  200, 1700604800, "Banana",    "2024-01-03"),
+            ("gc",    3,  200, 1700691200, "cherry",    "2024-01-03"),
+        ]
+        data["array inputs"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array inputs"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "n3": row[3],
+                    "t2": row[4],
+                    "t3": row[5],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i, row in enumerate(array_input_rows)
+        ]
+        #
+        # Array inputs, empty case: every key has n1, so the base query matches
+        # both groups, but no key in group "ge" has n2 or t2 at all. A TOLIST
+        # over those fields therefore collects nothing and yields an empty
+        # array, next to a non-empty one from group "ga" in the same reply.
+        #
+        array_empty_rows = [
+            # t1,  n1,   n2,       t2
+            ("ga",  1,   10,   "apple"),
+            ("ga",  2,   20,  "Banana"),
+            ("ge",  3, None,      None),
+            ("ge",  4, None,      None),
+        ]
+        data["array inputs empty"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array inputs empty"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {k: v for k, v in {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "t2": row[3],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                }.items() if v is not None},
+            )
+            for i, row in enumerate(array_empty_rows)
+        ]
+        #
+        # Array compare: group shapes that tell apart the possible rules for
+        # comparing two arrays. Per group, TOLIST(n1) and TOLIST(n2) collect:
+        #   g1  {1,2} vs {1,2}    identical
+        #   g2  {1,9} vs {1,2}    same first element, differing second
+        #   g3  {1,2} vs {1,2,3}  one is a prefix of the other
+        #   g4  {2}   vs {1,9}    differing first element
+        # Comparing by first element only, lexicographically, or by length all
+        # give different answers across these four.
+        #
+        array_compare_rows = [
+            # t1,  n1, n2
+            ("g1",  1,  1), ("g1", 2, 2),
+            ("g2",  1,  1), ("g2", 9, 2),
+            ("g3",  1,  1), ("g3", 2, 2), ("g3", 1, 3),
+            ("g4",  2,  1), ("g4", 2, 9),
+        ]
+        data["array compare"][CREATES_KEY(key_type)] = [create_cmds[key_type].format(schema)]
+        data["array compare"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{i:02d}",
+                {
+                    "t1": row[0],
+                    "n1": row[1],
+                    "n2": row[2],
+                    "v1": array_encode(key_type, [i for _ in range(VECTOR_DIM)]),
+                },
+            )
+            for i, row in enumerate(array_compare_rows)
+        ]
         for algo in vec_algos:
             for metric in metrics:
                 vector_points = [-1.5, 1.5]
@@ -666,16 +767,51 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     return data
 
 ### Helper Functions ###
+### Sort key prefix data set (issue #1353, item 4) ###
+#
+# Fixture for the WITHSORTKEYS sort-key prefix cases (generate_sortkey.py).
+# future JSON variant: add SETS/CREATES "json" entries here.
+SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
+
+
+def compute_sortkey_data_sets():
+    schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
+              "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2")
+    docs = [
+        ("hash:skp1", {"m": "all", "z": "zebra", "t": "cat", "n": "3",
+                       "f": "3.5", "vec": b"CCCCCCCC"}),
+        ("hash:skp2", {"m": "all", "z": "apple", "t": "ant", "n": "1",
+                       "f": "1.5", "vec": b"AAAAAAAA"}),
+        ("hash:skp3", {"m": "all", "z": "mango", "t": "bee", "n": "2",
+                       "f": "2.5", "vec": b"BBBBBBBB"}),
+    ]
+    return {
+        SORTKEY_PREFIX_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
+            ],
+        }
+    }
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        data_source = "text" if data_set in TEXT_DATASETS else "vector"
+        if data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set == SORTKEY_PREFIX_DATA_SET:
+            data_source = "sortkey"
+        else:
+            data_source = "vector"
 
     match data_source:
         case "vector":
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]

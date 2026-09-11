@@ -18,7 +18,6 @@
 #include <optional>
 #include <queue>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -27,11 +26,8 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -46,11 +42,10 @@
 #include "src/valkey_search_options.h"
 #include "src/vector_registry.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "third_party/hnswlib/simsimd.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -177,28 +172,19 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
-std::shared_ptr<const VectorRecord> VectorBase::GetOrConstructVectorRecord(
-    const InternedStringPtr &key, absl::string_view record) const {
-  auto [vector_record, vector_record_size] =
-      VectorRegistry::Instance().LookupRecord(
-          key, interned_attribute_identifier_, db_num_);
-  if (vector_record && vector_record_size == record.size() &&
-      std::memcmp(vector_record->GetRawVector(), record.data(),
-                  record.size()) == 0) {
-    return vector_record;
-  }
-  float reciprocal_magnitude = ComputeReciprocalMagnitude(record);
-  return VectorRecord::Construct(record, reciprocal_magnitude,
-                                 vector_allocator_.get());
+VectorBase::~VectorBase() {
+  vmsdk::VerifyMainThread();
+  VectorRegistry::Instance().RemoveIndexKeys(
+      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
 }
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
-                                                   absl::string_view record) {
-  if (!IsValidSizeVector(record)) {
+                                                   AttributeData &&data) {
+  CHECK(data.IsVector());
+  if (!IsValidSizeVector(data.GetLength())) {
     return RecordResult::kInvalidData;
   }
-
-  auto vector_record = GetOrConstructVectorRecord(key, record);
+  auto vector_record = data.ConsumeVector();
   float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
@@ -239,21 +225,19 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 }
 
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
-    const InternedStringPtr &key, absl::string_view record) {
-  if (!IsValidSizeVector(record)) {
-    auto id_res = GetInternalId(key);
-    RemoveRecordDueToError(
-        key, id_res.ok() ? std::make_optional(*id_res) : std::nullopt);
+    const InternedStringPtr &key, AttributeData &&data) {
+  CHECK(data.IsVector());
+  if (!IsValidSizeVector(data.GetLength())) {
+    [[maybe_unused]] auto res =
+        RemoveRecord(key, indexes::DeletionType::kRecord);
     return RecordResult::kInvalidData;
   }
-  auto vector_record = GetOrConstructVectorRecord(key, record);
+  auto vector_record = data.ConsumeVector();
   float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(bool res,
-                         UpdateMetadata(key, magnitude, vector_record.get()));
-  if (!res) {
-    // The new vector is identical to the tracked one: nothing to re-index. This
-    // is a no-op, not invalid data.
+  VMSDK_ASSIGN_OR_RETURN(
+      bool res, IsVectorUnchanged(key, magnitude, vector_record.get()));
+  if (res) {
     return RecordResult::kMissing;
   }
 
@@ -331,15 +315,10 @@ void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
           << internal_id.value() << ": " << remove_vector_res.message();
     }
   }
-  VectorRegistry::Instance().UntrackIfUnused(
-      key, interned_attribute_identifier_, db_num_);
 }
 
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     const InternedStringPtr &key) {
-  if (key->Str().empty()) {
-    return std::nullopt;
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
@@ -359,9 +338,6 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
 
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
                                               float magnitude) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
@@ -375,12 +351,9 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
   return id;
 }
 
-absl::StatusOr<bool> VectorBase::UpdateMetadata(
+absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     const InternedStringPtr &key, float magnitude,
     const VectorRecord *vector_record) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
   absl::ReaderMutexLock lock(&resize_mutex_);
   const VectorRecord *stored_record;
   {
@@ -393,13 +366,16 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
     it->second.magnitude = magnitude;
     auto &stored_ptr = GetVector(it->second.internal_id);
     if (!stored_ptr) {
-      return true;  // No stored record, so vectors are definitely not matching
+      return false;  // No stored record, so vectors are not matching
     }
     stored_record = stored_ptr.get();
   }
-  // Returns true if the vectors are not matching
+  if (stored_record == vector_record) {
+    return true;  // Fast path: shared VectorRegistry record, definitely
+                  // matching
+  }
   return (std::memcmp(stored_record->GetRawVector(),
-                      vector_record->GetRawVector(), GetVectorDataSize()) != 0);
+                      vector_record->GetRawVector(), GetVectorDataSize()) == 0);
 }
 
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -454,6 +430,7 @@ absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
@@ -474,22 +451,18 @@ absl::Status VectorBase::LoadTrackedKeys(
         ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
     CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
                    << interned_key->Str();
-    auto record = attribute_data_type->GetRecord(
+    auto attribute_status = attribute_data_type->GetAttribute(
         ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
-    CHECK(record.ok());
-    if (attribute_data_type->RecordsProvidedAsString() && record.value()) {
-      record.value() = NormalizeStringRecord(std::move(record.value()));
+    CHECK(attribute_status.ok());
+    auto attribute_val = std::move(attribute_status.value());
+    if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
+      attribute_val = NormalizeStringAttribute(std::move(attribute_val));
     }
-    if (!record.value()) {
-      return absl::DataLossError(absl::StrCat(
-          "Missing or invalid vector payload for key: ", interned_key->Str()));
-    }
-    auto vector_record = VectorRegistry::Instance().Track(
-        interned_key, interned_attribute_identifier_, record.value().get(),
-        vector_allocator_.get(), attribute_data_type->ToProto(), db_num_,
-        GetVectorDataType());
+    auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
+        interned_key, attribute_val.get(), attribute_data_type->ToProto(),
+        db_num_, this);
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
-    save_vector = vector_record;
+    save_vector = std::move(vector_record_with_size.vector_record);
   }
   // Use max label from label_lookup_
   inc_id_ = GetMaxLoadedLabel() + 1;
@@ -584,12 +557,6 @@ absl::Status VectorBase::ForEachTrackedKey(
 absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   return absl::OkStatus();
-}
-
-VectorBase::~VectorBase() {
-  VectorRegistry::Instance().BatchUntrackIfUnused(
-      interned_attribute_identifier_, std::move(tracked_metadata_by_key_),
-      db_num_);
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

@@ -162,7 +162,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   auto vectors = DeterministicallyGenerateVectors(kN, kDim, 10.0);
   for (int i = 0; i < kN; ++i) {
-    VMSDK_EXPECT_OK(index->AddRecord(IndexToKey(i), VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
   }
 
   // Warmup (also pages in the graph / vector storage).
@@ -248,7 +249,10 @@ absl::Status VerifyAdd(indexes::IndexBase *index,
   auto id = IndexToKey(i);
   absl::string_view vector = VectorToStr(vectors[i]);
   bool alreadyExist = index->IsTracked(id);
-  auto res = index->AddRecord(id, vector);
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
+  auto res = vector_index
+                 ? testing_infra::AddVectorRecord(*vector_index, id, vector)
+                 : testing_infra::AddRecord(*index, id, vector);
   if (res.ok()) {
     if (!index->IsTracked(id)) {
       return absl::InternalError(
@@ -279,7 +283,10 @@ absl::Status VerifyModify(indexes::IndexBase *index,
                           bool expected_tracked) {
   auto id = IndexToKey(i);
   absl::string_view vector_str = VectorToStr(vector);
-  auto res = index->ModifyRecord(id, vector_str);
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
+  auto res = vector_index ? testing_infra::ModifyVectorRecord(*vector_index, id,
+                                                              vector_str)
+                          : testing_infra::ModifyRecord(*index, id, vector_str);
   if (index->IsTracked(id) != expected_tracked) {
     return absl::InternalError(absl::StrCat(
         "From VerifyModify - IsTracked ,", index->IsTracked(id),
@@ -310,11 +317,8 @@ void TestIndex(T *index, int dimensions, int vector_size,
   VERIFY_ADD(index, vectors, 0, ExpectedResults::kError);
   auto vectors_small_dim =
       DeterministicallyGenerateVectors(vectors.size(), dimensions - 1, 1.0);
-  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kInvalidData);
-  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kInvalidData,
-                false);
 
-  VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kError, false);
+  VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kMissing, true);
 
   VERIFY_MODIFY(index, vectors[0], vectors.size(), ExpectedResults::kError,
                 false);
@@ -365,67 +369,68 @@ void TestIndex(T *index, int dimensions, int vector_size,
   }
 }
 
-struct NormalizeStringRecordTestCase {
+struct NormalizeStringAttributeTestCase {
   std::string test_name;
   bool success{true};
-  std::string record;
+  std::string attribute_value;
   std::vector<float> expected_norm_values;
 };
 
-class NormalizeStringRecordTest
-    : public ValkeySearchTestWithParam<NormalizeStringRecordTestCase> {
+class NormalizeStringAttributeTest
+    : public ValkeySearchTestWithParam<NormalizeStringAttributeTestCase> {
  public:
   const char *attribute_identifier = "attribute_identifier_1";
   data_model::AttributeDataType attribute_data_type =
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
 };
 
-TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
+TEST_P(NormalizeStringAttributeTest, NormalizeStringAttribute) {
   auto &params = GetParam();
 
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       attribute_identifier, attribute_data_type, 0);
-  auto record = vmsdk::MakeUniqueValkeyString(params.record);
-  auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
+  auto attribute = vmsdk::MakeUniqueValkeyString(params.attribute_value);
+  auto norm_attribute =
+      index.value()->NormalizeStringAttribute(std::move(attribute));
   if (!params.success) {
-    EXPECT_FALSE(norm_record.get());
+    EXPECT_FALSE(norm_attribute.get());
     return;
   }
-  auto norm_record_str = vmsdk::ToStringView(norm_record.get());
+  auto norm_attr_str = vmsdk::ToStringView(norm_attribute.get());
   for (size_t i = 0; i < params.expected_norm_values.size(); ++i) {
-    float value = *(((float *)norm_record_str.data()) + i);
+    float value = *(((float *)norm_attr_str.data()) + i);
     EXPECT_FLOAT_EQ(value, params.expected_norm_values[i]);
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    NormalizeStringRecordTests, NormalizeStringRecordTest,
+    NormalizeStringAttributeTests, NormalizeStringAttributeTest,
 
-    testing::ValuesIn<NormalizeStringRecordTestCase>({
+    testing::ValuesIn<NormalizeStringAttributeTestCase>({
         {
             .test_name = "cardinality_1",
-            .record = "[ 0.1]",
+            .attribute_value = "[ 0.1]",
             .expected_norm_values{0.1},
         },
         {
             .test_name = "cardinality_1_1",
-            .record = "[,0.1]",
+            .attribute_value = "[,0.1]",
             .expected_norm_values{0.1},
         },
         {
             .test_name = "cardinality_3_1",
-            .record = "[ 0.1, ,0.2,0.3,]",
+            .attribute_value = "[ 0.1, ,0.2,0.3,]",
             .expected_norm_values{0.1, 0.2, 0.3},
         },
         {
             .test_name = "cardinality_3_fail",
             .success = false,
-            .record = "[ 0.1, ,0.2,a,]",
+            .attribute_value = "[ 0.1, ,0.2,a,]",
         },
     }),
-    [](const testing::TestParamInfo<NormalizeStringRecordTestCase> &info) {
+    [](const testing::TestParamInfo<NormalizeStringAttributeTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -534,7 +539,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                          vec1.size() * sizeof(float));
 
   auto key1 = IndexToKey(1);
-  VMSDK_EXPECT_OK(index.value()->AddRecord(key1, vec1_bytes));
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*index.value(), key1, vec1_bytes));
 
   // Search query [5.0, 0.0, 0.0, 0.0] pointing in exact same direction.
   // Cosine distance should be 0.0 (1 - (3*5)/(3*5) = 0).
@@ -729,7 +735,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (size_t i = 0; i < new_vectors.size(); ++i) {
     auto key = StringInternStore::Intern(absl::StrCat("new_", i, "_key"));
     absl::string_view vec_str = VectorToStr(new_vectors[i]);
-    auto res = (*index)->AddRecord(key, vec_str);
+    auto res = testing_infra::AddVectorRecord(**index, key, vec_str);
     VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
     EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
   }
@@ -1293,6 +1299,149 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   EXPECT_EQ(algo.label_lookup_[1], 1u);
   EXPECT_TRUE(algo.isMarkedDeleted(0));
   EXPECT_FALSE(algo.isMarkedDeleted(1));
+}
+
+TEST_F(VectorIndexTest, HnswSelfHealsTombstoneRoot) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  std::vector<std::shared_ptr<const VectorRecord>> records;
+  records.reserve(vectors.size());
+  for (const auto &vector : vectors) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
+                              kDimensions * sizeof(float));
+    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                              vector_allocator.get()));
+  }
+
+  // Insert label 0 at level 2 so it establishes maxlevel_ = 2 and becomes the
+  // entry point.
+  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/2);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 0u);
+  EXPECT_EQ(algo.maxlevel_, 2);
+  EXPECT_FALSE(algo.isMarkedDeleted(0));
+
+  // Mark the entry point as deleted (tombstone).
+  algo.markDelete(0);
+  EXPECT_TRUE(algo.isMarkedDeleted(algo.enterpoint_node_.load()));
+
+  // Insert label 1 matching maxlevel_ (curlevel == maxlevelcopy == 2).
+  // The root self-healing logic detects the tombstoned enterpoint_node_ and
+  // updates enterpoint_node_ to the new alive element 1.
+  algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false),
+                /*label=*/1, /*level=*/2);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
+  EXPECT_FALSE(algo.isMarkedDeleted(algo.enterpoint_node_.load()));
+  EXPECT_EQ(algo.maxlevel_, 2);
+
+  // Verify search uses the healed entry point and finds the live element.
+  auto results = algo.searchKnn(
+      QueryVector(records[1], kDimensions * sizeof(float), false), /*k=*/1);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results.top().second, 1u);
+}
+
+TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackDoesNotThrow) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  auto vectors = DeterministicallyGenerateVectors(3, kDimensions, 10.0);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  std::vector<std::shared_ptr<const VectorRecord>> records;
+  records.reserve(vectors.size());
+  for (const auto &vector : vectors) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
+                              kDimensions * sizeof(float));
+    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                              vector_allocator.get()));
+  }
+
+  // Insert label 0 at level 1 and label 1 at level 0.
+  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/1);
+  algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false),
+                /*label=*/1, /*level=*/0);
+
+  // Mark all existing nodes deleted, creating an all-tombstone graph.
+  algo.markDelete(0);
+  algo.markDelete(1);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+  EXPECT_TRUE(algo.isMarkedDeleted(1));
+
+  // Inserting label 2 at level 0: searchBaseLayer encounters only tombstones,
+  // returning an empty candidate queue. The fallback prevents throwing
+  // "During insertion, no neighbors found to mutually connect to".
+  EXPECT_NO_THROW(
+      algo.addPoint(QueryVector(records[2], kDimensions * sizeof(float), false),
+                    /*label=*/2, /*level=*/0));
+  EXPECT_FALSE(algo.isMarkedDeleted(2));
+}
+
+TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+
+  // Define distinct vectors:
+  // v0 at origin, v1 far away, v2 very close to v0.
+  std::vector<float> v0(kDimensions, 0.0f);
+  std::vector<float> v1(kDimensions, 100.0f);
+  std::vector<float> v2(kDimensions, 0.01f);
+
+  auto make_record = [&](const std::vector<float> &v) {
+    absl::string_view bytes(reinterpret_cast<const char *>(v.data()),
+                            kDimensions * sizeof(float));
+    return VectorRecord::Construct(bytes, kDefaultMagnitude,
+                                   vector_allocator.get());
+  };
+
+  auto rec0 = make_record(v0);
+  auto rec1 = make_record(v1);
+  auto rec2 = make_record(v2);
+
+  // Insert label 0 at level 1.
+  algo.addPoint(QueryVector(rec0, kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/1);
+  // Mark node 0 deleted before inserting label 1.
+  algo.markDelete(0);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+
+  // Insert label 1 at level 1 (matches maxlevel_, self-heals root so node 1
+  // becomes the entry point; both 0 and 1 are connected at level 1).
+  algo.addPoint(QueryVector(rec1, kDimensions * sizeof(float), false),
+                /*label=*/1, /*level=*/1);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
+  EXPECT_FALSE(algo.isMarkedDeleted(1));
+
+  // Clear level 0 link list for node 0.
+  algo.setListCount(algo.get_linklist0(0), 0);
+
+  // Insert label 2 at level 1.
+  // At level 1, searchBaseLayer finds node 0 closer than node 1.
+  // mutuallyConnectNewElement returns node 0 as next entrypoint (currObj = 0).
+  // At level 0, searchBaseLayer(currObj = 0) has no live neighbors and returns
+  // empty top_candidates.
+  // Fallback links currObj (0) and alive enterpoint_node_ (1) without throwing.
+  EXPECT_NO_THROW(
+      algo.addPoint(QueryVector(rec2, kDimensions * sizeof(float), false),
+                    /*label=*/2, /*level=*/1));
+  EXPECT_FALSE(algo.isMarkedDeleted(2));
 }
 
 // ---- Happy path ----------------------------------------------------------

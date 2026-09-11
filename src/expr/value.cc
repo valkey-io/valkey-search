@@ -11,6 +11,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
 
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
@@ -38,9 +39,19 @@ static bool IsInf(const double& d) {
   return ((v & kExponentMask) == kExponentMask) && ((v & kMantissaMask) == 0);
 }
 
+// Redisearch has no string form for an array and compares it as the empty
+// string -- `@array == ""` is true there, for an empty and a populated array
+// alike. Matching that keeps string comparisons against an array compatible.
+static constexpr absl::string_view kArrayAsString{""};
+
 Value::Value(double d) { value_ = d; }
 
 bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
+
+bool Value::IsMissing() const {
+  auto nil = std::get_if<Nil>(&value_);
+  return nil && nil->IsMissing();
+}
 
 bool Value::IsBool() const { return std::get_if<bool>(&value_); }
 
@@ -95,11 +106,29 @@ std::string FormatDouble(double d) {
     } else {
       return "nan";
     }
-  } else {
-    char storage[32];
-    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d);
+  }
+  char storage[32];
+  // Redisearch splits on integrality, and so does this. Integers print in
+  // fixed notation: "%.12g" would turn an epoch-millisecond 1700000000123
+  // into "1.70000000012e+12" (the #1262 precision loss), and shortest-
+  // round-trip to_chars would shorten 1700000000 to "1.7e+09". Above 2^53
+  // integrality is an artifact of the binary representation, and the fixed
+  // expansion of a value like 1e300 would not fit storage, so the fixed path
+  // stops at 1e17 -- still well past epoch microseconds.
+  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
+                                   std::chars_format::fixed, 0);
+    CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
+                             << d << ": " << std::make_error_code(ec).message();
     return {storage, ptr};
   }
+  // Everything else takes Redisearch's 12 significant digits. to_chars would
+  // render sqrt(50) as 7.0710678118654755 where Redisearch says
+  // 7.07106781187, and that difference reaches the reply.
+  size_t output_chars = snprintf(storage, sizeof(storage), "%.12g", d);
+  CHECK(output_chars < sizeof(storage))
+      << "FormatDouble overflowed formatting " << d;
+  return {storage, output_chars};
 }
 
 std::optional<bool> Value::AsBool() const {
@@ -111,6 +140,10 @@ std::optional<bool> Value::AsBool() const {
       return true;
     }
     return !(*result == 0.0);
+  }
+  if (IsArray()) {
+    // Redisearch reads an array as truthy; empty follows the string rule below.
+    return !IsEmptyArray();
   }
   // 1.2.1 fix: non-empty strings are truthy (matches Redisearch). Pre-1.2.1
   // every non-numeric value (Nil, both string variants) evaluated to false.
@@ -171,6 +204,8 @@ std::optional<absl::string_view> Value::AsStringView() const {
     return *result;
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return absl::string_view(*result);
+  } else if (std::holds_alternative<Array>(value_)) {
+    return kArrayAsString;
   } else {
     return std::nullopt;
   }
@@ -185,8 +220,8 @@ std::optional<std::string> Value::AsString() const {
     return std::string(*result);
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
-  } else if (auto result = std::get_if<Value::Array>(&value_)) {
-    return "";
+  } else if (std::holds_alternative<Array>(value_)) {
+    return std::string(kArrayAsString);
   } else {
     return std::nullopt;
   }
@@ -222,6 +257,19 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   } else if (v.IsString()) {
     // IsString() guarantees AsStringView() succeeds.
     return os << "'" << *v.AsStringView() << "'";
+  } else if (v.IsArray()) {
+    // GroupKey streams its elements, and expanding a multi-value key puts
+    // arrays here, so this has to render rather than abort. Elements recurse,
+    // which also covers nested arrays.
+    auto array = v.GetArray();
+    os << '[';
+    for (size_t i = 0; i < array->size(); ++i) {
+      if (i > 0) {
+        os << ',';
+      }
+      os << (*array)[i];
+    }
+    return os << ']';
   }
   CHECK(false);
 }
@@ -308,10 +356,9 @@ Ordering Compare(const Value& l, const Value& r) {
       return Ordering::kGREATER;
     }
     return Ordering::kEQUAL;
-  } else if (l.IsArray() || r.IsArray()) {
-    // Array vs scalar
-    return Ordering::kUNORDERED;
   }
+  // Array vs scalar falls through to the string comparison below, where the
+  // array compares as kArrayAsString -- what Redisearch does.
 
   // Need to handle non-equivalent types.
   // Prefer to promote to double unless that fails.
@@ -594,9 +641,6 @@ static Value NumericUnaryNil(const Value& o, const char* fname) {
 }
 
 Value FuncFloor(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncFloor);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "floor couldn't convert to a double");
@@ -605,9 +649,6 @@ Value FuncFloor(const Value& o) {
 }
 
 Value FuncCeil(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncCeil);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "ceil couldn't convert to a double");
@@ -616,9 +657,6 @@ Value FuncCeil(const Value& o) {
 }
 
 Value FuncAbs(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncAbs);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "abs couldn't convert to a double");
@@ -627,9 +665,6 @@ Value FuncAbs(const Value& o) {
 }
 
 Value FuncLog(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncLog);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "log couldn't convert to a double");
@@ -638,9 +673,6 @@ Value FuncLog(const Value& o) {
 }
 
 Value FuncLog2(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncLog2);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "log2 couldn't convert to a double");
@@ -649,9 +681,6 @@ Value FuncLog2(const Value& o) {
 }
 
 Value FuncExp(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncExp);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "exp couldn't convert to a double");
@@ -660,9 +689,6 @@ Value FuncExp(const Value& o) {
 }
 
 Value FuncSqrt(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncSqrt);
-  }
   auto d = o.AsDouble();
   if (!d) {
     return NumericUnaryNil(o, "sqrt couldn't convert to a double");
@@ -786,9 +812,6 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
 }
 
 Value FuncLower(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncLower);
-  }
   // 1.2.1 fix: refuse non-string inputs (matches Redisearch — lower(0) → Nil).
   // Pre-1.2.1: passed numeric/bool through via AsStringView, returning
   // their string form unchanged.
@@ -815,9 +838,6 @@ Value FuncLower(const Value& o) {
 }
 
 Value FuncUpper(const Value& o) {
-  if (o.IsArray()) {
-    return ApplyToElements(o.GetArray(), FuncUpper);
-  }
   // See FuncLower above for rationale.
   if (!o.IsString() && VALKEY_SEARCH_COMPATIBILITY_FIX(
                            1, 2, 1, "upper_non_string_to_nil",

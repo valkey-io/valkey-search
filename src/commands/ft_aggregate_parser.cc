@@ -434,7 +434,13 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
 //   SORTBY + LIMIT 0 1000             ->  1000 rows   (a LIMIT raises it)
 //   SORTBY MAX 5 + LIMIT 0 100        ->   100 rows   (a LIMIT outranks MAX)
 //   SORTBY + LIMIT 500 100            ->   100 rows   (the offset counts too)
-//   LIMIT 0 1000 then SORTBY          ->  1000 rows   (already bounded)
+//   LIMIT 0 1000 then SORTBY          ->  1000 rows   (either side counts)
+//
+// Only a LIMIT directly beside the SORTBY counts, on either side. Redisearch
+// folds a SORTBY and a neighbouring LIMIT into one pipeline step, so the two
+// see the same records. Once another stage sits between them -- a GROUPBY,
+// say -- the record count changes and that LIMIT's window says nothing about
+// what the sort has to retain.
 //
 // Before this, SORTBY always truncated to its own max_, so a later LIMIT could
 // only ever see 10 records: `LIMIT 0 1000` returned 10, and `LIMIT 500 100`
@@ -452,31 +458,23 @@ void ResolveSortByBounds(AggregateParameters &params) {
     // MAX 0 is how Redis spells "no MAX", so it falls back to the default.
     size_t resolved = parsed_max == 0 ? SortBy::kDefaultMax : parsed_max;
 
-    const Limit *following = nullptr;
-    for (size_t j = i + 1; j < stages.size(); ++j) {
-      if (auto *limit = dynamic_cast<Limit *>(stages[j].get())) {
-        following = limit;
-        break;
-      }
+    // Only an immediate neighbour bounds this SORTBY. A LIMIT further along
+    // the pipeline is separated by a stage that changes the record count, so
+    // its window is not a bound on what the sort has to keep.
+    const Limit *adjacent =
+        i + 1 < stages.size() ? dynamic_cast<Limit *>(stages[i + 1].get())
+                              : nullptr;
+    if (adjacent == nullptr && i > 0) {
+      adjacent = dynamic_cast<Limit *>(stages[i - 1].get());
     }
-    if (following != nullptr) {
+    if (adjacent != nullptr) {
       // Keep at least what that LIMIT can ask for, offset included. Saturate
       // rather than wrap: a huge offset just means "retain everything".
       const size_t need =
-          following->offset_ > SortBy::kUnbounded - following->limit_
+          adjacent->offset_ > SortBy::kUnbounded - adjacent->limit_
               ? SortBy::kUnbounded
-              : following->offset_ + following->limit_;
+              : adjacent->offset_ + adjacent->limit_;
       resolved = std::max(resolved, need);
-    } else {
-      // No LIMIT downstream. One upstream has already bounded the stream, so
-      // sorting all of what arrives is what Redis does; truncating again here
-      // would drop rows the LIMIT already paid for.
-      for (size_t j = 0; j < i; ++j) {
-        if (dynamic_cast<Limit *>(stages[j].get()) != nullptr) {
-          resolved = SortBy::kUnbounded;
-          break;
-        }
-      }
     }
     sortby->max_ = VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "sortby_max_follows_limit", [&] { return resolved; },

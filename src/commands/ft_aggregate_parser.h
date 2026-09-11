@@ -357,9 +357,9 @@ class SortBy : public Stage {
     Direction direction_;
     std::unique_ptr<expr::Expression> expr_;
   };
-  // Redis keeps 10 sorted records when SORTBY is given neither a MAX nor a
-  // LIMIT to derive a bound from. ResolveSortByBounds() replaces this once the
-  // whole pipeline is known.
+  // Redis keeps 10 sorted records when SORTBY is given neither a MAX nor an
+  // adjacent LIMIT to derive a bound from. ResolveSortByBounds() replaces this
+  // once the whole pipeline is known.
   static constexpr size_t kDefaultMax = 10;
   static constexpr size_t kUnbounded = std::numeric_limits<size_t>::max();
   size_t max_{kDefaultMax};
@@ -379,7 +379,7 @@ class SortBy : public Stage {
       }
       os << k.expr_.get();
     }
-    if (max_) {
+    if (max_ != kUnbounded) {
       os << " MAX:" << max_;
     }
   }

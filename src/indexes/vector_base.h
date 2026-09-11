@@ -49,6 +49,7 @@ class IndexSchema;
 }  // namespace valkey_search
 
 namespace valkey_search::indexes {
+
 constexpr float kDefaultMagnitude = 1.0f;
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
@@ -79,6 +80,21 @@ class VectorRecord {
 
   const float reciprocal_magnitude_;
   char data_[0];  // flexible array member
+};
+
+struct VectorRecordWithSize {
+  std::shared_ptr<VectorRecord> vector_record;
+  size_t size{0};
+
+  bool operator==(const VectorRecordWithSize &other) const = default;
+  bool operator==(std::nullptr_t) const { return vector_record == nullptr; }
+  bool operator!=(std::nullptr_t) const { return vector_record != nullptr; }
+
+  bool operator==(absl::string_view bytes) const {
+    return vector_record != nullptr && size == bytes.size() &&
+           std::memcmp(vector_record->GetRawVector(), bytes.data(), size) == 0;
+  }
+  bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
 };
 
 // Computes 1/||v|| over `size` elements of storage type T. Templated because
@@ -242,19 +258,20 @@ struct TrackedKeyMetadata {
 
 class VectorBase : public IndexBase {
  public:
-  ~VectorBase() override;
-  absl::StatusOr<indexes::RecordResult> AddRecord(
-      const InternedStringPtr &key, absl::string_view record) override
+  absl::StatusOr<indexes::RecordResult> AddRecord(const InternedStringPtr &key,
+                                                  AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
                                     indexes::DeletionType deletion_type =
                                         indexes::DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<indexes::RecordResult> ModifyRecord(
-      const InternedStringPtr &key, absl::string_view record) override
+      const InternedStringPtr &key, AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
+  int GetDBNum() const { return db_num_; }
+  void OnSwapDB(int new_db_num) override { db_num_ = new_db_num; }
   std::unique_ptr<data_model::Index> ToProto() const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
@@ -337,13 +354,15 @@ class VectorBase : public IndexBase {
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
-  Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
+  FixedSizeAllocator *GetVectorAllocator() const {
+    return vector_allocator_.get();
+  }
   int GetDimensions() const { return dimensions_; }
   // Provided by VectorType<T> so the per-element byte width and format
   // conversion come from sizeof(T) + if-constexpr on T instead of a
   // runtime switch on GetVectorDataType().
-  vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override = 0;
+  vmsdk::UniqueValkeyString NormalizeStringAttribute(
+      vmsdk::UniqueValkeyString attribute) const override = 0;
   // Returns the vector data type enum. Used to disambiguate FLOAT16 from
   // BFLOAT16 wherever a byte width alone is ambiguous -- both are 2 bytes, so
   // a size-based check would silently route the wrong format.
@@ -362,11 +381,22 @@ class VectorBase : public IndexBase {
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
       std::optional<size_t> ef_runtime = std::nullopt,
       bool enable_partial_results = false) = 0;
+  bool IsValidSizeVector(size_t size) const {
+    return size == GetVectorDataSize();
+  }
   bool IsValidSizeVector(absl::string_view record) const {
-    return record.size() == GetVectorDataSize();
+    return IsValidSizeVector(record.size());
   }
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
+  }
+  // Computes 1/||record|| interpreting `record` as elements of the concrete
+  // storage type. Implemented by VectorType<T>; VectorBase cannot know the
+  // element width.
+  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
+  ~VectorBase() override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  data_model::AttributeDataType GetAttributeDataType() const {
+    return attribute_data_type_;
   }
 
  protected:
@@ -388,6 +418,12 @@ class VectorBase : public IndexBase {
 #endif  // !SAN_BUILD
   {
   }
+
+  VectorBase(IndexerType indexer_type, int dimensions,
+             data_model::AttributeDataType attribute_data_type,
+             absl::string_view attribute_identifier, int db_num)
+      : VectorBase(indexer_type, dimensions, sizeof(float), attribute_data_type,
+                   attribute_identifier, db_num) {}
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -438,10 +474,6 @@ class VectorBase : public IndexBase {
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
-  // Computes 1/||record|| interpreting `record` as elements of the concrete
-  // storage type. Implemented by VectorType<T>; VectorBase cannot know the
-  // element width.
-  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
   virtual void ToProtoImpl(
       data_model::VectorIndex *vector_index_proto) const = 0;
   virtual absl::Status SaveIndexImpl(
@@ -472,9 +504,9 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr &key,
-                                      float magnitude,
-                                      const VectorRecord *vector_record)
+  absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
+                                         float magnitude,
+                                         const VectorRecord *vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -494,8 +526,6 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float query_magnitude) const;
-  std::shared_ptr<const VectorRecord> GetOrConstructVectorRecord(
-      const InternedStringPtr &key, absl::string_view record) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

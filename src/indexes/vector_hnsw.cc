@@ -40,7 +40,6 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
-#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -65,7 +64,8 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::Create(
   try {
     auto index = std::shared_ptr<VectorHNSW<T>>(
         new VectorHNSW<T>(vector_index_proto.dimension_count(),
-                          attribute_identifier, attribute_data_type, db_num));
+                          attribute_identifier, attribute_data_type, db_num),
+        vmsdk::DestructByMainThread<VectorHNSW<T>>{});
     index->Init(vector_index_proto.distance_metric());
     const auto &hnsw_proto = vector_index_proto.hnsw_algorithm();
 

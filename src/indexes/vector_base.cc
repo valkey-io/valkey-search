@@ -289,6 +289,11 @@ void VectorBase::Init(int dimensions,
     normalize_ = true;
   }
 }
+VectorBase::~VectorBase() {
+  vmsdk::VerifyMainThread();
+  VectorRegistry::Instance().RemoveIndexKeys(
+      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
+}
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
                                                    AttributeData &&data) {
@@ -669,12 +674,6 @@ absl::Status VectorBase::ForEachTrackedKey(
 absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   return absl::OkStatus();
-}
-
-VectorBase::~VectorBase() {
-  vmsdk::VerifyMainThread();
-  VectorRegistry::Instance().RemoveIndexKeys(
-      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

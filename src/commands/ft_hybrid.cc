@@ -230,23 +230,217 @@ std::vector<query::ReturnAttribute> CopyReturnAttributes(
   return out;
 }
 
+// Reads the database fields a revalidation needs for one key. Mirrors what
+// GetContent does before it hands a record to VerifyFilter, minus the
+// reply-shaping: this content is read to make a decision, never returned.
+absl::StatusOr<RecordsMap> FetchRecordForRevalidation(
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    uint32_t db_num, absl::string_view key,
+    const absl::flat_hash_set<absl::string_view> &identifiers,
+    const std::optional<std::string> &vector_identifier) {
+  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num);
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  // NOEXPIRE for the same reason GetContent uses it: lazy expiry deletion
+  // during a read can crash the server.
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
+  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
+  }
+  return attribute_data_type.FetchAllRecords(ctx, vector_identifier,
+                                             key_obj.get(), key, identifiers);
+}
+
+// Brings every arm's own result back in line with the database before the arms
+// are merged.
+//
+// Each arm decided membership and score against the index as it stood while
+// the arms ran. A document mutated after that point is described by neither:
+// it may no longer match the arm at all, and if it does its score belongs to
+// the version that has been overwritten. Fusion reads per-arm ranks as well as
+// raw scores -- RRF scores purely by position within each arm -- so a stale
+// entry does not just misreport one row, it shifts every row below it. That is
+// why this runs before the merge rather than patching the merged list.
+//
+// Only keys whose mutation sequence number moved are touched. For every other
+// neighbor this is one integer compare.
+//
+// What it deliberately does not do: recover a document the mutation made newly
+// matching, or newly near enough to enter the vector arm's top K. Those were
+// never in any arm's list and nothing short of re-running the arms would find
+// them. The single-arm path has the same limit.
+void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
+  vmsdk::VerifyMainThread();
+  if (params.index_schema == nullptr) {
+    return;
+  }
+  // Arm parameters come back in completion order, so they are indexed by the
+  // arm_index each one recorded. An arm that failed to dispatch left a null.
+  std::vector<query::MultiArmShim *> arms(params.per_arm_results.size(),
+                                          nullptr);
+  for (auto &owner : params.retained_arm_owners) {
+    auto *shim = dynamic_cast<query::MultiArmShim *>(owner.get());
+    if (shim != nullptr && shim->arm_index < arms.size()) {
+      arms[shim->arm_index] = shim;
+    }
+  }
+
+  // What the arms' predicates read, plus each vector arm's own field. A JSON
+  // fetch returns exactly the identifiers it is given, so an incomplete set
+  // here would silently fail the predicates it cannot see.
+  absl::flat_hash_set<absl::string_view> identifiers;
+  std::vector<std::optional<std::string>> vector_identifier(arms.size(),
+                                                            std::nullopt);
+  for (size_t i = 0; i < arms.size(); ++i) {
+    if (arms[i] == nullptr) {
+      continue;
+    }
+    for (const auto &id : arms[i]->filter_parse_results.filter_identifiers) {
+      identifiers.insert(id);
+    }
+    if (!arms[i]->attribute_alias.empty()) {
+      auto id = params.index_schema->GetIdentifier(arms[i]->attribute_alias);
+      if (id.ok()) {
+        vector_identifier[i] = *id;
+        identifiers.insert(*vector_identifier[i]);
+      }
+    }
+  }
+
+  auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
+  const auto &attribute_data_type = params.index_schema->GetAttributeDataType();
+  for (size_t i = 0; i < arms.size(); ++i) {
+    auto *arm = arms[i];
+    if (arm == nullptr) {
+      continue;
+    }
+    auto &neighbors = params.per_arm_results[i].neighbors;
+    if (neighbors.empty()) {
+      continue;
+    }
+    // A pure vector arm carries a raw distance in Neighbor::distance; every
+    // other arm carries a relevance score in Neighbor::score. The two are
+    // refreshed differently and sort in opposite directions.
+    const bool arm_score_is_distance =
+        i < params.per_arm_score_is_distance.size() &&
+        params.per_arm_score_is_distance[i];
+    indexes::VectorBase *vector_index = nullptr;
+    if (arm_score_is_distance) {
+      auto index = params.index_schema->GetIndex(arm->attribute_alias);
+      if (index.ok()) {
+        vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
+      }
+    }
+    std::unique_ptr<query::SingleDocumentScorer> document_scorer;
+    std::vector<char> drop(neighbors.size(), 0);
+    bool rescored = false;
+
+    for (size_t j = 0; j < neighbors.size(); ++j) {
+      auto &n = neighbors[j];
+      auto db_seq =
+          params.index_schema->TryGetDbMutationSequenceNumber(n.external_id);
+      if (!db_seq.has_value()) {
+        // The index no longer tracks the key at all, which is what a deleting
+        // mutation leaves behind. No arm should still be offering it.
+        drop[j] = 1;
+        continue;
+      }
+      if (*db_seq == n.sequence_number) {
+        continue;
+      }
+      // Read per arm rather than once per key: the two arms ask for the
+      // document differently, and a vector arm's fetch fails outright when the
+      // vector field is gone, which says nothing about the text arm.
+      auto fetched = FetchRecordForRevalidation(
+          ctx.get(), attribute_data_type, params.db_num, n.external_id->Str(),
+          identifiers, vector_identifier[i]);
+      if (!fetched.ok()) {
+        // The key is gone, or unreadable. Either way this arm no longer
+        // matches it.
+        drop[j] = 1;
+        continue;
+      }
+      const RecordsMap &records = *fetched;
+      auto verification = query::VerifyFilter(
+          *arm, records, n, document_scorer,
+          /*recompute_score_override=*/!arm_score_is_distance);
+      if (!verification.matches) {
+        drop[j] = 1;
+        continue;
+      }
+      if (arm_score_is_distance) {
+        if (vector_index == nullptr || !vector_identifier[i].has_value()) {
+          continue;
+        }
+        auto record = records.find(*vector_identifier[i]);
+        if (record == records.end()) {
+          drop[j] = 1;
+          continue;
+        }
+        auto distance = vector_index->RecomputeDistance(
+            vmsdk::ToStringView(record->second.value.get()), arm->query);
+        if (distance.ok()) {
+          n.distance = *distance;
+          n.score = *distance;
+          rescored = true;
+        }
+      } else if (verification.recomputed_score.has_value()) {
+        n.score = *verification.recomputed_score;
+        rescored = true;
+      }
+    }
+
+    size_t kept = 0;
+    for (size_t j = 0; j < neighbors.size(); ++j) {
+      if (drop[j]) {
+        continue;
+      }
+      if (kept != j) {
+        neighbors[kept] = std::move(neighbors[j]);
+      }
+      ++kept;
+    }
+    neighbors.resize(kept);
+    params.per_arm_results[i].total_count = kept;
+
+    // Dropping preserves order, so only a fresh score can have put the arm out
+    // of order.
+    if (rescored) {
+      std::stable_sort(neighbors.begin(), neighbors.end(),
+                       [arm_score_is_distance](const indexes::Neighbor &a,
+                                               const indexes::Neighbor &b) {
+                         if (arm_score_is_distance) {
+                           if (a.distance != b.distance) {
+                             return a.distance < b.distance;
+                           }
+                         } else if (a.score != b.score) {
+                           return a.score > b.score;
+                         }
+                         return a.external_id->Str() < b.external_id->Str();
+                       });
+    }
+  }
+}
+
 // SearchParameters used to drive the SINGLE, atomic, post-fusion content
-// resolution for a local FT.HYBRID. ResolveContent runs the mutation/contention
-// check and fetches the database fields for the whole fused neighbor list at
-// once (on the main thread). On completion it re-merges the per-arm score
-// aliases and unblocks the client, whose reply callback runs the aggregate
-// pipeline. This is what makes the multi-arm results "come together before the
-// final main-thread validation".
+// resolution for a local FT.HYBRID. ResolveContent fetches the database fields
+// for the whole fused neighbor list at once (on the main thread). On
+// completion it re-merges the per-arm score aliases and unblocks the client,
+// whose reply callback runs the aggregate pipeline. This is what makes the
+// multi-arm results "come together before the final main-thread validation".
 class FusedResolver : public query::SearchParameters {
  public:
   std::unique_ptr<MultiSearchParameters> envelope;
   absl::flat_hash_map<std::string, RecordsMap> saved_aliases;
-  // FT.HYBRID always runs the contention check on the fused result, even when
-  // the LOAD clause asks for no database field: the check is what makes the
-  // multi-arm result atomic, and that is worth having whatever the reply
-  // carries. ResolveContent skips only the fetch when no_content is set.
+  // The contention check already ran, on the arms, before they were fused (see
+  // ArmGate). All that is left here is the fetch, which ResolveContent skips
+  // by itself when no_content is set.
   query::ContentProcessing GetContentProcessing() const override {
-    return query::kContentionCheckRequired;
+    return query::kContentRequired;
   }
   void QueryCompleteMainThread(
       std::unique_ptr<query::SearchParameters> self) override {
@@ -272,17 +466,9 @@ class FusedResolver : public query::SearchParameters {
 };
 
 // Local async completion: all arms have delivered raw (content-free) results.
-// Fuse, then run the single atomic content resolution over the fused list.
-void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
-  // If an arm already failed (MultiSearchTracker::Finalize populated the error
-  // in non-partial mode), skip fusion and content resolution and surface the
-  // specific arm error directly, rather than processing failed arms as success.
-  if (!params->search_result.status.ok()) {
-    auto *raw = params.release();
-    raw->blocked_client->SetReplyPrivateData(raw);
-    raw->blocked_client->UnblockClient();
-    return;
-  }
+// Fuse, then run the content resolution over the fused list. Reached only once
+// the arms have cleared the mutation queue and been revalidated against it.
+void FuseAndResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   auto fused = BuildFusedNeighbors(*params);
   auto resolver = std::make_unique<FusedResolver>();
   resolver->index_schema = params->index_schema;
@@ -298,11 +484,85 @@ void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   resolver->search_result.total_count = fused.size();
   resolver->search_result.neighbors = std::move(fused);
   resolver->envelope = std::move(params);
-  // ResolveContent performs the contention/mutation check (re-queueing if a
-  // mutation is in flight) and then the content fetch, atomically on the main
-  // thread, over the whole fused list.
-  vmsdk::RunByMain([resolver = std::move(resolver)]() mutable {
-    query::ResolveContent(std::move(resolver));
+  // Already on the main thread: ArmGate's completion runs there.
+  query::ResolveContent(std::move(resolver));
+}
+
+// Parks the whole operation behind any in-flight mutation on a key either arm
+// matched, and does it BEFORE the arms are fused.
+//
+// The check itself is the same one a single-arm query runs, reached through
+// the same ResolveContent: hand it a neighbor list, and if any of those keys
+// has a mutation queued, the parameters are moved into the mutation queue and
+// ResolveContent is called again once the mutation has applied. Carrying the
+// arms' own neighbors rather than the fused ones is what makes the sequence
+// numbers meaningful, since fusion does not carry them across.
+//
+// On the way out the arms are revalidated against the state the mutation left
+// behind, and only then merged.
+class ArmGate : public query::SearchParameters {
+ public:
+  std::unique_ptr<MultiSearchParameters> envelope;
+  query::ContentProcessing GetContentProcessing() const override {
+    return query::kContentionCheckRequired;
+  }
+  void QueryCompleteMainThread(
+      std::unique_ptr<query::SearchParameters> self) override {
+    DoComplete(std::move(self));
+  }
+  void QueryCompleteBackground(
+      std::unique_ptr<query::SearchParameters> self) override {
+    DoComplete(std::move(self));
+  }
+
+ private:
+  void DoComplete(std::unique_ptr<query::SearchParameters> /*self*/) {
+    auto env = std::move(envelope);
+    if (!search_result.status.ok()) {
+      // A cancelled query or a dropped index. Surface it rather than fusing
+      // whatever the arms happened to return.
+      env->search_result.status = search_result.status;
+      auto *raw = env.release();
+      raw->blocked_client->SetReplyPrivateData(raw);
+      raw->blocked_client->UnblockClient();
+      return;
+    }
+    RevalidateArmsBeforeFusion(*env);
+    FuseAndResolveLocal(std::move(env));
+  }
+};
+
+// Local async completion: all arms have delivered raw (content-free) results.
+void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
+  // If an arm already failed (MultiSearchTracker::Finalize populated the error
+  // in non-partial mode), skip fusion and content resolution and surface the
+  // specific arm error directly, rather than processing failed arms as success.
+  if (!params->search_result.status.ok()) {
+    auto *raw = params.release();
+    raw->blocked_client->SetReplyPrivateData(raw);
+    raw->blocked_client->UnblockClient();
+    return;
+  }
+  auto gate = std::make_unique<ArmGate>();
+  gate->index_schema = params->index_schema;
+  gate->db_num = params->db_num;
+  gate->cancellation_token = params->cancellation_token;
+  gate->enable_partial_results = params->enable_partial_results;
+  // Nothing is fetched for the gate; it exists to be parked.
+  gate->no_content = true;
+  // One entry per (arm, key), each carrying the sequence number that arm
+  // recorded. Duplicates across arms cost a map lookup and save a dedupe.
+  for (const auto &arm_result : params->per_arm_results) {
+    for (const auto &n : arm_result.neighbors) {
+      indexes::Neighbor probe;
+      probe.external_id = n.external_id;
+      probe.sequence_number = n.sequence_number;
+      gate->search_result.neighbors.push_back(std::move(probe));
+    }
+  }
+  gate->envelope = std::move(params);
+  vmsdk::RunByMain([gate = std::move(gate)]() mutable {
+    query::ResolveContent(std::move(gate));
   });
 }
 

@@ -1104,15 +1104,21 @@ class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):
 # =============================================================================
 # Parallel-arm execution + per-arm consistency under concurrent mutations.
 #
-# Property the implementation must hold (per the local-mode atomic-validation
-# design): the two arms of FT.HYBRID run in parallel under reader locks on the
-# same time-sliced index mutex, so a writer (mutation) cannot interleave
-# between them. The fused output is therefore consistent across arms — for any
-# document, the per-arm score aliases reflect the SAME pre-mutation index
-# snapshot, so the doc is either contributed by BOTH arms (both aliases
-# present) or by NEITHER (doc absent from the fused result). It is never the
-# case that doc X has only @s (search alias) without @v (vsim alias) or vice
-# versa due to a mid-flight mutation.
+# Property the implementation must hold: an FT.HYBRID reply describes one
+# state of the data, and it is the state the reply's own content comes from.
+#
+# Two mechanisms get it there. The arms run in parallel under reader locks on
+# the same time-sliced index mutex, with one outer lock held across all of
+# them, so a writer cannot interleave between arms and every arm sees one
+# snapshot. Then, if a mutation was queued against a key either arm matched,
+# the whole operation parks until it applies, and each arm's own result is
+# revalidated and rescored against what the mutation left behind before the
+# arms are merged.
+#
+# So a document appears in an arm exactly when it matches that arm after the
+# mutation, carrying the score it earns there, and the fused ranking follows.
+# A document that stopped matching one arm drops out of that arm alone; one
+# whose score moved is re-ranked rather than left where it was.
 # =============================================================================
 class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
     INDEX = "idx"
@@ -1179,23 +1185,16 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
         assert err[0] is None
         assert isinstance(res[0], list)
 
-    # -------- TEST 2 : doc present in both arms or neither (deterministic) ---
-    def test_doc_in_both_arms_or_neither_under_mutation(self):
-        """Deterministic atomicity probe. doc:1 matches both arms. We queue a
-        mutation that makes it no longer match SEARCH, but stall the mutation
-        processor so the mutation cannot apply while the arms are running.
+    # -------- TEST 2 : a mutation that changes nothing about matching --------
+    def test_doc_stays_in_both_arms_when_the_mutation_preserves_matching(self):
+        """doc:1 matches both arms, and the queued mutation rewrites it without
+        changing that: same title, a different vector. The mutation processor
+        is stalled so it cannot apply while the arms run.
 
-        Outcome on the fused list:
-          * Both arms saw the *pre-mutation* index (mutation parked) and both
-            found doc:1, so the fused row carries BOTH per-arm aliases (@s, @v).
-          * The post-fusion contention check (FusedResolver) observes the
-            pending mutation, re-queues onto the mutation pipeline, the
-            mutation applies once we release the pausepoint, and the final
-            content fetch returns the post-mutation HASH content.
-
-        The asserted invariant is the strong one the user asked for: doc:1 is
-        in BOTH arms (both aliases set) or NEITHER (absent from result). It is
-        never the case that exactly one of @s / @v is present."""
+        The arms park behind the mutation, it applies, and each arm is
+        revalidated against the result. doc:1 still matches both, so it must
+        still carry both per-arm aliases. A document is never left holding one
+        arm's alias when it belongs to both."""
         client: Valkey = self.server.get_new_client()
         q = self._setup_index(client, n=1)  # only doc:1, matched by both arms
 
@@ -1204,7 +1203,7 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
             "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
         mut_thread, _, mut_err = run_in_thread(
             lambda: self.server.get_new_client().execute_command(
-                "HSET", "doc:1", "title", "goodbye",
+                "HSET", "doc:1", "title", "hello world",
                 "vec", _vec(99.0, 99.0, 99.0, 99.0)))
         waiters.wait_for_true(
             lambda: client.execute_command(
@@ -1242,20 +1241,124 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
         assert err[0] is None
         assert isinstance(res[0], list)
 
-        # doc:1 must be either absent OR carry BOTH per-arm aliases — never
-        # exactly one.
         rows = [self._rec_to_dict(r) for r in res[0][1:]]
         doc1 = next((r for r in rows
                      if r.get(b"__key") == b"doc:1"
                      or b"doc:1" in r.values()), None)
-        if doc1 is None:
-            # Acceptable: mutation made it ineligible and the resolver dropped
-            # it during content fetch.
-            return
-        assert (b"s" in doc1) == (b"v" in doc1), \
-            f"split-arm violation: doc:1 = {doc1}"
+        assert doc1 is not None, "doc:1 still matches both arms"
+        assert b"s" in doc1 and b"v" in doc1, \
+            f"doc:1 lost an arm it still matches: {doc1}"
 
-    # -------- TEST 3 : stress probe — no split-arm result under concurrent
+    # -------- TESTS 3 & 4 : a mutated document is re-ranked, not just kept ---
+
+    def _ranking_index(self, client: Valkey) -> bytes:
+        """Three documents that both arms match, ordered the same way by each:
+        p:1 has the most occurrences of `hello` and the nearest vector, p:3 the
+        fewest and the farthest."""
+        client.execute_command(
+            "FT.CREATE", "rank_idx", "ON", "HASH", "PREFIX", "1", "p:",
+            "SCHEMA", "title", "TEXT", "NOSTEM",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+        client.execute_command("HSET", "p:1", "title",
+                               "hello hello hello hello",
+                               "vec", _vec(1.0, 0.0, 0.0, 0.0))
+        client.execute_command("HSET", "p:2", "title", "hello there",
+                               "vec", _vec(2.0, 0.0, 0.0, 0.0))
+        client.execute_command("HSET", "p:3", "title", "hello world",
+                               "vec", _vec(3.0, 0.0, 0.0, 0.0))
+        IndexingTestHelper.is_indexing_complete_on_node(client, "rank_idx")
+        return _vec(0.0, 0.0, 0.0, 0.0)
+
+    def _ranked(self, q: bytes):
+        """One FT.HYBRID over the ranking index, as a list of row dicts."""
+        result = self.server.get_new_client().execute_command(
+            "FT.HYBRID", "rank_idx",
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "3", "YIELD_SCORE_AS", "v",
+            "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "h",
+            "PARAMS", "2", "q", q)
+        return [self._rec_to_dict(r) for r in result[1:]]
+
+    def _run_across_mutation(self, client: Valkey, q: bytes, mutation):
+        """Park an FT.HYBRID behind `mutation`, release it, and return the
+        parked query's rows next to a fresh query's rows.
+
+        The mutation cannot apply while the arms run, so the arms produce a
+        pre-mutation result and the reply is assembled after the mutation
+        lands. Those rows have to agree with a query issued afterwards."""
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
+        mut_thread, _, mut_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(*mutation))
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST", "mutation_processing") >= 1,
+            timeout=5)
+        blocked_before = client.info("SEARCH").get(
+            "search_text_query_blocked_count", 0)
+        hyb_thread, res, err = run_in_thread(lambda: self._ranked(q))
+        waiters.wait_for_true(
+            lambda: client.info("SEARCH")["search_text_query_blocked_count"]
+            >= blocked_before + 1,
+            timeout=5)
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET", "mutation_processing")
+        mut_thread.join()
+        hyb_thread.join()
+        assert mut_err[0] is None
+        assert err[0] is None
+        return res[0], self._ranked(q)
+
+    @staticmethod
+    def _order(rows):
+        return [r.get(b"__key") for r in rows]
+
+    def test_mutation_drops_a_document_from_the_arm_it_left(self):
+        """p:1 leads both arms, then stops matching the text arm and its vector
+        moves to the far end. The parked query must rank it where it now
+        belongs -- last, on the vector arm alone -- not where it was when the
+        arms ran."""
+        client: Valkey = self.server.get_new_client()
+        q = self._ranking_index(client)
+        assert self._order(self._ranked(q)) == [b"p:1", b"p:2", b"p:3"]
+
+        parked, fresh = self._run_across_mutation(
+            client, q,
+            ("HSET", "p:1", "title", "goodbye",
+             "vec", _vec(99.0, 0.0, 0.0, 0.0)))
+
+        assert self._order(parked) == [b"p:2", b"p:3", b"p:1"]
+        assert self._order(parked) == self._order(fresh)
+        # p:1 left the text arm, so it carries no text alias any more, and its
+        # vector score and fused score are the post-mutation ones.
+        moved = next(r for r in parked if r[b"__key"] == b"p:1")
+        moved_fresh = next(r for r in fresh if r[b"__key"] == b"p:1")
+        assert b"s" not in moved
+        assert moved[b"v"] == moved_fresh[b"v"]
+        assert [r[b"h"] for r in parked] == [r[b"h"] for r in fresh]
+
+    def test_mutation_that_only_moves_a_vector_repositions_the_row(self):
+        """The document still matches both arms; only its vector moved. The
+        text arm keeps it, the vector arm has to rank it by where it is now."""
+        client: Valkey = self.server.get_new_client()
+        q = self._ranking_index(client)
+
+        parked, fresh = self._run_across_mutation(
+            client, q,
+            ("HSET", "p:1", "title", "hello hello hello hello",
+             "vec", _vec(99.0, 0.0, 0.0, 0.0)))
+
+        moved = next(r for r in parked if r[b"__key"] == b"p:1")
+        moved_fresh = next(r for r in fresh if r[b"__key"] == b"p:1")
+        # Still in both arms.
+        assert b"s" in moved and b"v" in moved
+        assert moved[b"v"] == moved_fresh[b"v"]
+        assert self._order(parked) == self._order(fresh)
+        # And it is no longer the nearest vector, so it is no longer first.
+        assert self._order(parked)[0] != b"p:1"
+
+    # -------- TEST 5 : stress probe — no split-arm result under concurrent
     #                   mutations across many trials --------
     def test_concurrent_mutations_never_split_arms(self):
         """The "both arms or neither" guarantee is a *per-query atomicity*

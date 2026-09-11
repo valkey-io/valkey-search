@@ -4,9 +4,10 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
+#include "src/commands/ft_aggregate_parser.h"
+
 #include <algorithm>
 #include <limits>
-#include "src/commands/ft_aggregate_parser.h"
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -461,9 +462,9 @@ void ResolveSortByBounds(AggregateParameters &params) {
     // Only an immediate neighbour bounds this SORTBY. A LIMIT further along
     // the pipeline is separated by a stage that changes the record count, so
     // its window is not a bound on what the sort has to keep.
-    const Limit *adjacent =
-        i + 1 < stages.size() ? dynamic_cast<Limit *>(stages[i + 1].get())
-                              : nullptr;
+    const Limit *adjacent = i + 1 < stages.size()
+                                ? dynamic_cast<Limit *>(stages[i + 1].get())
+                                : nullptr;
     if (adjacent == nullptr && i > 0) {
       adjacent = dynamic_cast<Limit *>(stages[i - 1].get());
     }

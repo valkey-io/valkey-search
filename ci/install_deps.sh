@@ -67,7 +67,7 @@ function ensure_gcc_amazon_linux() {
         LOG_INFO "✓ GCC ${current_version} already available at /usr/local/bin/gcc (>= ${GCC_MIN_VERSION})"
     else
         LOG_INFO "GCC >= ${GCC_MIN_VERSION} not found (current: ${current_version}) — installing GCC 14 from AL2023 repos..."
-        sudo dnf install -y gcc14 gcc14-c++ gcc14-libstdc++-static
+        sudo dnf install -y gcc14 gcc14-c++
 
         # Create symlinks in /usr/local/bin so builds pick up GCC 14 by default.
         sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/gcc
@@ -76,6 +76,8 @@ function ensure_gcc_amazon_linux() {
         sudo ln -sf /usr/bin/gcc14-g++ /usr/local/bin/c++
         LOG_INFO "✓ GCC 14 installed and symlinked into /usr/local/bin"
     fi
+
+    sudo dnf install -y gcc14-libstdc++-static
 
     /usr/local/bin/gcc --version
     /usr/local/bin/g++ --version

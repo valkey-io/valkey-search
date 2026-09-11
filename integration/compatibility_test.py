@@ -387,20 +387,30 @@ def compare_results(expected, results):
     # the reply carries, and an earlier GROUPBY's key is gone from the output
     # once a later stage regroups.
     def last_index(keyword):
-        # Match exactly, as this has always done: an uppercase SORTBY in an
-        # FT.SEARCH goes down the "no sort keys" path.
-        hits = [i for i, c in enumerate(cmd) if c == keyword]
+        # Case-insensitive: a generator writing SORTBY the way the command
+        # reference does must not silently get a different comparison from one
+        # writing it in lower case. str() because a command carries a raw
+        # vector blob among its arguments.
+        hits = [i for i, c in enumerate(cmd) if str(c).lower() == keyword]
         return hits[-1] if hits else -1
+
+    def field_name(token):
+        return str(token).lstrip('@')
 
     gix = last_index('groupby')
     six = last_index('sortby')
     if gix > six:
         count = int(cmd[gix+1])
-        sortkeys = [cmd[gix+2+i][1:] for i in range(count)]
+        sortkeys = [field_name(cmd[gix+2+i]) for i in range(count)]
     elif six >= 0:
-        count = int(cmd[six+1]) if cmd[0] != 'ft.search' else 1
-        # Grab the fields after the count, stripping any leading '@'
-        sortkeys = [cmd[six+2+i][1 if cmd[six+2+i].startswith("@") else 0:] for i in range(count)]
+        # FT.SEARCH takes a bare field where the aggregate pipeline takes a
+        # count followed by that many tokens: `SORTBY @n1 ASC` against
+        # `SORTBY 2 @n1 ASC`.
+        if str(cmd[0]).lower() == 'ft.search':
+            sortkeys = [field_name(cmd[six+1])]
+        else:
+            count = int(cmd[six+1])
+            sortkeys = [field_name(cmd[six+2+i]) for i in range(count)]
         sortkeys = [f for f in sortkeys if f.lower() not in ('asc', 'desc')]
     else:
         sortkeys=["__key"]

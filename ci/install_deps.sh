@@ -67,7 +67,7 @@ function ensure_gcc_amazon_linux() {
         LOG_INFO "✓ GCC ${current_version} already available at /usr/local/bin/gcc (>= ${GCC_MIN_VERSION})"
     else
         LOG_INFO "GCC >= ${GCC_MIN_VERSION} not found (current: ${current_version}) — installing GCC 14 from AL2023 repos..."
-        sudo dnf install -y gcc14 gcc14-c++
+        sudo dnf install -y gcc14 gcc14-c++ gcc14-libstdc++-static
 
         # Create symlinks in /usr/local/bin so builds pick up GCC 14 by default.
         sudo ln -sf /usr/bin/gcc14-gcc /usr/local/bin/gcc
@@ -79,6 +79,14 @@ function ensure_gcc_amazon_linux() {
 
     /usr/local/bin/gcc --version
     /usr/local/bin/g++ --version
+
+    local libstdcpp_a
+    libstdcpp_a=$(/usr/local/bin/g++ -print-file-name=libstdc++.a)
+    if [[ "${libstdcpp_a}" == "libstdc++.a" || ! -f "${libstdcpp_a}" ]]; then
+        LOG_ERROR "static libstdc++ for /usr/local/bin/g++ not found; on AL2023 install gcc14-libstdc++-static"
+        exit 1
+    fi
+    LOG_INFO "✓ static libstdc++ found at ${libstdcpp_a}"
 }
 
 # Detect the distro and dispatch. Add cases here (e.g. an apt-based branch for

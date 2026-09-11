@@ -29,10 +29,13 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/allocator.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -43,6 +46,7 @@ enum class QueryOperations : uint64_t;
 }
 
 namespace valkey_search::indexes {
+
 constexpr float kDefaultMagnitude = 1.0f;
 
 class VectorRecord {
@@ -72,19 +76,73 @@ class VectorRecord {
   char data_[0];  // flexible array member
 };
 
-float CalcReciprocalMagnitude(const float *src, size_t size);
+struct VectorRecordWithSize {
+  std::shared_ptr<VectorRecord> vector_record;
+  size_t size{0};
 
+  bool operator==(const VectorRecordWithSize &other) const = default;
+  bool operator==(std::nullptr_t) const { return vector_record == nullptr; }
+  bool operator!=(std::nullptr_t) const { return vector_record != nullptr; }
+
+  bool operator==(absl::string_view bytes) const {
+    return vector_record != nullptr && size == bytes.size() &&
+           std::memcmp(vector_record->GetRawVector(), bytes.data(), size) == 0;
+  }
+  bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
+};
+
+// Computes 1/||v|| over `size` elements of storage type T. Templated because
+// FLOAT16/BFLOAT16 vectors are 2 bytes per element: reading them as float
+// would both walk off the end of the buffer and produce garbage magnitudes.
+// The accumulation is always done in float regardless of T.
+template <typename T>
+float CalcReciprocalMagnitude(const T *src, size_t size);
+
+extern template float CalcReciprocalMagnitude<float>(const float *, size_t);
+extern template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
+extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
+                                                        size_t);
+
+// Verify the running CPU exposes a SIMD-targeted BF16 path required by the
+// current simsimd build. Returns OkStatus when:
+//   - This build of simsimd does not enable native BF16 (the serial path is
+//     then bit-correct), or
+//   - The CPU advertises Haswell/Genoa/Sapphire on x86, or NEON-BF16/SVE-BF16
+//     on ARM.
+// Otherwise returns FailedPreconditionError; callers should refuse to create
+// or load a BFLOAT16 index on this host. Called at index-create / RDB-load
+// time rather than module load so that nodes lacking a SIMD BF16 path can
+// still serve FLOAT32 and FLOAT16 indexes.
+absl::Status CheckSimsimdBf16Capability();
+
+// Scales `record` by `reciprocal_magnitude`, interpreting it as elements of
+// storage type T. The scale is applied in float and rounded once back into T.
+template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float reciprocal_magnitude);
 
+template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
                                   float *magnitude = nullptr);
+
+// Runtime-dispatched variants, for the few call sites that hold only a
+// data-type enum rather than a compile-time T (VectorRegistry, QueryVector).
+float CalcReciprocalMagnitude(absl::string_view record,
+                              data_model::VectorDataType data_type);
+
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  data_model::VectorDataType data_type,
+                                  float reciprocal_magnitude);
+
+// Default score value used when no scorer has been applied yet.
+inline constexpr float kDefaultScore = 0.0f;
 
 // Lightweight result entry used during non-vector search collection.
 // Trivially destructible — destroying a vector of 10K of these is a no-op.
 struct BorrowedNeighbor {
   BorrowedInternedStringPtr key;
   float distance;
+  float score;
 };
 static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");
@@ -92,26 +150,38 @@ static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
 struct Neighbor {
   InternedStringPtr external_id;
   float distance;
+  float score;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), sequence_number(0) {}
+  Neighbor() : distance(0.0f), score(kDefaultScore), sequence_number(0) {}
   Neighbor(const InternedStringPtr &external_id, float distance)
-      : external_id(external_id), distance(distance), sequence_number(0) {}
+      : external_id(external_id),
+        distance(distance),
+        score(distance),
+        sequence_number(0) {}
+  Neighbor(const InternedStringPtr &external_id, float distance, float score)
+      : external_id(external_id),
+        distance(distance),
+        score(score),
+        sequence_number(0) {}
   Neighbor(const InternedStringPtr &external_id, float distance,
            std::optional<RecordsMap> &&attribute_contents)
       : external_id(external_id),
         distance(distance),
+        score(distance),
         sequence_number(0),
         attribute_contents(std::move(attribute_contents)) {}
   Neighbor(Neighbor &&other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
+        score(other.score),
         sequence_number(other.sequence_number),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor &operator=(Neighbor &&other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
+      score = other.score;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
     }
@@ -119,7 +189,7 @@ struct Neighbor {
   }
   friend std::ostream &operator<<(std::ostream &os, const Neighbor &n) {
     os << "Key: " << n.external_id->Str() << " Dist: " << n.distance
-       << " Seq: " << n.sequence_number;
+       << " Score: " << n.score << " Seq: " << n.sequence_number;
     if (n.attribute_contents.has_value()) {
       os << ' ' << *n.attribute_contents;
     } else {
@@ -145,7 +215,9 @@ const absl::NoDestructor<
 
 const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
-    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32}});
+    kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
+                          {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -169,19 +241,20 @@ struct TrackedKeyMetadata {
 
 class VectorBase : public IndexBase {
  public:
-  ~VectorBase() override;
-  absl::StatusOr<indexes::RecordResult> AddRecord(
-      const InternedStringPtr &key, absl::string_view record) override
+  absl::StatusOr<indexes::RecordResult> AddRecord(const InternedStringPtr &key,
+                                                  AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> RemoveRecord(const InternedStringPtr &key,
                                     indexes::DeletionType deletion_type =
                                         indexes::DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<indexes::RecordResult> ModifyRecord(
-      const InternedStringPtr &key, absl::string_view record) override
+      const InternedStringPtr &key, AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
+  int GetDBNum() const { return db_num_; }
+  void OnSwapDB(int new_db_num) override { db_num_ = new_db_num; }
   std::unique_ptr<data_model::Index> ToProto() const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const
@@ -229,19 +302,53 @@ class VectorBase : public IndexBase {
 
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
-  Allocator *GetVectorAllocator() const { return vector_allocator_.get(); }
+  FixedSizeAllocator *GetVectorAllocator() const {
+    return vector_allocator_.get();
+  }
   int GetDimensions() const { return dimensions_; }
-  vmsdk::UniqueValkeyString NormalizeStringRecord(
-      vmsdk::UniqueValkeyString record) const override;
+  // Provided by VectorType<T> so the per-element byte width and format
+  // conversion come from sizeof(T) + if-constexpr on T instead of a
+  // runtime switch on GetVectorDataType().
+  vmsdk::UniqueValkeyString NormalizeStringAttribute(
+      vmsdk::UniqueValkeyString attribute) const override = 0;
+  // Returns the vector data type enum. Used to disambiguate FLOAT16 from
+  // BFLOAT16 wherever a byte width alone is ambiguous -- both are 2 bytes, so
+  // a size-based check would silently route the wrong format.
+  virtual data_model::VectorDataType GetVectorDataType() const = 0;
+  // KNN entry point, dispatched virtually so callers hold a VectorBase* and
+  // never need to know the storage type or the ANN algorithm. `ef_runtime` is
+  // meaningful only to HNSW; FLAT ignores it.
+  //
+  // The default arguments must stay identical here and in every override.
+  // C++ binds default arguments statically, so differing defaults would make
+  // the same call mean different things depending on the static type of the
+  // pointer it went through.
+  virtual absl::StatusOr<std::vector<Neighbor>> Search(
+      absl::string_view query, uint64_t count,
+      cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool enable_partial_results = false) = 0;
+  bool IsValidSizeVector(size_t size) const {
+    return size == GetVectorDataSize();
+  }
   bool IsValidSizeVector(absl::string_view record) const {
-    return record.size() == GetVectorDataSize();
+    return IsValidSizeVector(record.size());
   }
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }
+  // Computes 1/||record|| interpreting `record` as elements of the concrete
+  // storage type. Implemented by VectorType<T>; VectorBase cannot know the
+  // element width.
+  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
+  ~VectorBase() override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  data_model::AttributeDataType GetAttributeDataType() const {
+    return attribute_data_type_;
+  }
 
  protected:
-  VectorBase(IndexerType indexer_type, int dimensions,
+  VectorBase(IndexerType indexer_type, int dimensions, size_t element_size,
              data_model::AttributeDataType attribute_data_type,
              absl::string_view attribute_identifier, int db_num)
       : IndexBase(indexer_type),
@@ -255,18 +362,21 @@ class VectorBase : public IndexBase {
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator,
-            sizeof(VectorRecord) + dimensions * sizeof(float), true))
+            sizeof(VectorRecord) + dimensions * element_size, true))
 #endif  // !SAN_BUILD
   {
   }
+
+  VectorBase(IndexerType indexer_type, int dimensions,
+             data_model::AttributeDataType attribute_data_type,
+             absl::string_view attribute_identifier, int db_num)
+      : VectorBase(indexer_type, dimensions, sizeof(float), attribute_data_type,
+                   attribute_identifier, db_num) {}
   void RemoveRecordDueToError(const InternedStringPtr &key,
                               std::optional<uint64_t> internal_id)
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
-  template <typename T>
-  void Init(int dimensions, data_model::DistanceMetric distance_metric,
-            std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
 
   virtual absl::Status AddRecordImpl(
       uint64_t internal_id,
@@ -308,9 +418,9 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<std::optional<uint64_t>> UnTrackKey(
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
-  absl::StatusOr<bool> UpdateMetadata(const InternedStringPtr &key,
-                                      float magnitude,
-                                      const VectorRecord *vector_record)
+  absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
+                                         float magnitude,
+                                         const VectorRecord *vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -330,8 +440,6 @@ class VectorBase : public IndexBase {
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
                             float query_magnitude) const;
-  std::shared_ptr<const VectorRecord> GetOrConstructVectorRecord(
-      const InternedStringPtr &key, absl::string_view record) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

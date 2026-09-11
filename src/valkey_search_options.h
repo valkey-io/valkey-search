@@ -61,6 +61,12 @@ const config::Boolean &GetSkipCorruptedInternalUpdateEntries();
 /// Return the log level
 config::Enum &GetLogLevel();
 
+/// Return the scorer FT.SEARCH uses when the query omits SCORER
+config::Enum &GetDefaultScorer();
+
+/// Return true when the scoring kill switch is engaged
+bool IsScoringDisabled();
+
 /// Return the configuration entry for HNSW allow_replace_deleted flag
 const config::Boolean &GetHNSWAllowReplaceDeleted();
 
@@ -104,6 +110,10 @@ config::Number &GetThreadPoolWaitTimeSamples();
 /// Return the maximum number of words to search in text operations (prefix,
 /// suffix, fuzzy)
 config::Number &GetMaxTermExpansions();
+
+/// Return the maximum number of group keys one record may expand to when
+/// GROUPBY is given multi-value fields
+config::Number &GetMaxGroupKeyExpansion();
 
 /// Return the minimum TAG prefix length for wildcard queries (excluding '*')
 config::Number &GetTagMinPrefixLength();
@@ -159,6 +169,9 @@ config::Number &GetMutationWeightTag();
 /// Return the recursion depth of the query string from FT.SEARCH and
 /// FT.AGGREGATE commands
 config::Number &GetQueryStringDepth();
+
+/// Return the configuration entry for vector unshare batch size
+config::Number &GetVectorUnshareBatchSize();
 
 /// Return the configuration entry that controls compatibility-bug emulation.
 /// See COMPATIBILITY.md for the semantics.

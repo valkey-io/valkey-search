@@ -144,6 +144,59 @@ IndexSchema::BackfillJob::BackfillJob(ValkeyModuleCtx *ctx,
       << vmsdk::config::RedactIfNeeded(name) << " (size: " << db_size << ")";
 }
 
+namespace {
+
+// Builds one vector index, loading it from RDB when `iter` is present and
+// creating it empty otherwise. Templated on both the algorithm and the storage
+// type because those are the only things that vary across the six
+// algorithm x data-type combinations; writing them out longhand duplicated
+// this body six times and let per-arm details (notably the BFLOAT16 capability
+// probe) drift apart unnoticed.
+template <template <typename> class AlgoT, typename T>
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndex(
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::Attribute &attribute,
+    const data_model::VectorIndex &vector_index_proto,
+    std::optional<SupplementalContentChunkIter> &iter) {
+  VMSDK_ASSIGN_OR_RETURN(
+      auto index,
+      iter.has_value()
+          ? AlgoT<T>::LoadFromRDB(ctx, &index_schema->GetAttributeDataType(),
+                                  vector_index_proto, attribute.identifier(),
+                                  std::move(*iter), index_schema->GetDBNum())
+          : AlgoT<T>::Create(vector_index_proto, attribute.identifier(),
+                             index_schema->GetAttributeDataType().ToProto(),
+                             index_schema->GetDBNum()));
+  return index;
+}
+
+// Selects the storage type for `AlgoT` from the schema's declared data type.
+// BFLOAT16 additionally requires a SIMD-safe BF16 path on this CPU; that check
+// lives here so it cannot be forgotten for one algorithm and not the other.
+template <template <typename> class AlgoT>
+absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
+    ValkeyModuleCtx *ctx, IndexSchema *index_schema,
+    const data_model::Attribute &attribute,
+    const data_model::VectorIndex &vector_index_proto,
+    std::optional<SupplementalContentChunkIter> &iter) {
+  switch (vector_index_proto.vector_data_type()) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return CreateVectorIndex<AlgoT, float>(ctx, index_schema, attribute,
+                                             vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return CreateVectorIndex<AlgoT, float16>(ctx, index_schema, attribute,
+                                               vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
+      return CreateVectorIndex<AlgoT, bfloat16>(ctx, index_schema, attribute,
+                                                vector_index_proto, iter);
+    default:
+      return absl::InvalidArgumentError("Unsupported vector data type.");
+  }
+}
+
+}  // namespace
+
 absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
     ValkeyModuleCtx *ctx, IndexSchema *index_schema,
     const data_model::Attribute &attribute,
@@ -165,58 +218,19 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
           index.text_index(), index_schema->GetTextIndexSchema());
     }
     case data_model::Index::IndexTypeCase::kVectorIndex: {
-      switch (index.vector_index().algorithm_case()) {
-        case data_model::VectorIndex::kHnswAlgorithm: {
-          switch (index.vector_index().vector_data_type()) {
-            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorHNSW<float>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorHNSW<float>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            default: {
-              return absl::InvalidArgumentError(
-                  "Unsupported vector data type.");
-            }
-          }
-        }
-        case data_model::VectorIndex::kFlatAlgorithm: {
-          switch (index.vector_index().vector_data_type()) {
-            case data_model::VECTOR_DATA_TYPE_FLOAT32: {
-              // TODO: Create an empty index in case of an error
-              // loading the index contents from RDB.
-              VMSDK_ASSIGN_OR_RETURN(
-                  auto index,
-                  (iter.has_value())
-                      ? indexes::VectorFlat<float>::LoadFromRDB(
-                            ctx, &index_schema->GetAttributeDataType(),
-                            index.vector_index(), attribute.identifier(),
-                            std::move(*iter), index_schema->GetDBNum())
-                      : indexes::VectorFlat<float>::Create(
-                            index.vector_index(), attribute.identifier(),
-                            index_schema->GetAttributeDataType().ToProto(),
-                            index_schema->GetDBNum()));
-              return index;
-            }
-            default: {
-              return absl::InvalidArgumentError(
-                  "Unsupported vector data type.");
-            }
-          }
-        }
-        default: {
+      // TODO: Create an empty index in case of an error loading the index
+      // contents from RDB.
+      const auto &vector_index_proto = index.vector_index();
+      switch (vector_index_proto.algorithm_case()) {
+        case data_model::VectorIndex::kHnswAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorHNSW>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        case data_model::VectorIndex::kFlatAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorFlat>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        default:
           return absl::InvalidArgumentError("Unsupported algorithm.");
-        }
       }
-      break;
     }
     default: {
       return absl::InvalidArgumentError("Unsupported index type.");
@@ -565,55 +579,58 @@ void IndexSchema::OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
   ProcessKeyspaceNotification(ctx, key, false);
 }
 
-bool AddAttributeData(IndexSchema::MutatedAttributes &mutated_attributes,
-                      const Attribute &attribute,
-                      const AttributeDataType &attribute_data_type,
-                      vmsdk::UniqueValkeyString record) {
-  if (record) {
-    if (attribute_data_type.RecordsProvidedAsString()) {
-      auto normalized_record =
-          attribute.GetIndex()->NormalizeStringRecord(std::move(record));
-      if (!normalized_record) {
-        return false;
-      }
-      mutated_attributes[attribute.GetAlias()].data =
-          std::move(normalized_record);
-    } else {
-      mutated_attributes[attribute.GetAlias()].data = std::move(record);
+std::vector<const indexes::VectorBase *> IndexSchema::GetVectorIndexes() const {
+  std::vector<const indexes::VectorBase *> result;
+  for (const auto &[_, attr] : attributes_) {
+    auto index = attr.GetIndex();
+    if (index && indexes::IsVectorIndex(index)) {
+      result.push_back(static_cast<const indexes::VectorBase *>(index.get()));
     }
-  } else {
-    mutated_attributes[attribute.GetAlias()].data = nullptr;
   }
-  return true;
+  return result;
 }
 
-void TrackRecord(const Key &key, const Attribute &attribute,
-                 const data_model::AttributeDataType &attribute_data_type,
-                 ValkeyModuleString *record, int db_num) {
-  if (!indexes::IsVectorIndex(attribute.GetIndex())) {
+namespace {
+
+void AppendMutatedAttribute(
+    IndexSchema::MutatedAttributes &mutated_attributes,
+    const InternedStringPtr &key, const Attribute &attribute,
+    vmsdk::UniqueValkeyString attr_val, indexes::DeletionType deletion_type,
+    const data_model::AttributeDataType &attribute_data_type, int db_num) {
+  const auto &alias = attribute.GetAlias();
+  auto index = attribute.GetIndex();
+
+  if (indexes::IsVectorIndex(index)) {
+    auto *vector_base = static_cast<indexes::VectorBase *>(index.get());
+    CHECK(vector_base);
+    if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
+      VectorRegistry::Instance().DedupOrConstruct(
+          key, nullptr, attribute_data_type, db_num, vector_base);
+      mutated_attributes[alias] = AttributeData(deletion_type);
+      return;
+    }
+    auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
+        key, attr_val.get(), attribute_data_type, db_num, vector_base);
+    mutated_attributes[alias] =
+        AttributeData(std::move(vector_record_with_size));
     return;
   }
-  auto *vector_base =
-      dynamic_cast<indexes::VectorBase *>(attribute.GetIndex().get());
-  if (vector_base && record &&
-      !vector_base->IsValidSizeVector(vmsdk::ToStringView(record))) {
-    record = nullptr;
+  if (deletion_type != indexes::DeletionType::kNone || !attr_val) {
+    mutated_attributes[alias] = AttributeData(deletion_type);
+    return;
   }
-  VectorRegistry::Instance().Track(
-      key,
-      vector_base ? vector_base->GetInternedAttributeIdentifier()
-                  : StringInternStore::Intern(attribute.GetIdentifier()),
-      record, vector_base ? vector_base->GetVectorAllocator() : nullptr,
-      attribute_data_type, db_num);
+  mutated_attributes[alias] = AttributeData(std::move(attr_val));
 }
+
+}  // namespace
 
 void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                                               ValkeyModuleString *key,
                                               bool from_backfill) {
-  auto key_cstr = vmsdk::ToStringView(key);
-  if (key_cstr.empty()) {
+  if (ABSL_PREDICT_FALSE(key == nullptr) || is_destructing_) {
     return;
   }
+  auto key_cstr = vmsdk::ToStringView(key);
   auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
       ctx, key, VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
 
@@ -632,37 +649,40 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     const auto &attribute = attribute_itr.second;
     if (!key_obj) {
       added = true;
-      TrackRecord(interned_key, attribute, attribute_data_type_->ToProto(),
-                  nullptr, GetDBNum());
-      mutated_attributes[attribute_itr.first] = {
-          .data = nullptr,
-          .deletion_type = indexes::DeletionType::kRecord,
-      };
+      AppendMutatedAttribute(mutated_attributes, interned_key, attribute,
+                             nullptr, indexes::DeletionType::kRecord,
+                             attribute_data_type_->ToProto(), db_num_);
       continue;
     }
-    vmsdk::UniqueValkeyString record =
+    vmsdk::UniqueValkeyString attr_val =
         attribute_data_type_
-            ->GetRecord(ctx, key_obj.get(), key_cstr, attribute.GetIdentifier())
+            ->GetAttribute(ctx, key_obj.get(), key_cstr,
+                           attribute.GetIdentifier())
             .value_or(vmsdk::UniqueValkeyString());
-    TrackRecord(interned_key, attribute, attribute_data_type_->ToProto(),
-                record.get(), GetDBNum());
-    if (AddAttributeData(mutated_attributes, attribute, *attribute_data_type_,
-                         std::move(record))) {
-      added = true;
+    if (attr_val && attribute_data_type_->AttributesProvidedAsString() &&
+        attribute.GetIndex()) {
+      attr_val =
+          attribute.GetIndex()->NormalizeStringAttribute(std::move(attr_val));
     }
+    auto deletion_type = attr_val ? indexes::DeletionType::kNone
+                                  : indexes::DeletionType::kIdentifier;
+    AppendMutatedAttribute(mutated_attributes, interned_key, attribute,
+                           std::move(attr_val), deletion_type,
+                           attribute_data_type_->ToProto(), db_num_);
+    added = true;
   }
 
   // Read the per-document score from SCORE_FIELD if configured
   float document_score = score_;
   if (key_obj && HasScoreField()) {
-    auto score_record = attribute_data_type_->GetRecord(
+    auto score_attr_val = attribute_data_type_->GetAttribute(
         ctx, key_obj.get(), key_cstr, score_field_.value());
-    if (score_record.ok()) {
+    if (score_attr_val.ok()) {
       // Parse the value as a float. If it fails (non-numeric), fall back to
       // the default score silently. Raw value is stored without clamping.
       // The scoring algorithm decides how to handle values at query time.
       float value;
-      auto str_view = vmsdk::ToStringView(score_record.value().get());
+      auto str_view = vmsdk::ToStringView(score_attr_val.value().get());
       if (absl::SimpleAtof(str_view, &value) && value == value) {  // NaN check
         document_score = value;
       }
@@ -699,28 +719,27 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
   if (text_index_schema_) {
     // Always clean up indexed words from all text attributes of the key up
-    // front
+    // front. DeleteKeyData also decrements total_doc_len internally.
     text_index_schema_->DeleteKeyData(key);
   }
-  bool all_deletes = true;
+  bool all_records_deleted = true;
   bool invalid_data = false;
   for (auto &attribute_data_itr : mutated_attributes) {
     const auto itr = attributes_.find(attribute_data_itr.first);
     if (itr == attributes_.end()) {
       continue;
     }
-    if (attribute_data_itr.second.deletion_type ==
-        indexes::DeletionType::kNone) {
-      all_deletes = false;
+    if (attribute_data_itr.second.deletion_type !=
+        indexes::DeletionType::kRecord) {
+      all_records_deleted = false;
     }
     if (ProcessAttributeMutation(ctx, itr->second, key,
-                                 std::move(attribute_data_itr.second.data),
-                                 attribute_data_itr.second.deletion_type)) {
+                                 std::move(attribute_data_itr.second))) {
       invalid_data = true;
     }
   }
-  CHECK(!all_deletes || !invalid_data);
-  if (all_deletes) {
+  CHECK(!all_records_deleted || !invalid_data);
+  if (all_records_deleted) {
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
     absl::MutexLock lock(&mutated_records_mutex_);
@@ -728,7 +747,8 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the
-    // updates to all Text attributes in one operation for efficiency
+    // updates to all Text attributes in one operation for efficiency.
+    // CommitKeyData stores doc_len/norm in TextIndexSchema internally.
     text_index_schema_->CommitKeyData(key);
   }
 
@@ -769,22 +789,22 @@ void IndexSchema::RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx,
   }
 }
 
-bool IndexSchema::ProcessAttributeMutation(
-    ValkeyModuleCtx *ctx, const Attribute &attribute, const Key &key,
-    vmsdk::UniqueValkeyString data, indexes::DeletionType deletion_type) {
+bool IndexSchema::ProcessAttributeMutation(ValkeyModuleCtx *ctx,
+                                           const Attribute &attribute,
+                                           const Key &key,
+                                           AttributeData &&data) {
   auto index = attribute.GetIndex();
-  if (data) {
-    DCHECK(deletion_type == indexes::DeletionType::kNone);
-    auto data_view = vmsdk::ToStringView(data.get());
+  if (!data.IsNull()) {
+    DCHECK(data.deletion_type == indexes::DeletionType::kNone);
     if (index->IsTracked(key)) {
-      auto res = index->ModifyRecord(key, data_view);
+      auto res = index->ModifyRecord(key, std::move(data));
       TrackResults(ctx, res, "Modify", stats_.subscription_modify);
       if (res.ok() && res.value() == indexes::RecordResult::kAdded) {
         ++Metrics::GetStats().time_slice_upserts;
       }
       return res.ok() && res.value() == indexes::RecordResult::kInvalidData;
     }
-    auto res = index->AddRecord(key, data_view);
+    auto res = index->AddRecord(key, std::move(data));
     TrackResults(ctx, res, "Add", stats_.subscription_add);
 
     if (res.ok() && res.value() == indexes::RecordResult::kAdded) {
@@ -806,14 +826,13 @@ bool IndexSchema::ProcessAttributeMutation(
           Metrics::GetStats().ingest_field_text++;
           break;
         default:
-          // Shouldn't happen
           break;
       }
     }
     return res.ok() && res.value() == indexes::RecordResult::kInvalidData;
   }
 
-  auto res = index->RemoveRecord(key, deletion_type);
+  auto res = index->RemoveRecord(key, data.deletion_type);
   TrackResults(ctx, res, "Remove", stats_.subscription_remove);
   if (res.ok() && res.value()) {
     ++Metrics::GetStats().time_slice_deletes;
@@ -845,6 +864,15 @@ void IndexSchema::ProcessMultiQueue() {
   Metrics::GetStats().ingest_last_batch_size = multi_mutations_keys.size();
   Metrics::GetStats().ingest_total_batches++;
 
+  // While a fork is in flight the mutations thread pool is suspended, and every
+  // path that resumes it runs on this thread, so waiting below would never
+  // return. Drain inline instead: the workers are parked, hence no concurrent
+  // writer to race with.
+  if (ABSL_PREDICT_FALSE(mutations_thread_pool_->IsSuspended())) {
+    ProcessMultiQueueInline();
+    return;
+  }
+
   absl::BlockingCounter blocking_counter(multi_mutations_keys.size());
   vmsdk::WriterMutexLock lock(&time_sliced_mutex_, false, true);
   while (!multi_mutations_keys.empty()) {
@@ -854,6 +882,23 @@ void IndexSchema::ProcessMultiQueue() {
                      &blocking_counter);
   }
   blocking_counter.Wait();
+}
+
+void IndexSchema::ProcessMultiQueueInline() {
+  auto &multi_mutations_keys = multi_mutations_keys_.Get();
+  while (!multi_mutations_keys.empty()) {
+    auto key = multi_mutations_keys.front();
+    multi_mutations_keys.pop_front();
+    {
+      // Balances the decrement inside ProcessSingleMutationAsync.
+      absl::MutexLock lock(&stats_.mutex_);
+      ++stats_.mutation_queue_size_;
+    }
+    // time_sliced_mutex_ is left unheld: the callee takes it and it is not
+    // recursive.
+    ProcessSingleMutationAsync(detached_ctx_.get(), /*from_backfill=*/false,
+                               key, /*delay_capturer=*/nullptr);
+  }
 }
 
 void IndexSchema::EnqueueMultiMutation(const Key &key) {
@@ -969,12 +1014,8 @@ MutationSequenceNumber IndexSchema::UpdateDbInfoKey(
         << "Invalid attribute position found";
 
     const auto &attr_pos = res.value();
-    size_t data_len{0};
-    if (mutated_attr.second.data) {
-      // If data is present, the operation is either INSERT or UPDATE.
-      // Otherwise, the field has been deleted and is treated as having size
-      // 0.
-      data_len = vmsdk::ToStringView(mutated_attr.second.data.get()).length();
+    size_t data_len = mutated_attr.second.GetLength();
+    if (!mutated_attr.second.IsNull()) {
       attr_info_vec.emplace_back(attr_pos, data_len);
     }
     // update the global tracking array
@@ -1202,6 +1243,18 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
+  // The index_definition block gained the score_field pair and switched
+  // default_score from a hardcoded "1" bulk string to the configured score as
+  // a double in 1.3.0. Pre-1.3.0: a 6-element array with no score_field and a
+  // literal "1" for default_score (SCORE only accepted 1.0 at the time, so the
+  // literal was always accurate). Evaluated once per reply so the element count
+  // and the emitted pairs cannot disagree, and so the INFO counter records one
+  // use per FT.INFO call rather than one per affected field. See
+  // COMPATIBILITY.md.
+  const bool score_info_fixed = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_info_score_field", [] { return true; },
+      [] { return false; });
+
   int arrSize = 28;
   // Text-attribute info fields
   if (text_index_schema_) {
@@ -1213,7 +1266,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, 8);
+  ValkeyModule_ReplyWithArray(ctx, score_info_fixed ? 8 : 6);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -1223,11 +1276,15 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
-  ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
+  if (score_info_fixed) {
+    ValkeyModule_ReplyWithDouble(ctx, static_cast<double>(score_));
 
-  ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
-  ValkeyModule_ReplyWithSimpleString(
-      ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
+    ValkeyModule_ReplyWithSimpleString(ctx, "score_field");
+    ValkeyModule_ReplyWithSimpleString(
+        ctx, score_field_.has_value() ? score_field_.value().c_str() : "");
+  } else {
+    ValkeyModule_ReplyWithCString(ctx, "1");
+  }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "attributes");
   ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
@@ -1812,7 +1869,7 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
 }
 
 bool IndexSchema::IsInCurrentDB(ValkeyModuleCtx *ctx) const {
-  return ValkeyModule_GetSelectedDb(ctx) == db_num_;
+  return IsInDB(ValkeyModule_GetSelectedDb(ctx));
 }
 
 void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
@@ -1826,6 +1883,11 @@ void IndexSchema::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     return;
   }
   db_num_ = db_to_swap_to;
+  for (auto &[_, attribute] : attributes_) {
+    if (attribute.GetIndex()) {
+      attribute.GetIndex()->OnSwapDB(db_to_swap_to);
+    }
+  }
   auto &backfill_job = backfill_job_.Get();
   if (IsBackfillInProgress() && !backfill_job->IsScanDone()) {
     ValkeyModule_SelectDb(backfill_job->scan_ctx.get(), db_to_swap_to);
@@ -1876,7 +1938,7 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
   // Clean up any potentially stale index entries that can arise from
   // pending record deletions being lost during RDB save.
   vmsdk::StopWatch stop_watch;
-  ValkeyModule_SelectDb(ctx, db_num_);  // Make sure we are in the right DB.
+  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, db_num_);
   absl::flat_hash_map<std::string, MutatedAttributes> deletion_attributes;
   for (const auto &attribute : attributes_) {
     const auto &index = attribute.second.GetIndex();
@@ -1888,10 +1950,8 @@ void IndexSchema::OnLoadingEnded(ValkeyModuleCtx *ctx) {
                                             &stale_entries](const Key &key) {
       auto r_str = vmsdk::MakeUniqueValkeyString(*key);
       if (!ValkeyModule_KeyExists(ctx, r_str.get())) {
-        deletion_attributes[std::string(*key)][attribute.second.GetAlias()] = {
-            .data = nullptr,
-            .deletion_type = indexes::DeletionType::kRecord,
-        };
+        deletion_attributes[std::string(*key)][attribute.second.GetAlias()] =
+            AttributeData(indexes::DeletionType::kRecord);
         stale_entries++;
       }
       key_size++;
@@ -1979,11 +2039,6 @@ bool IndexSchema::InTrackedMutationRecords(
   if (ABSL_PREDICT_FALSE(itr == tracked_mutated_records_.end())) {
     return false;
   }
-  // ConsumeTrackedMutatedAttribute moves the attribute map out and sets
-  // attributes = std::nullopt, leaving the entry in the map. After that
-  // sequence, attributes is disengaged and `attributes->find(...)` would
-  // dereference an empty optional (UB; observed crashing under ASAN in the
-  // backfill scan path). No pending mutation == false.
   if (!itr->second.attributes.has_value()) {
     return false;
   }
@@ -2000,12 +2055,9 @@ size_t IndexSchema::ComputeWeightedBufferSize(
     const MutatedAttributes &attributes) const {
   size_t total = 0;
   for (const auto &[alias, attr_data] : attributes) {
-    size_t data_size = 0;
-    if (attr_data.data.get() != nullptr) {
-      data_size = vmsdk::ToStringView(attr_data.data.get()).length();
-    }
-    uint32_t weight = 0;
+    size_t data_size = attr_data.GetLength();
     auto attr_itr = attributes_.find(alias);
+    uint32_t weight = 0;
     if (attr_itr != attributes_.end()) {
       weight = attr_itr->second.GetIndex()->GetMutationWeight();
     }
@@ -2100,7 +2152,30 @@ void IndexSchema::MarkAsDestructing() {
   }
 
   backfill_job_.Get()->MarkScanAsDone();
+
+  absl::flat_hash_map<indexes::VectorBase *, std::vector<InternedStringPtr>>
+      pending_keys_by_index;
+  for (auto &[key, mutation] : tracked_mutated_records_) {
+    if (mutation.attributes) {
+      for (const auto &[alias, attr_data] : *mutation.attributes) {
+        if (attr_data.IsVector()) {
+          auto it = attributes_.find(alias);
+          if (it != attributes_.end()) {
+            auto *vb = dynamic_cast<indexes::VectorBase *>(
+                it->second.GetIndex().get());
+            if (vb) {
+              pending_keys_by_index[vb].push_back(key);
+            }
+          }
+        }
+      }
+    }
+  }
   tracked_mutated_records_.clear();
+  for (auto &[vb, keys] : pending_keys_by_index) {
+    VectorRegistry::Instance().RemoveIndexKeys(
+        db_num_, vb->GetInternedAttributeIdentifier(), keys);
+  }
   is_destructing_ = true;
 }
 
@@ -2208,13 +2283,22 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
         "calculation");
   }
   bool has_text_index = false;
+  bool has_low_precision_vector = false;
   for (const auto &attr : unpacked->attributes()) {
     if (attr.index().has_text_index()) {
       has_text_index = true;
-      break;
+    }
+    if (attr.index().has_vector_index()) {
+      const auto dt = attr.index().vector_index().vector_data_type();
+      if (dt == data_model::VECTOR_DATA_TYPE_FLOAT16 ||
+          dt == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
+        has_low_precision_vector = true;
+      }
     }
   }
-  if (has_text_index) {
+  if (has_low_precision_vector) {
+    return kRelease13;
+  } else if (has_text_index) {
     return kRelease12;
   } else if (unpacked->has_db_num() && unpacked->db_num() != 0) {
     return kRelease11;

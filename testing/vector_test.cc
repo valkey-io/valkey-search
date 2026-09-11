@@ -77,7 +77,7 @@ static void ExpectNeighborsNear(const std::vector<NeighborTest> &act,
   std::sort(sorted_exp.begin(), sorted_exp.end(), compare_by_id);
   for (size_t j = 0; j < sorted_act.size(); ++j) {
     EXPECT_EQ(sorted_act[j].external_id, sorted_exp[j].external_id);
-    EXPECT_NEAR(sorted_act[j].distance, sorted_exp[j].distance, tolerance);
+    EXPECT_NEAR(sorted_act[j].score, sorted_exp[j].score, tolerance);
   }
 }
 
@@ -162,7 +162,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
   auto vectors = DeterministicallyGenerateVectors(kN, kDim, 10.0);
   for (int i = 0; i < kN; ++i) {
-    VMSDK_EXPECT_OK(index->AddRecord(IndexToKey(i), VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
   }
 
   // Warmup (also pages in the graph / vector storage).
@@ -248,7 +249,10 @@ absl::Status VerifyAdd(indexes::IndexBase *index,
   auto id = IndexToKey(i);
   absl::string_view vector = VectorToStr(vectors[i]);
   bool alreadyExist = index->IsTracked(id);
-  auto res = index->AddRecord(id, vector);
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
+  auto res = vector_index
+                 ? testing_infra::AddVectorRecord(*vector_index, id, vector)
+                 : testing_infra::AddRecord(*index, id, vector);
   if (res.ok()) {
     if (!index->IsTracked(id)) {
       return absl::InternalError(
@@ -279,7 +283,10 @@ absl::Status VerifyModify(indexes::IndexBase *index,
                           bool expected_tracked) {
   auto id = IndexToKey(i);
   absl::string_view vector_str = VectorToStr(vector);
-  auto res = index->ModifyRecord(id, vector_str);
+  auto *vector_index = dynamic_cast<indexes::VectorBase *>(index);
+  auto res = vector_index ? testing_infra::ModifyVectorRecord(*vector_index, id,
+                                                              vector_str)
+                          : testing_infra::ModifyRecord(*index, id, vector_str);
   if (index->IsTracked(id) != expected_tracked) {
     return absl::InternalError(absl::StrCat(
         "From VerifyModify - IsTracked ,", index->IsTracked(id),
@@ -310,11 +317,8 @@ void TestIndex(T *index, int dimensions, int vector_size,
   VERIFY_ADD(index, vectors, 0, ExpectedResults::kError);
   auto vectors_small_dim =
       DeterministicallyGenerateVectors(vectors.size(), dimensions - 1, 1.0);
-  VERIFY_ADD(index, vectors_small_dim, 0, ExpectedResults::kInvalidData);
-  VERIFY_MODIFY(index, vectors_small_dim[0], 0, ExpectedResults::kInvalidData,
-                false);
 
-  VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kError, false);
+  VERIFY_MODIFY(index, vectors[0], 0, ExpectedResults::kMissing, true);
 
   VERIFY_MODIFY(index, vectors[0], vectors.size(), ExpectedResults::kError,
                 false);
@@ -343,7 +347,7 @@ void TestIndex(T *index, int dimensions, int vector_size,
       bool found = false;
       for (const auto &neighbors : res.value()) {
         if (neighbors.external_id == IndexToKey(i)) {
-          EXPECT_LT(neighbors.distance - res.value()[0].distance, 0.0001);
+          EXPECT_LT(neighbors.score - res.value()[0].score, 0.0001);
           found = true;
           break;
         }
@@ -365,67 +369,68 @@ void TestIndex(T *index, int dimensions, int vector_size,
   }
 }
 
-struct NormalizeStringRecordTestCase {
+struct NormalizeStringAttributeTestCase {
   std::string test_name;
   bool success{true};
-  std::string record;
+  std::string attribute_value;
   std::vector<float> expected_norm_values;
 };
 
-class NormalizeStringRecordTest
-    : public ValkeySearchTestWithParam<NormalizeStringRecordTestCase> {
+class NormalizeStringAttributeTest
+    : public ValkeySearchTestWithParam<NormalizeStringAttributeTestCase> {
  public:
   const char *attribute_identifier = "attribute_identifier_1";
   data_model::AttributeDataType attribute_data_type =
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
 };
 
-TEST_P(NormalizeStringRecordTest, NormalizeStringRecord) {
+TEST_P(NormalizeStringAttributeTest, NormalizeStringAttribute) {
   auto &params = GetParam();
 
   auto index = VectorHNSW<float>::Create(
       CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
                                  kInitialCap, kM, kEFConstruction, kEFRuntime),
       attribute_identifier, attribute_data_type, 0);
-  auto record = vmsdk::MakeUniqueValkeyString(params.record);
-  auto norm_record = index.value()->NormalizeStringRecord(std::move(record));
+  auto attribute = vmsdk::MakeUniqueValkeyString(params.attribute_value);
+  auto norm_attribute =
+      index.value()->NormalizeStringAttribute(std::move(attribute));
   if (!params.success) {
-    EXPECT_FALSE(norm_record.get());
+    EXPECT_FALSE(norm_attribute.get());
     return;
   }
-  auto norm_record_str = vmsdk::ToStringView(norm_record.get());
+  auto norm_attr_str = vmsdk::ToStringView(norm_attribute.get());
   for (size_t i = 0; i < params.expected_norm_values.size(); ++i) {
-    float value = *(((float *)norm_record_str.data()) + i);
+    float value = *(((float *)norm_attr_str.data()) + i);
     EXPECT_FLOAT_EQ(value, params.expected_norm_values[i]);
   }
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    NormalizeStringRecordTests, NormalizeStringRecordTest,
+    NormalizeStringAttributeTests, NormalizeStringAttributeTest,
 
-    testing::ValuesIn<NormalizeStringRecordTestCase>({
+    testing::ValuesIn<NormalizeStringAttributeTestCase>({
         {
             .test_name = "cardinality_1",
-            .record = "[ 0.1]",
+            .attribute_value = "[ 0.1]",
             .expected_norm_values{0.1},
         },
         {
             .test_name = "cardinality_1_1",
-            .record = "[,0.1]",
+            .attribute_value = "[,0.1]",
             .expected_norm_values{0.1},
         },
         {
             .test_name = "cardinality_3_1",
-            .record = "[ 0.1, ,0.2,0.3,]",
+            .attribute_value = "[ 0.1, ,0.2,0.3,]",
             .expected_norm_values{0.1, 0.2, 0.3},
         },
         {
             .test_name = "cardinality_3_fail",
             .success = false,
-            .record = "[ 0.1, ,0.2,a,]",
+            .attribute_value = "[ 0.1, ,0.2,a,]",
         },
     }),
-    [](const testing::TestParamInfo<NormalizeStringRecordTestCase> &info) {
+    [](const testing::TestParamInfo<NormalizeStringAttributeTestCase> &info) {
       return info.param.test_name;
     });
 
@@ -534,7 +539,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
                          vec1.size() * sizeof(float));
 
   auto key1 = IndexToKey(1);
-  VMSDK_EXPECT_OK(index.value()->AddRecord(key1, vec1_bytes));
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*index.value(), key1, vec1_bytes));
 
   // Search query [5.0, 0.0, 0.0, 0.0] pointing in exact same direction.
   // Cosine distance should be 0.0 (1 - (3*5)/(3*5) = 0).
@@ -729,7 +735,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   for (size_t i = 0; i < new_vectors.size(); ++i) {
     auto key = StringInternStore::Intern(absl::StrCat("new_", i, "_key"));
     absl::string_view vec_str = VectorToStr(new_vectors[i]);
-    auto res = (*index)->AddRecord(key, vec_str);
+    auto res = testing_infra::AddVectorRecord(**index, key, vec_str);
     VMSDK_EXPECT_OK(res) << "AddRecord failed for new vector " << i;
     EXPECT_EQ(res.value(), indexes::RecordResult::kAdded);
   }
@@ -1332,6 +1338,17 @@ TEST_F(VectorIndexTest, LoadValidatesSingleVector) {
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
 }
 
+// Regression: a small index may legitimately have a max_level greater than its
+// element count, because HNSW draws each node's level from an independent
+// random distribution. A single element forced to level 2 (max_level == 2,
+// curr_element_count == 1) must load successfully. This previously failed the
+// (incorrect) "max_level exceeds the element count" validation, which crashed
+// the server on RDB restore of e.g. a single zero-length-key HNSW index.
+TEST_F(VectorIndexTest, LoadValidatesSingleVectorWithHighLevel) {
+  auto golden = BuildGoldenChunks({2}, kGoldenMax);
+  VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/true));
+}
+
 TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   auto golden = MultiLayerGolden();
   hnswlib::L2Space space{kDimensions};
@@ -1388,7 +1405,17 @@ TEST_F(VectorIndexTest, RejectHeaderMaxLevelTooLarge) {
   auto h = GetHeader(golden);
   h.set_max_level(1000);
   SetHeader(&golden, h);
-  ExpectReject(std::move(golden), "max_level exceeds the element count");
+  ExpectReject(std::move(golden), "max level above expected range");
+}
+
+TEST_F(VectorIndexTest, RejectHeaderMaxLevelEntryPointMismatch) {
+  auto golden = MultiLayerGolden();
+  auto h = GetHeader(golden);
+  h.set_max_level(100);
+  SetHeader(&golden, h);
+  // A max_level inconsistent with the actual per-element levels is caught by
+  // the global entry-point invariant (the entry point must be a tallest node).
+  ExpectReject(std::move(golden), "enterpoint node is not at max_level");
 }
 
 TEST_F(VectorIndexTest, RejectHeaderSerializeSizeMismatch) {

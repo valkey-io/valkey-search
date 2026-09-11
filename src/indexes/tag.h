@@ -21,6 +21,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/attribute_data.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
@@ -49,14 +50,14 @@ class Tag : public IndexBase {
   ~Tag() override;
 
   absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
-                                         absl::string_view data) override
+                                         AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<bool> RemoveRecord(
       const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr &key,
-                                            absl::string_view data) override
+                                            AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
@@ -93,6 +94,17 @@ class Tag : public IndexBase {
   std::optional<absl::flat_hash_set<absl::string_view>> GetValue(
       const InternedStringPtr &key,
       bool &case_sensitive) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
+  // Returns whether `key` carries tag value `value`. `value` is normalized
+  // (lowercased unless case-sensitive) before lookup, so callers pass the raw
+  // query value. Unlike GetValue, this avoids parsing/allocating the document's
+  // tag set per call: it looks the value up in the rax and tests the key
+  // against that value's posting bag. Lock-free like GetValue, relying on the
+  // read-side invariant that the index is not mutated while the time-sliced
+  // mutex is held in read mode.
+  // Borrowed key: the only caller is the scoring walk, which holds the lock.
+  bool ContainsKey(absl::string_view value, BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Iterator yielded by EntriesFetcher::Begin(). Walks a vector of rax slots
   // (each slot's 8 bytes encode a BagOfInternedStringPtrs); for negated
@@ -145,6 +157,13 @@ class Tag : public IndexBase {
 
   char GetSeparator() const { return separator_; }
   bool IsCaseSensitive() const { return case_sensitive_; }
+
+  // Number of documents carrying tag value `value` (0 if the value is absent).
+  // `value` is normalized (lowercased unless case-sensitive) before lookup, so
+  // callers pass the raw query value. Feeds the BM25 IDF document frequency
+  // (dt) for tag scoring. O(1) rax lookup plus a bag size read.
+  size_t GetTagValueDocCount(absl::string_view value) const
+      ABSL_LOCKS_EXCLUDED(index_mutex_);
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(

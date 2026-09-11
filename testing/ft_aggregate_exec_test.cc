@@ -6,12 +6,20 @@
 
 #include "src/commands/ft_aggregate_exec.h"
 
-#include <algorithm>
-#include <random>
+#include <cstdlib>
+#include <iostream>
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
+
+namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+}  // namespace
 
 namespace valkey_search {
 namespace aggregate {
@@ -21,7 +29,9 @@ struct FakeIndexInterface : public IndexInterface {
   absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view fld_name) const override {
     std::string field_name(fld_name);
-    std::cout << "Fake make reference " << field_name << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake make reference " << field_name << "\n";
+    }
     auto itr = fields_.find(field_name);
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -32,13 +42,17 @@ struct FakeIndexInterface : public IndexInterface {
   }
   absl::StatusOr<std::string> GetIdentifier(
       absl::string_view alias) const override {
-    std::cout << "Fake get identifier for " << alias << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get identifier for " << alias << "\n";
+    }
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto type, GetFieldType(alias));
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(
       absl::string_view identifier) const override {
-    std::cout << "Fake get alias for " << identifier << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get alias for " << identifier << "\n";
+    }
     auto itr = fields_.find(std::string(identifier));
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -82,12 +96,12 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-        1);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
 
@@ -111,15 +125,15 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric),
-        1);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n3", "n3", indexes::IndexerType::kNumeric),
-        2);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
+    EXPECT_EQ(params->AddRecordAttribute("n3", "n3", "n3",
+                                         indexes::IndexerType::kNumeric),
+              2);
 
     auto parser = CreateAggregateParser();
 
@@ -131,6 +145,27 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
       ValkeyModule_FreeString(nullptr, str);
     }
     return params;
+  }
+
+  // Variant that returns the parse status instead of asserting success, for
+  // exercising error paths.
+  absl::Status TryParseStages(absl::string_view test) {
+    auto argv = vmsdk::ToValkeyStringVector(test);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fakeIndex;
+    // Two numeric columns so the parsed stages can resolve both @n1 and @n2.
+    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
+
+    auto parser = CreateAggregateParser();
+    auto status = parser.Parse(params, itr);
+
+    for (auto *str : argv) {
+      ValkeyModule_FreeString(nullptr, str);
+    }
+    return status;
   }
 };
 
@@ -271,6 +306,116 @@ TEST_F(AggregateExecTest, GroupTest) {
   }
 }
 
+TEST_F(AggregateExecTest, GroupByArrayKeyExpandsTest) {
+  // An array group key is a multi-value field: the record joins one group per
+  // element, and one per combination when both key fields hold arrays.
+  auto make_record = [](std::vector<double> n1, std::vector<double> n2) {
+    auto rec = std::make_unique<Record>(2);
+    auto to_value = [](const std::vector<double> &elems) {
+      std::vector<expr::Value> arr;
+      arr.reserve(elems.size());
+      for (double e : elems) {
+        arr.emplace_back(e);
+      }
+      return expr::Value(std::move(arr));
+    };
+    rec->fields_[0] = to_value(n1);
+    rec->fields_[1] = to_value(n2);
+    return rec;
+  };
+
+  // {1,2} and {2,3} share the element 2, so the two records join three
+  // distinct groups: 1, 2 and 3.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {0.0}));
+    records.emplace_back(make_record({2.0, 3.0}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 3);
+  }
+  // Two array keys expand to the product of their elements.
+  {
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {10.0, 20.0, 30.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 6);
+  }
+  // An empty array has no element to group into and keys as nil.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    EXPECT_TRUE(record->fields_.at(0).IsNil());
+  }
+  // Reducer arguments are not expanded: they still see the whole array.
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce tolist 1 @n1 as items");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {0.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 2);
+    auto record = records.pop_front();
+    EXPECT_TRUE(record->fields_.at(0).IsDouble());
+    EXPECT_EQ(record->fields_.at(2).ArraySize(), 2);
+  }
+}
+
+// Two array keys whose product exceeds max-group-key-expansion must be
+// refused rather than expanded.
+TEST_F(AggregateExecTest, GroupByArrayKeyExpansionLimitTest) {
+  auto to_value = [](const std::vector<double> &elems) {
+    std::vector<expr::Value> arr;
+    arr.reserve(elems.size());
+    for (double e : elems) {
+      arr.emplace_back(e);
+    }
+    return expr::Value(std::move(arr));
+  };
+  auto make_record = [&](const std::vector<double> &n1,
+                         const std::vector<double> &n2) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = to_value(n1);
+    rec->fields_[1] = to_value(n2);
+    return rec;
+  };
+
+  auto &limit = options::GetMaxGroupKeyExpansion();
+  const auto saved = limit.GetValue();
+  VMSDK_EXPECT_OK(limit.SetValue(5));
+
+  {
+    // 3 * 3 = 9 > 5.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0, 3.0}, {10.0, 20.0, 30.0}));
+    auto status = param->stages_[0]->Execute(records);
+    EXPECT_TRUE(absl::IsResourceExhausted(status)) << status;
+  }
+  {
+    // 2 * 2 = 4 <= 5, so this one is still allowed through.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0}, {10.0, 20.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 4);
+  }
+  {
+    // Exactly at the limit: 5 * 1 = 5 is not over it.
+    auto param = MakeStages("groupby 2 @n1 @n2 reduce count 0");
+    RecordSet records(nullptr);
+    records.emplace_back(make_record({1.0, 2.0, 3.0, 4.0, 5.0}, {10.0}));
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 5);
+  }
+
+  VMSDK_EXPECT_OK(limit.SetValue(saved));
+}
+
 TEST_F(AggregateExecTest, ReducerTest) {
   struct Testcase {
     std::string text_;
@@ -303,36 +448,49 @@ TEST_F(AggregateExecTest, ReducerTest) {
     }
   }
 }
-// Regression test for issue #1251: re-using an alias for a different field must
-// shadow the previous binding (RediSearch LOAD/APPLY semantics) rather than
-// abort or silently corrupt the alias/slot bookkeeping.
-TEST_F(AggregateExecTest, AliasRebindShadowsPreviousBinding) {
+// Regression test for issue #1251: re-using an output name for a different
+// field must not corrupt the column bookkeeping (the original defect sized
+// records from record_indexes_by_alias_, which undercounted, so populating a
+// later column wrote out of bounds).
+//
+// Upstream resolved #1251 by letting the re-bind shadow: two columns, with the
+// name resolving to the second. This branch collapses on the output name
+// instead, which matches Redisearch -- `LOAD 4 @n1 @n2 AS n1` returns a single
+// n1 column holding n1's value (the first claim wins), and an APPLY that
+// re-uses a loaded field's name overwrites that column in place rather than
+// emitting the name twice. A LOAD clause that actually provokes this collision
+// is rejected outright by the parser; see test_aggregate_load_as.py.
+TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   auto params = std::make_unique<AggregateParameters>(0);
   params->parse_vars_.index_interface_ = &fakeIndex;
 
-  EXPECT_EQ(
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric),
-      0);
-  EXPECT_EQ(
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-      1);
-
-  // record_info_by_index_.size() is the slot count records are sized by.
-  EXPECT_EQ(params->record_info_by_index_.size(), 2);
-
-  // Shadowed: alias n1 resolves to the new slot, but the old slot survives and
-  // stays reachable by its identifier.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
+  // Re-using the output name n1 for a different field resolves to the column
+  // already emitting that name; no second n1 column is created.
+  EXPECT_EQ(params->AddRecordAttribute("n2", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
+  EXPECT_EQ(params->record_info_by_index_.size(), 1);
   ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
-  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 1);
-  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n1"));
-  EXPECT_EQ(params->record_indexes_by_identifier_.at("n1"), 0);
-  ASSERT_TRUE(params->record_indexes_by_identifier_.contains("n2"));
-  EXPECT_EQ(params->record_indexes_by_identifier_.at("n2"), 1);
+  EXPECT_EQ(params->record_indexes_by_alias_.at("n1"), 0);
+  EXPECT_EQ(params->record_info_by_index_[0].identifier_, "n1");
 
-  // Re-adding the pair currently in effect is idempotent — no new slot.
-  EXPECT_EQ(
-      params->AddRecordAttribute("n2", "n1", indexes::IndexerType::kNumeric),
-      1);
+  // A distinct output name over the same field gets a column of its own, so
+  // record_info_by_index_ -- what records are sized by -- stays the count of
+  // columns actually emitted.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "alias_of_n1",
+                                       indexes::IndexerType::kNumeric),
+            1);
+  EXPECT_EQ(params->record_info_by_index_.size(), 2);
+  EXPECT_EQ(params->record_info_by_index_[1].identifier_, "n1");
+  EXPECT_EQ(params->record_indexes_by_alias_.at("alias_of_n1"), 1);
+
+  // Re-adding a pair currently in effect is idempotent -- no new column.
+  EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                       indexes::IndexerType::kNumeric),
+            0);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
 }
 
@@ -469,12 +627,16 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       vmsdk::ArgsIterator itr(argv.data(), argv.size());
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
-      params->AddRecordAttribute("n1", "n1", indexes::IndexerType::kNumeric);
-      params->AddRecordAttribute("n2", "n2", indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n1", "n1", "n1",
+                                 indexes::IndexerType::kNumeric);
+      params->AddRecordAttribute("n2", "n2", "n2",
+                                 indexes::IndexerType::kNumeric);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
-      for (auto *str : argv) ValkeyModule_FreeString(nullptr, str);
+      for (auto *str : argv) {
+        ValkeyModule_FreeString(nullptr, str);
+      }
       continue;
     }
     auto param = MakeStages(tc.text_);
@@ -653,6 +815,266 @@ TEST_F(AggregateExecTest, FirstValueReducerAscDescDistinctOutputTest) {
   ASSERT_GE(record->fields_.size(), 4u);
   EXPECT_TRUE(record->fields_.at(3).IsDouble());
   EXPECT_NEAR(*record->fields_.at(3).AsDouble(), 3.0, .001);
+}
+
+// Extracts the elements from a RANDOM_SAMPLE reducer result (Value::Array).
+static std::vector<expr::Value> GetSampleArray(const expr::Value &value) {
+  EXPECT_TRUE(value.IsArray()) << "Expected vector Value";
+  if (!value.IsArray()) {
+    return {};
+  }
+  auto vec = value.GetArray();
+  return std::vector<expr::Value>(vec->begin(), vec->end());
+}
+
+// Checks that every element in `sample` appears in `allowed`.
+static void ExpectAllElementsIn(const std::vector<expr::Value> &sample,
+                                const std::vector<std::string> &allowed) {
+  for (const auto &elem : sample) {
+    std::string elem_str = elem.AsString().value();
+    EXPECT_TRUE(std::find(allowed.begin(), allowed.end(), elem_str) !=
+                allowed.end())
+        << "Sample element \"" << elem_str << "\" not in allowed set";
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleBasicTest) {
+  // Edge case: empty record set produces no groups
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 5");
+    RecordSet records(nullptr);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 0);
+  }
+
+  // Edge case: single value in group
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 5");
+    auto records = MakeData(1);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 1);
+    EXPECT_EQ(sample[0].AsString(), expr::Value(0.0).AsString());
+  }
+
+  // Sampled values must come from the input set
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 3");
+    auto records = MakeData(5);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 5; ++i) {
+      allowed.push_back(expr::Value(double(i)).AsString().value());
+    }
+    ExpectAllElementsIn(sample, allowed);
+  }
+
+  // Sample size == group size: all elements selected
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 4");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 4);
+    std::vector<std::string> all_values;
+    for (int i = 0; i < 4; ++i) {
+      all_values.push_back(expr::Value(double(i)).AsString().value());
+    }
+    ExpectAllElementsIn(sample, all_values);
+  }
+
+  // Sample size > group size: all elements selected, no duplicates
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 10");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 4);
+    std::vector<std::string> all_values;
+    for (int i = 0; i < 4; ++i) {
+      all_values.push_back(expr::Value(double(i)).AsString().value());
+    }
+    ExpectAllElementsIn(sample, all_values);
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleNilHandlingTest) {
+  // Mixed nil and non-nil: only non-nil values should be sampled
+  auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 3");
+  RecordSet records(nullptr);
+  // 3 non-nil values at indices 0, 2, 4
+  for (int i = 0; i < 5; ++i) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] =
+        (i % 2 == 0) ? expr::Value(double(i)) : expr::Value();  // nil
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  auto sample = GetSampleArray(record->fields_.at(2));
+  EXPECT_EQ(sample.size(), 3);
+  std::vector<std::string> allowed;
+  for (int i : {0, 2, 4}) {
+    allowed.push_back(expr::Value(double(i)).AsString().value());
+  }
+  ExpectAllElementsIn(sample, allowed);
+}
+
+TEST_F(AggregateExecTest, RandomSampleTypeHandlingTest) {
+  // String values: type is preserved in output
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 3");
+    RecordSet records(nullptr);
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 5; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      std::string val = std::string("str") + std::to_string(i);
+      allowed.push_back(val);
+      rec->fields_[0] = expr::Value(std::move(val));
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 3);
+    ExpectAllElementsIn(sample, allowed);
+  }
+
+  // Mixed types: no nil in output, types preserved
+  {
+    auto param = MakeStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 4");
+    RecordSet records(nullptr);
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 6; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      if (i % 2 == 0) {
+        rec->fields_[0] = expr::Value(double(i));
+        allowed.push_back(expr::Value(double(i)).AsString().value());
+      } else {
+        std::string val = std::string("str") + std::to_string(i);
+        allowed.push_back(val);
+        rec->fields_[0] = expr::Value(std::move(val));
+      }
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample = GetSampleArray(record->fields_.at(2));
+    EXPECT_EQ(sample.size(), 4);
+    ExpectAllElementsIn(sample, allowed);
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleMultipleReducersTest) {
+  {
+    auto param = MakeStages(
+        "groupby 1 @n2 "
+        "reduce RANDOM_SAMPLE 2 @n1 3 "
+        "reduce RANDOM_SAMPLE 2 @n1 2");
+    auto records = MakeData(5);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    auto sample1 = GetSampleArray(record->fields_.at(2));
+    auto sample2 = GetSampleArray(record->fields_.at(3));
+    EXPECT_EQ(sample1.size(), 3);
+    EXPECT_EQ(sample2.size(), 2);
+    std::vector<std::string> allowed;
+    for (int i = 0; i < 5; ++i) {
+      allowed.push_back(expr::Value(double(i)).AsString().value());
+    }
+    ExpectAllElementsIn(sample1, allowed);
+    ExpectAllElementsIn(sample2, allowed);
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleGroupByTest) {
+  {
+    auto param = MakeStages("groupby 1 @n1 reduce RANDOM_SAMPLE 2 @n2 2");
+    RecordSet records(nullptr);
+    // 6 records, 3 groups (n1 values 0,1,2), each group has 2 records
+    for (int i = 0; i < 6; ++i) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(double(i % 3));  // 3 groups
+      rec->fields_[1] = expr::Value(double(i));
+      records.emplace_back(std::move(rec));
+    }
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 3);
+    for (auto &rec : records) {
+      auto sample = GetSampleArray(rec->fields_.at(2));
+      EXPECT_EQ(sample.size(), 2);
+    }
+  }
+}
+
+TEST_F(AggregateExecTest, RandomSampleParseErrorsTest) {
+  // Negative sample size is rejected at parse time.
+  {
+    auto status = TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 -5");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  }
+
+  // Sample size above kMaxSampleSize is rejected.
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 1001");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  }
+
+  // Non-integer sample size is rejected.
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 1.5");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  }
+
+  // Wrong argument count (1 instead of 2) is rejected.
+  {
+    auto status = TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 1 @n1");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  }
+
+  // Sample size zero is accepted (empty sample is a valid result).
+  {
+    auto status = TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 0");
+    EXPECT_TRUE(status.ok()) << status;
+  }
+
+  // Sample size at the upper bound is accepted.
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 2 @n1 1000");
+    EXPECT_TRUE(status.ok()) << status;
+  }
+
+  // Extra declared arguments beyond 2 are rejected (RANDOM_SAMPLE is
+  // fixed-arity 2).
+  {
+    auto status =
+        TryParseStages("groupby 1 @n2 reduce RANDOM_SAMPLE 3 @n1 5 extra");
+    EXPECT_FALSE(status.ok());
+    EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  }
 }
 
 }  // namespace aggregate

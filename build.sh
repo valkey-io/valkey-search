@@ -32,9 +32,11 @@ Usage: build.sh [options...]
     --clean                           Clean the current build configuration (debug or release).
     --format                          Applies clang-format. (Run in dev container environment to ensure correct clang-format version)
     --run-tests                       Run all tests. Optionally, pass a test name to run: "--run-tests=<test-name>".
+    --test-verbose                    Enable verbose test output (sets TEST_VERBOSE=1).
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
     --run-integration-tests[=pattern] Run integration tests.
+    --parallel[=N] | -j[=N]           Run integration tests in parallel with N workers (default: all CPU cores).
     --no-system-modules               Disable system dependencies and force building from submodules.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
@@ -44,13 +46,36 @@ Usage: build.sh [options...]
 Example usage:
 
     # Build the release configuration, run cmake if needed
-    build.sh
+    ./build.sh
 
     # Force run cmake and build the debug configuration
-    build.sh --configure --debug
+    ./build.sh --configure --debug
+
+    # Build debug version and run all unit tests
+    ./build.sh --debug --run-tests
+
+    # Run a specific unit test suite
+    ./build.sh --debug --run-tests=query_test
+
+    # Run unit tests matching a regex pattern
+    ./build.sh --debug --run-tests="index.*"
+
+    # Run unit tests with verbose debug traces enabled
+    ./build.sh --debug --run-tests --test-verbose
 
 EOF
 }
+
+function is_valid_parallel_workers() {
+    local val="$1"
+    [[ "$val" == "auto" || "$val" == "logical" || "$val" =~ ^[0-9]+$ ]]
+}
+
+PARALLEL_WORKERS="${PARALLEL_WORKERS:=auto}"
+if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+    echo "ERROR: Invalid PARALLEL_WORKERS environment variable: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer." >&2
+    exit 1
+fi
 
 ## Parse command line arguments
 while [ $# -gt 0 ]; do
@@ -113,6 +138,30 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Running integration tests with pattern=${TEST_PATTERN}"
         ;;
+    --parallel | -j)
+        shift || true
+        if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+            if is_valid_parallel_workers "$1"; then
+                PARALLEL_WORKERS="$1"
+                shift || true
+            else
+                echo "ERROR: Invalid value for --parallel: '$1'. Supported values: 0, auto, logical, or positive integer." >&2
+                exit 1
+            fi
+        else
+            PARALLEL_WORKERS="auto"
+        fi
+        echo "Running integration tests in parallel (workers=${PARALLEL_WORKERS})"
+        ;;
+    --parallel=* | -j=*)
+        PARALLEL_WORKERS="${1#*=}"
+        shift || true
+        if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+            echo "ERROR: Invalid value for --parallel: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer." >&2
+            exit 1
+        fi
+        echo "Running integration tests in parallel (workers=${PARALLEL_WORKERS})"
+        ;;
     --retries=*)
         INTEG_RETRIES=${1#*=}
         shift || true
@@ -146,6 +195,11 @@ while [ $# -gt 0 ]; do
         shift || true
         VERBOSE_ARGS="-v"
         echo "Verbose build: true"
+        ;;
+    --test-verbose)
+        export TEST_VERBOSE=1
+        shift || true
+        echo "Verbose test output: true"
         ;;
     --help | -h)
         print_usage
@@ -187,6 +241,111 @@ if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
 else
   BUILD_TOOL="make -j$(num_proc)"
 fi
+
+function determine_ninja() {
+    local os_name=$(uname -s)
+    if [[ "${os_name}" == "Darwin" ]]; then
+        # ninja can be installed via "brew"
+        echo "ninja"
+    else
+        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+        # Ubuntu / Mint et al will report "ID_LIKE=debian"
+        local debian_output=$(cat /etc/*-release 2>/dev/null | grep -i debian | wc -l)
+        if [ ${debian_output} -gt 0 ]; then
+            echo "ninja"
+        else
+            echo "ninja-build"
+        fi
+    fi
+}
+
+function check_subcommand_dependencies() {
+    local subcommands=()
+    if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+        subcommands+=("--run-integration-tests")
+    fi
+    if [[ -n "${RUN_TEST}" ]]; then
+        subcommands+=("--run-tests")
+    fi
+    if [[ "${RUN_BUILD}" == "yes" && ${#subcommands[@]} -eq 0 ]]; then
+        subcommands+=("build")
+    fi
+
+    if [[ ${#subcommands[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    local build_tool=$(determine_ninja)
+    if [[ "${BUILD_TOOL}" =~ make ]]; then
+        build_tool="make"
+    fi
+
+    local missing=()
+
+    # Build tools needed for compilation
+    if ! command -v cmake &>/dev/null; then
+        missing+=("cmake")
+    fi
+    if ! command -v "${build_tool}" &>/dev/null && ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null && ! command -v make &>/dev/null; then
+        missing+=("${build_tool}")
+    fi
+    if ! command -v git &>/dev/null; then
+        missing+=("git")
+    fi
+
+    local has_c_compiler=false
+    for c_comp in gcc clang cc; do
+        if command -v "${c_comp}" &>/dev/null; then
+            has_c_compiler=true
+            break
+        fi
+    done
+    if [[ "${has_c_compiler}" == "false" ]]; then
+        missing+=("gcc or clang")
+    fi
+
+    local has_cxx_compiler=false
+    for cxx_comp in g++ clang++ c++; do
+        if command -v "${cxx_comp}" &>/dev/null; then
+            has_cxx_compiler=true
+            break
+        fi
+    done
+    if [[ "${has_cxx_compiler}" == "false" ]]; then
+        missing+=("g++ or clang++")
+    fi
+
+    # Integration test specific external dependencies
+    if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+        if ! command -v python3 &>/dev/null; then
+            missing+=("python3")
+        fi
+        if ! command -v memtier_benchmark &>/dev/null; then
+            missing+=("memtier_benchmark")
+        fi
+        if ! command -v script &>/dev/null; then
+            missing+=("script")
+        fi
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "" >&2
+        printf "${RED}ERROR: Missing required CLI binaries for %s:${RESET}\n" "${subcommands[*]}" >&2
+        for tool in "${missing[@]}"; do
+            printf "  ${RED}- %s${RESET}\n" "${tool}" >&2
+        done
+        echo "" >&2
+        printf "${YELLOW}Note: It is strongly recommended to run within the repository devcontainer where all dependencies are pre-installed:${RESET}\n" >&2
+        local run_cmd=".devcontainer/run_in_docker.sh ./build.sh"
+        if [ -n "${ARGV}" ]; then
+            run_cmd="${run_cmd} ${ARGV}"
+        fi
+        printf "    ${GREEN}%s${RESET}\n\n" "${run_cmd}" >&2
+        exit 1
+    fi
+}
+
+check_subcommand_dependencies
 
 function build_icu_if_needed() {
     printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
@@ -317,79 +476,6 @@ function format() {
     printf "Applied clang-format\n"
 }
 
-function print_test_prefix() {
-    printf "${BOLD_PINK}Running:${RESET} $1"
-}
-
-function print_test_ok() {
-    printf " ... ${GREEN}ok${RESET}\n"
-}
-
-function print_test_summary() {
-    printf "${BLUE}Test output can be found here:${RESET} ${TEST_OUTPUT_FILE}\n"
-}
-
-function print_test_error_and_exit() {
-    printf " ... ${RED}failed${RESET}\n"
-    if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
-        # Only dump the failed test's output, not the entire accumulated log
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}"
-        else
-            printf "${RED}No test output produced (test crashed or was terminated).${RESET}\n"
-        fi
-    fi
-
-    # When running tests with sanitizer enabled, do not terminate the execution after the first failure continue
-    # running the remainder of the tests
-    if [[ "${SAN_BUILD}" == "no" ]]; then
-        print_test_summary
-        exit 1
-    else
-        # Make sure to exit the script with an error
-        EXIT_CODE=1
-    fi
-}
-
-function check_tool() {
-    local tool_name=$1
-    local message=$2
-    printf "Checking for ${tool_name}..."
-    command -v "${tool_name}" >/dev/null ||
-        (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
-    printf "${GREEN}ok${RESET}\n"
-}
-
-function determine_ninja() {
-    local os_name=$(uname -s)
-    if [[ "${os_name}" == "Darwin" ]]; then
-        # ninja is can be installed via "brew"
-        echo "ninja"
-    else
-        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
-        # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
-        if [ ${debian_output} -gt 0 ]; then
-            echo "ninja"
-        else
-            echo "ninja-build"
-        fi
-    fi
-}
-
-function check_tools() {
-    local tools="cmake g++ gcc"
-    for tool in $tools; do
-        check_tool ${tool}
-    done
-
-    local build_tool=$(determine_ninja)
-    if [[ "${BUILD_TOOL}" =~ make ]]; then
-        build_tool="make"
-    fi
-    check_tool ${build_tool}
-}
-
 function check_and_clean_on_branch_change() {
     local current_branch=$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     local branch_stamp="${BUILD_DIR}/.last_build_branch"
@@ -463,16 +549,12 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     fi
 fi
 
-TESTS_DIR=${BUILD_DIR}/tests
-TEST_OUTPUT_FILE=${BUILD_DIR}/tests.out
-
 check_and_clean_on_branch_change
 
 printf "Checking if configure is required..."
 
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
-check_tools
 
 START_TIME=$(date +%s)
 
@@ -496,37 +578,30 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     export ASAN_OPTIONS="detect_odr_violation=0"
 fi
 
-function run_single_test() {
-    local test_exec="$1"
-    echo "==> Running executable: ${test_exec}" >> "${TEST_OUTPUT_FILE}"
-    echo "" >> "${TEST_OUTPUT_FILE}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_prefix "${test_exec}"
-    if "${test_exec}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1; then
-        cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
-        print_test_ok
-    else
-        if [ -f "${CURRENT_TEST_OUTPUT_FILE}" ]; then
-            cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"
-        fi
-        print_test_error_and_exit
+if [ -n "${RUN_TEST}" ]; then
+    test_filter=""
+    if [[ "${RUN_TEST}" != "all" ]]; then
+        test_filter="-R ${RUN_TEST}"
     fi
-}
-
-if [[ "${RUN_TEST}" == "all" ]]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    while read -r test; do
-        run_single_test "${test}"
-    done < <(find "${TESTS_DIR}" -name "*_test" -type f)
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
-elif [ ! -z "${RUN_TEST}" ]; then
-    rm -f "${TEST_OUTPUT_FILE}"
-    CURRENT_TEST_OUTPUT_FILE="${BUILD_DIR}/current_test.out"
-    run_single_test "${TESTS_DIR}/${RUN_TEST}"
-    rm -f "${CURRENT_TEST_OUTPUT_FILE}"
-    print_test_summary
+    test_jobs=${JOBS:-$(num_proc)}
+    printf "${BOLD_PINK}Running unit tests (-j ${test_jobs})...${RESET}\n"
+    set -o pipefail
+    if ! GTEST_COLOR=yes CLICOLOR_FORCE=1 ctest --test-dir "${BUILD_DIR}" ${test_filter} -j ${test_jobs} --output-on-failure 2>&1 | tee "${BUILD_DIR}/tests.out"; then
+        EXIT_CODE=1
+        if [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
+            sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
+            printf "\n${RED}======================= FAILED TEST DETAILS =======================${RESET}\n"
+            grep -E -B 2 -A 25 -i "(: Failure|==[0-9]+==ERROR: |SUMMARY: .*Sanitizer|\[  FAILED  \]|Check failed:|Assertion \`.*\' failed)" "${BUILD_DIR}/Testing/Temporary/LastTest.log" || true
+            printf "${RED}===================================================================${RESET}\n"
+        fi
+    elif [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
+        sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
+    fi
+    if [ -f "${BUILD_DIR}/tests.out" ]; then
+        sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/tests.out"
+    fi
+    printf "\n${BLUE}Test output can be found in:${RESET} ${BUILD_DIR}/tests.out\n"
+    printf "${BLUE}Detailed CTest logs can be found in:${RESET} ${BUILD_DIR}/Testing/Temporary/LastTest.log\n\n"
 elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     params=""
     if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
@@ -550,8 +625,12 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     else
         # Abseil based tests do not support filtering tests based on "-k" flag
         # so when the TEST_PATTERN env variable is found, skip Abseil based tests
+        absl_params="${params}"
+        if [[ -n "${PARALLEL_WORKERS}" ]]; then
+            absl_params="${absl_params} --parallel=${PARALLEL_WORKERS}"
+        fi
         pushd testing/integration >/dev/null
-        ./run.sh ${params}
+        ./run.sh ${absl_params} || EXIT_CODE=1
         popd >/dev/null
     fi
 
@@ -563,8 +642,12 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     export TEST_PATTERN=${TEST_PATTERN}
     export INTEG_RETRIES=${INTEG_RETRIES}
     export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
+    integ_params="${params}"
+    if [[ -n "${PARALLEL_WORKERS}" ]]; then
+        integ_params="${integ_params} --parallel=${PARALLEL_WORKERS}"
+    fi
     # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh ${params} || EXIT_CODE=1
+    ./run.sh ${integ_params} || EXIT_CODE=1
     popd >/dev/null
 fi
 

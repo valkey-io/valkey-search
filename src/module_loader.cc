@@ -31,7 +31,7 @@ inline std::list<absl::string_view> ACLPermissionFormatter(
 }  // namespace
 
 vmsdk::module::Options options = {
-    .name = "search",
+    .name = kModuleName,
     .acl_categories = ACLPermissionFormatter({
         valkey_search::kSearchCategory,
     }),
@@ -126,4 +126,4 @@ vmsdk::module::Options options = {
           valkey_search::ValkeySearch::Instance().OnUnload(ctx);
         },
 };
-VALKEY_MODULE(options);
+VALKEY_MODULE(options, kModuleName, kModuleVersion);

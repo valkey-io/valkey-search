@@ -280,6 +280,13 @@ struct SearchParameters {
   // no_content query would enable a recompute without the contention check its
   // per-key text index walk depends on.
   bool WillFetchContentOnMainThread() const { return !no_content; }
+  // True when the search needs no post-search processing: a NOCONTENT reply
+  // where nothing (e.g. SORTBY) requires loading and reordering the full result
+  // set first. When true, the query can complete on the background thread and
+  // skip content loading.
+  bool NoProcessingRequired() const {
+    return no_content && !RequiresCompleteResults();
+  }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();

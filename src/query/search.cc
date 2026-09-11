@@ -973,7 +973,7 @@ void ScoreTextQuery(const IndexSchema &index_schema,
                     const indexes::scoring::Scorer *scorer,
                     std::vector<indexes::BorrowedNeighbor> &candidates) {
   CHECK(scorer != nullptr);
-  if (candidates.empty()) return;
+  if (candidates.empty() || options::IsScoringDisabled()) return;
 
   const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
   // Candidates came from this index, so total_docs should be > 0; degrade to
@@ -1088,6 +1088,10 @@ SingleDocumentScorer::SingleDocumentScorer(
   CHECK(root_predicate != nullptr);
   CHECK(scorer != nullptr);
 
+  // Kill switch: leave total_docs at 0 so Score() returns nullopt (callers
+  // score 0) and none of the resolve work below runs.
+  if (options::IsScoringDisabled()) return;
+
   // Reading index_key_info_ / text-index metadata requires the reader lock.
   // Production always constructs from the background thread inside Search(),
   // which already holds it (kLockAlreadyHeld); kAcquireLock is for tests that
@@ -1192,8 +1196,10 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
 
   // In-iterator scoring runs only for pure text queries over a non-empty text
   // index; match-all is excluded because its universal-set scan carries no
-  // TextIterator. Everything else is scored by the extra step below.
-  const bool score_in_drain = !has_non_text_predicate && text_index_schema &&
+  // TextIterator. Everything else is scored by the extra step below, which the
+  // kill switch short-circuits inside ScoreTextQuery.
+  const bool score_in_drain = !options::IsScoringDisabled() &&
+                              !has_non_text_predicate && text_index_schema &&
                               text_index_schema->GetTrackedKeyCount() > 0 &&
                               !parameters.filter_parse_results.is_match_all;
 
@@ -1910,7 +1916,7 @@ absl::Status query::SearchParameters::PostParseQueryString() {
 }
 
 ContentProcessing SearchParameters::GetContentProcessing() const {
-  if (no_content) {
+  if (NoProcessingRequired()) {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.

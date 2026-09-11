@@ -242,7 +242,38 @@ def row_sort_key(sortkeys):
     return key
 
 
-def unpack_result(cmd, key_type, rs, sortkeys):
+def canonicalize_ties(rows, sortkeys):
+    """Order the rows that tie on `sortkeys`, and leave everything else where
+    it is.
+
+    Used where the reply's own sequence is the answer. Two engines asked to
+    sort by a field must agree on the order of rows whose values differ, but
+    nothing decides the order of rows that hold the same value -- a SORTBY on
+    a field some documents do not carry leaves every one of those tied, and so
+    does a SORTBY over an array column where two groups hold the same array.
+    Canonicalizing each run of tied rows keeps those interchangeable without
+    giving up on the order of the rest.
+    """
+    def key_of(row):
+        return [order_insensitive(row.get(k)) for k in sortkeys]
+
+    def content_of(row):
+        return sorted((repr(k), order_insensitive(v)) for k, v in row.items())
+
+    out = []
+    i = 0
+    while i < len(rows):
+        j = i + 1
+        while j < len(rows) and key_of(rows[j]) == key_of(rows[i]):
+            j += 1
+        run = rows[i:j]
+        run.sort(key=content_of)
+        out.extend(run)
+        i = j
+    return out
+
+
+def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
     if "ft.hybrid" in cmd[0].lower():
         out = unpack_hybrid_result(rs, key_type)
     elif "ft.search" in cmd[0].lower():
@@ -255,8 +286,18 @@ def unpack_result(cmd, key_type, rs, sortkeys):
     else:
         out = unpack_agg_result(rs, key_type)
     #
-    # Sort by the sortkeys
+    # Align the rows for comparison. `ordered` means the command fixed the
+    # reply's sequence, so the sequence itself is the thing under test and
+    # only tied rows may be moved.
     #
+    if ordered and not any(isinstance(row.get(k), list)
+                           for row in out for k in sortkeys):
+        return canonicalize_ties(out, sortkeys)
+    # A list-valued sort key falls through to the alignment below. The engines
+    # return the elements of a TOLIST in different orders -- which is what
+    # order_insensitive() exists to absorb -- so they are not sorting the same
+    # values, and the sequence each produces is not something the other can be
+    # held to.
     if len(sortkeys) > 0:
         try:
             out.sort(key=row_sort_key(sortkeys))
@@ -399,13 +440,21 @@ def compare_results(expected, results):
 
     gix = last_index('groupby')
     six = last_index('sortby')
+    # `ordered` says the command fixed the reply's sequence, so the sequence is
+    # itself under test and the rows are compared as they arrived. Only a
+    # SORTBY that nothing regroups afterwards does that: a GROUPBY puts the
+    # reply back in an order no one specified, so a reply ending in one is
+    # aligned on its group key instead.
+    ordered = False
     if gix > six:
         count = int(cmd[gix+1])
         sortkeys = [field_name(cmd[gix+2+i]) for i in range(count)]
     elif six >= 0:
+        ordered = True
         # FT.SEARCH takes a bare field where the aggregate pipeline takes a
         # count followed by that many tokens: `SORTBY @n1 ASC` against
-        # `SORTBY 2 @n1 ASC`.
+        # `SORTBY 2 @n1 ASC`. The names are still needed here, to tell which
+        # rows tie and may therefore be ordered either way.
         if str(cmd[0]).lower() == 'ft.search':
             sortkeys = [field_name(cmd[six+1])]
         else:
@@ -439,10 +488,12 @@ def compare_results(expected, results):
 
     # Output raw results
     # print("Raw expected result:", expected["result"])
-    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
+    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys,
+                       ordered)
     # print("Unpack of expected result:", rl)
     # print("Raw actual result:", results["result"])
-    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
+    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys,
+                       ordered)
     # print("Unpack of actual result:", vk)
 
     # Process failures

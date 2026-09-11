@@ -26,6 +26,7 @@
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "src/valkey_search_options.h"
 #include "value.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -98,10 +99,27 @@ void ReplyScoreTopLevel(ValkeyModuleCtx* ctx, float score) {
 std::string GetSortKeyValue(const indexes::Neighbor& neighbor,
                             const SearchCommand& command);
 
-void SerializeNeighbors(ValkeyModuleCtx* ctx,
-                        const query::SearchResult& search_result,
-                        const SearchCommand& parameters) {
-  const auto& neighbors = search_result.neighbors;
+// WITHSORTKEYS prefixes each sort key by the SORTBY field's declared type:
+// '#' for NUMERIC fields, '$' for everything else (RediSearch-compatible).
+bool IsSortByFieldNumeric(const SearchCommand &command,
+                          const bool sort_by_vec_score) {
+  // sort by vector is considered special numeric but cannot be determined from
+  // IndexerType
+  if (sort_by_vec_score) {
+    return true;
+  }
+  if (!command.sortby_parameter.has_value()) {
+    return false;
+  }
+  auto idx = command.index_schema->GetIndex(command.sortby_parameter->field);
+  return idx.ok() &&
+         idx.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
+}
+
+void SerializeNeighbors(ValkeyModuleCtx *ctx,
+                        const query::SearchResult &search_result,
+                        const SearchCommand &parameters) {
+  const auto &neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   auto range = search_result.GetSerializationRange(parameters);
 
@@ -114,13 +132,19 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
   const bool emit_top_level_score = parameters.with_scores;
   const bool has_relevance = HasTextRelevance(parameters);
 
-  // WITHSORTKEYS: emit the sort key (prefixed with '#') after the optional
-  // score.
+  // WITHSORTKEYS: emit the sort key after the optional score, prefixed by
+  // the SORTBY field's type. The vector-distance sort key is numeric ('#').
   const bool emit_sort_key = parameters.with_sort_keys;
   const bool sort_by_vec_score =
       parameters.sortby_parameter.has_value() && parameters.score_as &&
       parameters.sortby_parameter->field ==
           vmsdk::ToStringView(parameters.score_as.get());
+  const std::string sort_key_prefix = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_search_sortkey_type_prefix",
+      [&]() -> std::string {
+        return IsSortByFieldNumeric(parameters, sort_by_vec_score) ? "#" : "$";
+      },
+      [&]() -> std::string { return "#"; });
 
   const size_t elements_per_result =
       2 + (emit_top_level_score ? 1 : 0) + (emit_sort_key ? 1 : 0);
@@ -137,7 +161,7 @@ void SerializeNeighbors(ValkeyModuleCtx* ctx,
       std::string value = sort_by_vec_score
                               ? absl::StrFormat("%.12g", neighbors[i].distance)
                               : GetSortKeyValue(neighbors[i], parameters);
-      std::string prefixed_value = "#" + value;
+      std::string prefixed_value = sort_key_prefix + value;
       ValkeyModule_ReplyWithString(
           ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
     }
@@ -263,6 +287,17 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
 
   ValkeyModule_ReplyWithArray(ctx, elements_per_result * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, command);
+
+  std::string prefix_str;
+  if (command.with_sort_keys) {
+    prefix_str = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_search_sortkey_type_prefix",
+        [&]() -> std::string {
+          return IsSortByFieldNumeric(command, false) ? "#" : "$";
+        },
+        [&]() -> std::string { return "#"; });
+  }
+
   for (size_t i = range.start_index; i < range.end_index; ++i) {
     // Document ID
     ValkeyModule_ReplyWithString(
@@ -273,12 +308,13 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx* ctx,
       ReplyScoreTopLevel(ctx, neighbors[i].score);
     }
 
-    // Sort key value (prefixed with #) when WITHSORTKEYS is specified
+    // Prefix the sort key: '#' for NUMERIC fields, '$' for string fields
+    // (RediSearch-compatible).
     if (command.with_sort_keys) {
       std::string sort_key_value = GetSortKeyValue(neighbors[i], command);
-      std::string prefixed_value = "#" + sort_key_value;
+      std::string value_with_prefix = prefix_str + sort_key_value;
       ValkeyModule_ReplyWithString(
-          ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
+          ctx, vmsdk::MakeUniqueValkeyString(value_with_prefix).get());
     }
 
     const auto& contents = neighbors[i].attribute_contents.value();

@@ -1542,10 +1542,10 @@ TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
 
   auto vectors = DeterministicallyGenerateVectors(kVecCount, kDim, 10.0);
   for (int i = 0; i < kVecCount; ++i) {
-    VMSDK_EXPECT_OK(
-        testing_infra::AddVectorRecord(**hnsw_index, IndexToKey(i), VectorToStr(vectors[i])));
-    VMSDK_EXPECT_OK(
-        testing_infra::AddVectorRecord(**flat_index, IndexToKey(i), VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**hnsw_index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat_index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
   }
 
   for (int i = 0; i < kVecCount; ++i) {

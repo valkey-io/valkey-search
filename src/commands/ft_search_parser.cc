@@ -62,8 +62,8 @@ vmsdk::config::Number& GetMaxKnn() {
   return dynamic_cast<vmsdk::config::Number&>(*max_knn);
 }
 
-vmsdk::config::Number &GetMaxTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number &>(*max_timeout_ms);
+vmsdk::config::Number& GetMaxTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_timeout_ms);
 }
 
 }  // namespace options

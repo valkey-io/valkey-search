@@ -454,9 +454,15 @@ class VectorBase : public IndexBase {
 
   float ClampCosineDistance(float dist) const {
     if (!normalize_) return dist;
-    if (dist <= std::numeric_limits<float>::epsilon()) return 0.0f;
-    if (dist >= 2.0f - std::numeric_limits<float>::epsilon())
-      return std::nextafter(2.0f, 3.0f);
+    // FP accumulation error for a dot product of N terms is bounded by
+    // N * (epsilon/2) * |result|.  For a unit vector against itself the result
+    // is 1, so the self-distance 1 - dot(v,v) can land anywhere in the range
+    // [-N*eps/2, N*eps/2].  Scale the clamp threshold accordingly so that
+    // genuine self-matches (and near-self-matches) are not falsely excluded.
+    const float kClampEpsilon =
+        static_cast<float>(dimensions_) * std::numeric_limits<float>::epsilon();
+    if (dist <= kClampEpsilon) return 0.0f;
+    if (dist >= 2.0f - kClampEpsilon) return std::nextafter(2.0f, 3.0f);
     return dist;
   }
 

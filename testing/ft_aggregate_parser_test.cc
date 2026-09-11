@@ -537,7 +537,8 @@ TEST_F(ParseCommandRegistrationTest, NonVectorOneVrPredicate) {
   params.index_schema = schema;
   params.parse_vars.query_string =
       "@vec:[VECTOR_RANGE 0.5 $blob]=>{$yield_distance_as: my_dist}";
-  params.parse_vars.params["blob"] = {1, MakeBlob3()};
+  std::string blob = MakeBlob3();
+  params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
 
   ASSERT_TRUE(RunParseCommand(params));
 
@@ -560,8 +561,10 @@ TEST_F(ParseCommandRegistrationTest, NonVectorTwoVrPredicates) {
   params.parse_vars.query_string =
       "(@vec:[VECTOR_RANGE 0.5 $b1]=>{$yield_distance_as: d1} "
       "@vec:[VECTOR_RANGE 1.0 $b2]=>{$yield_distance_as: d2})";
-  params.parse_vars.params["b1"] = {1, MakeBlob3()};
-  params.parse_vars.params["b2"] = {1, MakeBlob3()};
+  std::string b1 = MakeBlob3();
+  std::string b2 = MakeBlob3();
+  params.parse_vars.params["b1"] = {1, absl::string_view(b1)};
+  params.parse_vars.params["b2"] = {1, absl::string_view(b2)};
 
   ASSERT_TRUE(RunParseCommand(params));
 
@@ -586,8 +589,10 @@ TEST_F(ParseCommandRegistrationTest, KnnWithOneVrPredicate) {
   params.parse_vars.query_string =
       "@vec:[VECTOR_RANGE 0.5 $vrblob]=>{$yield_distance_as: vr_dist}"
       "=>[KNN 5 @vec $kblob AS knn_dist]";
-  params.parse_vars.params["vrblob"] = {1, MakeBlob3()};
-  params.parse_vars.params["kblob"] = {1, MakeBlob3()};
+  std::string vrblob = MakeBlob3();
+  std::string kblob = MakeBlob3();
+  params.parse_vars.params["vrblob"] = {1, absl::string_view(vrblob)};
+  params.parse_vars.params["kblob"] = {1, absl::string_view(kblob)};
   params.parse_vars.score_as_string = "knn_dist";
 
   ASSERT_TRUE(RunParseCommand(params));
@@ -615,7 +620,8 @@ TEST_F(ParseCommandRegistrationTest, KnnWithNoVrPredicate) {
   AggregateParameters params(0);
   params.index_schema = schema;
   params.parse_vars.query_string = "*=>[KNN 5 @vec $kblob AS knn_dist]";
-  params.parse_vars.params["kblob"] = {1, MakeBlob3()};
+  std::string kblob = MakeBlob3();
+  params.parse_vars.params["kblob"] = {1, absl::string_view(kblob)};
   params.parse_vars.score_as_string = "knn_dist";
 
   ASSERT_TRUE(RunParseCommand(params));

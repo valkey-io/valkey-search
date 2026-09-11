@@ -351,6 +351,19 @@ class IndexSchema : public KeyspaceEventSubscription,
 
   size_t GetDbKeyInfoSize() const { return db_key_info_.Get().size(); }
 
+  // Same as GetDbMutationSequenceNumber, for callers that may legitimately ask
+  // about a key the index no longer tracks: a mutation that deleted the key
+  // erases its entry, and asking about one of those is a question, not a bug.
+  std::optional<MutationSequenceNumber> TryGetDbMutationSequenceNumber(
+      const Key &key) const {
+    const auto &map = db_key_info_.Get();
+    auto itr = map.find(key);
+    if (itr == map.end()) {
+      return std::nullopt;
+    }
+    return itr->second.mutation_sequence_number_;
+  }
+
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
     auto itr = db_key_info_.Get().find(key);
     CHECK(itr != db_key_info_.Get().end())

@@ -531,6 +531,29 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
       internal_id};
 }
 
+absl::StatusOr<float> VectorBase::RecomputeDistance(
+    absl::string_view record, absl::string_view query) const {
+  if (!IsValidSizeVector(record)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Vector record of size ", record.size(),
+                     " does not match the index dimensions"));
+  }
+  // Built with the default allocator rather than the index's own: this runs on
+  // the main thread while writers may be using that allocator, and one record
+  // per mutated key is not worth sharing.
+  auto vector_record =
+      VectorRecord::Construct(record, ComputeReciprocalMagnitude(record));
+  if (!vector_record) {
+    return absl::InternalError("Could not construct a vector record");
+  }
+  float query_magnitude = kDefaultMagnitude;
+  if (normalize_) {
+    query_magnitude = CalcReciprocalMagnitude(query, GetVectorDataType()) *
+                      vector_record->GetReciprocalMagnitude();
+  }
+  return ComputeDistance(query, vector_record.get(), query_magnitude);
+}
+
 bool VectorBase::AddPrefilteredKey(
     absl::string_view query, float query_magnitude,
     const InternedStringPtr &key, uint64_t count,

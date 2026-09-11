@@ -548,6 +548,76 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   EXPECT_NEAR(search_res.value()[0].distance, 0.0f, 1e-5f);
 }
 
+// RecomputeDistance answers the question the search answers, but from bytes
+// handed to it rather than from the index. FT.HYBRID uses it to refresh a
+// neighbor whose document was rewritten after the search scored it.
+TEST_F(VectorIndexTest, RecomputeDistanceMatchesTheSearchForTheStoredVector)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int dimensions = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_L2, 10,
+                                 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+
+  auto bytes = [](std::vector<float> v) {
+    return std::string(reinterpret_cast<const char *>(v.data()),
+                       v.size() * sizeof(float));
+  };
+  const std::string stored = bytes({1.0f, 0.0f, 0.0f, 0.0f});
+  const std::string query = bytes({0.0f, 0.0f, 0.0f, 0.0f});
+  VMSDK_EXPECT_OK(index.value()->AddRecord(IndexToKey(1), stored));
+
+  auto search_res = index.value()->Search(query, 1, CancelNever());
+  ASSERT_TRUE(search_res.ok());
+  ASSERT_EQ(search_res.value().size(), 1);
+
+  auto same = index.value()->RecomputeDistance(stored, query);
+  ASSERT_TRUE(same.ok());
+  EXPECT_NEAR(*same, search_res.value()[0].distance, 1e-5f);
+
+  // A different vector gives a different answer without the index having heard
+  // about the change: L2 to [9,0,0,0] is 81.
+  auto moved =
+      index.value()->RecomputeDistance(bytes({9.0f, 0.0f, 0.0f, 0.0f}), query);
+  ASSERT_TRUE(moved.ok());
+  EXPECT_NEAR(*moved, 81.0f, 1e-4f);
+
+  // A record of the wrong width is rejected rather than read past its end.
+  EXPECT_FALSE(index.value()->RecomputeDistance(bytes({1.0f}), query).ok());
+}
+
+// With COSINE the magnitudes of both sides matter, so the normalization has to
+// be applied to the passed-in bytes the same way the search applies it to the
+// stored record.
+TEST_F(VectorIndexTest, RecomputeDistanceNormalizesForCosine)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int dimensions = 4;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(dimensions, data_model::DISTANCE_METRIC_COSINE,
+                                 10, 10),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+
+  auto bytes = [](std::vector<float> v) {
+    return std::string(reinterpret_cast<const char *>(v.data()),
+                       v.size() * sizeof(float));
+  };
+  const std::string query = bytes({5.0f, 0.0f, 0.0f, 0.0f});
+
+  // Same direction, different magnitude: cosine distance 0.
+  auto aligned =
+      index.value()->RecomputeDistance(bytes({3.0f, 0.0f, 0.0f, 0.0f}), query);
+  ASSERT_TRUE(aligned.ok());
+  EXPECT_NEAR(*aligned, 0.0f, 1e-5f);
+
+  // Orthogonal: cosine distance 1.
+  auto orthogonal =
+      index.value()->RecomputeDistance(bytes({0.0f, 2.0f, 0.0f, 0.0f}), query);
+  ASSERT_TRUE(orthogonal.ok());
+  EXPECT_NEAR(*orthogonal, 1.0f, 1e-5f);
+}
+
 float CalcRecall(VectorFlat<float> *flat_index, VectorHNSW<float> *hnsw_index,
                  uint64_t k, int dimensions, std::optional<size_t> ef_runtime) {
   auto search_vectors = DeterministicallyGenerateVectors(50, dimensions, 1.5);

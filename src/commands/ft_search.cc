@@ -101,7 +101,7 @@ std::string GetSortKeyValue(const indexes::Neighbor& neighbor,
 
 // WITHSORTKEYS prefixes each sort key by the SORTBY field's declared type:
 // '#' for NUMERIC fields, '$' for everything else (RediSearch-compatible).
-bool IsSortByFieldNumeric(const SearchCommand &command,
+bool IsSortByFieldNumeric(const SearchCommand& command,
                           const bool sort_by_vec_score) {
   // sort by vector is considered special numeric but cannot be determined from
   // IndexerType
@@ -116,10 +116,10 @@ bool IsSortByFieldNumeric(const SearchCommand &command,
          idx.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
 }
 
-void SerializeNeighbors(ValkeyModuleCtx *ctx,
-                        const query::SearchResult &search_result,
-                        const SearchCommand &parameters) {
-  const auto &neighbors = search_result.neighbors;
+void SerializeNeighbors(ValkeyModuleCtx* ctx,
+                        const query::SearchResult& search_result,
+                        const SearchCommand& parameters) {
+  const auto& neighbors = search_result.neighbors;
   CHECK_GT(static_cast<size_t>(parameters.k), parameters.limit.first_index);
   auto range = search_result.GetSerializationRange(parameters);
 

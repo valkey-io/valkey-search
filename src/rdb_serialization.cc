@@ -178,10 +178,6 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   // stale residual can't leak into the at-rest number_of_indexes metric.
   absl::Cleanup clear_restore_progress = [] {
     Metrics::GetStats().rdb_restore_in_progress = false;
-    Metrics::GetStats().rdb_restore_total_indexes = 0;
-    Metrics::GetStats().rdb_restore_completed_indexes = 0;
-    Metrics::GetStats().rdb_restore_current_index_keys_total = 0;
-    Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
   };
 
   // Begin RDBSection iteration

@@ -13,6 +13,7 @@ GENERATORS = [
     {"generator": "generate_text.py", "answers": "text-search-answers.pickle.gz", "cluster": False},
     {"generator": "generate_array.py", "answers": "array-input-answers.pickle.gz", "cluster": False},
     {"generator": "generate_expr.py",  "answers": "expr-answers.pickle.gz",         "cluster": False},
+    {"generator": "generate_sortkey.py", "answers": "sortkey-answers.pickle.gz",  "cluster": False},
 ]
 
 

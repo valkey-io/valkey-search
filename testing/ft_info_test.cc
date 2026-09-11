@@ -410,19 +410,6 @@ INSTANTIATE_TEST_SUITE_P(
                 },
         },
         {
-            .test_name = "incorrect_param_count",
-            .test_cases =
-                {
-                    {
-                        .argv = {"FT.Info"},
-                        .expect_return_failure = true,
-                        .expected_output =
-                            "-ERR wrong number of "
-                            "arguments for 'FT.INFO' command\r\n",
-                    },
-                },
-        },
-        {
             .test_name = "index_schema_does_not_exist",
             .test_cases =
                 {

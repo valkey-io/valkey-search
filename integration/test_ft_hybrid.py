@@ -130,8 +130,11 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
     # ---------------------------------------------------------------------
 
     def test_yield_score_as_aliases_reach_apply_and_sortby(self):
-        """Per-arm and COMBINE YIELD_SCORE_AS aliases are reachable by the
-        aggregate stages."""
+        """The COMBINE YIELD_SCORE_AS alias is reachable by the aggregate
+        stages. The per-arm aliases are named here too, but only so that
+        naming them does not disturb the fused one: a per-arm alias is not
+        itself resolvable in a stage (see
+        test_sortby_per_arm_score_alias_is_rejected)."""
         client = self.server.get_new_client()
         self.setup_index(client)
         result = client.execute_command(
@@ -153,6 +156,95 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             keys = set(rec[::2])
             assert b"hscore" in keys, f"hscore missing in {rec}"
             assert b"h2" in keys, f"h2 (APPLY result) missing in {rec}"
+
+    # ---------------------------------------------------------------------
+    # SORTBY over the fused record. Order is asserted here and only here:
+    # the compatibility suite re-sorts both replies on a derived key before
+    # comparing them, so it pins which rows and values come back, never the
+    # sequence the engine emitted them in.
+    # ---------------------------------------------------------------------
+
+    def _fused_rows(self, client, *tail):
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "sscore",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+            "YIELD_SCORE_AS", "vscore",
+            "COMBINE", "RRF", "4", "WINDOW", "20", "YIELD_SCORE_AS", "hscore",
+            *tail,
+            "LIMIT", "0", "10",
+            "PARAMS", "2", "q", self.Q,
+        )
+        return [self._rec_to_dict(rec) for rec in result[1:]]
+
+    def test_sortby_fused_score_orders_the_reply(self):
+        """Ascending and descending both order the rows, and reversing one
+        gives the other's scores."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        descending = [float(r[b"hscore"])
+                      for r in self._fused_rows(
+                          client, "SORTBY", "2", "@hscore", "DESC")]
+        ascending = [float(r[b"hscore"])
+                     for r in self._fused_rows(
+                         client, "SORTBY", "2", "@hscore", "ASC")]
+
+        assert len(descending) == 10
+        assert descending == sorted(descending, reverse=True)
+        assert ascending == sorted(ascending)
+        # Ties do not break this: it compares the score sequence, not the keys.
+        assert ascending == list(reversed(descending))
+
+    def test_sortby_document_key_orders_the_reply(self):
+        """The document key is sortable even though it is not a schema
+        field."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        ascending = [r[b"__key"] for r in self._fused_rows(
+            client, "SORTBY", "2", "@__key", "ASC")]
+        descending = [r[b"__key"] for r in self._fused_rows(
+            client, "SORTBY", "2", "@__key", "DESC")]
+
+        assert len(ascending) == 10
+        assert ascending == sorted(ascending)
+        assert descending == list(reversed(ascending))
+
+    def test_sortby_applied_column_orders_the_reply(self):
+        """A column APPLY derived from the fused score sorts like the score it
+        was derived from, which is what makes a stage's output usable by the
+        stage after it."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        rows = self._fused_rows(
+            client,
+            "APPLY", "@hscore * 1000", "AS", "scaled",
+            "SORTBY", "2", "@scaled", "DESC")
+        scaled = [float(r[b"scaled"]) for r in rows]
+        assert len(scaled) == 10
+        assert scaled == sorted(scaled, reverse=True)
+        # And it really is the fused score, scaled.
+        for row in rows:
+            assert abs(float(row[b"scaled"]) -
+                       float(row[b"hscore"]) * 1000) < 1e-6
+
+    def test_sortby_per_arm_score_alias_is_rejected(self):
+        """A per-arm YIELD_SCORE_AS alias is not a column any stage resolves.
+        It is neither a field of the index nor anything LOAD can name, and the
+        stage parser rejects it before the query runs.
+
+        Redis resolves it in a SORTBY under every LOAD clause except `LOAD *`.
+        That divergence is recorded in
+        integration/compatibility/unsupported_tests.md and swept, xfail, by
+        generate_hybrid.py::test_sortby_per_arm_score_is_reachable."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for alias in ("vscore", "sscore"):
+            with pytest.raises(ResponseError,
+                               match=rf"Index field `{alias}` does not exist"):
+                self._fused_rows(client, "SORTBY", "2", f"@{alias}", "DESC")
 
     # ---------------------------------------------------------------------
     # COMBINE FUNCTION: user-defined scoring expression over per-arm scores.

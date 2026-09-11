@@ -190,6 +190,7 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         vector="near",
         search_score_as="text_score",
         vector_score_as=None,
+        fused_score_as="hybrid_score",
         window=NON_BINDING_WINDOW,
         limit=PINNED_LIMIT,
         load=LOAD_ALL,
@@ -223,10 +224,9 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         method, options = combine
         if window is not None:
             options = [*options, "WINDOW", window]
-        cmd += [
-            "COMBINE", method, str(len(options) + 2),
-            *options, "YIELD_SCORE_AS", "hybrid_score",
-        ]
+        if fused_score_as:
+            options = [*options, "YIELD_SCORE_AS", fused_score_as]
+        cmd += ["COMBINE", method, str(len(options)), *options]
         cmd += list(load)
         # Pipeline stages first, then LIMIT. An explicit LIMIT is a positional
         # stage on both engines, so writing it last is what makes `GROUPBY` see
@@ -442,6 +442,13 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for limit in [("0", "1"), ("0", "5"), ("2", "5"), ("0", "100")]:
             self.hybrid(key_type, "@title:alpha", limit=limit)
 
+    # NOTE on what a SORTBY sweep can and cannot pin down here.
+    # compatibility_test.py re-sorts both replies on a key it derives from the
+    # command before comparing them, so what these cases compare is which rows
+    # come back and what each column holds -- not the order the engine emitted
+    # them in. Emitted order is asserted in integration/test_ft_hybrid.py,
+    # which compares replies as they arrive.
+
     def test_sortby(self, key_type):
         self.setup_data(key_type)
         for sort in [
@@ -450,6 +457,105 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             ["SORTBY", "2", "@hybrid_score", "DESC"],
         ]:
             self.hybrid(key_type, "@title:alpha", tail=sort)
+
+    def test_sortby_every_kind_of_column(self, key_type):
+        """SORTBY over each kind of column a fused record carries, alone and
+        in combination: the fused score, a per-arm score, a plain document
+        field, the document key, and the name the fused score falls back to
+        when COMBINE does not alias it.
+
+        Both engines refuse a per-arm score here, and for the same reason: a
+        YIELD_SCORE_AS alias is not a field of the index and, under `LOAD *`,
+        not a loaded column either. The cases are swept so that the agreement
+        is on the record, and so that one engine starting to accept them shows
+        up as a difference.
+        """
+        self.setup_data(key_type)
+        cases = [
+            # The fused score, both directions.
+            ["SORTBY", "2", "@hybrid_score", "DESC"],
+            ["SORTBY", "2", "@hybrid_score", "ASC"],
+            # Per-arm scores, each named by its own arm's YIELD_SCORE_AS.
+            ["SORTBY", "2", "@text_score", "DESC"],
+            ["SORTBY", "2", "@vector_score", "DESC"],
+            # A plain field, and the document key.
+            ["SORTBY", "2", "@price", "ASC"],
+            ["SORTBY", "2", "@__key", "ASC"],
+            # The fused score's default name, which a reply carries but no
+            # stage resolves.
+            ["SORTBY", "2", "@__score", "DESC"],
+            # Combinations. A score first with a field to break its ties, the
+            # same pair the other way round, and the two arms against each
+            # other.
+            ["SORTBY", "4", "@hybrid_score", "DESC", "@price", "ASC"],
+            ["SORTBY", "4", "@price", "ASC", "@hybrid_score", "DESC"],
+            ["SORTBY", "4", "@text_score", "DESC", "@vector_score", "DESC"],
+            ["SORTBY", "4", "@vector_score", "DESC", "@price", "ASC"],
+        ]
+        for sort in cases:
+            self.hybrid(key_type, "@title:alpha", tail=sort,
+                        vector_score_as="vector_score")
+
+    # TODO(stage-refs-per-arm-score): Redis resolves a per-arm YIELD_SCORE_AS
+    # alias in a SORTBY whenever the LOAD clause is anything other than
+    # `LOAD *`, and sorts by it. valkey-search rejects the reference outright,
+    # at parse time, under every LOAD clause: "Index field `vector_score` does
+    # not exist". The fused COMBINE alias is reachable in stages on both
+    # engines; only the per-arm ones are not, here.
+    #
+    # When the per-arm aliases become reachable these will start matching, the
+    # run will print XPASS, and both the `xfail=True` and the entry in
+    # unsupported_tests.md should be removed.
+    def test_sortby_per_arm_score_is_reachable(self, key_type):
+        self.setup_data(key_type)
+        for load in [NO_LOAD, ["LOAD", "1", "@price"],
+                     ["LOAD", "2", "@price", "@color"]]:
+            for sort in [
+                ["SORTBY", "2", "@vector_score", "DESC"],
+                ["SORTBY", "2", "@text_score", "DESC"],
+                ["SORTBY", "4", "@text_score", "DESC", "@vector_score", "ASC"],
+            ]:
+                self.hybrid(key_type, "@title:alpha", load=load, tail=sort,
+                            vector_score_as="vector_score", xfail=True)
+
+    def test_pipeline_stages_over_scores(self, key_type):
+        """The other stages, over the same columns. The fused score is
+        reachable to all of them on both engines; a per-arm score is reachable
+        to neither under `LOAD *`."""
+        self.setup_data(key_type)
+        cases = [
+            ["APPLY", "@hybrid_score * 100", "AS", "scaled_score"],
+            ["APPLY", "@hybrid_score + @price", "AS", "mixed_score"],
+            ["APPLY", "@text_score + @vector_score", "AS", "arm_sum_score"],
+            ["APPLY", "@vector_score", "AS", "copied_score"],
+            ["FILTER", "@hybrid_score > 0.01"],
+            ["FILTER", "@vector_score > 0.2"],
+            ["FILTER", "@text_score > 0"],
+            ["GROUPBY", "1", "@color",
+             "REDUCE", "MAX", "1", "@hybrid_score", "AS", "max_score"],
+            ["GROUPBY", "1", "@color",
+             "REDUCE", "MAX", "1", "@vector_score", "AS", "max_vec_score"],
+            ["GROUPBY", "1", "@color",
+             "REDUCE", "AVG", "1", "@text_score", "AS", "avg_text_score"],
+            ["GROUPBY", "1", "@color",
+             "REDUCE", "COUNT", "0", "AS", "cnt"],
+        ]
+        for tail in cases:
+            self.hybrid(key_type, "@title:alpha", tail=tail,
+                        vector_score_as="vector_score")
+
+    def test_unaliased_fused_score(self, key_type):
+        """COMBINE without YIELD_SCORE_AS. The fused score still reaches the
+        reply, under whatever name the engine falls back to, and the sweep
+        records what that name is."""
+        self.setup_data(key_type)
+        for query in ["@title:alpha", "@body:canyon"]:
+            self.hybrid(key_type, query, fused_score_as=None)
+        # Naming one arm but not the fusion, and the reverse.
+        self.hybrid(key_type, "@title:alpha", fused_score_as=None,
+                    vector_score_as="vector_score")
+        self.hybrid(key_type, "@title:alpha", fused_score_as=None,
+                    search_score_as=None, vector_score_as=None)
 
     def test_groupby_reduce(self, key_type):
         self.setup_data(key_type)

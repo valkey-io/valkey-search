@@ -132,7 +132,7 @@ class IndexingTestHelper:
         
         """
         parser = IndexingTestHelper.get_ft_info(client, index_name)
-        return parser.is_backfill_complete() and parser.is_ready()
+        return parser.is_backfill_complete() and parser.is_ready() and parser.mutation_queue_size == 0
 
     @staticmethod
     def is_backfill_complete_on_node(client: Valkey, index_name: str) -> bool:
@@ -146,10 +146,15 @@ class IndexingTestHelper:
         waiters.wait_for_true(lambda: IndexingTestHelper.is_backfill_complete_on_node(client, index_name))
     
     @staticmethod
+    def wait_for_indexing_complete_on_node(client: Valkey, index_name: str):
+        """Wait for indexing to complete on a single node."""
+        waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(client, index_name))
+    
+    @staticmethod
     def is_indexing_complete_cluster(client: Valkey, index_name: str) -> bool:
         """Check if indexing is complete on a cluster node using CLUSTER mode.""" 
         parser = IndexingTestHelper.get_ft_info(client, index_name, cluster=True)
-        return parser.is_backfill_complete() and parser.is_ready()
+        return parser.is_backfill_complete() and parser.is_ready() and parser.mutation_queue_size == 0
     
     @staticmethod
     def wait_for_indexing_complete_on_all_nodes(clients: list, index_name: str):

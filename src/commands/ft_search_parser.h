@@ -17,6 +17,7 @@
 namespace valkey_search {
 namespace options {
 vmsdk::config::Number &GetMaxKnn();
+vmsdk::config::Number &GetMaxTimeoutMs();
 }  // namespace options
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters);
@@ -40,6 +41,7 @@ struct SearchCommand : public QueryCommand {
   query::SerializationRange GetSerializationRange() const;
 
   bool with_sort_keys{false};
+  bool with_scores{false};
 };
 
 }  // namespace valkey_search

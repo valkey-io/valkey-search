@@ -6,10 +6,16 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/type_conversions.h"
@@ -37,6 +43,22 @@ constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
 constexpr absl::string_view kSlopParam{"SLOP"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kScorerParam{"SCORER"};
+
+std::string OutputNameFor(absl::string_view written_name,
+                          absl::string_view schema_identifier) {
+  // Equal on a HASH index, and for a load written as the identifier itself.
+  // Nothing to choose between, so nothing to gate or count either.
+  if (written_name == schema_identifier) {
+    return std::string(written_name);
+  }
+  // Both column-creating call sites route through this one invocation so the
+  // compatibility counter has a single registration site.
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "aggregate_json_field_names",
+      [&]() -> std::string { return std::string(written_name); },
+      [&]() -> std::string { return std::string(schema_identifier); });
+}
 
 std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
   return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
@@ -46,22 +68,122 @@ std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructLoadParser() {
         itr.Next();
         if (vmsdk::ToStringView(count_string) == "*") {
           parameters.loadall_ = true;
-        } else {
-          uint32_t cnt{0};
-          VMSDK_ASSIGN_OR_RETURN(cnt, vmsdk::To<uint32_t>(count_string));
-          for (uint32_t i = 0; i < cnt; ++i) {
-            std::string load;
-            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
-            if (load.empty() || load == "@") {
-              return absl::InvalidArgumentError(
-                  "Empty argument in LOAD clause not allowed");
-            }
-            if (load[0] == '@') {
-              parameters.loads_.emplace_back(load.substr(1));
-            } else {
-              parameters.loads_.emplace_back(std::move(load));
+          return absl::OkStatus();
+        }
+        uint32_t cnt{0};
+        VMSDK_ASSIGN_OR_RETURN(cnt, vmsdk::To<uint32_t>(count_string));
+        // `cnt` is a token budget. Each LOAD entry is a field/path, optionally
+        // followed by `AS <alias>`; the `AS` keyword and its alias count
+        // against the budget (matching RediSearch).
+        uint32_t consumed = 0;
+        // Output names claimed so far by this clause, mapped to whether the
+        // claim came from an `AS` rename. A name claimed twice is rejected when
+        // a rename is involved (see below); two plain loads of the same field
+        // keep their long-standing de-duplicating behavior.
+        absl::flat_hash_map<std::string, bool> claimed_names;
+        // Columns this LOAD clause has already assigned an output name to. A
+        // later entry naming the same field cannot reuse one of these -- it
+        // would overwrite the earlier entry's output name -- so it gets a
+        // column of its own reading the same field.
+        absl::flat_hash_set<size_t> claimed_columns;
+        while (consumed < cnt) {
+          std::string load;
+          VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, load));
+          ++consumed;
+          if (load.empty() || load == "@") {
+            return absl::InvalidArgumentError(
+                "Empty argument in LOAD clause not allowed");
+          }
+          std::string identifier = load[0] == '@' ? load.substr(1) : load;
+          // `identifier` is what gets fetched; `alias` is the name the column
+          // is emitted under, and defaults to the field token exactly as
+          // written. Resolving a JSON path below rewrites the former and must
+          // leave the latter alone.
+          std::string alias = identifier;
+          bool renamed = false;
+          auto &index = *parameters.parse_vars_.index_interface_;
+
+          // If the entry is a schema identifier (e.g. a JSON path) rather than
+          // an attribute name, resolve it so the field can be fetched. This is
+          // not gated on emulate-release: without it the path is left
+          // unresolved and the load fails outright ("Index field `$.price`
+          // does not exist"), so the old behavior is unusable and there is no
+          // user base for SemVer to protect.
+          if (!index.GetFieldType(identifier).ok()) {
+            if (auto resolved = index.GetAlias(identifier); resolved.ok()) {
+              identifier = *std::move(resolved);
             }
           }
+
+          // Honoring `AS <alias>` in the LOAD clause is a compatibility fix
+          // introduced in 1.3.0. Older emulated releases treat `AS` as just
+          // another field name, so the legacy branch consumes nothing and the
+          // keyword falls through to be parsed as the next field.
+          //
+          // Peek rather than pop: the macro is entered only when the next word
+          // really is `AS`, so the usage counter counts uses of the keyword
+          // instead of incrementing once per loaded field.
+          auto next_word = itr.GetStringView();
+          if (consumed < cnt && next_word.ok() &&
+              absl::EqualsIgnoreCase(*next_word, kAsParam)) {
+            VMSDK_ASSIGN_OR_RETURN(
+                renamed,
+                VALKEY_SEARCH_COMPATIBILITY_FIX(
+                    1, 3, 0, "ft_aggregate_load_as",
+                    [&]() -> absl::StatusOr<bool> {
+                      itr.Next();  // consume the `AS` keyword
+                      ++consumed;
+                      if (consumed >= cnt) {
+                        return absl::InvalidArgumentError(
+                            "`AS` argument to LOAD clause is missing/invalid");
+                      }
+                      std::string rename;
+                      VMSDK_RETURN_IF_ERROR(
+                          vmsdk::ParseParamValue(itr, rename));
+                      ++consumed;
+                      if (rename.empty()) {
+                        return absl::InvalidArgumentError(
+                            "`AS` argument to LOAD clause is missing/invalid");
+                      }
+                      alias = std::move(rename);
+                      return true;
+                    },
+                    []() -> absl::StatusOr<bool> { return false; }));
+          }
+          // Intentionally stricter than RediSearch (which keeps the first claim
+          // of a name and silently drops the rest): reject a LOAD clause that
+          // names the same output twice when an `AS` rename is involved. Left
+          // to itself such a collision aliases two entries onto one record
+          // column, so the emitted value would depend on fetch order.
+          if (auto [it, inserted] = claimed_names.emplace(alias, renamed);
+              !inserted && (renamed || it->second)) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Duplicate `AS` alias `", alias, "` in LOAD clause"));
+          }
+          if (renamed) {
+            // LOAD precedes APPLY/SORTBY/FILTER in the command, so register
+            // the rename now to make `@alias` resolvable in those later
+            // stages. Entries that can't be resolved against the index here
+            // (e.g. __key, the score field) are renamed afterwards in
+            // ManipulateReturnsClause.
+            auto ref = parameters.MakeReference(identifier, false);
+            if (ref.ok()) {
+              if (auto *attr = dynamic_cast<Attribute *>(ref->get())) {
+                size_t index = attr->record_index_;
+                if (claimed_columns.contains(index)) {
+                  index = parameters.AddRecordAttributeAlias(index, alias);
+                } else {
+                  parameters.record_info_by_index_[index].output_name_ = alias;
+                  parameters.record_indexes_by_alias_[alias] = index;
+                }
+                claimed_columns.insert(index);
+              }
+            }
+          }
+          parameters.loads_.emplace_back(
+              LoadField{.identifier = std::move(identifier),
+                        .alias = std::move(alias),
+                        .renamed = renamed});
         }
         return absl::OkStatus();
       });
@@ -249,6 +371,9 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
                         GENERATE_FLAG_PARSER(AggregateParameters, inorder));
   parser.AddParamParser(kVerbatim,
                         GENERATE_FLAG_PARSER(AggregateParameters, verbatim));
+  parser.AddParamParser(kScorerParam,
+                        GENERATE_ENUM_PARSER(AggregateParameters, scorer,
+                                             *indexes::scoring::kScorerByStr));
   parser.AddParamParser(kLoadParam, ConstructLoadParser());
   parser.AddParamParser(kApplyParam, ConstructApplyParser());
   parser.AddParamParser(kFilterParam, ConstructFilterParser());
@@ -262,11 +387,7 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
 absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
 AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   DBG << "MakeReference : " << name << " Create:" << create << "\n";
-  auto it = record_indexes_by_identifier_.find(name);
-  if (it != record_indexes_by_identifier_.end()) {
-    return std::make_unique<Attribute>(name, it->second);
-  }
-  it = record_indexes_by_alias_.find(name);
+  auto it = record_indexes_by_alias_.find(name);
   if (it != record_indexes_by_alias_.end()) {
     return std::make_unique<Attribute>(name, it->second);
   }
@@ -291,11 +412,13 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   if (identifier.ok()) {
     // DBG << "Adding Record Attribute: " << name << " with alias "
     //     << identifier.value() << "\n";
-    new_index = AddRecordAttribute(*identifier, name, fieldType);
+    new_index = AddRecordAttribute(*identifier, name,
+                                   OutputNameFor(name, *identifier), fieldType);
   } else {
     // DBG << "Adding Record Attribute: " << name
     //     << " with synthetic alias (no index schema)\n";
-    new_index = AddRecordAttribute(name, name, indexes::IndexerType::kNone);
+    new_index =
+        AddRecordAttribute(name, name, name, indexes::IndexerType::kNone);
   }
   return std::make_unique<Attribute>(name, new_index);
 }

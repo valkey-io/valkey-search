@@ -43,6 +43,11 @@ function num_proc() {
   fi
 }
 
+function is_valid_parallel_workers() {
+  local val="$1"
+  [[ "$val" == "auto" || "$val" == "logical" || "$val" =~ ^[0-9]+$ ]]
+}
+
 function findup() {
   # Check if a filename was provided
   if [ -z "$1" ]; then
@@ -124,6 +129,15 @@ function pip_check_if_module_installed() {
 }
 
 function install_test_framework() {
+  local xdist_module_installed=$(pip_check_if_module_installed pytest-xdist)
+  if [[ "${xdist_module_installed}" == "no" ]]; then
+    LOG_INFO "Installing pytest-xdist dependency"
+    local testing_requirements_txt=${_WORKSPACE_HOME}/testing/integration/requirements.txt
+    if [ -f ${testing_requirements_txt} ]; then
+      ${PIP_PATH} install -r ${testing_requirements_txt}
+    fi
+  fi
+
   if [ ! -z "${VALKEY_TEST_FRAMEWORK}" ] &&
     [ -f "${VALKEY_TEST_FRAMEWORK}/LICENSE" ]; then
     LOG_INFO "Using valkey-test-framework => ${VALKEY_TEST_FRAMEWORK}"
@@ -141,14 +155,16 @@ function install_test_framework() {
 
   pushd ${test_framework_path} >/dev/null
   valkey_module_installed=$(pip_check_if_module_installed valkey)
-  if [[ "${valkey_module_installed}" == "no" ]]; then
+  xdist_module_installed=$(pip_check_if_module_installed pytest-xdist)
+  if [[ "${valkey_module_installed}" == "no" ]] || [[ "${xdist_module_installed}" == "no" ]]; then
     LOG_INFO "Installing dependencies"
     local requirements_txt=${test_framework_path}/requirements.txt
     local testing_requirements_txt=${_WORKSPACE_HOME}/testing/integration/requirements.txt
     if [ -f ${requirements_txt} ]; then
       LOG_INFO "Installing requirements file"
-      ${PIP_PATH} install -r ${requirements_txt} -r ${testing_requirements_txt}
+      ${PIP_PATH} install -r ${requirements_txt}
       ${PIP_PATH} install --upgrade pytest
+      ${PIP_PATH} install -r ${testing_requirements_txt}
     else
       LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"
     fi
@@ -171,9 +187,18 @@ function setup_valkey_server() {
   fi
 
   # Clone and build it
-  VALKEY_VERSION="${VALKEY_VERSION:=9.0.1}"
+  VALKEY_VERSION="${VALKEY_VERSION:=9.1}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
+  
+  local version_stamp_file="${VALKEY_SERVER_HOME_DIR}/.valkey_version_stamp"
+  if [ -d "${VALKEY_SERVER_HOME_DIR}" ]; then
+    if [ ! -f "${version_stamp_file}" ] || [ "$(cat "${version_stamp_file}")" != "${VALKEY_VERSION}" ]; then
+      LOG_INFO "Stale Valkey version detected (needed ${VALKEY_VERSION}). Wiping ${VALKEY_SERVER_HOME_DIR} and rebuilding..."
+      rm -rf "${VALKEY_SERVER_HOME_DIR}"
+    fi
+  fi
+
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
     LOG_INFO "Cloning valkey-server@${VALKEY_VERSION} into ${VALKEY_SERVER_HOME_DIR}"
     git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
@@ -233,6 +258,7 @@ function setup_valkey_server() {
   cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
   make -j$(num_proc)
   popd >/dev/null
+  echo "${VALKEY_VERSION}" > "${version_stamp_file}"
   export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
   export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
   LOG_INFO "VALKEY_SERVER_PATH => ${VALKEY_SERVER_PATH}"

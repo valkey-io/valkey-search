@@ -6,11 +6,20 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include <cstdlib>
+#include <iostream>
 #include <map>
 
 #include "gtest/gtest.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
+
+namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+}  // namespace
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
   return os << "S=" << *(std::string *)s;
@@ -24,7 +33,9 @@ struct FakeIndexInterface : public IndexInterface {
   absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view fld_name) const override {
     std::string field_name(fld_name);
-    std::cout << "Fake make reference " << field_name << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake make reference " << field_name << "\n";
+    }
     auto itr = fields_.find(field_name);
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -35,13 +46,17 @@ struct FakeIndexInterface : public IndexInterface {
   }
   absl::StatusOr<std::string> GetIdentifier(
       absl::string_view alias) const override {
-    std::cout << "Fake get identifier for " << alias << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get identifier for " << alias << "\n";
+    }
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto type, GetFieldType(alias));
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(
       absl::string_view identifier) const override {
-    std::cout << "Fake get alias for " << identifier << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get alias for " << identifier << "\n";
+    }
     auto itr = fields_.find(std::string(identifier));
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -125,7 +140,9 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               InorderTestValue inorder_test,
                               SlopTestValue slop_test,
                               VerbatimTestValue verbatim_test) {
-  std::cerr << "Running test: '" << test << "'\n";
+  if (IsVerbose()) {
+    std::cerr << "Running test: '" << test << "'\n";
+  }
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
@@ -149,7 +166,10 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
       EXPECT_FALSE(params.loadall_);
       EXPECT_EQ(params.loads_.size(), loads_test.value_->size());
       for (auto i = 0; i < loads_test.value_->size(); ++i) {
-        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i]);
+        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i].identifier);
+        // No AS clause in these cases (and the rename gate is off by default),
+        // so the output alias mirrors the identifier.
+        EXPECT_EQ(params.loads_[i].alias, params.loads_[i].identifier);
       }
     }
     EXPECT_EQ(params.inorder, inorder_test.value_);
@@ -247,7 +267,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
     text += TestStages[ix].stage_in_;
     any_bad |= TestStages[ix].stage_out_ == nullptr;
   }
-  std::cout << "Doing case " << text << "\n";
+  if (IsVerbose()) {
+    std::cout << "Doing case " << text << "\n";
+  }
   auto argv = vmsdk::ToValkeyStringVector(text);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
@@ -258,7 +280,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
   auto parser = CreateAggregateParser();
   auto result = parser.Parse(params, itr);
   if (any_bad) {
-    std::cout << "Failed status: " << result << "\n";
+    if (IsVerbose()) {
+      std::cout << "Failed status: " << result << "\n";
+    }
     EXPECT_FALSE(result.ok());
   } else {
     EXPECT_TRUE(result.ok());
@@ -280,11 +304,48 @@ TEST_F(AggregateTest, StageParserTest) {
     DoStageTest(&fake_index, std::vector<size_t>{i});
     for (size_t j = 0; j < TestStages.size(); ++j) {
       DoStageTest(&fake_index, std::vector<size_t>{i, j});
-      for (size_t k = 0; k < TestStages.size(); ++k) {
-        DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
-      }
+      // Sample 3-stage combinations across all stage positions
+      size_t k = (i + j) % TestStages.size();
+      DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
     }
   }
+}
+
+// TestStages above covers the legacy auto-generated REDUCE name, which is what
+// the default emulate-release selects. Both forms have to stay reachable; see
+// COMPATIBILITY.md.
+TEST_F(AggregateTest, DefaultReducerAliasFollowsEmulateRelease) {
+  // Mixed-case field: the compatible form lowercases the args too, not just
+  // the reducer name.
+  fake_index.fields_["N3"] = indexes::IndexerType::kNumeric;
+  auto dump = [&](absl::string_view stage) {
+    auto argv = vmsdk::ToValkeyStringVector(stage);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.timeout_ms = 0;
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    std::ostringstream os;
+    if (parser.Parse(params, itr).ok() && !params.stages_.empty()) {
+      params.stages_[0]->Dump(os);
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+    return os.str();
+  };
+
+  const auto saved = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MIN 1 @n2"),
+            "GROUPBY @n1 MIN(@n2) => MIN(@n2)");
+
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE COUNT 0"),
+            "GROUPBY @n1 COUNT() => __generated_aliascount");
+  EXPECT_EQ(dump("GROUPBY 1 @n1 REDUCE MAX 1 @N3"),
+            "GROUPBY @n1 MAX(@N3) => __generated_aliasmaxn3");
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
 TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {

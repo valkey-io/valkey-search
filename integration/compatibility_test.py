@@ -220,12 +220,22 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         # not just whether WITHSORTKEYS is in the command. This handles cases
         # where the expected result (from pickle) may not have sort keys even
         # if the command requested them.
-        has_sortkeys = result_has_sortkeys(rs)
         if any(isinstance(c, str) and c.lower() == "nocontent" for c in cmd):
             # NOCONTENT replies carry no field lists, so the row-pair unpacking
-            # below runs off the end of the reply. Unpack ids only.
-            out = unpack_search_result_nocontent(rs, has_sortkeys)
+            # below runs off the end of the reply. Unpack ids only. Take
+            # WITHSORTKEYS from the command, not result_has_sortkeys(rs): an
+            # ids-only reply whose second id happens to start with '#'/'$' would
+            # fool the reply sniffing.
+            with_sortkeys = any(
+                isinstance(c, str) and c.lower() == "withsortkeys" for c in cmd
+            )
+            out = unpack_search_result_nocontent(rs, with_sortkeys)
         else:
+            # Detect if the result actually has sort keys by checking the format,
+            # not just whether WITHSORTKEYS is in the command. This handles cases
+            # where the expected result (from pickle) may not have sort keys even
+            # if the command requested them.
+            has_sortkeys = result_has_sortkeys(rs)
             out = unpack_search_result(rs, key_type, has_sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)

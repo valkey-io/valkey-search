@@ -222,14 +222,20 @@ def unpack_result(cmd, key_type, rs, sortkeys):
         # if the command requested them.
         if any(isinstance(c, str) and c.lower() == "nocontent" for c in cmd):
             # NOCONTENT replies carry no field lists, so the row-pair unpacking
-            # below runs off the end of the reply. Unpack ids only. Take
-            # WITHSORTKEYS from the command, not result_has_sortkeys(rs): an
-            # ids-only reply whose second id happens to start with '#'/'$' would
-            # fool the reply sniffing.
+            # below runs off the end of the reply. Unpack ids only.
+            #
+            # Plain NOCONTENT (no WITHSORTKEYS) is strictly ids-only, so do not
+            # sniff the reply: an id that happens to start with '#'/'$' would
+            # otherwise fool result_has_sortkeys and drop rows.
+            #
+            # NOCONTENT + WITHSORTKEYS diverges between engines: RediSearch emits
+            # a '#'/'$' sortkey after each id, while valkey-search returns ids
+            # only. Detect per-reply so each side unpacks to the same ids.
             with_sortkeys = any(
                 isinstance(c, str) and c.lower() == "withsortkeys" for c in cmd
             )
-            out = unpack_search_result_nocontent(rs, with_sortkeys)
+            has_sortkeys = with_sortkeys and result_has_sortkeys(rs)
+            out = unpack_search_result_nocontent(rs, has_sortkeys)
         else:
             # Detect if the result actually has sort keys by checking the format,
             # not just whether WITHSORTKEYS is in the command. This handles cases

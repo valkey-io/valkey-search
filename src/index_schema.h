@@ -618,6 +618,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,
               InTrackedMutationRecordsAfterConsumeNoCrash);
+  // Orphan multi/exec key is skipped on save (test-only access).
+  FRIEND_TEST(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

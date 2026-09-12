@@ -3611,4 +3611,37 @@ TEST(IndexSchemaMinVersionTest, LowPrecisionDominatesOtherContributors) {
 
 }  // namespace
 
+// A multi/exec key whose mutation record has already been consumed (in the
+// deque, absent from the map) is skipped by SaveIndexExtension, not fatal.
+TEST_F(IndexSchemaFriendTest, OrphanMultiKeySkippedOnSave)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto k = StringInternStore::Intern("prefix1_orphan");
+  index_schema->SetDbMutationSequenceNumber(k, 1);
+  index_schema->EnqueueMultiMutation(k);  // deque=[K]
+  {
+    auto a = CreateMutatedAttributes(attribute_identifier, "d1");
+    index_schema->TrackMutatedRecord(nullptr, k, std::move(a), 1, false, false,
+                                     /*from_multi=*/true, 0);  // map={K}
+  }
+  // Drive the real consumer (the writer-pool task body) to index and erase the
+  // mutation record, leaving K referenced only by the deque.
+  index_schema->ProcessSingleMutationAsync(&fake_ctx, /*from_backfill=*/false,
+                                           k,
+                                           /*delay_capturer=*/nullptr);
+
+  // Confirm the state under test: K is in the deque but not the map.
+  {
+    absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+    ASSERT_EQ(index_schema->multi_mutations_keys_.Get().size(), 1u);
+    EXPECT_EQ(index_schema->multi_mutations_keys_.Get().front()->Str(),
+              "prefix1_orphan");
+    EXPECT_EQ(index_schema->tracked_mutated_records_.find(k),
+              index_schema->tracked_mutated_records_.end());
+  }
+
+  FakeSafeRDB rdb;
+  EXPECT_TRUE(
+      index_schema->SaveIndexExtension(RDBChunkOutputStream(&rdb)).ok());
+}
+
 }  // namespace valkey_search

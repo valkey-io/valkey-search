@@ -12,6 +12,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
@@ -715,6 +716,43 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
 
   // Clear the now-stale stack-local index_interface_ pointer.
   env.agg->parse_vars_.index_interface_ = nullptr;
+
+  // A score alias naming a column the LOAD clause also emits is rejected
+  // rather than silently resolved. Both would land in the same reply column,
+  // and which one won was a matter of ordering: the content fetch writes the
+  // database field, then the alias merge overwrites it -- while replacing a
+  // map entry whose key is a view into the value being destroyed. The caller
+  // can rename either side. `LoadField::alias` is the emitted name, so this
+  // covers `LOAD 3 @price AS cost` as well as a plain `LOAD 1 @price`.
+  if (env.agg != nullptr) {
+    absl::flat_hash_set<absl::string_view> loaded;
+    for (const auto &load : env.agg->loads_) {
+      loaded.insert(load.alias);
+    }
+    // `LOAD *` names no fields but emits every one the document carries, so
+    // the collision set there is the schema itself.
+    const bool load_all = env.agg->loadall_;
+    auto reject_collision = [&](absl::string_view alias) -> absl::Status {
+      const bool collides = loaded.contains(alias) ||
+                            (load_all && env.index_schema != nullptr &&
+                             env.index_schema->GetIdentifier(alias).ok());
+      if (collides) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("YIELD_SCORE_AS `", alias,
+                         "` collides with a column loaded by LOAD"));
+      }
+      return absl::OkStatus();
+    };
+    for (const auto &alias : env.per_arm_score_alias) {
+      if (alias.has_value()) {
+        VMSDK_RETURN_IF_ERROR(reject_collision(*alias));
+      }
+    }
+    if (env.score_as) {
+      VMSDK_RETURN_IF_ERROR(
+          reject_collision(vmsdk::ToStringView(env.score_as.get())));
+    }
+  }
 
   // After per-arm parse: VSIM RANGE is parsed for shape but not yet
   // executable.

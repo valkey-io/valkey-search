@@ -58,8 +58,8 @@ class BaseCompatibilityTest:
             
         cls.container_name = f"{CONTAINER_PREFIX}-{random.randint(1000, 9999)}"
         if os.system(f"docker run --rm -d --name {cls.container_name} "
-                     f"-p 0:6379 redis/redis-stack-server") != 0:
-            print("Failed to start Redis Stack server, please check your Docker setup.")
+                     f"-p 0:6379 redis:latest") != 0:
+            print("Failed to start Redis server, please check your Docker setup.")
             sys.exit(1)
         port = cls._published_port()
         if port is None:
@@ -432,6 +432,37 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t3 reduce max 1 @n1 as nmax"
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
+
+    def test_aggregate_groupby_missing_field_reducers(self, key_type, dialect, vector_data_type):
+        """Reducers folding over a group in which no member has the field.
+
+        `missing numbers` groups by @t1 into g_all (every member has @n1),
+        g_none (no member does) and g_mixed. The g_none group is the case that
+        matters: MIN/MAX/SUM/AVG have to fold zero values there, and Redis 8
+        answers inf / -inf / nan rather than a value or an omitted field. Every
+        other dataset populates @n1 on every key, so nothing else in this suite
+        reaches that branch.
+        """
+        self.setup_data("missing numbers", key_type, vector_data_type=vector_data_type)
+        for reducer in ["min", "max", "sum", "avg", "count_distinct"]:
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+                f"groupby 1 @t1 reduce {reducer} 1 @n1 as r"
+            )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+            f"groupby 1 @t1 reduce count 0 as c reduce min 1 @n1 as mn "
+            f"reduce max 1 @n1 as mx reduce sum 1 @n1 as sm reduce avg 1 @n1 as av"
+        )
+        # A TAG field folded by MIN/MAX: Redis 8 folds only numbers, so a
+        # non-numeric input contributes nothing and the group answers the
+        # identity rather than 0.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+            f"groupby 1 @t1 reduce min 1 @t1 as mn reduce max 1 @t1 as mx"
+        )
+        # Not covered here: GROUPBY on @n1 itself, where the group key is
+        # absent on some keys.
 
     def test_aggregate_groupby_tolist(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)

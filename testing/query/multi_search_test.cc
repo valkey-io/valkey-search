@@ -74,10 +74,14 @@ TEST(MultiSearchTrackerTest, FinalizeCalledAfterAllArmsComplete) {
 
 TEST(MultiSearchTrackerTest, ArmErrorPropagatedAsSearchResultStatus) {
   auto params = MakeParams(2);
+  // Set explicitly rather than relying on a default: the flag is seeded from
+  // the `search.prefer-partial-results` configuration, so a default it happens
+  // to share with this test today is not something to test through.
+  params->enable_partial_results = false;
   bool finalize_called = false;
   absl::Status final_status = absl::OkStatus();
-  // enable_partial_results is false by default; first arm error should
-  // surface as the fused result's status.
+  // With partial results refused, the first arm error surfaces as the fused
+  // result's status.
   params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
     finalize_called = true;
     final_status = p->search_result.status;

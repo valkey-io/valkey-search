@@ -5,6 +5,7 @@
  *
  */
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -667,6 +668,19 @@ absl::Status MultiSearchParameters::ParseAfterIndex(MultiSearchParameters &cmd,
 absl::Status MultiSearchParameters::ExecuteSyncLocal(
     ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd) {
   for (auto &arm : cmd->arms) {
+    // The envelope's cancellation token is created after ParseAfterIndex
+    // returns, so every arm is still carrying the null one it copied during
+    // the parse. The async local path and the fanout path both repair this;
+    // without it query::Search dereferences a null shared_ptr on its first
+    // line and takes the server down.
+    arm->cancellation_token = cmd->cancellation_token;
+    // Uncapped for the reason the async path uncaps (see
+    // PerformMultiSearchLocalAsync): fusion needs each arm's full match set,
+    // and the aggregate pipeline's LIMIT is what bounds the reply. Left at the
+    // per-arm default this path answers the same query with fewer rows than
+    // the async one.
+    arm->limit.first_index = 0;
+    arm->limit.number = std::numeric_limits<uint64_t>::max();
     // Run the index search only; defer the database content fetch until after
     // fusion so the multi-arm result is validated as a unit.
     arm->no_content = true;

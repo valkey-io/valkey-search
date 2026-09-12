@@ -25,6 +25,7 @@
 #include "src/index_schema.h"
 #include "src/query/search.h"
 #include "src/utils/cancel.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/command_parser.h"
@@ -86,8 +87,13 @@ struct MultiSearchParameters {
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   uint64_t timeout_ms{0};
-  bool enable_partial_results{false};
-  bool enable_consistency{false};
+  // Seeded from configuration, exactly as SearchParameters does. Hardcoding
+  // these left both settings inert for FT.HYBRID: a deployment that asked for
+  // partial results got an error from one failing shard, and one that asked
+  // for consistent results had the slot check skipped, because the envelope's
+  // `false` is what reaches every shard.
+  bool enable_partial_results{options::GetPreferPartialResults().GetValue()};
+  bool enable_consistency{options::GetPreferConsistentResults().GetValue()};
   bool local_only{false};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint{0};

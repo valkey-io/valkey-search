@@ -58,19 +58,19 @@ static auto max_timeout_ms =
         .Build();
 
 namespace options {
-vmsdk::config::Number &GetMaxKnn() {
-  return dynamic_cast<vmsdk::config::Number &>(*max_knn);
+vmsdk::config::Number& GetMaxKnn() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_knn);
 }
 
-vmsdk::config::Number &GetMaxTimeoutMs() {
-  return dynamic_cast<vmsdk::config::Number &>(*max_timeout_ms);
+vmsdk::config::Number& GetMaxTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number&>(*max_timeout_ms);
 }
 
 }  // namespace options
 
 namespace {
 
-absl::Status Verify(query::SearchParameters &parameters) {
+absl::Status Verify(query::SearchParameters& parameters) {
   // Only verify the vector KNN parameters for vector based queries.
   if (!parameters.IsNonVectorQuery()) {
     if (parameters.query.empty()) {
@@ -118,7 +118,7 @@ absl::Status Verify(query::SearchParameters &parameters) {
 
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
-      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+      [](SearchCommand& parameters, vmsdk::ArgsIterator& itr) -> absl::Status {
         VMSDK_RETURN_IF_ERROR(
             vmsdk::ParseParamValue(itr, parameters.limit.first_index));
         VMSDK_RETURN_IF_ERROR(
@@ -129,7 +129,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
 
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
-      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+      [](SearchCommand& parameters, vmsdk::ArgsIterator& itr) -> absl::Status {
         unsigned count{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
         if (count & 1) {
@@ -156,7 +156,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
 }
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
-      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+      [](SearchCommand& parameters, vmsdk::ArgsIterator& itr) -> absl::Status {
         vmsdk::UniqueValkeyString field;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, field));
         query::SortByParameter sortbyparams;
@@ -183,7 +183,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
 }
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
-      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+      [](SearchCommand& parameters, vmsdk::ArgsIterator& itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
         if (cnt == 0) {
@@ -283,13 +283,24 @@ absl::Status SearchCommand::PostParseQueryString() {
   }
 
   if (sortby_parameter.has_value()) {
-    // The vector score field (KNN distance, reported via score_as) is a
+    // Allow sorting by any vector range distance alias (yield_distance_as)
+    // without requiring it to be a real index field.
+    auto vr_score_fields = query::CollectVrScoreFields(*this);
+    bool is_vr_score_field = false;
+    for (const auto& field : vr_score_fields) {
+      if (!field.empty() && sortby_parameter->field == field) {
+        is_vr_score_field = true;
+        break;
+      }
+    }
+    // The vector score field (KNN distance, reported via score_as) is also a
     // synthesized reply field, not a schema attribute, so it is sortable
     // without being declared. Validate any other field against the schema.
     const bool is_vector_score =
         score_as &&
         sortby_parameter->field == vmsdk::ToStringView(score_as.get());
-    if (!is_vector_score) {
+    if (!is_vr_score_field && !is_vector_score) {
+      // Validate sortby field exists in the index schema
       VMSDK_RETURN_IF_ERROR(
           index_schema->GetIdentifier(sortby_parameter->field).status());
     }
@@ -298,7 +309,7 @@ absl::Status SearchCommand::PostParseQueryString() {
   return absl::OkStatus();
 }
 
-absl::Status VerifyQueryString(query::SearchParameters &parameters) {
+absl::Status VerifyQueryString(query::SearchParameters& parameters) {
   // Only verify the vector KNN parameters for vector based queries.
   if (!parameters.IsNonVectorQuery()) {
     if (parameters.query.empty()) {
@@ -344,7 +355,7 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
+absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator& itr) {
   VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*this, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(

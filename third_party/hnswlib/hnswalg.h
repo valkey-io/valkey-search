@@ -347,9 +347,9 @@ class HierarchicalNSW
       size_t size = getListCount((linklistsizeint *)data);
       tableint *datal = (tableint *)(data + 1);
 #ifdef USE_PREFETCH
-      __builtin_prefetch((char *)(visited_array + *(data + 1)), 0, 3);
-      __builtin_prefetch((char *)(visited_array + *(data + 1) + 64), 0, 3);
       if (size > 0) {
+        __builtin_prefetch((char *)(visited_array + *datal), 0, 3);
+        __builtin_prefetch((char *)(visited_array + *datal + 64), 0, 3);
         __builtin_prefetch(GetDataByInternalId(*datal)->GetRawVector(), 0, 3);
       }
       if (size > 1) {
@@ -1517,6 +1517,7 @@ class HierarchicalNSW
           std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
           data = get_linklist_at_level(currObj, level);
           int size = getListCount(data);
+          if (size == 0) break;
           tableint *datal = (tableint *)(data + 1);
 #ifdef USE_PREFETCH
           __builtin_prefetch(GetDataByInternalId(*datal)->GetRawVector(), 0, 3);

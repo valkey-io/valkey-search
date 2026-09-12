@@ -783,11 +783,10 @@ TEST_F(RDBSerializationTest, PerformRDBLoadLegacyNonCoordinatedTotalIndexes) {
   auto test_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*test_cb.mock_callbacks, load(testing::_, testing::_, testing::_))
       .Times(2)
-      .WillRepeatedly([](ValkeyModuleCtx* ctx,
-                         std::unique_ptr<data_model::RDBSection> section,
-                         SupplementalContentIter&& iter) {
-        return absl::OkStatus();
-      });
+      .WillRepeatedly(
+          [](ValkeyModuleCtx* ctx,
+             std::unique_ptr<data_model::RDBSection> section,
+             SupplementalContentIter&& iter) { return absl::OkStatus(); });
   RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
                       std::move(test_cb.callbacks_struct));
 
@@ -812,22 +811,20 @@ TEST_F(RDBSerializationTest, PerformRDBLoadLegacyCoordinatedTotalIndexes) {
   EXPECT_CALL(*index_cb.mock_callbacks,
               load(testing::_, testing::_, testing::_))
       .Times(2)
-      .WillRepeatedly([](ValkeyModuleCtx* ctx,
-                         std::unique_ptr<data_model::RDBSection> section,
-                         SupplementalContentIter&& iter) {
-        return absl::OkStatus();
-      });
+      .WillRepeatedly(
+          [](ValkeyModuleCtx* ctx,
+             std::unique_ptr<data_model::RDBSection> section,
+             SupplementalContentIter&& iter) { return absl::OkStatus(); });
   RegisterRDBCallback(data_model::RDB_SECTION_INDEX_SCHEMA,
                       std::move(index_cb.callbacks_struct));
 
   auto metadata_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*metadata_cb.mock_callbacks,
               load(testing::_, testing::_, testing::_))
-      .WillOnce([](ValkeyModuleCtx* ctx,
-                   std::unique_ptr<data_model::RDBSection> section,
-                   SupplementalContentIter&& iter) {
-        return absl::OkStatus();
-      });
+      .WillOnce(
+          [](ValkeyModuleCtx* ctx,
+             std::unique_ptr<data_model::RDBSection> section,
+             SupplementalContentIter&& iter) { return absl::OkStatus(); });
   RegisterRDBCallback(data_model::RDB_SECTION_GLOBAL_METADATA,
                       std::move(metadata_cb.callbacks_struct));
 
@@ -854,11 +851,10 @@ TEST_F(RDBSerializationTest, PerformRDBLoadLegacyCoordinatedSingleSection) {
   auto metadata_cb = GenerateRDBSectionCallbacks();
   EXPECT_CALL(*metadata_cb.mock_callbacks,
               load(testing::_, testing::_, testing::_))
-      .WillOnce([](ValkeyModuleCtx* ctx,
-                   std::unique_ptr<data_model::RDBSection> section,
-                   SupplementalContentIter&& iter) {
-        return absl::OkStatus();
-      });
+      .WillOnce(
+          [](ValkeyModuleCtx* ctx,
+             std::unique_ptr<data_model::RDBSection> section,
+             SupplementalContentIter&& iter) { return absl::OkStatus(); });
   RegisterRDBCallback(data_model::RDB_SECTION_GLOBAL_METADATA,
                       std::move(metadata_cb.callbacks_struct));
 

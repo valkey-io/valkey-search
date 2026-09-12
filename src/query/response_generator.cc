@@ -422,6 +422,43 @@ absl::StatusOr<RecordsMap> GetContent(
   return return_content;
 }
 
+// The vector bytes this document holds now, or nullopt if they cannot be read.
+//
+// The content already fetched for the reply usually carries them, but a RETURN
+// clause that did not ask for the vector field leaves them out. Reading them
+// again for that case costs one key open, and only for a document that was
+// actually mutated -- asking for the vector up front would pull a full vector
+// per row through every KNN reply that names its columns.
+std::optional<absl::string_view> CurrentVectorBytes(
+    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
+    const query::SearchParameters &parameters, absl::string_view key,
+    const std::string &vector_identifier, const RecordsMap &fetched,
+    RecordsMap &scratch) {
+  auto itr = fetched.find(vector_identifier);
+  if (itr != fetched.end()) {
+    return vmsdk::ToStringView(itr->second.value.get());
+  }
+  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
+  auto key_str = vmsdk::MakeUniqueValkeyString(key);
+  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
+  if (!key_obj) {
+    return std::nullopt;
+  }
+  absl::flat_hash_set<absl::string_view> want{vector_identifier};
+  auto records = attribute_data_type.FetchAllRecords(ctx, vector_identifier,
+                                                     key_obj.get(), key, want);
+  if (!records.ok()) {
+    return std::nullopt;
+  }
+  scratch = std::move(records.value());
+  auto found = scratch.find(vector_identifier);
+  if (found == scratch.end()) {
+    return std::nullopt;
+  }
+  return vmsdk::ToStringView(found->second.value.get());
+}
+
 // Adds all local content for neighbors to the list of neighbors.
 //
 // Any neighbors already contained in the attribute content map will be skipped.
@@ -440,6 +477,23 @@ void ProcessNeighborsForReply(
   // such recompute means the carried scores are no longer globally ordered, so
   // the survivors must be re-ranked below (non-vector queries only).
   bool any_score_recomputed = false;
+  // The same for a vector query, whose Neighbor.score is a KNN distance rather
+  // than a relevance score and so is refreshed against the document's current
+  // vector instead of through the Scorer.
+  bool any_distance_recomputed = false;
+  // A query is ordered by its KNN distance only when the distance is all it
+  // ranks on: a `text=>[KNN ...]` query reports a distance but orders by text
+  // relevance, which ApplyHybridTextScore put in Neighbor.score.
+  const bool ranks_on_distance =
+      !parameters.IsNonVectorQuery() && !QueryHasTextPredicate(parameters);
+  indexes::VectorBase *vector_index = nullptr;
+  if (!parameters.IsNonVectorQuery() && vector_identifier.has_value() &&
+      parameters.index_schema != nullptr) {
+    auto index = parameters.index_schema->GetIndex(parameters.attribute_alias);
+    if (index.ok()) {
+      vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
+    }
+  }
   // Lazily built by VerifyFilter on the first mutated document and reused for
   // the rest of the reply, so leaf resolution runs once instead of once per
   // recomputed document.
@@ -469,6 +523,31 @@ void ProcessNeighborsForReply(
     if (recomputed_score.has_value()) {
       neighbor.score = *recomputed_score;
       any_score_recomputed = true;
+    }
+    // A vector query's distance is stale for the same reason and is refreshed
+    // the same way, against the vector the document holds now rather than the
+    // one the index was carrying when the search ran.
+    if (vector_index != nullptr &&
+        parameters.index_schema->GetDbMutationSequenceNumber(
+            neighbor.external_id) != neighbor.sequence_number) {
+      RecordsMap scratch;
+      auto bytes = CurrentVectorBytes(
+          ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
+          *vector_identifier, content.value(), scratch);
+      if (bytes.has_value()) {
+        auto distance =
+            vector_index->RecomputeDistance(*bytes, parameters.query);
+        if (distance.ok()) {
+          neighbor.distance = *distance;
+          // For a query ranked on the distance the two are the same number;
+          // where they are not, Neighbor.score is a relevance the distance
+          // must not overwrite.
+          if (ranks_on_distance) {
+            neighbor.score = *distance;
+          }
+          any_distance_recomputed = true;
+        }
+      }
     }
 
     // Check content size before assigning
@@ -534,6 +613,22 @@ void ProcessNeighborsForReply(
             return a.score > b.score;
           }
           // Tie-break on key ascending for a deterministic result order
+          return a.external_id->Str() < b.external_id->Str();
+        });
+  }
+
+  // And the same for a refreshed distance, which sorts the other way: a KNN
+  // reply is nearest-first. An explicit SORTBY is left alone, as above -- it
+  // runs later, in the reply path, and already reads the distance this block
+  // has just corrected.
+  if (any_distance_recomputed && !neighbors.empty() && ranks_on_distance &&
+      !parameters.sortby_parameter.has_value()) {
+    std::stable_sort(
+        neighbors.begin(), neighbors.end(),
+        [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+          if (a.distance != b.distance) {
+            return a.distance < b.distance;
+          }
           return a.external_id->Str() < b.external_id->Str();
         });
   }

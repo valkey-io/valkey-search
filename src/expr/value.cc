@@ -175,6 +175,17 @@ std::optional<double> Value::AsDouble() const {
   } else {
     return std::nullopt;
   }
+  // 1.3.0 fix: an empty string is not a number. strtod("") consumes nothing
+  // and returns 0.0 (which passes the end-of-string check below), so before
+  // 1.3.0 AsDouble("") == 0 -- making abs("")/timefmt("")/(0)==("") diverge
+  // from Redisearch, which treats "" as non-numeric (nan / nil / not-equal).
+  // Gate per COMPATIBILITY.md.
+  if (sv.empty()) {
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "empty_string_not_numeric",
+        [&]() -> std::optional<double> { return std::nullopt; },
+        [&]() -> std::optional<double> { return 0.0; });
+  }
   char* end{nullptr};
   double val = std::strtod(sv.begin(), &end);
   if (end != sv.end() || IsNan(val)) {
@@ -537,15 +548,23 @@ Value FuncDiv(const Value& l, const Value& r) {
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
-    if (lv && rv) {
-      if (rv.value() == 0) {
-        return Value(std::nan(""));
-      } else {
-        return Value(lv.value() / rv.value());
-      }
-    } else {
+    if (!lv || !rv) {
       return Value(Value::Nil("Divide requires numeric operands"));
     }
+    // Redisearch returns IEEE 754 division semantics for divide-by-zero:
+    // positive/0 -> +inf, negative/0 -> -inf, 0/0 -> NaN. Valkey-search 1.2.x
+    // and earlier collapsed all divide-by-zero cases to a plain NaN, which is
+    // observably different from Redisearch. Gate the fixed behavior behind
+    // search.emulate-release per COMPATIBILITY.md.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_divide_by_zero",
+        [&] { return Value(lv.value() / rv.value()); },
+        [&] {
+          if (rv.value() == 0) {
+            return Value(std::nan(""));
+          }
+          return Value(lv.value() / rv.value());
+        });
   }
 
   // Case 2: Left is vector, right is scalar (broadcast)
@@ -1030,7 +1049,12 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!fmtstr) {
     return Value(Value::Nil("timefmt: format has no string representation"));
   }
-  if (fmtstr->empty()) {
+  // A format whose first byte is NUL is empty as far as strftime is concerned:
+  // it takes a NUL-terminated C string, so the value is truncated to nothing.
+  // A raw vector blob reaches here that way. Treat it as the empty format
+  // rather than letting it fall through to the loop below, which cannot tell
+  // "produced no output" from "buffer too small" and would grow forever.
+  if (fmtstr->empty() || (*fmtstr)[0] == 0) {
     // 1.2.1 fix: empty format → Nil (matches Redisearch).
     // Pre-1.2.1: returned an empty string as a fast-path.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
@@ -1045,11 +1069,20 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
 
+  // strftime() returns 0 both when the buffer is too small and when the format
+  // legitimately produces no output, and the two are indistinguishable. The
+  // guard above rules out the reachable case, but any other zero-output format
+  // would still send an unbounded doubling loop into an OOM kill. Cap the
+  // growth and report no output instead.
+  static constexpr size_t kMaxTimefmtResult = 1 << 20;
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
   while ((result_bytes = strftime(result.data(), result.size(), fmt_z.c_str(),
                                   &tm)) == 0) {
+    if (result.size() >= kMaxTimefmtResult) {
+      return Value(Value::Nil("timefmt: format produced no output"));
+    }
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);

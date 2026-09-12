@@ -66,9 +66,17 @@ if(BUILD_UNIT_TESTS)
   add_subdirectory(integration)
 endif()
 
-# Create a symbolic link to the root directory for compile_commands.json
+# Create a relative symbolic link to the root directory for compile_commands.json
+file(RELATIVE_PATH REL_COMPILE_COMMANDS "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/compile_commands.json")
 execute_process(
   COMMAND
     ${CMAKE_COMMAND} -E create_symlink
-    ${CMAKE_BINARY_DIR}/compile_commands.json
-    ${CMAKE_SOURCE_DIR}/compile_commands.json)
+    "${REL_COMPILE_COMMANDS}"
+    "${CMAKE_SOURCE_DIR}/compile_commands.json")
+
+# Ensure every build updates the root symlink to this build directory
+add_custom_target(
+  update_compile_commands ALL
+  COMMAND ${CMAKE_COMMAND} -E create_symlink "${REL_COMPILE_COMMANDS}" "${CMAKE_SOURCE_DIR}/compile_commands.json"
+  COMMENT "Updating compile_commands.json symlink to ${REL_COMPILE_COMMANDS}")
+

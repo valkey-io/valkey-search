@@ -15,7 +15,7 @@ note that a run narrowed with -k, or one that fails part way, deliberately
 declines to write its answer file, because a partial run would replace a
 complete file with a short one.
 
-Both forms require Docker. The generators spin up redis/redis-stack-server to
+Both forms require Docker. The generators spin up redis:latest to
 capture reference answers, in a container named Generate-search-NNNN on a port
 docker assigns, so concurrent runs on one machine do not collide. A generator
 that fails part way leaves its answer file untouched rather than replacing it

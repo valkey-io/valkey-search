@@ -465,6 +465,16 @@ void MetadataManager::HandleBroadcastedMetadata(
                           schema = std::unique_ptr<GlobalMetadata>(
                               response.release_metadata()),
                           address = std::move(address)] {
+          // The node may have been demoted after accepting the broadcast but
+          // before the asynchronous metadata fetch completed. Recheck the
+          // role on the main thread immediately before applying the update.
+          if (ValkeyModule_GetContextFlags(ctx) &
+              VALKEYMODULE_CTX_FLAGS_SLAVE) {
+            VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
+                << "Discarding metadata reconciliation because node is a "
+                   "replica";
+            return;
+          }
           VMSDK_LOG_EVERY_N_SEC(DEBUG, ctx, 1)
               << "Got GlobalMetadata from " << address << ": "
               << schema->DebugString();

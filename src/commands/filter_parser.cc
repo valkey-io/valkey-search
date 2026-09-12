@@ -1011,7 +1011,7 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
 // can be a combination of different words, *, % for different text operations.
 // A text field can also scope a group: @field_name:(a|b|c) applies the field
 // to every bare term inside, e.g. @f:(a|b) => OR(@f:a, @f:b). An explicit
-// @other:term inside the group overrides the scoped field.
+// @other:term inside the group is a syntax error (rejected, matching RediSearch).
 // 9. The tag separator character is configurable with a default value of '|'.
 // 10. A field name can be wrapped with `()` to group multiple predicates.
 // 11. Space between predicates is considered as AND while '|' is considered as

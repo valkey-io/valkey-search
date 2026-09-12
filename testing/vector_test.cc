@@ -5,9 +5,11 @@
  *
  */
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -22,6 +24,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
+#include "absl/synchronization/notification.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -80,6 +83,45 @@ static void ExpectNeighborsNear(const std::vector<NeighborTest> &act,
     EXPECT_NEAR(sorted_act[j].score, sorted_exp[j].score, tolerance);
   }
 }
+
+hnswlib::DISTFUNC<float> g_orig_dist_func = nullptr;
+std::function<void()> *g_on_dist_calc = nullptr;
+
+float InterceptingDistFunc(const void *pVect1, const void *pVect2,
+                           const void *qty_ptr, float magnitude) {
+  if (g_on_dist_calc && *g_on_dist_calc) {
+    (*g_on_dist_calc)();
+  }
+  return g_orig_dist_func(pVect1, pVect2, qty_ptr, magnitude);
+}
+
+class ConcurrentSyncL2Space : public hnswlib::SpaceInterface<float> {
+ public:
+  explicit ConcurrentSyncL2Space(size_t dim, std::function<void()> on_dist_calc)
+      : underlying_space_(dim), on_dist_calc_(std::move(on_dist_calc)) {
+    g_orig_dist_func = underlying_space_.get_dist_func();
+    g_on_dist_calc = &on_dist_calc_;
+  }
+
+  ~ConcurrentSyncL2Space() override {
+    g_on_dist_calc = nullptr;
+    g_orig_dist_func = nullptr;
+  }
+
+  size_t get_data_size() override { return underlying_space_.get_data_size(); }
+
+  hnswlib::DISTFUNC<float> get_dist_func() override {
+    return InterceptingDistFunc;
+  }
+
+  void *get_dist_func_param() override {
+    return underlying_space_.get_dist_func_param();
+  }
+
+ private:
+  hnswlib::L2Space underlying_space_;
+  std::function<void()> on_dist_calc_;
+};
 
 class VectorIndexTest : public ValkeySearchTest {
  public:
@@ -1301,6 +1343,226 @@ TEST_F(VectorIndexTest, HnswAddPointReplaceDeletedDoesNotDuplicateLabel) {
   EXPECT_FALSE(algo.isMarkedDeleted(1));
 }
 
+TEST_F(VectorIndexTest, HnswSelfHealsTombstoneRoot) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  std::vector<std::shared_ptr<const VectorRecord>> records;
+  records.reserve(vectors.size());
+  for (const auto &vector : vectors) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
+                              kDimensions * sizeof(float));
+    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                              vector_allocator.get()));
+  }
+
+  // Insert label 0 at level 2 so it establishes maxlevel_ = 2 and becomes the
+  // entry point.
+  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/2);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 0u);
+  EXPECT_EQ(algo.maxlevel_.load(), 2);
+  EXPECT_FALSE(algo.isMarkedDeleted(0));
+
+  // Mark the entry point as deleted (tombstone).
+  algo.markDelete(0);
+  EXPECT_TRUE(algo.isMarkedDeleted(algo.enterpoint_node_.load()));
+
+  // Insert label 1 matching maxlevel_ (curlevel == maxlevelcopy == 2).
+  // The root self-healing logic detects the tombstoned enterpoint_node_ and
+  // updates enterpoint_node_ to the new alive element 1.
+  algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false),
+                /*label=*/1, /*level=*/2);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
+  EXPECT_FALSE(algo.isMarkedDeleted(algo.enterpoint_node_.load()));
+  EXPECT_EQ(algo.maxlevel_.load(), 2);
+
+  // Verify search uses the healed entry point and finds the live element.
+  auto results = algo.searchKnn(
+      QueryVector(records[1], kDimensions * sizeof(float), false), /*k=*/1);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results.top().second, 1u);
+}
+
+TEST_F(VectorIndexTest, ConcurrentRootDeletionAndInsertionHealsRoot) {
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+
+  auto vectors = DeterministicallyGenerateVectors(2, kDimensions, 10.0);
+  std::vector<std::shared_ptr<const VectorRecord>> records;
+  records.reserve(vectors.size());
+  for (const auto &vector : vectors) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
+                              kDimensions * sizeof(float));
+    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                              vector_allocator.get()));
+  }
+
+  std::atomic<bool> hook_enabled = false;
+  std::atomic<bool> intercepted = false;
+  absl::Notification add_point_in_progress;
+  absl::Notification node_0_deleted;
+
+  ConcurrentSyncL2Space space(kDimensions, [&]() {
+    if (hook_enabled.load(std::memory_order_relaxed) &&
+        !intercepted.exchange(true, std::memory_order_relaxed)) {
+      add_point_in_progress.Notify();
+      node_0_deleted.WaitForNotification();
+    }
+  });
+
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  // Insert label 0 at level 2 so it establishes maxlevel_ = 2 and becomes the
+  // entry point.
+  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/2);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 0u);
+  EXPECT_EQ(algo.maxlevel_.load(), 2);
+  EXPECT_FALSE(algo.isMarkedDeleted(0));
+
+  // Enable intercepting distance calculation hook for the next insertion.
+  hook_enabled.store(true, std::memory_order_relaxed);
+
+  // In a concurrent thread, begin inserting label 1 at level 2.
+  // When addPoint() evaluates distances in searchBaseLayer(), it has already
+  // unlocked the global mutex. The hook will pause thread 1, allowing the main
+  // thread to delete node 0 concurrently.
+  std::thread insert_thread([&]() {
+    algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false),
+                  /*label=*/1, /*level=*/2);
+  });
+
+  // Wait until thread 1 is actively searching in addPoint() (global unlocked).
+  add_point_in_progress.WaitForNotification();
+
+  // Mark node 0 (the current entry point) as deleted concurrently while
+  // thread 1 is inserting label 1.
+  algo.markDelete(0);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+
+  // Resume thread 1 to finish addPoint().
+  node_0_deleted.Notify();
+  insert_thread.join();
+
+  // Thread 1 must detect that entry point 0 was deleted and self-heal the root
+  // to the alive node 1.
+  EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
+  EXPECT_FALSE(algo.isMarkedDeleted(algo.enterpoint_node_.load()));
+  EXPECT_EQ(algo.maxlevel_.load(), 2);
+
+  // Verify search uses the healed entry point and finds the live element.
+  auto results = algo.searchKnn(
+      QueryVector(records[1], kDimensions * sizeof(float), false), /*k=*/1);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results.top().second, 1u);
+}
+
+TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackDoesNotThrow) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  auto vectors = DeterministicallyGenerateVectors(3, kDimensions, 10.0);
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+  std::vector<std::shared_ptr<const VectorRecord>> records;
+  records.reserve(vectors.size());
+  for (const auto &vector : vectors) {
+    absl::string_view v_bytes(reinterpret_cast<const char *>(vector.data()),
+                              kDimensions * sizeof(float));
+    records.push_back(VectorRecord::Construct(v_bytes, kDefaultMagnitude,
+                                              vector_allocator.get()));
+  }
+
+  // Insert label 0 at level 1 and label 1 at level 0.
+  algo.addPoint(QueryVector(records[0], kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/1);
+  algo.addPoint(QueryVector(records[1], kDimensions * sizeof(float), false),
+                /*label=*/1, /*level=*/0);
+
+  // Mark all existing nodes deleted, creating an all-tombstone graph.
+  algo.markDelete(0);
+  algo.markDelete(1);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+  EXPECT_TRUE(algo.isMarkedDeleted(1));
+
+  // Inserting label 2 at level 0: searchBaseLayer encounters only tombstones,
+  // returning an empty candidate queue. The fallback prevents throwing
+  // "During insertion, no neighbors found to mutually connect to".
+  EXPECT_NO_THROW(
+      algo.addPoint(QueryVector(records[2], kDimensions * sizeof(float), false),
+                    /*label=*/2, /*level=*/0));
+  EXPECT_FALSE(algo.isMarkedDeleted(2));
+}
+
+TEST_F(VectorIndexTest, HnswTombstoneClusterFallbackWithAliveRootDoesNotThrow) {
+  hnswlib::L2Space space{kDimensions};
+  VectorHNSW<float>::HNSWIndex algo(&space, /*max_elements=*/kGoldenMax,
+                                    /*normalized=*/false, kM, kEFConstruction,
+                                    /*allow_replace_deleted=*/false,
+                                    /*random_seed=*/100);
+
+  auto vector_allocator = CREATE_UNIQUE_PTR(
+      FixedSizeAllocator, kDimensions * sizeof(float) + 1, true);
+
+  // Define distinct vectors:
+  // v0 at origin, v1 far away, v2 very close to v0.
+  std::vector<float> v0(kDimensions, 0.0f);
+  std::vector<float> v1(kDimensions, 100.0f);
+  std::vector<float> v2(kDimensions, 0.01f);
+
+  auto make_record = [&](const std::vector<float> &v) {
+    absl::string_view bytes(reinterpret_cast<const char *>(v.data()),
+                            kDimensions * sizeof(float));
+    return VectorRecord::Construct(bytes, kDefaultMagnitude,
+                                   vector_allocator.get());
+  };
+
+  auto rec0 = make_record(v0);
+  auto rec1 = make_record(v1);
+  auto rec2 = make_record(v2);
+
+  // Insert label 0 at level 2.
+  algo.addPoint(QueryVector(rec0, kDimensions * sizeof(float), false),
+                /*label=*/0, /*level=*/2);
+  // Mark node 0 deleted before inserting label 1.
+  algo.markDelete(0);
+  EXPECT_TRUE(algo.isMarkedDeleted(0));
+
+  // Insert label 1 at level 2 (matches maxlevel_, self-heals root so node 1
+  // becomes the entry point; both 0 and 1 are connected at level 2).
+  algo.addPoint(QueryVector(rec1, kDimensions * sizeof(float), false),
+                /*label=*/1, /*level=*/2);
+  EXPECT_EQ(algo.enterpoint_node_.load(), 1u);
+  EXPECT_FALSE(algo.isMarkedDeleted(1));
+
+  // Clear level 1 link list for node 0.
+  algo.setListCount(algo.get_linklist_at_level(0, 1), 0);
+
+  // Insert label 2 at level 1.
+  // Greedy descent at level 2 navigates to node 0 (closer than node 1).
+  // At level 1, searchBaseLayer(currObj = 0) has no live neighbors and returns
+  // empty top_candidates.
+  // Fallback links currObj (0) and alive enterpoint_node_ (1) without throwing.
+  EXPECT_NO_THROW(
+      algo.addPoint(QueryVector(rec2, kDimensions * sizeof(float), false),
+                    /*label=*/2, /*level=*/1));
+  EXPECT_FALSE(algo.isMarkedDeleted(2));
+  EXPECT_EQ(algo.getListCount(algo.get_linklist_at_level(2, 1)), 2);
+}
+
 TEST_F(VectorIndexTest, HnswHandlesEmptyNeighborLists) {
   hnswlib::L2Space space{1};
   VectorHNSW<float>::HNSWIndex algo(
@@ -1363,8 +1625,8 @@ TEST_F(VectorIndexTest, LoadValidatesMultiLayerRoundTripIdentity) {
   VMSDK_EXPECT_OK(algo.LoadIndex(golden, &space, kGoldenMax, kM,
                                  /*validate=*/true, generator));
   EXPECT_EQ(algo.cur_element_count_, 8u);
-  EXPECT_EQ(algo.maxlevel_, 2);
-  EXPECT_EQ(algo.element_levels_[algo.enterpoint_node_], 2);
+  EXPECT_EQ(algo.maxlevel_.load(), 2);
+  EXPECT_EQ(algo.element_levels_[algo.enterpoint_node_.load()], 2);
   ChunkStream resaved;
   auto serializer = [](const std::shared_ptr<const VectorRecord> &record,
                        bool is_marked_deleted) {

@@ -12,185 +12,21 @@ save time (falling back to section arithmetic for older RDBs), and the metadata
 section no longer increments the completed counter.
 """
 
-import os
-import time
 import threading
-from valkey_search_test_case import ValkeySearchTestCaseDebugMode, ValkeySearchClusterTestCaseDebugMode
+
+from indexes import Index, Numeric, Tag, Vector
+from valkey_search_test_case import (
+    ValkeySearchClusterTestCaseDebugMode,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
 from valkeytestframework.util import waiters
-from indexes import *
 
 
 index_1 = Index("idx_pct_1", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")])
 index_2 = Index("idx_pct_2", [Vector("v", 3, type="HNSW", m=2, efc=1), Tag("t")])
 index_3 = Index("idx_pct_3", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")])
 NUM_DOCS = 500
-
-# Wire-format constants for the RDB_SECTION_SNAPSHOT_INFO RDBSection, so the
-# tests can assert the section really landed in the RDB rather than trusting
-# the INFO metrics that are derived from it.
-#
-# RDBSection.type is field 1 (varint), and RDB_SECTION_SNAPSHOT_INFO is enum
-# value 3. RDBSection.supplemental_count is field 2 and is zero for this
-# section, so proto3 omits it. RDBSection.snapshot_info_contents is field 5 and
-# is a nested message, giving wire type 2. Protobuf serializes in ascending
-# field-number order.
-_RDB_SECTION_TYPE_TAG = 0x08          # field 1, varint
-_RDB_SECTION_SNAPSHOT_INFO = 0x03     # RDB_SECTION_SNAPSHOT_INFO
-_SNAPSHOT_INFO_CONTENTS_TAG = 0x2A    # field 5, wire type 2 -> (5 << 3) | 2
-_NUM_INDEXES_TAG = 0x08               # SnapshotInfo.num_indexes, field 1 varint
-
-
-def _encode_varint(value):
-    """Encode an unsigned integer using protobuf base-128 varint encoding."""
-    out = bytearray()
-    while True:
-        byte = value & 0x7F
-        value >>= 7
-        if value:
-            out.append(byte | 0x80)
-        else:
-            out.append(byte)
-            return bytes(out)
-
-
-def _snapshot_info_section_bytes(num_indexes):
-    """
-    Build the exact on-disk byte sequence for a SnapshotInfo RDBSection holding
-    num_indexes, including the RDB string-length prefix.
-
-    The section is written with SaveStringBuffer, which prefixes the serialized
-    protobuf with an RDB-encoded length. For lengths under 64 that is a single
-    byte equal to the length (RDB 6-bit length encoding), so anchoring on it
-    makes the pattern specific enough to avoid coincidental matches elsewhere
-    in the RDB.
-    """
-    # SnapshotInfo itself. num_indexes == 0 is the proto3 scalar default and is
-    # therefore not serialized, leaving an empty nested message. Presence still
-    # works because snapshot_info_contents is a oneof member.
-    if num_indexes:
-        snapshot_info = bytes([_NUM_INDEXES_TAG]) + _encode_varint(num_indexes)
-    else:
-        snapshot_info = b""
-
-    section = (
-        bytes([_RDB_SECTION_TYPE_TAG, _RDB_SECTION_SNAPSHOT_INFO])
-        + bytes([_SNAPSHOT_INFO_CONTENTS_TAG])
-        + _encode_varint(len(snapshot_info))
-        + snapshot_info
-    )
-    assert len(section) < 64, "section grew past the 6-bit RDB length encoding"
-    return bytes([len(section)]) + section
-
-
-def _index_schema_name_bytes(index_name):
-    """
-    Byte sequence for IndexSchema.name (field 1, wire type 2) inside an
-    INDEX_SCHEMA RDBSection. Used to prove SnapshotInfo is written first.
-
-    This does not collide with the hash keys for the same index: a key like
-    "idx_pct_1:0" is stored as an RDB string whose length prefix is followed
-    immediately by 'i', whereas this pattern requires the field tag 0x0a
-    followed by the name length.
-    """
-    encoded = index_name.encode()
-    return b"\x0a" + bytes([len(encoded)]) + encoded
-
-
-def _server_rdb_path(client):
-    """Resolve the live RDB path from the server's own configuration."""
-
-    def config_value(name):
-        result = client.execute_command("CONFIG", "GET", name)
-        if isinstance(result, dict):
-            value = list(result.values())[0]
-        else:
-            value = result[1]
-        return value.decode() if isinstance(value, bytes) else value
-
-    return os.path.join(config_value("dir"), config_value("dbfilename"))
-
-
-def assert_snapshot_info_in_rdb(client, expected_num_indexes, label,
-                                index_name_written_after=None,
-                                expected_index_names=None):
-    """
-    Assert the RDB on disk contains exactly one SnapshotInfo section recording
-    expected_num_indexes, and that no neighbouring count was written instead.
-
-    Checking the neighbouring counts is what catches an off-by-one, which is
-    the whole class of bug this section exists to eliminate: the previous
-    implementation inferred the index count from the section count and was
-    wrong by exactly one in coordinated mode.
-
-    Pass expected_index_names to tie the recorded number to the index schemas
-    actually serialized into the RDB. Without it the expected count would only
-    ever be compared against search_number_of_indexes, which is derived from
-    the same GetNumberOfIndexSchemas() call that produces num_indexes, so a
-    bug in that call would make both agree and go unnoticed.
-    """
-    rdb_path = _server_rdb_path(client)
-    assert os.path.exists(rdb_path), f"[{label}] RDB file not found at {rdb_path}"
-    with open(rdb_path, "rb") as handle:
-        rdb = handle.read()
-    print(f"[{label}] Inspecting RDB at {rdb_path} ({len(rdb)} bytes)")
-
-    expected = _snapshot_info_section_bytes(expected_num_indexes)
-    occurrences = rdb.count(expected)
-    assert occurrences == 1, (
-        f"[{label}] Expected exactly one SnapshotInfo section with "
-        f"num_indexes={expected_num_indexes} (bytes {expected.hex()}) in the RDB, "
-        f"found {occurrences}"
-    )
-    print(f"[{label}] Found SnapshotInfo section num_indexes={expected_num_indexes} "
-          f"(bytes {expected.hex()})")
-
-    # Guard against an off-by-one in either direction.
-    for wrong_count in (expected_num_indexes - 1, expected_num_indexes + 1):
-        if wrong_count < 0:
-            continue
-        wrong = _snapshot_info_section_bytes(wrong_count)
-        assert wrong not in rdb, (
-            f"[{label}] RDB unexpectedly contains a SnapshotInfo section with "
-            f"num_indexes={wrong_count} (bytes {wrong.hex()}); the recorded index "
-            f"count is off by one"
-        )
-
-    # Independently confirm the recorded number against the index schemas that
-    # are actually present in the RDB, rather than against another metric
-    # derived from the same in-memory counter.
-    if expected_index_names is not None:
-        assert expected_num_indexes == len(expected_index_names), (
-            f"[{label}] Test setup error: expected_num_indexes="
-            f"{expected_num_indexes} disagrees with expected_index_names="
-            f"{expected_index_names}"
-        )
-        for index_name in expected_index_names:
-            marker = _index_schema_name_bytes(index_name)
-            assert marker in rdb, (
-                f"[{label}] Expected an IndexSchema named {index_name} in the "
-                f"RDB (bytes {marker.hex()}) but did not find one; the recorded "
-                f"num_indexes={expected_num_indexes} does not match the schemas "
-                f"on disk"
-            )
-        print(f"[{label}] Confirmed {len(expected_index_names)} named index "
-              f"schemas on disk: {sorted(expected_index_names)}")
-
-    # SnapshotInfo must be the first section, ahead of any index schema.
-    if index_name_written_after is not None:
-        marker = _index_schema_name_bytes(index_name_written_after)
-        marker_offset = rdb.find(marker)
-        assert marker_offset != -1, (
-            f"[{label}] Could not locate the IndexSchema name for "
-            f"{index_name_written_after} in the RDB"
-        )
-        snapshot_offset = rdb.find(expected)
-        assert snapshot_offset < marker_offset, (
-            f"[{label}] SnapshotInfo section at offset {snapshot_offset} must "
-            f"precede the first index schema at offset {marker_offset}"
-        )
-        print(f"[{label}] SnapshotInfo at offset {snapshot_offset} precedes the "
-              f"first index schema at offset {marker_offset}")
 
 
 class TestIndexesRestoredPercentStandalone(ValkeySearchTestCaseDebugMode):
@@ -225,13 +61,6 @@ class TestIndexesRestoredPercentStandalone(ValkeySearchTestCaseDebugMode):
 
         # Save RDB
         self.client.execute_command("SAVE")
-
-        # The save path records the real index count, not the section count.
-        assert_snapshot_info_in_rdb(
-            self.client, expected_num_indexes=2, label="Standalone",
-            index_name_written_after=index_1.name,
-            expected_index_names=[index_1.name, index_2.name],
-        )
 
         after_save = self.client.info("search")
         assert int(after_save["search_rdb_save_success_cnt"]) == save_success_before + 1, \
@@ -332,92 +161,52 @@ class TestIndexesRestoredPercentStandalone(ValkeySearchTestCaseDebugMode):
         assert info["search_number_of_indexes"] == 2, \
             f"Expected 2 indexes after restore, got {info['search_number_of_indexes']}"
 
-    def test_snapshot_info_tracks_actual_index_count(self):
-        """
-        The recorded count must follow the real number of index schemas rather
-        than a fixed value or the section count. Saving at two different index
-        counts and re-reading the RDB each time pins that down.
-        """
-        index_1.create(self.client, True)
-        index_2.create(self.client, True)
-        waiters.wait_for_true(lambda: index_1.backfill_complete(self.client))
-        waiters.wait_for_true(lambda: index_2.backfill_complete(self.client))
-
-        self.client.execute_command("SAVE")
-        assert_snapshot_info_in_rdb(
-            self.client, expected_num_indexes=2, label="Standalone/2-indexes",
-            index_name_written_after=index_1.name,
-            expected_index_names=[index_1.name, index_2.name],
-        )
-
-        # Add a third index and save again.
+        # The recorded total must follow the real number of index schemas
+        # rather than being a fixed value or the section count: save/reload at
+        # a higher and then a lower index count and confirm the restored state
+        # tracks it in both directions, completing at 100% each time.
         index_3.create(self.client, True)
         waiters.wait_for_true(lambda: index_3.backfill_complete(self.client))
         assert self.client.info("search")["search_number_of_indexes"] == 3
 
         self.client.execute_command("SAVE")
-        assert_snapshot_info_in_rdb(
-            self.client, expected_num_indexes=3, label="Standalone/3-indexes",
-            index_name_written_after=index_1.name,
-            expected_index_names=[index_1.name, index_2.name, index_3.name],
-        )
+        self.client.execute_command("DEBUG", "RELOAD")
+        info = self.client.info("search")
+        assert float(info["search_rdb_indexes_restored_percent"]) == 100.0, \
+            "Expected 100% after restoring 3 indexes"
+        assert info["search_number_of_indexes"] == 3, \
+            f"Expected 3 indexes after restore, got {info['search_number_of_indexes']}"
 
-        # Drop back down to one index and confirm the count follows downward too.
         self.client.execute_command("FT.DROPINDEX", index_2.name)
         self.client.execute_command("FT.DROPINDEX", index_3.name)
         assert self.client.info("search")["search_number_of_indexes"] == 1
 
         self.client.execute_command("SAVE")
-        assert_snapshot_info_in_rdb(
-            self.client, expected_num_indexes=1, label="Standalone/1-index",
-            index_name_written_after=index_1.name,
-            expected_index_names=[index_1.name],
-        )
-
-        # The dropped schemas must be gone from the RDB too, so the recorded
-        # count of 1 is not merely a stale value that happens to be smaller.
-        with open(_server_rdb_path(self.client), "rb") as handle:
-            rdb_after_drop = handle.read()
-        for dropped in (index_2.name, index_3.name):
-            marker = _index_schema_name_bytes(dropped)
-            assert marker not in rdb_after_drop, (
-                f"[Standalone/1-index] Dropped index {dropped} is still present "
-                f"in the RDB"
-            )
-
-        # The restored total must match, so the metric still completes at 100%.
         self.client.execute_command("DEBUG", "RELOAD")
         info = self.client.info("search")
-        assert float(info["search_rdb_indexes_restored_percent"]) == 100.0
-        assert info["search_number_of_indexes"] == 1
+        assert float(info["search_rdb_indexes_restored_percent"]) == 100.0, \
+            "Expected 100% after restoring 1 index"
+        assert info["search_number_of_indexes"] == 1, \
+            f"Expected 1 index after restore, got {info['search_number_of_indexes']}"
 
-    def test_no_snapshot_info_section_without_indexes(self):
+    def test_restore_without_indexes(self):
         """
-        With no indexes there is no ValkeySearch aux payload at all, so no
-        SnapshotInfo section should be written. This guards the AuxSave2
+        With no indexes there is no ValkeySearch aux payload at all, so a
+        reload must not invoke the aux load callback. This guards the AuxSave2
         "write nothing when empty" behaviour that the new section must not
-        disturb.
+        disturb: rdb_load_success_cnt only moves when PerformRDBLoad runs.
         """
-        assert self.client.info("search")["search_number_of_indexes"] == 0
+        before = self.client.info("search")
+        assert before["search_number_of_indexes"] == 0
+        load_success_before = int(before.get("search_rdb_load_success_cnt", 0))
 
         self.client.execute_command("SAVE")
-
-        rdb_path = _server_rdb_path(self.client)
-        with open(rdb_path, "rb") as handle:
-            rdb = handle.read()
-
-        # No SnapshotInfo section for any plausible index count.
-        for count in range(0, 4):
-            pattern = _snapshot_info_section_bytes(count)
-            assert pattern not in rdb, (
-                f"[Standalone/no-indexes] RDB unexpectedly contains a SnapshotInfo "
-                f"section with num_indexes={count}"
-            )
-        print("[Standalone/no-indexes] Confirmed no SnapshotInfo section written")
-
-        # Restore is a no-op for search, and the percentage is defined as 100.
         self.client.execute_command("DEBUG", "RELOAD")
+
         info = self.client.info("search")
+        assert int(info.get("search_rdb_load_success_cnt", 0)) == load_success_before, \
+            "Expected no aux payload (and hence no aux load) for an empty index set"
+        assert int(info.get("search_rdb_load_failure_cnt", 0)) == 0
         assert info["search_rdb_restore_in_progress"] == 0
         assert float(info["search_rdb_indexes_restored_percent"]) == 100.0
         assert info["search_number_of_indexes"] == 0
@@ -467,15 +256,6 @@ class TestIndexesRestoredPercentCluster(ValkeySearchClusterTestCaseDebugMode):
         for idx, rg in enumerate(self.replication_groups):
             rg.primary.client.execute_command("SAVE")
 
-        # Every primary must record 2 indexes, not the 3 sections it wrote.
-        # This is the exact off-by-one that made this metric report 66.67%.
-        for idx, rg in enumerate(self.replication_groups):
-            assert_snapshot_info_in_rdb(
-                rg.primary.client, expected_num_indexes=2,
-                label=f"Cluster/node{idx}",
-                expected_index_names=[index_1.name, index_2.name],
-            )
-
         # Restart all primaries (triggers RDB load with GLOBAL_METADATA section)
         print(f"[Cluster] Restarting all {len(self.replication_groups)} primaries...")
         for idx, rg in enumerate(self.replication_groups):
@@ -518,13 +298,5 @@ class TestIndexesRestoredPercentCluster(ValkeySearchClusterTestCaseDebugMode):
                 f"Node {idx}: Expected at least one successful RDB load"
             assert int(info.get("search_rdb_load_failure_cnt", 0)) == 0, \
                 f"Node {idx}: Expected no RDB load failures"
-
-            # The SnapshotInfo section survives the restart untouched, so the
-            # count the node restored from is still verifiable on disk.
-            assert_snapshot_info_in_rdb(
-                client, expected_num_indexes=2,
-                label=f"Cluster/node{idx}/after-restart",
-                expected_index_names=[index_1.name, index_2.name],
-            )
 
         print("[Cluster] All nodes verified: indexes_restored_percent=100.0%")

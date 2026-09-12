@@ -253,6 +253,53 @@ TEST_F(FTHybridParserTest, RangeIsParsedThenReportedUnimplemented) {
   EXPECT_EQ(params.status().code(), absl::StatusCode::kUnimplemented);
 }
 
+// ---------------------------------------------------------------------
+// A score alias naming a column LOAD also emits
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, ArmScoreAliasCollidingWithALoadedFieldIsRejected) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "n", "VSIM", "@vector",
+             "$q", "KNN", "2", "K", "5", "LOAD", "1", "@n"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_THAT(params.status().message(),
+              ::testing::HasSubstr("collides with a column loaded by LOAD"));
+}
+
+TEST_F(FTHybridParserTest, FusedScoreAliasCollidingWithALoadedFieldIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                       "n", "LOAD", "1", "@n"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_THAT(params.status().message(),
+              ::testing::HasSubstr("collides with a column loaded by LOAD"));
+}
+
+TEST_F(FTHybridParserTest, ScoreAliasCollidingWithLoadAllIsRejected) {
+  // `LOAD *` names no fields but emits every one the document carries, so a
+  // score alias that is a schema field collides just the same.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "n", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "*"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_THAT(params.status().message(),
+              ::testing::HasSubstr("collides with a column loaded by LOAD"));
+}
+
+TEST_F(FTHybridParserTest, ScoreAliasNotNamingALoadedColumnIsAccepted) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "text_score", "VSIM",
+             "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "1", "@n"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, ScoreAliasCollidingWithNoLoadClauseIsAccepted) {
+  // Nothing is loaded, so nothing collides -- the alias is the only thing
+  // claiming that column name.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "n", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+}
+
 }  // namespace
 }  // namespace query
 }  // namespace valkey_search

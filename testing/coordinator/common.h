@@ -32,7 +32,7 @@ class MockClient : public Client {
               (override));
   MOCK_METHOD(void, SearchIndexPartition,
               (std::unique_ptr<SearchIndexPartitionRequest> request,
-               SearchIndexPartitionCallback done),
+               std::stop_token stop_token, SearchIndexPartitionCallback done),
               (override));
   MOCK_METHOD(void, InfoIndexPartition,
               (std::unique_ptr<InfoIndexPartitionRequest> request,

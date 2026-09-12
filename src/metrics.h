@@ -90,6 +90,8 @@ class Metrics {
         0};
     std::atomic<uint64_t> coordinator_client_search_index_partition_failure_cnt{
         0};
+    std::atomic<uint64_t>
+        coordinator_client_search_index_partition_cancelled_cnt{0};
     std::atomic<uint64_t> coordinator_bytes_out{0};
     std::atomic<uint64_t> coordinator_bytes_in{0};
 

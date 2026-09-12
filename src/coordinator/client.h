@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_COORDINATOR_CLIENT_H_
 
 #include <memory>
+#include <stop_token>
 #include <string>
 
 #include "absl/functional/any_invocable.h"
@@ -33,7 +34,7 @@ class Client {
   virtual void GetGlobalMetadata(GetGlobalMetadataCallback done) = 0;
   virtual void SearchIndexPartition(
       std::unique_ptr<SearchIndexPartitionRequest> request,
-      SearchIndexPartitionCallback done) = 0;
+      std::stop_token stop_token, SearchIndexPartitionCallback done) = 0;
   virtual void InfoIndexPartition(
       std::unique_ptr<InfoIndexPartitionRequest> request,
       InfoIndexPartitionCallback done, int timeout_ms = 5000) = 0;
@@ -54,7 +55,7 @@ class ClientImpl : public Client {
   void GetGlobalMetadata(GetGlobalMetadataCallback done) override;
   void SearchIndexPartition(
       std::unique_ptr<SearchIndexPartitionRequest> request,
-      SearchIndexPartitionCallback done) override;
+      std::stop_token stop_token, SearchIndexPartitionCallback done) override;
   void InfoIndexPartition(std::unique_ptr<InfoIndexPartitionRequest> request,
                           InfoIndexPartitionCallback done,
                           int timeout_ms = 5000) override;

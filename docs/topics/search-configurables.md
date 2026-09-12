@@ -19,7 +19,7 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.skip-rdb-load                          | Boolean |               | Skip loading vector index data from RDB file                                                                                      |
 | search.skip-corrupted-internal-update-entries | Boolean |               | Skip corrupted AOF entries during internal updates                                                                                |
 | search.log-level                              |  Enum   |               | Controls module log level verbosity                                                                                               |
-| search.prefer-partial-results                 | Boolean |               | Default option for delivering partial results when timeout occurs (uses SOMESHARDS if not explicitly provided)                    |
+| search.enable-partial-results                 | Boolean | true          | Default option for delivering partial results when timeout occurs (uses SOMESHARDS if not explicitly provided)                    |
 | search.prefer-consistent-results              | Boolean |               | Default option for delivering consistent results when timeout occurs (uses CONSISTENT if not explicitly provided)                 |
 | search.search-result-background-cleanup       | Boolean |               | Enable search result cleanup on background thread                                                                                 |
 | search.high-priority-weight                   | Number  |               | Weight for high priority tasks in thread pools; low priority = 100 - this value                                                   |

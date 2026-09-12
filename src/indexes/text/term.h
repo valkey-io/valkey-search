@@ -51,7 +51,9 @@ class TermIterator : public TextIterator {
       const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
       float leaf_weight = 1.0f, uint32_t num_doc_contain_term = 0,
       const TextIndexSchema* text_index_schema = nullptr,
-      const scoring::Scorer* scorer = nullptr);
+      const scoring::Scorer* scorer = nullptr,
+      absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt =
+          {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -112,6 +114,10 @@ class TermIterator : public TextIterator {
   const scoring::Scorer* scorer_{nullptr};
   float idf_{0.0f};
   float avg_doc_len_{0.0f};
+
+  // Per-matched-term IDF for prefix/suffix/fuzzy, index-aligned with
+  // key_iterators_. Non-empty selects expansion mode in GetScore().
+  absl::InlinedVector<float, kWordExpansionInlineCapacity> per_term_idf_;
 
   // Pending queue: heap of valid iterators not currently being processed.
   // Provides O(1) access to the minimum key and O(log K) extraction.

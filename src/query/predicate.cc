@@ -287,13 +287,13 @@ EvaluationResult FuzzyPredicate::Evaluate(
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   // Get all KeyIterators for words within edit distance
-  auto key_iters = indexes::text::FuzzySearch::Search(
+  auto expansion = indexes::text::FuzzySearch::Search(
       text_index.GetPrefix(), term_, distance_, max_words);
   // Filter to only include KeyIterators that match target_key and field_mask
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       filtered_key_iterators;
-  for (auto &key_iter : key_iters) {
+  for (auto &key_iter : expansion.key_iterators) {
     BACKGROUND_PAUSEPOINT("search_fuzzy_search");
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {

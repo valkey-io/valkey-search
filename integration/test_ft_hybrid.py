@@ -158,6 +158,82 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             assert b"h2" in keys, f"h2 (APPLY result) missing in {rec}"
 
     # ---------------------------------------------------------------------
+    # The synchronous dispatch path, which MULTI/EXEC and a server without
+    # parallel queries both take. It is a separate implementation of the same
+    # command, so what it has to prove is that it answers identically.
+    # ---------------------------------------------------------------------
+
+    def _wide_index(self, client: Valkey, n: int = 40) -> bytes:
+        """More documents than any per-arm default cap, all matching the text
+        arm, so an arm that is quietly capped comes back short."""
+        client.execute_command(
+            "FT.CREATE", "wide", "ON", "HASH", "PREFIX", "1", "w:",
+            "SCHEMA", "title", "TEXT",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, n + 1):
+            client.hset(f"w:{i:03d}", mapping={
+                "title": "hello world",
+                "vec": _vec(float(i), 0.0, 0.0, 0.0)})
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "wide", "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == n,
+            timeout=10)
+        return _vec(0.0, 0.0, 0.0, 0.0)
+
+    @staticmethod
+    def _wide_query(q: bytes, n: int):
+        return ["FT.HYBRID", "wide",
+                "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", str(n),
+                "YIELD_SCORE_AS", "v",
+                "COMBINE", "RRF", "4", "WINDOW", "100",
+                "YIELD_SCORE_AS", "h",
+                "LIMIT", "0", "100",
+                "PARAMS", "2", "q", q]
+
+    def test_multi_exec_matches_the_direct_reply(self):
+        """FT.HYBRID inside a transaction takes the synchronous path, which
+        parses the arms before the cancellation token exists and does not
+        uncap them. Both defects are invisible until the same query is run
+        both ways and the replies compared."""
+        client = self.server.get_new_client()
+        n = 40
+        q = self._wide_index(client, n)
+        cmd = self._wide_query(q, n)
+
+        direct = client.execute_command(*cmd)
+
+        pipe = client.pipeline(transaction=True)
+        pipe.execute_command(*cmd)
+        in_multi = pipe.execute()[0]
+
+        # Alive at all: this used to close the connection.
+        assert client.ping()
+        assert direct[0] == n, f"direct returned {direct[0]} of {n}"
+        assert in_multi[0] == direct[0], (
+            f"transaction returned {in_multi[0]}, direct returned {direct[0]}")
+        as_rows = [self._rec_to_dict(r) for r in in_multi[1:]]
+        direct_rows = [self._rec_to_dict(r) for r in direct[1:]]
+        assert [r[b"__key"] for r in as_rows] == \
+            [r[b"__key"] for r in direct_rows]
+        assert [r[b"h"] for r in as_rows] == [r[b"h"] for r in direct_rows]
+
+    def test_multi_exec_is_cancellable_rather_than_crashing(self):
+        """The arms on the synchronous path must carry a real cancellation
+        token. A zero timeout is the cheapest way to make something actually
+        read it."""
+        client = self.server.get_new_client()
+        q = self._wide_index(client, 12)
+        pipe = client.pipeline(transaction=True)
+        pipe.execute_command(*(self._wide_query(q, 12) +
+                               ["TIMEOUT", "100000"]))
+        result = pipe.execute()[0]
+        assert client.ping()
+        assert isinstance(result, list)
+
+    # ---------------------------------------------------------------------
     # SORTBY over the fused record. Order is asserted here and only here:
     # the compatibility suite re-sorts both replies on a derived key before
     # comparing them, so it pins which rows and values come back, never the
@@ -1095,35 +1171,67 @@ class TestFtHybridClusterConsistency(ValkeySearchClusterTestCaseDebugMode):
             timeout=15)
         return cluster, client
 
-    def test_index_fingerprint_mismatch_fails_fanout(self):
-        """A forced index-fingerprint mismatch on the coordinator makes every
-        shard's per-arm consistency check fail; FT.HYBRID surfaces a clean
-        consistency error."""
-        _, client = self._setup()
-        # Sanity: nominal fanout succeeds.
-        ok = client.execute_command(
+    def _hybrid(self, client: Valkey):
+        return client.execute_command(
             "FT.HYBRID", self.INDEX,
             "SEARCH", "@title:hello",
             "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
             "PARAMS", "2", "q", self.Q,
         )
-        assert ok[0] > 0
 
+    def test_index_fingerprint_mismatch_fails_fanout(self):
+        """A forced index-fingerprint mismatch makes every shard's per-arm
+        consistency check fail. With partial results refused, that has to
+        surface as an error rather than as a quietly short reply."""
+        _, client = self._setup()
+        assert self._hybrid(client)[0] > 0  # sanity: nominal fanout works
+
+        client.execute_command(
+            "CONFIG", "SET", "search.enable-partial-results", "no")
         client.execute_command(
             "ft._debug", "CONTROLLED_VARIABLE", "set",
             "ForceInvalidIndexFingerprint", "yes")
         try:
             with pytest.raises(ResponseError):
-                client.execute_command(
-                    "FT.HYBRID", self.INDEX,
-                    "SEARCH", "@title:hello",
-                    "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-                    "PARAMS", "2", "q", self.Q,
-                )
+                self._hybrid(client)
         finally:
             client.execute_command(
                 "ft._debug", "CONTROLLED_VARIABLE", "set",
                 "ForceInvalidIndexFingerprint", "no")
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-partial-results", "yes")
+
+    def test_partial_results_setting_is_live_for_hybrid(self):
+        """`search.enable-partial-results` reaches FT.HYBRID rather than being
+        hardcoded. The same forced failure is an error when partial results are
+        refused and a short reply when they are allowed, so this fails in one
+        direction or the other if the setting is ever pinned again."""
+        _, client = self._setup()
+        nominal = self._hybrid(client)[0]
+        assert nominal > 0
+
+        client.execute_command(
+            "ft._debug", "CONTROLLED_VARIABLE", "set",
+            "ForceInvalidIndexFingerprint", "yes")
+        try:
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-partial-results", "no")
+            with pytest.raises(ResponseError):
+                self._hybrid(client)
+
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-partial-results", "yes")
+            tolerated = self._hybrid(client)
+            # A reply rather than an error, carrying whatever survived the
+            # shards that failed their check.
+            assert isinstance(tolerated, list)
+            assert tolerated[0] < nominal
+        finally:
+            client.execute_command(
+                "ft._debug", "CONTROLLED_VARIABLE", "set",
+                "ForceInvalidIndexFingerprint", "no")
+            client.execute_command(
+                "CONFIG", "SET", "search.enable-partial-results", "yes")
 
 
 class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):

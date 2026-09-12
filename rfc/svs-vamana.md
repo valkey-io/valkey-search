@@ -69,7 +69,7 @@ SVS is added as a git submodule under `third_party/svs/` and compiled as an obje
 
 **Advantages over the prior pre-built runtime model:**
 
-- **Automatic memory tracking:** All SVS C and C++ allocations route through `vmsdk::__wrap_malloc` and the global `operator new` overloads that valkey-search already maintains. These wrappers intercept at link time -- no wrapper boilerplate, no custom allocator interface. SVS memory is immediately visible in `used_memory` and `FT.INFO`.
+- **Automatic memory tracking:** All SVS C and C++ allocations route through the module's own `malloc`/`free`/`calloc`/`realloc`/`aligned_alloc`/`posix_memalign`/`valloc` definitions in `vmsdk/src/memory_allocation_c_api.cc` (introduced in valkey-search PR #1360), which delegate to `ValkeyModule_Alloc` and report the delta to `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize`. Because SVS is statically linked into `libsearch.so`, its allocation call sites resolve to these definitions at link time, with no per-target CMake configuration or wrapper boilerplate required. SVS memory is immediately visible in `used_memory` and `FT.INFO`. The `VMSDK_USE_VALKEY_ALLOC_OVERRIDES` gate in `memory_allocation_overrides.h` enables the wrappers on Linux release builds; sanitizer builds and macOS opt out (see the header for the rationale).
 - **Removes x86 binary constraint:** The pre-built runtime binary was x86-only by definition. Statically linking SVS from source removes this hard constraint on the deployment artifact. ARM64 is architecturally possible from this integration -- valkey-search's `simsimd` layer already provides ARM distance kernels and the SVS submodule build is not intrinsically x86-only -- but this release does not ship an ARM64 build or an SVS_VAMANA ARM64 smoke test, and no ARM64 target is exercised in CI. Adopters that need ARM64 will need to enable the build, validate an SVS_VAMANA create/add/search/delete cycle on their target, and confirm behavior for their workload before relying on it.
 - **Single self-contained binary:** `libsearch.so` distributes cleanly with no `LD_LIBRARY_PATH` dependencies or runtime `.so` discovery.
 - **Hermetic symbol isolation:** Statically linked SVS symbols remain hidden via `-Wl,--version-script`, eliminating any risk of symbol collision with other Valkey modules.
@@ -88,9 +88,9 @@ SVS is added as a git submodule under `third_party/svs/` and compiled as an obje
 |-----------|---------------------|-------------------------------|-------------------|---------------------|
 | Deployment files | 2 | 1 | 2 | 2-3 |
 | Operator complexity | Low | Low | Low | Medium |
-| Hot-pluggable compression | No | No (module reload) | Yes (.so swap) | Yes |
+| Hot-pluggable compression | No | No (server restart -- the module registers a custom Valkey data type, so `MODULE UNLOAD` is not supported) | Yes (.so swap) | Yes |
 | ABI stability | C++ vtable (fragile) | N/A (built together, same toolchain) | C stable (pure C ABI) | C stable |
-| Memory accounting | `get_memory_usage()` polling | Automatic via `__wrap_malloc` | `get_memory_usage()` polling | Via C API + SharedAPI |
+| Memory accounting | `get_memory_usage()` polling | Automatic via the module `malloc`/`free`/`calloc`/`realloc` wrappers in `vmsdk/src/memory_allocation_c_api.cc` (PR #1360) | `get_memory_usage()` polling | Via C API + SharedAPI |
 | LTO / inlining | None | Full (within single build) | None (.so boundary) | None (.so boundary) |
 | Proprietary backend independence | None | Requires matching toolchain (see Future Considerations) | Intel builds independently | Intel builds independently |
 | Hardware-specific variants | No | Requires full rebuild | Yes (.so swap) | Partial |
@@ -106,15 +106,22 @@ SVS is added as a git submodule under `third_party/svs/` and compiled as an obje
 
 ### Deferred Compression
 
-Deferred compression applies **only to LeanVec** compression types. For all other types the index is ready immediately:
+Deferred compression applies **only to LeanVec** compression types. For all other types the index is ready immediately.
+
+In-scope (open-source submodule):
 
 | Compression | Activation | `state` in FT.INFO |
 |-------------|-----------|---------------------|
 | NONE | Immediate -- index ready at creation | Always `ready` |
 | FP16 | Immediate -- index built with FP16 storage at creation | Always `ready` |
 | SQ8 | Immediate -- index built with SQ8 storage at creation | Always `ready` |
-| LVQ4/8/4X4/4X8 | Immediate -- index built with LVQ storage at creation (proprietary) | Always `ready` |
-| LEANVEC* | Deferred -- accumulates vectors until `LEANVEC_TRAINING_THRESHOLD`, then trains projection and builds compressed index | `training` below threshold; `ready` after |
+
+Future proprietary build (out of scope for this RFC; `FT.CREATE` currently rejects these types):
+
+| Compression | Activation (when supported) | `state` in FT.INFO |
+|-------------|-----------------------------|---------------------|
+| LVQ4 / LVQ8 / LVQ4X4 / LVQ4X8 | Immediate -- index built with LVQ storage at creation | Always `ready` |
+| LEANVEC4X4 / LEANVEC4X8 / LEANVEC8X8 | Deferred -- accumulates vectors until `LEANVEC_TRAINING_THRESHOLD`, then trains projection and builds compressed index | `training` below threshold; `ready` after |
 
 For LeanVec types, SVS requires a minimum corpus to train the projection matrices. Until `LEANVEC_TRAINING_THRESHOLD` vectors have been buffered, the index is in `state: training`, search returns an error, and modifications are queued. Once the threshold is crossed, valkey-search trains the LeanVec matrices on the buffered corpus, builds the compressed index, and transitions to `state: ready`.
 
@@ -131,10 +138,11 @@ The compression transition uses **copy semantics** to avoid blocking concurrent 
 3. Memory admission -- before allocating the clone, valkey-search reserves the projected clone footprint against the tracked-allocator budget. If the reservation would push `used_memory` past `maxmemory` (accounting for the ~2x overlap window), the transition is aborted: the original index is retained, no swap occurs, `FT.INFO` reflects the abort, and searches continue uninterrupted against the uncompressed index.
 4. Clone with new storage -- a compressed index is built from a snapshot of the source index. Mutations that complete on the source index after the snapshot is taken are journaled. Searches continue against the original uncompressed index during this phase.
 5. Pre-lock catch-up -- without holding the exclusive lock, valkey-search drains the bulk of the journal into the compressed index. New mutations arriving during this phase continue to be journaled. This step repeats until the remaining journal tail is small enough that replaying it under the lock will complete within the latency bound.
-6. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the bounded remaining journal tail into the compressed index, atomically swaps the index pointer, and releases the lock. The old uncompressed storage is freed.
-7. Memory accounting update -- the freed memory is reflected in `FT.INFO` and per-index byte counters.
+6. Reconcile and swap -- valkey-search acquires the exclusive index lock, replays the bounded remaining journal tail into the compressed index, atomically swaps the index pointer, and releases the lock. The old uncompressed index handle is retained by a shared pointer held outside the lock.
+7. Deferred free -- after the lock is released, the old uncompressed storage is freed on the writer pool. Freeing a multi-GB DynamicVamana returns per-node/edge blocks to jemalloc and reports each delta to `vmsdk::ReportFreeMemorySize`; done under the lock this can easily exceed the latency bound.
+8. Memory accounting update -- the final byte-count delta is reflected in `FT.INFO` and per-index byte counters once the deferred free completes.
 
-**Hard constraint:** Searches must never block for more than ~10ms during the transition. The pre-lock catch-up phase (step 5) ensures the journal tail replayed under the lock in step 6 is small enough to satisfy this bound. 2x peak memory during the overlap window is acceptable, but only up to the memory-admission bound in step 3.
+**Hard constraint:** Searches must never block for more than ~10ms during the transition. The pre-lock catch-up phase (step 5) bounds the journal tail replayed under the lock in step 6; step 7 runs entirely outside the lock. 2x peak memory during the overlap window is acceptable, but only up to the memory-admission bound in step 3.
 
 **Fallback behavior:** If the target compression is unavailable at `FT.CREATE` time (LVQ/LeanVec requested), the command returns an error immediately. Deferred compression transitions within the open-source build target FP16 or SQ8 only.
 
@@ -163,7 +171,7 @@ The `SVS_VAMANA` algorithm is selected via the `VECTOR` field specification of `
 
 ```text
 FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
-    TYPE FLOAT32
+    TYPE FLOAT32|FLOAT16|BFLOAT16
     DIM <dimensions>
     DISTANCE_METRIC L2|IP|COSINE
     [INITIAL_CAP <capacity>]
@@ -177,11 +185,16 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
     [RAW_VECTOR_STORAGE KEEP|DROP]
 ```
 
+**`TYPE` versus `COMPRESSION` -- two distinct concepts:**
+
+- **`TYPE`** is the on-the-wire element format of the raw vector bytes coming into `FT.CREATE`/`HSET`. It applies uniformly across FLAT, HNSW, and SVS_VAMANA (see valkey-search PR #1001). `FLOAT16` and `BFLOAT16` halve the raw-payload size at some precision cost.
+- **`COMPRESSION`** is the SVS-internal storage kind: how SVS represents each node inside its own graph. `COMPRESSION FP16` is orthogonal to `TYPE FLOAT16`; it selects an SVS storage kind independent of the raw byte format the caller supplied.
+
 #### Parameter Reference
 
 | Parameter | Type | Default | Constraints | Description |
 |-----------|------|---------|-------------|-------------|
-| TYPE | enum | -- | FLOAT32 | Vector element type (currently only FLOAT32 supported) |
+| TYPE | enum | -- | FLOAT32, FLOAT16, BFLOAT16 | Raw vector element type on ingest. `FLOAT16` and `BFLOAT16` halve payload size (valkey-search PR #1001). Independent of `COMPRESSION`, which controls SVS's internal storage kind. |
 | DIM | int | -- | Required | Vector dimensionality |
 | DISTANCE_METRIC | enum | -- | L2, IP, COSINE | Distance function for similarity computation |
 | INITIAL_CAP | int | 10240 | -- | Initial capacity hint for memory pre-allocation |
@@ -198,8 +211,8 @@ FT.CREATE <index> ... SCHEMA <field> VECTOR SVS_VAMANA <num_params>
 
 | Compression | Category | Description |
 |-------------|----------|-------------|
-| NONE | Baseline | Full precision FP32 storage (no compression) |
-| FP16 | Baseline | IEEE 754 half-precision float storage |
+| NONE | Baseline | No SVS-side compression; SVS stores each element in the width dictated by `TYPE`. `TYPE FLOAT32 COMPRESSION NONE` -> FP32 storage; `TYPE FLOAT16 COMPRESSION NONE` -> FP16 storage (no upcast); `TYPE BFLOAT16 COMPRESSION NONE` -> BF16 storage. |
+| FP16 | Baseline | SVS narrows each element to IEEE 754 half-precision, regardless of `TYPE`. Redundant with `TYPE FLOAT16` when the caller already sends FP16 bytes; useful when the caller sends FP32 but wants FP16 storage inside the index. |
 | SQ8 | Scalar quantization | Scalar 8-bit quantization |
 | LVQ4 | LVQ | 4-bit Locally-adaptive Vector Quantization |
 | LVQ8 | LVQ | 8-bit Locally-adaptive Vector Quantization |
@@ -262,11 +275,18 @@ The behavioral difference between the two backends at query time is where the fi
 - **HNSW** consults the predicate *per visited node* during graph traversal (`third_party/hnswlib/hnswalg.h:550-578`). The filter gates admission to the result heap (`top_candidates`), not the expansion frontier (`candidate_set`); filter-rejected nodes are still expanded. Crucially, because the result heap counts only filter-passing entries against the `ef` budget, selective predicates naturally extend traversal length until `k` matches are found.
 - **SVS** consults the predicate *post-traversal, per batch* (`bindings/c/src/filtered_search.hpp:200-223`; `filtered_topk_search` entry point at `:155-237`). The Vamana `greedy_search` receives no predicate (`include/svs/index/vamana/greedy_search.h:188-201`); it returns a fixed-size batch that the filter is then applied to, and the batch iterator is advanced until `k` filter-passing candidates are collected or the `filter_rate` hint's confidence budget is exhausted -- at which point SVS returns an empty result set (documented at `bindings/c/include/svs/c/svs_c.h:762-772`; enforced pre-search at `filtered_search.hpp:185-190` and per-batch at `:218-222`), where HNSW would return a partial result.
 
+Two related SVS failure modes are worth calling out separately in the caller contract:
+
+- **Empty result set** when the observed hit rate falls below the `filter_rate` hint at either abort site (pre-search on the initial sampled batch, or per-batch during the loop): `n_results == 0`. Callers should treat `n_results == 0 && expected > 0` as a `filter_rate` misprediction, log the observed / hinted rate, and consider falling back to the FLAT exact scan.
+- **Partial result set** when the batch iterator exhausts the reachable frontier before finding K filter-passing candidates without ever tripping the hit-rate abort -- typically with very selective filters combined with a small `SEARCH_WINDOW_SIZE`. The result is `0 < n_results < K` for a query that a FLAT scan would answer with K matches. The caller cannot distinguish "filter too selective for the current beam width" from "insufficient matches exist in the corpus" from this signal alone; the mitigation is the same as for the empty-result case.
+
+The `invalid_argument` thrown by SVS's `filter_rate()` range check (`bindings/c/src/types_support.hpp:85-92`) is a C++ exception. It cannot unwind across the `extern "C"` boundary of `svs_index_search_topk`; the C API adapter is expected to catch it and translate to an `SVS_ERROR_*` code via the `svs_error_h` out-parameter. valkey-search's responsibility is to keep the returned selectivity within `[0.0, 1.0]` at the source.
+
 Neither backend implements true edge-gated inline filtering (FilteredDiskANN-style, where `filter(neighbor) == false` skips walking that neighbor's edges); such an implementation typically requires filter-aware graph construction and is out of scope for this RFC.
 
 ### RDB
 
-> **Status: Planned (Phase 2).** RDB persistence for SVS is not yet implemented. `SaveIndexImpl` currently returns `UnimplementedError`. The design below describes the target implementation.
+> **Status: Planned (Phase 2).** RDB persistence for SVS is not yet implemented. The SVS index class (`vector_svs.cc`) is not yet in the codebase -- it lands in Phase 3 (see the migration plan). When Phase 3 introduces the class, `SaveIndexImpl` will initially return `UnimplementedError` until Phase 2 wires up the design below.
 
 The SVS C API provides `save()` / `load()` APIs that serialize the complete DynamicVamana index (graph, vector data, metadata) to a stream.
 
@@ -372,27 +392,30 @@ bool svs_tp_parallel_for(void* self,
 
 #### Memory Accounting
 
-For the open-source submodule build (this RFC), all SVS C and C++ allocations are intercepted automatically via `vmsdk::__wrap_malloc` and the global `operator new` overloads at link time. SVS memory is immediately visible in `used_memory` and `FT.INFO` with no additional code -- the same mechanism used for hnswlib.
+For the open-source submodule build, SVS allocations are tracked automatically through the module's C allocator wrappers. The machinery lives in `vmsdk/src/memory_allocation_c_api.cc` (introduced in valkey-search PR #1360) and provides definitions of `malloc`, `free`, `calloc`, `realloc`, `aligned_alloc`, `posix_memalign`, and `valloc` that:
 
-A prerequisite for this to work: the SVS CMake target must be set up with `target_compile_definitions(... VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)`, identical to how hnswlib is configured. Without this definition, SVS allocations silently bypass the tracked allocator -- `maxmemory` enforcement and key eviction triggers would not account for vector index memory. This requirement interacts with the ongoing build system modernization in [PR #1225](https://github.com/valkey-io/valkey-search/pull/1225); see the Future Considerations section for details.
+1. Delegate the underlying allocation to `ValkeyModule_Alloc` / `ValkeyModule_Free` (routing through Valkey's tracked allocator).
+2. Report the allocated size to `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize`, incrementing the module's `used_memory_bytes` counter.
 
-`svs_index_get_memory_usage()` supplements automatic tracking by providing per-index byte counts for `FT.INFO` detail reporting.
+Because SVS is statically compiled into `libsearch.so`, its `malloc`/`free`/`new`/`delete` call sites resolve to these module-owned definitions at link time. No per-target CMake compile definition is required, and no header inclusion or wrapper boilerplate is needed inside SVS source files. The `VMSDK_USE_VALKEY_ALLOC_OVERRIDES` gate (defined in `vmsdk/src/memory_allocation_overrides.h`) enables the wrappers by default on Linux release builds; sanitizer and macOS builds opt out so the sanitizer's own allocator or the system allocator handles everything.
 
-Note: the prior runtime model (`libsvs_runtime.so.0.4.0`) had genuinely opaque memory accounting because it predates the `get_memory_usage()` API and has its own PLT entries. The submodule approach does not share this limitation.
+`svs_index_get_memory_usage()` supplements automatic tracking by providing per-index byte counts for `FT.INFO` detail reporting -- a per-index attribution figure that complements the aggregate `used_memory` counter.
 
-**Pending: Valkey PR #4128 -- `ValkeyModule_AllocateExternalMemory`:** This in-progress Valkey core PR introduces a pair of module APIs for accounting memory that bypasses `zmalloc`:
+`vmsdk/versionscript.lds` (valkey-search PR #1374) keeps libstdc++ template locals hidden (`_ZNSt*` / `_ZNKSt*` / `_ZSt*` / `_ZTISt*` / `_ZTVSt*` / `_ZTSSt*` wildcards), so the statically linked SVS submodule does not leak std lib symbols across the module boundary. No SVS-specific version script is required.
+
+Note: the prior runtime model (`libsvs_runtime.so.0.4.0`) had genuinely opaque memory accounting because it predates the `get_memory_usage()` API and has its own PLT entries that `malloc` interposition could not cross. The submodule approach does not share this limitation.
+
+**Related upstream work: Valkey PR #4128 (`VM_IncrExternalMemory` / `VM_DecrExternalMemory`).** This Valkey core PR (open) introduces module APIs for accounting memory that bypasses `zmalloc`:
 
 ```c
-int ValkeyModule_AllocateExternalMemory(size_t bytes);  // report allocation
-int ValkeyModule_FreeExternalMemory(size_t bytes);      // report deallocation
+int ValkeyModule_IncrExternalMemory(size_t bytes);  // report allocation
+int ValkeyModule_DecrExternalMemory(size_t bytes);  // report deallocation
 ```
 
-The counter flows into `zmalloc_used_memory()` and therefore into `used_memory`, `maxmemory` enforcement, and OOM detection. This is directly relevant to SVS in two cases that `__wrap_malloc` cannot cover:
+The counter flows into `zmalloc_used_memory()` and therefore into `used_memory`, `maxmemory` enforcement, and OOM detection. This is directly relevant to SVS in two cases that the module `malloc` wrappers cannot cover:
 
-- **`mmap`-backed storage:** If SVS uses `mmap` for huge-page-aligned index regions (which can reduce vector search latency by ~30% per community benchmarks by enabling alignment control and lazy population that `ValkeyModule_Alloc` cannot provide), those allocations bypass `__wrap_malloc` entirely. `ValkeyModule_AllocateExternalMemory` provides the accounting path.
-- **Proprietary pre-built objects:** For builds where SVS allocations cross a PLT boundary, `ValkeyModule_AllocateExternalMemory(delta)` / `ValkeyModule_FreeExternalMemory(delta)` called after each mutating operation replaces the `UpdateReportedMemory()` polling workaround with an officially-supported Valkey API.
-
-Note: the final API name is still under discussion in the PR (candidates include `AllocateExternalMemory` and `IncrExternalMemory`). An open concern about the external counter being included in `used_memory_dataset` calculations has not yet been resolved. The PR has one MEMBER approval and is awaiting TSC vote before merge.
+- **`mmap`-backed storage:** If SVS uses `mmap` for huge-page-aligned index regions (which can reduce vector search latency by ~30% per community benchmarks by enabling alignment control and lazy population that `ValkeyModule_Alloc` cannot provide), those allocations bypass the module allocator entirely. `VM_IncrExternalMemory` provides the accounting path.
+- **Proprietary pre-built objects:** For future builds where SVS allocations cross a PLT boundary (see Alternative D in Future Considerations), `VM_IncrExternalMemory(delta)` / `VM_DecrExternalMemory(delta)` called after each mutating operation is the officially-supported accounting API.
 
 #### Proprietary Compression (LVQ, LeanVec)
 
@@ -425,7 +448,7 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 
 - **Index metrics**: vector count, graph degree statistics (mean/max), memory usage (bytes), compression state
 - **Search metrics**: query latency histogram (p50/p95/p99), queries per second
-- **Memory accounting**: automatic via `vmsdk::__wrap_malloc`/`operator new` interception (requires `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` on the SVS CMake target); per-index byte counts via `svs_index_get_memory_usage()` for `FT.INFO` detail.
+- **Memory accounting**: automatic via the module `malloc`/`free`/`calloc`/`realloc` wrappers in `vmsdk/src/memory_allocation_c_api.cc` (PR #1360); SVS is statically linked so all allocations resolve to these definitions at link time. Per-index byte counts via `svs_index_get_memory_usage()` for `FT.INFO` detail.
 
 ## Implementation Status
 
@@ -434,8 +457,11 @@ The submodule is compiled from source as part of valkey-search's CMake build. AV
 | Feature | Description |
 |---------|-------------|
 | Runtime v0.4.0 integration | save/load, get_distance, thread-safe add |
-| VectorRegistry integration | PR #1316 merged: VectorExternalizer replaced by VectorRegistry; `AddRecordImpl`/`ModifyRecordImpl` now receive `shared_ptr<const VectorRecord>&&`; raw vector bytes owned by registry for key lifetime; `IsVectorMatch` removed from codebase; `RAW_VECTOR_STORAGE` parameter removed |
-| Memory accounting | Per-index delta reporting via `DynamicVamanaIndex::get_memory_usage()` (SVS C++ runtime API); deltas reported to Valkey through `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize` after each mutation (`UpdateReportedMemory()`, svs-memory-reporting branch) |
+| Element type support (PR #1001) | Module-level `TYPE FLOAT32 / FLOAT16 / BFLOAT16` supported across FLAT and HNSW; SVS integration inherits this via `VectorType<T>` and hnswlib's new FP16 / BF16 space classes. `RAW_VECTOR_STORAGE` remains an SVS-native option controlling whether SVS retains original bytes alongside its compressed representation. |
+| VectorRegistry integration (PRs #1316, #1325) | `VectorExternalizer` replaced by `VectorRegistry`; `AddRecordImpl` / `ModifyRecordImpl` take `std::shared_ptr<const VectorRecord>&&`; raw vector bytes owned by the registry for the key's lifetime; multi-DB isolation and server-event lifecycle fixed in PR #1325. `IsVectorMatch`, `ComputeDistanceFromRecordImpl`, `GetValueImpl`, `TrackVector`, `UnTrackVector` removed from `VectorBase`; replaced by `ComputeDistance` / `GetVector` / `GetVectorLockFree` / `GetAlgoIdLockFree` / `GetMaxLoadedLabel` / `GetLabelCount`. |
+| Memory allocation machinery (PR #1360) | `memory_allocation_overrides.cc` deleted; C allocator definitions live in `memory_allocation_c_api.cc` and are picked up automatically by any statically linked third-party code, including SVS. `RawSystemAllocator` (bootstrap path) provided in `memory_allocation_overrides.h`. `VMSDK_USE_VALKEY_ALLOC_OVERRIDES` gate replaces the earlier `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` per-target definition. |
+| Symbol locality (PR #1374) | `vmsdk/versionscript.lds` keeps libstdc++ template locals hidden via `_ZNSt*` / `_ZNKSt*` / `_ZSt*` / `_ZTISt*` / `_ZTVSt*` / `_ZTSSt*` wildcards. No SVS-specific version script is required for the submodule build. |
+| Per-index memory reporting (SVS runtime) | `svs_index_get_memory_usage()` used for `FT.INFO` per-index byte attribution (supplements automatic tracking). |
 | Metrics suite | Full SVS-specific metrics in metrics framework |
 | Basic index operations | Create, add, search, remove functional |
 
@@ -472,28 +498,31 @@ LVQ and LeanVec are proprietary compression backends and are out of scope for th
 
 ### Memory Accounting and Allocation Considerations
 
-Any path that adds LVQ/LeanVec -- whether via a valkey-bundle build flag, a standalone user build, or any other mechanism -- must address the same memory tracking requirements as the open-source submodule.
+Any path that adds LVQ/LeanVec -- valkey-bundle build flag, standalone user build, or dynamic `.so` -- must address the same memory tracking requirements as the open-source submodule.
 
-**How tracking works for the open-source build:** valkey-search intercepts all C and C++ allocations from statically linked third-party code via the `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` compile definition. When this definition is present on a CMake target, `vmsdk/src/memory_allocation_overrides.h` redefines `malloc`/`free`/`calloc`/`realloc` and overrides `operator new`/`delete` to route through Valkey's tracked allocator. This causes all vector index memory to be counted in `used_memory`, which is what enables `maxmemory` enforcement and key eviction triggers to function correctly against the index.
+**How tracking works for the open-source submodule build.** valkey-search's module-side `malloc`/`free`/`calloc`/`realloc`/`aligned_alloc`/`posix_memalign`/`valloc` are defined in `vmsdk/src/memory_allocation_c_api.cc` (PR #1360) and delegate to `ValkeyModule_Alloc` / `ValkeyModule_Free` while reporting the delta to `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize`. Any statically linked third-party code (hnswlib, SVS) picks up these definitions at link time. The `VMSDK_USE_VALKEY_ALLOC_OVERRIDES` gate in `memory_allocation_overrides.h` enables the wrappers on Linux release builds; sanitizer builds and macOS opt out so the sanitizer's own allocator or the system allocator handles everything (see the header for the macOS `ld64 -rename_section` blocker).
 
-**The fragility risk -- PR #1225:** The open-source build system is being modernized ([PR #1225](https://github.com/valkey-io/valkey-search/pull/1225)), which converts intermediate static libraries to CMake OBJECT libraries and removes significant custom CMake scaffolding. During review, a reviewer caught that the `target_compile_definitions(... VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES)` on the hnswlib target was at risk of being silently lost during the target rename (`hnswlib_vmsdk` INTERFACE -> `hnswlib` OBJECT). OBJECT libraries propagate INTERFACE properties differently than INTERFACE libraries in complex link graphs, and the definition must explicitly reach every translation unit that includes hnswlib headers. If it is dropped, hnswlib silently falls back to system `malloc` -- bypassing the tracked allocator entirely.
+**Bootstrap allocations.** `vmsdk::RawSystemAllocator<T>` and `RawSystemMalloc`/`RawSystemFree` (in `memory_allocation_overrides.h`) reach glibc directly via `__libc_malloc` / `__libc_free`, bypassing the module allocator so the primitives that back accounting (`ShardedAtomic` counters) do not re-enter their own initialization. By default, `RawSystemAllocator<T>` still calls `ReportAllocMemorySize` / `ReportFreeMemorySize`, so its allocations remain visible in `used_memory` -- only the underlying allocation is diverted from `ValkeyModule_Alloc`. The explicit `DisableRawSystemAllocatorReporting` tag opts out of both routing and reporting for allocations that must be completely invisible to the accounting layer. The ordinary SVS integration does not need any of this -- SVS calls plain `malloc` and gets counted automatically.
 
-The SVS submodule will face the same requirement: its CMake target must be set up with `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` in the same way hnswlib is. This must be verified when the submodule is integrated under the modernized build system from PR #1225.
+**Symbol locality.** `vmsdk/versionscript.lds` (PR #1374) keeps libstdc++ template locals hidden with `_ZNSt*` / `_ZNKSt*` / `_ZSt*` / `_ZTISt*` / `_ZTVSt*` / `_ZTSSt*` wildcards, so a statically linked SVS submodule does not leak std lib symbols across the module boundary. No SVS-specific version script is required.
 
-**Challenges if this is not correctly propagated:**
+**Sanitizer build gap.** Under `SAN_BUILD`, `VMSDK_USE_VALKEY_ALLOC_OVERRIDES` is undefined and the C allocator wrappers do not ship. ASAN/TSAN CI therefore does not exercise the tracked-allocator path; allocator-bypass regressions that would surface in production Release builds are not caught by sanitizer runs. Integration tests that validate memory accounting must run in non-sanitizer Release builds.
+
+**For proprietary builds that ship pre-compiled objects (Alternative A tarball or Alternative D `.so`).** Pre-compiled objects have their own PLT entries; the module `malloc` definitions cannot capture allocations that resolve inside those objects. Two accounting paths are available:
+
+1. **`svs_index_get_memory_usage()` polling**: after each mutating operation, compute `new - last_reported` and call `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize` for the delta. Close-to-realtime; does not require Valkey-core changes.
+2. **`VM_IncrExternalMemory` / `VM_DecrExternalMemory`** (Valkey PR #4128, currently open): the officially-sanctioned module API for reporting memory that bypasses `zmalloc`. Once merged, this becomes the preferred path.
+
+If SVS PRO uses `mmap` for huge-page-aligned index regions (up to ~30% latency improvement per community benchmarks by controlling alignment and enabling lazy population -- capabilities `ValkeyModule_Alloc` cannot provide), those allocations also bypass the module `malloc` wrappers and require the same external-memory accounting path.
+
+**Failure modes if a proprietary build ships without either accounting path:**
 
 | Failure | Impact |
 |---------|--------|
-| SVS allocations bypass `__wrap_malloc` | `used_memory` undercounts vector index memory |
+| SVS PRO allocations bypass the module allocator | `used_memory` undercounts vector index memory |
 | `used_memory` undercounts | Valkey does not trigger `maxmemory` evictions when the index grows |
 | No eviction trigger | Server can OOM-kill under memory pressure with no warning |
-| `FT.INFO` memory fields | Per-index byte counts come from `get_memory_usage()` API, not from allocator tracking -- this remains accurate as a supplemental figure, but does not feed into Valkey's global memory enforcement |
-
-**Sanitizer build gap:** `memory_allocation_overrides.h` explicitly disables all overrides under `SAN_BUILD` (the `#ifdef SAN_BUILD` guard). This means ASAN/TSAN test runs do not exercise the tracked-allocator path -- allocator bypass bugs that would only manifest in production builds are not caught by sanitizer CI runs. Any integration test that validates memory accounting must run in a non-sanitizer Release build.
-
-**For proprietary compression builds (all alternatives):** If LVQ/LeanVec backends are compiled from source (e.g., via the tarball download pattern), the same `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` mechanism applies and must be explicitly set on the SVS PRO CMake target. If any component is provided as a pre-built binary object, the PLT boundary problem from the prior pre-built runtime model re-emerges for that component -- allocations from pre-built objects cannot be intercepted at link time.
-
-Once [Valkey PR #4128](https://github.com/valkey-io/valkey/pull/4128) merges, the preferred accounting path for pre-built objects is `ValkeyModule_AllocateExternalMemory(delta)` / `ValkeyModule_FreeExternalMemory(delta)` called after each mutating operation -- replacing the `UpdateReportedMemory()` / `get_memory_usage()` polling pattern with an officially-supported Valkey module API. Until PR #4128 merges, `get_memory_usage()` polling remains the only available mechanism.
+| `FT.INFO` memory fields | Per-index byte counts from `get_memory_usage()` remain accurate as a supplemental figure but do not feed into Valkey's global memory enforcement |
 
 ### Alternative A: valkey-bundle Build Flag (Preferred Starting Point)
 
@@ -536,13 +565,16 @@ if(SVS_PRO)
     list(APPEND CMAKE_PREFIX_PATH "${svs_pro_SOURCE_DIR}")
     # SVS exports its CMake package as `svs` (see SVS C++ quickstart);
     # `svs_pro` above is only the FetchContent handle for the download.
-    find_package(svs REQUIRED)
-    # Link the exported SVS targets into libsearch.so.
-    # target_link_libraries(search PRIVATE svs::svs svs::svs_shared_library)
-    # Note: VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES cannot be applied retroactively
-    # to pre-compiled objects in the tarball. Memory accounting for SVS PRO uses
-    # get_memory_usage() polling via UpdateReportedMemory() after each mutation.
-    # See Future Considerations -- Memory Accounting.
+    find_package(svs CONFIG REQUIRED)
+    # Link the exported SVS targets into libsearch (the module target defined
+    # in src/CMakeLists.txt). When Phase 3 introduces a dedicated `vector_svs`
+    # OBJECT library for the SVS integration sources, link there instead.
+    target_link_libraries(libsearch PRIVATE svs::svs)
+    # Note: the module malloc wrappers in memory_allocation_c_api.cc capture
+    # allocations only inside libsearch.so's own translation units. Pre-compiled
+    # objects in the SVS tarball have their own PLT entries; accounting for
+    # SVS PRO uses svs_index_get_memory_usage() polling, or VM_IncrExternalMemory
+    # once Valkey PR #4128 lands. See Future Considerations -- Memory Accounting.
 endif()
 ```
 
@@ -552,7 +584,7 @@ docker build --build-arg SVS_PRO=1 \
              -t valkey/valkey-bundle:<tag>-svs-pro .
 ```
 
-**Pros:** Single Dockerfile; standard valkey-bundle distribution path; no separate image CI/CD pipeline; uses the established SVS tarball download pattern; source-compiled proprietary backends allow `VMSDK_ENABLE_MEMORY_ALLOCATION_OVERRIDES` to be enforced.
+**Pros:** Single Dockerfile; standard valkey-bundle distribution path; no separate image CI/CD pipeline; uses the established SVS tarball download pattern. Memory accounting uses `svs_index_get_memory_usage()` polling (or `VM_IncrExternalMemory` once PR #4128 lands) because tarball objects live behind a PLT boundary from the module `malloc` wrappers.
 
 **Cons:** Community approval required for Dockerfile.template changes. Image tag naming and ownership must be agreed with the valkey community. Intel must publish a compatible tarball to GitHub releases for each valkey-search release.
 
@@ -596,7 +628,7 @@ for sym in svs_index_search_topk svs_index_get_memory_usage \
 done
 
 # Verify: fail the build if any non-allowlisted global symbol remains
-LEAKED=$(nm -g --defined-only svs_c_api.o | awk '$3 !~ /^svs_/' | grep -v ' U ')
+LEAKED=$(nm -g --defined-only svs_c_api.o | awk '$3 !~ /^svs_/')
 if [ -n "$LEAKED" ]; then
     echo "ERROR: non-allowlisted global symbols in libsvs_c_api.a:" >&2
     echo "$LEAKED" >&2
@@ -669,7 +701,7 @@ The two variants ship the same `svs/c/svs_c.h` exports and differ only in implem
 
 **How Intel builds the Intel variant:** Because the boundary is a pure C ABI (no mangled C++ symbols, no STL types in the interface), Intel can compile `libsvs_c_api.so` with any compiler, any optimization level, and any hardware-specific flags independently from the valkey-search build environment. Multiple `.so` variants targeting different hardware (AVX-512, AVX2) can be distributed as separate files.
 
-**Memory accounting for this model:** Since `libsvs_c_api.so` has its own PLT entries, `__wrap_malloc` interposition does not cross the `.so` boundary. Memory tracking uses `svs_index_get_memory_usage()` polling with `UpdateReportedMemory()` after each mutating operation -- the same approach already implemented in the svs-memory-reporting branch and documented in the Memory Accounting section above.
+**Memory accounting for this model:** Since `libsvs_c_api.so` has its own PLT entries, the module `malloc` wrappers in `memory_allocation_c_api.cc` do not capture allocations resolved inside the `.so`. Memory tracking uses `svs_index_get_memory_usage()` polling with delta reporting to `vmsdk::ReportAllocMemorySize` / `vmsdk::ReportFreeMemorySize` after each mutating operation, or `VM_IncrExternalMemory` / `VM_DecrExternalMemory` once Valkey PR #4128 lands.
 
 **Pros:**
 - No C++ ABI risks: pure C boundary eliminates compiler version, STL, and LTO concerns
@@ -680,7 +712,7 @@ The two variants ship the same `svs/c/svs_c.h` exports and differ only in implem
 
 **Cons:**
 - Deployment complexity: `LD_LIBRARY_PATH` or `/etc/ld.so.conf.d/` must point to `libsvs_c_api.so`; breaks the single-binary model
-- Memory accounting via polling: not automatic like `__wrap_malloc`; delta reporting after mutations is close-to-realtime but not instantaneous
+- Memory accounting via polling: not automatic like the module `malloc` wrappers; delta reporting after mutations is close-to-realtime but not instantaneous
 - Version compatibility matrix: `libsearch.so` and `libsvs_c_api.so` must be compatible versions; this must be enforced and documented
 
 **Relationship to the main spec:** The open-source submodule integration (this RFC) targets the C API as the integration layer (`svs/c/svs_c.h`). Once that is in place, the C API interface is already designed to work with either static or dynamic linking. Switching from static submodule to dynamic `libsvs_c_api.so` would require `libsearch.so` to call `dlopen`/`dlsym` or link against the `.so` at build time, but the function signatures remain the same. This alternative is therefore a plausible follow-on once the C API is stable on main.
@@ -704,8 +736,14 @@ A fourth possibility -- Intel building the entire `libsearch.so` (valkey-search 
 
 - [Intel Scalable Vector Search -- GitHub](https://github.com/intel/ScalableVectorSearch)
 - [Intel SVS Documentation](https://intel.github.io/ScalableVectorSearch/)
+- [valkey-search PR #1001 -- FLOAT16 and BFLOAT16 element types](https://github.com/valkey-io/valkey-search/pull/1001)
+- [valkey-search PR #1292 -- Multi/exec fork drain deadlock fix](https://github.com/valkey-io/valkey-search/pull/1292)
+- [valkey-search PR #1310 -- Zero-length key indexing](https://github.com/valkey-io/valkey-search/pull/1310)
 - [valkey-search PR #1316 -- VectorRegistry for memory sharing](https://github.com/valkey-io/valkey-search/pull/1316)
-- [Valkey PR #4128 -- VM_AllocateExternalMemory (pending merge)](https://github.com/valkey-io/valkey/pull/4128)
+- [valkey-search PR #1325 -- VectorRegistry lifecycle / multi-DB isolation / server events](https://github.com/valkey-io/valkey-search/pull/1325)
+- [valkey-search PR #1360 -- New memory allocation machinery](https://github.com/valkey-io/valkey-search/pull/1360)
+- [valkey-search PR #1374 -- versionscript.lds keeps std symbols local](https://github.com/valkey-io/valkey-search/pull/1374)
+- [Valkey PR #4128 -- VM_IncrExternalMemory / VM_DecrExternalMemory (open)](https://github.com/valkey-io/valkey/pull/4128)
 - [SVS PR #326 -- Deferred Compression](https://github.com/intel/ScalableVectorSearch/pull/326)
 - [SVS PR #352 -- C API Filtered TopK Search](https://github.com/intel/ScalableVectorSearch/pull/352)
 - [SVS PR #305 -- C API Threadpool Getter/Setter](https://github.com/intel/ScalableVectorSearch/pull/305)

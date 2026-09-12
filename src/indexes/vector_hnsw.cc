@@ -178,6 +178,7 @@ absl::Status VectorHNSW<T>::AddRecordImpl(
         VMSDK_RETURN_IF_ERROR(ResizeIfFull());
         continue;
       }
+      DCHECK(false) << "Unexpected error while adding a record: " << e.what();
       ++Metrics::GetStats().hnsw_add_exceptions_cnt;
       return absl::InternalError(
           absl::StrCat("Error while adding a record: ", e.what()));
@@ -295,6 +296,7 @@ absl::Status VectorHNSW<T>::ModifyRecordImpl(
                                 normalize_, GetVectorDataType()),
                     internal_id, /*replace_deleted=*/false);
   } catch (const std::exception &e) {
+    DCHECK(false) << "Unexpected error while modifying a record: " << e.what();
     ++Metrics::GetStats().hnsw_modify_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while modifying a record: ", e.what()));
@@ -310,6 +312,7 @@ absl::Status VectorHNSW<T>::RemoveRecordImpl(uint64_t internal_id) {
     // calculations against it (during search/traversal) use magnitude 1.0f.
     VMSDK_RETURN_IF_ERROR(AlgoDeleteRecord(internal_id));
   } catch (const std::exception &e) {
+    DCHECK(false) << "Unexpected error while removing a record: " << e.what();
     ++Metrics::GetStats().hnsw_remove_exceptions_cnt;
     return absl::InternalError(
         absl::StrCat("Error while removing a record: ", e.what()));

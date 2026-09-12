@@ -300,20 +300,39 @@ function setup_json_module() {
 
 # Loop over Valkey log files and search for sanitization errors
 function check_for_san_errors() {
-  local valkey_logs="$1"
+  local valkey_logs=($1)
+  local num_logs=${#valkey_logs[@]}
+  if [[ ${num_logs} -eq 0 ]]; then
+    return
+  fi
   local exit_with_error=0
   local files_to_dump=""
-  for logfile in ${valkey_logs}; do
-    printf "Checking log file ${logfile} for ASan/TSan errors"
-    local errors_count=$(cat ${logfile} | grep -wE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' | wc -l)
-    if [[ ${errors_count} -eq 0 ]]; then
-      printf "... ${GREEN}ok${RESET}\n"
+  if [[ ${num_logs} -gt 10 ]]; then
+    printf "Checking %d log files for ASan/TSan errors..." "${num_logs}"
+    for logfile in "${valkey_logs[@]}"; do
+      if grep -qwE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' "${logfile}" 2>/dev/null; then
+        exit_with_error=1
+        files_to_dump="${files_to_dump} ${logfile}"
+      fi
+    done
+    if [[ ${exit_with_error} -eq 0 ]]; then
+      printf " ${GREEN}ok${RESET}\n"
     else
-      printf "... ${RED}found errors!${RESET}\n"
-      exit_with_error=1
-      files_to_dump="${files_to_dump} ${logfile}"
+      printf " ${RED}found errors!${RESET}\n"
     fi
-  done
+  else
+    for logfile in "${valkey_logs[@]}"; do
+      printf "Checking log file ${logfile} for ASan/TSan errors"
+      local errors_count=$(cat ${logfile} | grep -wE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' | wc -l)
+      if [[ ${errors_count} -eq 0 ]]; then
+        printf "... ${GREEN}ok${RESET}\n"
+      else
+        printf "... ${RED}found errors!${RESET}\n"
+        exit_with_error=1
+        files_to_dump="${files_to_dump} ${logfile}"
+      fi
+    done
+  fi
 
   if [[ ${exit_with_error} -ne 0 ]]; then
     printf "\n\nDumping log files with errors\n\n"

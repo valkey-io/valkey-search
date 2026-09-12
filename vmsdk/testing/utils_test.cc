@@ -176,8 +176,8 @@ TEST_F(UtilsTest, IsReadOnly) {
   EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
       .WillOnce(testing::Return(43));
   EXPECT_CALL(*kMockValkeyModule, GetClientInfoById(testing::_, 43))
-      .WillOnce([](void* client_info, uint64_t) {
-        static_cast<ValkeyModuleClientInfo*>(client_info)->flags = 0;
+      .WillOnce([](void *client_info, uint64_t) {
+        static_cast<ValkeyModuleClientInfo *>(client_info)->flags = 0;
         return VALKEYMODULE_OK;
       });
   EXPECT_FALSE(IsReadOnly(&fake_ctx));
@@ -185,8 +185,8 @@ TEST_F(UtilsTest, IsReadOnly) {
   EXPECT_CALL(*kMockValkeyModule, GetClientId(&fake_ctx))
       .WillOnce(testing::Return(44));
   EXPECT_CALL(*kMockValkeyModule, GetClientInfoById(testing::_, 44))
-      .WillOnce([](void* client_info, uint64_t) {
-        static_cast<ValkeyModuleClientInfo*>(client_info)->flags =
+      .WillOnce([](void *client_info, uint64_t) {
+        static_cast<ValkeyModuleClientInfo *>(client_info)->flags =
             VALKEYMODULE_CLIENTINFO_FLAG_READONLY;
         return VALKEYMODULE_OK;
       });

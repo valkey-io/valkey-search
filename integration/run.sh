@@ -4,6 +4,7 @@
 ROOT_DIR=$(readlink -f $(readlink -f $(dirname $0))/..)
 export ROOT_DIR
 
+START_TIME=$(date +%s)
 . ${ROOT_DIR}/scripts/common.rc
 
 LOG_NOTICE "Root directory is: ${ROOT_DIR}"
@@ -58,12 +59,14 @@ while [ $# -gt 0 ]; do
     shift || true
     SAN_SUFFIX="-asan"
     export SAN_BUILD="address"
+    export ASAN_BUILD=1
     LOG_INFO "Assuming ASan build"
     ;;
   --tsan)
     shift || true
     SAN_SUFFIX="-tsan"
     export SAN_BUILD="thread"
+    export TSAN_BUILD=1
     LOG_INFO "Assuming TSan build"
     ;;
   --capture)
@@ -119,8 +122,10 @@ done
 if [ -z "${SAN_SUFFIX}" ] && [ ! -z "${SAN_BUILD}" ]; then
   if [[ "${SAN_BUILD}" == "address" ]]; then
     SAN_SUFFIX="-asan"
+    export ASAN_BUILD=1
   elif [[ "${SAN_BUILD}" == "thread" ]]; then
     SAN_SUFFIX="-tsan"
+    export TSAN_BUILD=1
   fi
 fi
 
@@ -149,7 +154,7 @@ fi
 
 BUILD_DIR=${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${SAN_SUFFIX}
 WD=${BUILD_DIR}/integration
-export LOGS_DIR=${WD}/.valkey-test-framework
+export LOGS_DIR=${LOGS_DIR:-${WD}/.valkey-test-framework}
 
 # Check for user provided module path
 MODULE_PATH="${MODULE_PATH:=}"
@@ -215,7 +220,7 @@ else
 fi
 
 RUN_SUCCESS=0
-export LOGS_DIR=${WD}/.valkey-test-framework
+export LOGS_DIR=${LOGS_DIR:-${WD}/.valkey-test-framework}
 print_environment_var "LOGS_DIR" "${LOGS_DIR}"
 
 rm -fr ${LOGS_DIR}
@@ -262,7 +267,7 @@ function run_pytest() {
     XDIST_ARRAY=(${XDIST_ARGS})
     PYTEST_CMD+=("${XDIST_ARRAY[@]}")
   fi
-  PYTEST_CMD+=(--cache-clear -v "${ROOT_DIR}/integration/")
+  PYTEST_CMD+=(--cache-clear -rfE -v "${ROOT_DIR}/integration/")
 
   LOG_INFO "Running: ${PYTEST_CMD[*]}"
   # Capture pytest output to check for sanitizer errors
@@ -314,3 +319,7 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
   # Check pytest output for sanitizer errors
   check_for_san_errors "${PYTEST_OUTPUT_LOG}"
 fi
+
+END_TIME=$(date +%s)
+TEST_RUNTIME=$((END_TIME - START_TIME))
+printf "\n${GREEN}Integration tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))

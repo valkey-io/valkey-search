@@ -26,6 +26,19 @@ if worker_id and not LOGS_DIR.endswith(f"/{worker_id}"):
     LOGS_DIR = os.path.join(LOGS_DIR, worker_id)
 
 
+def is_sanitizer_enabled() -> bool:
+    san_build = os.getenv("SAN_BUILD", "").lower()
+    return bool(
+        os.getenv("ASAN_BUILD")
+        or os.getenv("TSAN_BUILD")
+        or (san_build and san_build != "no")
+        or "-asan" in os.getenv("MODULE_PATH", "")
+        or "-tsan" in os.getenv("MODULE_PATH", "")
+        or "-asan" in os.getenv("VALKEY_SEARCH_PATH", "")
+        or "-tsan" in os.getenv("VALKEY_SEARCH_PATH", "")
+    )
+
+
 class Node:
     """This class represents a valkey server instance, regardless of its role"""
 
@@ -195,6 +208,30 @@ class ValkeySearchTestCaseCommon(ValkeyTestCase):
         try:
             os.chdir(testdir)
             lines = self.get_config_file_lines(testdir, port)
+            # Setting 'save 99999999 1' overrides default periodic snapshot triggers (e.g.
+            # 'save 60 10000', which causes fork failures and MISCONF errors under ASan
+            # during heavy ingest) while keeping saveparamslen > 0 so Valkey still saves
+            # final RDB on graceful shutdown/restart (e.g. DEBUG RESTART).
+            if not any(line.strip().startswith("save") for line in lines):
+                lines = ["save 99999999 1"] + lines
+
+            # Under sanitizers (ASan/TSan), cap reader and writer thread pools to 4 to avoid
+            # thread explosion and test timeouts while preserving concurrency coverage.
+            if is_sanitizer_enabled():
+                module_path = os.getenv("MODULE_PATH", "")
+                new_lines = []
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("loadmodule") and (
+                        (module_path and module_path in stripped)
+                        or "libsearch" in stripped
+                    ):
+                        if "--reader-threads" not in line:
+                            line += " --reader-threads 4"
+                        if "--writer-threads" not in line:
+                            line += " --writer-threads 4"
+                    new_lines.append(line)
+                lines = new_lines
 
             conf_file = f"{testdir}/valkey_{port}.conf"
             with open(conf_file, "w+") as f:
@@ -320,6 +357,11 @@ class ValkeySearchTestCaseBase(ValkeySearchTestCaseCommon):
 
     def get_config_file_lines(self, testdir, port) -> List[str]:
         return [
+            # Setting 'save 99999999 1' overrides default periodic snapshot triggers (e.g.
+            # 'save 60 10000', which causes fork failures and MISCONF errors under ASan
+            # during heavy ingest) while keeping saveparamslen > 0 so Valkey still saves
+            # final RDB on graceful shutdown/restart (e.g. DEBUG RESTART).
+            "save 99999999 1",
             "enable-debug-command yes",
             f"loadmodule {os.getenv('JSON_MODULE_PATH')}",
             f"dir {testdir}",

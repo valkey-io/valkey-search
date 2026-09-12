@@ -80,6 +80,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   bool loadall_{false};
   std::vector<LoadField> loads_;
   bool load_key{false};
+  // ADDSCORES: expose the relevance score as pipeline field __score
+  // (see ProcessNeighborsForProcessing / CreateRecordsFromNeighbors).
   bool addscores_{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
@@ -100,6 +102,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
+
   //
   // Number of records required as output of the query phase.
   // If all records are required, then it will be

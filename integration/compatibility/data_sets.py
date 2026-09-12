@@ -795,6 +795,28 @@ def compute_sortkey_data_sets():
     }
 
 
+### RETURN clause data set (issue #1353, item 7) ###
+#
+# Fixture for the repeated-RETURN-clause cases (generate_return.py). One
+# document, no SORTBY in any query to avoid hitting other #1353 divergence
+RETURN_CLAUSE_DATA_SET = "return clause"
+
+
+def compute_return_data_sets():
+    docs = [
+        ("hash:rc1", {"m": "all", "p": "10", "title": "hello world"}),
+    ]
+    return {
+        RETURN_CLAUSE_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                "SCHEMA m TAG p NUMERIC title TEXT"
+            ],
+        }
+    }
+
+
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
@@ -802,6 +824,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "text"
         elif data_set == SORTKEY_PREFIX_DATA_SET:
             data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
         else:
             data_source = "vector"
 
@@ -812,6 +836,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_text_data_sets(data_set, schema_type=schema_type)
         case "sortkey":
             data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]

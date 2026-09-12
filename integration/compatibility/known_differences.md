@@ -11,8 +11,10 @@ For the array-input sweep, see `array_input_compatibility.md`.
 
 ## 1. Differences no test covers
 
-Found by direct comparison against Redis, but not exercised by any generator,
-so nothing would catch a regression in them.
+Found by direct comparison against Redis, but not compared by any generator --
+either no generator exercises them, or the case is captured and marked
+`excluded`, which replays the command only to check that valkey-search does not
+crash. Either way nothing would catch a regression in them.
 
 ### 1.1 APPLY over an absent field truncates the result stream
 
@@ -75,6 +77,46 @@ deliberate choice rather than a defect: matching Redis means giving up shortest
 round-trip formatting. The harness absorbs it instead, comparing two numeric
 values that differ byte-for-byte through `compare_number_eq`, which uses
 `math.isclose` and treats `nan` and `-nan` as equal.
+
+### 1.5 Equality between two arrays
+
+Redis reads only the first element of each array and compares that.
+valkey-search compares element by element and then by length
+(`Compare` in `src/expr/value.cc`). Measured on `redis:latest`:
+
+```
+FT.AGGREGATE idx @n1:[-inf inf] LOAD 3 @n1 @n2 @t1 GROUPBY 1 @t1
+  REDUCE TOLIST 1 @n1 AS items REDUCE TOLIST 1 @n2 AS items2
+  APPLY (@items)==(@items2) AS result
+
+items      items2       Redis   valkey-search
+[5]        [5,7]        1       0
+[1,9]      [1,2]        1       0
+[1,2]      [1,3,2]      1       0
+[2]        [1,9]        0       0
+```
+
+Matching Redis means discarding every element after the first, so
+valkey-search keeps its own rule and `generate_array.py` marks
+`test_array_vs_array_compare` excluded.
+
+Adopting the Redis rule would not make the case comparable anyway. TOLIST's
+element order is unspecified and the two engines produce different orders, so
+under a first-element rule the recorded answer depends on whichever element
+Redis's hash table happened to yield first. The harness already sorts TOLIST
+arrays before comparing them (`compare_row` in `compatibility_test.py`), which
+hides the order in the array fields but cannot hide it in a scalar computed
+from them.
+
+That ordering is also why the divergence went unnoticed until the pickles were
+regenerated: every earlier generation landed on orders whose first elements
+differed, where the two rules agree. The `array compare` dataset exists to tell
+the rules apart and did so once the order changed.
+
+The same expression under FILTER (`test_filter_array`) is left comparing,
+because the `array inputs` dataset gives `@n1` and `@n2` disjoint values in
+every group. The first elements can never coincide there, so both rules answer
+"not equal" under any order.
 
 ## 2. Where the two reference engines disagree
 

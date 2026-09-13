@@ -238,6 +238,9 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
+  data_model::DistanceMetric GetDistanceMetric() const {
+    return distance_metric_;
+  }
   std::unique_ptr<data_model::Index> ToProto() const override;
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override;
   absl::Status SaveTrackedKeys(RDBChunkOutputStream chunked_out) const

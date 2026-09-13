@@ -712,6 +712,20 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // text relevance — carries a BM25-style relevance score instead.
     env.per_arm_score_is_distance.push_back(arm->IsVectorQuery() &&
                                             !QueryHasTextPredicate(*arm));
+    // And which metric produced it: the similarity a distance maps to differs
+    // by metric, and `arms` is emptied at dispatch.
+    auto metric = data_model::DISTANCE_METRIC_UNSPECIFIED;
+    if (arm->IsVectorQuery() && env.index_schema != nullptr) {
+      auto index = env.index_schema->GetIndex(arm->attribute_alias);
+      if (index.ok()) {
+        auto *vector_index =
+            dynamic_cast<const indexes::VectorBase *>(index->get());
+        if (vector_index != nullptr) {
+          metric = vector_index->GetDistanceMetric();
+        }
+      }
+    }
+    env.per_arm_distance_metric.push_back(metric);
   }
 
   // Clear the now-stale stack-local index_interface_ pointer.

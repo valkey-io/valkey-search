@@ -15,6 +15,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -57,6 +58,7 @@ constexpr absl::string_view kBetaKw{"BETA"};
 constexpr absl::string_view kYieldScoreAsKw{"YIELD_SCORE_AS"};
 constexpr absl::string_view kScorerKw{"SCORER"};
 constexpr absl::string_view kFilterKw{"FILTER"};
+constexpr absl::string_view kBatchSizeKw{"BATCH_SIZE"};
 constexpr absl::string_view kReturnKw{"RETURN"};
 constexpr absl::string_view kNocontentKw{"NOCONTENT"};
 constexpr absl::string_view kDialectKw{"DIALECT"};
@@ -182,8 +184,13 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
 // The KNN/RANGE block is optional; omitting it means KNN with the default K.
 // YIELD_SCORE_AS names the arm and sits after the block, never inside it.
 absl::Status ParseVsimClause(MultiSearchParameters &env,
-                             vmsdk::ArgsIterator &itr, bool *vsim_uses_range) {
+                             vmsdk::ArgsIterator &itr, bool *vsim_uses_range,
+                             std::string *vsim_filter_storage,
+                             std::string *vsim_query_storage) {
   *vsim_uses_range = false;
+  // Owned by the caller, because arm->parse_vars.query_string is a view.
+  std::string &vsim_filter = *vsim_filter_storage;
+  std::string &vsim_query_string = *vsim_query_storage;
   if (!itr.PopIfNextIgnoreCase(kVsimKw)) {
     return absl::InvalidArgumentError("FT.HYBRID requires VSIM clause");
   }
@@ -321,7 +328,11 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       break;
     }
     auto next = next_or.value();
-    if (IsTopLevelKeyword(next)) {
+    // FILTER is checked before the top-level break, because inside a VSIM
+    // clause it means a pre-filter on the vector search rather than the
+    // aggregate stage it means everywhere else. A FILTER meant as that stage
+    // comes after COMBINE, which has already ended this loop.
+    if (IsTopLevelKeyword(next) && !absl::EqualsIgnoreCase(next, kFilterKw)) {
       break;
     }
     if (absl::EqualsIgnoreCase(next, kYieldScoreAsKw)) {
@@ -330,10 +341,82 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       itr.Next();
       per_arm_alias = std::string(alias_sv);
       arm->score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
+    } else if (absl::EqualsIgnoreCase(next, kFilterKw)) {
+      // FILTER [count] <search-expression> [POLICY <p>] [BATCH_SIZE <n>]
+      //
+      // A pre-filter on the vector search, in the same query language the
+      // SEARCH arm uses -- not the aggregate FILTER's expression language,
+      // which is what the token means once the VSIM clause has ended. The
+      // count is optional, and when given it counts every token that follows,
+      // the POLICY options included.
+      itr.Next();
+      VMSDK_ASSIGN_OR_RETURN(auto first, itr.GetStringView());
+      uint32_t token_count = 0;
+      if (absl::SimpleAtoi(first, &token_count)) {
+        itr.Next();
+      } else {
+        token_count = 1;  // no count given: the expression alone
+      }
+      if (token_count == 0) {
+        return absl::InvalidArgumentError("VSIM FILTER requires an expression");
+      }
+      VMSDK_ASSIGN_OR_RETURN(auto expr_sv, itr.GetStringView());
+      itr.Next();
+      vsim_filter = std::string(expr_sv);
+      // Anything else inside the count tunes how the pre-filter is executed --
+      // POLICY picks between an ad-hoc and a batched strategy, BATCH_SIZE sizes
+      // the batches. Both change how much work the search does rather than what
+      // it answers, so they are consumed and discarded. The count is a raw
+      // token count, as it is on the reference engine, so the tokens inside it
+      // are taken as they come rather than validated.
+      for (uint32_t consumed = 1; consumed < token_count; ++consumed) {
+        if (!itr.HasNext()) {
+          return absl::InvalidArgumentError(
+              "VSIM FILTER count exceeds the arguments given");
+        }
+        itr.Next();
+      }
+      // And the same options are accepted outside a count, which is how the
+      // command reference writes them.
+      while (itr.HasNext()) {
+        auto opt_or = itr.GetStringView();
+        if (!opt_or.ok()) {
+          break;
+        }
+        if (!absl::EqualsIgnoreCase(opt_or.value(), kPolicyKw) &&
+            !absl::EqualsIgnoreCase(opt_or.value(), kBatchSizeKw)) {
+          break;
+        }
+        itr.Next();
+        if (!itr.HasNext()) {
+          return absl::InvalidArgumentError(
+              absl::StrCat(opt_or.value(), " requires a value"));
+        }
+        itr.Next();
+      }
     } else {
       return absl::InvalidArgumentError(
           absl::StrCat("Unexpected token in VSIM clause: `", next, "`"));
     }
+  }
+
+  // With a pre-filter, the arm becomes an ordinary query in the FT.SEARCH
+  // language -- `<filter>=>[KNN k @field $param]` -- and the existing parser
+  // populates it. That is the same path the Valkey-superset vector-in-SEARCH
+  // form takes, so the pre-filter gets the query planner's filtering for free
+  // instead of a second implementation inside this clause.
+  if (!vsim_filter.empty()) {
+    std::string knn =
+        absl::StrCat("=>[KNN ", arm->k, " @", arm->attribute_alias, " ",
+                     arm->parse_vars.query_vector_string);
+    if (arm->ef.has_value()) {
+      absl::StrAppend(&knn, " EF_RUNTIME ", *arm->ef);
+    }
+    absl::StrAppend(&knn, "]");
+    vsim_query_string = absl::StrCat(vsim_filter, knn);
+    arm->parse_vars.query_string = vsim_query_string;
+    // The filter decides membership, never the score.
+    arm->vector_score_only = true;
   }
 
   env.arms.push_back(std::move(arm));
@@ -468,10 +551,16 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
 absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
                                   vmsdk::ArgsIterator &itr) {
   bool vsim_uses_range = false;
+  // The VSIM arm's pre-filter and the query string synthesized from it. Held
+  // here because the arm keeps a string_view into the latter and both have to
+  // outlive the parse.
+  std::string vsim_filter;
+  std::string vsim_query_string;
   // 1. SEARCH (mandatory, must come first)
   VMSDK_RETURN_IF_ERROR(ParseSearchClause(env, itr));
   // 2. VSIM (mandatory, must follow)
-  VMSDK_RETURN_IF_ERROR(ParseVsimClause(env, itr, &vsim_uses_range));
+  VMSDK_RETURN_IF_ERROR(ParseVsimClause(env, itr, &vsim_uses_range,
+                                        &vsim_filter, &vsim_query_string));
   // 3. Optional COMBINE
   if (itr.PopIfNextIgnoreCase(kCombineKw)) {
     VMSDK_RETURN_IF_ERROR(ParseCombineClause(env, itr));
@@ -710,8 +799,12 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // arm; anything with a text predicate — a text SEARCH arm, or a
     // `text=>[KNN ...]` arm whose score ApplyHybridTextScore overwrites with
     // text relevance — carries a BM25-style relevance score instead.
-    env.per_arm_score_is_distance.push_back(arm->IsVectorQuery() &&
-                                            !QueryHasTextPredicate(*arm));
+    // A VSIM arm's score is its distance whatever its pre-filter contains;
+    // only a SEARCH arm written as a vector query trades its distance for text
+    // relevance.
+    env.per_arm_score_is_distance.push_back(
+        arm->IsVectorQuery() &&
+        (arm->vector_score_only || !QueryHasTextPredicate(*arm)));
     // And which metric produced it: the similarity a distance maps to differs
     // by metric, and `arms` is emptied at dispatch.
     auto metric = data_model::DISTANCE_METRIC_UNSPECIFIED;

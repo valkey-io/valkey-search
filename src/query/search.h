@@ -254,6 +254,11 @@ struct SearchParameters {
       params.clear();
     }
   } parse_vars;
+  // Set for a VSIM arm carrying a FILTER: the filter decides which documents
+  // the vector search considers and must not touch the score, so the hybrid
+  // text score is suppressed even when the filter holds a text predicate. See
+  // ApplyHybridTextScore.
+  bool vector_score_only{false};
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
   // Indicates whether the search requires complete results (neighbors/keys) to

@@ -229,10 +229,14 @@ value is missing. Accepted so a command written for a coordinator dialect that
 does carry `POLICY` is not rejected here; it does not change an answer, so
 sweeping it would record an error-message mismatch and nothing else.
 
-Neither engine accepts a `FILTER` inside the VSIM clause -- there is no vector
-pre-filter option on either, and both reject `FILTER` placed before `KNN` or
-inside the counted KNN block. A `FILTER` after the arms is an aggregate
-pipeline stage on both, and that is where they differ; see below.
+Both engines take a `FILTER` inside the VSIM clause, where it pre-filters the
+vector search. It goes after the `KNN`/`RANGE` block and *before*
+`YIELD_SCORE_AS` -- placed after the alias it ends the clause and becomes the
+aggregate stage instead -- and it is written in the FT.SEARCH query language,
+not the aggregate FILTER's expression language. The count is optional. Note the
+command reference has the order the other way round, and its structured
+argument list omits `POLICY` entirely while the syntax line shows it; both were
+resolved by measurement.
 
 ### 5.4c. A pipeline stage naming a field no LOAD clause asked for
 
@@ -258,6 +262,29 @@ the same shapes behave the same way under FT.AGGREGATE. Not swept here, because
 a sweep of it would be testing the aggregate pipeline's loading rules through
 FT.HYBRID, and because two of the four rows above are Redis soft failures that
 are not a target worth recording.
+
+### 5.10. A conjunction used as a KNN pre-filter — TODO, marked `xfail`
+
+**Status:** open, in valkey-search, and not specific to FT.HYBRID.
+
+A pre-filter that intersects a text predicate with another predicate is not
+applied to the vector search. On plain FT.SEARCH, with no FT.HYBRID involved:
+
+```
+FT.SEARCH idx "@title:alpha @body:river"                  -> 12 documents
+FT.SEARCH idx "@title:alpha @body:river=>[KNN 10 @vec $q]"
+   -> 10 documents, 5 of which are not among the 12
+```
+
+A single predicate of any type is honoured, and the conjunction itself is
+right: both engines count `@title:alpha @body:river` at 12, and
+`@price:[0 30] @title:alpha` at 10. So it is specifically the use as a
+pre-filter that loses the second term.
+
+Redis refuses that FT.SEARCH spelling, so a VSIM `FILTER` is the only place the
+two engines can be compared on it, which is where
+`test_vsim_filter_conjunction` sweeps it, `xfail`. Every single-predicate
+filter -- text, tag, numeric, negation, distributed union -- matches exactly.
 
 ### 5.5. The fused score's default column name — TODO, marked `xfail`
 

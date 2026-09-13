@@ -1008,7 +1008,10 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 // their score.
 void ApplyHybridTextScore(const SearchParameters &parameters,
                           std::vector<indexes::Neighbor> &neighbors) {
-  if (!QueryHasTextPredicate(parameters) || neighbors.empty()) return;
+  if (parameters.vector_score_only || !QueryHasTextPredicate(parameters) ||
+      neighbors.empty()) {
+    return;
+  }
   std::vector<indexes::BorrowedNeighbor> borrowed;
   borrowed.reserve(neighbors.size());
   for (const auto &neighbor : neighbors) {
@@ -1391,7 +1394,8 @@ void SearchResult::TrimResults(std::vector<T> &vec,
       std::sort(vec.begin(), vec.end(), cmp);
     }
   } else if (parameters.IsNonVectorQuery() ||
-             QueryHasTextPredicate(parameters)) {
+             (QueryHasTextPredicate(parameters) &&
+              !parameters.vector_score_only)) {
     // Two cases sort by score descending here:
     //   - Cluster-merge non-vector path: the merged Neighbor vector is drained
     //     from the fanout heap ascending and never sorted.
@@ -1399,6 +1403,10 @@ void SearchResult::TrimResults(std::vector<T> &vec,
     //     the query score is the text relevance (set by ApplyHybridTextScore),
     //     so re-rank by it to match Redis. The vector distance is preserved on
     //     Neighbor.distance and still reported via the score_as field.
+    //
+    // A VSIM arm carrying a text pre-filter is excluded. Its score is the
+    // distance, not a relevance, so sorting by score descending would return
+    // the FARTHEST matches -- which is exactly what it did before this guard.
     // Content resolution later drops some neighbors, but drops preserve
     // relative order, so this ordering survives. Pure vector queries (no text
     // predicate) fall through and keep their distance-ascending order.

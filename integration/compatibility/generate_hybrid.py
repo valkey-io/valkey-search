@@ -193,6 +193,7 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         combine=("RRF", ["CONSTANT", "60"]),
         knn=("2", ["K", "10"]),
         vector_field="@vec",
+        vsim_filter=None,
         vector="near",
         search_score_as="text_score",
         vector_score_as=None,
@@ -225,6 +226,12 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         if knn is not None:
             knn_count, knn_args = knn
             cmd += ["KNN", knn_count, *knn_args]
+        # A FILTER inside the VSIM clause pre-filters the vector search, and
+        # goes after the KNN block and before YIELD_SCORE_AS -- put after the
+        # alias it ends the clause and becomes an aggregate stage instead.
+        if vsim_filter is not None:
+            cmd += ["FILTER", *([vsim_filter] if isinstance(vsim_filter, str)
+                                else list(vsim_filter))]
         if vector_score_as:
             cmd += ["YIELD_SCORE_AS", vector_score_as]
         method, options = combine
@@ -342,6 +349,93 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                 self.hybrid(key_type, "@title:alpha", vector_field=field,
                             combine=("LINEAR", weights),
                             vector_score_as="vector_score")
+
+    # Expressions in the FT.SEARCH query language, which is what a VSIM FILTER
+    # takes -- not the aggregate FILTER's expression language, which is what the
+    # same token means after COMBINE.
+    VSIM_FILTERS = [
+        "@price:[0 20]",
+        "@price:[21 52]",
+        "@color:{red}",
+        "@color:{red|blue}",
+        "@title:alpha",
+        "@body:stone",
+        "-@color:{red}",
+    ]
+
+    def test_vsim_filter_pre_filters_the_vector_arm(self, key_type):
+        """A FILTER before COMBINE narrows what the vector search considers.
+
+        The SEARCH arm is given a term that matches nothing, so the vector arm
+        is the only contributor and the filter is visible in the rows. With a
+        matching SEARCH arm the union hides it: the text arm returns the
+        documents the filter excluded anyway.
+        """
+        self.setup_data(key_type)
+        for expr in self.VSIM_FILTERS:
+            self.hybrid(key_type, "@title:omega", vsim_filter=expr,
+                        vector_score_as="vector_score")
+
+    def test_vsim_filter_alongside_a_matching_search_arm(self, key_type):
+        """The same filters with a SEARCH arm that does match, where what is
+        being compared is the union of a filtered vector arm and an unfiltered
+        text one."""
+        self.setup_data(key_type)
+        for expr in ["@price:[0 20]", "@color:{red}", "@title:alpha"]:
+            self.hybrid(key_type, "@title:alpha", vsim_filter=expr,
+                        vector_score_as="vector_score")
+
+    def test_vsim_filter_does_not_touch_the_score(self, key_type):
+        """A filter decides membership, never the score. A text predicate is
+        the case that matters: for a SEARCH arm written as a vector query it
+        trades the distance for text relevance, and here it must not."""
+        self.setup_data(key_type)
+        # Written the way the rest of this generator writes text queries: one
+        # term per field reference, an intersection across fields, and a union
+        # distributed over the field. The compact forms (`@body:stone river`,
+        # `@title:alpha|beta`) and two terms on one field are text-parser gaps
+        # that would be tested here instead of the filter.
+        for expr in ["@title:alpha", "(@title:alpha|@title:beta)"]:
+            self.hybrid(key_type, "@title:omega", vsim_filter=expr,
+                        vector_score_as="vector_score")
+
+    # TODO(knn-prefilter-conjunction): a pre-filter that intersects a text
+    # predicate with another predicate is not applied to the vector search.
+    # Measured on plain FT.SEARCH, with no FT.HYBRID involved: the prefilter
+    # `@title:alpha @body:river` matches 12 documents, and
+    # `@title:alpha @body:river=>[KNN 10 @vec $q]` returns 10 of which 5 are
+    # not among the 12. A single predicate of any type is honoured, and the
+    # conjunction itself is right -- both engines count it at 12 -- so it is
+    # specifically its use as a prefilter that drops it. Redis refuses that
+    # FT.SEARCH spelling outright, so a VSIM FILTER is the only place the
+    # comparison can be made, which is why it is marked here.
+    #
+    # When the prefilter honours a conjunction these will match, the run will
+    # print XPASS, and both the xfail and unsupported_tests.md 5.10 come off.
+    def test_vsim_filter_conjunction(self, key_type):
+        self.setup_data(key_type)
+        for expr in ["@title:alpha @body:river",
+                     "@price:[0 30] @title:alpha",
+                     "@color:{green} @title:alpha"]:
+            self.hybrid(key_type, "@title:omega", vsim_filter=expr,
+                        vector_score_as="vector_score", xfail=True)
+
+    def test_vsim_filter_with_a_count(self, key_type):
+        """The count is optional, and when given it counts the tokens that
+        follow."""
+        self.setup_data(key_type)
+        for expr in ["@price:[0 20]", "@color:{red}"]:
+            self.hybrid(key_type, "@title:omega", vsim_filter=["1", expr],
+                        vector_score_as="vector_score")
+
+    def test_vsim_filter_interacts_with_k(self, key_type):
+        """K bounds the filtered set rather than the set before filtering --
+        or the other way round, which is the thing being pinned."""
+        self.setup_data(key_type)
+        for k in ["1", "3", "10", "24"]:
+            self.hybrid(key_type, "@title:omega", knn=("2", ["K", k]),
+                        vsim_filter="@color:{red}", limit=("0", "100"),
+                        vector_score_as="vector_score")
 
     def test_vector_score_alias(self, key_type):
         """The VSIM arm's own score, surfaced through YIELD_SCORE_AS."""

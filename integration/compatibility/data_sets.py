@@ -804,16 +804,17 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
 ### Filter Data ###
 
 FILTER_DOCS = [
-    {"status": "active",   "price": 100,  "category": "electronics", "title": "quick fox jumps high",    "rating": 5},
-    {"status": "inactive", "price": 25,   "category": "books",       "title": "slow turtle walks far",   "rating": 3},
-    {"status": "active",   "price": 200,  "category": "clothing",    "title": "red hat sells well",      "rating": 4},
-    {"status": "pending",  "price": 50,   "category": "food",        "title": "fresh apple grows fast",  "rating": 2},
+    {"status": "active",   "price": 100,  "category": "electronics", "title": "quick fox jumps high",    "rating": 5, "memo": "12"},
+    {"status": "inactive", "price": 25,   "category": "books",       "title": "slow turtle walks far",   "rating": 3, "memo": "abc"},
+    {"status": "active",   "price": 200,  "category": "clothing",    "title": "red hat sells well",      "rating": 4, "memo": "3.5"},
+    {"status": "pending",  "price": 50,   "category": "food",        "title": "fresh apple grows fast",  "rating": 2, "memo": ""},
     {"status": "active",   "price": 75,   "category": "electronics", "title": "bright screen shines on", "rating": 5},
     {"status": "inactive", "price": 300,  "category": "books",       "title": "old book reads fine",     "rating": 1},
     {"status": "active",   "price": 150,                              "title": "new phone rings loud",    "rating": 4},  # missing category
     {"status": "pending",  "price": 10,   "category": "clothing",    "title": "blue shirt fits right"},                  # missing rating
     {                       "price": 500,  "category": "electronics", "title": "fast chip runs cool",     "rating": 5},  # missing status
     {"status": "active",   "price": 1000, "category": "food",        "title": "big cake bakes slow",     "rating": 3},
+    {"status": "active",   "price": 42,   "category": "books",                                           "rating": 2},  # missing title (TEXT)
 ]
 
 # Edge-case numeric documents for FILTER tests.
@@ -896,7 +897,7 @@ HARD_NUM_FILTER_EXPRS = {
     "filter num le self": "@n1 <= @n1",
     # Unordered (NaN) comparison. A NaN operand is the only way a FILTER
     # comparison can be unordered: Compare() returns kUNORDERED for nil
-    # (guarded separately, and handled as three-valued logic), for
+    # (guarded separately -- a missing operand is simply false), for
     # array-vs-scalar (which no filter attribute reference can produce, as
     # every reference yields a double or a string), and for NaN.
     #
@@ -960,9 +961,14 @@ HARD_STR_FILTER_EXPRS = {
 }
 
 # Filter expressions exercising missing-field behavior inside boolean
-# compositions. FILTER_DOCS deliberately leaves `status`, `rating`, and
-# `category` missing in some rows. These expressions probe how each engine
-# handles a nil operand inside && / || / negation / relational comparisons.
+# compositions. FILTER_DOCS deliberately leaves `status`, `rating`,
+# `category` and `title` missing in some rows. These expressions probe how
+# each engine handles a missing operand inside && / || / negation /
+# relational comparisons.
+#
+# Redis answers a comparison with a missing operand as FALSE, not unknown, so
+# nothing propagates and the operators are order-insensitive. The mirrored
+# left/right variants below are what proves that: they must agree.
 #
 # The "key" missing-status row is R8 (status absent, price=500). The
 # constants in each expression are chosen so that on R8 the *other*
@@ -974,16 +980,15 @@ HARD_STR_FILTER_EXPRS = {
 # Mirrored ("nil left" / "nil right") variants of each shape detect any
 # short-circuit-ordering difference between the engines.
 MISSING_FIELD_FILTER_EXPRS = {
-    # AND with `==` against a missing status; right branch TRUE on R8.
-    # VK admits R8 (Nil=='active' yields true under filter ==); RL likely
-    # rejects R8. The expression isolates concern #1.
+    # AND with `==` against a missing status; right branch TRUE on R8, so
+    # the AND's outcome is decided entirely by the missing-field comparison.
     "filter and eq nil left":    "@status=='active' && @price>200",
     "filter and eq nil right":   "@price>200 && @status=='active'",
     # OR with `==` against a missing status; right branch FALSE on R8.
     "filter or eq nil left":     "@status=='active' || @price<=200",
     "filter or eq nil right":    "@price<=200 || @status=='active'",
-    # Same shapes with FILTER `!=` (concern #2). Filter semantics make
-    # `Nil != 'active'` true; APPLY semantics would make it false.
+    # Same shapes with `!=`. A missing operand makes this false too -- the
+    # one case where FILTER and an intuitive reading of `!=` disagree.
     "filter and ne nil left":    "@status!='active' && @price>200",
     "filter or ne nil left":     "@status!='active' || @price<=200",
     # Both branches reference a missing field. R6 is missing category,
@@ -991,11 +996,22 @@ MISSING_FIELD_FILTER_EXPRS = {
     # operand, so engine disagreement can show on either row.
     "filter and missing both":   "@status=='active' && @category=='food'",
     "filter or missing both":    "@status=='active' || @category=='food'",
-    # Relational on a missing status (concern #3). Right branch TRUE on
-    # R8 so the AND's result is determined by relop-on-nil semantics.
+    # Relational on a missing status. Right branch TRUE on R8 so the AND's
+    # result is determined by the relational-on-missing semantics.
     "filter and relop nil left": "@status<'b' && @price>200",
-    # Idiomatic "safe" patterns users would write to dodge nil. Both
-    # engines should agree here; if either diverges that's a regression.
+    # A missing TEXT field. `title` is the only TEXT in the schema and the
+    # last FILTER_DOCS row omits it, so these are the only cases that reach
+    # the missing-field path for a TEXT type at all -- TAG and NUMERIC are
+    # covered by the status/category/rating rows above.
+    "filter bare eq nil text":   "@title == 'quick fox jumps high'",
+    "filter bare ne nil text":   "@title != 'quick fox jumps high'",
+    "filter not eq nil text":    "!(@title == 'quick fox jumps high')",
+    "filter and eq nil text":    "@title == 'quick fox jumps high' && @price>10",
+    "filter or eq nil text":     "@title == 'quick fox jumps high' || @price<10",
+    "filter contains nil text":  "contains(@title, 'fox')",
+    "filter exists nil text":    "exists(@title)",
+    # Idiomatic "safe" patterns users would write to dodge a missing field.
+    # Both engines should agree here; if either diverges that's a regression.
     "filter exists guard":       "exists(@status) && @status=='active'",
     "filter not exists or eq":   "!exists(@status) || @status=='active'",
     # Negation of equality on nil exercises the `!(==)` vs `!=` duality
@@ -1058,6 +1074,55 @@ ALIAS_FILTER_EXPRS = {
     "filter alias missing":   "@cat == 'food' || @st == 'pending'",
 }
 
+# Filter expressions over an UNDECLARED hash field holding values that are
+# not numbers: "12", "abc", "3.5", "" on the first four FILTER_DOCS rows, and
+# absent on the rest. Comparing that against a numeric literal is the only
+# observable way to reach the coercion path.
+#
+# A *declared* NUMERIC field with a non-numeric value cannot test this: both
+# engines classify it as invalid data and drop the whole key from the index
+# before any query runs, so whatever the filter decided is invisible -- the
+# same trap the hash-only "nan" row springs on HARD_NUM_FILTER_EXPRS.
+#
+# HASH only. A JSON index rejects a FILTER that references an undeclared
+# field at FT.CREATE time, so generate_filter skips the json parametrization.
+UNDECLARED_NUMERIC_FILTER_EXPRS = {
+    "filter undeclared num gt":   "@memo > 5",
+    "filter undeclared num lt":   "@memo < 100",
+    "filter undeclared num eq":   "@memo == 12",
+    "filter undeclared str eq":   "@memo == 'abc'",
+    "filter undeclared exists":   "exists(@memo)",
+    # A value that is not a number, against a numeric literal, is unordered:
+    # != is true for it and everything else false. Byte-order comparison --
+    # which is what a plain string fallback would do -- would instead make
+    # "abc" > 5 true, so these pin the distinction.
+    "filter undeclared num ne":   "@memo != 5",
+    "filter undeclared num ge":   "@memo >= 5",
+    "filter undeclared num le":   "@memo <= 5",
+    # Quoting the literal switches the whole comparison to byte order.
+    "filter undeclared quoted gt": "@memo > '5'",
+    "filter undeclared quoted eq": "@memo == '12'",
+}
+
+# Comparisons where the numeric-ness comes from something other than a plain
+# field reference, which is what distinguishes "is this operand a number?"
+# from "is this field declared NUMERIC?".
+#
+#   - a NUMERIC field is NOT a number: its value arrives as stored bytes, so
+#     @price > @rating and @price > '100' are byte-order comparisons while
+#     @price > 100 is numeric.
+#   - a number-returning function IS one, so strlen(@title) > '3' is numeric
+#     even though the literal is quoted.
+TYPED_COMPARISON_FILTER_EXPRS = {
+    "filter typed num vs literal":  "@price > 100",
+    "filter typed num vs quoted":   "@price > '100'",
+    "filter typed num vs num":      "@price > @rating",
+    "filter typed strlen vs lit":   "strlen(@title) > 3",
+    "filter typed strlen vs quote": "strlen(@title) > '3'",
+    "filter typed lower vs lit":    "lower(@category) > 5",
+    "filter typed lower vs quote":  "lower(@category) > 'c'",
+}
+
 FILTER_DATASETS = {
     "filter base":               None,
     "filter tag eq":             "@status=='active'",
@@ -1074,6 +1139,8 @@ FILTER_DATASETS = {
     **HARD_NUM_FILTER_EXPRS,
     **HARD_STR_FILTER_EXPRS,
     **ALIAS_FILTER_EXPRS,
+    **UNDECLARED_NUMERIC_FILTER_EXPRS,
+    **TYPED_COMPARISON_FILTER_EXPRS,
 }
 
 def _filter_docs_schema(key_type):

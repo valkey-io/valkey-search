@@ -4,6 +4,8 @@ from .data_sets import (
     load_data,
     ALIAS_FILTER_EXPRS,
     HARD_NUM_FILTER_EXPRS,
+    TYPED_COMPARISON_FILTER_EXPRS,
+    UNDECLARED_NUMERIC_FILTER_EXPRS,
     HARD_STR_FILTER_EXPRS,
     MISSING_FIELD_FILTER_EXPRS,
 )
@@ -163,6 +165,31 @@ class TestFilterCompatibility(BaseCompatibilityTest):
     def test_filter_alias(self, key_type, dialect, dataset):
         self.setup_data(dataset, key_type)
         self._run_alias_queries(key_type, dialect)
+
+    # An undeclared hash field holding non-numeric values, compared against a
+    # numeric literal. HASH only: a JSON index rejects a FILTER referencing an
+    # undeclared field at FT.CREATE time, which the integration suite covers
+    # (test_filter_json_undeclared_field_is_rejected).
+    @pytest.mark.parametrize(
+        "dataset", sorted(UNDECLARED_NUMERIC_FILTER_EXPRS.keys()),
+        ids=lambda d: d.replace(" ", "_"),
+    )
+    def test_filter_undeclared_numeric(self, key_type, dialect, dataset):
+        if key_type == "json":
+            pytest.skip("JSON rejects an undeclared field reference at FT.CREATE")
+        self.setup_data(dataset, key_type)
+        self._run_filter_queries(key_type, dialect)
+
+    # Comparisons whose numeric-ness comes from the literal or from a
+    # function's return type rather than from a field's declared type.
+    # Runs on both key types: none of these reference an undeclared field.
+    @pytest.mark.parametrize(
+        "dataset", sorted(TYPED_COMPARISON_FILTER_EXPRS.keys()),
+        ids=lambda d: d.replace(" ", "_"),
+    )
+    def test_filter_typed_comparison(self, key_type, dialect, dataset):
+        self.setup_data(dataset, key_type)
+        self._run_filter_queries(key_type, dialect)
 
     def test_filter_base(self, key_type, dialect):
         self.setup_data("filter base", key_type)

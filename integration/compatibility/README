@@ -8,6 +8,7 @@ generators come and go. Today that list is:
     generate.py         -> aggregate-answers.pickle.gz
     generate_text.py    -> text-search-answers.pickle.gz
     generate_array.py   -> array-input-answers.pickle.gz
+    generate_filter.py  -> filter-answers.pickle.gz
 
 Or, to regenerate just one, cd to this directory and run pytest on it -- but
 note that a run narrowed with -k, or one that fails part way, deliberately

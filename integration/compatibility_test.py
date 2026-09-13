@@ -5,6 +5,7 @@ from operator import itemgetter
 from itertools import chain, combinations
 import pickle
 import compatibility
+from valkey.cluster import ValkeyCluster
 from compatibility import GENERATORS, compute_sources_hash
 from compatibility.data_sets import *
 
@@ -688,6 +689,24 @@ def do_answer(client, expected, data_set):
         record(compare_results(expected, result))
     return data_set
 
+def cluster_routing(cmd):
+    """Extra execute_command kwargs needed to route `cmd` in cluster mode.
+
+    The cluster client routes a keyless command only if it recognizes the name:
+    its SEARCH_COMMANDS list carries FT.SEARCH and FT.AGGREGATE but predates
+    FT.HYBRID, so that one raises "No way to dispatch this command" instead of
+    reaching a node. Sending it to the default node is what the client does for
+    the two it knows, and any primary is a valid entry point -- the coordinator
+    fans out from wherever the command lands.
+    """
+    name = str(cmd[0]).upper()
+    if name in ValkeyCluster.SEARCH_COMMANDS[0]:
+        return {}
+    if name.startswith("FT."):
+        return {"target_nodes": ValkeyCluster.DEFAULT_NODE}
+    return {}
+
+
 def drop_index_cluster(test_case, key_type):
     index_name = "json_idx1" if key_type == "json" else "hash_idx1"
     primary0 = test_case.new_client_for_primary(0)
@@ -742,7 +761,8 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         )
 
         result["cmd"] = expected["cmd"]
-        result["result"] = cluster_client.execute_command(*expected["cmd"])
+        result["result"] = cluster_client.execute_command(
+            *expected["cmd"], **cluster_routing(expected["cmd"]))
         result["exception"] = False
 
         if compare_results(expected, result):

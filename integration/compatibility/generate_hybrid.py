@@ -111,21 +111,26 @@ RRF_WINDOW_COMBINES = [
     ("RRF", ["CONSTANT", "20", "WINDOW", "5"]),
 ]
 
+# Weights that sum to one cannot tell an engine that normalizes them from one
+# that applies them raw -- both give the same answer. The pairs below that sum
+# to something else are what separates the two readings, and `ALPHA 1 BETA 1`
+# distinguishes a third: an engine that averages rather than adds.
 LINEAR_COMBINES = [
     ("LINEAR", ["ALPHA", "0.5", "BETA", "0.5"]),
     ("LINEAR", ["ALPHA", "1", "BETA", "0"]),
     ("LINEAR", ["ALPHA", "0", "BETA", "1"]),
     ("LINEAR", ["ALPHA", "0.2", "BETA", "0.8"]),
-    ("LINEAR", ["ALPHA", "0.5", "BETA", "0.5"]),
+    ("LINEAR", ["ALPHA", "1", "BETA", "1"]),
+    ("LINEAR", ["ALPHA", "2", "BETA", "2"]),
+    ("LINEAR", ["ALPHA", "3", "BETA", "1"]),
+    ("LINEAR", ["ALPHA", "0.7", "BETA", "0.7"]),
 ]
 
 # Every sweep that is about *scoring* pins WINDOW and LIMIT rather than taking
-# the defaults, because the two engines' defaults do not agree: Redis defaults
-# to returning 10 rows and applies WINDOW only as a per-arm cap, while Valkey
-# returns everything the window allows and truncates the fused list to WINDOW
-# as well. Left implicit, those two disagreements would change the *size* of
-# every result and bury the score comparison the sweeps exist to make. The
-# defaults get their own dedicated tests below instead.
+# the defaults, so that a disagreement about either changes the size of exactly
+# the sweeps written to look for it and not of every other answer. Both engines
+# default LIMIT to 10 rows; the per-arm WINDOW default is what
+# test_default_arm_sizes is for.
 NON_BINDING_WINDOW = "100"   # > corpus size, so WINDOW never binds
 PINNED_LIMIT = ("0", "10")
 
@@ -282,6 +287,18 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             for query in ["@title:alpha", "(@title:alpha|@title:gamma)", "@body:canyon"]:
                 self.hybrid(key_type, query, combine=combine)
 
+    def test_linear_with_a_binding_window(self, key_type):
+        """LINEAR was only ever swept with a window too wide to bind, so
+        whether WINDOW bounds a LINEAR arm the way it bounds an RRF one was
+        never compared."""
+        self.setup_data(key_type)
+        for window in ["3", "5", "10"]:
+            for query in ["@title:alpha", "@body:stone"]:
+                self.hybrid(key_type, query,
+                            combine=("LINEAR", ["ALPHA", "0.5", "BETA", "0.5",
+                                                "WINDOW", window]),
+                            window=None)
+
     # -----------------------------------------------------------------
     # The VSIM arm.
     # -----------------------------------------------------------------
@@ -411,6 +428,34 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         self.setup_data(key_type)
         for query in ["@title:alpha", "@body:stone", "@body:canyon"]:
             self.hybrid(key_type, query, limit=None)
+
+    def test_default_arm_sizes(self, key_type):
+        """How many documents each arm contributes when nothing says.
+
+        LIMIT is pinned wide enough not to bind, which is what makes the count
+        itself visible: with the usual `LIMIT 0 10` a disagreement about the
+        per-arm default is only detectable if it happens to disturb the first
+        page. `@body:stone` matches the whole corpus, so the text arm is as
+        large as it can be.
+        """
+        self.setup_data(key_type)
+        for query in ["@body:stone", "@title:alpha", "@title:omega"]:
+            self.hybrid(key_type, query, window=None, limit=("0", "100"),
+                        vector_score_as="vector_score")
+
+    def test_default_arm_sizes_track_k(self, key_type):
+        """And whether the vector arm's default contribution follows K.
+
+        If the per-arm default is a fixed window the vector arm stops growing
+        once K passes it; if it follows K it keeps growing. Either is a
+        defensible design, so what matters is that both engines do the same
+        thing -- and the row counts here say which.
+        """
+        self.setup_data(key_type)
+        for k in ["1", "5", "10", "11", "20", "24"]:
+            self.hybrid(key_type, "@body:stone", knn=("2", ["K", k]),
+                        window=None, limit=("0", "100"),
+                        vector_score_as="vector_score")
 
     def test_default_window(self, key_type):
         """No WINDOW: how much of each arm reaches the fusion, and is the
@@ -544,10 +589,21 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             self.hybrid(key_type, "@title:alpha", tail=tail,
                         vector_score_as="vector_score")
 
+    # TODO(fused-score-default-name): with no LOAD clause AND no COMBINE alias,
+    # Redis emits the fused score as `__score`; valkey-search emits no score
+    # column at all. Every other shape hides it -- under `LOAD *` neither
+    # engine emits a score column, and with an alias both emit the alias -- so
+    # the divergence is only reachable here. See unsupported_tests.md 5.5.
+    def test_unaliased_fused_score_without_load(self, key_type):
+        self.setup_data(key_type)
+        for query in ["@title:alpha", "@body:canyon"]:
+            self.hybrid(key_type, query, fused_score_as=None, load=NO_LOAD,
+                        search_score_as=None, xfail=True)
+
     def test_unaliased_fused_score(self, key_type):
-        """COMBINE without YIELD_SCORE_AS. The fused score still reaches the
-        reply, under whatever name the engine falls back to, and the sweep
-        records what that name is."""
+        """COMBINE without YIELD_SCORE_AS, under `LOAD *`. Neither engine emits
+        a fused-score column in that shape, so what this compares is the
+        document columns and the top-10 membership."""
         self.setup_data(key_type)
         for query in ["@title:alpha", "@body:canyon"]:
             self.hybrid(key_type, query, fused_score_as=None)

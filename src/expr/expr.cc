@@ -83,9 +83,13 @@ struct AttributeValue : Expression {
 };
 
 struct Not : Expression {
-  Not(ExprPtr &&p) : expr_(std::move(p)) {}
+  explicit Not(ExprPtr &&p) : expr_(std::move(p)) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto value = expr_->Evaluate(ctx, record);
+    // No FILTER special case here: a missing field already made its
+    // comparison false (FilterFunc* in value.cc), so negating it gives true,
+    // which is what Redisearch answers for `!(@absent == 'x')`.
+    //
     // AsBool reads a nil as false, so without this `!(@absent)` answers true
     // -- a wrong value rather than merely an unpropagated one.
     if (value.IsMissing() && MissingPropagates()) {
@@ -583,9 +587,13 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
-    static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
-                                     {"==", &FuncEq}, {"!=", &FuncNe},
-                                     {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> apply_ops{{"<=", &FuncLe}, {"<", &FuncLt},
+                                           {"==", &FuncEq}, {"!=", &FuncNe},
+                                           {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> filter_ops{
+        {"<=", &FilterFuncLe}, {"<", &FilterFuncLt},  {"==", &FilterFuncEq},
+        {"!=", &FilterFuncNe}, {">=", &FilterFuncGe}, {">", &FilterFuncGt}};
+    auto &ops = ctx.UseFilterComparisonSemantics() ? filter_ops : apply_ops;
     return DoDyadic(ctx, &Compiler::AddOp, ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext &ctx) {

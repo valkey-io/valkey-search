@@ -211,13 +211,27 @@ Value FuncMul(const Value &l, const Value &r);
 Value FuncDiv(const Value &l, const Value &r);
 Value FuncPower(const Value &l, const Value &r);
 
-// Compare Functions
+// Compare Functions (APPLY semantics: kUNORDERED treated as equal for ==)
 Value FuncGt(const Value &l, const Value &r);
 Value FuncGe(const Value &l, const Value &r);
 Value FuncEq(const Value &l, const Value &r);
 Value FuncNe(const Value &l, const Value &r);
 Value FuncLt(const Value &l, const Value &r);
 Value FuncLe(const Value &l, const Value &r);
+
+// Compare Functions (FILTER semantics). These differ from the APPLY versions
+// above in one way only: a Nil operand -- a missing field -- makes the
+// comparison FALSE, where the APPLY operators read an unordered compare as
+// equal and would answer true for ==. Two-valued, so nothing propagates:
+// `!(@absent == 'x')` is true and both `@absent == 'x'` and `@absent != 'x'`
+// are false. Every non-Nil pair, including the kUNORDERED a NaN produces, is
+// answered by the same operators as APPLY. See the block comment in value.cc.
+Value FilterFuncGt(const Value &l, const Value &r);
+Value FilterFuncGe(const Value &l, const Value &r);
+Value FilterFuncEq(const Value &l, const Value &r);
+Value FilterFuncNe(const Value &l, const Value &r);
+Value FilterFuncLt(const Value &l, const Value &r);
+Value FilterFuncLe(const Value &l, const Value &r);
 
 // Logical Functions
 Value FuncLor(const Value &l, const Value &r);

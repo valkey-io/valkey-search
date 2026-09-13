@@ -35,6 +35,7 @@
 #include "google/protobuf/repeated_ptr_field.h"
 #include "src/attribute.h"
 #include "src/attribute_data_type.h"
+#include "src/filter_expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
@@ -282,6 +283,18 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+  // Compiling the FILTER resolves every @reference against the attributes, so
+  // it can only run once they exist. On the RDB path they do not yet:
+  // skip_attributes means they arrive below as supplemental content, and
+  // LoadIndex calls CompileFilter() once they have. Compiling here against an
+  // empty schema would fail outright for JSON -- taking the whole aux section
+  // and the RDB load down with it -- and for HASH would resolve every
+  // reference to an undeclared-field read of the key, which agrees when alias
+  // and identifier match and silently stops filtering when they differ.
+  if (!skip_attributes) {
+    VMSDK_RETURN_IF_ERROR(res->CompileFilter());
+  }
+
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
     // since we are skipping it.
@@ -320,6 +333,8 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
+      filter_expression_str_(
+          index_schema_proto.has_filter() ? index_schema_proto.filter() : ""),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -689,6 +704,25 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
     }
   }
 
+  // Evaluate the FILTER expression here, on the main thread, while the key is
+  // still open. This lets references to fields not declared in the schema
+  // (HASH only) read their values directly off the key. It is evaluated for
+  // every existing key (key_obj != null) regardless of whether any declared
+  // field is present, so a predicate over a missing/undeclared field (e.g. a
+  // negation) can still admit the key. A deleted key (key_obj == null) is
+  // simply removed and is not filter-evaluated. When a key is rejected, all of
+  // its attributes are converted to deletes so any previously indexed entry is
+  // removed, and the rejection is counted for FT.INFO.
+  bool filter_rejected = false;
+  if (compiled_filter_ && key_obj &&
+      !EvaluateFilter(mutated_attributes, ctx, key_obj.get(), key_cstr)) {
+    for (auto &attr : mutated_attributes) {
+      attr.second = AttributeData(indexes::DeletionType::kRecord);
+    }
+    ++stats_.filter_rejected_keys;
+    filter_rejected = true;
+  }
+
   if (added) {
     switch (attribute_data_type_->ToProto()) {
       case data_model::ATTRIBUTE_DATA_TYPE_HASH:
@@ -708,8 +742,13 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
       default:
         CHECK(false);
     }
+    // A rejected key is not in the index, so it must not be tracked as one:
+    // it is passed as a delete so UpdateDbInfoKey drops it from db_key_info_
+    // rather than inserting it with an all-deletes attribute set. Otherwise
+    // it inflates FT.INFO num_docs (which is db_key_info_.size()) and lands
+    // in the RDB key list that SaveIndexExtension writes.
     ProcessMutation(ctx, mutated_attributes, interned_key, from_backfill,
-                    key_obj == nullptr, document_score);
+                    key_obj == nullptr || filter_rejected, document_score);
   }
 }
 
@@ -722,6 +761,10 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // front. DeleteKeyData also decrements total_doc_len internally.
     text_index_schema_->DeleteKeyData(key);
   }
+  // Note: the FILTER expression is evaluated earlier, on the main thread in
+  // ProcessKeyspaceNotification (where the key is still open). A rejected key
+  // arrives here already converted to deletes, so this path just applies the
+  // resulting mutations.
   bool all_records_deleted = true;
   bool invalid_data = false;
   for (auto &attribute_data_itr : mutated_attributes) {
@@ -1255,7 +1298,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  int arrSize = 28;
+  int arrSize = 30;  // includes the filter_rejected_keys counter
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1266,7 +1309,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
-  ValkeyModule_ReplyWithArray(ctx, score_info_fixed ? 8 : 6);
+  int index_def_size = score_info_fixed ? 8 : 6;
+  if (compiled_filter_) {
+    index_def_size += 2;
+  }
+  ValkeyModule_ReplyWithArray(ctx, index_def_size);
   ValkeyModule_ReplyWithSimpleString(ctx, "key_type");
   ValkeyModule_ReplyWithSimpleString(ctx,
                                      attribute_data_type_->ToString().c_str());
@@ -1274,6 +1321,12 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithArray(ctx, subscribed_key_prefixes_.size());
   for (const auto &prefix : subscribed_key_prefixes_) {
     ValkeyModule_ReplyWithSimpleString(ctx, prefix.c_str());
+  }
+  // Emitted between prefixes and default_score, and only when the index has
+  // one, because that is where and when Redis emits it.
+  if (compiled_filter_) {
+    ValkeyModule_ReplyWithSimpleString(ctx, "filter");
+    ValkeyModule_ReplyWithSimpleString(ctx, filter_expression_str_.c_str());
   }
   ValkeyModule_ReplyWithSimpleString(ctx, "default_score");
   if (score_info_fixed) {
@@ -1311,6 +1364,10 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
+
+  ValkeyModule_ReplyWithSimpleString(ctx, "filter_rejected_keys");
+  ValkeyModule_ReplyWithCString(
+      ctx, absl::StrFormat("%lu", stats_.filter_rejected_keys).c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "backfill_in_progress");
   ValkeyModule_ReplyWithCString(
@@ -1381,6 +1438,9 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->set_score(score_);
   if (score_field_.has_value()) {
     index_schema_proto->set_score_field(score_field_.value());
+  }
+  if (!filter_expression_str_.empty()) {
+    index_schema_proto->set_filter(filter_expression_str_);
   }
 
   auto *stats = index_schema_proto->mutable_stats();
@@ -1836,6 +1896,11 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
                 SkipSupplementalContent(supplemental_iter, "mutation queue"));
           } else {
             if (index_schema) {
+              // The attributes arrived with the INDEX_CONTENT sections above,
+              // so the FILTER resolves now -- and has to, before
+              // LoadIndexExtension replays keys through
+              // ProcessKeyspaceNotification, which evaluates it.
+              VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
               VMSDK_RETURN_IF_ERROR(index_schema->LoadIndexExtension(
                   ctx, RDBChunkInputStream(supplemental_iter.IterateChunks())));
               if (!supplemental_content->mutation_queue_header()
@@ -1861,6 +1926,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
       }
     }
   }
+  // Idempotent: covers a stream that carried no INDEX_EXTENSION section, so
+  // the index still has its filter for everything ingested after the load.
+  VMSDK_RETURN_IF_ERROR(index_schema->CompileFilter());
   VMSDK_LOG(NOTICE, ctx) << "Loaded index schema with "
                          << index_schema->GetAttributeCount() << " attributes";
   std::move(mark_destructing_on_error)
@@ -2296,7 +2364,11 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
       }
     }
   }
-  if (has_low_precision_vector) {
+  // A FILTER is only understood from 1.3.0. An older module does not know the
+  // proto field, so it would load the index, silently ignore the filter, and
+  // index every key the filter exists to exclude -- a wrong index rather than
+  // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
+  if (has_low_precision_vector || unpacked->has_filter()) {
     return kRelease13;
   } else if (has_text_index) {
     return kRelease12;
@@ -2305,6 +2377,69 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   } else {
     return kRelease10;
   }
+}
+
+absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
+IndexSchema::MakeReference(absl::string_view name, bool create) {
+  auto data_type = attribute_data_type_->ToProto();
+  // Try to find by alias first (attributes_ is keyed by alias)
+  auto itr = attributes_.find(std::string(name));
+  if (itr != attributes_.end()) {
+    return std::make_unique<FilterAttributeReference>(
+        std::string(name), itr->second.GetIndex()->GetIndexerType(), data_type);
+  }
+  // Try to find by identifier
+  auto id_itr = identifier_to_alias_.find(std::string(name));
+  if (id_itr != identifier_to_alias_.end()) {
+    auto attr_itr = attributes_.find(id_itr->second);
+    auto type = attr_itr != attributes_.end()
+                    ? attr_itr->second.GetIndex()->GetIndexerType()
+                    : indexes::IndexerType::kNone;
+    return std::make_unique<FilterAttributeReference>(id_itr->second, type,
+                                                      data_type);
+  }
+  if (!create) {
+    // The field is not declared in the schema. For a HASH index it can still
+    // be read directly off the key at evaluation time, so emit a reference
+    // that does so. For JSON there is no path to resolve an undeclared field,
+    // so reject the expression at FT.CREATE time.
+    if (data_type == data_model::ATTRIBUTE_DATA_TYPE_HASH) {
+      return std::make_unique<UnindexedHashFieldReference>(std::string(name));
+    }
+    return absl::NotFoundError(
+        absl::StrCat("Field `", name, "` not found in index schema"));
+  }
+  return std::make_unique<FilterAttributeReference>(
+      std::string(name), indexes::IndexerType::kNone, data_type);
+}
+
+absl::Status IndexSchema::CompileFilter() {
+  if (filter_expression_str_.empty() || compiled_filter_) {
+    return absl::OkStatus();
+  }
+  VMSDK_ASSIGN_OR_RETURN(compiled_filter_, expr::Expression::Compile(
+                                               *this, filter_expression_str_));
+  return absl::OkStatus();
+}
+
+absl::StatusOr<expr::Value> IndexSchema::GetParam(absl::string_view s) const {
+  return absl::NotFoundError(absl::StrCat("Parameter `", s, "` not found"));
+}
+
+bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
+                                 ValkeyModuleCtx *ctx,
+                                 ValkeyModuleKey *open_key,
+                                 absl::string_view key) const {
+  // stats_ is mutable and this runs on the main thread, so the record can
+  // take the stats by reference and count conversion failures directly.
+  FilterRecord record(mutated_attributes, stats_);
+  FilterEvalContext eval_ctx(ctx, open_key, key, attribute_data_type_.get());
+  auto result = compiled_filter_->Evaluate(eval_ctx, record);
+  // Only a definite true admits the document. A missing field already made
+  // its comparison false (see FilterFunc* in expr/value.cc), and an
+  // expression that evaluated to nothing for any other reason -- lower() of a
+  // number, say -- is not true either, so both land here as a rejection.
+  return result.IsTrue();
 }
 
 }  // namespace valkey_search

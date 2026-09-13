@@ -101,6 +101,8 @@ def parse_value(x, key_type):
     try:
         if x is None:
             # RESP nil: an APPLY whose expression evaluated to nothing.
+            # Both engines can return this (e.g. a string function applied to
+            # a numeric field on JSON), so represent it as None on both sides.
             result = None
         elif isinstance(x, list):
             # TOLIST reducer returns a Python list for both hash and json

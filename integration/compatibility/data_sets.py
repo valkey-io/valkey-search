@@ -815,8 +815,17 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             print(f"{s}:{load_list[s][0]}:  ", k)
     return len(load_list)
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type, vector_data_type="FLOAT32"):
-    data = compute_data_sets(vector_data_type=vector_data_type)
+def load_data_cluster(cluster_client, test_case, data_set, key_type,
+                      vector_data_type="FLOAT32", schema_type="default"):
+    # Same corpus dispatch load_data does. Hardcoding the vector corpora here
+    # is what kept the text and hybrid answer files out of cluster replay:
+    # their data sets are not in that dictionary, so the lookup below raised.
+    if data_set in HYBRID_DATASETS:
+        data = compute_hybrid_data_sets()
+    elif data_set in TEXT_DATASETS:
+        data = compute_text_data_sets(data_set, schema_type=schema_type)
+    else:
+        data = compute_data_sets(vector_data_type=vector_data_type)
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:

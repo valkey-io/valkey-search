@@ -29,6 +29,20 @@ from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
 
+# How closely two engines' numbers have to agree, by the storage type of the
+# vectors in play. See compare_number_eq.
+#
+# FLOAT32 holds about seven decimal digits and the two engines agree to nearly
+# all of them; what differs is how they format the result. The 2-byte types
+# hold about three, and the engines round them differently -- the repo's own
+# space_distance_test.cc compares them at 1e-2 for the same reason.
+TOLERANCE_BY_VECTOR_TYPE = {
+    "FLOAT32": (1e-5, 1e-6),
+    "FLOAT16": (1e-2, 1e-2),
+    "BFLOAT16": (1e-2, 1e-2),
+}
+DEFAULT_TOLERANCE = TOLERANCE_BY_VECTOR_TYPE["FLOAT32"]
+
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
 def printable_cmd(cmd):
@@ -316,7 +330,7 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
             return out
     return out
 
-def compare_number_eq(l, r):
+def compare_number_eq(l, r, tol=DEFAULT_TOLERANCE):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
 
@@ -333,7 +347,7 @@ def compare_number_eq(l, r):
             print("mismatch vector field length: ", l, " ", r)
             return False
         for i in range(len(l)):
-            if not compare_number_eq(l[i], r[i]):
+            if not compare_number_eq(l[i], r[i], tol):
                 print("mismatch vector field value: ", l, " ", r, " at index ", i)
                 return False
         return True
@@ -345,13 +359,26 @@ def compare_number_eq(l, r):
             print("mismatch vector field length: ", ll, " ", rr)
             return False
         for i in range(len(ll)):
-            if not compare_number_eq(ll[i], rr[i]):
+            if not compare_number_eq(ll[i], rr[i], tol):
                 print("mismatch vector field value: ", ll, " ", rr, " at index ", i)
                 return False
         return True
     else:
         try:
-            return math.isclose(float(l), float(r), abs_tol=.01)
+            # Relative first, absolute only as a floor near zero.
+            #
+            # The absolute tolerance on its own was 0.01, which is wider than
+            # the whole range of a reciprocal-rank-fusion score: with the
+            # default constant those span about 0.012 to 0.033 across a page,
+            # so any permutation of them compared equal and the column was
+            # decorative. The two engines format the same value to different
+            # precision -- 0.0327868852459 against 0.0327868834138, a relative
+            # difference near 6e-8 -- which is what the relative tolerance is
+            # sized for. The absolute floor keeps values that straddle zero
+            # from being held to a relative standard they cannot meet.
+            rel_tol, abs_tol = tol
+            return math.isclose(float(l), float(r), rel_tol=rel_tol,
+                                abs_tol=abs_tol)
         except ValueError:
             print("ValueError comparing: ", l, " and ", r)
             return False
@@ -361,7 +388,7 @@ def compare_number_eq(l, r):
         
         
     
-def compare_row(l, r, key_type):
+def compare_row(l, r, key_type, tol=DEFAULT_TOLERANCE):
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
     #print("Comparing row: ", l, " and ", r)
@@ -384,7 +411,7 @@ def compare_row(l, r, key_type):
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
         elif lks[i].startswith("n") or lks[i].endswith("score"):
-            if not compare_number_eq(l[lks[i]], r[rks[i]]):
+            if not compare_number_eq(l[lks[i]], r[rks[i]], tol):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 print("RL: ", r)
                 print("VK: ", l)
@@ -397,7 +424,7 @@ def compare_row(l, r, key_type):
                 print("mismatch vector field length: ", l[lks[i]], " ", r[rks[i]])
                 return False
             for i in range(l[lks[i]]):
-                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i]):
+                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i], tol):
                     print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
                     return False
         elif lks[i] == b'$' and rks[i] == b'$':
@@ -420,6 +447,8 @@ def compare_results(expected, results):
     print("CMD:", printable_cmd(expected["cmd"]))
     cmd = expected["cmd"]
     key_type = expected["key_type"]
+    tol = TOLERANCE_BY_VECTOR_TYPE.get(
+        expected.get("vector_data_type", "FLOAT32"), DEFAULT_TOLERANCE)
     if cmd != results["cmd"]:
         print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
@@ -512,7 +541,8 @@ def compare_results(expected, results):
     # if compare_results(vk, rl):
     # Directly comparing dicts instead of custom compare function
     # TODO: investigate this later
-    if all([compare_row(vk[i], rl[i], key_type) for i in range(len(rl))]):
+    if all([compare_row(vk[i], rl[i], key_type, tol)
+            for i in range(len(rl))]):
         # print("Results look good.")
         #print(TEST_MARKER)
         if "ft.search" in cmd:
@@ -524,7 +554,7 @@ def compare_results(expected, results):
     print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl), " TestName: ", expected["testname"], " <<< Identifies mismatching results")
     print(f"CMD: {cmd}")
     for i in range(len(rl)):
-        if not compare_row(rl[i], vk[i], key_type):
+        if not compare_row(rl[i], vk[i], key_type, tol):
             print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
             print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())], "<<<")
         else:

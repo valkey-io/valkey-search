@@ -600,6 +600,24 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             self.hybrid(key_type, query, fused_score_as=None, load=NO_LOAD,
                         search_score_as=None, xfail=True)
 
+    def test_unaliased_fused_score_with_explicit_load(self, key_type):
+        """No score named anywhere, and a LOAD clause that names its columns.
+
+        The control for test_unaliased_fused_score_without_load above: an
+        explicit LOAD suppresses the default score column on both engines, the
+        same way `LOAD *` does, so these are compared normally. That is what
+        confines the `__score` divergence to the LOAD-less shape rather than
+        leaving it a property of score-aliasing in general.
+        """
+        self.setup_data(key_type)
+        for load in [["LOAD", "1", "@price"],
+                     ["LOAD", "2", "@price", "@color"],
+                     ["LOAD", "1", "@__key"],
+                     ["LOAD", "2", "@__key", "@price"],
+                     ["LOAD", "3", "@price", "@color", "@title"]]:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None)
+
     def test_unaliased_fused_score(self, key_type):
         """COMBINE without YIELD_SCORE_AS, under `LOAD *`. Neither engine emits
         a fused-score column in that shape, so what this compares is the

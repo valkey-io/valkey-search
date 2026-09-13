@@ -1302,6 +1302,115 @@ class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):
 
 
 # =============================================================================
+# A COSINE arm, whose distance can come back negative.
+#
+# A vector arm's distance becomes the similarity every fusion method reads, via
+# `1 / (1 + distance)`. Cosine distance is nominally in [0, 2], but for a
+# document whose vector matches the query it lands just below zero -- about
+# -1.6e-07 -- because the arithmetic does not cancel exactly. Every other
+# FT.HYBRID test in this file uses L2, where a distance is never negative, so
+# the sign is only exercised here.
+#
+# COMBINE FUNCTION is deliberately not covered: there the fused score is
+# whatever the user's expression returns, so there is no formula of ours to
+# check against.
+# =============================================================================
+class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
+    INDEX = "cosidx"
+    Q = _vec(1.0, 2.0, 3.0, 4.0)
+
+    def setup_index(self, client: Valkey) -> None:
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "HASH", "PREFIX", "1", "c:",
+            "SCHEMA", "title", "TEXT",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "COSINE")
+        # Identical to the query, the same direction at twice the length,
+        # orthogonal, and opposed: cosine distances of roughly 0, 0, 1 and 2.
+        for key, vector in [
+                ("c:same", _vec(1.0, 2.0, 3.0, 4.0)),
+                ("c:scaled", _vec(2.0, 4.0, 6.0, 8.0)),
+                ("c:orth", _vec(-2.0, 1.0, 0.0, 0.0)),
+                ("c:opposed", _vec(-1.0, -2.0, -3.0, -4.0))]:
+            client.hset(key, mapping={"title": "hello world", "vec": vector})
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 4,
+            timeout=10)
+
+    @staticmethod
+    def _rec_to_dict(rec):
+        return {bytes(rec[i]): rec[i + 1] for i in range(0, len(rec), 2)}
+
+    def _rows(self, client: Valkey, method: str, *opts):
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "4", "YIELD_SCORE_AS", "v",
+            "COMBINE", method, str(len(opts) + 2), *opts,
+            "YIELD_SCORE_AS", "h",
+            "LOAD", "1", "@__key", "LIMIT", "0", "4",
+            "PARAMS", "2", "q", self.Q)
+        return {r[b"__key"]: r for r in
+                (self._rec_to_dict(rec) for rec in result[1:])}
+
+    def test_the_distance_really_is_negative(self):
+        """The premise. Without this the two tests below would pass on an
+        index that never produced a negative distance at all."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        result = client.execute_command(
+            "FT.SEARCH", self.INDEX, "*=>[KNN 4 @vec $q AS d]",
+            "RETURN", "1", "d", "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+        by_key = {}
+        for i in range(1, len(result), 2):
+            fields = self._rec_to_dict(result[i + 1])
+            by_key[result[i]] = float(fields[b"d"])
+        assert by_key[b"c:same"] < 0.0, \
+            f"expected a negative self-distance, got {by_key[b'c:same']}"
+        assert abs(by_key[b"c:same"]) < 1e-5  # negative, but only just
+        assert abs(by_key[b"c:orth"] - 1.0) < 1e-5
+        assert abs(by_key[b"c:opposed"] - 2.0) < 1e-5
+
+    def test_rrf_over_a_negative_distance(self):
+        """The similarity a negative distance produces is slightly above 1, and
+        it has to reach the reply that way -- the guard in the conversion is
+        for a distance at or below -1, which cosine cannot reach, so it must
+        not fire here and collapse the score to zero."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        rows = self._rrf_rows = self._rows(client, "RRF", "CONSTANT", "60")
+
+        same = float(rows[b"c:same"][b"v"])
+        assert same > 1.0, f"negative distance should give v > 1, got {same}"
+        assert same < 1.001
+        # The other three are ordered by distance, and none collapsed.
+        assert 0.0 < float(rows[b"c:orth"][b"v"]) < same
+        assert 0.0 < float(rows[b"c:opposed"][b"v"]) < float(
+            rows[b"c:orth"][b"v"])
+        # Every fused score is a finite positive number.
+        for key, row in rows.items():
+            h = float(row[b"h"])
+            assert h > 0.0 and h == h and h != float("inf"), f"{key}: h={h}"
+
+    def test_linear_over_a_negative_distance(self):
+        """LINEAR sums the two arms' scores with the given weights, so the
+        fused score is reproducible from the aliases -- including for the
+        document whose distance was negative."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        rows = self._rows(client, "LINEAR", "ALPHA", "0.25", "BETA", "0.75")
+
+        assert float(rows[b"c:same"][b"v"]) > 1.0
+        for key, row in rows.items():
+            expected = 0.25 * float(row[b"s"]) + 0.75 * float(row[b"v"])
+            actual = float(row[b"h"])
+            assert abs(actual - expected) < 1e-5, \
+                f"{key}: fused {actual} != 0.25*s + 0.75*v = {expected}"
+
+
+# =============================================================================
 # Parallel-arm execution + per-arm consistency under concurrent mutations.
 #
 # Property the implementation must hold: an FT.HYBRID reply describes one

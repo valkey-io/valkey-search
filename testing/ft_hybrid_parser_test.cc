@@ -300,6 +300,77 @@ TEST_F(FTHybridParserTest, ScoreAliasCollidingWithNoLoadClauseIsAccepted) {
   VMSDK_EXPECT_OK(params);
 }
 
+// ---------------------------------------------------------------------
+// VSIM FILTER: a pre-filter on the vector search
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, VsimFilterBecomesAPrefilteredVectorQuery) {
+  // The arm is handed to the ordinary query parser as
+  // `<filter>=>[KNN k @field $param]`, so what proves the filter took effect is
+  // that the arm now carries a predicate -- a pure VSIM arm has none.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "FILTER", "@n:[0 3]"});
+  VMSDK_EXPECT_OK(params);
+  const auto &arm = VsimArm(**params);
+  EXPECT_EQ(arm.k, 5);
+  EXPECT_NE(arm.filter_parse_results.root_predicate, nullptr);
+  // And its score stays the vector distance whatever the filter contains.
+  EXPECT_TRUE(arm.vector_score_only);
+  EXPECT_TRUE((*params)->per_arm_score_is_distance.at(1));
+}
+
+TEST_F(FTHybridParserTest, VsimFilterAcceptsAnOptionalCount) {
+  auto without = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                        "2", "K", "5", "FILTER", "@n:[0 3]"});
+  VMSDK_EXPECT_OK(without);
+  auto with = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2",
+                     "K", "5", "FILTER", "1", "@n:[0 3]"});
+  VMSDK_EXPECT_OK(with);
+  EXPECT_EQ(VsimArm(**without).k, VsimArm(**with).k);
+}
+
+TEST_F(FTHybridParserTest, VsimFilterCountSwallowsItsPolicyOptions) {
+  // POLICY and BATCH_SIZE tune how the pre-filter runs rather than what it
+  // answers, so they are consumed and discarded. The count is a raw token
+  // count, as on the reference engine.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "FILTER", "5", "@n:[0 3]", "POLICY",
+                       "BATCHES", "BATCH_SIZE", "10"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 5);
+}
+
+TEST_F(FTHybridParserTest, VsimFilterAcceptsPolicyWithoutACount) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "FILTER", "@n:[0 3]", "POLICY", "ADHOC_BF"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 5);
+}
+
+TEST_F(FTHybridParserTest, VsimFilterCountCannotRunPastTheArguments) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "FILTER", "9", "@n:[0 3]"});
+  EXPECT_FALSE(params.ok());
+}
+
+TEST_F(FTHybridParserTest, VsimFilterBeforeTheKnnBlockIsRejected) {
+  // The reference rejects this order too: the block comes first.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "FILTER",
+                       "@n:[0 3]", "KNN", "2", "K", "5"});
+  EXPECT_FALSE(params.ok());
+}
+
+TEST_F(FTHybridParserTest, AVsimArmWithNoFilterIsNotAPrefilteredQuery) {
+  // The control: without a FILTER the arm keeps the direct path, carrying no
+  // predicate and no score override.
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).filter_parse_results.root_predicate, nullptr);
+  EXPECT_FALSE(VsimArm(**params).vector_score_only);
+}
+
 }  // namespace
 }  // namespace query
 }  // namespace valkey_search

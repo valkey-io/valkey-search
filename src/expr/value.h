@@ -220,12 +220,12 @@ Value FuncLt(const Value &l, const Value &r);
 Value FuncLe(const Value &l, const Value &r);
 
 // Compare Functions (FILTER semantics). These differ from the APPLY versions
-// above in one way only: a Nil operand (a missing field) yields Nil
-// ("unknown") instead of true/false, which then propagates through the filter
-// logical operators and keeps the document. Every non-Nil operand pair,
-// including the kUNORDERED produced by a NaN, is answered by the same
-// operators as APPLY -- kUNORDERED reads as equal, so ==, <= and >= are true
-// while !=, < and > are false. See the block comment in value.cc.
+// above in one way only: a Nil operand -- a missing field -- makes the
+// comparison FALSE, where the APPLY operators read an unordered compare as
+// equal and would answer true for ==. Two-valued, so nothing propagates:
+// `!(@absent == 'x')` is true and both `@absent == 'x'` and `@absent != 'x'`
+// are false. Every non-Nil pair, including the kUNORDERED a NaN produces, is
+// answered by the same operators as APPLY. See the block comment in value.cc.
 Value FilterFuncGt(const Value &l, const Value &r);
 Value FilterFuncGe(const Value &l, const Value &r);
 Value FilterFuncEq(const Value &l, const Value &r);

@@ -83,19 +83,13 @@ struct AttributeValue : Expression {
 };
 
 struct Not : Expression {
-  Not(ExprPtr &&p, bool filter_semantics = false)
-      : expr_(std::move(p)), filter_semantics_(filter_semantics) {}
+  explicit Not(ExprPtr &&p) : expr_(std::move(p)) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto value = expr_->Evaluate(ctx, record);
-    // Filter semantics (matches Redisearch): negating a Nil ("unknown",
-    // produced by a missing-field comparison) stays Nil and keeps the
-    // document (see IndexSchema::EvaluateFilter). Broader than the
-    // missing-field rule below and checked first, because the FilterFunc*
-    // comparisons return a reason-carrying Nil rather than Value::Missing(),
-    // so IsMissing() is false for exactly the values FILTER must propagate.
-    if (filter_semantics_ && value.IsNil()) {
-      return Value(Value::Nil("filter !: missing field"));
-    }
+    // No FILTER special case here: a missing field already made its
+    // comparison false (FilterFunc* in value.cc), so negating it gives true,
+    // which is what Redisearch answers for `!(@absent == 'x')`.
+    //
     // AsBool reads a nil as false, so without this `!(@absent)` answers true
     // -- a wrong value rather than merely an unpropagated one.
     if (value.IsMissing() && MissingPropagates()) {
@@ -112,7 +106,6 @@ struct Not : Expression {
 
  private:
   ExprPtr expr_;
-  bool filter_semantics_;
 };
 
 struct FunctionCall : Expression {
@@ -348,53 +341,6 @@ struct Dyadic : Expression {
   absl::string_view name_;
 };
 
-// Short-circuit && / || for FILTER context, implementing Redisearch's
-// three-valued (SQL NULL-like) logic. A Nil ("unknown", from a missing-field
-// comparison -- see FilterFuncEq) on the left propagates as Nil and keeps the
-// document (IndexSchema::EvaluateFilter keeps on Nil). Otherwise the standard
-// short-circuit applies, and the right operand's value (which may itself be
-// Nil) becomes the result when it is reached. This is order-sensitive, exactly
-// as Redisearch is: `false && Nil` -> false (excludes), but `Nil && false`
-// -> Nil (keeps). The APPLY path keeps the eager FuncLand/FuncLor behavior.
-struct FilterLogical : Expression {
-  enum Kind { kAnd, kOr };
-  FilterLogical(ExprPtr lexpr, ExprPtr rexpr, Kind kind, absl::string_view name)
-      : lexpr_(std::move(lexpr)),
-        rexpr_(std::move(rexpr)),
-        kind_(kind),
-        name_(name) {}
-  Value Evaluate(EvalContext &ctx, const Record &record) const override {
-    auto lvalue = lexpr_->Evaluate(ctx, record);
-    if (lvalue.IsNil()) {
-      return Value(Value::Nil("filter logical: missing field"));
-    }
-    bool ltrue = lvalue.IsTrue();
-    if (kind_ == kAnd) {
-      if (!ltrue) {
-        return Value(false);  // false && x -> false (short-circuit)
-      }
-      return rexpr_->Evaluate(ctx, record);  // true && x -> x
-    }
-    if (ltrue) {
-      return Value(true);  // true || x -> true (short-circuit)
-    }
-    return rexpr_->Evaluate(ctx, record);  // false || x -> x
-  }
-  void Dump(std::ostream &os) const override {
-    os << '(';
-    lexpr_->Dump(os);
-    os << name_;
-    rexpr_->Dump(os);
-    os << ')';
-  }
-
- private:
-  ExprPtr lexpr_;
-  ExprPtr rexpr_;
-  Kind kind_;
-  absl::string_view name_;
-};
-
 bool IsIdentifierChar(int c) {
   return c != EOF && (std::isalnum(c) || c == '_');
 }
@@ -417,8 +363,7 @@ struct Compiler {
   using DyadicOp = std::pair<absl::string_view, Dyadic::ValueFunc>;
 
   absl::StatusOr<ExprPtr> DoDyadic(CompileContext &ctx, ParseFunc func,
-                                   const std::vector<DyadicOp> &ops,
-                                   bool short_circuit_logical = false) {
+                                   const std::vector<DyadicOp> &ops) {
     utils::Scanner s = s_;
     DBG << "Start Dyadic: " << ops[0].first << " Remaining: '"
         << s_.GetUnscanned() << "'\n";
@@ -442,15 +387,8 @@ struct Compiler {
           } else {
             DBG << "Dyadic: " << lvalue << ' ' << op.first << ' ' << rvalue
                 << " Remaining: '" << s_.GetUnscanned() << "'\n";
-            if (short_circuit_logical) {
-              auto kind =
-                  op.first == "&&" ? FilterLogical::kAnd : FilterLogical::kOr;
-              lvalue = std::make_unique<FilterLogical>(
-                  std::move(lvalue), std::move(rvalue), kind, op.first);
-            } else {
-              lvalue = std::make_unique<Dyadic>(
-                  std::move(lvalue), std::move(rvalue), op.second, op.first);
-            }
+            lvalue = std::make_unique<Dyadic>(
+                std::move(lvalue), std::move(rvalue), op.second, op.first);
             s = s_;
             found = true;
             break;
@@ -482,8 +420,7 @@ struct Compiler {
     if (!expr) {
       return absl::InvalidArgumentError(kInvalidOrMissingExpression);
     }
-    return std::make_unique<Not>(std::move(expr),
-                                 ctx.UseFilterComparisonSemantics());
+    return std::make_unique<Not>(std::move(expr));
   }
 
   absl::StatusOr<ExprPtr> Primary(CompileContext &ctx) {
@@ -638,24 +575,16 @@ struct Compiler {
     static const std::vector<DyadicOp> kFixedLorOps{{"||", &FuncLor}};
     static const std::vector<DyadicOp> kLegacyLogicalOps{{"||", &FuncLor},
                                                          {"&&", &FuncLand}};
-    // FILTER context builds short-circuit FilterLogical nodes (three-valued
-    // NULL logic); APPLY context uses the eager FuncLor/FuncLand above. This
-    // is orthogonal to the precedence fix below, so it applies to both the
-    // fixed and the legacy grouping.
-    const bool short_circuit = ctx.UseFilterComparisonSemantics();
-    auto fixed = [&] {
-      return DoDyadic(ctx, &Compiler::LandOp, kFixedLorOps, short_circuit);
-    };
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::LandOp, kFixedLorOps); };
     auto legacy = [&] {
-      return DoDyadic(ctx, &Compiler::CmpOp, kLegacyLogicalOps, short_circuit);
+      return DoDyadic(ctx, &Compiler::CmpOp, kLegacyLogicalOps);
     };
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "ft_aggregate_logical_precedence", fixed, legacy);
   }
   absl::StatusOr<ExprPtr> LandOp(CompileContext &ctx) {
     static const std::vector<DyadicOp> ops{{"&&", &FuncLand}};
-    return DoDyadic(ctx, &Compiler::CmpOp, ops,
-                    ctx.UseFilterComparisonSemantics());
+    return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
     static std::vector<DyadicOp> apply_ops{{"<=", &FuncLe}, {"<", &FuncLt},

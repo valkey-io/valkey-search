@@ -1298,7 +1298,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  int arrSize = 32;  // includes the two filter_* counters
+  int arrSize = 30;  // includes the filter_rejected_keys counter
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1364,11 +1364,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(
       ctx, absl::StrFormat("%lu", stats_.subscription_add.skipped_cnt).c_str());
-
-  ValkeyModule_ReplyWithSimpleString(ctx, "filter_numeric_conversion_failures");
-  ValkeyModule_ReplyWithCString(
-      ctx, absl::StrFormat("%lu", stats_.filter_numeric_conversion_failures)
-               .c_str());
 
   ValkeyModule_ReplyWithSimpleString(ctx, "filter_rejected_keys");
   ValkeyModule_ReplyWithCString(
@@ -2369,7 +2364,11 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
       }
     }
   }
-  if (has_low_precision_vector) {
+  // A FILTER is only understood from 1.3.0. An older module does not know the
+  // proto field, so it would load the index, silently ignore the filter, and
+  // index every key the filter exists to exclude -- a wrong index rather than
+  // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
+  if (has_low_precision_vector || unpacked->has_filter()) {
     return kRelease13;
   } else if (has_text_index) {
     return kRelease12;
@@ -2436,10 +2435,11 @@ bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
   FilterRecord record(mutated_attributes, stats_);
   FilterEvalContext eval_ctx(ctx, open_key, key, attribute_data_type_.get());
   auto result = compiled_filter_->Evaluate(eval_ctx, record);
-  // A Nil ("unknown") result means the filter referenced a missing field;
-  // matching Redisearch, such a document is kept. Only a definite false
-  // excludes it.
-  return result.IsNil() || result.IsTrue();
+  // Only a definite true admits the document. A missing field already made
+  // its comparison false (see FilterFunc* in expr/value.cc), and an
+  // expression that evaluated to nothing for any other reason -- lower() of a
+  // number, say -- is not true either, so both land here as a rejection.
+  return result.IsTrue();
 }
 
 }  // namespace valkey_search

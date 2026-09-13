@@ -198,11 +198,9 @@ TEST_F(ExprTest, NotOperatorRequiresOperand) {
 //
 // ExprTest above pins APPLY semantics (UseFilterComparisonSemantics() ==
 // false). This fixture is its FILTER counterpart: it compiles with the flag
-// on, so CmpOp() selects the FilterFunc* comparisons and AndOp()/OrOp()
-// build short-circuit FilterLogical nodes instead of the eager
-// FuncLand/FuncLor. Without it the FILTER-only branches in expr.cc have no
-// unit coverage at all and are exercised only by the Redis Stack
-// compatibility suite, which needs Docker to run.
+// on, so CmpOp() selects the FilterFunc* comparisons rather than the APPLY
+// ones. Without it the FILTER-only branches have no unit coverage at all and
+// are exercised only by the compatibility suite, which needs Docker to run.
 // ---------------------------------------------------------------------------
 class FilterExprTest : public ExprTest {
  protected:
@@ -231,38 +229,41 @@ class FilterExprTest : public ExprTest {
   }
 };
 
-// A comparison involving a missing field is "unknown", not true or false.
-// IndexSchema::EvaluateFilter keeps the document on a top-level Nil, so this
-// is what lets `@status != 'x'` still admit a document with no status field.
-TEST_F(FilterExprTest, MissingFieldComparisonYieldsNil) {
+// A comparison involving a missing field is FALSE, not "unknown". The
+// document is simply not admitted; nothing propagates.
+TEST_F(FilterExprTest, MissingFieldComparisonIsFalse) {
   for (absl::string_view expr :
        {"@missing == 1", "@missing != 1", "@missing < 1", "@missing <= 1",
         "@missing > 1", "@missing >= 1"}) {
-    EXPECT_TRUE(Eval(expr).IsNil()) << "expected Nil from '" << expr << "'";
+    auto v = Eval(expr);
+    EXPECT_FALSE(v.IsNil()) << "'" << expr << "' must not yield Nil";
+    EXPECT_EQ(v, Value(false)) << "'" << expr << "' must be false";
   }
   // A present field still produces a definite answer.
   EXPECT_EQ(Eval("@one == 1"), Value(true));
   EXPECT_EQ(Eval("@one == 2"), Value(false));
 }
 
-// Negating an unknown stays unknown, so the document is still kept.
-TEST_F(FilterExprTest, NegationPropagatesNil) {
-  EXPECT_TRUE(Eval("!(@missing == 1)").IsNil());
+// Negating a missing-field comparison gives true, because the comparison was
+// false. This is what admits every key for `!(@absent == 'x')`.
+TEST_F(FilterExprTest, NegationOfMissingFieldIsTrue) {
+  EXPECT_EQ(Eval("!(@missing == 1)"), Value(true));
+  EXPECT_EQ(Eval("!(@missing != 1)"), Value(true));
   EXPECT_EQ(Eval("!(@one == 1)"), Value(false));
   EXPECT_EQ(Eval("!(@one == 2)"), Value(true));
 }
 
-// Three-valued && / ||, and deliberately order-sensitive: a definite false
-// on the left of && short-circuits to false and excludes the document, but
-// an unknown on the left propagates and keeps it. Redisearch behaves the
-// same way, which is why FilterLogical short-circuits rather than eagerly
-// evaluating both sides like FuncLand/FuncLor.
-TEST_F(FilterExprTest, LogicalOperatorsAreThreeValuedAndOrderSensitive) {
+// Two-valued && / ||, and order-insensitive -- there is no unknown left to
+// propagate, so swapping the operands cannot change the answer. Regression
+// guard for the three-valued FilterLogical node this replaced, which made
+// `false && missing` differ from `missing && false`.
+TEST_F(FilterExprTest, LogicalOperatorsAreTwoValuedAndOrderInsensitive) {
   EXPECT_EQ(Eval("(@one == 2) && (@missing == 1)"), Value(false));
-  EXPECT_TRUE(Eval("(@missing == 1) && (@one == 2)").IsNil());
+  EXPECT_EQ(Eval("(@missing == 1) && (@one == 2)"), Value(false));
 
   EXPECT_EQ(Eval("(@one == 1) || (@missing == 1)"), Value(true));
-  EXPECT_TRUE(Eval("(@missing == 1) || (@one == 2)").IsNil());
+  EXPECT_EQ(Eval("(@missing == 1) || (@one == 1)"), Value(true));
+  EXPECT_EQ(Eval("(@missing == 1) || (@one == 2)"), Value(false));
 
   // A definite operand on both sides behaves normally.
   EXPECT_EQ(Eval("(@one == 1) && (@two == 2)"), Value(true));

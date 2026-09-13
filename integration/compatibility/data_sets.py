@@ -801,6 +801,446 @@ def compute_text_data_sets(dataset_name, seed=123, schema_type="default"):
     
     return data
 
+### Filter Data ###
+
+FILTER_DOCS = [
+    {"status": "active",   "price": 100,  "category": "electronics", "title": "quick fox jumps high",    "rating": 5, "memo": "12"},
+    {"status": "inactive", "price": 25,   "category": "books",       "title": "slow turtle walks far",   "rating": 3, "memo": "abc"},
+    {"status": "active",   "price": 200,  "category": "clothing",    "title": "red hat sells well",      "rating": 4, "memo": "3.5"},
+    {"status": "pending",  "price": 50,   "category": "food",        "title": "fresh apple grows fast",  "rating": 2, "memo": ""},
+    {"status": "active",   "price": 75,   "category": "electronics", "title": "bright screen shines on", "rating": 5},
+    {"status": "inactive", "price": 300,  "category": "books",       "title": "old book reads fine",     "rating": 1},
+    {"status": "active",   "price": 150,                              "title": "new phone rings loud",    "rating": 4},  # missing category
+    {"status": "pending",  "price": 10,   "category": "clothing",    "title": "blue shirt fits right"},                  # missing rating
+    {                       "price": 500,  "category": "electronics", "title": "fast chip runs cool",     "rating": 5},  # missing status
+    {"status": "active",   "price": 1000, "category": "food",        "title": "big cake bakes slow",     "rating": 3},
+    {"status": "active",   "price": 42,   "category": "books",                                           "rating": 2},  # missing title (TEXT)
+]
+
+# Edge-case numeric documents for FILTER tests.
+# Includes 0, +/-0.5, +/-1, large magnitudes, +/-inf (hash-only), nan (hash-only).
+# Kept small and focused on edge cases.
+_INF = float("inf")
+_NEG_INF = float("-inf")
+_NAN = float("nan")
+
+# (n1, n2, n3) tuples. n3 is kept >= 0 so it can safely be used with sqrt/log.
+_HARD_NUMBERS_COMMON = [
+    ( 0.0,  0.0,    0.0),
+    # NOTE: a row with n1=-0.0, n2=+0.0 is intentionally omitted.
+    # Redis Stack's hash NUMERIC FILTER does not follow IEEE 754 for signed
+    # zeros: it treats `-0.0` and `+0.0` as distinct in ==, !=, <, >=, even
+    # though IEEE 754 mandates -0.0 == +0.0 (and the matching answers for the
+    # related orderings). The most likely explanation is a defect in the
+    # string-to-double conversion used on hash field values: it doesn't
+    # preserve the negative-zero sign bit when parsing "-0.0", so by the time
+    # the FILTER comparator runs, the two values no longer compare as IEEE
+    # equal. Notably, the JSON path produces the IEEE-correct answer for the
+    # same row, which is consistent with this being a hash-side parsing bug
+    # rather than a deliberate FILTER semantic. valkey-search uses
+    # absl::SimpleAtod on the same bytes, gets a proper IEEE -0.0 double, and
+    # therefore returns the IEEE-correct result. Including this row in the
+    # data set would produce permanent (and intentional) compat failures, so
+    # we exclude it.
+    # ( -0.0, 0.0, 1.0 ),
+    ( 1.0, -1.0,    1.0),
+    (-1.0,  1.0,    2.0),
+    ( 0.5, -0.5,    0.25),
+    (-0.5,  0.5,    4.0),
+    ( 100.0, -100.0, 16.0),
+]
+# Extra rows that can only be expressed in hash (JSON has no inf/nan).
+_HARD_NUMBERS_HASH_ONLY = [
+    ( _INF,     -1.0,    _INF),
+    ( _NEG_INF,  1.0,    1.0),
+    ( _NAN,      0.0,    0.0),
+]
+
+# Edge-case string documents for FILTER tests.
+# s1 is a TAG (exact-match), s2 is a TEXT field.
+_HARD_STRINGS = [
+    {"s1": "alpha",       "s2": "alpha bravo charlie"},
+    {"s1": "Alpha",       "s2": "ALPHA BRAVO"},
+    {"s1": "a",           "s2": "a"},
+    {"s1": "abc",         "s2": "abc def"},
+    {"s1": "abc123",      "s2": "abc 123"},
+    {"s1": "alpha-bravo", "s2": "alpha bravo"},
+    {"s1": "zulu",        "s2": "zulu yankee"},
+]
+
+# Filter expressions exercising every numeric operator and function on hard numbers.
+HARD_NUM_FILTER_EXPRS = {
+    # arithmetic dyadic operators
+    "filter num add":   "(@n1 + @n2) >= 0",
+    "filter num sub":   "(@n1 - @n2) > 0",
+    "filter num mul":   "(@n1 * @n2) <= 0",
+    "filter num div":   "(@n1 / @n3) > 0",
+    "filter num pow":   "(@n3 ^ 2) > 0",
+    # relational operators
+    "filter num lt":    "@n1 < @n2",
+    "filter num le":    "@n1 <= @n2",
+    "filter num eq":    "@n1 == @n2",
+    "filter num ne":    "@n1 != @n2",
+    "filter num ge":    "@n1 >= @n2",
+    "filter num gt":    "@n1 > @n2",
+    # logical operators
+    "filter num and":   "(@n1 >= 0) && (@n2 >= 0)",
+    "filter num or":    "(@n1 < 0) || (@n2 > 0)",
+    # comparison against literal infinity
+    "filter num lt inf": "@n1 < +inf",
+    "filter num gt ninf": "@n1 > -inf",
+    # Self-comparison, pinning the +/-inf rows (inf == inf is true) and the
+    # whole-key drop of the hash-only "nan" row (see below).
+    "filter num eq self": "@n1 == @n1",
+    "filter num ne self": "@n1 != @n1",
+    "filter num ge self": "@n1 >= @n1",
+    "filter num le self": "@n1 <= @n1",
+    # Unordered (NaN) comparison. A NaN operand is the only way a FILTER
+    # comparison can be unordered: Compare() returns kUNORDERED for nil
+    # (guarded separately -- a missing operand is simply false), for
+    # array-vs-scalar (which no filter attribute reference can produce, as
+    # every reference yields a double or a string), and for NaN.
+    #
+    # The NaN has to be *computed*: a NUMERIC field whose stored value is
+    # literally "nan" cannot test this, because both engines classify it as
+    # invalid data and drop the whole key from every index before any query
+    # can see it (valkey-search via the 1.3.0 emulate-release invalid-data
+    # rule in IndexSchema::ProcessMutation). `@n1 - @n1` on the +/-inf rows
+    # (hash:06, hash:07) is valid data that stays indexed and yields NaN,
+    # so the comparison result is observable through the @n2 probe.
+    #
+    # Redis answers an unordered comparison as though the operands were
+    # equal: ==, <= and >= admit the inf rows, while !=, < and > reject them.
+    "filter num eq nan": "(@n1 - @n1) == 0",
+    "filter num ne nan": "(@n1 - @n1) != 0",
+    "filter num lt nan": "(@n1 - @n1) < 0",
+    "filter num le nan": "(@n1 - @n1) <= 0",
+    "filter num gt nan": "(@n1 - @n1) > 0",
+    "filter num ge nan": "(@n1 - @n1) >= 0",
+    # numeric monadic functions
+    "filter num abs":   "abs(@n1) > 0",
+    "filter num ceil":  "ceil(@n2) >= 0",
+    "filter num floor": "floor(@n2) >= 0",
+    "filter num log":   "log(@n3) >= 0",
+    "filter num log2":  "log2(@n3) >= 0",
+    "filter num exp":   "exp(@n3) > 1",
+    "filter num sqrt":  "sqrt(@n3) >= 1",
+    # nested function/operator combinations
+    "filter num abs sub": "abs(@n1 - @n2) > 0",
+    "filter num exp neg": "exp(0 - @n3) <= 1",
+}
+
+# Filter expressions exercising every string operator and function on hard strings.
+HARD_STR_FILTER_EXPRS = {
+    # equality on TAG and TEXT
+    "filter str eq tag":     "@s1 == 'alpha'",
+    "filter str ne tag":     "@s1 != 'alpha'",
+    "filter str eq text":    "@s2 == 'alpha bravo'",
+    "filter str ne text":    "@s2 != 'alpha bravo'",
+    # contains / startswith
+    "filter str contains tag":   "contains(@s1, 'lph')",
+    "filter str contains text":  "contains(@s2, 'bravo')",
+    "filter str contains empty": "contains(@s1, '')",
+    "filter str starts tag":     "startswith(@s1, 'a')",
+    "filter str starts text":    "startswith(@s2, 'alpha')",
+    "filter str starts empty":   "startswith(@s1, '')",
+    # strlen
+    "filter str strlen gt":   "strlen(@s1) > 1",
+    "filter str strlen eq1":  "strlen(@s1) == 1",
+    "filter str strlen text": "strlen(@s2) >= 5",
+    # substr
+    "filter str substr eq":  "substr(@s1, 0, 3) == 'alp'",
+    "filter str substr neg": "substr(@s1, -3, 3) == 'pha'",
+    # case conversion
+    "filter str lower":      "lower(@s1) == 'alpha'",
+    "filter str upper":      "upper(@s1) == 'ALPHA'",
+    "filter str lower text": "lower(@s2) == 'alpha bravo'",
+    # nested function combinations
+    "filter str strlen lower":  "strlen(lower(@s1)) > 1",
+    "filter str contains upper": "contains(upper(@s1), 'PHA')",
+}
+
+# Filter expressions exercising missing-field behavior inside boolean
+# compositions. FILTER_DOCS deliberately leaves `status`, `rating`,
+# `category` and `title` missing in some rows. These expressions probe how
+# each engine handles a missing operand inside && / || / negation /
+# relational comparisons.
+#
+# Redis answers a comparison with a missing operand as FALSE, not unknown, so
+# nothing propagates and the operators are order-insensitive. The mirrored
+# left/right variants below are what proves that: they must agree.
+#
+# The "key" missing-status row is R8 (status absent, price=500). The
+# constants in each expression are chosen so that on R8 the *other*
+# branch evaluates to:
+#   - TRUE for `&&` (so the AND's outcome depends on the nil branch)
+#   - FALSE for `||` (so the OR's outcome depends on the nil branch)
+# That isolates the nil-handling decision to a single observable row.
+#
+# Mirrored ("nil left" / "nil right") variants of each shape detect any
+# short-circuit-ordering difference between the engines.
+MISSING_FIELD_FILTER_EXPRS = {
+    # AND with `==` against a missing status; right branch TRUE on R8, so
+    # the AND's outcome is decided entirely by the missing-field comparison.
+    "filter and eq nil left":    "@status=='active' && @price>200",
+    "filter and eq nil right":   "@price>200 && @status=='active'",
+    # OR with `==` against a missing status; right branch FALSE on R8.
+    "filter or eq nil left":     "@status=='active' || @price<=200",
+    "filter or eq nil right":    "@price<=200 || @status=='active'",
+    # Same shapes with `!=`. A missing operand makes this false too -- the
+    # one case where FILTER and an intuitive reading of `!=` disagree.
+    "filter and ne nil left":    "@status!='active' && @price>200",
+    "filter or ne nil left":     "@status!='active' || @price<=200",
+    # Both branches reference a missing field. R6 is missing category,
+    # R8 is missing status -- different rows hit the nil branch in each
+    # operand, so engine disagreement can show on either row.
+    "filter and missing both":   "@status=='active' && @category=='food'",
+    "filter or missing both":    "@status=='active' || @category=='food'",
+    # Relational on a missing status. Right branch TRUE on R8 so the AND's
+    # result is determined by the relational-on-missing semantics.
+    "filter and relop nil left": "@status<'b' && @price>200",
+    # A missing TEXT field. `title` is the only TEXT in the schema and the
+    # last FILTER_DOCS row omits it, so these are the only cases that reach
+    # the missing-field path for a TEXT type at all -- TAG and NUMERIC are
+    # covered by the status/category/rating rows above.
+    "filter bare eq nil text":   "@title == 'quick fox jumps high'",
+    "filter bare ne nil text":   "@title != 'quick fox jumps high'",
+    "filter not eq nil text":    "!(@title == 'quick fox jumps high')",
+    "filter and eq nil text":    "@title == 'quick fox jumps high' && @price>10",
+    "filter or eq nil text":     "@title == 'quick fox jumps high' || @price<10",
+    "filter contains nil text":  "contains(@title, 'fox')",
+    "filter exists nil text":    "exists(@title)",
+    # Idiomatic "safe" patterns users would write to dodge a missing field.
+    # Both engines should agree here; if either diverges that's a regression.
+    "filter exists guard":       "exists(@status) && @status=='active'",
+    "filter not exists or eq":   "!exists(@status) || @status=='active'",
+    # Negation of equality on nil exercises the `!(==)` vs `!=` duality
+    # (concern #2 + #4). Under VK both `!(Nil=='active')` and
+    # `Nil!='active'` are TRUE; under classic semantics one would be FALSE.
+    "filter neg of eq":          "!(@status=='active')",
+    # --- Bare single-operator comparisons against a missing field ---
+    # Each isolates ONE FilterFunc* operator's nil semantics with no
+    # surrounding boolean composition, mirroring the per-operator review
+    # analysis (FilterFuncEq/Ne/Lt/Le/Gt/Ge). @status is missing on R8, so
+    # every one of these applies its operator directly to a Nil operand.
+    # VK: a comparison touching a missing field yields Nil ("unknown"),
+    # which the filter keeps -- matching RediSearch (missing field -> NULL,
+    # NULL kept). The earlier composition tests only exercised ==, != and <
+    # against a missing field; <=, > and >= were never applied to one.
+    "filter bare eq nil":        "@status=='active'",  # == FilterFuncEq
+    "filter bare ne nil":        "@status!='active'",  # != FilterFuncNe
+    "filter bare lt nil":        "@status<'m'",         # <  FilterFuncLt
+    "filter bare le nil":        "@status<='m'",        # <= FilterFuncLe
+    "filter bare gt nil":        "@status>'m'",         # >  FilterFuncGt
+    "filter bare ge nil":        "@status>='m'",        # >= FilterFuncGe
+    # Same six operators against a missing NUMERIC field (R7 has no rating),
+    # which resolves through the numeric attribute path in
+    # FilterAttributeReference rather than the string path.
+    "filter bare num eq nil":    "@rating==3",
+    "filter bare num ne nil":    "@rating!=3",
+    "filter bare num lt nil":    "@rating<3",
+    "filter bare num le nil":    "@rating<=3",
+    "filter bare num gt nil":    "@rating>3",
+    "filter bare num ge nil":    "@rating>=3",
+}
+
+# Filter expressions that reference fields by their SCHEMA *alias*.
+#
+# Run against _alias_schema, where every alias differs from its identifier
+# (`status AS st`, `$.price AS pr`), so a match proves the alias resolved --
+# with alias and identifier identical, as in the default schema, the two
+# resolution paths are indistinguishable.
+#
+# Redis resolves the alias and only the alias: with `color AS c` declared,
+# `@c` matches while `@color` (the identifier) returns nothing, for HASH and
+# JSON alike. The identifier form is deliberately not covered here; see the
+# note in generate_filter._run_alias_queries.
+ALIAS_FILTER_EXPRS = {
+    # TAG and NUMERIC aliases, the two simplest resolutions.
+    "filter alias tag eq":    "@st == 'active'",
+    "filter alias tag ne":    "@st != 'inactive'",
+    "filter alias num gt":    "@pr > 100",
+    "filter alias num range": "@pr >= 50 && @pr <= 200",
+    # An alias on each side of a boolean, so neither operand can be the only
+    # one being resolved.
+    "filter alias and":       "@st == 'active' && @pr > 100",
+    "filter alias or":        "@cat == 'electronics' || @rt > 4",
+    # Alias inside a function call rather than a bare comparison.
+    "filter alias exists":    "exists(@rt)",
+    "filter alias contains":  "contains(@ttl, 'slow')",
+    # Aliases whose rows are missing the underlying field (FILTER_DOCS R6/R7/R8
+    # omit category/rating/status), so alias resolution is exercised on the
+    # missing-value path too.
+    "filter alias missing":   "@cat == 'food' || @st == 'pending'",
+}
+
+# Filter expressions over an UNDECLARED hash field holding values that are
+# not numbers: "12", "abc", "3.5", "" on the first four FILTER_DOCS rows, and
+# absent on the rest. Comparing that against a numeric literal is the only
+# observable way to reach the coercion path.
+#
+# A *declared* NUMERIC field with a non-numeric value cannot test this: both
+# engines classify it as invalid data and drop the whole key from the index
+# before any query runs, so whatever the filter decided is invisible -- the
+# same trap the hash-only "nan" row springs on HARD_NUM_FILTER_EXPRS.
+#
+# HASH only. A JSON index rejects a FILTER that references an undeclared
+# field at FT.CREATE time, so generate_filter skips the json parametrization.
+UNDECLARED_NUMERIC_FILTER_EXPRS = {
+    "filter undeclared num gt":   "@memo > 5",
+    "filter undeclared num lt":   "@memo < 100",
+    "filter undeclared num eq":   "@memo == 12",
+    "filter undeclared str eq":   "@memo == 'abc'",
+    "filter undeclared exists":   "exists(@memo)",
+    # A value that is not a number, against a numeric literal, is unordered:
+    # != is true for it and everything else false. Byte-order comparison --
+    # which is what a plain string fallback would do -- would instead make
+    # "abc" > 5 true, so these pin the distinction.
+    "filter undeclared num ne":   "@memo != 5",
+    "filter undeclared num ge":   "@memo >= 5",
+    "filter undeclared num le":   "@memo <= 5",
+    # Quoting the literal switches the whole comparison to byte order.
+    "filter undeclared quoted gt": "@memo > '5'",
+    "filter undeclared quoted eq": "@memo == '12'",
+}
+
+# Comparisons where the numeric-ness comes from something other than a plain
+# field reference, which is what distinguishes "is this operand a number?"
+# from "is this field declared NUMERIC?".
+#
+#   - a NUMERIC field is NOT a number: its value arrives as stored bytes, so
+#     @price > @rating and @price > '100' are byte-order comparisons while
+#     @price > 100 is numeric.
+#   - a number-returning function IS one, so strlen(@title) > '3' is numeric
+#     even though the literal is quoted.
+TYPED_COMPARISON_FILTER_EXPRS = {
+    "filter typed num vs literal":  "@price > 100",
+    "filter typed num vs quoted":   "@price > '100'",
+    "filter typed num vs num":      "@price > @rating",
+    "filter typed strlen vs lit":   "strlen(@title) > 3",
+    "filter typed strlen vs quote": "strlen(@title) > '3'",
+    "filter typed lower vs lit":    "lower(@category) > 5",
+    "filter typed lower vs quote":  "lower(@category) > 'c'",
+}
+
+FILTER_DATASETS = {
+    "filter base":               None,
+    "filter tag eq":             "@status=='active'",
+    "filter tag neq":            "@status!='inactive'",
+    "filter numeric gt":         "@price>100",
+    "filter numeric range":      "@price>=50 && @price<=200",
+    "filter exists rating":      "exists(@rating)",
+    "filter not exists category": "!exists(@category)",
+    "filter combined":           "@status=='active' && @price>100",
+    "filter strlen numeric":     "strlen(@price)>=3",
+    "filter startswith numeric": "startswith(@price,'1')",
+    "filter contains text":      "contains(@title,'slow')",
+    **MISSING_FIELD_FILTER_EXPRS,
+    **HARD_NUM_FILTER_EXPRS,
+    **HARD_STR_FILTER_EXPRS,
+    **ALIAS_FILTER_EXPRS,
+    **UNDECLARED_NUMERIC_FILTER_EXPRS,
+    **TYPED_COMPARISON_FILTER_EXPRS,
+}
+
+def _filter_docs_schema(key_type):
+    """Schema for the FILTER_DOCS dataset family."""
+    if key_type == "hash":
+        return [
+            "status TAG", "price NUMERIC", "category TAG",
+            "title TEXT NOSTEM", "rating NUMERIC",
+        ]
+    return [
+        "$.status AS status TAG", "$.price AS price NUMERIC",
+        "$.category AS category TAG", "$.title AS title TEXT NOSTEM",
+        "$.rating AS rating NUMERIC",
+    ]
+
+def _alias_schema(key_type):
+    """Schema for the alias FILTER tests, over the FILTER_DOCS dataset.
+
+    Every field is declared with an `AS <alias>` that differs from its
+    identifier, so a FILTER can only match by resolving the alias. The
+    hash schema needs the explicit `AS` for this: the default hash schema
+    above leaves alias and identifier identical, which cannot tell the two
+    resolution paths apart.
+    """
+    if key_type == "hash":
+        return [
+            "status AS st TAG", "price AS pr NUMERIC", "category AS cat TAG",
+            "title AS ttl TEXT NOSTEM", "rating AS rt NUMERIC",
+        ]
+    return [
+        "$.status AS st TAG", "$.price AS pr NUMERIC",
+        "$.category AS cat TAG", "$.title AS ttl TEXT NOSTEM",
+        "$.rating AS rt NUMERIC",
+    ]
+
+def _hard_numbers_schema(key_type):
+    """Schema for the hard-numbers FILTER tests (n1, n2, n3 NUMERIC)."""
+    if key_type == "hash":
+        return ["n1 NUMERIC", "n2 NUMERIC", "n3 NUMERIC"]
+    return [
+        "$.n1 AS n1 NUMERIC", "$.n2 AS n2 NUMERIC", "$.n3 AS n3 NUMERIC",
+    ]
+
+def _hard_strings_schema(key_type):
+    """Schema for the hard-strings FILTER tests (s1 TAG, s2 TEXT)."""
+    if key_type == "hash":
+        return ["s1 TAG", "s2 TEXT NOSTEM"]
+    return [
+        "$.s1 AS s1 TAG", "$.s2 AS s2 TEXT NOSTEM",
+    ]
+
+def _hard_numbers_docs(key_type):
+    """Build (key, fields) docs for the hard-numbers FILTER tests."""
+    rows = list(_HARD_NUMBERS_COMMON)
+    if key_type == "hash":
+        # JSON has no inf/nan, so only hash gets the extreme rows.
+        rows += list(_HARD_NUMBERS_HASH_ONLY)
+    docs = []
+    for i, (n1, n2, n3) in enumerate(rows):
+        docs.append((f"{key_type}:{i:02d}", {"n1": n1, "n2": n2, "n3": n3}))
+    return docs
+
+def _hard_strings_docs(key_type):
+    return [(f"{key_type}:{i:02d}", dict(d)) for i, d in enumerate(_HARD_STRINGS)]
+
+def compute_filter_data_sets(dataset_name):
+    if dataset_name not in FILTER_DATASETS:
+        raise ValueError(f"Unknown filter dataset: {dataset_name}. Available: {list(FILTER_DATASETS.keys())}")
+
+    filter_expr = FILTER_DATASETS[dataset_name]
+    data = {dataset_name: {}}
+
+    if dataset_name in HARD_NUM_FILTER_EXPRS:
+        schema_fn, docs_fn = _hard_numbers_schema, _hard_numbers_docs
+    elif dataset_name in HARD_STR_FILTER_EXPRS:
+        schema_fn, docs_fn = _hard_strings_schema, _hard_strings_docs
+    elif dataset_name in ALIAS_FILTER_EXPRS:
+        schema_fn = _alias_schema
+        def docs_fn(kt):
+            return [(f"{kt}:{i:02d}", dict(doc)) for i, doc in enumerate(FILTER_DOCS)]
+    else:
+        schema_fn = _filter_docs_schema
+        def docs_fn(kt):
+            return [(f"{kt}:{i:02d}", dict(doc)) for i, doc in enumerate(FILTER_DOCS)]
+
+    for key_type in ["hash", "json"]:
+        schema_parts = schema_fn(key_type)
+        create_cmd = [
+            "FT.CREATE", f"{key_type}_idx1", "ON", key_type.upper(),
+            "PREFIX", "1", f"{key_type}:",
+        ]
+        if filter_expr is not None:
+            create_cmd += ["FILTER", filter_expr]
+        create_cmd += ["SCHEMA"] + " ".join(schema_parts).split()
+
+        data[dataset_name][CREATES_KEY(key_type)] = [create_cmd]
+        data[dataset_name][SETS_KEY(key_type)] = docs_fn(key_type)
+
+    return data
+
 ### Helper Functions ###
 ### Sort key prefix data set (issue #1353, item 4) ###
 #
@@ -835,6 +1275,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
     if data_source is None:
         if data_set in TEXT_DATASETS:
             data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
         elif data_set == SORTKEY_PREFIX_DATA_SET:
             data_source = "sortkey"
         else:
@@ -845,13 +1287,20 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_data_sets(vector_data_type=vector_data_type)
         case "text":
             data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "filter":
+            data = compute_filter_data_sets(data_set)
         case "sortkey":
             data = compute_sortkey_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
     load_list = data[data_set][SETS_KEY(key_type)]
     for create_index_cmd in data[data_set][CREATES_KEY(key_type)]:
-        client.execute_command(create_index_cmd)
+        if isinstance(create_index_cmd, (list, tuple)):
+            print("Create Index: ", *create_index_cmd)
+            client.execute_command(*create_index_cmd)
+        else:
+            print("Create Index: ", create_index_cmd)
+            client.execute_command(create_index_cmd)
 
     # Make large chunks to accelerate things
     batch_size = 50

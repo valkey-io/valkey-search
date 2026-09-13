@@ -63,6 +63,7 @@ if(BUILD_UNIT_TESTS)
   message(STATUS "Building tests")
   enable_testing()
   add_subdirectory(testing)
+  add_subdirectory(integration)
 endif()
 
 # Create a relative symbolic link to the root directory for compile_commands.json

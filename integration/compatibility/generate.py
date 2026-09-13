@@ -853,7 +853,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2")
         # ... including for later pipeline stages.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2 apply @n2+100 as r"
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as n2 apply 100+@n2 as r"
         )
         # Hiding a declared field of a different type (numeric hides a tag).
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 as t1")
@@ -891,7 +891,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             excluded=True,
         )
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply @x+1 as y",
+            f"ft.aggregate {key_type}_idx1 * load 7 @__key @n1 as x @n2 as x apply 1+@x as y",
             excluded=True,
         )
 
@@ -902,7 +902,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         # Load by JSON path with a rename, then use the rename in APPLY.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply @a+1 as b"
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key $.n1 as a apply 1+@a as b"
         )
         # Load by JSON path without a rename: emitted under the path.
         self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key $.n1")
@@ -925,11 +925,11 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         # --- APPLY: both the source name and the computed name.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as computed"
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply 1+@n1 as computed"
         )
         # APPLY writing back over the loaded field's own name.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply @n1+1 as n1"
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 apply 1+@n1 as n1"
         )
         # APPLY over a field that is not named in the LOAD clause.
         self.check(dialect,
@@ -972,7 +972,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         # A reducer feeding a later APPLY, so the reducer's name is re-read.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply @total+1 as bumped"
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 groupby 1 @t1 reduce sum 1 @n1 as total apply 1+@total as bumped"
         )
 
         # --- SORTBY does not rename what it sorts on.
@@ -993,10 +993,10 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
 
         # --- Multi-stage pipelines, end to end.
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply @n1+10 as bumped filter @bumped>0"
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 apply 10+@n1 as bumped filter @bumped>0"
         )
         self.check(dialect,
-            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply @n1+10 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
+            f"ft.aggregate {key_type}_idx1 * load 2 @t1 @n1 apply 10+@n1 as bumped groupby 1 @t1 reduce max 1 @bumped as peak"
         )
 
     def test_aggregate_numeric_dyadic_operators(self, key_type, dialect, vector_data_type):
@@ -1038,102 +1038,61 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
-    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
-    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset, vector_data_type):
-        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
+    # Each case is (load_field, apply_expr).
+    #
+    # The TAG-field entries (@t1/@t2/@t3) are the original coverage of
+    # contains() over string attributes and string literals.
+    #
+    # The NUMERIC-field entries (@n1) probe how each engine handles a
+    # numeric attribute when a string function is applied to it. Observed
+    # Redis Stack behavior:
+    #   - strlen/startswith/contains/substr on a numeric -> the APPLY
+    #     pipeline raises an error. The compat framework auto-skips the
+    #     comparison whenever Redis Stack raised, so these cases act as
+    #     no-crash probes against valkey's coercion path -- valkey itself
+    #     coerces the numeric to a string (FormatDouble, %.11g) and
+    #     produces a value. The only assertion here is that valkey does
+    #     not crash on the same input that errors in Redis Stack.
+    #   - lower/upper on a numeric -> Redis Stack returns nil (no error).
+    #     valkey returns the formatted string. This is a *real*
+    #     divergence; lower(@n1) / upper(@n1) are intentionally NOT
+    #     included in the table because they would produce permanent
+    #     compat failures rather than informative coverage.
+    AGGREGATE_STRING_APPLY_CASES = [
+        ("t3", 'contains(@t3, "all")'),
+        ("t3", 'contains(@t3, "value")'),
+        ("t2", 'contains(@t2, "two")'),
+        ("t1", 'contains(@t1, "one")'),
+        ("t1", 'contains(@t1, "")'),
+        ("t1", 'contains("", "one")'),
+        ("t3", 'contains("", "")'),
+        # String functions on a NUMERIC attribute (no-crash probe; see comment).
+        ("n1", 'strlen(@n1)'),
+        ("n1", 'startswith(@n1, "1")'),
+        ("n1", 'startswith(@n1, "-")'),
+        ("n1", 'contains(@n1, "0")'),
+        ("n1", 'substr(@n1, 0, 1)'),
+        ("n1", 'substr(@n1, 0, 3)'),
+    ]
 
-        # String apply function "contains"
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "all")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "value")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            'contains(@t2, "two")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "one")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t1",
-            "apply",
-            'contains("", "one")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains("", "")',
-            "as",
-            "apply_result",
-        )
+    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
+    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset,
+                                              vector_data_type):
+        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
+        for load_field, apply_expr in self.AGGREGATE_STRING_APPLY_CASES:
+            self.check(dialect,
+                "ft.aggregate",
+                f"{key_type}_idx1",
+                "*",
+                "load",
+                "2",
+                "__key",
+                load_field,
+                "apply",
+                apply_expr,
+                "as",
+                "apply_result",
+            )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_substr(self, key_type, dialect, dataset, vector_data_type):

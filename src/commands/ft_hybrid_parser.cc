@@ -413,7 +413,11 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       absl::StrAppend(&knn, " EF_RUNTIME ", *arm->ef);
     }
     absl::StrAppend(&knn, "]");
-    vsim_query_string = absl::StrCat(vsim_filter, knn);
+    // Parenthesized: it is the spelling the reference engine requires for a
+    // filter of more than one predicate -- it refuses `@a:x @b:y=>[KNN ...]`
+    // as a syntax error and accepts `(@a:x @b:y)=>[KNN ...]` -- and it leaves
+    // no question about what the `=>` binds to.
+    vsim_query_string = absl::StrCat("(", vsim_filter, ")", knn);
     arm->parse_vars.query_string = vsim_query_string;
     // The filter decides membership, never the score.
     arm->vector_score_only = true;

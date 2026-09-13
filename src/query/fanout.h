@@ -23,6 +23,7 @@ namespace valkey_search::query::fanout {
 absl::Status PerformSearchFanoutAsync(
     ValkeyModuleCtx* ctx,
     std::vector<vmsdk::cluster_map::NodeInfo>& search_targets,
+    bool allow_primary_fallback,
     coordinator::ClientPool* coordinator_client_pool,
     std::unique_ptr<query::SearchParameters> parameters,
     vmsdk::ThreadPool* thread_pool);

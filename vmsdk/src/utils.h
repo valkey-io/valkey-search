@@ -111,6 +111,9 @@ inline std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
 bool IsRealUserClient(ValkeyModuleCtx *ctx);
+// Returns whether the issuing client enabled cluster READONLY mode. This is a
+// client property, distinct from the server's read-only context flag.
+bool IsReadOnly(ValkeyModuleCtx *ctx);
 bool MultiOrLua(ValkeyModuleCtx *ctx);
 
 size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);

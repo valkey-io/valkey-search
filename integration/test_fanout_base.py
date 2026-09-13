@@ -167,7 +167,7 @@ class TestFanout(ValkeySearchClusterTestCase):
         assert(primary.info("replication")["role"] == "master")
 
         if client_mode == "READONLY":
-            assert primary.execute_command("READONLY") == b"OK"
+            assert primary.execute_command("READONLY") is True
         
         index = Index("test", [Vector("v", 3, type="FLAT")], type=KeyDataType.HASH)
         index.create(primary)

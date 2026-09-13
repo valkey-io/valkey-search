@@ -41,7 +41,9 @@ void RunAnyInvocable(void *invocable) {
   absl::AnyInvocable<void()> *fn = (absl::AnyInvocable<void()> *)invocable;
   {
     absl::MutexLock lock(&outstanding_callbacks_mu);
-    outstanding_callbacks.erase(fn);
+    if (outstanding_callbacks.erase(fn) == 0) {
+      return;
+    }
   }
   (*fn)();
   delete fn;
@@ -94,7 +96,7 @@ void MarkAsShuttingDown() { shutting_down.store(true); }
 bool IsShuttingDown() { return shutting_down.load(); }
 
 int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
-  if (IsMainThread() && !force_async) {
+  if (IsMainThread() && (!force_async || IsShuttingDown())) {
     fn();
     return VALKEYMODULE_OK;
   }
@@ -118,11 +120,24 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
 }
 
 void DrainPendingMainCallbacks() {
-  absl::MutexLock lock(&outstanding_callbacks_mu);
-  for (absl::AnyInvocable<void()> *fn : outstanding_callbacks) {
-    delete fn;
+  VerifyMainThread();
+  while (true) {
+    absl::flat_hash_set<absl::AnyInvocable<void()> *> callbacks_to_run;
+    {
+      absl::MutexLock lock(&outstanding_callbacks_mu);
+      if (outstanding_callbacks.empty()) {
+        break;
+      }
+      callbacks_to_run = std::move(outstanding_callbacks);
+      outstanding_callbacks.clear();
+    }
+    for (absl::AnyInvocable<void()> *fn : callbacks_to_run) {
+      if (fn) {
+        (*fn)();
+        delete fn;
+      }
+    }
   }
-  outstanding_callbacks.clear();
 }
 
 std::string WrongArity(absl::string_view cmd) {

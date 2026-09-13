@@ -4,6 +4,7 @@ ROOT_DIR=$(readlink -f $(dirname $0))
 WORKSPACE_HOME=$(readlink -f ${ROOT_DIR}/../..)
 
 BUILD_CONFIG=release
+START_TIME=$(date +%s)
 # TEST=all
 TEST=vector_search_integration
 CLEAN="no"
@@ -60,11 +61,13 @@ while [[ $# -gt 0 ]]; do
         shift || true
         SAN_BUILD="address"
         san_suffix="-asan"
+        export ASAN_BUILD=1
         ;;
     --tsan)
         shift || true
         SAN_BUILD="thread"
         san_suffix="-tsan"
+        export TSAN_BUILD=1
         ;;
     --parallel | -j)
         shift || true
@@ -122,6 +125,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 export SAN_BUILD
+if [[ "${SAN_BUILD}" == "address" ]]; then
+    export ASAN_BUILD=1
+elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    export TSAN_BUILD=1
+fi
 
 # Source the common.rc after we setup our environment variables
 . ${WORKSPACE_HOME}/scripts/common.rc
@@ -195,14 +203,10 @@ function build() {
     make
 }
 
-if [ -n "${san_suffix}" ]; then
-    BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${san_suffix}
-else
-    BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX}
-fi
+BUILD_DIR_BASENAME=.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}
 BUILD_DIR=${ROOT_DIR}/${BUILD_DIR_BASENAME}
 export TEST_TMPDIR="$BUILD_DIR/tmp"
-VALKEY_SEARCH_PATH=${MODULE_ROOT}/${BUILD_DIR_BASENAME}/libsearch.${MODULE_EXT}
+VALKEY_SEARCH_PATH=${VALKEY_SEARCH_PATH:-${MODULE_PATH:-${MODULE_ROOT}/${BUILD_DIR_BASENAME}/libsearch.${MODULE_EXT}}}
 
 if [[ "${CLEAN}" == "yes" ]]; then
     rm -rf ${BUILD_DIR}
@@ -298,9 +302,9 @@ if [ -n "${PARALLEL_WORKERS}" ] && [ "${PARALLEL_WORKERS}" != "0" ] && [ "${PARA
     XDIST_ARGS="-n ${PARALLEL_WORKERS} --dist=load"
     echo "Running integration tests in parallel with ${PARALLEL_WORKERS} workers"
     if [[ "${TEST}" == "all" ]]; then
-        python3 -m pytest ${XDIST_ARGS} -v ${ROOT_DIR}/vector_search_integration_test.py ${ROOT_DIR}/stability_test.py
+        python3 -m pytest ${XDIST_ARGS} -rfE -v ${ROOT_DIR}/vector_search_integration_test.py ${ROOT_DIR}/stability_test.py
     else
-        python3 -m pytest ${XDIST_ARGS} -v ${ROOT_DIR}/${TEST}_test.py
+        python3 -m pytest ${XDIST_ARGS} -rfE -v ${ROOT_DIR}/${TEST}_test.py
     fi
 else
     if [[ "${TEST}" == "all" ]]; then
@@ -323,3 +327,7 @@ if [[ "${SAN_BUILD}" != "no" ]]; then
     # And now we can check the logs
     check_for_san_errors "$(find ${TEST_UNDECLARED_OUTPUTS_DIR} -name "*_stdout.txt" | grep -v valkey_cli_stdout)"
 fi
+
+END_TIME=$(date +%s)
+TEST_RUNTIME=$((END_TIME - START_TIME))
+printf "\n${GREEN}Integration tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))

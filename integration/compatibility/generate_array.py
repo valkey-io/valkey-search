@@ -343,23 +343,31 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
             self._missing_pipeline(key_type, tail)
 
     def test_array_vs_array_compare(self, key_type):
-        """Comparing two arrays -- a query Redisearch accepts.
+        """Comparing two arrays -- a query Redisearch accepts, and answers by a
+        rule valkey-search deliberately does not follow.
 
-        Both engines compare lexicographically, but each over its own element
-        order, so the answers only agree when those orders happen to agree.
+        Redisearch reads only the first element of each array, so `[5]` and
+        `[5,7]` are equal to it. valkey-search compares element by element and
+        then by length, so they are not. DATASET_COMPARE is built to tell those
+        rules apart, and the answers diverge on the groups where the first
+        elements match and the rest does not.
+
+        Captured but excluded: the replay only checks that valkey-search does
+        not crash. See known_differences.md 1.5 for why the rule is not adopted,
+        and why recording a comparison here would be unstable even if it were --
+        TOLIST's element order is unspecified, and Redisearch's answer follows
+        whichever element its hash table happens to yield first.
         """
         self.setup_data(DATASET_COMPARE, key_type)
-        # The ordered comparisons -- "<", "<=", ">=", ">" -- are left out: both
-        # engines compare element by element, so their answer follows whichever
-        # element each engine happens to hold first, and Redisearch's order is
-        # its hash table's. Equality is unaffected by that for these shapes.
+        # The ordered comparisons -- "<", "<=", ">=", ">" -- are left out for
+        # the same reason, and were left out before equality joined them.
         for op in ["==", "!="]:
             cmd = ["ft.aggregate", f"{key_type}_idx1", FILTER_QUERY]
             cmd += ("load 3 @n1 @n2 @t1 groupby 1 @t1 "
                     "reduce tolist 1 @n1 as items "
                     "reduce tolist 1 @n2 as items2 "
                     f"apply (@items){op}(@items2) as result").split()
-            self.execute_command(cmd + ["DIALECT", "2"])
+            self.execute_command(cmd + ["DIALECT", "2"], excluded=True)
 
     ### FILTER ###
 

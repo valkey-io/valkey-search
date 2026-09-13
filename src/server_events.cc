@@ -63,25 +63,25 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
 void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                         uint64_t subevent, void *data) {
-  // Mark the module as shutting down so that RunByMain() stops
-  // scheduling new tasks.
-  vmsdk::MarkAsShuttingDown();
   // Clear all PausePoints so any waiting worker threads wake up and exit
   // their spin loops, then join all thread pools so every in-flight task
   // completes before we tear down index schemas.  This ordering matters:
   //   1. ClearAllPausePoints       – unblocks workers stuck in PausePoint().
   //   2. JoinAllThreadPools        – drains task queues and waits for every
   //                                  worker thread to exit.
-  //   3. DrainPendingMainCallbacks – frees any RunByMain() one-shots that
-  //                                  workers enqueued after passing the
-  //                                  IsShuttingDown() check; the event loop
-  //                                  won't run them now and they'd otherwise
-  //                                  leak.
-  //   4. OnShutdownCallback        – removes all index schemas on the main
+  //   3. MarkAsShuttingDown        – stops accepting new RunByMain() tasks now
+  //                                  that background workers have exited.
+  //   4. DrainPendingMainCallbacks – executes and frees any RunByMain()
+  //   one-shots
+  //                                  that workers enqueued (e.g. deferred
+  //                                  deleters); the event loop won't run them
+  //                                  now and they'd otherwise leak.
+  //   5. OnShutdownCallback        – removes all index schemas on the main
   //                                  thread.
-  //   5. Destruct                  – cleans up VectorRegistry tracked entries.
+  //   6. Destruct                  – cleans up VectorRegistry tracked entries.
   vmsdk::debug::ClearAllPausePoints();
   ValkeySearch::Instance().JoinAllThreadPools();
+  vmsdk::MarkAsShuttingDown();
   vmsdk::DrainPendingMainCallbacks();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
   VectorRegistry::Destruct();

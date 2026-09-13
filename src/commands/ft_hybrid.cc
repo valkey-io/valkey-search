@@ -41,20 +41,49 @@ namespace valkey_search {
 namespace query {
 
 // Converts a pure vector arm's raw distances into the similarity that fusion
-// and the per-arm score alias both report: `1 / (1 + distance)`.
+// and the per-arm score alias both report.
 //
-// Every other arm already carries a relevance score where higher is better (a
-// text arm's BM25 value), so this is what puts all arms on one footing: fusion
-// can then read Neighbor::score uniformly, LINEAR can sum the arms directly,
-// and a COMBINE FUNCTION expression sees the same number the user sees through
-// YIELD_SCORE_AS. It is also the value Redis reports for the VSIM arm.
+// Every other arm carries a relevance score where higher is better (a text
+// arm's BM25 value), so this is what puts all arms on one footing: fusion can
+// then read Neighbor::score uniformly, LINEAR can sum the arms directly, and a
+// COMBINE FUNCTION expression sees the same number the user sees through
+// YIELD_SCORE_AS.
 //
-// `distance` is non-negative for the supported metrics, so 1 + distance is
-// never zero; the guard is defensive.
-void ConvertVectorArmScoresToSimilarity(std::vector<indexes::Neighbor> &ns) {
+// The mapping depends on the metric, and these are the three Redis uses --
+// measured against the 8.4 query engine rather than derived, by reading the
+// distance FT.SEARCH reports for a document and the similarity the same
+// document's arm reports through FT.HYBRID:
+//
+//   L2      1 / (1 + d)   d >= 0, so this is in (0, 1]
+//   IP      (1 + d) / 2   d = 1 - dot, unbounded below, so this is unbounded
+//   COSINE  1 - d / 2     d in [0, 2], so this is in [0, 1]
+//
+// A single formula for all three was wrong in two ways. Inner-product
+// distances go well below -1 -- -499 for a document whose dot product with the
+// query is 500 -- which drove `1 / (1 + d)` through its pole and into the
+// guard, so the three best matches all reported 0 while the worst reported 1,
+// inverting the arm. And for cosine the two formulas agree at d of 0 and 1 but
+// not at 2, where opposed vectors should score 0 and scored 1/3.
+//
+// The guard is kept for L2, where a negative distance should not arise and a
+// pole is not worth risking on a float error.
+void ConvertVectorArmScoresToSimilarity(std::vector<indexes::Neighbor> &ns,
+                                        data_model::DistanceMetric metric) {
   for (auto &n : ns) {
     const double d = static_cast<double>(n.distance);
-    n.score = static_cast<float>(d > -1.0 ? 1.0 / (1.0 + d) : 0.0);
+    double similarity;
+    switch (metric) {
+      case data_model::DISTANCE_METRIC_IP:
+        similarity = (1.0 + d) / 2.0;
+        break;
+      case data_model::DISTANCE_METRIC_COSINE:
+        similarity = 1.0 - d / 2.0;
+        break;
+      default:
+        similarity = d > -1.0 ? 1.0 / (1.0 + d) : 0.0;
+        break;
+    }
+    n.score = static_cast<float>(similarity);
   }
 }
 
@@ -73,7 +102,11 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
     // into SearchAsync at dispatch).
     if (i < params.per_arm_score_is_distance.size() &&
         params.per_arm_score_is_distance[i]) {
-      ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors);
+      auto metric = i < params.per_arm_distance_metric.size()
+                        ? params.per_arm_distance_metric[i]
+                        : data_model::DISTANCE_METRIC_UNSPECIFIED;
+      ConvertVectorArmScoresToSimilarity(params.per_arm_results[i].neighbors,
+                                         metric);
     }
     rank_fusion::ArmInput in;
     in.neighbors = &params.per_arm_results[i].neighbors;

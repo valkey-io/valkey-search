@@ -212,6 +212,53 @@ When the aliases become reachable these will start matching, the run will
 print `XPASS`, and both the `xfail=True` in `generate_hybrid.py` and this
 section should be removed.
 
+### 5.4b. `POLICY` — valkey accepts and discards, Redis rejects
+
+**Status:** deliberate leniency, not swept.
+
+```
+... VSIM @vec $q KNN 2 K 20 POLICY local ...
+Redis:  (error) SEARCH_PARSE_ARGS POLICY: Unknown argument
+Valkey: answers as if the clause were not there
+```
+
+The Redis 8.4 query engine has no `POLICY` clause on FT.HYBRID and refuses the
+token outright, for every value tried. valkey-search parses it and throws the
+value away (ft_hybrid_parser.cc, the top-level walk), erroring only when the
+value is missing. Accepted so a command written for a coordinator dialect that
+does carry `POLICY` is not rejected here; it does not change an answer, so
+sweeping it would record an error-message mismatch and nothing else.
+
+Neither engine accepts a `FILTER` inside the VSIM clause -- there is no vector
+pre-filter option on either, and both reject `FILTER` placed before `KNN` or
+inside the counted KNN block. A `FILTER` after the arms is an aggregate
+pipeline stage on both, and that is where they differ; see below.
+
+### 5.4c. A pipeline stage naming a field no LOAD clause asked for
+
+**Status:** open, and not FT.HYBRID-specific.
+
+valkey-search implicitly loads a field that a pipeline stage references
+(#919), so a `FILTER` resolves whether or not a LOAD clause names the field.
+Redis requires the field to have been loaded by an earlier stage, and when it
+has not the `FILTER` passes every row through rather than failing:
+
+```
+... KNN 2 K 20 FILTER @price<5 ...               Redis 20 rows, Valkey 5
+... KNN 2 K 20 LOAD 1 @price FILTER @price<5 ... Redis  5 rows, Valkey 5
+... KNN 2 K 20 FILTER @price<5 LOAD 1 @price ... Redis 20 rows, Valkey 5
+... KNN 2 K 20 LOAD * FILTER @price<5 ...        Redis errors, Valkey 5
+```
+
+So the engines agree exactly when the field is loaded before the stage that
+names it, and disagree in three ways otherwise -- Redis silently not filtering,
+Redis caring about stage order where valkey-search does not, and the `LOAD *`
+case of 5.4. This belongs to the aggregate pipeline rather than to FT.HYBRID:
+the same shapes behave the same way under FT.AGGREGATE. Not swept here, because
+a sweep of it would be testing the aggregate pipeline's loading rules through
+FT.HYBRID, and because two of the four rows above are Redis soft failures that
+are not a target worth recording.
+
 ### 5.5. The fused score's default column name — TODO, marked `xfail`
 
 **Status:** open.

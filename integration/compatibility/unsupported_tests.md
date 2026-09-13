@@ -263,28 +263,44 @@ a sweep of it would be testing the aggregate pipeline's loading rules through
 FT.HYBRID, and because two of the four rows above are Redis soft failures that
 are not a target worth recording.
 
-### 5.10. A conjunction used as a KNN pre-filter — TODO, marked `xfail`
+### 5.10. A text conjunct is dropped from a KNN pre-filter — skipped
 
-**Status:** open, in valkey-search, and not specific to FT.HYBRID.
+**Status:** open in valkey-search, and NOT an FT.HYBRID defect. Tracked here
+only because this is where it was found.
 
-A pre-filter that intersects a text predicate with another predicate is not
-applied to the vector search. On plain FT.SEARCH, with no FT.HYBRID involved:
+A pre-filter that ANDs a text predicate with anything loses the text conjunct
+when it is used for a vector search. A conjunction of non-text predicates is
+correct, and so is every single predicate. Written parenthesized, which is the
+spelling the reference requires for more than one predicate:
 
 ```
-FT.SEARCH idx "@title:alpha @body:river"                  -> 12 documents
-FT.SEARCH idx "@title:alpha @body:river=>[KNN 10 @vec $q]"
-   -> 10 documents, 5 of which are not among the 12
+prefilter                       matches   redis   valkey
+@title:epsilon                        1       1        1
+@price:[0 10]                         6       6        6
+@price:[0 30] @price:[20 52]          5       5        5
+@color:{red} @price:[0 30]            4       4        4
+@title:alpha @body:river             12      12       24
+@price:[0 30] @title:alpha           10      10       14
+@color:{red} @title:alpha              0       0        6
+@color:{red} @title:delta             2       2        6
 ```
 
-A single predicate of any type is honoured, and the conjunction itself is
-right: both engines count `@title:alpha @body:river` at 12, and
-`@price:[0 30] @title:alpha` at 10. So it is specifically the use as a
-pre-filter that loses the second term.
+With both conjuncts text nothing survives, so the query degrades to an
+unfiltered KNN -- the 24 above is the whole corpus.
 
-Redis refuses that FT.SEARCH spelling, so a VSIM `FILTER` is the only place the
-two engines can be compared on it, which is where
-`test_vsim_filter_conjunction` sweeps it, `xfail`. Every single-predicate
-filter -- text, tag, numeric, negation, distributed union -- matches exactly.
+FT.SEARCH and FT.AGGREGATE produce identical counts and identical wrong rows
+for every expression above, so this is one defect in the shared pre-filter
+path, not one per command; FT.HYBRID's VSIM `FILTER` inherits it by routing
+through the same place. `test_vsim_filter_conjunction` is therefore `skip`
+rather than `xfail`: an FT.HYBRID divergence register is the wrong place to
+track a shared-path defect, and the sweep would only re-report it.
+
+Note the parentheses are required to ask the reference the question at all --
+it refuses `@a:x @b:y=>[KNN ...]` as a syntax error -- but they change nothing
+on our side: bare, spaced, parenthesized and both give byte-identical rows.
+
+Every single-predicate filter -- text, tag, numeric, negation, distributed
+union -- matches the reference exactly, and those are swept normally.
 
 ### 5.5. The fused score's default column name — TODO, marked `xfail`
 

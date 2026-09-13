@@ -42,12 +42,6 @@ class FilterRecord : public expr::Expression::Record {
     return mutated_attributes_;
   }
 
-  // Counts a NUMERIC field whose raw value would not parse as a double.
-  // A plain increment: the filter is evaluated only on the main thread.
-  void RecordNumericConversionFailure() const {
-    ++stats_.filter_numeric_conversion_failures;
-  }
-
  private:
   const IndexSchema::MutatedAttributes& mutated_attributes_;
   IndexSchema::Stats& stats_;

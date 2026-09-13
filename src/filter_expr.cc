@@ -43,15 +43,24 @@ expr::Value FilterAttributeReference::GetValue(
     return expr::Value(expr::Value::Nil("Field Missing"));
   }
   auto data_view = itr->second.GetStringView();
-  if (type_ == indexes::IndexerType::kNumeric) {
+  // Whether a NUMERIC field is a *runtime number* to a FILTER depends on the
+  // key type, and Redisearch draws the same line:
+  //
+  //   JSON - the document carries real types, so a NUMERIC field is a number.
+  //          `@price > @rating` compares numerically.
+  //   HASH - every value is bytes, so a NUMERIC field is not. `@price >
+  //   @rating`
+  //          compares byte by byte, and only a numeric literal or a
+  //          number-returning function makes a comparison numeric.
+  //
+  // Parsing unconditionally would make the HASH case numeric; never parsing
+  // would make the JSON case a string comparison. Both diverge.
+  if (type_ == indexes::IndexerType::kNumeric &&
+      data_type_ == data_model::ATTRIBUTE_DATA_TYPE_JSON) {
     double d;
     if (absl::SimpleAtod(data_view, &d)) {
       return expr::Value(d);
     }
-    // The NUMERIC field's raw value is not a parseable number. Count it
-    // (surfaced as FT.INFO filter_numeric_conversion_failures) and fall
-    // through, treating the raw bytes as a string value.
-    filter_record.RecordNumericConversionFailure();
   }
   return expr::Value(data_view);
 }

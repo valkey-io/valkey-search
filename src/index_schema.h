@@ -127,11 +127,8 @@ class IndexSchema : public KeyspaceEventSubscription,
     ResultCnt<std::atomic<uint64_t>> subscription_add;
     std::atomic<uint32_t> document_cnt{0};
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
-    // FILTER counters. Both are written only during index-time FILTER
-    // evaluation, which runs on the main thread, so they are plain integers.
-    // Number of times a FILTER expression referenced a NUMERIC field whose
-    // raw value could not be parsed as a double.
-    uint64_t filter_numeric_conversion_failures{0};
+    // Written only during index-time FILTER evaluation, which runs on the
+    // main thread, so it is a plain integer.
     // Number of documents excluded from the index because they did not satisfy
     // the FILTER expression.
     uint64_t filter_rejected_keys{0};

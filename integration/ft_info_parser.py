@@ -146,11 +146,6 @@ class FTInfoParser:
         return self.parsed_data.get("hash_indexing_failures", 0)
 
     @property
-    def filter_numeric_conversion_failures(self) -> int:
-        """Get the number of FILTER numeric-field conversion failures."""
-        return self.parsed_data.get("filter_numeric_conversion_failures", 0)
-
-    @property
     def filter_rejected_keys(self) -> int:
         """Get the number of keys excluded from the index by the FILTER."""
         return self.parsed_data.get("filter_rejected_keys", 0)

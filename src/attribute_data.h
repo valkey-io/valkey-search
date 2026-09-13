@@ -54,6 +54,14 @@ class AttributeData {
     if (auto *str = std::get_if<vmsdk::UniqueValkeyString>(&data_)) {
       return str->get() ? vmsdk::ToStringView(str->get()) : absl::string_view{};
     }
+    // A vector's payload is its raw bytes. Returning empty here instead would
+    // make a FILTER read every vector field as "", so `@vec == ''` matched
+    // any key that had one; Redis compares the value itself.
+    if (auto *vec = std::get_if<indexes::VectorRecordWithSize>(&data_)) {
+      if (vec->vector_record) {
+        return absl::string_view(vec->vector_record->GetRawVector(), vec->size);
+      }
+    }
     return {};
   }
 

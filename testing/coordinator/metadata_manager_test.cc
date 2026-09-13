@@ -27,6 +27,7 @@
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/util.h"
+#include "src/metrics.h"
 #include "src/version.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
@@ -1868,6 +1869,22 @@ TEST_F(MetadataManagerTest, TestSaveWrongTimeIsNoOp) {
 
   VMSDK_EXPECT_OK(test_metadata_manager_->SaveMetadata(
       fake_ctx, &fake_rdb, VALKEYMODULE_AUX_BEFORE_RDB));
+}
+
+// The global metadata section is not an index, so it must not advance the
+// restore progress counter. The total it is compared against comes from
+// SnapshotInfo::num_indexes, which excludes this section.
+TEST_F(MetadataManagerTest, TestLoadMetadataDoesNotCountAsCompletedIndex) {
+  auto fake_rdb_io = reinterpret_cast<ValkeyModuleIO*>(0xBADF00D1);
+  SafeRDB fake_rdb(fake_rdb_io);
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->set_supplemental_count(0);
+
+  Metrics::GetStats().rdb_restore_completed_indexes = 0;
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      fake_ctx, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_completed_indexes, 0);
 }
 
 class MetadataManagerTimestampTest : public MetadataManagerTest {

@@ -141,6 +141,24 @@ void RegisterRDBCallback(data_model::RDBSectionType type,
 }
 void ClearRDBCallbacks() { kRegisteredRDBSectionCallbacks.clear(); }
 
+/* Fully consume the supplemental content of an RDBSection that we are not
+ * handing to a load callback. Both the unknown-section path and the
+ * framework-owned SnapshotInfo path need this: leaving supplemental records
+ * unread desynchronizes the stream and causes a confusing parse failure on
+ * the *next* section rather than here. */
+static absl::Status DrainSupplementalContent(
+    SupplementalContentIter &&supplemental_iter) {
+  while (supplemental_iter.HasNext()) {
+    VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto header,
+                           supplemental_iter.Next());
+    auto chunk_it = supplemental_iter.IterateChunks();
+    while (chunk_it.HasNext()) {
+      VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto chunk, chunk_it.Next());
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   // Parse the header
   if (encver != kCurrentEncVer) {
@@ -167,10 +185,22 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
   VMSDK_LOG(NOTICE, ctx) << "Loading RDB from version: " << rdb_version
                          << " with " << rdb_section_count << " sections.";
 
+  /* Derive the index count for RDBs written before RDB_SECTION_SNAPSHOT_INFO
+   * existed. Such RDBs contain one section per index plus, in coordinated
+   * cluster mode, one GLOBAL_METADATA section. This assumes the RDB was
+   * written in the same mode we are reading it in, which holds because
+   * restoring across CMD/CME is not supported. A SnapshotInfo section, when
+   * present, replaces this estimate with the exact count. */
+  const bool coordinator_mode = kRegisteredRDBSectionCallbacks.contains(
+      data_model::RDB_SECTION_GLOBAL_METADATA);
+  const uint64_t derived_total_indexes =
+      (coordinator_mode && rdb_section_count > 0) ? rdb_section_count - 1
+                                                  : rdb_section_count;
+
   // Initialize restore progress tracking
   auto rdb_load_start = absl::Now();
   Metrics::GetStats().rdb_restore_in_progress = true;
-  Metrics::GetStats().rdb_restore_total_indexes = rdb_section_count;
+  Metrics::GetStats().rdb_restore_total_indexes = derived_total_indexes;
   Metrics::GetStats().rdb_restore_completed_indexes = 0;
   Metrics::GetStats().rdb_restore_current_index_keys_total = 0;
   Metrics::GetStats().rdb_restore_current_index_keys_loaded = 0;
@@ -180,10 +210,34 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
     Metrics::GetStats().rdb_restore_in_progress = false;
   };
 
+  bool seen_snapshot_info = false;
+
   // Begin RDBSection iteration
   RDBSectionIter it(rdb, rdb_section_count);
   while (it.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto section, it.Next());
+
+    /* SnapshotInfo is owned by the RDB framework, not by a component, so it
+     * has no registered callback. */
+    if (section->type() == data_model::RDB_SECTION_SNAPSHOT_INFO) {
+      if (section->has_snapshot_info_contents()) {
+        if (seen_snapshot_info) {
+          VMSDK_LOG(WARNING, ctx)
+              << "Multiple RDB_SECTION_SNAPSHOT_INFO sections in RDB; using "
+                 "the last one.";
+        }
+        Metrics::GetStats().rdb_restore_total_indexes =
+            section->snapshot_info_contents().num_indexes();
+        seen_snapshot_info = true;
+      } else {
+        VMSDK_LOG(WARNING, ctx)
+            << "RDB_SECTION_SNAPSHOT_INFO section has no contents; ignoring "
+               "it and retaining the derived index total.";
+      }
+      VMSDK_RETURN_IF_ERROR(
+          DrainSupplementalContent(it.IterateSupplementalContent()));
+      continue;
+    }
 
     if (kRegisteredRDBSectionCallbacks.contains(section->type())) {
       auto &load_callback =
@@ -194,15 +248,8 @@ absl::Status PerformRDBLoad(ValkeyModuleCtx *ctx, SafeRDB *rdb, int encver) {
       VMSDK_LOG(WARNING, ctx)
           << "Ignoring unknown RDB section with type "
           << data_model::RDBSectionType_Name(section->type());
-      // Need to consume all supplemental data
-      auto supp_it = it.IterateSupplementalContent();
-      while (supp_it.HasNext()) {
-        VMSDK_ASSIGN_OR_RETURN(auto _, supp_it.Next());
-        auto chunk_it = supp_it.IterateChunks();
-        while (chunk_it.HasNext()) {
-          VMSDK_ASSIGN_OR_RETURN(auto _, chunk_it.Next());
-        }
-      }
+      VMSDK_RETURN_IF_ERROR(
+          DrainSupplementalContent(it.IterateSupplementalContent()));
     }
   }
 
@@ -238,7 +285,7 @@ int AuxLoadCallback(ValkeyModuleIO *rdb, int encver, int when) {
 
 absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
   // Aggregate header information from save callbacks first
-  int rdb_section_count = 0;
+  int content_section_count = 0;
   vmsdk::ValkeyVersion min_version = 0;  // 0.0.0 by default
   absl::flat_hash_map<data_model::RDBSectionType, int> section_counts;
   for (auto &[type, callbacks] : kRegisteredRDBSectionCallbacks) {
@@ -248,21 +295,48 @@ absl::Status PerformRDBSave(ValkeyModuleCtx *ctx, SafeRDB *rdb, int when) {
       CHECK(this_version.ok());
       min_version = std::max(min_version, *this_version);
     }
-    rdb_section_count += section_counts[type];
+    content_section_count += section_counts[type];
   }
 
-  // Do nothing to satisfy AuxSave2 if there are no RDBSections.
-  if (rdb_section_count == 0) {
+  /* Do nothing to satisfy AuxSave2 if there are no RDBSections. Note that the
+   * SnapshotInfo section below is deliberately not counted here: it must never
+   * be the reason an otherwise empty aux payload gets written. */
+  if (content_section_count == 0) {
     return absl::OkStatus();
   }
 
+  /* find() rather than operator[] so we do not insert a spurious zero entry
+   * into section_counts, which the save loop below iterates. */
+  int num_indexes = 0;
+  auto index_count_it =
+      section_counts.find(data_model::RDB_SECTION_INDEX_SCHEMA);
+  if (index_count_it != section_counts.end()) {
+    num_indexes = index_count_it->second;
+  }
+
+  const int rdb_section_count = content_section_count + 1;
+
   VMSDK_LOG(NOTICE, ctx) << "Saving " << rdb_section_count
-                         << " ValkeySearch RDB sections with minimum version "
+                         << " ValkeySearch RDB sections (" << num_indexes
+                         << " indexes) with minimum version "
                          << vmsdk::ValkeyVersion(min_version).ToString();
 
   // Save the header
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(min_version.ToInt()));
   VMSDK_RETURN_IF_ERROR(rdb->SaveUnsigned(rdb_section_count));
+
+  /* Record the real index count so restore does not have to infer it from the
+   * section count. Written here, before the callback loop, so that its
+   * position is deterministic: kRegisteredRDBSectionCallbacks is a hash map
+   * and the order of the component sections below is unspecified. This section
+   * deliberately does not contribute to min_version -- raising the minimum
+   * would make older modules reject the entire RDB instead of skipping this
+   * one unknown section. */
+  data_model::RDBSection snapshot_info;
+  snapshot_info.set_type(data_model::RDB_SECTION_SNAPSHOT_INFO);
+  snapshot_info.mutable_snapshot_info_contents()->set_num_indexes(num_indexes);
+  VMSDK_RETURN_IF_ERROR(
+      rdb->SaveStringBuffer(snapshot_info.SerializeAsString()));
 
   // Now do the save of the contents
   for (auto &section_count : section_counts) {

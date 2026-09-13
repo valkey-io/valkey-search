@@ -652,6 +652,99 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  *")
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load *")
 
+    def test_aggregate_loadall_stage(self, key_type, dialect, vector_data_type):
+        """One pipeline stage after `LOAD *`, once per stage.
+
+        `LOAD *` asks for the whole record, and on a JSON index the whole
+        record is a single `$` column holding the root document. A `@name` in
+        a following stage resolves against no column of that blob, so the
+        field has to be fetched alongside it -- Redisearch emits the named
+        field *and* `$` together. HASH is run too so both key types are held
+        to one expectation, and on HASH it already works: the whole record
+        arrives keyed by field name.
+
+        The stage list is the five that build a pipeline stage in
+        `CreateAggregateParser`: APPLY, FILTER, GROUPBY, LIMIT and SORTBY.
+        Everything else that parser accepts (DIALECT, TIMEOUT, PARAMS,
+        SCORER, ADDSCORES, SLOP, INORDER, VERBATIM) is a query-level option
+        and builds no stage.
+
+        Redisearch auto-loads for SORTBY and for GROUPBY/REDUCE, but NOT for
+        APPLY or FILTER: those error with "Property `n1` not loaded nor in
+        pipeline", and the error has nothing to do with `LOAD *` -- plain
+        `load 1 @__key apply @n1*2 as doubled` errors the same way. So the
+        APPLY and FILTER cases below record an error, not a loaded column.
+        `compare_results` passes unconditionally whenever the reference
+        engine raised, so those two cases can never fail; they are here to
+        pin the reference behavior in the answer file, and a regeneration
+        that stops recording an error is the signal to revisit them. The
+        GROUPBY, SORTBY and LIMIT cases are the ones that actually measure.
+
+        Row alignment: `LOAD *` takes no field list, so `@__key` cannot be
+        loaded to align on and the reference answers carry no `__key` column.
+        The GROUPBY and SORTBY cases give the harness their own sort keys;
+        the rest fall back to the whole-row-content tiebreak in
+        `row_sort_key`, which is unique per row here because every document's
+        `$` blob is distinct.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # APPLY over a field that only `LOAD *` brings in.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * apply 1+@n1 as computed"
+        )
+        # FILTER over two such fields. n1 < n2 is n1 < -n1, so the surviving
+        # set is the negative half of n1 -- a deterministic subset, not an
+        # arbitrary one.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * filter @n1<@n2")
+        # GROUPBY on a field only `LOAD *` brings in. t1 is unique per
+        # document, so a working group key yields one group per document and
+        # a broken one collapses them into a single group -- a difference the
+        # harness reports as a row-count mismatch rather than a value one.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * groupby 1 @t1 reduce count 0 as cnt"
+        )
+        # LIMIT wider than the data set. A narrower one would take an
+        # arbitrary slice, since nothing has ordered the rows yet; the
+        # SORTBY-then-LIMIT case below covers a real truncation.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * limit 0 100")
+        # SORTBY on a field only `LOAD *` brings in.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc")
+        # SORTBY on a tag field, so the name survives a string stage too.
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load * sortby 2 @t1 asc")
+
+    def test_aggregate_loadall_two_stages(self, key_type, dialect, vector_data_type):
+        """Two pipeline stages after `LOAD *`.
+
+        A second stage reads what the first one produced, so these pin that
+        the field `LOAD *` had to bring in survives one hop further down the
+        pipeline than the single-stage cases above.
+
+        As above, the APPLY-then-SORTBY case records a reference error and so
+        cannot fail; APPLY does not auto-load its operand on either engine.
+        The GROUPBY-then-APPLY case does measure, because there the APPLY
+        reads a reducer output that is already in the pipeline rather than a
+        stored field.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+
+        # APPLY then SORTBY: the sort key is the APPLY output, which exists
+        # only if the APPLY could read the field `LOAD *` brought in.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * apply @n1*2 as dbl sortby 2 @dbl asc"
+        )
+        # SORTBY then LIMIT: a real truncation, made deterministic by the sort
+        # in front of it.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * sortby 2 @n1 asc limit 0 5"
+        )
+        # GROUPBY then APPLY: the reducer argument is a second field that
+        # `LOAD *` has to bring in, and the APPLY re-reads the reducer's own
+        # output name afterwards.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load * groupby 1 @t1 reduce sum 1 @n1 as total apply 1+@total as bumped"
+        )
+
     def test_aggregate_autoload_groupby(self, key_type, dialect, vector_data_type):
         """A field named by GROUPBY or by a REDUCE argument must be fetched even
         when no LOAD clause covers it. Redisearch loads such fields implicitly;

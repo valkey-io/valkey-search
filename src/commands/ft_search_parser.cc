@@ -295,6 +295,15 @@ absl::Status SearchCommand::PostParseQueryString() {
     }
   }
 
+  // A bare FT.SEARCH returns the whole record; RETURN narrows it to a list and
+  // NOCONTENT / RETURN 0 asks for nothing. Those were previously distinguished
+  // downstream by `return_attributes` being empty, which FT.AGGREGATE can no
+  // longer rely on now that `LOAD *` pairs a whole-record request with the
+  // named paths its pipeline stages need. Deriving the flag here keeps
+  // FT.SEARCH behavior exactly as it was while letting the fetch path read one
+  // flag for both commands.
+  all_content = !no_content && return_attributes.empty();
+
   return absl::OkStatus();
 }
 

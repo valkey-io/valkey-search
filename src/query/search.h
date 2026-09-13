@@ -217,6 +217,26 @@ struct SearchParameters {
   LimitParameter limit;
   uint64_t timeout_ms{0};
   bool no_content{false};
+  // True when the caller asked for the whole record, alongside whatever
+  // `return_attributes` names:
+  //
+  //   all_content  return_attributes   fetched
+  //   -----------  -----------------   -------------------------------------
+  //   false        empty               nothing   (NOCONTENT, RETURN 0, LOAD 0)
+  //   false        list                just that list
+  //   true         empty               the whole record   (LOAD *)
+  //   true         list                the whole record *and* that list
+  //
+  // The last row is why this is a flag rather than "the list is empty". The
+  // two key types spell a whole-record fetch differently: a HASH fetch asks
+  // for no identifier in particular and the scan keeps every field, while a
+  // JSON fetch must name the root `$` explicitly. So on JSON the root can sit
+  // in the identifier list next to the named paths a pipeline stage needs,
+  // and both are fetched together; on HASH the named list is redundant.
+  //
+  // FT.AGGREGATE sets this from `LOAD *`. FT.SEARCH derives it in
+  // PostParseQueryString, where a bare search means the whole record.
+  bool all_content{false};
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};

@@ -192,6 +192,7 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         *,
         combine=("RRF", ["CONSTANT", "60"]),
         knn=("2", ["K", "10"]),
+        vector_field="@vec",
         vector="near",
         search_score_as="text_score",
         vector_score_as=None,
@@ -220,7 +221,7 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         ]
         if search_score_as:
             cmd += ["YIELD_SCORE_AS", search_score_as]
-        cmd += ["VSIM", "@vec", "$q"]
+        cmd += ["VSIM", vector_field, "$q"]
         if knn is not None:
             knn_count, knn_args = knn
             cmd += ["KNN", knn_count, *knn_args]
@@ -308,6 +309,39 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for knn in KNN_CLAUSES:
             for vector in QUERY_VECTORS:
                 self.hybrid(key_type, "@title:alpha", knn=knn, vector=vector)
+
+    def test_distance_metrics(self, key_type):
+        """The same vectors under each distance metric.
+
+        A vector arm reports a similarity derived from its distance, and the
+        derivation differs per metric -- `1/(1+d)` for L2, `(1+d)/2` for inner
+        product, `1-d/2` for cosine. Sweeping one metric left the other two
+        formulas uncompared, which is how an inner-product arm came to report
+        the same similarity for each of its three best matches.
+
+        Inner product is the interesting one: its distance is `1 - dot` and so
+        unbounded below, which is the only way a negative distance reaches
+        fusion at all.
+        """
+        self.setup_data(key_type)
+        for field in ["@vec", "@vec_ip", "@vec_cos"]:
+            for vector in QUERY_VECTORS:
+                for query in ["@title:alpha", "@body:stone", "@title:omega"]:
+                    self.hybrid(key_type, query, vector_field=field,
+                                vector=vector,
+                                vector_score_as="vector_score")
+
+    def test_distance_metrics_under_linear(self, key_type):
+        """And through LINEAR, which sums the arm scores rather than their
+        ranks, so a wrong similarity moves the fused score directly instead of
+        being absorbed by the ranking."""
+        self.setup_data(key_type)
+        for field in ["@vec", "@vec_ip", "@vec_cos"]:
+            for weights in [["ALPHA", "0.5", "BETA", "0.5"],
+                            ["ALPHA", "0", "BETA", "1"]]:
+                self.hybrid(key_type, "@title:alpha", vector_field=field,
+                            combine=("LINEAR", weights),
+                            vector_score_as="vector_score")
 
     def test_vector_score_alias(self, key_type):
         """The VSIM arm's own score, surfaced through YIELD_SCORE_AS."""

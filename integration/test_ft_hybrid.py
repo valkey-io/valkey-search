@@ -1373,26 +1373,33 @@ class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
         assert abs(by_key[b"c:orth"] - 1.0) < 1e-5
         assert abs(by_key[b"c:opposed"] - 2.0) < 1e-5
 
-    def test_rrf_over_a_negative_distance(self):
-        """The similarity a negative distance produces is slightly above 1, and
-        it has to reach the reply that way -- the guard in the conversion is
-        for a distance at or below -1, which cosine cannot reach, so it must
-        not fire here and collapse the score to zero."""
+    def test_similarity_follows_the_cosine_formula(self):
+        """A cosine arm reports `1 - distance / 2`, which is what the reference
+        engine reports and what keeps the value in [0, 1] across the metric's
+        whole [0, 2] range.
+
+        A negative distance therefore lands just above 1 rather than being
+        clamped, and an opposed vector lands at 0 rather than at the 1/3 a
+        `1 / (1 + d)` mapping would give it."""
         client = self.server.get_new_client()
         self.setup_index(client)
-        rows = self._rrf_rows = self._rows(client, "RRF", "CONSTANT", "60")
+        rows = self._rows(client, "RRF", "CONSTANT", "60")
 
         same = float(rows[b"c:same"][b"v"])
-        assert same > 1.0, f"negative distance should give v > 1, got {same}"
-        assert same < 1.001
-        # The other three are ordered by distance, and none collapsed.
-        assert 0.0 < float(rows[b"c:orth"][b"v"]) < same
-        assert 0.0 < float(rows[b"c:opposed"][b"v"]) < float(
-            rows[b"c:orth"][b"v"])
-        # Every fused score is a finite positive number.
+        orth = float(rows[b"c:orth"][b"v"])
+        opposed = float(rows[b"c:opposed"][b"v"])
+
+        # The self-distance is slightly negative, so the similarity is slightly
+        # above 1 -- not clamped, and not 1 exactly.
+        assert 1.0 < same < 1.001, f"expected just above 1, got {same}"
+        assert abs(orth - 0.5) < 1e-5, f"orthogonal should be 0.5, got {orth}"
+        # Opposed is distance 2, so similarity 0 to within float error.
+        assert abs(opposed) < 1e-5, f"opposed should be 0, got {opposed}"
+        assert same > orth > opposed
+        # And every fused score is a finite number.
         for key, row in rows.items():
             h = float(row[b"h"])
-            assert h > 0.0 and h == h and h != float("inf"), f"{key}: h={h}"
+            assert h == h and abs(h) != float("inf"), f"{key}: h={h}"
 
     def test_linear_over_a_negative_distance(self):
         """LINEAR sums the two arms' scores with the given weights, so the
@@ -1408,6 +1415,105 @@ class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
             actual = float(row[b"h"])
             assert abs(actual - expected) < 1e-5, \
                 f"{key}: fused {actual} != 0.25*s + 0.75*v = {expected}"
+
+
+# =============================================================================
+# An inner-product arm, whose distance is unbounded below.
+#
+# IP distance is `1 - dot`, so a document whose dot product with the query is
+# 500 arrives at -499. That is the only metric that reaches far below zero, and
+# the similarity it maps to is `(1 + d) / 2` -- an affine map, because no
+# bounded one exists over an unbounded domain. A single `1 / (1 + d)` mapping
+# used to drive those through a pole and clamp them, so the three best matches
+# all reported the same similarity and the worst reported the largest.
+# =============================================================================
+class TestFtHybridInnerProduct(ValkeySearchTestCaseBase):
+    INDEX = "ipidx"
+    Q = _vec(10.0, 0.0, 0.0, 0.0)
+    # dot with the query, and therefore distance 1 - dot: 0, -9, -49, -499.
+    DOCS = {
+        "p:small": _vec(0.1, 0.0, 0.0, 0.0),
+        "p:unit": _vec(1.0, 0.0, 0.0, 0.0),
+        "p:big": _vec(5.0, 0.0, 0.0, 0.0),
+        "p:huge": _vec(50.0, 0.0, 0.0, 0.0),
+    }
+
+    def setup_index(self, client: Valkey) -> None:
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "HASH", "PREFIX", "1", "p:",
+            "SCHEMA", "title", "TEXT",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "IP")
+        for key, vector in self.DOCS.items():
+            client.hset(key, mapping={"title": "hello world", "vec": vector})
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == len(self.DOCS),
+            timeout=10)
+
+    @staticmethod
+    def _rec_to_dict(rec):
+        return {bytes(rec[i]): rec[i + 1] for i in range(0, len(rec), 2)}
+
+    def _distances(self, client: Valkey):
+        result = client.execute_command(
+            "FT.SEARCH", self.INDEX, "*=>[KNN 4 @vec $q AS d]",
+            "RETURN", "1", "d", "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+        return {result[i]: float(self._rec_to_dict(result[i + 1])[b"d"])
+                for i in range(1, len(result), 2)}
+
+    def _arm_scores(self, client: Valkey, method: str, *opts):
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello", "YIELD_SCORE_AS", "s",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "4", "YIELD_SCORE_AS", "v",
+            "COMBINE", method, str(len(opts) + 2), *opts,
+            "YIELD_SCORE_AS", "h",
+            "LOAD", "1", "@__key", "LIMIT", "0", "4",
+            "PARAMS", "2", "q", self.Q)
+        return [self._rec_to_dict(rec) for rec in result[1:]]
+
+    def test_distances_really_go_below_minus_one(self):
+        """The premise, and the thing no other metric provides."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        d = self._distances(client)
+        assert abs(d[b"p:small"] - 0.0) < 1e-4
+        assert abs(d[b"p:unit"] - -9.0) < 1e-4
+        assert abs(d[b"p:big"] - -49.0) < 1e-4
+        assert abs(d[b"p:huge"] - -499.0) < 1e-3
+
+    def test_similarity_follows_the_inner_product_formula(self):
+        """`(1 + d) / 2`, for every document including the three whose distance
+        is below -1. Those used to be clamped to a single value, which lost the
+        ordering between them entirely."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        distances = self._distances(client)
+        rows = {r[b"__key"]: r for r in self._arm_scores(client, "RRF",
+                                                         "CONSTANT", "60")}
+        for key, distance in distances.items():
+            actual = float(rows[key][b"v"])
+            expected = (1.0 + distance) / 2.0
+            assert abs(actual - expected) < 1e-3, (
+                f"{key}: distance {distance} should give {expected}, "
+                f"got {actual}")
+        # All four are distinct, which is what the clamp destroyed.
+        values = {float(r[b"v"]) for r in rows.values()}
+        assert len(values) == len(self.DOCS), f"collapsed to {values}"
+
+    def test_linear_sums_the_unbounded_similarity(self):
+        """LINEAR reads the similarity rather than the rank, so an unbounded
+        one has to flow through the weighted sum unaltered."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for row in self._arm_scores(client, "LINEAR",
+                                    "ALPHA", "0.5", "BETA", "0.5"):
+            expected = 0.5 * float(row[b"s"]) + 0.5 * float(row[b"v"])
+            actual = float(row[b"h"])
+            assert abs(actual - expected) < 1e-3, (
+                f"{row[b'__key']}: fused {actual} != {expected}")
 
 
 # =============================================================================

@@ -1025,16 +1025,24 @@ def compute_hybrid_data_sets():
         "hash": "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {}",
         "json": "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA {}",
     }
-    vector_def = (
-        f"VECTOR HNSW 6 TYPE FLOAT32 DIM {HYBRID_VECTOR_DIM} DISTANCE_METRIC L2"
-    )
+    def vector_def(metric):
+        return (f"VECTOR HNSW 6 TYPE FLOAT32 DIM {HYBRID_VECTOR_DIM} "
+                f"DISTANCE_METRIC {metric}")
+
+    # Three vector fields over the same vectors, one per distance metric. The
+    # similarity a vector arm reports is a different function of the distance
+    # for each, so a sweep that only ever used one metric could not see two of
+    # the three formulas. `vec` keeps its name and its place, so every existing
+    # answer is unaffected.
     # NOSTEM is required: see the module comment above.
     field_defs = [
         ("title", "TEXT NOSTEM"),
         ("body", "TEXT NOSTEM"),
         ("color", "TAG"),
         ("price", "NUMERIC"),
-        ("vec", vector_def),
+        ("vec", vector_def("L2")),
+        ("vec_ip", vector_def("IP")),
+        ("vec_cos", vector_def("COSINE")),
     ]
 
     for key_type in ["hash", "json"]:
@@ -1054,6 +1062,8 @@ def compute_hybrid_data_sets():
                     "color": HYBRID_COLORS[i % len(HYBRID_COLORS)],
                     "price": (i * 7) % 53,
                     "vec": array_encode(key_type, _hybrid_vector(i)),
+                    "vec_ip": array_encode(key_type, _hybrid_vector(i)),
+                    "vec_cos": array_encode(key_type, _hybrid_vector(i)),
                 },
             ))
         data[name][SETS_KEY(key_type)] = docs

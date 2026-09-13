@@ -114,6 +114,11 @@ struct MultiSearchParameters {
   // Recorded at parse time because `arms` is emptied at dispatch (each
   // MultiArmShim is moved into SearchAsync), so it cannot be re-derived later.
   std::vector<bool> per_arm_score_is_distance;
+  // The metric each distance came from, captured for the same reason:
+  // turning a distance into a similarity depends on it, and by fusion
+  // time the arm is gone. UNSPECIFIED for an arm carrying a relevance
+  // score rather than a distance.
+  std::vector<data_model::DistanceMetric> per_arm_distance_metric;
 
   // ----- fusion + post-pipeline -----
   FusionConfig fusion;

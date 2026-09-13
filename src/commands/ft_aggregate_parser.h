@@ -7,6 +7,8 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_AGGREGATE_PARSER_H
 #define VALKEYSEARCH_SRC_COMMANDS_FT_AGGREGATE_PARSER_H
 
+#include <limits>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
@@ -358,7 +360,12 @@ class SortBy : public Stage {
     Direction direction_;
     std::unique_ptr<expr::Expression> expr_;
   };
-  size_t max_{10};
+  // Redis keeps 10 sorted records when SORTBY is given neither a MAX nor an
+  // adjacent LIMIT to derive a bound from. ResolveSortByBounds() replaces this
+  // once the whole pipeline is known.
+  static constexpr size_t kDefaultMax = 10;
+  static constexpr size_t kUnbounded = std::numeric_limits<size_t>::max();
+  size_t max_{kDefaultMax};
   absl::InlinedVector<SortKey, 4> sortkeys_;
   void Dump(std::ostream& os) const override {
     os << "SORTBY:";
@@ -375,11 +382,16 @@ class SortBy : public Stage {
       }
       os << k.expr_.get();
     }
-    if (max_) {
+    if (max_ != kUnbounded) {
       os << " MAX:" << max_;
     }
   }
 };
+
+// Fixes up every SORTBY stage's retention bound once the whole pipeline has
+// been parsed, because the bound depends on the LIMIT stages around it. Must
+// run after parsing and before execution.
+void ResolveSortByBounds(AggregateParameters& params);
 
 absl::StatusOr<std::unique_ptr<QueryCommand>> ParseAggregateParameters(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc,

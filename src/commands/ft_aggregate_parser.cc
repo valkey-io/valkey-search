@@ -6,6 +6,9 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include <algorithm>
+#include <limits>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
@@ -422,6 +425,63 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
         AddRecordAttribute(name, name, name, indexes::IndexerType::kNone);
   }
   return std::make_unique<Attribute>(name, new_index);
+}
+
+// SORTBY's retention bound is a property of the whole pipeline, not of the
+// SORTBY clause alone. Measured on redis:latest over 10000 documents:
+//
+//   SORTBY, no MAX, no LIMIT          ->    10 rows   (the default)
+//   SORTBY MAX 50, no LIMIT           ->    50 rows   (MAX sets the bound)
+//   SORTBY MAX 0, no LIMIT            ->    10 rows   (MAX 0 means "unset")
+//   SORTBY + LIMIT 0 1000             ->  1000 rows   (a LIMIT raises it)
+//   SORTBY MAX 5 + LIMIT 0 100        ->   100 rows   (a LIMIT outranks MAX)
+//   SORTBY + LIMIT 500 100            ->   100 rows   (the offset counts too)
+//   LIMIT 0 1000 then SORTBY          ->  1000 rows   (either side counts)
+//
+// Only a LIMIT directly beside the SORTBY counts, on either side. Redisearch
+// folds a SORTBY and a neighbouring LIMIT into one pipeline step, so the two
+// see the same records. Once another stage sits between them -- a GROUPBY,
+// say -- the record count changes and that LIMIT's window says nothing about
+// what the sort has to retain.
+//
+// Before this, SORTBY always truncated to its own max_, so a later LIMIT could
+// only ever see 10 records: `LIMIT 0 1000` returned 10, and `LIMIT 500 100`
+// returned nothing at all, because the offset fell past the end of the ten
+// records that survived. Paging through sorted results was broken beyond the
+// first page.
+void ResolveSortByBounds(AggregateParameters &params) {
+  auto &stages = params.stages_;
+  for (size_t i = 0; i < stages.size(); ++i) {
+    auto *sortby = dynamic_cast<SortBy *>(stages[i].get());
+    if (sortby == nullptr) {
+      continue;
+    }
+    const size_t parsed_max = sortby->max_;
+    // MAX 0 is how Redis spells "no MAX", so it falls back to the default.
+    size_t resolved = parsed_max == 0 ? SortBy::kDefaultMax : parsed_max;
+
+    // Only an immediate neighbour bounds this SORTBY. A LIMIT further along
+    // the pipeline is separated by a stage that changes the record count, so
+    // its window is not a bound on what the sort has to keep.
+    const Limit *adjacent = i + 1 < stages.size()
+                                ? dynamic_cast<Limit *>(stages[i + 1].get())
+                                : nullptr;
+    if (adjacent == nullptr && i > 0) {
+      adjacent = dynamic_cast<Limit *>(stages[i - 1].get());
+    }
+    if (adjacent != nullptr) {
+      // Keep at least what that LIMIT can ask for, offset included. Saturate
+      // rather than wrap: a huge offset just means "retain everything".
+      const size_t need =
+          adjacent->offset_ > SortBy::kUnbounded - adjacent->limit_
+              ? SortBy::kUnbounded
+              : adjacent->offset_ + adjacent->limit_;
+      resolved = std::max(resolved, need);
+    }
+    sortby->max_ = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "sortby_max_follows_limit", [&] { return resolved; },
+        [&] { return parsed_max; });
+  }
 }
 
 std::ostream &operator<<(std::ostream &os, const AggregateParameters &agg) {

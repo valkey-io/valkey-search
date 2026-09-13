@@ -549,6 +549,97 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
 
+    def test_aggregate_sortby_limit_window(self, key_type, dialect, vector_data_type):
+        """SORTBY paired with a LIMIT that reaches past SORTBY's own bound.
+
+        SORTBY keeps only a bounded number of records, and every other
+        SORTBY+LIMIT case in this suite asks for at most 5 rows at an offset of
+        at most 2, which fits inside that bound whatever it is. These do not:
+        `sortable numbers` holds 15 documents, so a count of 15 exceeds the
+        bound and an offset of 12 starts past it. Without them a SORTBY that
+        silently truncates to its default looks correct.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        # Count past the bound: all 15 rows, not the first few.
+        self.check(dialect, f"{base} limit 0 15")
+        # Offset past the bound: the last 3 rows, not an empty reply.
+        self.check(dialect, f"{base} limit 12 5")
+        # An offset beyond the data is empty for a different reason, and should
+        # stay empty.
+        self.check(dialect, f"{base} limit 20 5")
+        # An explicit MAX smaller than the LIMIT: the LIMIT wins.
+        self.check(dialect, f"{base} max 3 limit 0 15")
+        # MAX 0 means no MAX, so the default bound applies.
+        self.check(dialect, f"{base} max 0")
+        # MAX alone sets the bound when no LIMIT follows.
+        self.check(dialect, f"{base} max 12")
+        # A LIMIT ahead of the SORTBY has already bounded the stream.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 limit 0 14 sortby 2 @n1 asc")
+
+    def test_aggregate_sortby_bound_across_a_stage(self, key_type, dialect, vector_data_type):
+        """A LIMIT bounds a SORTBY only when the two stages are adjacent.
+
+        Redisearch folds a SORTBY and a neighbouring LIMIT into one pipeline
+        step, so they see the same records. Put any stage between them and they
+        no longer share one, and the LIMIT stops saying anything about how many
+        sorted records have to survive. Nothing else in this suite places a
+        stage between the two, so without these the rule is untested.
+
+        `sortable numbers` holds 15 documents and the default bound is 10.
+        Grouping on @n1, whose 15 values are distinct, turns the surviving
+        records into one row each, so the reply says both how many survived the
+        sort and which ones: 10 rows means the sort kept its default, 15 means
+        the trailing LIMIT reached back across the GROUPBY and raised it.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        group = "groupby 1 @n1 reduce count 0 as c"
+        # A GROUPBY between the two: the LIMIT must not raise the sort's bound.
+        self.check(dialect, f"{base} {group} limit 0 15")
+        # The same pipeline with no trailing LIMIT, for contrast.
+        self.check(dialect, f"{base} {group}")
+        # The LIMIT adjacent to the SORTBY instead: here it does raise it.
+        self.check(dialect, f"{base} limit 0 15 {group}")
+        # An explicit MAX is not overridden by a LIMIT across the GROUPBY.
+        self.check(dialect, f"{base} max 3 {group} limit 0 15")
+        # An APPLY between them behaves the same way, so this is not about
+        # GROUPBY changing the record count.
+        self.check(dialect, f"{base} apply @n1 as m {group} limit 0 15")
+
+    def test_aggregate_sortby_max(self, key_type, dialect, vector_data_type):
+        """MAX replaces SORTBY's default retention bound of 10.
+
+        `sortable numbers` holds 15 documents, so a MAX between 10 and 15
+        separates the three outcomes: 10 rows means the default survived, the
+        MAX value means it was honored, and 15 means nothing bounded the sort.
+
+        MAX 0 is not "unlimited". Measured on redis:8.2 and
+        redis/redis-stack-server over 40 documents, `SORTBY ... MAX 0` returns
+        10 rows, exactly as if no MAX had been written. It spells "unset", so
+        the default applies and a bare MAX 0 cannot be told apart from no MAX.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        # Below the default: MAX wins, fewer than 10 rows.
+        self.check(dialect, f"{base} max 4")
+        # Between the default and the data size: MAX wins over the default.
+        self.check(dialect, f"{base} max 11")
+        self.check(dialect, f"{base} max 14")
+        # At and past the data size: every record survives.
+        self.check(dialect, f"{base} max 15")
+        self.check(dialect, f"{base} max 100")
+        # MAX 0 means unset, so the default of 10 applies. If MAX 0 were
+        # unlimited this would return all 15.
+        self.check(dialect, f"{base} max 0")
+        # MAX 0 with an adjacent LIMIT past the default: the LIMIT raises the
+        # bound, exactly as it does when no MAX is written at all.
+        self.check(dialect, f"{base} max 0 limit 0 15")
+        # MAX 0 with a GROUPBY in between: nothing raises the bound, so the
+        # default of 10 stands.
+        self.check(dialect, f"{base} max 0 groupby 1 @n1 reduce count 0 as c limit 0 15")
+
     def test_aggregate_short_limit(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         self.checkvec(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 limit 0 5")

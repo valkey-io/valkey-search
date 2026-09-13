@@ -104,13 +104,11 @@ class TextIterator {
   // and field)
   virtual bool IsIteratorValid() const = 0;
 
-  // Scoring: returns the relevance score for the current document.
-  // Leaf iterators compute this via the active scoring algorithm.
+  // Scoring: returns the relevance score for the current document, already
+  // multiplied by this iterator's own query-tree weight, so callers never
+  // apply it. Leaf iterators compute this via the active scoring algorithm.
   // Composite iterators aggregate children's scores.
   virtual float GetScore() const { return 0.0f; }
-
-  // Weight multiplier for this iterator's contribution to the parent score.
-  virtual float GetWeight() const { return 1.0f; }
 };
 
 }  // namespace valkey_search::indexes::text

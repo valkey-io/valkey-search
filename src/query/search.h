@@ -264,6 +264,14 @@ struct SearchParameters {
     return sortby_parameter.has_value();
   }
 
+  // True when the search needs no post-search processing: a NOCONTENT reply
+  // where nothing (e.g. SORTBY) requires loading and reordering the full result
+  // set first. When true, the query can complete on the background thread and
+  // skip content loading.
+  bool NoProcessingRequired() const {
+    return no_content && !RequiresCompleteResults();
+  }
+
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
   ContentProcessing GetContentProcessing() const;
@@ -339,7 +347,7 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate);
+    bool negate, float or_weight_multiplier = 1.0f);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

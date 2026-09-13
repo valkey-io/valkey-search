@@ -196,7 +196,67 @@ When the aliases become reachable these will start matching, the run will
 print `XPASS`, and both the `xfail=True` in `generate_hybrid.py` and this
 section should be removed.
 
-### 5.5. Reference engine image — TODO
+### 5.5. The fused score's default column name — TODO, marked `xfail`
+
+**Status:** open.
+
+With no `LOAD` clause and no `YIELD_SCORE_AS` on `COMBINE`, Redis emits the
+fused score under the name `__score`. valkey-search emits no score column at
+all:
+
+```
+FT.HYBRID idx SEARCH @title:alpha VSIM @vec $q KNN 2 K 10 COMBINE RRF 0 ...
+Redis:  each row carries __key and __score
+Valkey: each row carries __key
+```
+
+Every other shape hides it. Under `LOAD *` neither engine emits a score
+column, and when `COMBINE` names the score both emit that name, so the
+divergence is reachable only in the one combination -- which is why it went
+unnoticed: the suite swept LOAD-less commands and alias-less commands, never
+both at once. `test_unaliased_fused_score_without_load` sweeps it, `xfail`.
+
+The harness would have caught it on its own the moment such an answer existed:
+`compare_row` compares the two rows' column sets before it compares any value.
+
+### 5.6. COMBINE FUNCTION — a valkey-search extension, deliberately not swept
+
+**Status:** permanent divergence, by design.
+
+The Redis 8.4 query engine accepts only `RRF` and `LINEAR` as `COMBINE`
+methods. `FUNCTION` is refused exactly as a nonsense method name is:
+
+```
+127.0.0.1:6379> FT.HYBRID idx ... COMBINE FUNCTION 4 EXPR "@s + @v" ...
+(error) SEARCH_PARSE_ARGS COMBINE: Invalid value for argument
+```
+
+valkey-search implements it, binding each arm's score to a reference -- its
+`YIELD_SCORE_AS` alias, the positional `@__arm<i>_score`, or
+`@__search_score` / `@__vector_score` for the two-arm shape. It is therefore an
+extension with no reference behaviour to be compatible with, and sweeping it
+would only record a reference error, which this harness passes unconditionally.
+It is covered by `integration/test_ft_hybrid.py` instead.
+
+### 5.7. VSIM RANGE — parsed, not implemented, not swept
+
+**Status:** open, in valkey-search.
+
+Redis implements `VSIM ... RANGE <count> RADIUS <r> [EPSILON <e>]`.
+valkey-search parses the clause for shape and then refuses it:
+
+```
+(error) VSIM RANGE is not yet supported; use KNN
+```
+
+Not swept, for the same reason as 5.6 in reverse: the answers would be
+valkey-search errors against real Redis results, which the harness reports as a
+failure rather than a documented gap, and an `xfail` entry per shape would
+document an unimplemented feature rather than a behavioural difference.
+`testing/ft_hybrid_parser_test.cc` pins the parse-then-refuse behaviour. When
+RANGE is implemented it should be swept like KNN and this section removed.
+
+### 5.8. Reference engine image — TODO
 
 **Status:** temporary.
 
@@ -206,3 +266,35 @@ section should be removed.
 moves the shared image to `redis:latest` for every generator; once that lands,
 the `DOCKER_IMAGE` override marked `TODO(reference-image)` can be dropped and
 this generator can inherit the shared image again.
+
+### 5.9. Cluster replay — blocked on shard-local text scoring
+
+**Status:** open. The mechanical blockers are fixed; the substantive one is not.
+
+`GENERATORS` marks this generator `"cluster": False`, so the answers are
+replayed against a standalone server only. Two things used to make cluster
+replay impossible at all, and both are now fixed:
+
+* `load_data_cluster` hardcoded the vector corpora, so the `hybrid text` data
+  set raised `KeyError` before a single query ran. It now dispatches on the
+  data set the way `load_data` does.
+* The cluster client routes a keyless command only if it recognizes the name.
+  Its `SEARCH_COMMANDS` list carries FT.SEARCH and FT.AGGREGATE but predates
+  FT.HYBRID, so the command raised "No way to dispatch this command" instead of
+  reaching a node. `cluster_routing()` in compatibility_test.py sends any
+  unrecognized `FT.` command to the default node, which is what the client does
+  for the two it knows.
+
+What remains is not mechanical. With the flag on, 33 of 202 answers match. The
+text arm is the reason: each shard scores BM25 from its own corpus, so the
+document frequency of a term is a third of what a standalone server sees and
+the inverse document frequency rises to match. For `@title:beta` the reference
+top score is 0.938 and a three-shard cluster answers 1.340. Every sweep whose
+fused ranking depends on a text score follows it, which is nearly all of them.
+`generate_text.py` is excluded from cluster replay for the same reason.
+
+So the options are to align distributed text scoring with the single-node
+computation, or to capture a second set of reference answers from a Redis
+cluster. Until one of those happens, flipping the flag would record the
+divergence 169 times rather than test anything. Note the reference engine's own
+cluster behaviour is unmeasured here: this generator runs one container.

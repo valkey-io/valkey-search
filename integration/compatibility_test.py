@@ -490,6 +490,27 @@ def compare_results(expected, results):
             count = int(cmd[six+1])
             sortkeys = [field_name(cmd[six+2+i]) for i in range(count)]
         sortkeys = [f for f in sortkeys if f.lower() not in ('asc', 'desc')]
+    elif "ft.hybrid" in str(cmd[0]).lower():
+        # A rank-fusion command answers in fused-score order whether or not the
+        # query says so -- that ordering IS the answer -- so it is compared as
+        # it arrived. Without this the reply was aligned on `__key`, a column
+        # an FT.HYBRID reply does not even carry under `LOAD *`, so every row
+        # tied, the alignment fell back to whole-row content, and the ranking
+        # was never compared at all.
+        #
+        # The tie key is the name COMBINE gave the fused score, because that is
+        # the only column that holds it. `__score`, the name a reply falls back
+        # to, is no use here: one engine emits it and the other does not, which
+        # is itself a divergence the suite records rather than relies on.
+        ordered = True
+        sortkeys = []
+        cix = last_index('combine')
+        if cix >= 0:
+            tail = [str(c) for c in cmd[cix:]]
+            for i, token in enumerate(tail):
+                if token.lower() == 'yield_score_as' and i + 1 < len(tail):
+                    sortkeys = [field_name(tail[i + 1])]
+                    break
     else:
         sortkeys=["__key"]
         # sortkeys=[]

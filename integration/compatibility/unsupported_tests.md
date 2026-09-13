@@ -156,6 +156,22 @@ returns — so recording these would only pin a permanent error-message
 mismatch. `testing/ft_hybrid_parser_test.cc` covers them instead, and the
 sweep in `generate_hybrid.py` stays to the forms both engines accept.
 
+### 5.3b. `LOAD 0` — valkey accepts, Redis rejects
+
+**Status:** deliberate leniency, not swept.
+
+```
+... LOAD 0 ...
+Redis:  (error) SEARCH_PARSE_ARGS Bad arguments for LOAD: Expected n
+Valkey: each row carries __key, as with no LOAD clause at all
+```
+
+An empty LOAD names no columns, which is what omitting the clause means, and
+valkey-search treats it that way. Redis requires a positive count. Nothing in
+an answer differs -- the accepted command returns what the omitted clause
+returns -- so recording it would pin an error-message mismatch and no more.
+Noted here because it is the same shape of leniency as 5.3.
+
 ### 5.4. Per-arm score aliases in a pipeline stage — TODO, marked `xfail`
 
 **Status:** open.

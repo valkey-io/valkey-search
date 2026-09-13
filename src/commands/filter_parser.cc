@@ -586,14 +586,18 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 }
 
 // Returns a token within an exact phrase parsing it until reaching the
-// token boundary while handling escape chars.
+// token boundary while handling escape chars. `delim` is the character that
+// closes the phrase: `"` for double-quoted phrases, `'` for apostrophe-phrases
+// (the latter is enabled by the search.emulate-release >= 1.3.0 gate in
+// ParseTextTokens; see COMPATIBILITY.md).
 // Quoted Text Syntax:
-// word1 word2" word3 -> word1
-// word2" word3 -> word2
-// Token boundaries (separated by space): " <punctuation> \<non-punctuation>
+// word1 word2<delim> word3 -> word1
+// word2<delim> word3 -> word2
+// Token boundaries (separated by space): <delim> <punctuation>
+// \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const std::optional<std::string>& field_or_default) {
+    const std::optional<std::string>& field_or_default, char delim) {
   const auto& lexer = text_index_schema->GetLexer();
   std::string processed_content;
   while (!IsEnd()) {
@@ -604,7 +608,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     }
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
-    if (ch == '"') break;
+    if (ch == delim) break;
     if (ch == '\\') continue;  // Don't break on backslash
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
@@ -818,6 +822,8 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // a text predicate.
 // Text Parsing Syntax:
 //   Quoted: "word1 word2" -> ComposedAND(exact, slop=0, inorder=true)
+//   Apostrophe-quoted (>= 1.3.0 with emulate-release):
+//     'word1 word2' -> ComposedAND(exact, slop=0, inorder=true)
 //   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
 // Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
@@ -829,17 +835,44 @@ FilterParser::ParseTextTokens(
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
+  // Redisearch treats unescaped `'` as a secondary phrase delimiter, paired
+  // left-to-right and structurally equivalent to `"`. An apostrophe with no
+  // matching close ahead is silently treated as a separator — so we look
+  // ahead before entering phrase mode. Pre-1.3.0 valkey-search dropped
+  // unescaped apostrophes as ordinary punctuation, which silently changed
+  // the parse of queries like `great'wall great'wall`. Gate behind
+  // search.emulate-release per COMPATIBILITY.md.
+  const bool apostrophe_phrases_enabled = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_search_apostrophe_phrase", [&] { return true; },
+      [&] { return false; });
+  auto has_matching_apostrophe_ahead = [&](size_t start) {
+    for (size_t i = start; i < expression_.size(); ++i) {
+      if (expression_[i] == '\\' && i + 1 < expression_.size()) {
+        ++i;  // skip escaped char
+        continue;
+      }
+      if (expression_[i] == '\'') return true;
+    }
+    return false;
+  };
   absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
                       indexes::text::kProximityTermsInlineCapacity>
       terms;
-  bool in_quotes = false;
+  // 0 when not inside a phrase; otherwise the character (`"` or `'`) that
+  // opened the phrase. The same character must close it.
+  char phrase_delim = 0;
   bool exact_phrase = false;
   while (!IsEnd()) {
     char c = Peek();
-    if (c == '"') {
-      in_quotes = !in_quotes;
+    const bool is_phrase_open =
+        (phrase_delim == 0 &&
+         (c == '"' || (apostrophe_phrases_enabled && c == '\'' &&
+                       has_matching_apostrophe_ahead(pos_ + 1))));
+    const bool is_phrase_close = (phrase_delim != 0 && c == phrase_delim);
+    if (is_phrase_open || is_phrase_close) {
+      phrase_delim = is_phrase_open ? c : 0;
       ++pos_;
-      if (in_quotes && terms.empty()) {
+      if (is_phrase_open && terms.empty()) {
         exact_phrase = true;
         continue;
       }
@@ -848,8 +881,9 @@ FilterParser::ParseTextTokens(
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(
         auto result,
-        in_quotes
-            ? ParseQuotedTextToken(text_index_schema, field_or_default)
+        (phrase_delim != 0)
+            ? ParseQuotedTextToken(text_index_schema, field_or_default,
+                                   phrase_delim)
             : ParseUnquotedTextToken(text_index_schema, field_or_default));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
@@ -901,6 +935,97 @@ FilterParser::ParseTextTokens(
     node_count_++;
   }
   return pred;
+}
+
+// If the parser is positioned at a `=> { ... }` QMA block, consume it and
+// apply the parsed weight to `predicate`.
+absl::Status FilterParser::MaybeConsumeQMABlock(query::Predicate& predicate) {
+  SkipWhitespace();
+  size_t saved_pos = pos_;
+  if (IsEnd() || pos_ + 1 >= expression_.size() || expression_[pos_] != '=' ||
+      expression_[pos_ + 1] != '>') {
+    return absl::OkStatus();
+  }
+  // Look ahead past => and optional whitespace for {.
+  size_t lookahead = pos_ + 2;
+  while (lookahead < expression_.size() &&
+         std::isspace(expression_[lookahead])) {
+    lookahead++;
+  }
+  // Only `=> {` is a QMA block. `=> [` is the vector KNN delimiter (handled
+  // upstream), so leave the position untouched in that case.
+  if (lookahead >= expression_.size() || expression_[lookahead] != '{') {
+    pos_ = saved_pos;
+    return absl::OkStatus();
+  }
+  pos_ = lookahead + 1;
+  VMSDK_ASSIGN_OR_RETURN(auto weight, ParseQMABlock());
+  predicate.SetWeight(static_cast<float>(weight));
+  return absl::OkStatus();
+}
+
+// Parses a QMA block. Expects the parser position to be after `=> {`.
+// Parses `$weight:` followed by a positive float, expects closing `}`.
+// Returns the weight value on success.
+absl::StatusOr<double> FilterParser::ParseQMABlock() {
+  // Parse attribute name starting with $
+  if (!Match('$')) {
+    if (IsEnd() || Peek() == '}') {
+      return absl::InvalidArgumentError("Missing QMA attribute name");
+    }
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unexpected character in QMA block at position ", pos_ + 1,
+                     ": expected '$'"));
+  }
+  // Parse the attribute name
+  std::string attr_name;
+  while (!IsEnd() && Peek() != ':' && !std::isspace(Peek()) && Peek() != '}') {
+    attr_name += expression_[pos_++];
+  }
+  // Only $weight is supported (case-insensitive)
+  if (absl::AsciiStrToLower(attr_name) != "weight") {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Unsupported QMA attribute: `$", attr_name, "`"));
+  }
+  // Expect colon after attribute name
+  if (!Match(':')) {
+    return absl::InvalidArgumentError(
+        "Expected ':' following QMA attribute name");
+  }
+  SkipWhitespace();
+  // Parse the weight value
+  if (IsEnd() || Peek() == ';' || Peek() == '}') {
+    return absl::InvalidArgumentError("Missing value for QMA attribute name");
+  }
+  // Parse the number manually. Non-numeric input fails SimpleAtod below and
+  // non-positive values (including a leading '-') are caught by value <= 0.
+  std::string number_str;
+  if (!IsEnd() && Peek() == '-') {
+    number_str += expression_[pos_++];
+  }
+  while (!IsEnd() && (std::isdigit(Peek()) || Peek() == '.')) {
+    number_str += expression_[pos_++];
+  }
+  double value;
+  if (!absl::SimpleAtod(number_str, &value)) {
+    return absl::InvalidArgumentError(
+        "Invalid weight value: expected a positive number");
+  }
+  if (value <= 0.0) {
+    return absl::InvalidArgumentError("Weight must be a positive number");
+  }
+  // SetWeight narrows to float, so a value above FLT_MAX would become inf and
+  // then produce a NaN score wherever it meets a zero document score. Reject it
+  // here instead.
+  if (value > static_cast<double>(std::numeric_limits<float>::max())) {
+    return absl::InvalidArgumentError("Weight must be a finite number");
+  }
+  // Consume optional semicolon
+  Match(';');
+  if (!Match('}')) {
+    return absl::InvalidArgumentError("Missing closing '}' in QMA block");
+  }
+  return value;
 }
 
 // Parsing rules:
@@ -962,6 +1087,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         return absl::InvalidArgumentError(
             absl::StrCat("Empty brackets detected at Position: ", pos_ - 1));
       }
+      // Check for QMA block: => { ... } after closing )
+      VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
       if (result.prev_predicate) {
         node_count_++;
       }
@@ -1029,6 +1156,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
         }
         predicate = std::move(*predicate_opt);
       }
+      // Attach an optional QMA block (=> { ... }) to this bare term, matching
+      // RediSearch which allows attributes on a term, not only on a group.
+      VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
       if (result.prev_predicate) {
         node_count_++;
       }

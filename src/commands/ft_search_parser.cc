@@ -34,6 +34,7 @@ namespace valkey_search {
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};
 constexpr int kMaxKnn{100000};
+constexpr absl::string_view kMaxTimeoutMsConfig{"max-timeout-ms"};
 
 /// Register the "--max-knn" flag. Controls the max KNN parameter for vector
 /// search.
@@ -45,9 +46,24 @@ static auto max_knn =
         .WithValidationCallback(CHECK_RANGE(1, kMaxKnn, kMaxKnnConfig))
         .Build();
 
+/// Register the "--max-timeout-ms" flag. Controls the maximum allowed TIMEOUT
+/// value, in milliseconds, for FT.SEARCH and FT.AGGREGATE.
+static auto max_timeout_ms =
+    vmsdk::config::NumberBuilder(kMaxTimeoutMsConfig,   // name
+                                 query::kMaxTimeoutMs,  // default timeout
+                                 1,                     // min timeout
+                                 query::kMaxTimeoutMs)  // max timeout
+        .WithValidationCallback(
+            CHECK_RANGE(1, query::kMaxTimeoutMs, kMaxTimeoutMsConfig))
+        .Build();
+
 namespace options {
 vmsdk::config::Number &GetMaxKnn() {
   return dynamic_cast<vmsdk::config::Number &>(*max_knn);
+}
+
+vmsdk::config::Number &GetMaxTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_timeout_ms);
 }
 
 }  // namespace options
@@ -75,12 +91,13 @@ absl::Status Verify(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
@@ -226,6 +243,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, no_content));
   parser.AddParamParser(query::kWithSortKeysParam,
                         GENERATE_FLAG_PARSER(SearchCommand, with_sort_keys));
+  parser.AddParamParser(query::kWithScoresParam,
+                        GENERATE_FLAG_PARSER(SearchCommand, with_scores));
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
   parser.AddParamParser(query::kParamsParam, ConstructParamsParser());
@@ -235,6 +254,9 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
+  parser.AddParamParser(query::kScorer,
+                        GENERATE_ENUM_PARSER(SearchCommand, scorer,
+                                             *indexes::scoring::kScorerByStr));
 
   return parser;
 }
@@ -246,10 +268,31 @@ static vmsdk::KeyValueParser<SearchCommand> SearchParser = CreateSearchParser();
 absl::Status SearchCommand::PostParseQueryString() {
   VMSDK_RETURN_IF_ERROR(query::SearchParameters::PostParseQueryString());
 
+  // The vector score reply field (KNN `AS`, or the default __<field>_score) is
+  // a synthesized field. If it collides with a declared schema attribute,
+  // SORTBY / WITHSORTKEYS on that name would route to the vector distance
+  // instead of the field, silently corrupting the order. Reject it (Redis does
+  // the same at parse time). GetIndex looks up the alias in the real
+  // attribute map (GetIdentifier is virtual and may be mocked in tests).
+  if (score_as && IsVectorQuery()) {
+    auto score_as_view = vmsdk::ToStringView(score_as.get());
+    if (index_schema->GetIndex(score_as_view).ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Property `", score_as_view, "` already exists in schema"));
+    }
+  }
+
   if (sortby_parameter.has_value()) {
-    // Validate sortby field exists in the index schema
-    VMSDK_RETURN_IF_ERROR(
-        index_schema->GetIdentifier(sortby_parameter->field).status());
+    // The vector score field (KNN distance, reported via score_as) is a
+    // synthesized reply field, not a schema attribute, so it is sortable
+    // without being declared. Validate any other field against the schema.
+    const bool is_vector_score =
+        score_as &&
+        sortby_parameter->field == vmsdk::ToStringView(score_as.get());
+    if (!is_vector_score) {
+      VMSDK_RETURN_IF_ERROR(
+          index_schema->GetIdentifier(sortby_parameter->field).status());
+    }
   }
 
   return absl::OkStatus();
@@ -276,12 +319,13 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(

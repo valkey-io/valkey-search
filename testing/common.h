@@ -40,7 +40,7 @@
 #include "src/server_events.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -59,7 +59,8 @@ class IndexTeser : public T {
   absl::StatusOr<bool> AddRecord(absl::string_view key,
                                  absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    auto res = T::AddRecord(interned_key, data);
+    auto res = T::AddRecord(interned_key,
+                            AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     if (!res.ok()) {
       return res.status();
     }
@@ -68,7 +69,8 @@ class IndexTeser : public T {
   absl::StatusOr<indexes::RecordResult> AddRecordResult(
       absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    return T::AddRecord(interned_key, data);
+    return T::AddRecord(interned_key,
+                        AttributeData(vmsdk::MakeUniqueValkeyString(data)));
   }
   absl::StatusOr<bool> RemoveRecord(
       absl::string_view key,
@@ -79,7 +81,8 @@ class IndexTeser : public T {
   absl::StatusOr<bool> ModifyRecord(absl::string_view key,
                                     absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    auto res = T::ModifyRecord(interned_key, data);
+    auto res = T::ModifyRecord(
+        interned_key, AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     if (!res.ok()) {
       return res.status();
     }
@@ -88,7 +91,8 @@ class IndexTeser : public T {
   absl::StatusOr<indexes::RecordResult> ModifyRecordResult(
       absl::string_view key, absl::string_view data) {
     auto interned_key = StringInternStore::Intern(key);
-    return T::ModifyRecord(interned_key, data);
+    return T::ModifyRecord(interned_key,
+                           AttributeData(vmsdk::MakeUniqueValkeyString(data)));
   }
   bool IsTracked(absl::string_view key) const {
     auto interned_key = StringInternStore::Intern(key);
@@ -96,20 +100,112 @@ class IndexTeser : public T {
   }
 };
 
-class MockIndex : public indexes::IndexBase {
+namespace testing_infra {
+
+inline AttributeData MakeAttributeData(vmsdk::UniqueValkeyString str) {
+  return AttributeData(std::move(str));
+}
+
+inline AttributeData MakeAttributeData(absl::string_view sv) {
+  return AttributeData(vmsdk::MakeUniqueValkeyString(sv));
+}
+
+inline AttributeData MakeAttributeData(indexes::VectorBase &index,
+                                       const InternedStringPtr &key,
+                                       absl::string_view data) {
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return AttributeData(std::move(vec));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    AttributeData &&data) {
+  return index.AddRecord(key, std::move(data));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    vmsdk::UniqueValkeyString str) {
+  return index.AddRecord(key, AttributeData(std::move(str)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  return index.AddRecord(key,
+                         AttributeData(vmsdk::MakeUniqueValkeyString(data)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> AddVectorRecord(
+    indexes::VectorBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return index.AddRecord(key, AttributeData(std::move(vec)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    AttributeData &&data) {
+  return index.ModifyRecord(key, std::move(data));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    vmsdk::UniqueValkeyString str) {
+  return index.ModifyRecord(key, AttributeData(std::move(str)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyRecord(
+    indexes::IndexBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  return index.ModifyRecord(key,
+                            AttributeData(vmsdk::MakeUniqueValkeyString(data)));
+}
+
+inline absl::StatusOr<indexes::RecordResult> ModifyVectorRecord(
+    indexes::VectorBase &index, const InternedStringPtr &key,
+    absl::string_view data) {
+  auto valkey_str = vmsdk::MakeUniqueValkeyString(data);
+  auto vec = VectorRegistry::Instance().DedupOrConstruct(
+      key, valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH,
+      index.GetDBNum(), &index);
+  return index.ModifyRecord(key, AttributeData(std::move(vec)));
+}
+
+}  // namespace testing_infra
+
+class MockIndex : public indexes::VectorBase {
  public:
-  MockIndex() : indexes::IndexBase(indexes::IndexerType::kNone) {}
-  MockIndex(indexes::IndexerType type) : indexes::IndexBase(type) {}
+  MockIndex(int dimensions = 4, absl::string_view attribute_name = "vec",
+            int db_num = 0)
+      : indexes::VectorBase(indexes::IndexerType::kVector, dimensions,
+                            data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                            attribute_name, db_num) {
+    ON_CALL(*this, GetDataTypeSize)
+        .WillByDefault(testing::Return(sizeof(float)));
+  }
+  MockIndex(indexes::IndexerType type, int dimensions = 4,
+            absl::string_view attribute_name = "vec", int db_num = 0)
+      : indexes::VectorBase(type, dimensions,
+                            data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                            attribute_name, db_num) {
+    ON_CALL(*this, GetDataTypeSize)
+        .WillByDefault(testing::Return(sizeof(float)));
+  }
   MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, AddRecord,
-              (const InternedStringPtr& key, absl::string_view data),
-              (override));
+              (const InternedStringPtr &key, AttributeData &&data), (override));
   MOCK_METHOD(absl::StatusOr<bool>, RemoveRecord,
-              (const InternedStringPtr& key,
+              (const InternedStringPtr &key,
                indexes::DeletionType deletion_type),
               (override));
   MOCK_METHOD(absl::StatusOr<indexes::RecordResult>, ModifyRecord,
-              (const InternedStringPtr& key, absl::string_view data),
-              (override));
+              (const InternedStringPtr &key, AttributeData &&data), (override));
   MOCK_METHOD(std::unique_ptr<data_model::Index>, ToProto, (),
               (const, override));
   MOCK_METHOD(int, RespondWithInfo, (ValkeyModuleCtx * ctx), (const, override));
@@ -117,57 +213,121 @@ class MockIndex : public indexes::IndexBase {
               (const, override));
   MOCK_METHOD((size_t), GetTrackedKeyCount, (), (const, override));
   MOCK_METHOD((size_t), GetUnTrackedKeyCount, (), (const, override));
-  MOCK_METHOD(bool, IsTracked, (const InternedStringPtr& key),
+  MOCK_METHOD(bool, IsTracked, (const InternedStringPtr &key),
               (const, override));
-  MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr& key),
+  MOCK_METHOD(bool, IsUnTracked, (const InternedStringPtr &key),
               (const, override));
-  MOCK_METHOD(void, UnTrack, (const InternedStringPtr& key), (override));
+  MOCK_METHOD(void, UnTrack, (const InternedStringPtr &key), (override));
   MOCK_METHOD(
       (absl::Status), ForEachTrackedKey,
-      (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
+      (absl::AnyInvocable<absl::Status(const InternedStringPtr &key)> fn),
       (const, override));
   MOCK_METHOD(
       (absl::Status), ForEachUnTrackedKey,
-      (absl::AnyInvocable<absl::Status(const InternedStringPtr& key)> fn),
+      (absl::AnyInvocable<absl::Status(const InternedStringPtr &key)> fn),
       (const, override));
   MOCK_METHOD(uint32_t, GetMutationWeight, (), (const, override));
+  MOCK_METHOD(size_t, GetCapacity, (), (const, override));
+  MOCK_METHOD(absl::Status, RemoveRecordImpl, (uint64_t internal_id),
+              (override));
+  absl::Status ModifyRecordImpl(
+      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+    return absl::OkStatus();
+  }
+  absl::Status AddRecordImpl(
+      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+    return absl::OkStatus();
+  }
+  MOCK_METHOD(int, RespondWithInfoImpl, (ValkeyModuleCtx * ctx),
+              (const, override));
+  MOCK_METHOD(size_t, GetDataTypeSize, (), (const, override));
+  MOCK_METHOD(void, ToProtoImpl, (data_model::VectorIndex *),
+              (const, override));
+  absl::Status SaveIndexImpl(RDBChunkOutputStream) const override {
+    return absl::OkStatus();
+  }
+  std::shared_ptr<const indexes::VectorRecord> &GetVectorLockFree(
+      uint64_t) const override {
+    static std::shared_ptr<const indexes::VectorRecord> p;
+    return p;
+  }
+  std::shared_ptr<const indexes::VectorRecord> &GetVector(
+      uint64_t) const override {
+    static std::shared_ptr<const indexes::VectorRecord> p;
+    return p;
+  }
+  float ComputeDistance(absl::string_view, const indexes::VectorRecord *,
+                        float) const override {
+    return 0.0f;
+  }
+  std::optional<hnswlib::tableint> GetAlgoIdLockFree(uint64_t) const override {
+    return std::nullopt;
+  }
+  data_model::VectorDataType GetVectorDataType() const override {
+    return data_model::VECTOR_DATA_TYPE_FLOAT32;
+  }
+  float ComputeReciprocalMagnitude(absl::string_view) const override {
+    return 1.0f;
+  }
+  vmsdk::UniqueValkeyString NormalizeStringAttribute(
+      vmsdk::UniqueValkeyString attribute) const override {
+    return attribute;
+  }
+  absl::StatusOr<std::vector<indexes::Neighbor>> Search(
+      absl::string_view, uint64_t, cancel::Token &,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr,
+      std::optional<size_t> = std::nullopt, bool = false) override {
+    return std::vector<indexes::Neighbor>{};
+  }
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {
  public:
-  MOCK_METHOD(AttributeDataType&, GetAttributeDataType, (), (override, const));
-  MOCK_METHOD(const std::vector<std::string>&, GetKeyPrefixes, (),
+  MOCK_METHOD(AttributeDataType &, GetAttributeDataType, (), (override, const));
+  MOCK_METHOD(const std::vector<std::string> &, GetKeyPrefixes, (),
               (override, const));
   MOCK_METHOD(void, OnKeyspaceNotification,
-              (ValkeyModuleCtx * ctx, int type, const char* event,
-               ValkeyModuleString* key),
+              (ValkeyModuleCtx * ctx, int type, const char *event,
+               ValkeyModuleString *key),
               (override));
+  std::vector<const indexes::VectorBase *> GetVectorIndexes() const override {
+    return vector_indexes_;
+  }
+  bool IsInDB(int db_num) const override {
+    return db_num_ == -1 || db_num_ == db_num;
+  }
+  std::vector<const indexes::VectorBase *> vector_indexes_;
+  int db_num_{-1};
 };
 
 class MockAttributeDataType : public AttributeDataType {
  public:
-  MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetRecord,
-              (ValkeyModuleCtx * ctx, ValkeyModuleKey* open_key,
+  MockAttributeDataType() {
+    ON_CALL(*this, IsProperType(testing::_))
+        .WillByDefault(testing::Return(true));
+  }
+  MOCK_METHOD(absl::StatusOr<vmsdk::UniqueValkeyString>, GetAttribute,
+              (ValkeyModuleCtx * ctx, ValkeyModuleKey *open_key,
                absl::string_view key, absl::string_view identifier),
               (override, const));
   MOCK_METHOD(int, GetValkeyEventTypes, (), (override, const));
-  MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllRecords,
+  MOCK_METHOD((absl::StatusOr<RecordsMap>), FetchAllAttributes,
               (ValkeyModuleCtx * ctx,
-               const std::optional<std::string>& query_attribute_name,
-               ValkeyModuleKey* open_key, absl::string_view key,
-               const absl::flat_hash_set<absl::string_view>& identifiers),
+               const std::optional<std::string> &query_attribute_name,
+               ValkeyModuleKey *open_key, absl::string_view key,
+               const absl::flat_hash_set<absl::string_view> &identifiers),
               (override, const));
   MOCK_METHOD((data_model::AttributeDataType), ToProto, (), (override, const));
   MOCK_METHOD((std::string), ToString, (), (override, const));
   MOCK_METHOD((bool), IsProperType, (ValkeyModuleKey * key), (override, const));
-  MOCK_METHOD(bool, RecordsProvidedAsString, (), (override, const));
+  MOCK_METHOD(bool, AttributesProvidedAsString, (), (override, const));
 };
 
 class FakeSafeRDB : public SafeRDB {
  public:
   FakeSafeRDB() = default;
   FakeSafeRDB(unsigned char dump_rdb[], size_t len) {
-    buffer_.write((const char*)dump_rdb, len);
+    buffer_.write((const char *)dump_rdb, len);
   }
   absl::StatusOr<size_t> LoadSizeT() override { return LoadPOD<size_t>(); }
   absl::StatusOr<unsigned int> LoadUnsigned() override {
@@ -216,14 +376,14 @@ class FakeSafeRDB : public SafeRDB {
   template <typename T>
   T LoadPOD() {
     T val;
-    buffer_.read((char*)&val, sizeof(T));
+    buffer_.read((char *)&val, sizeof(T));
     EXPECT_TRUE(buffer_);
     return val;
   }
 
   template <typename T>
   void SavePOD(const T val) {
-    buffer_.write((char*)&val, sizeof(T));
+    buffer_.write((char *)&val, sizeof(T));
     EXPECT_TRUE(buffer_);
   }
 };
@@ -238,7 +398,7 @@ data_model::VectorIndex CreateFlatVectorIndexProto(
 
 data_model::NumericIndex CreateNumericIndexProto();
 
-data_model::TagIndex CreateTagIndexProto(const std::string& separator = ",",
+data_model::TagIndex CreateTagIndexProto(const std::string &separator = ",",
                                          bool case_sensitive = false);
 
 data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
@@ -247,16 +407,20 @@ data_model::TextIndex CreateTextIndexProto(bool with_suffix_trie, bool no_stem,
 class MockIndexSchema : public IndexSchema {
  public:
   static absl::StatusOr<std::shared_ptr<MockIndexSchema>> Create(
-      ValkeyModuleCtx* ctx, absl::string_view key,
-      const std::vector<absl::string_view>& subscribed_key_prefixes,
+      ValkeyModuleCtx *ctx, absl::string_view key,
+      const std::vector<absl::string_view> &subscribed_key_prefixes,
       std::unique_ptr<AttributeDataType> attribute_data_type,
-      vmsdk::ThreadPool* mutations_thread_pool,
+      vmsdk::ThreadPool *mutations_thread_pool = nullptr,
       data_model::Language language = data_model::Language::LANGUAGE_ENGLISH,
       std::string punctuation = ".", bool with_offsets = true,
-      const std::vector<std::string>& stop_words = {}, float score = 1.0,
-      const std::string& score_field = "") {
+      const std::vector<std::string> &stop_words = {}, float score = 1.0,
+      const std::string &score_field = "", int db_num = 0) {
+    if (mutations_thread_pool == nullptr) {
+      mutations_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+    }
     data_model::IndexSchema index_schema_proto;
     index_schema_proto.set_name(std::string(key));
+    index_schema_proto.set_db_num(db_num);
     index_schema_proto.mutable_subscribed_key_prefixes()->Add(
         subscribed_key_prefixes.begin(), subscribed_key_prefixes.end());
     index_schema_proto.set_language(language);
@@ -269,27 +433,35 @@ class MockIndexSchema : public IndexSchema {
       index_schema_proto.set_score_field(score_field);
     }
     // NOLINTNEXTLINE
-    auto res = std::shared_ptr<MockIndexSchema>(new MockIndexSchema(
-        ctx, index_schema_proto, std::move(attribute_data_type),
-        mutations_thread_pool));
+    auto res = std::shared_ptr<MockIndexSchema>(
+        new MockIndexSchema(ctx, index_schema_proto,
+                            std::move(attribute_data_type),
+                            mutations_thread_pool),
+        vmsdk::DestructByMainThread<MockIndexSchema>{});
     VMSDK_RETURN_IF_ERROR(res->Init(ctx));
     return res;
   }
-  MockIndexSchema(ValkeyModuleCtx* ctx,
-                  const data_model::IndexSchema& index_schema_proto,
+  MockIndexSchema(ValkeyModuleCtx *ctx,
+                  const data_model::IndexSchema &index_schema_proto,
                   std::unique_ptr<AttributeDataType> attribute_data_type,
-                  vmsdk::ThreadPool* mutations_thread_pool, bool reload = false)
+                  vmsdk::ThreadPool *mutations_thread_pool = nullptr,
+                  bool reload = false)
       : IndexSchema(ctx, index_schema_proto, std::move(attribute_data_type),
-                    mutations_thread_pool, reload) {
+                    mutations_thread_pool
+                        ? mutations_thread_pool
+                        : ValkeySearch::Instance().GetWriterThreadPool(),
+                    reload) {
     ON_CALL(*this, OnLoadingEnded(testing::_))
-        .WillByDefault([this](ValkeyModuleCtx* ctx) {
-          return IndexSchema::OnLoadingEnded(ctx);
+        .WillByDefault([this](ValkeyModuleCtx *ctx) {
+          IndexSchema::OnLoadingEnded(ctx);
+          return;
         });
     ON_CALL(*this, OnSwapDB(testing::_))
-        .WillByDefault([this](ValkeyModuleSwapDbInfo* swap_db_info) {
-          return IndexSchema::OnSwapDB(swap_db_info);
+        .WillByDefault([this](ValkeyModuleSwapDbInfo *swap_db_info) {
+          IndexSchema::OnSwapDB(swap_db_info);
+          return;
         });
-    ON_CALL(*this, RDBSave(testing::_)).WillByDefault([this](SafeRDB* rdb) {
+    ON_CALL(*this, RDBSave(testing::_)).WillByDefault([this](SafeRDB *rdb) {
       return IndexSchema::RDBSave(rdb);
     });
     ON_CALL(*this, GetIdentifier(testing::_))
@@ -312,21 +484,14 @@ class TestableValkeySearch : public ValkeySearch {
   void InitThreadPools(std::optional<size_t> readers,
                        std::optional<size_t> writers,
                        std::optional<size_t> utility);
-
-  vmsdk::ThreadPool* GetWriterThreadPool() const {
-    return writer_thread_pool_.get();
-  }
-  vmsdk::ThreadPool* GetReaderThreadPool() const {
-    return reader_thread_pool_.get();
-  }
 };
 
 class TestableSchemaManager : public SchemaManager {
  public:
   TestableSchemaManager(
-      ValkeyModuleCtx* ctx,
+      ValkeyModuleCtx *ctx,
       absl::AnyInvocable<void()> server_events_callback = []() {},
-      vmsdk::ThreadPool* writer_thread_pool = nullptr,
+      vmsdk::ThreadPool *writer_thread_pool = nullptr,
       bool coordinator_enabled = false)
       : SchemaManager(ctx, std::move(server_events_callback),
                       writer_thread_pool, coordinator_enabled) {}
@@ -334,27 +499,27 @@ class TestableSchemaManager : public SchemaManager {
 
 class TestableMetadataManager : public coordinator::MetadataManager {
  public:
-  TestableMetadataManager(ValkeyModuleCtx* ctx,
-                          coordinator::ClientPool& client_pool)
+  TestableMetadataManager(ValkeyModuleCtx *ctx,
+                          coordinator::ClientPool &client_pool)
       : coordinator::MetadataManager(ctx, client_pool) {}
 };
 
 inline void InitThreadPools(std::optional<size_t> readers,
                             std::optional<size_t> writers,
                             std::optional<size_t> utility) {
-  ((TestableValkeySearch*)&ValkeySearch::Instance())
+  ((TestableValkeySearch *)&ValkeySearch::Instance())
       ->InitThreadPools(readers, writers, utility);
 }
 
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateIndexSchema(
-    std::string index_schema_key, ValkeyModuleCtx* fake_ctx = nullptr,
-    vmsdk::ThreadPool* writer_thread_pool = nullptr,
-    const std::vector<absl::string_view>* key_prefixes = nullptr,
+    std::string index_schema_key, ValkeyModuleCtx *fake_ctx = nullptr,
+    vmsdk::ThreadPool *writer_thread_pool = nullptr,
+    const std::vector<absl::string_view> *key_prefixes = nullptr,
     int32_t index_schema_db_num = 0);
 absl::StatusOr<std::shared_ptr<MockIndexSchema>> CreateVectorHNSWSchema(
-    std::string index_schema_key, ValkeyModuleCtx* fake_ctx = nullptr,
-    vmsdk::ThreadPool* writer_thread_pool = nullptr,
-    const std::vector<absl::string_view>* key_prefixes = nullptr,
+    std::string index_schema_key, ValkeyModuleCtx *fake_ctx = nullptr,
+    vmsdk::ThreadPool *writer_thread_pool = nullptr,
+    const std::vector<absl::string_view> *key_prefixes = nullptr,
     int32_t index_schema_db_num = 0);
 
 // TestableKeyspaceEventManager subclasses KeyspaceEventManager and makes it
@@ -366,7 +531,7 @@ class TestableKeyspaceEventManager : public KeyspaceEventManager {
 
 class MockThreadPool : public vmsdk::ThreadPool {
  public:
-  MockThreadPool(const std::string& name, size_t num_threads)
+  MockThreadPool(const std::string &name, size_t num_threads)
       : vmsdk::ThreadPool(name, num_threads) {
     ON_CALL(*this, Schedule(testing::_, testing::_))
         .WillByDefault(
@@ -378,30 +543,49 @@ class MockThreadPool : public vmsdk::ThreadPool {
               (absl::AnyInvocable<void()> task, Priority priority), (override));
 };
 
+void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool &mutations_thread_pool);
+
 class ValkeySearchTest : public vmsdk::ValkeyTest {
  protected:
   ValkeyModuleCtx fake_ctx_;
   ValkeyModuleCtx registry_ctx_;
 
   void SetUp() override {
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeyTest::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
+    InitThreadPools(/*readers=*/std::nullopt, /*writers=*/1,
+                    /*utility=*/std::nullopt);
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
-        false));
+        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); },
+        ValkeySearch::Instance().GetWriterThreadPool(), false));
     ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault([&](ValkeyModuleCtx* ctx) {
+        .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorExternalizer::Instance().Init(&registry_ctx_);
+    VectorRegistry::Construct(&registry_ctx_);
   }
   void TearDown() override {
+    if (ValkeySearch::HasInstance()) {
+      if (auto *pool = ValkeySearch::Instance().GetWriterThreadPool()) {
+        if (pool->IsSuspended()) {
+          (void)pool->ResumeWorkers();
+        }
+        WaitWorkerTasksAreCompleted(*pool);
+      }
+    }
+    kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorExternalizer::Instance().Reset();
+    VectorRegistry::Destruct();
+    auto &enable_sharing =
+        const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
+    VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
     ValkeyTest::TearDown();
   }
 };
@@ -412,28 +596,28 @@ struct TestReturnAttribute {
 };
 
 query::ReturnAttribute ToReturnAttribute(
-    const TestReturnAttribute& test_return_attribute);
+    const TestReturnAttribute &test_return_attribute);
 
-std::unordered_map<std::string, std::string> ToStringMap(const RecordsMap& map);
+std::unordered_map<std::string, std::string> ToStringMap(const RecordsMap &map);
 
 struct NeighborTest {
   std::string external_id;
-  float distance;
+  float score;
   std::optional<std::unordered_map<std::string, std::string>>
       attribute_contents;
-  inline bool operator==(const NeighborTest& other) const {
-    return external_id == other.external_id && distance == other.distance &&
+  bool operator==(const NeighborTest &other) const {
+    return external_id == other.external_id && score == other.score &&
            attribute_contents == other.attribute_contents;
   }
 };
 
-indexes::Neighbor ToIndexesNeighbor(const NeighborTest& neighbor_test);
-NeighborTest ToNeighborTest(const indexes::Neighbor& neighbor_test);
+indexes::Neighbor ToIndexesNeighbor(const NeighborTest &neighbor_test);
+NeighborTest ToNeighborTest(const indexes::Neighbor &neighbor_test);
 
 template <typename T>
-std::vector<NeighborTest> ToVectorNeighborTest(const T& neighbors) {
+std::vector<NeighborTest> ToVectorNeighborTest(const T &neighbors) {
   std::vector<NeighborTest> neighbors_test(neighbors.size());
-  for (const auto& neighbor : neighbors) {
+  for (const auto &neighbor : neighbors) {
     neighbors_test.push_back(ToNeighborTest(neighbor));
   }
   return neighbors_test;
@@ -448,22 +632,33 @@ class ValkeySearchTestWithParam : public vmsdk::ValkeyTestWithParam<T> {
   void SetUp() override {
     vmsdk::ValkeyTestWithParam<T>::SetUp();
     ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
+    InitThreadPools(/*readers=*/std::nullopt, /*writers=*/1,
+                    /*utility=*/std::nullopt);
     KeyspaceEventManager::InitInstance(
         std::make_unique<TestableKeyspaceEventManager>());
     SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
-        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); }, nullptr,
-        false));
+        &fake_ctx_, []() { server_events::SubscribeToServerEvents(); },
+        ValkeySearch::Instance().GetWriterThreadPool(), false));
     ON_CALL(*kMockValkeyModule, GetDetachedThreadSafeContext(testing::_))
-        .WillByDefault([&](ValkeyModuleCtx* ctx) {
+        .WillByDefault([&](ValkeyModuleCtx *ctx) {
           return ctx == &registry_ctx_ ? ctx : nullptr;
         });
-    VectorExternalizer::Instance().Init(&registry_ctx_);
+    VectorRegistry::Construct(&registry_ctx_);
   }
   void TearDown() override {
+    if (ValkeySearch::HasInstance()) {
+      if (auto *pool = ValkeySearch::Instance().GetWriterThreadPool()) {
+        if (pool->IsSuspended()) {
+          (void)pool->ResumeWorkers();
+        }
+        WaitWorkerTasksAreCompleted(*pool);
+      }
+    }
+    kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     ValkeySearch::InitInstance(nullptr);
     KeyspaceEventManager::InitInstance(nullptr);
-    VectorExternalizer::Instance().Reset();
+    VectorRegistry::Destruct();
     vmsdk::ValkeyTestWithParam<T>::TearDown();
   }
 };
@@ -475,20 +670,19 @@ struct RespReply {
   using RespArray = std::vector<RespReply>;
   std::variant<std::string, int64_t, RespArray> value;
 
-  static bool CompareArrays(const RespArray& array1, const RespArray& array2);
+  static bool CompareArrays(const RespArray &array1, const RespArray &array2);
 
   // Equality operator to compare two RespReply objects
-  bool operator==(const RespReply& other) const;
+  bool operator==(const RespReply &other) const;
 
   // Inequality operator
-  bool operator!=(const RespReply& other) const { return !(*this == other); }
+  bool operator!=(const RespReply &other) const { return !(*this == other); }
 };
 
 RespReply ParseRespReply(absl::string_view input);
-void WaitWorkerTasksAreCompleted(vmsdk::ThreadPool& mutations_thread_pool);
 
-inline auto VectorToStr = [](const std::vector<float>& v) {
-  return absl::string_view((char*)v.data(), v.size() * sizeof(float));
+inline auto VectorToStr = [](const std::vector<float> &v) {
+  return absl::string_view((char *)v.data(), v.size() * sizeof(float));
 };
 
 class UnitTestSearchParameters : public query::SearchParameters {
@@ -507,6 +701,34 @@ class UnitTestSearchParameters : public query::SearchParameters {
     CHECK(false);
   }
 };
+
+namespace testing_infra {
+
+inline std::shared_ptr<indexes::VectorRecord> MakeVectorRecord(
+    absl::string_view raw_vector_bytes) {
+  float reciprocal_mag = indexes::CalcReciprocalMagnitude(
+      reinterpret_cast<const float *>(raw_vector_bytes.data()),
+      raw_vector_bytes.size() / sizeof(float));
+  return indexes::VectorRecord::Construct(raw_vector_bytes, reciprocal_mag);
+}
+
+inline AttributeData MakeStringAttributeData(absl::string_view str) {
+  return AttributeData(vmsdk::MakeUniqueValkeyString(str));
+}
+
+inline AttributeData MakeVectorAttributeData(
+    const InternedStringPtr &key, const InternedStringPtr &attribute_identifier,
+    absl::string_view raw_vector_bytes, int db_num = 0) {
+  return AttributeData(indexes::VectorRecordWithSize{
+      MakeVectorRecord(raw_vector_bytes), raw_vector_bytes.size()});
+}
+
+inline AttributeData MakeDeletionAttributeData(
+    indexes::DeletionType del = indexes::DeletionType::kRecord) {
+  return AttributeData(del);
+}
+
+}  // namespace testing_infra
 
 }  // namespace valkey_search
 

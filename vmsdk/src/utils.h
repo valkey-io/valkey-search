@@ -59,11 +59,11 @@ inline void VerifyMainThread() { CHECK(IsMainThread()); }
 void MarkAsShuttingDown();
 bool IsShuttingDown();
 
-// Free any RunByMain() callbacks that were enqueued to the event loop but
-// never invoked (e.g., because shutdown began after a worker thread had
-// already passed the IsShuttingDown() check in RunByMain). Must be called on
-// the main thread after MarkAsShuttingDown() and after every thread that can
-// call RunByMain() has been joined, so no new callbacks can race in.
+// Execute and free any RunByMain() callbacks that were enqueued to the event
+// loop but never invoked (e.g., because shutdown began and the event loop is
+// no longer running). Must be called on the main thread after
+// MarkAsShuttingDown() and after every thread that can call RunByMain() has
+// been joined, so no new callbacks can race in.
 void DrainPendingMainCallbacks();
 
 // MainThreadAccessGuard ensures that all access to the underlying data
@@ -217,6 +217,17 @@ class ValkeySelectDbGuard {
   int old_db_;
   bool switched_ = false;
 };
+
+template <typename T>
+struct DestructByMainThread {
+  void operator()(T *ptr) const {
+    if (!ptr) {
+      return;
+    }
+    vmsdk::RunByMain([ptr]() { delete ptr; });
+  }
+};
+
 }  // namespace vmsdk
 
 // Hash specialization for SocketAddress

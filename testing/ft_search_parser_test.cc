@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -20,6 +21,7 @@
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/commands/ft_aggregate_parser.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -36,6 +38,11 @@
 namespace valkey_search {
 
 namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+
 using testing::TestParamInfo;
 using testing::ValuesIn;
 
@@ -54,7 +61,7 @@ const std::vector<std::pair<bool, absl::string_view>> kLimitOptions = {
     {true, "LIMIT 10 5"}, {false, "LIMIT -10 5"}, {false, "LIMIT 10 -5"},
 };
 
-struct FTSearchParserTestCase {
+struct FTSearchParserTestCase {  // NOLINT
   std::string test_name;
   bool success{false};
   absl::string_view params_str;
@@ -80,10 +87,19 @@ struct FTSearchParserTestCase {
   query::SortOrder sortby_order{query::SortOrder::kAscending};
   bool sortby_enabled{false};
   bool with_sort_keys{false};
+  // WITHSCORES and SCORER test fields
+  bool with_scores{false};
+  indexes::scoring::ScorerType scorer{indexes::scoring::ScorerType::kBm25Std};
 };
 
 class FTSearchParserTest
-    : public ValkeySearchTestWithParam<FTSearchParserTestCase> {};
+    : public ValkeySearchTestWithParam<FTSearchParserTestCase> {
+ protected:
+  void TearDown() override {
+    SchemaManager::InitInstance(nullptr);
+    ValkeySearchTestWithParam<FTSearchParserTestCase>::TearDown();
+  }
+};
 
 std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
     const std::vector<float> &floats) {
@@ -98,18 +114,21 @@ std::vector<ValkeyModuleString *> FloatToValkeyStringVector(
 }
 
 void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
+                              const std::shared_ptr<IndexSchema> &index_schema,
                               size_t dialect_itr, size_t limit_itr,
                               bool add_end_unexpected_param, bool no_content,
                               std::optional<uint64_t> timeout_ms) {
-  std::cerr << test_case.test_name
-            << " - dialect: " << kDialectOptions[dialect_itr].second
-            << ", limit: " << kLimitOptions[limit_itr].second
-            << ", add_end_unexpected_param: " << add_end_unexpected_param
-            << ", no_content: " << no_content;
-  if (timeout_ms.has_value()) {
-    std::cerr << ", timeout_ms: " << timeout_ms.value();
+  if (IsVerbose()) {
+    std::cerr << test_case.test_name
+              << " - dialect: " << kDialectOptions[dialect_itr].second
+              << ", limit: " << kLimitOptions[limit_itr].second
+              << ", add_end_unexpected_param: " << add_end_unexpected_param
+              << ", no_content: " << no_content;
+    if (timeout_ms.has_value()) {
+      std::cerr << ", timeout_ms: " << timeout_ms.value();
+    }
+    std::cerr << "\n";
   }
-  std::cerr << "\n";
 
   std::vector<float> floats = {0.1, 0.2, 0.3};
   if (test_case.query_blob_num_floats.has_value()) {
@@ -117,48 +136,6 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
   std::vector<ValkeyModuleString *> args;
   const std::string key_str = "my_schema_name";
-  ValkeyModuleCtx fake_ctx;
-  SchemaManager::InitInstance(
-      std::make_unique<TestableSchemaManager>(&fake_ctx));
-  auto index_schema = CreateIndexSchema(key_str, &fake_ctx).value();
-  EXPECT_CALL(
-      *kMockValkeyModule,
-      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
-      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
-  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
-      .Times(::testing::AnyNumber())
-      .WillRepeatedly([&index_schema](absl::string_view field) {
-        return index_schema->IndexSchema::GetIdentifier(field);
-      });
-  if (test_case.vector_query) {
-    // Vector index setup
-    data_model::VectorIndex vector_index_proto;
-    vector_index_proto.set_dimension_count(3);
-    vector_index_proto.set_initial_cap(100);
-    vector_index_proto.set_vector_data_type(
-        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
-    auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
-    flat_algorithm_proto->set_block_size(100);
-    vector_index_proto.set_allocated_flat_algorithm(
-        flat_algorithm_proto.release());
-    auto index = indexes::VectorFlat<float>::Create(
-                     vector_index_proto, "attribute_identifier_1",
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH)
-                     .value();
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex(test_case.attribute_alias, "id1", index));
-  } else {
-    // Non Vector index setup
-    data_model::NumericIndex numeric_index_proto;
-    auto numeric_index =
-        std::make_shared<indexes::Numeric>(numeric_index_proto);
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex("attribute_identifier_1", "id1", numeric_index));
-    data_model::TagIndex tag_index_proto;
-    auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
-    VMSDK_EXPECT_OK(
-        index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
-  }
   args.push_back(
       ValkeyModule_CreateString(nullptr, key_str.data(), key_str.size()));
   args.push_back(ValkeyModule_CreateString(nullptr, test_case.filter_str.data(),
@@ -221,11 +198,13 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
   auto &schema_manager = SchemaManager::Instance();
 
-  std::cerr << "Executing cmd: ";
-  for (auto &a : args) {
-    std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
+  if (IsVerbose()) {
+    std::cerr << "Executing cmd: ";
+    for (auto &a : args) {
+      std::cerr << "'" << vmsdk::ToStringView(a) << "' ";
+    }
+    std::cerr << "\n";
   }
-  std::cerr << "\n";
 
   // Repro semantics of command startup
   vmsdk::ArgsIterator itr{&args[0], int(args.size())};
@@ -276,6 +255,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->k, 0);
       EXPECT_FALSE(search_params.value()->ef.has_value());
       EXPECT_TRUE(search_params.value()->attribute_alias.empty());
+      EXPECT_EQ(search_params.value()->score_as.get(), nullptr);
     }
     EXPECT_EQ(search_params.value()->no_content,
               no_content || test_case.no_content);
@@ -299,10 +279,12 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
     EXPECT_EQ(search_params.value()->verbatim, test_case.verbatim);
     EXPECT_EQ(search_params.value()->inorder, test_case.inorder);
     EXPECT_EQ(search_params.value()->slop, test_case.slop);
+    EXPECT_EQ(search_params.value()->scorer, test_case.scorer);
     // Validate SORTBY parameters
     EXPECT_EQ(search_params.value()->sortby_parameter.has_value(),
               test_case.sortby_enabled);
     EXPECT_EQ(search_params.value()->with_sort_keys, test_case.with_sort_keys);
+    EXPECT_EQ(search_params.value()->with_scores, test_case.with_scores);
     if (test_case.sortby_enabled) {
       EXPECT_EQ(search_params.value()->sortby_parameter->field,
                 test_case.sortby_field);
@@ -310,8 +292,10 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                 test_case.sortby_order);
     }
   } else {
-    std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
-              << "` Because: " << search_params.status().message() << "\n";
+    if (IsVerbose()) {
+      std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
+                << "` Because: " << search_params.status().message() << "\n";
+    }
     if (!test_case.expected_error_message.empty() &&
         !search_params.status().message().starts_with(
             test_case.expected_error_message)) {
@@ -331,8 +315,10 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
             "`DIALEC"));
       } else {
         EXPECT_TRUE(add_end_unexpected_param || !test_case.success);
-        std::cerr << "Status Message: " << search_params.status().message()
-                  << "\n";
+        if (IsVerbose()) {
+          std::cerr << "Status Message: " << search_params.status().message()
+                    << "\n";
+        }
         EXPECT_TRUE(search_params.status().message().starts_with(
             "Error parsing vector similarity parameters"));
       }
@@ -343,10 +329,62 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
   }
 }
 
+std::shared_ptr<IndexSchema> SetupIndexSchemaForTestCase(
+    const FTSearchParserTestCase &test_case, ValkeyModuleCtx *ctx) {
+  const std::string key_str = "my_schema_name";
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(ctx));
+  auto index_schema = CreateIndexSchema(key_str, ctx).value();
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      OpenKey(testing::_, testing::An<ValkeyModuleString *>(), testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*index_schema, GetIdentifier(::testing::_))
+      .Times(::testing::AnyNumber())
+      .WillRepeatedly(
+          [schema_ptr = index_schema.get()](absl::string_view field) {
+            return schema_ptr->IndexSchema::GetIdentifier(field);
+          });
+  if (test_case.vector_query) {
+    // Vector index setup
+    data_model::VectorIndex vector_index_proto;
+    vector_index_proto.set_dimension_count(3);
+    vector_index_proto.set_initial_cap(100);
+    vector_index_proto.set_vector_data_type(
+        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+    auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
+    flat_algorithm_proto->set_block_size(100);
+    vector_index_proto.set_allocated_flat_algorithm(
+        flat_algorithm_proto.release());
+    auto index = indexes::VectorFlat<float>::Create(
+                     vector_index_proto, "attribute_identifier_1",
+                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                     .value();
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+  } else {
+    // Non Vector index setup
+    data_model::NumericIndex numeric_index_proto;
+    auto numeric_index =
+        std::make_shared<indexes::Numeric>(numeric_index_proto);
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_identifier_1", "id1", numeric_index));
+    data_model::TagIndex tag_index_proto;
+    auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
+    VMSDK_EXPECT_OK(index_schema->AddIndex(
+        "__score", "id3",
+        std::make_shared<indexes::Numeric>(numeric_index_proto)));
+  }
+  return index_schema;
+}
+
 TEST_P(FTSearchParserTest, Parse) {
   const FTSearchParserTestCase &test_case = GetParam();
+  auto index_schema = SetupIndexSchemaForTestCase(test_case, &fake_ctx_);
   if (!test_case.success || !test_case.search_parameters_str.empty()) {
-    DoVectorSearchParserTest(test_case, 0, 0, false, false, std::nullopt);
+    DoVectorSearchParserTest(test_case, index_schema, 0, 0, false, false,
+                             std::nullopt);
     return;
   }
   for (size_t dialect_itr = 0; dialect_itr < kDialectOptions.size();
@@ -355,20 +393,47 @@ TEST_P(FTSearchParserTest, Parse) {
       for (bool add_end_unexpected_param : {false, true}) {
         for (bool no_content : {false, true}) {
           for (uint64_t timeout_ms : {100, 200}) {
-            DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
-                                     add_end_unexpected_param, no_content,
-                                     timeout_ms);
+            DoVectorSearchParserTest(test_case, index_schema, dialect_itr,
+                                     limit_itr, add_end_unexpected_param,
+                                     no_content, timeout_ms);
           }
-          DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
-                                   add_end_unexpected_param, no_content,
-                                   std::nullopt);
-          DoVectorSearchParserTest(test_case, dialect_itr, limit_itr,
-                                   add_end_unexpected_param, no_content,
-                                   query::kMaxTimeoutMs + 1);
+          DoVectorSearchParserTest(test_case, index_schema, dialect_itr,
+                                   limit_itr, add_end_unexpected_param,
+                                   no_content, std::nullopt);
+          DoVectorSearchParserTest(test_case, index_schema, dialect_itr,
+                                   limit_itr, add_end_unexpected_param,
+                                   no_content, query::kMaxTimeoutMs + 1);
         }
       }
     }
   }
+}
+
+class MaxTimeoutConfigTest : public vmsdk::ValkeyTest {};
+
+TEST_F(MaxTimeoutConfigTest, AppliesToSearchAndAggregate) {
+  auto &max_timeout_ms = options::GetMaxTimeoutMs();
+  const auto saved_max_timeout_ms = max_timeout_ms.GetValue();
+
+  VMSDK_EXPECT_OK(max_timeout_ms.SetValue(100));
+
+  SearchCommand search_parameters(0);
+  search_parameters.timeout_ms = 100;
+  VMSDK_EXPECT_OK(VerifyQueryString(search_parameters));
+  search_parameters.timeout_ms = 101;
+  EXPECT_EQ(VerifyQueryString(search_parameters).message(),
+            "TIMEOUT must be a positive integer greater than 0 and cannot "
+            "exceed 100.");
+
+  aggregate::AggregateParameters aggregate_parameters(0);
+  aggregate_parameters.timeout_ms = 100;
+  VMSDK_EXPECT_OK(VerifyQueryString(aggregate_parameters));
+  aggregate_parameters.timeout_ms = 101;
+  EXPECT_EQ(VerifyQueryString(aggregate_parameters).message(),
+            "TIMEOUT must be a positive integer greater than 0 and cannot "
+            "exceed 100.");
+
+  VMSDK_EXPECT_OK(max_timeout_ms.SetValue(saved_max_timeout_ms));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -514,6 +579,16 @@ INSTANTIATE_TEST_SUITE_P(
             .k = 10,
             .ef = 190,
             .score_as = "as_test",
+        },
+        {
+            // The KNN `AS` alias collides with a declared schema attribute, so
+            // SORTBY / WITHSORTKEYS on that name would ambiguously map to the
+            // vector distance. Reject at parse time (matches Redis).
+            .test_name = "score_as_collides_with_schema_field",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB As vec]",
+            .expected_error_message = "Property `vec` already exists in schema",
         },
         {
             .test_name = "empty_hash_field",
@@ -715,10 +790,11 @@ INSTANTIATE_TEST_SUITE_P(
             .test_name = "invalid_vector_parameters_1",
             .success = false,
             .params_str = " PARAMS 2",
+            // `=>ss[` is not a vector delimiter (non-whitespace between => and
+            // [), so the whole string is treated as a pre-filter expression,
+            // which fails to parse.
             .filter_str = "(*)=>ss[KNN 10 @vec $BLOB]",
-            .expected_error_message =
-                "Error parsing vector similarity parameters: `ss[KNN 10 @vec "
-                "$BLOB]`. Expecting '[' got 's'",
+            .expected_error_message = "Invalid filter expression:",
         },
         {
             .test_name = "invalid_vector_parameters_2",
@@ -962,6 +1038,80 @@ INSTANTIATE_TEST_SUITE_P(
                 "Error parsing value for the parameter `SLOP`",
             .search_parameters_str = "SLOP -100",
         },
+        // WITHSCORES parameter tests
+        {
+            .test_name = "withscores_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "WITHSCORES",
+            .with_scores = true,
+        },
+        {
+            .test_name = "withscores_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES",
+            .vector_query = false,
+            .with_scores = true,
+        },
+        // SCORER parameter tests
+        {
+            .test_name = "scorer_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "SCORER BM25STD",
+            .scorer = indexes::scoring::ScorerType::kBm25Std,
+        },
+        {
+            .test_name = "scorer_non_vector_query",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SCORER BM25STD",
+            .vector_query = false,
+            .scorer = indexes::scoring::ScorerType::kBm25Std,
+        },
+        {
+            .test_name = "withscores_and_scorer_combined",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES SCORER BM25STD",
+            .vector_query = false,
+            .with_scores = true,
+            .scorer = indexes::scoring::ScorerType::kBm25Std,
+        },
+        {
+            // TFIDF is not implemented; it must be rejected at parse time
+            // rather than accepted (which would abort at scoring).
+            .test_name = "scorer_tfidf_rejected",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "SCORER TFIDF",
+            .vector_query = false,
+        },
         // SORTBY tests
         {
             .test_name = "sortby_numeric_asc",
@@ -1042,6 +1192,70 @@ INSTANTIATE_TEST_SUITE_P(
             .sortby_order = query::SortOrder::kAscending,
             .sortby_enabled = true,
             .with_sort_keys = true,
+        },
+        {
+            // Adding WITHSCORES must not change how SORTBY resolves.
+            .test_name = "sortby_schema_field_named_score_with_withscores",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "WITHSCORES",
+            .vector_query = false,
+            .sortby_parameters_str = "SORTBY __score ASC",
+            .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+            .with_scores = true,
+        },
+        {
+            .test_name = "sortby_schema_field_named_score_no_withscores",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .vector_query = false,
+            .sortby_parameters_str = "SORTBY __score DESC",
+            .sortby_field = "__score",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
+        },
+        {
+            // SORTBY on the KNN score alias is accepted even though the alias
+            // is not an index field: it is a synthesized reply field.
+            .test_name = "sortby_vector_score_asc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test ASC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kAscending,
+            .sortby_enabled = true,
+        },
+        {
+            // Descending on the score alias is supported too: ApplySorting
+            // compares Neighbor.distance directly rather than relying on the
+            // natural KNN order.
+            .test_name = "sortby_vector_score_desc",
+            .success = true,
+            .params_str = " PARAMS 4 EF 190",
+            .filter_str = "(*)=>[KNN 10 @vec $BLOB EF_RUNTIMe $EF As as_test]",
+            .k = 10,
+            .ef = 190,
+            .score_as = "as_test",
+            .sortby_parameters_str = "SORTBY as_test DESC",
+            .sortby_field = "as_test",
+            .sortby_order = query::SortOrder::kDescending,
+            .sortby_enabled = true,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

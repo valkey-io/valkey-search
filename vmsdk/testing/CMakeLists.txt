@@ -54,14 +54,6 @@ target_include_directories(status_macros_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(status_macros_test PUBLIC vmsdklib)
 finalize_test_flags(status_macros_test)
 
-set(SRCS_MEMORY_ALLOCATION_TEST
-    ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_test.cc)
-add_executable(memory_allocation_test ${SRCS_MEMORY_ALLOCATION_TEST})
-target_include_directories(memory_allocation_test
-                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(memory_allocation_test PUBLIC vmsdklib)
-finalize_test_flags(memory_allocation_test)
-
 set(SRCS_UTILS_TEST ${CMAKE_CURRENT_LIST_DIR}/utils_test.cc)
 add_executable(utils_test ${SRCS_UTILS_TEST})
 target_include_directories(utils_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -91,6 +83,15 @@ target_link_libraries(cluster_map_test PUBLIC vmsdklib)
 target_link_libraries(cluster_map_test PUBLIC vmsdk_testing_infra)
 target_link_libraries(cluster_map_test PUBLIC valkey_module)
 finalize_test_flags(cluster_map_test)
+
+set(SRCS_LATENCY_SAMPLER_TEST
+    ${CMAKE_CURRENT_LIST_DIR}/latency_sampler_test.cc)
+add_executable(latency_sampler_test ${SRCS_LATENCY_SAMPLER_TEST})
+target_include_directories(latency_sampler_test
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(latency_sampler_test PUBLIC vmsdklib)
+target_link_libraries(latency_sampler_test PUBLIC vmsdk_testing_infra)
+finalize_test_flags(latency_sampler_test)
 
 string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
 if("${SAN_BUILD_LOWER}" STREQUAL "no")

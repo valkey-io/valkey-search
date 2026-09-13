@@ -28,13 +28,24 @@ using ExprPtr = std::unique_ptr<Expression>;
 constexpr absl::string_view kInvalidOrMissingExpression{
     "Invalid or missing expression"};
 
+// 1.3.0 fix shared by every expression site: a reference to a field the key
+// does not have propagates as missing, rather than the operator or function
+// substituting a reason of its own -- which read as "evaluated to nothing" and
+// so kept the record and the alias. Returns true when the new (propagating)
+// behavior should be taken. Single counter for all the sites below.
+static bool MissingPropagates() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "expr_missing_propagates", [] { return true; },
+      [] { return false; });
+}
+
 struct Constant : Expression {
   Constant(std::string constant) : constant_(std::move(constant)) {}
   Constant(double constant) : constant_(constant) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return constant_;
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << "Constant(" << constant_ << ")";
   }
 
@@ -43,12 +54,12 @@ struct Constant : Expression {
 };
 
 struct Parameter : Expression {
-  Parameter(std::string&& name, Value&& value)
+  Parameter(std::string &&name, Value &&value)
       : name_(std::move(name)), value_(std::move(value)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return value_;
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << "$" << name_ << "(" << value_ << ")";
   }
 
@@ -61,10 +72,10 @@ struct AttributeValue : Expression {
   AttributeValue(std::string identifier,
                  std::unique_ptr<AttributeReference> ref)
       : identifier_(std::move(identifier)), ref_(std::move(ref)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return ref_->GetValue(ctx, record);
   }
-  void Dump(std::ostream& os) const override { os << '@' << identifier_; }
+  void Dump(std::ostream &os) const override { os << '@' << identifier_; }
 
  private:
   std::string identifier_;
@@ -72,16 +83,19 @@ struct AttributeValue : Expression {
 };
 
 struct Not : Expression {
-  Not(ExprPtr&& p) : expr_(std::move(p)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
-    auto Primary = expr_->Evaluate(ctx, record).AsBool();
-    if (Primary) {
-      return Value(!*Primary);
-    } else {
-      return Value{};
+  Not(ExprPtr &&p) : expr_(std::move(p)) {}
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
+    auto value = expr_->Evaluate(ctx, record);
+    // AsBool reads a nil as false, so without this `!(@absent)` answers true
+    // -- a wrong value rather than merely an unpropagated one.
+    if (value.IsMissing() && MissingPropagates()) {
+      return Value::Missing();
     }
+    // AsBool has a result for every other alternative, so the optional is
+    // always engaged; the dereference is safe.
+    return Value(!*value.AsBool());
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << '!';
     expr_->Dump(os);
   }
@@ -91,19 +105,19 @@ struct Not : Expression {
 };
 
 struct FunctionCall : Expression {
-  using Func = Value (*)(EvalContext& ctx, const Record& record,
-                         const absl::InlinedVector<ExprPtr, 4>& params);
+  using Func = Value (*)(EvalContext &ctx, const Record &record,
+                         const absl::InlinedVector<ExprPtr, 4> &params);
   static absl::StatusOr<Func> LookUpAndValidate(
-      const std::string& name, const absl::InlinedVector<ExprPtr, 4>& params);
+      const std::string &name, const absl::InlinedVector<ExprPtr, 4> &params);
   FunctionCall(std::string name, Func func,
                absl::InlinedVector<ExprPtr, 4> params)
       : name_(std::move(name)), func_(func), params_(std::move(params)) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return (*func_)(ctx, record, params_);
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << name_ << '(';
-    for (auto& p : params_) {
+    for (auto &p : params_) {
       if (&p != &params_[0]) {
         os << ',';
       }
@@ -118,69 +132,96 @@ struct FunctionCall : Expression {
   absl::InlinedVector<ExprPtr, 4> params_;
 };
 
-template <Value (*func1)(const Value& o)>
+// Redisearch drops a record whose expression reached for a field the key does
+// not have, so a missing argument short-circuits the whole call. exists() is
+// the exception: answering that question *is* its job, so it asks for the
+// missing value with kMissingIsAnArgument.
+constexpr bool kMissingIsAnArgument = true;
+
+template <Value (*func1)(const Value &o), bool pass_missing = false>
 Value MonadicFunctionProxy(
-    Expression::EvalContext& ctx, const Expression::Record& record,
-    const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+    Expression::EvalContext &ctx, const Expression::Record &record,
+    const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 1);
-  return (*func1)(params[0]->Evaluate(ctx, record));
+  auto value = params[0]->Evaluate(ctx, record);
+  if (!pass_missing && value.IsMissing() && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func1)(value);
 };
 
-template <Value (*func2)(const Value& l, const Value& r)>
-Value DyadicFunctionProxy(Expression::EvalContext& ctx,
-                          const Expression::Record& record,
-                          const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+template <Value (*func2)(const Value &l, const Value &r)>
+Value DyadicFunctionProxy(Expression::EvalContext &ctx,
+                          const Expression::Record &record,
+                          const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 2);
-  return (*func2)(params[0]->Evaluate(ctx, record),
-                  params[1]->Evaluate(ctx, record));
+  auto l = params[0]->Evaluate(ctx, record);
+  auto r = params[1]->Evaluate(ctx, record);
+  if ((l.IsMissing() || r.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func2)(l, r);
 };
 
-template <Value (*func3)(const Value& l, const Value& m, const Value& r)>
+template <Value (*func3)(const Value &l, const Value &m, const Value &r)>
 Value TriadicFunctionProxy(
-    Expression::EvalContext& ctx, const Expression::Record& record,
-    const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+    Expression::EvalContext &ctx, const Expression::Record &record,
+    const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 3);
-  return (*func3)(params[0]->Evaluate(ctx, record),
-                  params[1]->Evaluate(ctx, record),
-                  params[2]->Evaluate(ctx, record));
+  auto l = params[0]->Evaluate(ctx, record);
+  auto m = params[1]->Evaluate(ctx, record);
+  auto r = params[2]->Evaluate(ctx, record);
+  if ((l.IsMissing() || m.IsMissing() || r.IsMissing()) &&
+      MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func3)(l, m, r);
 };
 
-using Func = Value (*)(Expression::EvalContext& ctx,
-                       const Expression::Record& record,
-                       const absl::InlinedVector<ExprPtr, 4>& params);
+using Func = Value (*)(Expression::EvalContext &ctx,
+                       const Expression::Record &record,
+                       const absl::InlinedVector<ExprPtr, 4> &params);
 
-Value FuncExists(const Value& o) { return Value(!o.IsNil()); }
+Value FuncExists(const Value &o) { return Value(!o.IsNil()); }
 
-Value ProxyConcat(Expression::EvalContext& ctx,
-                  const Expression::Record& record,
-                  const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+Value ProxyConcat(Expression::EvalContext &ctx,
+                  const Expression::Record &record,
+                  const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   absl::InlinedVector<Value, 4> values;
-  for (auto& p : params) {
+  for (auto &p : params) {
     values.emplace_back(p->Evaluate(ctx, record));
   }
   return FuncConcat(values);
 }
 
-Value ProxyTimefmt(Expression::EvalContext& ctx,
-                   const Expression::Record& record,
-                   const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+Value ProxyTimefmt(Expression::EvalContext &ctx,
+                   const Expression::Record &record,
+                   const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
   }
-  return FuncTimefmt(params[0]->Evaluate(ctx, record), fmt);
+  auto value = params[0]->Evaluate(ctx, record);
+  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return FuncTimefmt(value, fmt);
 }
 
-Value ProxyParsetime(Expression::EvalContext& ctx,
-                     const Expression::Record& record,
-                     const absl::InlinedVector<expr::ExprPtr, 4>& params) {
+Value ProxyParsetime(Expression::EvalContext &ctx,
+                     const Expression::Record &record,
+                     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
   }
-  return FuncParsetime(params[0]->Evaluate(ctx, record), fmt);
+  auto value = params[0]->Evaluate(ctx, record);
+  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return FuncParsetime(value, fmt);
 }
 
 struct FunctionTableEntry {
@@ -190,7 +231,7 @@ struct FunctionTableEntry {
 };
 
 static std::map<std::string, FunctionTableEntry> function_table{
-    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists>}},
+    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>}},
 
     {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>}},
     {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>}},
@@ -223,7 +264,7 @@ static std::map<std::string, FunctionTableEntry> function_table{
 };
 
 absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
-    const std::string& name, const absl::InlinedVector<ExprPtr, 4>& params) {
+    const std::string &name, const absl::InlinedVector<ExprPtr, 4> &params) {
   auto it = function_table.find(name);
   if (it == function_table.end()) {
     return absl::NotFoundError(absl::StrCat("Function ", name, " is unknown"));
@@ -253,18 +294,35 @@ absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
 //
 
 struct Dyadic : Expression {
-  using ValueFunc = Value (*)(const Value&, const Value&);
+  using ValueFunc = Value (*)(const Value &, const Value &);
   Dyadic(ExprPtr lexpr, ExprPtr rexpr, ValueFunc func, absl::string_view name)
       : lexpr_(std::move(lexpr)),
         rexpr_(std::move(rexpr)),
         func_(func),
         name_(name) {}
-  Value Evaluate(EvalContext& ctx, const Record& record) const override {
+  Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto lvalue = lexpr_->Evaluate(ctx, record);
     auto rvalue = rexpr_->Evaluate(ctx, record);
+    // Redisearch drops a record whose APPLY expression reached for a field the
+    // key does not have, however deep in the expression that reference sat.
+    // Without this the operator manufactures its own reason ("Add requires
+    // numeric operands"), which reads as "evaluated to nothing" and keeps the
+    // record. Safe only because a field named by a stage is now loaded
+    // implicitly, so an unpopulated slot means the key really lacks it.
+    // `&&` is the exception, measured against Redis 8: a missing operand
+    // there is simply falsy, so the record is kept and the alias replies 0,
+    // whichever side the reference sat on. Letting the operator run gives
+    // exactly that, because AsBool() already reads a nil as false. Redis 8
+    // also truncates the result stream after such a row, which is not
+    // reproduced here; see known_differences.md.
+    const bool logical_and = name_ == "&&";
+    if (!logical_and && (lvalue.IsMissing() || rvalue.IsMissing()) &&
+        MissingPropagates()) {
+      return Value::Missing();
+    }
     return (*func_)(lvalue, rvalue);
   }
-  void Dump(std::ostream& os) const override {
+  void Dump(std::ostream &os) const override {
     os << '(';
     lexpr_->Dump(os);
     os << name_;
@@ -284,8 +342,8 @@ bool IsIdentifierChar(int c) {
 }
 
 struct DepthGuard {
-  int& depth;
-  DepthGuard(int& d) : depth(d) { ++depth; }
+  int &depth;
+  DepthGuard(int &d) : depth(d) { ++depth; }
   ~DepthGuard() { --depth; }
 };
 
@@ -296,12 +354,12 @@ struct Compiler {
 
   using CompileContext = Expression::CompileContext;
 
-  using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext& ctx);
+  using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext &ctx);
 
   using DyadicOp = std::pair<absl::string_view, Dyadic::ValueFunc>;
 
-  absl::StatusOr<ExprPtr> DoDyadic(CompileContext& ctx, ParseFunc func,
-                                   const std::vector<DyadicOp>& ops) {
+  absl::StatusOr<ExprPtr> DoDyadic(CompileContext &ctx, ParseFunc func,
+                                   const std::vector<DyadicOp> &ops) {
     utils::Scanner s = s_;
     DBG << "Start Dyadic: " << ops[0].first << " Remaining: '"
         << s_.GetUnscanned() << "'\n";
@@ -313,7 +371,7 @@ struct Compiler {
     while (s_.SkipWhiteSpacePeekByte() != EOF) {
       s = s_;
       bool found = false;
-      for (auto& op : ops) {
+      for (auto &op : ops) {
         DBG << "Dyadic looking for " << op.first
             << " Remaining: " << s_.GetUnscanned() << "\n";
         if (s_.SkipWhiteSpacePopWord(op.first)) {
@@ -341,7 +399,7 @@ struct Compiler {
     return lvalue;
   }
 
-  absl::StatusOr<ExprPtr> ParseParameter(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseParameter(CompileContext &ctx) {
     CHECK(s_.PopByte('$'));
     std::string param_name;
     while (IsIdentifierChar(s_.PeekByte())) {
@@ -352,7 +410,7 @@ struct Compiler {
                                        std::move(param_value));
   }
 
-  absl::StatusOr<ExprPtr> Invert(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Invert(CompileContext &ctx) {
     CHECK(s_.PopByte('!'));
     VMSDK_ASSIGN_OR_RETURN(auto expr, Primary(ctx));
     if (!expr) {
@@ -361,7 +419,7 @@ struct Compiler {
     return std::make_unique<Not>(std::move(expr));
   }
 
-  absl::StatusOr<ExprPtr> Primary(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Primary(CompileContext &ctx) {
     DepthGuard guard(depth_);
     if (depth_ > options::GetQueryStringDepth().GetValue()) {
       return absl::InvalidArgumentError("Expression too complex");
@@ -409,7 +467,7 @@ struct Compiler {
         return ParseFunctionCall(ctx);
     }
   }
-  absl::StatusOr<ExprPtr> Attribute(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Attribute(CompileContext &ctx) {
     CHECK(s_.PopByte('@'));
     size_t pos = s_.GetPosition();
     std::string identifier;
@@ -422,7 +480,7 @@ struct Compiler {
                            _ << " near position " << pos);
     return std::make_unique<AttributeValue>(identifier, std::move(ref));
   }
-  absl::StatusOr<ExprPtr> ParseFunctionCall(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseFunctionCall(CompileContext &ctx) {
     std::string name;
     utils::Scanner s = s_;
     while (IsIdentifierChar(s_.PeekByte())) {
@@ -460,7 +518,7 @@ struct Compiler {
       }
     }
   }
-  absl::StatusOr<ExprPtr> Number(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Number(CompileContext &ctx) {
     DBG << "Number Start: '" << s_.GetUnscanned() << "'\n";
     auto num = s_.PopDouble();
     if (!num) {
@@ -470,7 +528,7 @@ struct Compiler {
         << "'\n";
     return std::make_unique<Constant>(*num);
   }
-  absl::StatusOr<ExprPtr> QuotedString(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> QuotedString(CompileContext &ctx) {
     std::string str;
     int start_byte = s_.NextByte();
     while (s_.PeekByte() != start_byte) {
@@ -496,46 +554,90 @@ struct Compiler {
   // The precedence ordering is (highest to lowest)
   //
   //  Primary: Number, Field, ()
-  //  MulOp: * / ^
-  //  AddOp: + -
-  //  CmpOp: < <= == != > >=
-  //  LandOp: &&
-  //  LorOp: ||
+  //  PowOp:   ^                 (Redisearch-compatible since 1.3.0)
+  //  MulOp:   * /
+  //  AddOp:   + -
+  //  CmpOp:   < <= == != > >=
+  //  LandOp:  &&                (Redisearch-compatible since 1.3.0)
+  //  LorOp:   ||
   //
-  absl::StatusOr<ExprPtr> LorOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
-        {"||", &FuncLor},
+  // Pre-1.3.0 valkey-search put `^` at the same precedence as `*` and `/`,
+  // making expressions like `@a*@b^@c` parse as `(@a*@b)^@c` instead of the
+  // Redisearch-compatible `@a*(@b^@c)`. Pre-1.3.0 also put `&&` and `||` at
+  // the same level, making `@a||@b&&@c` parse as `(@a||@b)&&@c` instead of
+  // the C/SQL-standard `@a||(@b&&@c)` that Redisearch follows. Both fixes are
+  // gated by search.emulate-release per COMPATIBILITY.md.
+  absl::StatusOr<ExprPtr> LorOp(CompileContext &ctx) {
+    static const std::vector<DyadicOp> kFixedLorOps{{"||", &FuncLor}};
+    static const std::vector<DyadicOp> kLegacyLogicalOps{{"||", &FuncLor},
+                                                         {"&&", &FuncLand}};
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::LandOp, kFixedLorOps); };
+    auto legacy = [&] {
+      return DoDyadic(ctx, &Compiler::CmpOp, kLegacyLogicalOps);
     };
-    return DoDyadic(ctx, &Compiler::LandOp, ops);
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_logical_precedence", fixed, legacy);
   }
-  absl::StatusOr<ExprPtr> LandOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
-        {"&&", &FuncLand},
-    };
+  absl::StatusOr<ExprPtr> LandOp(CompileContext &ctx) {
+    static const std::vector<DyadicOp> ops{{"&&", &FuncLand}};
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
-  absl::StatusOr<ExprPtr> CmpOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
                                      {"==", &FuncEq}, {"!=", &FuncNe},
                                      {">=", &FuncGe}, {">", &FuncGt}};
     return DoDyadic(ctx, &Compiler::AddOp, ops);
   }
-  absl::StatusOr<ExprPtr> AddOp(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> AddOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{{"+", &FuncAdd}, {"-", &FuncSub}};
     return DoDyadic(ctx, &Compiler::MulOp, ops);
   }
-  absl::StatusOr<ExprPtr> MulOp(CompileContext& ctx) {
-    static std::vector<DyadicOp> ops{
+  absl::StatusOr<ExprPtr> MulOp(CompileContext &ctx) {
+    // Hoisted out of the lambda bodies because the preprocessor splits macro
+    // arguments on commas and would see the brace-initializers as multiple
+    // args.
+    static const std::vector<DyadicOp> kFixedMulOps{{"*", &FuncMul},
+                                                    {"/", &FuncDiv}};
+    static const std::vector<DyadicOp> kLegacyMulOps{
         {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
-    return DoDyadic(ctx, &Compiler::Primary, ops);
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::PowOp, kFixedMulOps); };
+    auto legacy = [&] {
+      return DoDyadic(ctx, &Compiler::Primary, kLegacyMulOps);
+    };
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_pow_precedence", fixed, legacy);
+  }
+  // `^` is right-associative in Redisearch: `a^b^c` == `a^(b^c)`. DoDyadic
+  // would produce a left-fold (`(a^b)^c`), so recurse into PowOp for the rhs
+  // instead. Each recursion grows the C++ stack, so this level must guard the
+  // depth counter itself — Primary's DepthGuard releases on every return and
+  // would otherwise let `a^b^c^…^z` bypass search.query-string-depth.
+  absl::StatusOr<ExprPtr> PowOp(CompileContext &ctx) {
+    DepthGuard guard(depth_);
+    if (depth_ > options::GetQueryStringDepth().GetValue()) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto lvalue, Primary(ctx));
+    if (!lvalue) {
+      return nullptr;
+    }
+    if (s_.SkipWhiteSpacePopWord("^")) {
+      VMSDK_ASSIGN_OR_RETURN(auto rvalue, PowOp(ctx));
+      if (!rvalue) {
+        return absl::InvalidArgumentError("Invalid or missing expression");
+      }
+      lvalue = std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue),
+                                        &FuncPower, "^");
+    }
+    return lvalue;
   }
 
-  absl::StatusOr<ExprPtr> ParseExpression(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> ParseExpression(CompileContext &ctx) {
     DBG << "Start Expression: '" << s_.GetUnscanned() << "'\n";
     return LorOp(ctx);
   }
 
-  absl::StatusOr<ExprPtr> Compile(CompileContext& ctx) {
+  absl::StatusOr<ExprPtr> Compile(CompileContext &ctx) {
     VMSDK_ASSIGN_OR_RETURN(auto result, ParseExpression(ctx));
     if (!result) {
       return absl::InvalidArgumentError(kInvalidOrMissingExpression);
@@ -549,7 +651,7 @@ struct Compiler {
   }
 };
 
-absl::StatusOr<ExprPtr> Expression::Compile(CompileContext& ctx,
+absl::StatusOr<ExprPtr> Expression::Compile(CompileContext &ctx,
                                             absl::string_view s) {
   Compiler c(s);
   return c.Compile(ctx);

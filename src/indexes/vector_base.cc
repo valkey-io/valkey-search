@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, valkey-search contributors
+ * Copyright (c) 2026, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
  *
@@ -10,7 +10,6 @@
 #include <sys/types.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -19,7 +18,6 @@
 #include <optional>
 #include <queue>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -28,14 +26,13 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
@@ -43,41 +40,107 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
-#include "src/vector_externalizer.h"
+#include "src/vector_registry.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "third_party/hnswlib/space_ip.h"
-#include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-constexpr float kDefaultMagnitude = -1.0f;
-
-namespace {
-
-template <typename T>
-std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
-    int dimensions, valkey_search::data_model::DistanceMetric distance_metric) {
-  if constexpr (std::is_same_v<T, float>) {
-    if (distance_metric ==
-            valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
-        distance_metric ==
-            valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_IP) {
-      return std::make_unique<hnswlib::InnerProductSpace>(dimensions);
-    } else {
-      return std::make_unique<hnswlib::L2Space>(dimensions);
-    }
-  }
-  DCHECK(false) << "no matching spacer";
-  return std::make_unique<hnswlib::L2Space>(dimensions);
-}
-
-}  // namespace
 
 namespace indexes {
+
+template <typename T>
+float CalcReciprocalMagnitude(const T *src, size_t size) {
+  // Accumulate in float even when T is 2 bytes: squaring a half-precision
+  // value overflows its own exponent range well before it overflows float.
+  float sum_sq = 0.0f;
+  for (size_t i = 0; i < size; i++) {
+    float v = static_cast<float>(src[i]);
+    sum_sq += v * v;
+  }
+  return (sum_sq == 0.0f) ? 1.0f : (1.0f / std::sqrt(sum_sq));
+}
+
+template float CalcReciprocalMagnitude<float>(const float *, size_t);
+template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
+template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *, size_t);
+
+float CalcReciprocalMagnitude(absl::string_view record,
+                              data_model::VectorDataType data_type) {
+  switch (data_type) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return CalcReciprocalMagnitude(
+          reinterpret_cast<const float *>(record.data()),
+          record.size() / sizeof(float));
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return CalcReciprocalMagnitude(
+          reinterpret_cast<const float16 *>(record.data()),
+          record.size() / sizeof(float16));
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      return CalcReciprocalMagnitude(
+          reinterpret_cast<const bfloat16 *>(record.data()),
+          record.size() / sizeof(bfloat16));
+    default:
+      CHECK(false) << "unsupported vector data type";
+  }
+}
+
+template <typename T>
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  float reciprocal_magnitude) {
+  if (ABSL_PREDICT_FALSE(reciprocal_magnitude == 0.0f)) {
+    reciprocal_magnitude = 1.0f;
+  }
+  size_t dimensions = record.size() / sizeof(T);
+  const T *src = reinterpret_cast<const T *>(record.data());
+  std::vector<char> ret(record.size());
+  T *dst = reinterpret_cast<T *>(ret.data());
+  for (size_t i = 0; i < dimensions; i++) {
+    // Scale in float, then round once back into T. Scaling in T would
+    // double-round for the 2-byte types.
+    dst[i] = static_cast<T>(reciprocal_magnitude * static_cast<float>(src[i]));
+  }
+  return ret;
+}
+
+template <typename T>
+std::vector<char> NormalizeVector(absl::string_view record, float *magnitude) {
+  float reciprocal_magnitude = CalcReciprocalMagnitude(
+      reinterpret_cast<const T *>(record.data()), record.size() / sizeof(T));
+  std::vector<char> ret = NormalizeVector<T>(record, reciprocal_magnitude);
+
+  if (magnitude) {
+    *magnitude = 1.0f / reciprocal_magnitude;
+  }
+  return ret;
+}
+
+template std::vector<char> NormalizeVector<float>(absl::string_view, float);
+template std::vector<char> NormalizeVector<float16>(absl::string_view, float);
+template std::vector<char> NormalizeVector<bfloat16>(absl::string_view, float);
+template std::vector<char> NormalizeVector<float>(absl::string_view, float *);
+template std::vector<char> NormalizeVector<float16>(absl::string_view, float *);
+template std::vector<char> NormalizeVector<bfloat16>(absl::string_view,
+                                                     float *);
+
+std::vector<char> NormalizeVector(absl::string_view record,
+                                  data_model::VectorDataType data_type,
+                                  float reciprocal_magnitude) {
+  switch (data_type) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return NormalizeVector<float>(record, reciprocal_magnitude);
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return NormalizeVector<float16>(record, reciprocal_magnitude);
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      return NormalizeVector<bfloat16>(record, reciprocal_magnitude);
+    default:
+      CHECK(false) << "unsupported vector data type";
+  }
+}
+
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
   key_ = &key;
@@ -96,7 +159,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
-  auto value = predicate.GetIndex()->GetValue(*key_);
+  const auto *value = predicate.GetIndex()->GetValue(*key_);
   return predicate.Evaluate(value);
 }
 
@@ -109,82 +172,25 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
-template <typename T>
-T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
-  T magnitude = 0.0f;
-  for (size_t i = 0; i < size; i++) {
-    magnitude += src[i] * src[i];
-  }
-  magnitude = std::sqrt(magnitude);
-  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
-  for (size_t i = 0; i < size; i++) {
-    dst[i] = norm * src[i];
-  }
-  return magnitude;
-}
-
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float *magnitude) {
-  std::vector<char> ret(record.size());
-  if (type_size == sizeof(float)) {
-    float result = CopyAndNormalizeEmbedding(
-        (float *)&ret[0], (float *)record.data(), ret.size() / sizeof(float));
-    if (magnitude) {
-      *magnitude = result;
-    }
-    return ret;
-  }
-  CHECK(false) << "unsupported type size";
-}
-
-template <typename T>
-void VectorBase::Init(int dimensions,
-                      valkey_search::data_model::DistanceMetric distance_metric,
-                      std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
-  space = CreateSpace<T>(dimensions, distance_metric);
-  distance_metric_ = distance_metric;
-  if (distance_metric ==
-      valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE) {
-    normalize_ = true;
-  }
-}
-
-InternedStringPtr VectorBase::InternVector(absl::string_view record,
-                                           std::optional<float> &magnitude) {
-  if (!IsValidSizeVector(record)) {
-    return {};
-  }
-  if (normalize_) {
-    magnitude = kDefaultMagnitude;
-    auto norm_record =
-        NormalizeEmbedding(record, GetDataTypeSize(), &magnitude.value());
-    return StringInternStore::Intern(
-        absl::string_view((const char *)norm_record.data(), norm_record.size()),
-        vector_allocator_.get());
-  }
-  return StringInternStore::Intern(record, vector_allocator_.get());
+VectorBase::~VectorBase() {
+  vmsdk::VerifyMainThread();
+  VectorRegistry::Instance().RemoveIndexKeys(
+      db_num_, interned_attribute_identifier_, std::move(key_by_internal_id_));
 }
 
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
-                                                   absl::string_view record) {
-  std::optional<float> magnitude;
-  auto interned_vector = InternVector(record, magnitude);
-  if (!interned_vector) {
-    // A vector with the wrong byte length cannot be interned: invalid data.
+                                                   AttributeData &&data) {
+  CHECK(data.IsVector());
+  if (!IsValidSizeVector(data.GetLength())) {
     return RecordResult::kInvalidData;
   }
-  VMSDK_ASSIGN_OR_RETURN(
-      auto internal_id,
-      TrackKey(key, magnitude.value_or(kDefaultMagnitude), interned_vector));
-  absl::Status add_result = AddRecordImpl(internal_id, interned_vector->Str());
+  auto vector_record = data.ConsumeVector();
+  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
+  VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
+  absl::Status add_result =
+      AddRecordImpl(internal_id, std::move(vector_record));
   if (!add_result.ok()) {
-    auto untrack_result = UnTrackKey(key);
-    if (!untrack_result.ok()) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "While processing error for AddRecord, encountered error in "
-             "UntrackKey: "
-          << untrack_result.status().message();
-    }
+    RemoveRecordDueToError(key, internal_id);
     return add_result;
   }
   return RecordResult::kAdded;
@@ -219,39 +225,27 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 }
 
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
-    const InternedStringPtr &key, absl::string_view record) {
-  // VectorExternalizer tracks added entries. We need to untrack mutations which
-  // are processed as modified records.
-  std::optional<float> magnitude;
-  auto interned_vector = InternVector(record, magnitude);
-  if (!interned_vector) {
-    // A vector with the wrong byte length cannot be interned: invalid data.
+    const InternedStringPtr &key, AttributeData &&data) {
+  CHECK(data.IsVector());
+  if (!IsValidSizeVector(data.GetLength())) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return RecordResult::kInvalidData;
   }
+  auto vector_record = data.ConsumeVector();
+  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
   VMSDK_ASSIGN_OR_RETURN(
-      bool res, UpdateMetadata(key, magnitude.value_or(kDefaultMagnitude),
-                               interned_vector));
-  if (!res) {
-    // The new vector is identical to the tracked one: nothing to re-index. This
-    // is a no-op, not invalid data.
+      bool res, IsVectorUnchanged(key, magnitude, vector_record.get()));
+  if (res) {
     return RecordResult::kMissing;
   }
 
-  auto modify_result = ModifyRecordImpl(internal_id, interned_vector->Str());
+  auto modify_result = ModifyRecordImpl(internal_id, std::move(vector_record));
   if (!modify_result.ok()) {
-    auto untrack_result = UnTrackKey(key);
-    if (!untrack_result.ok()) {
-      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-          << "While processing error for ModifyRecord, encountered error "
-             "in UntrackKey: "
-          << untrack_result.status().message();
-    }
+    RemoveRecordDueToError(key, internal_id);
     return modify_result;
   }
-  TrackVector(internal_id, interned_vector);
   return RecordResult::kAdded;
 }
 
@@ -267,7 +261,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
       knn_res.pop();
       continue;
     }
-    // Insert in desc order.
+    // Insert in desc order. Will need an update with score in the future
     ret.emplace_back(Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
@@ -276,29 +270,24 @@ absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
   return ret;
 }
 
-absl::StatusOr<std::vector<char>> VectorBase::GetValue(
+absl::StatusOr<std::vector<char>> VectorBase::GetVectorDuringSearch(
     const InternedStringPtr &key) const {
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
     return absl::NotFoundError("Record was not found");
   }
   std::vector<char> result;
-  char *value = GetValueImpl(it->second.internal_id);
-  if (normalize_) {
-    if (it->second.magnitude < 0) {
-      return absl::InternalError("Magnitude is not initialized");
-    }
-    result = DenormalizeVector(absl::string_view(value, GetVectorDataSize()),
-                               GetDataTypeSize(), it->second.magnitude);
-  } else {
-    result.assign(value, value + GetVectorDataSize());
+  auto &vector_record = GetVectorLockFree(it->second.internal_id);
+  if (!vector_record) {
+    return absl::NotFoundError("Record was not found");
   }
+  const char *value = vector_record->GetRawVector();
+  result.assign(value, value + GetVectorDataSize());
   return result;
 }
 
 absl::StatusOr<bool> VectorBase::RemoveRecord(
-    const InternedStringPtr &key,
-    [[maybe_unused]] indexes::DeletionType deletion_type) {
+    const InternedStringPtr &key, indexes::DeletionType deletion_type) {
   VMSDK_ASSIGN_OR_RETURN(auto res, UnTrackKey(key));
   if (!res.has_value()) {
     return false;
@@ -307,18 +296,35 @@ absl::StatusOr<bool> VectorBase::RemoveRecord(
   return true;
 }
 
+void VectorBase::RemoveRecordDueToError(const InternedStringPtr &key,
+                                        std::optional<uint64_t> internal_id) {
+  auto res = UnTrackKey(key);
+  if (!res.ok()) {
+    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+        << "While processing error, failed to untrack the key "
+           "with id: "
+        << (internal_id.has_value() ? std::to_string(internal_id.value())
+                                    : "unknown")
+        << ": " << res.status().message();
+  }
+  if (internal_id.has_value()) {
+    auto remove_vector_res = RemoveRecordImpl(internal_id.value());
+    if (!remove_vector_res.ok()) {
+      VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+          << "While processing error, failed to remove vector with id: "
+          << internal_id.value() << ": " << remove_vector_res.message();
+    }
+  }
+}
+
 absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
     const InternedStringPtr &key) {
-  if (key->Str().empty()) {
-    return std::nullopt;
-  }
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto it = tracked_metadata_by_key_.find(key);
   if (it == tracked_metadata_by_key_.end()) {
     return std::nullopt;
   }
   auto id = it->second.internal_id;
-  UnTrackVector(id);
   tracked_metadata_by_key_.erase(it);
   auto key_by_internal_id_it = key_by_internal_id_.find(id);
   if (key_by_internal_id_it == key_by_internal_id_.end()) {
@@ -330,19 +336,8 @@ absl::StatusOr<std::optional<uint64_t>> VectorBase::UnTrackKey(
   return id;
 }
 
-char *VectorBase::TrackVector(uint64_t internal_id, char *vector, size_t len) {
-  auto interned_vector = StringInternStore::Intern(
-      absl::string_view(vector, len), vector_allocator_.get());
-  TrackVector(internal_id, interned_vector);
-  return (char *)interned_vector->Str().data();
-}
-
 absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
-                                              float magnitude,
-                                              const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
+                                              float magnitude) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
   auto id = inc_id_++;
   auto [_, succ] = tracked_metadata_by_key_.insert(
@@ -352,20 +347,15 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
     return absl::InvalidArgumentError(
         absl::StrCat("Embedding id already exists: ", key->Str()));
   }
-  TrackVector(id, vector);
   key_by_internal_id_.insert({id, key});
   return id;
 }
-// Return an error if the key is empty or not being tracked.
-// Return false if the tracked vector matches the input vector.
-// Otherwise, track the new vector and return true.
-absl::StatusOr<bool> VectorBase::UpdateMetadata(
+
+absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     const InternedStringPtr &key, float magnitude,
-    const InternedStringPtr &vector) {
-  if (key->Str().empty()) {
-    return absl::InvalidArgumentError("key can't be empty");
-  }
-  uint64_t internal_id;
+    const VectorRecord *vector_record) {
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  const VectorRecord *stored_record;
   {
     absl::WriterMutexLock lock(&key_to_metadata_mutex_);
     auto it = tracked_metadata_by_key_.find(key);
@@ -374,12 +364,18 @@ absl::StatusOr<bool> VectorBase::UpdateMetadata(
           absl::StrCat("Embedding id not found: ", key->Str()));
     }
     it->second.magnitude = magnitude;
-    internal_id = it->second.internal_id;
+    auto &stored_ptr = GetVector(it->second.internal_id);
+    if (!stored_ptr) {
+      return false;  // No stored record, so vectors are not matching
+    }
+    stored_record = stored_ptr.get();
   }
-  if (IsVectorMatch(internal_id, vector)) {
-    return false;
+  if (stored_record == vector_record) {
+    return true;  // Fast path: shared VectorRegistry record, definitely
+                  // matching
   }
-  return true;
+  return (std::memcmp(stored_record->GetRawVector(),
+                      vector_record->GetRawVector(), GetVectorDataSize()) == 0);
 }
 
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -394,7 +390,9 @@ int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(ctx, dimensions_);
   ValkeyModule_ReplyWithSimpleString(ctx, "distance_metric");
   ValkeyModule_ReplyWithSimpleString(
-      ctx, LookupKeyByValue(*kDistanceMetricByStr, distance_metric_).data());
+      ctx,
+      std::string(LookupKeyByValue(*kDistanceMetricByStr, distance_metric_))
+          .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "size");
   {
     absl::MutexLock lock(&key_to_metadata_mutex_);
@@ -409,8 +407,7 @@ int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 }
 
 absl::Status VectorBase::SaveIndex(RDBChunkOutputStream chunked_out) const {
-  VMSDK_RETURN_IF_ERROR(SaveIndexImpl(std::move(chunked_out)));
-  return absl::OkStatus();
+  return SaveIndexImpl(std::move(chunked_out));
 }
 
 absl::Status VectorBase::SaveTrackedKeys(
@@ -429,36 +426,11 @@ absl::Status VectorBase::SaveTrackedKeys(
   return absl::OkStatus();
 }
 
-void VectorBase::ExternalizeVector(ValkeyModuleCtx *ctx,
-                                   const AttributeDataType *attribute_data_type,
-                                   absl::string_view key_cstr,
-                                   absl::string_view attribute_identifier) {
-  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, vmsdk::MakeUniqueValkeyString(key_cstr).get(),
-      VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-  if (!key_obj || !attribute_data_type->IsProperType(key_obj.get())) {
-    return;
-  }
-  bool is_module_owned;
-  vmsdk::UniqueValkeyString record = VectorExternalizer::Instance().GetRecord(
-      ctx, attribute_data_type, key_obj.get(), key_cstr, attribute_identifier,
-      is_module_owned);
-  CHECK(!is_module_owned);
-  std::optional<float> magnitude;
-  auto interned_key = StringInternStore::Intern(key_cstr);
-  auto interned_vector =
-      InternVector(vmsdk::ToStringView(record.get()), magnitude);
-  if (interned_vector) {
-    VectorExternalizer::Instance().Externalize(
-        interned_key, attribute_identifier, attribute_data_type->ToProto(),
-        interned_vector, magnitude);
-  }
-}
-
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
                            _ << "Error loading metadata");
@@ -473,12 +445,27 @@ absl::Status VectorBase::LoadTrackedKeys(
           .magnitude = tracked_key_metadata.magnitude()}});
     key_by_internal_id_.insert(
         {tracked_key_metadata.internal_id(), interned_key});
-    ExternalizeVector(ctx, attribute_data_type, tracked_key_metadata.key(),
-                      attribute_identifier_);
+
+    auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
+    auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+        ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+    CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
+                   << interned_key->Str();
+    auto attribute_status = attribute_data_type->GetAttribute(
+        ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
+    CHECK(attribute_status.ok());
+    auto attribute_val = std::move(attribute_status.value());
+    if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
+      attribute_val = NormalizeStringAttribute(std::move(attribute_val));
+    }
+    auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
+        interned_key, attribute_val.get(), attribute_data_type->ToProto(),
+        db_num_, this);
+    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
+    save_vector = std::move(vector_record_with_size.vector_record);
   }
   // Use max label from label_lookup_
-  inc_id_ = GetMaxInternalLabel();
-  ++inc_id_;
+  inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
 
@@ -501,16 +488,28 @@ uint32_t VectorBase::GetMutationWeight() const {
 
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
-                                      absl::string_view query) const {
+                                      absl::string_view query,
+                                      float query_magnitude) const {
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalIdDuringSearch(key));
-  return ComputeDistanceFromRecordImpl(internal_id, query);
+  const auto &vector_record = GetVectorLockFree(internal_id);
+  if (!vector_record) {
+    return absl::InternalError(
+        absl::StrCat("Couldn't find internal id: ", internal_id));
+  }
+  if (normalize_) {
+    query_magnitude *= vector_record->GetReciprocalMagnitude();
+  }
+  return (std::pair<float, hnswlib::labeltype>){
+      ComputeDistance(query, vector_record.get(), query_magnitude),
+      internal_id};
 }
 
 bool VectorBase::AddPrefilteredKey(
-    absl::string_view query, uint64_t count, const InternedStringPtr &key,
+    absl::string_view query, float query_magnitude,
+    const InternedStringPtr &key, uint64_t count,
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
     absl::flat_hash_set<const char *> &top_keys) const {
-  auto result = ComputeDistanceFromRecord(key, query);
+  auto result = ComputeDistanceFromRecord(key, query, query_magnitude);
   if (!result.ok()) {
     return false;
   }
@@ -527,27 +526,6 @@ bool VectorBase::AddPrefilteredKey(
     return true;
   }
   return false;
-}
-
-vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
-    vmsdk::UniqueValkeyString record) const {
-  CHECK_EQ(GetDataTypeSize(), sizeof(float));
-  auto record_str = vmsdk::ToStringView(record.get());
-  if (absl::ConsumePrefix(&record_str, "[")) {
-    absl::ConsumeSuffix(&record_str, "]");
-  }
-  std::vector<std::string> float_strings =
-      absl::StrSplit(record_str, ',', absl::SkipWhitespace());
-  std::string binary_string;
-  binary_string.reserve(float_strings.size() * sizeof(float));
-  for (const auto &float_str : float_strings) {
-    float value;
-    if (!absl::SimpleAtof(float_str, &value)) {
-      return nullptr;
-    }
-    binary_string += std::string((char *)&value, sizeof(float));
-  }
-  return vmsdk::MakeUniqueValkeyString(binary_string);
 }
 
 size_t VectorBase::GetTrackedKeyCount() const {
@@ -567,8 +545,6 @@ bool VectorBase::IsUnTracked(const InternedStringPtr &key) const {
   return false;
 }
 
-void VectorBase::UnTrack(const InternedStringPtr &key) {}
-
 absl::Status VectorBase::ForEachTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   absl::MutexLock lock(&key_to_metadata_mutex_);
@@ -583,12 +559,57 @@ absl::Status VectorBase::ForEachUnTrackedKey(
   return absl::OkStatus();
 }
 
-template void VectorBase::Init<float>(
-    int dimensions, data_model::DistanceMetric distance_metric,
-    std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
-
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
+
+absl::Status CheckSimsimdBf16Capability() {
+#if defined(__SSE2__) || defined(__AVX512F__) || \
+    defined(__ARM_BF16_FORMAT_ALTERNATIVE__)
+  // This predicate mirrors third_party/simsimd/c/lib.c's SIMSIMD_NATIVE_BF16
+  // selection. When NATIVE_BF16 is 1, simsimd_bf16_t is a native bf16-like
+  // typedef (e.g. _Float16 on x86) and the serial fallback path
+  // (simsimd_l2sq_bf16_serial / simsimd_dot_bf16_serial) misinterprets the
+  // stored bits. The runtime CPU must therefore advertise at least one
+  // SIMD-targeted dispatch (haswell/genoa/sapphire on x86, neon_bf16/
+  // sve_bf16 on ARM) that loads raw 16-bit words and converts via shifts.
+  const bool has_simd_safe_bf16_path =
+      simsimd_uses_haswell() || simsimd_uses_genoa() ||
+      simsimd_uses_sapphire() || simsimd_uses_neon_bf16() ||
+      simsimd_uses_sve_bf16();
+  if (!has_simd_safe_bf16_path) {
+    return absl::FailedPreconditionError(
+        "BFLOAT16 indexes require a SIMD-targeted BF16 path "
+        "(Haswell/Genoa/Sapphire on x86, NEON-BF16/SVE-BF16 on ARM). "
+        "simsimd's serial BF16 fallback is unsafe under the current build "
+        "(SIMSIMD_NATIVE_BF16=1 in third_party/simsimd/c/lib.c). Either "
+        "run on a newer CPU or rebuild with SIMSIMD_NATIVE_BF16=0.");
+  }
+#endif
+  return absl::OkStatus();
+}
+
+std::shared_ptr<VectorRecord> VectorRecord::Construct(
+    absl::string_view vector, float reciprocal_magnitude,
+    Allocator *allocator) {
+  size_t total_size = sizeof(VectorRecord) + vector.size();
+  void *mem =
+      allocator ? allocator->Allocate(total_size) : ::operator new(total_size);
+  VectorRecord *ptr = new (mem) VectorRecord(vector, reciprocal_magnitude);
+  return {ptr, [allocator_used = (allocator != nullptr)](VectorRecord *p) {
+            p->~VectorRecord();
+            if (allocator_used) {
+              Allocator::Free(reinterpret_cast<char *>(p));
+            } else {
+              ::operator delete(p);
+            }
+          }};
+}
+
+VectorRecord::VectorRecord(absl::string_view vector, float reciprocal_magnitude)
+    : reciprocal_magnitude_(
+          reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude) {
+  std::memcpy(data_, vector.data(), vector.size());
+}
 }  // namespace indexes
 
 }  // namespace valkey_search

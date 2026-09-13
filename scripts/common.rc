@@ -43,6 +43,11 @@ function num_proc() {
   fi
 }
 
+function is_valid_parallel_workers() {
+  local val="$1"
+  [[ "$val" == "auto" || "$val" == "logical" || "$val" =~ ^[0-9]+$ ]]
+}
+
 function findup() {
   # Check if a filename was provided
   if [ -z "$1" ]; then
@@ -124,6 +129,15 @@ function pip_check_if_module_installed() {
 }
 
 function install_test_framework() {
+  local xdist_module_installed=$(pip_check_if_module_installed pytest-xdist)
+  if [[ "${xdist_module_installed}" == "no" ]]; then
+    LOG_INFO "Installing pytest-xdist dependency"
+    local testing_requirements_txt=${_WORKSPACE_HOME}/testing/integration/requirements.txt
+    if [ -f ${testing_requirements_txt} ]; then
+      ${PIP_PATH} install -r ${testing_requirements_txt}
+    fi
+  fi
+
   if [ ! -z "${VALKEY_TEST_FRAMEWORK}" ] &&
     [ -f "${VALKEY_TEST_FRAMEWORK}/LICENSE" ]; then
     LOG_INFO "Using valkey-test-framework => ${VALKEY_TEST_FRAMEWORK}"
@@ -141,14 +155,16 @@ function install_test_framework() {
 
   pushd ${test_framework_path} >/dev/null
   valkey_module_installed=$(pip_check_if_module_installed valkey)
-  if [[ "${valkey_module_installed}" == "no" ]]; then
+  xdist_module_installed=$(pip_check_if_module_installed pytest-xdist)
+  if [[ "${valkey_module_installed}" == "no" ]] || [[ "${xdist_module_installed}" == "no" ]]; then
     LOG_INFO "Installing dependencies"
     local requirements_txt=${test_framework_path}/requirements.txt
     local testing_requirements_txt=${_WORKSPACE_HOME}/testing/integration/requirements.txt
     if [ -f ${requirements_txt} ]; then
       LOG_INFO "Installing requirements file"
-      ${PIP_PATH} install -r ${requirements_txt} -r ${testing_requirements_txt}
+      ${PIP_PATH} install -r ${requirements_txt}
       ${PIP_PATH} install --upgrade pytest
+      ${PIP_PATH} install -r ${testing_requirements_txt}
     else
       LOG_ERROR "Missing ${requirements_txt} file. Broken installation?"
     fi
@@ -171,9 +187,18 @@ function setup_valkey_server() {
   fi
 
   # Clone and build it
-  VALKEY_VERSION="${VALKEY_VERSION:=9.0.1}"
+  VALKEY_VERSION="${VALKEY_VERSION:=9.1}"
   export VALKEY_SERVER_HOME_DIR=$(get_third_party_build_dir)/valkey-server
   export VALKEY_SERVER_BUILD_DIR=${VALKEY_SERVER_HOME_DIR}/.build-release
+  
+  local version_stamp_file="${VALKEY_SERVER_HOME_DIR}/.valkey_version_stamp"
+  if [ -d "${VALKEY_SERVER_HOME_DIR}" ]; then
+    if [ ! -f "${version_stamp_file}" ] || [ "$(cat "${version_stamp_file}")" != "${VALKEY_VERSION}" ]; then
+      LOG_INFO "Stale Valkey version detected (needed ${VALKEY_VERSION}). Wiping ${VALKEY_SERVER_HOME_DIR} and rebuilding..."
+      rm -rf "${VALKEY_SERVER_HOME_DIR}"
+    fi
+  fi
+
   if [ ! -d ${VALKEY_SERVER_HOME_DIR} ]; then
     LOG_INFO "Cloning valkey-server@${VALKEY_VERSION} into ${VALKEY_SERVER_HOME_DIR}"
     git clone --branch ${VALKEY_VERSION} --single-branch https://github.com/valkey-io/valkey.git ${VALKEY_SERVER_HOME_DIR}
@@ -193,6 +218,23 @@ function setup_valkey_server() {
   if [ ! -z "${SAN_BUILD}" ] && [[ "${SAN_BUILD}" != "no" ]]; then
     VALKEY_CMAKE_EXTRA_ARGS="-DBUILD_SANITIZER=${SAN_BUILD}"
     LOG_INFO "Building Valkey with Sanitizer options: -DBUILD_SANITIZER=${SAN_BUILD}"
+
+    # On Linux, make libstdc++ a direct dependency of valkey-server for
+    # sanitizer builds. libasan intercepts C++ __cxa_throw and at startup
+    # looks up the real one in libstdc++. If libstdc++ isn't loaded yet at
+    # that point, it caches nullptr and every later `throw` triggers a
+    # fatal libasan CHECK. Loading libstdc++ from valkey-server's own
+    # NEEDED list guarantees it's there early enough for the lookup to
+    # succeed. --no-as-needed keeps it linked despite Valkey's C sources
+    # not referencing any C++ symbols; push/pop scopes that override to
+    # just -lstdc++. These are GNU ld / ELF-specific flags, and macOS
+    # sanitizer builds use libc++ instead of libstdc++, so this only
+    # applies to Linux.
+    if [[ "${UNAME_S}" == "Linux" ]]; then
+      export LDFLAGS="${LDFLAGS} -Wl,--push-state,--no-as-needed,-lstdc++,--pop-state"
+      LOG_INFO "Forcing libstdc++ into valkey-server DT_NEEDED for reliable ASAN __cxa_throw interception (LDFLAGS: ${LDFLAGS})"
+    fi
+
     # Temporary workaround until these are merged into core upstream:
     # 1. IFUNC resolvers run before TSAN runtime initializes, so no_sanitize("thread") is required.
     # https://github.com/valkey-io/valkey/blob/4dee322edeb9c96029d89cfaf1600abad2afead0/src/util.c#L640-L642
@@ -216,6 +258,7 @@ function setup_valkey_server() {
   cmake -DCMAKE_BUILD_TYPE=Release .. ${VALKEY_CMAKE_EXTRA_ARGS}
   make -j$(num_proc)
   popd >/dev/null
+  echo "${VALKEY_VERSION}" > "${version_stamp_file}"
   export VALKEY_SERVER_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-server
   export VALKEY_CLI_PATH=${VALKEY_SERVER_BUILD_DIR}/bin/valkey-cli
   LOG_INFO "VALKEY_SERVER_PATH => ${VALKEY_SERVER_PATH}"
@@ -257,20 +300,39 @@ function setup_json_module() {
 
 # Loop over Valkey log files and search for sanitization errors
 function check_for_san_errors() {
-  local valkey_logs="$1"
+  local valkey_logs=($1)
+  local num_logs=${#valkey_logs[@]}
+  if [[ ${num_logs} -eq 0 ]]; then
+    return
+  fi
   local exit_with_error=0
   local files_to_dump=""
-  for logfile in ${valkey_logs}; do
-    printf "Checking log file ${logfile} for ASan/TSan errors"
-    local errors_count=$(cat ${logfile} | grep -wE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' | wc -l)
-    if [[ ${errors_count} -eq 0 ]]; then
-      printf "... ${GREEN}ok${RESET}\n"
+  if [[ ${num_logs} -gt 10 ]]; then
+    printf "Checking %d log files for ASan/TSan errors..." "${num_logs}"
+    for logfile in "${valkey_logs[@]}"; do
+      if grep -qwE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' "${logfile}" 2>/dev/null; then
+        exit_with_error=1
+        files_to_dump="${files_to_dump} ${logfile}"
+      fi
+    done
+    if [[ ${exit_with_error} -eq 0 ]]; then
+      printf " ${GREEN}ok${RESET}\n"
     else
-      printf "... ${RED}found errors!${RESET}\n"
-      exit_with_error=1
-      files_to_dump="${files_to_dump} ${logfile}"
+      printf " ${RED}found errors!${RESET}\n"
     fi
-  done
+  else
+    for logfile in "${valkey_logs[@]}"; do
+      printf "Checking log file ${logfile} for ASan/TSan errors"
+      local errors_count=$(cat ${logfile} | grep -wE 'AddressSanitizer|ThreadSanitizer|LeakSanitizer' | wc -l)
+      if [[ ${errors_count} -eq 0 ]]; then
+        printf "... ${GREEN}ok${RESET}\n"
+      else
+        printf "... ${RED}found errors!${RESET}\n"
+        exit_with_error=1
+        files_to_dump="${files_to_dump} ${logfile}"
+      fi
+    done
+  fi
 
   if [[ ${exit_with_error} -ne 0 ]]; then
     printf "\n\nDumping log files with errors\n\n"

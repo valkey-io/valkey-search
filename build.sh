@@ -178,12 +178,14 @@ while [ $# -gt 0 ]; do
     --asan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
         SAN_BUILD="address"
+        export ASAN_BUILD=1
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --tsan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
         SAN_BUILD="thread"
+        export TSAN_BUILD=1
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
@@ -233,6 +235,11 @@ fi
 
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD
+if [[ "${SAN_BUILD}" == "address" ]]; then
+    export ASAN_BUILD=1
+elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    export TSAN_BUILD=1
+fi
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
@@ -565,6 +572,11 @@ if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
 fi
 
+local_build_dir="${BUILD_DIR#${ROOT_DIR}/}"
+if [ -f "${BUILD_DIR}/compile_commands.json" ]; then
+    ln -sf "${local_build_dir}/compile_commands.json" "${ROOT_DIR}/compile_commands.json"
+fi
+
 if [[ "${RUN_BUILD}" == "yes" ]]; then
     build
 fi
@@ -584,9 +596,15 @@ if [ -n "${RUN_TEST}" ]; then
         test_filter="-R ${RUN_TEST}"
     fi
     test_jobs=${JOBS:-$(num_proc)}
-    printf "${BOLD_PINK}Running unit tests (-j ${test_jobs})...${RESET}\n"
+    test_timeout=${TEST_TIMEOUT:-60}
+    if [[ "${SAN_BUILD}" != "no" && -z "${TEST_TIMEOUT}" ]]; then
+        test_timeout=120
+    fi
+    printf '%b%s%b\n' "${BOLD_PINK}" \
+        "Running unit tests (-j ${test_jobs}, timeout ${test_timeout}s)..." \
+        "${RESET}"
     set -o pipefail
-    if ! GTEST_COLOR=yes CLICOLOR_FORCE=1 ctest --test-dir "${BUILD_DIR}" ${test_filter} -j ${test_jobs} --output-on-failure 2>&1 | tee "${BUILD_DIR}/tests.out"; then
+    if ! GTEST_COLOR=yes CLICOLOR_FORCE=1 ctest --test-dir "${BUILD_DIR}" ${test_filter} -j ${test_jobs} --timeout "${test_timeout}" --output-on-failure 2>&1 | tee "${BUILD_DIR}/tests.out"; then
         EXIT_CODE=1
         if [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
             sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
@@ -629,28 +647,40 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
         if [[ -n "${PARALLEL_WORKERS}" ]]; then
             absl_params="${absl_params} --parallel=${PARALLEL_WORKERS}"
         fi
+        export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
         pushd testing/integration >/dev/null
         ./run.sh ${absl_params} || EXIT_CODE=1
         popd >/dev/null
     fi
 
     # Run OSS integration tests
-    pushd integration >/dev/null
-    if [[ "${TEST_PATTERN}" == "oss" ]]; then
-        TEST_PATTERN=""
+    if [[ ${EXIT_CODE} -ne 0 ]]; then
+        echo ""
+        LOG_ERROR " ** Abseil based integration tests failed, skipping OSS integration tests **"
+        echo ""
+    else
+        pushd integration >/dev/null
+        if [[ "${TEST_PATTERN}" == "oss" ]]; then
+            TEST_PATTERN=""
+        fi
+        export TEST_PATTERN=${TEST_PATTERN}
+        export INTEG_RETRIES=${INTEG_RETRIES}
+        export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
+        integ_params="${params}"
+        if [[ -n "${PARALLEL_WORKERS}" ]]; then
+            integ_params="${integ_params} --parallel=${PARALLEL_WORKERS}"
+        fi
+        # Run will run ASan or normal tests based on the environment variable SAN_BUILD
+        ./run.sh ${integ_params} || EXIT_CODE=1
+        popd >/dev/null
     fi
-    export TEST_PATTERN=${TEST_PATTERN}
-    export INTEG_RETRIES=${INTEG_RETRIES}
-    export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
-    integ_params="${params}"
-    if [[ -n "${PARALLEL_WORKERS}" ]]; then
-        integ_params="${integ_params} --parallel=${PARALLEL_WORKERS}"
-    fi
-    # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh ${integ_params} || EXIT_CODE=1
-    popd >/dev/null
 fi
 
 END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
+if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+    printf "\n${GREEN}Total integration tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))
+elif [ -n "${RUN_TEST}" ]; then
+    printf "\n${GREEN}Unit tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))
+fi
 exit ${EXIT_CODE}

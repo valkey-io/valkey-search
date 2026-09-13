@@ -206,6 +206,11 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
+  // SORTBY's retention bound depends on the LIMIT stages around it, so it can
+  // only be settled once the whole pipeline is known. Must precede
+  // GetSerializationRange(), which reads the resolved stages.
+  ResolveSortByBounds(*this);
+
   // Set limit parameters based on GetSerializationRange logic
   auto range = GetSerializationRange();
   limit.first_index = range.start_index;

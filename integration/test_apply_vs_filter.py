@@ -161,17 +161,31 @@ class TestApplyVsFilter(ValkeySearchTestCaseBase):
     def test_contains_on_text(self, key_type):
         """APPLY contains(@title,'slow') — title is TEXT.
 
-        This documents an APPLY/FILTER asymmetry: FILTER can reference a TEXT
-        field (see the "filter contains text" compatibility case), but the
-        FT.AGGREGATE parser only admits TAG/NUMERIC/VECTOR attributes in an
-        expression and rejects a TEXT field reference at parse time
-        (ft_aggregate_parser.cc MakeReference). So the same contains() over a
-        TEXT field that works in FILTER is a parse error in APPLY."""
+        This used to assert an APPLY/FILTER asymmetry: FILTER could reference
+        a TEXT field while the FT.AGGREGATE parser rejected one at parse time
+        with "Invalid data type for @title". #1366 removed that limitation, so
+        the two agree now and the same contains() works in both."""
         client = self.server.get_new_client()
         if key_type == "hash":
             _load_hash(client, DOCS)
         else:
             _load_json(client, JSON_DOCS)
 
-        with pytest.raises(ResponseError, match="Invalid data type for @title"):
-            _run_apply(client, "contains(@title,'slow')")
+        results = _run_apply(client, "contains(@title,'slow')")
+
+        # doc:01 "slow turtle walks far" and doc:09 "big cake bakes slow"
+        # contain it; every other title does not.
+        def truth(k):
+            v = results[k]
+            return v.decode() if isinstance(v, bytes) else str(v)
+
+        assert len(results) == 10, f"expected 10 docs, got {sorted(results)}"
+        for key in (b"doc:01", b"doc:09"):
+            assert truth(key) == "1", (
+                f"{key!r} contains 'slow' but APPLY said {results[key]!r}"
+            )
+        others = [k for k in results if k not in (b"doc:01", b"doc:09")]
+        for key in others:
+            assert truth(key) == "0", (
+                f"{key!r} does not contain 'slow' but APPLY said {results[key]!r}"
+            )

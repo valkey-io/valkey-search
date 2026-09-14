@@ -1445,7 +1445,8 @@ TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
 
   // Consume the mutation. Because attributes was engaged, the entry stays in
-  // the map with attributes = std::nullopt (see ConsumeTrackedMutatedAttribute).
+  // the map with attributes = std::nullopt (see
+  // ConsumeTrackedMutatedAttribute).
   auto consumed = index_schema->ConsumeTrackedMutatedAttribute(key, true);
   EXPECT_TRUE(consumed.has_value());
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);

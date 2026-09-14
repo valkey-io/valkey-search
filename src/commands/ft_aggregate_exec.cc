@@ -1133,9 +1133,7 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
 
     CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      if (!parameters.suppressed_reply_field_.empty() &&
-          parameters.record_info_by_index_[i].output_name_ ==
-              parameters.suppressed_reply_field_) {
+      if (parameters.suppressed_reply_column_ == i) {
         continue;
       }
       if (ReplyWithValue(

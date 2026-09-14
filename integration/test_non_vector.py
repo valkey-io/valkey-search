@@ -1119,6 +1119,56 @@ class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
                               [b"n", b"1"]], f"emulate-release {release}"
 
 
+class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
+    """
+        Repeated RETURN clauses are last-one-wins (issue #1353 item 7),
+        gated on search.emulate-release: pre-1.3.0 a `RETURN 0` latched
+        no-content for the whole command and repeated clauses accumulated
+        fields. The NOCONTENT keyword is sticky on both sides of the gate.
+        debug-mode is required to set emulate-release at the module version.
+    """
+
+    def test_return_clause_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "rcg_idx", "ON", "HASH", "PREFIX", "1", "rcg:",
+            "SCHEMA", "m", "TAG", "p", "NUMERIC", "title", "TEXT") == b"OK"
+        assert client.execute_command(
+            "HSET", "rcg:1", "m", "all", "p", "10",
+            "title", "hello world") == 3
+
+        with_title = [1, b"rcg:1", [b"title", b"hello world"]]
+        id_only = [1, b"rcg:1"]
+        for release, later_return, replaced, latched in (
+            # Legacy: RETURN 0 latches no-content; field lists accumulate.
+            ("1.2.1", id_only,
+             [1, b"rcg:1", [b"title", b"hello world", b"p", b"10"]],
+             id_only),
+            # Fixed: the last RETURN clause wins.
+            ("1.3.0", with_title, [1, b"rcg:1", [b"p", b"10"]], id_only),
+        ):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "RETURN", "0",
+                "RETURN", "1", "title", "DIALECT", "2")
+            assert result == later_return, f"emulate-release {release}"
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "RETURN", "1", "title",
+                "RETURN", "1", "p", "DIALECT", "2")
+            assert result == replaced, f"emulate-release {release}"
+            # A final RETURN 0 suppresses fields on both sides of the gate.
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "RETURN", "1", "title",
+                "RETURN", "0", "DIALECT", "2")
+            assert result == latched, f"emulate-release {release}"
+            # NOCONTENT stays sticky on both sides of the gate.
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "NOCONTENT",
+                "RETURN", "1", "title", "DIALECT", "2")
+            assert result == id_only, f"emulate-release {release}"
+
+
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
         A REDUCE with no AS clause auto-generates its output name, and which form

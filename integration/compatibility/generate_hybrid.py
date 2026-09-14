@@ -1026,18 +1026,31 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                     fused_score_as=None, search_score_as="text_score",
                     vector_score_as="vector_score")
 
-    # TODO(load-score-rename): `LOAD 3 @__score AS s` renames the score column
-    # and Redis then emits nothing at all -- three rows, zero columns each:
+    # Skipped, not xfail: Redis is broken here, so there is no answer worth
+    # recording. `LOAD 3 @__score AS s` renames the fused score and Redis then
+    # returns rows carrying no columns at all --
     #
     #   redis:  [b'total_results', 20, b'results', [[], [], []], ...]
     #   valkey: [3, [b's', b'0.0320184417069'], [b's', b'0.0317460335791'], ...]
     #
-    # The rename is accepted and the column is dropped, which is a degenerate
-    # answer rather than a rule worth matching: every other LOAD rename in
-    # this suite emits the renamed column, and so does a LOAD of `@__score`
-    # without the rename. Marked `xfail` rather than fixed, because matching
-    # it would mean deliberately dropping a column the caller asked for. See
-    # unsupported_tests.md 5.5b.
+    # -- and with the renamed column feeding a stage it drops every *row*,
+    # reporting the reason in the reply's warnings:
+    #
+    #   [b'total_results', 20, b'results', [],
+    #    b'warnings', [b'SEARCH_VALUE_NOT_FOUND Could not find the value ...']]
+    #
+    # It accepts the clause, loses the data, and says so. Every other LOAD
+    # rename in this suite emits the renamed column, and so does a LOAD of
+    # `@__score` without the rename, so this is a defect rather than a rule
+    # this engine should converge on. `xfail` would say we intend to match it
+    # one day; we do not, because matching it means discarding a column the
+    # caller named.
+    #
+    # The cases are kept so that re-enabling is deleting one line, for
+    # whenever Redis fixes the rename. See unsupported_tests.md 5.5b.
+    @pytest.mark.skip(reason="Redis is broken for a renamed `@__score`: it "
+                             "returns rows with no columns, or no rows at "
+                             "all -- see unsupported_tests.md 5.5b")
     def test_load_renaming_the_score_column(self, key_type):
         self.setup_data(key_type)
         for load in [["LOAD", "3", "@__score", "AS", "s"],
@@ -1054,20 +1067,17 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                      ["LOAD", "7", "@__key", "AS", "a", "@__score", "AS", "b",
                       "@price"]]:
             self.hybrid(key_type, "@title:alpha", load=load,
-                        fused_score_as=None, search_score_as=None,
-                        xfail=True)
-        # And the renamed score feeding a later stage. Redis drops every row
-        # here rather than only the column, with a warning:
-        #   [b'total_results', 20, b'results', [], b'warnings',
-        #    [b'SEARCH_VALUE_NOT_FOUND Could not find the value ...']]
+                        fused_score_as=None, search_score_as=None)
+        # The renamed score feeding a later stage, which is where Redis loses
+        # the rows rather than only the column.
         self.hybrid(key_type, "@title:alpha",
                     load=["LOAD", "3", "@__score", "AS", "s"],
                     tail=["SORTBY", "2", "@s", "DESC"],
-                    fused_score_as=None, search_score_as=None, xfail=True)
+                    fused_score_as=None, search_score_as=None)
         self.hybrid(key_type, "@title:alpha",
                     load=["LOAD", "3", "@__score", "AS", "s"],
                     tail=["APPLY", "@s * 2", "AS", "doubled_score"],
-                    fused_score_as=None, search_score_as=None, xfail=True)
+                    fused_score_as=None, search_score_as=None)
 
     # TODO(load-rename-onto-score): `LOAD 3 @price AS __score` renames a
     # different field onto the name the default projection uses for the fused

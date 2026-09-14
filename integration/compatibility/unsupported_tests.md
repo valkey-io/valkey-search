@@ -374,9 +374,9 @@ score column rather than through a database field, and it is left as-is for
 the same reason. Not swept: the two divergent rows are Redis errors, so there
 is no reference answer worth recording.
 
-### 5.5b. `LOAD ... @__score AS <name>` — Redis emits no column at all
+### 5.5b. `LOAD ... @__score AS <name>` — Redis is broken, skipped
 
-**Status:** permanent divergence, marked `xfail`, and deliberately not matched.
+**Status:** a Redis defect. Skipped, not `xfail`.
 
 A `LOAD` clause that names `@__score` brings the fused score back into a
 projection the clause otherwise replaces, and both engines honour it — see
@@ -394,9 +394,16 @@ valkey: [3, [b's', b'0.0320184417069'], [b's', b'0.0317460335791'], ...]
 
 Redis accepts the rename and then returns rows carrying no columns at all.
 Every other `LOAD` rename in this suite emits the renamed column, and so does
-a `LOAD` of `@__score` without the rename, so this is a degenerate answer
-rather than a rule. `test_load_renaming_the_score_column` records it `xfail`:
-matching it would mean deliberately dropping a column the caller asked for.
+a `LOAD` of `@__score` without the rename, so this is a defect on their side
+rather than a rule this engine should converge on.
+
+`test_load_renaming_the_score_column` is therefore `skip` rather than `xfail`.
+The distinction matters: `xfail` records the reference answer and compares
+against it, which says the gap is ours and that we mean to close it. Here we
+do not -- closing it would mean discarding a column the caller named -- and
+the recorded answer would be an empty reply, which is worth nothing to compare
+against. The cases are kept in place so that re-enabling is deleting one line,
+for whenever Redis fixes the rename.
 
 It is the rename itself, not the name chosen: measured on HASH and on JSON,
 which behave identically, Redis drops the column whatever it is renamed to,
@@ -412,7 +419,9 @@ and whatever else the clause loads.
 | `LOAD 7 @__key AS a @__score AS b @price` | `a`, `price` | all three |
 
 Feeding the renamed column to a later stage is worse still: Redis drops every
-*row*, not only the column, and says why in a warning.
+*row*, not only the column, and says why in a warning. It accepts the clause,
+loses the data, and reports the loss -- which is what makes this a defect
+rather than a different-but-defensible choice.
 
 ```
 ... LOAD 3 @__score AS s APPLY "@s * 2" AS doubled_score ...
@@ -435,11 +444,14 @@ redis:  [('__score', <the fused score>)]   -- the rename is discarded
 valkey: [('__score', b'21')]               -- the price, as asked for
 ```
 
-Reversing ours would mean discarding a field the LOAD clause named, so this is
-recorded rather than matched, in
-`test_load_renaming_another_field_onto_the_score_name`. Once `COMBINE ...
-YIELD_SCORE_AS` has renamed the score away there is no clash and both engines
-agree, which the same test pins. `LOAD 3 @__key AS __score` behaves the same
+Both replies are well-formed here, and Redis' precedence rule -- the score
+keeps its own name -- is defensible even though it silently drops the field.
+That is why this one stays `xfail` while the rename *of* the score above is
+skipped: this is a difference of choice, that one is a defect. Reversing ours
+would mean discarding a field the LOAD clause named, so it is recorded rather
+than matched, in `test_load_renaming_another_field_onto_the_score_name`. Once
+`COMBINE ... YIELD_SCORE_AS` has renamed the score away there is no clash and
+both engines agree, which the same test pins. `LOAD 3 @__key AS __score` behaves the same
 way -- Redis protects the name against the key column exactly as it does
 against a document field -- and is swept there too.
 

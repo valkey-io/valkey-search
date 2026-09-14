@@ -162,13 +162,12 @@ absl::Status VectorFlat<T>::AddRecordImpl(
       algo_->addPoint(std::move(vector_record), internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
-      std::string error_msg = e.what();
       if (absl::StrContains(
-              error_msg,
-              "The number of elements exceeds the specified limit")) {
+              e.what(), "The number of elements exceeds the specified limit")) {
         VMSDK_RETURN_IF_ERROR(ResizeIfFull());
         continue;
       }
+      DCHECK(false) << "Unexpected error while adding a record: " << e.what();
       return absl::InternalError(
           absl::StrCat("Error while adding a record: ", e.what()));
     }
@@ -199,6 +198,7 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
     algo_->removePoint(internal_id);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_remove_exceptions_cnt;
+    DCHECK(false) << "Unexpected error while removing a record: " << e.what();
     return absl::InternalError(
         absl::StrCat("Error while removing a FLAT record: ", e.what()));
   }

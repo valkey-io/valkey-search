@@ -282,6 +282,35 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             for query in ["@title:alpha", "(@title:alpha|@title:gamma)", "@body:canyon"]:
                 self.hybrid(key_type, query, combine=combine)
 
+    def test_rrf_fractional_constants(self, key_type):
+        """The RRF constant is a real number, not an integer.
+
+        Fusion divides by `constant + rank`, so a fractional constant has to
+        land strictly between the integers around it. Sweeping the halves
+        beside the whole numbers is what separates a real constant from one
+        truncated on the way in -- a sweep of integers alone would pass either
+        way.
+        """
+        self.setup_data(key_type)
+        for constant in ["0", "0.5", "1", "1.25", "1.5", "1.75", "2", "2.5",
+                         "59.5", "60", "60.5", "1000.5"]:
+            self.hybrid(key_type, "@title:alpha",
+                        combine=("RRF", ["CONSTANT", constant]))
+
+    def test_linear_weight_range(self, key_type):
+        """Weights outside [0, 1] are meaningful and both engines take them.
+
+        A negative weight subtracts an arm and one above 1 amplifies it, so
+        neither is an input to reject. The zero cases pin that an arm can be
+        switched off entirely from the COMBINE clause.
+        """
+        self.setup_data(key_type)
+        weights = [("0", "1"), ("1", "0"), ("0", "0"), ("-0.5", "1.5"),
+                   ("2.5", "0.5"), ("1000", "1"), ("0.001", "0.002")]
+        for alpha, beta in weights:
+            self.hybrid(key_type, "@title:alpha",
+                        combine=("LINEAR", ["ALPHA", alpha, "BETA", beta]))
+
     def test_rrf_window(self, key_type):
         """WINDOW carries its own value, so no default is appended."""
         self.setup_data(key_type)

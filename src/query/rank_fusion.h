@@ -37,7 +37,12 @@ struct ArmInput {
   double weight = 1.0;
   // For RRF: arm-level RRF constant. The spec uses one global constant; the
   // per-arm field allows future variants without reshaping the API.
-  uint32_t rrf_constant = 60;
+  //
+  // A real number, not an integer: the reference accepts fractional constants
+  // and they change the ranking, so `CONSTANT 1.5` has to sit strictly
+  // between `CONSTANT 1` and `CONSTANT 2` rather than truncating to one of
+  // them.
+  double rrf_constant = 60.0;
   // For both RRF and LINEAR: window cap on this arm's contribution. Only the
   // top `window` neighbors (by the arm's pre-fusion order — vector arms are
   // sorted ascending by distance) participate in fusion. 0 = unlimited.

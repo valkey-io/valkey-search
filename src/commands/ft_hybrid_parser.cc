@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -96,6 +98,57 @@ bool IsTopLevelKeyword(absl::string_view tok) {
 }
 
 namespace {
+
+// Reads a whole token as a non-negative integer.
+//
+// The shared `ParseParamValue` reaches `std::from_chars`, which consumes what
+// it can and reports success on the prefix, so it turned `WINDOW 20abc` into
+// 20, `WINDOW 1.5` into 1, `WINDOW 1e3` into 1 and `WINDOW 0x10` into 0.
+// Silently acting on a number the caller did not write is worse than either
+// engine's answer, so these insist the token is entirely the number.
+absl::StatusOr<uint64_t> ParseWholeUint(vmsdk::ArgsIterator &itr,
+                                        absl::string_view keyword) {
+  VMSDK_ASSIGN_OR_RETURN(auto tok, itr.GetStringView());
+  itr.Next();
+  uint64_t value = 0;
+  if (tok.empty() || !absl::SimpleAtoi(tok, &value)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("COMBINE ", keyword, " must be a non-negative integer, "
+                                          "got `",
+                     tok, "`"));
+  }
+  return value;
+}
+
+// True for everything except NaN and +/-infinity, whose IEEE-754 form is the
+// only one with every exponent bit set.
+//
+// `std::isfinite` cannot be used: this project builds with `-ffast-math`,
+// which implies `-ffinite-math-only` and lets the compiler fold the call to
+// `true`. It did -- `ALPHA inf` was accepted and produced infinite scores
+// with the call in place. src/expr/value.cc and src/indexes/scoring/scorer.h
+// avoid the same trap the same way.
+bool IsFiniteDouble(double value) {
+  static constexpr uint64_t kExponentMask = 0x7FF0000000000000ULL;
+  uint64_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return (bits & kExponentMask) != kExponentMask;
+}
+
+// Reads a whole token as a finite real number. `absl::SimpleAtod` accepts
+// `nan` and `inf`, and overflows `1e400` to infinity, any of which then
+// propagates through every fused score; the reference rejects all three.
+absl::StatusOr<double> ParseWholeFinite(vmsdk::ArgsIterator &itr,
+                                        absl::string_view keyword) {
+  VMSDK_ASSIGN_OR_RETURN(auto tok, itr.GetStringView());
+  itr.Next();
+  double value = 0;
+  if (tok.empty() || !absl::SimpleAtod(tok, &value) || !IsFiniteDouble(value)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "COMBINE ", keyword, " must be a finite number, got `", tok, "`"));
+  }
+  return value;
+}
 
 // Plumb the envelope-shared dispatch fields onto a freshly-allocated arm.
 void InitArmFromEnvelope(MultiSearchParameters &env, MultiArmShim &arm) {
@@ -462,21 +515,29 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
         return absl::InvalidArgumentError(
             "COMBINE CONSTANT is only valid with RRF");
       }
-      uint32_t v = 0;
-      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
+      // Fractional constants are meaningful and the reference honours them,
+      // so this is a real number. Negative is refused: it puts a pole at
+      // `rank == -constant`, and the reference answers infinity there.
+      VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeFinite(inner_itr, kConstantKw));
+      if (v < 0.0) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "COMBINE CONSTANT must not be negative, got `", v, "`"));
+      }
       env.fusion.rrf_constant = v;
     } else if (absl::EqualsIgnoreCase(kw, kWindowKw)) {
-      uint32_t v = 0;
-      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
-      env.fusion.window = v;
+      VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeUint(inner_itr, kWindowKw));
+      if (v > std::numeric_limits<uint32_t>::max()) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "COMBINE WINDOW is out of range, got `", v, "`"));
+      }
+      env.fusion.window = static_cast<uint32_t>(v);
       saw_window = true;
     } else if (absl::EqualsIgnoreCase(kw, kAlphaKw)) {
       if (env.fusion.method != FusionConfig::Method::kLinear) {
         return absl::InvalidArgumentError(
             "COMBINE ALPHA is only valid with LINEAR");
       }
-      double v = 0;
-      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
+      VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeFinite(inner_itr, kAlphaKw));
       env.fusion.alpha = v;
       saw_alpha = true;
     } else if (absl::EqualsIgnoreCase(kw, kBetaKw)) {
@@ -484,8 +545,7 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
         return absl::InvalidArgumentError(
             "COMBINE BETA is only valid with LINEAR");
       }
-      double v = 0;
-      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, v));
+      VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeFinite(inner_itr, kBetaKw));
       env.fusion.beta = v;
       saw_beta = true;
     } else if (absl::EqualsIgnoreCase(kw, kYieldScoreAsKw)) {

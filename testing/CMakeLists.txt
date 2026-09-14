@@ -105,6 +105,7 @@ finalize_test_flags(filter_test)
 
 # 1. Indexes Test Suite - consolidates index-related tests
 set(INDEXES_TEST_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/compact_postings_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/index_schema_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/lexer_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/numeric_index_test.cc

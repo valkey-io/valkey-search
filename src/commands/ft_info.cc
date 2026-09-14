@@ -29,10 +29,6 @@ namespace valkey_search {
 
 absl::Status FTInfoCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
-  if (argc < 2) {
-    ValkeyModule_ReplyWithError(ctx, vmsdk::WrongArity(kInfoCommand).c_str());
-    return absl::OkStatus();
-  }
   vmsdk::ArgsIterator itr{argv, argc};
   itr.Next();
 

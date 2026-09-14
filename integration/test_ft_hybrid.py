@@ -936,6 +936,77 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
             f"WINDOW must not truncate the fused list; got {result[0]} rows"
         assert result[0] <= 12
 
+    def test_window_zero_means_unlimited(self):
+        """`WINDOW 0` lifts the cap rather than removing every candidate.
+
+        This is where the parser's zero sentinel becomes observable: the
+        reference rejects `WINDOW 0`, so nothing outside this repo pins it,
+        and a reading of zero as "take no rows" would return an empty reply
+        instead of the whole union.
+        """
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        capped = self._hybrid(client, "COMBINE", "RRF", "2", "WINDOW", "3",
+                              "LIMIT", "0", "100")
+        unlimited = self._hybrid(client, "COMBINE", "RRF", "2", "WINDOW", "0",
+                                 "LIMIT", "0", "100")
+        wide = self._hybrid(client, "COMBINE", "RRF", "2", "WINDOW", "1000",
+                            "LIMIT", "0", "100")
+        assert unlimited[0] == wide[0], (
+            f"WINDOW 0 returned {unlimited[0]} rows, a window wider than the "
+            f"corpus returned {wide[0]}")
+        assert unlimited[0] > capped[0], (
+            f"WINDOW 0 ({unlimited[0]} rows) should not be capped like "
+            f"WINDOW 3 ({capped[0]} rows)")
+
+    def test_malformed_fusion_arguments_are_rejected(self):
+        """A number the caller did not write must never be acted on.
+
+        Each of these was previously accepted and silently truncated, because
+        the shared scalar parser keeps whatever numeric prefix it finds:
+        `WINDOW 20abc` became 20 and `CONSTANT 1.5` became 1.
+        """
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        cases = [
+            ["COMBINE", "RRF", "2", "WINDOW", "20abc"],
+            ["COMBINE", "RRF", "2", "WINDOW", "1.5"],
+            ["COMBINE", "RRF", "2", "WINDOW", "-1"],
+            ["COMBINE", "RRF", "2", "CONSTANT", "60abc"],
+            ["COMBINE", "RRF", "2", "CONSTANT", "-1"],
+            ["COMBINE", "RRF", "2", "CONSTANT", "inf"],
+            ["COMBINE", "RRF", "2", "CONSTANT", "nan"],
+            ["COMBINE", "LINEAR", "4", "ALPHA", "inf", "BETA", "0.5"],
+            ["COMBINE", "LINEAR", "4", "ALPHA", "nan", "BETA", "0.5"],
+            ["COMBINE", "LINEAR", "4", "ALPHA", "0.5", "BETA", "1e400"],
+        ]
+        for extra in cases:
+            with pytest.raises(ResponseError):
+                self._hybrid(client, *extra, "LIMIT", "0", "3")
+
+    def test_fractional_rrf_constant_ranks_between_its_neighbours(self):
+        """`CONSTANT 1.5` is a real constant, not one truncated to 1.
+
+        Fusion divides by `constant + rank`, so a larger constant flattens
+        every score. A fractional value therefore has to land strictly between
+        the two integers around it -- which is what catches a truncation that
+        a single-value check would not.
+        """
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        def top_score(constant):
+            reply = self._hybrid(
+                client, "COMBINE", "RRF", "4", "CONSTANT", constant,
+                "YIELD_SCORE_AS", "h", "LIMIT", "0", "1")
+            return float(self._rec_to_dict(reply[1])[b"h"])
+
+        one, one_and_a_half, two = (top_score("1"), top_score("1.5"),
+                                    top_score("2"))
+        assert one > one_and_a_half > two, (
+            f"CONSTANT 1.5 scored {one_and_a_half}, outside "
+            f"({two}, {one}) -- it was probably truncated")
+
     def test_vsim_score_is_similarity_not_distance(self):
         """The VSIM arm reports 1 / (1 + distance): higher is better, and the
         document sitting on the query vector scores exactly 1."""

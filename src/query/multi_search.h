@@ -58,7 +58,9 @@ inline constexpr absl::string_view kDefaultOutputScoreName{"__score"};
 struct FusionConfig {
   enum class Method { kRRF, kLinear, kFunction };
   Method method = Method::kRRF;
-  uint32_t rrf_constant = 60;
+  // Fractional, to match the reference: see rank_fusion.h.
+  double rrf_constant = 60.0;
+  // 0 means unlimited, which is also what COMBINE FUNCTION defaults to.
   uint32_t window = 20;
   std::optional<double> alpha;  // required when method == kLinear
   std::optional<double> beta;   // required when method == kLinear

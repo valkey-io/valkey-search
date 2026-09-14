@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <queue>
 #include <random>
 
@@ -388,13 +389,22 @@ static expr::Value NumericReducerArg(const expr::Value &value) {
     return value;
   }
   if (value.IsArray()) {
-    return expr::Value(0.0);
+    // Redis 8 folds only numbers, and an array is not one, so it contributes
+    // nothing and the group answers the identity. (redis-stack read an array
+    // as 0, which is what this used to return.) Ungated like the rest of the
+    // array handling: TOLIST is newer than 1.2.1, so there is no released
+    // behavior to preserve.
+    return expr::Value(expr::Value::Nil("reducer: array is not a number"));
   }
   if (!MinMaxIsNumeric()) {
     return value;
   }
   auto number = value.AsDouble();
-  return number ? expr::Value(*number) : expr::Value(0.0);
+  // Redis 8 folds only numbers into MIN/MAX: an input that will not convert
+  // contributes nothing, leaving the fold empty rather than pulling the result
+  // to 0. (redis-stack read it as 0, which is why this once returned one.)
+  return number ? expr::Value(*number)
+                : expr::Value(expr::Value::Nil("reducer: not a number"));
 }
 
 class Min : public GroupBy::ReducerInstance {
@@ -414,13 +424,16 @@ class Min : public GroupBy::ReducerInstance {
       DBG << "Not new Min: " << value << "\n";
     }
   }
-  // A group whose every input was nil replies 0 in Redisearch, for a string
-  // field as much as a numeric one -- MIN is numeric, so 0 is its identity.
+  // A group that folded no value at all replies with the identity of min.
+  // Written as an explicit constant because -ffast-math assumes finite
+  // arithmetic, so computing an infinity is not reliable.
   expr::Value GetResult() const override {
     if (!min_.IsNil()) {
       return min_;
     }
-    return MinMaxIsNumeric() ? expr::Value(0.0) : min_;
+    return MinMaxIsNumeric()
+               ? expr::Value(std::numeric_limits<double>::infinity())
+               : min_;
   }
 };
 
@@ -444,24 +457,40 @@ class Max : public GroupBy::ReducerInstance {
       max_ = value;
     }
   }
-  // As for Min: nothing seen replies 0, not a missing field.
+  // As for Min: nothing folded replies with the identity, not a missing field.
   expr::Value GetResult() const override {
     if (!max_.IsNil()) {
       return max_;
     }
-    return MinMaxIsNumeric() ? expr::Value(0.0) : max_;
+    return MinMaxIsNumeric()
+               ? expr::Value(-std::numeric_limits<double>::infinity())
+               : max_;
   }
 };
 
+// SUM and AVG over a group that folded no value at all answer nan in Redis 8,
+// not 0. (redis-stack answered 0, which is what this used to return.)
+static expr::Value EmptyFoldSumAvg() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "reduce_sum_avg_empty_nan",
+      [] { return expr::Value(std::nan("")); },
+      [] { return expr::Value(0.0); });
+}
+
 class Sum : public GroupBy::ReducerInstance {
   double sum_{0};
+  size_t count_{0};
   void ProcessRecord(const ArgVector &values) override {
     auto val = values[0].AsDouble();
     if (val) {
       sum_ += *val;
+      count_++;
     }
   }
-  expr::Value GetResult() const override { return expr::Value(sum_); }
+  // The count tells "summed to zero" from "summed nothing".
+  expr::Value GetResult() const override {
+    return count_ ? expr::Value(sum_) : EmptyFoldSumAvg();
+  }
 };
 
 class Avg : public GroupBy::ReducerInstance {
@@ -475,7 +504,7 @@ class Avg : public GroupBy::ReducerInstance {
     }
   }
   expr::Value GetResult() const override {
-    return expr::Value(count_ ? sum_ / count_ : 0.0);
+    return count_ ? expr::Value(sum_ / count_) : EmptyFoldSumAvg();
   }
 };
 

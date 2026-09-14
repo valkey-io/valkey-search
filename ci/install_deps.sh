@@ -77,8 +77,18 @@ function ensure_gcc_amazon_linux() {
         LOG_INFO "✓ GCC 14 installed and symlinked into /usr/local/bin"
     fi
 
+    sudo dnf install -y gcc14-libstdc++-static
+
     /usr/local/bin/gcc --version
     /usr/local/bin/g++ --version
+
+    local libstdcpp_a
+    libstdcpp_a=$(/usr/local/bin/g++ -print-file-name=libstdc++.a)
+    if [[ "${libstdcpp_a}" == "libstdc++.a" || ! -f "${libstdcpp_a}" ]]; then
+        LOG_ERROR "static libstdc++ for /usr/local/bin/g++ not found; on AL2023 install gcc14-libstdc++-static"
+        exit 1
+    fi
+    LOG_INFO "✓ static libstdc++ found at ${libstdcpp_a}"
 }
 
 # Detect the distro and dispatch. Add cases here (e.g. an apt-based branch for

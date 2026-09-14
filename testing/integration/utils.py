@@ -38,6 +38,19 @@ def to_str(val):
     return str(val)
 
 
+def is_sanitizer_enabled() -> bool:
+    san_build = os.getenv("SAN_BUILD", "").lower()
+    return bool(
+        os.getenv("ASAN_BUILD")
+        or os.getenv("TSAN_BUILD")
+        or (san_build and san_build != "no")
+        or "-asan" in os.getenv("VALKEY_SEARCH_PATH", "")
+        or "-tsan" in os.getenv("VALKEY_SEARCH_PATH", "")
+        or "-asan" in os.getenv("MODULE_PATH", "")
+        or "-tsan" in os.getenv("MODULE_PATH", "")
+    )
+
+
 class ValkeyServerUnderTest:
     def __init__(self, process_handle: subprocess.Popen[Any], port: int):
         self.process_handle = process_handle
@@ -99,11 +112,33 @@ def start_valkey_process(
         f.write(f"dir {directory}\n")
         if password:
             f.write(f"requirepass {password}\n")
+        if "save" not in args:
+            # Setting 'save 99999999 1' overrides default periodic snapshot triggers (e.g.
+            # 'save 60 10000', which causes fork failures and MISCONF errors under ASan
+            # during heavy ingest) while keeping saveparamslen > 0 so Valkey still saves
+            # final RDB on graceful shutdown/restart (e.g. DEBUG RESTART).
+            f.write("save 99999999 1\n")
         for k, v in args.items():
             f.write(f"{k} {v}\n")
         f.write(f"loadmodule {os.environ['VALKEY_JSON_PATH']}\n")
         for k, v in modules.items():
-            f.write(f"loadmodule {k} {v}\n")
+            mod_args = v
+            # Under sanitizers (ASan/TSan), cap reader and writer thread pools to 4 to avoid
+            # resource exhaustion and test timeouts while preserving concurrency coverage.
+            if is_sanitizer_enabled() and (
+                "libsearch" in k or k == os.environ.get("VALKEY_SEARCH_PATH")
+            ):
+                if (
+                    "--reader-threads" not in mod_args
+                    and "search.reader-threads" not in args
+                ):
+                    mod_args = f"{mod_args} --reader-threads 4".strip()
+                if (
+                    "--writer-threads" not in mod_args
+                    and "search.writer-threads" not in args
+                ):
+                    mod_args = f"{mod_args} --writer-threads 4".strip()
+            f.write(f"loadmodule {k} {mod_args}\n")
 
     command = f"ulimit -c unlimited && exec {valkey_server_path} {conf_path}"
     logging.info("Starting valkey process with config: %s", conf_path)

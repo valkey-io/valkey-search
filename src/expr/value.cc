@@ -175,6 +175,17 @@ std::optional<double> Value::AsDouble() const {
   } else {
     return std::nullopt;
   }
+  // 1.3.0 fix: an empty string is not a number. strtod("") consumes nothing
+  // and returns 0.0 (which passes the end-of-string check below), so before
+  // 1.3.0 AsDouble("") == 0 -- making abs("")/timefmt("")/(0)==("") diverge
+  // from Redisearch, which treats "" as non-numeric (nan / nil / not-equal).
+  // Gate per COMPATIBILITY.md.
+  if (sv.empty()) {
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "empty_string_not_numeric",
+        [&]() -> std::optional<double> { return std::nullopt; },
+        [&]() -> std::optional<double> { return 0.0; });
+  }
   char* end{nullptr};
   double val = std::strtod(sv.begin(), &end);
   if (end != sv.end() || IsNan(val)) {
@@ -537,15 +548,23 @@ Value FuncDiv(const Value& l, const Value& r) {
   if (!l.IsArray() && !r.IsArray()) {
     auto lv = l.AsDouble();
     auto rv = r.AsDouble();
-    if (lv && rv) {
-      if (rv.value() == 0) {
-        return Value(std::nan(""));
-      } else {
-        return Value(lv.value() / rv.value());
-      }
-    } else {
+    if (!lv || !rv) {
       return Value(Value::Nil("Divide requires numeric operands"));
     }
+    // Redisearch returns IEEE 754 division semantics for divide-by-zero:
+    // positive/0 -> +inf, negative/0 -> -inf, 0/0 -> NaN. Valkey-search 1.2.x
+    // and earlier collapsed all divide-by-zero cases to a plain NaN, which is
+    // observably different from Redisearch. Gate the fixed behavior behind
+    // search.emulate-release per COMPATIBILITY.md.
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_divide_by_zero",
+        [&] { return Value(lv.value() / rv.value()); },
+        [&] {
+          if (rv.value() == 0) {
+            return Value(std::nan(""));
+          }
+          return Value(lv.value() / rv.value());
+        });
   }
 
   // Case 2: Left is vector, right is scalar (broadcast)
@@ -599,6 +618,115 @@ Value FuncNe(const Value& l, const Value& r) { return Value(l != r); }
 Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 
 Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
+
+// Filter comparison semantics (matches Redisearch FT.CREATE FILTER): a
+// comparison that involves a missing field is FALSE, not "unknown". The
+// document is simply not admitted, and a negation of that comparison is true
+// -- `!(@absent == 'x')` admits every key, while both `@absent == 'x'` and
+// `@absent != 'x'` admit none. Two-valued, so nothing propagates and the
+// operators are order-insensitive.
+//
+// Measured against redis:latest (search 81000), which is the compatibility
+// reference. RediSearch 2.10.20 answered these with three-valued SQL NULL
+// logic instead, keeping the document on a missing operand; Redis changed it,
+// and this follows the current engine. FT.CREATE FILTER has never shipped, so
+// there is no released behavior to preserve behind search.emulate-release.
+//
+// The guard is on IsNil() specifically, not on Compare()==kUNORDERED:
+// kUNORDERED also arises from NaN (e.g. inf - inf, or a division by zero),
+// which is a real computed value rather than a missing field and keeps the
+// ordinary comparison behavior. For all non-Nil operands these fall through
+// to the same operators as APPLY -- which is what Redisearch does: it answers
+// an unordered comparison as though the operands were equal (== and <= and >=
+// true, != and < and > false). Both engine versions agree on that, which is
+// why the "filter num <op> nan" cases in HARD_NUM_FILTER_EXPRS were unaffected
+// by the reference switch. (A NUMERIC field whose stored value is literally
+// "nan" cannot be used to test it: both engines treat that as invalid data and
+// drop the whole key from the index before any query can observe it.)
+static bool EitherNil(const Value& l, const Value& r) {
+  return l.IsNil() || r.IsNil();
+}
+
+// True when one operand is a runtime number and the other is a string that is
+// not one. Redisearch answers that pair as IEEE-unordered -- != is true and
+// every other comparison is false -- rather than falling back to a byte-order
+// comparison of the two, which is what Compare() would do.
+//
+// Only a bare numeric literal or a number-returning function (strlen, abs, ...)
+// is a runtime number here. A NUMERIC-declared field is not: its value reaches
+// the filter as the raw bytes, so `@a > @b` over two NUMERIC fields is a string
+// comparison on both engines while `@a > 5` is numeric.
+//
+// This cannot be folded into Compare() as a kUNORDERED result. NaN produces
+// kUNORDERED too, and there Redisearch answers as though the operands were
+// equal (== true, != false) -- the opposite mapping, pinned by the
+// "filter num <op> nan" compatibility cases.
+static bool NumberVersusNonNumericString(const Value& l, const Value& r) {
+  auto one_way = [](const Value& num, const Value& str) {
+    return num.IsDouble() && str.IsString() && !str.AsDouble().has_value();
+  };
+  return one_way(l, r) || one_way(r, l);
+}
+
+Value FilterFuncEq(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l == r);
+}
+
+Value FilterFuncNe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(true);
+  }
+  return Value(l != r);
+}
+
+Value FilterFuncLt(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l < r);
+}
+
+Value FilterFuncLe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l <= r);
+}
+
+Value FilterFuncGt(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l > r);
+}
+
+Value FilterFuncGe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l >= r);
+}
 
 Value FuncLor(const Value& l, const Value& r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
@@ -697,6 +825,9 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("strlen of nil"));
+  }
   if (o.IsArray()) {
     return ApplyToElements(o.GetArray(), FuncStrlen);
   }
@@ -727,6 +858,9 @@ Value FuncStartswith(const Value& l, const Value& r) {
   }
 
   // Case 4: Both scalars (existing behavior)
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("startswith with nil"));
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -760,6 +894,9 @@ Value FuncContains(const Value& l, const Value& r) {
   }
 
   // Case 4: Both scalars (existing behavior)
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("contains with nil"));
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -779,10 +916,12 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsNil()) {
+    return Value(Value::Nil("substr of nil"));
+  }
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
     return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
   }
-
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -872,6 +1011,11 @@ static bool DateNegativeTsReturnsNil() {
 }
 
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
+  for (auto& v : values) {
+    if (v.IsNil()) {
+      return Value(Value::Nil("concat with nil"));
+    }
+  }
   std::string result;
   for (auto& v : values) {
     auto s = v.AsStringView();
@@ -948,7 +1092,12 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   if (!fmtstr) {
     return Value(Value::Nil("timefmt: format has no string representation"));
   }
-  if (fmtstr->empty()) {
+  // A format whose first byte is NUL is empty as far as strftime is concerned:
+  // it takes a NUL-terminated C string, so the value is truncated to nothing.
+  // A raw vector blob reaches here that way. Treat it as the empty format
+  // rather than letting it fall through to the loop below, which cannot tell
+  // "produced no output" from "buffer too small" and would grow forever.
+  if (fmtstr->empty() || (*fmtstr)[0] == 0) {
     // 1.2.1 fix: empty format → Nil (matches Redisearch).
     // Pre-1.2.1: returned an empty string as a fast-path.
     return VALKEY_SEARCH_COMPATIBILITY_FIX(
@@ -963,11 +1112,20 @@ Value FuncTimefmt(const Value& ts, const Value& fmt) {
   time_t timestamp = (time_t)*timestampd;
   ::gmtime_r(&timestamp, &tm);
 
+  // strftime() returns 0 both when the buffer is too small and when the format
+  // legitimately produces no output, and the two are indistinguishable. The
+  // guard above rules out the reachable case, but any other zero-output format
+  // would still send an unbounded doubling loop into an OOM kill. Cap the
+  // growth and report no output instead.
+  static constexpr size_t kMaxTimefmtResult = 1 << 20;
   std::string result;
   result.resize(100);
   size_t result_bytes = 0;
   while ((result_bytes = strftime(result.data(), result.size(), fmt_z.c_str(),
                                   &tm)) == 0) {
+    if (result.size() >= kMaxTimefmtResult) {
+      return Value(Value::Nil("timefmt: format produced no output"));
+    }
     result.resize(result.size() * 2);
   }
   result.resize(result_bytes);

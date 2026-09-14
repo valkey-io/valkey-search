@@ -64,6 +64,7 @@ struct FTCreateParameters {
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
+  std::string filter;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -141,6 +142,14 @@ TEST_P(FTCreateParserTest, ParseParams) {
     if (test_case.expected.score != 1.0f) {
       EXPECT_TRUE(index_schema_proto->has_score());
       EXPECT_FLOAT_EQ(index_schema_proto->score(), test_case.expected.score);
+    }
+
+    // Verify filter
+    if (!test_case.expected.filter.empty()) {
+      EXPECT_TRUE(index_schema_proto->has_filter());
+      EXPECT_EQ(index_schema_proto->filter(), test_case.expected.filter);
+    } else {
+      EXPECT_FALSE(index_schema_proto->has_filter());
     }
 
     // Verify schema-level text parameters if we have text fields
@@ -1184,13 +1193,163 @@ INSTANTIATE_TEST_SUITE_P(
                  "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
          },
          {
-             .test_name = "unexpected_filter",
+             .test_name = "happy_path_filter_with_tag",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH FILTER \"@status=='active'\" SCHEMA "
+                 "status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             .test_name = "filter_empty_expression",
              .success = false,
              .command_str =
-                 " idx1 filter aa SChema hash_field1 vector hnsw 6 TYPE "
-                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+                 "idx1 on HASH FILTER \"\" SCHEMA status tag ",
              .expected_error_message =
-                 "The parameter `FILTER` is not supported",
+                 "FILTER expression cannot be empty",
+         },
+         {
+             // FILTER is a pre-SCHEMA option like SCORE and LANGUAGE, so it
+             // must be accepted after them, not only immediately after
+             // PREFIX. It used to be parsed once before the flexible
+             // ordering loop, which made this form fail with
+             // "Unexpected parameter `FILTER`".
+             .test_name = "filter_after_score_and_language",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: SCORE 0.5 LANGUAGE english "
+                 "FILTER \"@status=='active'\" SCHEMA status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             // ... and before them, interleaved with the other options.
+             .test_name = "filter_before_score_and_skipinitialscan",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: FILTER \"@price>100\" "
+                 "SKIPINITIALSCAN SCORE 0.5 SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .skip_initial_scan = true,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // An empty expression is rejected wherever FILTER appears, not
+             // just in the position the old pre-loop parse handled.
+             .test_name = "filter_empty_expression_after_score",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"\" SCHEMA status tag ",
+             .expected_error_message =
+                 "FILTER expression cannot be empty",
+         },
+         {
+             // PREFIX is parsed from the flexible ordering loop too, so it
+             // no longer has to come first among the pre-SCHEMA options.
+             .test_name = "prefix_after_score_and_filter",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"@price>100\" "
+                 "PREFIX 1 p: SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             .test_name = "prefix_between_other_options",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SKIPINITIALSCAN PREFIX 2 a: b: LANGUAGE english "
+                 "SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"a:", "b:"},
+                  .skip_initial_scan = true,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // A hash-tagged index still requires a PREFIX clause; the check
+             // moved out of ParsePrefixes() to after the ordering loop, so it
+             // must still fire when PREFIX appears in a late position...
+             .test_name = "hash_tagged_index_with_late_prefix",
+             .success = true,
+             .command_str =
+                 "idx{a} on HASH SCORE 0.5 PREFIX 1 p{a} SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx{a}",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p{a}"},
+                  .score = 0.5,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // ... and must still reject a hash-tagged index that has other
+             // pre-SCHEMA options but no PREFIX at all.
+             .test_name = "hash_tagged_index_missing_prefix_with_options",
+             .success = false,
+             .command_str = "idx{a} on HASH SCORE 0.5 SCHEMA price numeric ",
+             .expected_error_message =
+                 "PREFIX parameter is required for hash-tagged indexes",
+         },
+         {
+             // Two PREFIX clauses are rejected outright rather than appended,
+             // so repeats cannot slip past the max-prefixes bound.
+             .test_name = "duplicate_prefix_clause",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 a: PREFIX 1 b: SCHEMA price numeric ",
+             .expected_error_message = "`PREFIX` specified multiple times",
          },
          {
              .test_name = "invalid_language_parameter_value",

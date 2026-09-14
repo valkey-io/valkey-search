@@ -124,18 +124,51 @@ subsets, `@__key`, `AS` renames of an existing field, a rename onto another
 field's name, two renames at once, and renames referenced by a following
 `SORTBY`, `APPLY` or `GROUPBY`.
 
-### 5.2. The suite sweeps HASH keys only
+### 5.2. The suite sweeps HASH keys only — waiting on PR 1381
 
-**Status:** deliberate.
+**Status:** open, fix identified and measured, not yet merged.
 
 `generate_hybrid.py` runs against HASH indexes and does not sweep JSON. Naming
 an indexed field in a pipeline stage — `GROUPBY 1 @color`, `SORTBY 2 @price
 ASC` — does not resolve under `LOAD *` on a JSON index, because the document
-arrives as a single `$` column. That is an FT.AGGREGATE limitation being fixed
-on its own branch: the equivalent FT.AGGREGATE query has the same problem, and
-the fix has to be backported to the 1.2 release separately. Sweeping JSON here
-would pin that gap rather than test FT.HYBRID, which has no key-type-specific
-code of its own.
+arrives as a single `$` column. That is an FT.AGGREGATE limitation, not an
+FT.HYBRID one: the equivalent FT.AGGREGATE query has the same problem, and
+FT.HYBRID has no key-type-specific code of its own.
+
+The fix is PR 1381, "Ask for content with `all_content`, not by leaving the
+list empty". Today an empty `return_attributes` means two different things,
+"fetch nothing" and "fetch the whole record", so a stage that names a field
+cannot ask for it alongside `LOAD *`. 1381 splits them with an explicit flag.
+
+**FT.HYBRID does not get that fix for free.** `FusedResolver` in
+`src/commands/ft_hybrid.cc` copies `return_attributes` and `no_content` but
+not `all_content`, and `WantsNoDatabaseContent` still tests `loadall_`.
+Landing 1381 without that three-line follow-up silently *empties* `LOAD *`
+replies rather than fixing them — a JSON `LOAD *` returns no `$` column at
+all, and a HASH `LOAD * SORTBY 2 @price ASC` returns only `price`. There is no
+compile error to catch it; the flag just stays false.
+
+Measured on a merged build (hybrid + 1381 + that follow-up) against a redis:8
+reference, over the 15 cases in `test_loadall_feeding_a_stage`:
+
+| build | hash | json |
+|---|---|---|
+| `hybrid` alone | 10 pass / 1 fail | 4 pass / 7 fail |
+| merged + follow-up | 11 pass / 0 fail | 11 pass / 0 fail |
+
+(Four of the 15 record a reference error rather than an answer, so they pass
+unconditionally: Redis auto-loads for SORTBY and GROUPBY but not for APPLY or
+FILTER. They are kept to pin that, as 1381 does for FT.AGGREGATE.)
+
+`test_loadall_feeding_a_stage` carries those cases now, marked `skip`. When
+1381 and the follow-up land: drop the skip, delete this section, and
+parametrize `TestHybridCompatibility` over both key types — after gating
+`test_load_unknown_field`'s `LOAD 1 $.price` case to HASH, because that path
+resolves on a JSON index and would otherwise XPASS for the wrong reason.
+
+Note 1381 does **not** address 5.1: it never touches the schema lookup that
+produces "Index field `x` does not exist", and `LOAD 1 @nosuchfield` is
+rejected identically before and after the merge.
 
 ### 5.3. An incomplete KNN block — valkey accepts, Redis rejects
 
@@ -302,28 +335,44 @@ on our side: bare, spaced, parenthesized and both give byte-identical rows.
 Every single-predicate filter -- text, tag, numeric, negation, distributed
 union -- matches the reference exactly, and those are swept normally.
 
-### 5.5. The fused score's default column name — TODO, marked `xfail`
+### 5.5. Referencing `@__score` under a LOAD clause — valkey accepts, Redis rejects
 
-**Status:** open.
+**Status:** open, permissive, and narrow.
 
-With no `LOAD` clause and no `YIELD_SCORE_AS` on `COMBINE`, Redis emits the
-fused score under the name `__score`. valkey-search emits no score column at
-all:
+The fused score's own name and emission now match the reference exactly. The
+rule both engines follow, measured across every combination of LOAD shape,
+COMBINE method and per-arm alias, on HASH and on JSON:
+
+| shape | column in the reply |
+|---|---|
+| no LOAD clause | `__score` |
+| any LOAD clause (`LOAD *` or a named list) | none |
+| `COMBINE ... YIELD_SCORE_AS name`, any LOAD shape | `name` |
+
+So a LOAD clause replaces the default projection outright, and an explicitly
+named score is an explicit request that survives it. `COMBINE ...
+YIELD_SCORE_AS __score` with no LOAD names the column the default projection
+already generates, and both engines reject it.
+
+What still differs is whether the column is *referenceable* from a pipeline
+stage once a LOAD clause has hidden it:
 
 ```
-FT.HYBRID idx SEARCH @title:alpha VSIM @vec $q KNN 2 K 10 COMBINE RRF 0 ...
-Redis:  each row carries __key and __score
-Valkey: each row carries __key
+... COMBINE RRF 0 APPLY "@__score * 2" AS dbl            both engines: ok
+... COMBINE RRF 0 LOAD 1 @price APPLY "@__score * 2" ...  Redis rejects,
+                                                          valkey accepts
+... COMBINE RRF 0 LOAD *       APPLY "@__score * 2" ...  Redis rejects,
+                                                          valkey accepts
 ```
 
-Every other shape hides it. Under `LOAD *` neither engine emits a score
-column, and when `COMBINE` names the score both emit that name, so the
-divergence is reachable only in the one combination -- which is why it went
-unnoticed: the suite swept LOAD-less commands and alias-less commands, never
-both at once. `test_unaliased_fused_score_without_load` sweeps it, `xfail`.
-
-The harness would have caught it on its own the moment such an answer existed:
-`compare_row` compares the two rows' column sets before it compares any value.
+Redis answers `SEARCH_PROP_NOT_FOUND Property not loaded nor in pipeline`,
+because for it the score column ceases to exist when the default projection is
+replaced. valkey-search keeps the column registered so the post-fusion
+pipeline can still sort and filter on it, and only hides it from the reply.
+This is the same permissive-loading difference as 5.4c, reached through the
+score column rather than through a database field, and it is left as-is for
+the same reason. Not swept: the two divergent rows are Redis errors, so there
+is no reference answer worth recording.
 
 ### 5.6. COMBINE FUNCTION — a valkey-search extension, deliberately not swept
 

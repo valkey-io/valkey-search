@@ -499,10 +499,13 @@ def compare_results(expected, results):
         # tied, the alignment fell back to whole-row content, and the ranking
         # was never compared at all.
         #
-        # The tie key is the name COMBINE gave the fused score, because that is
-        # the only column that holds it. `__score`, the name a reply falls back
-        # to, is no use here: one engine emits it and the other does not, which
-        # is itself a divergence the suite records rather than relies on.
+        # The tie key is the name COMBINE gave the fused score, because that
+        # is the column that holds it. With no COMBINE alias there is no tie
+        # key at all and the order is compared strictly, position by position.
+        # `__score`, the default name, would work as one -- both engines emit
+        # it when the caller gave no LOAD clause -- but naming it would only
+        # let rows that share a score swap places, which is a comparison these
+        # cases pass without.
         ordered = True
         sortkeys = []
         cix = last_index('combine')

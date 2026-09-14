@@ -19,6 +19,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/coordinator/client_pool.h"
 #include "src/coordinator/coordinator.pb.h"
@@ -42,6 +43,10 @@ class Expression;
 }  // namespace valkey_search::expr
 
 namespace valkey_search::query {
+
+// The column FT.HYBRID puts the fused score in when the caller did not name
+// one with COMBINE ... YIELD_SCORE_AS.
+inline constexpr absl::string_view kDefaultOutputScoreName{"__score"};
 
 // Configuration for the COMBINE fusion stage. Populated by the FT.HYBRID
 // parser; consumed by `query::rank_fusion::{RRF,Linear,Function}` in
@@ -99,8 +104,17 @@ struct MultiSearchParameters {
   uint64_t slot_fingerprint{0};
   cancel::Token cancellation_token;
   std::optional<vmsdk::BlockedClient> blocked_client;
-  vmsdk::UniqueValkeyString score_as;  // user-visible field name for the
-                                       // fused score (COMBINE YIELD_SCORE_AS)
+  // Name the fused score is generated under. `__score` unless COMBINE ...
+  // YIELD_SCORE_AS renamed it. The column always exists so that the
+  // post-fusion pipeline can sort, filter and apply on it; whether it reaches
+  // the reply depends on `output_score_name_explicit` and the LOAD clause,
+  // which the FT.HYBRID parser settles once the whole command is read.
+  std::string output_score_name{kDefaultOutputScoreName};
+  // True when COMBINE ... YIELD_SCORE_AS named the score. An explicitly named
+  // score is always in the reply; the default name only survives when the
+  // caller gave no LOAD clause, because any LOAD replaces the default
+  // projection.
+  bool output_score_name_explicit{false};
 
   // ----- arms (each is a MultiArmShim, which IS-A SearchParameters; the shim
   //       carries the tracker back-pointer set at dispatch time. For FT.HYBRID

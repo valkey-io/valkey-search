@@ -525,6 +525,81 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for load, tail in self._load_cases(key_type):
             self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
 
+    # Skipped until PR 1381 ("Ask for content with `all_content`, not by
+    # leaving the list empty") merges, plus the three-line follow-up it needs
+    # in FT.HYBRID.
+    #
+    # What these sweep is `LOAD *` feeding a pipeline stage. `LOAD *` today
+    # means "return_attributes is empty", which is the same encoding as "fetch
+    # nothing", so a stage that names a field cannot ask for it alongside the
+    # whole record. 1381 splits the two with an explicit `all_content` flag.
+    # FT.HYBRID does not get the fix for free: its `FusedResolver` copies
+    # `return_attributes` and `no_content` but not `all_content`, and
+    # `WantsNoDatabaseContent` still tests `loadall_`, so landing 1381 without
+    # touching `src/commands/ft_hybrid.cc` silently empties `LOAD *` replies
+    # instead of fixing them.
+    #
+    # Measured on a merged build (hybrid + 1381 + that follow-up) against a
+    # redis:8 reference, over the 15 cases below and on both key types:
+    #
+    #                        hash                json
+    #   hybrid alone         10 pass / 1 fail    4 pass / 7 fail
+    #   merged + follow-up   11 pass / 0 fail    11 pass / 0 fail
+    #
+    # (Four of the 15 record a reference error rather than an answer -- Redis
+    # auto-loads for SORTBY and GROUPBY but not for APPLY or FILTER -- so they
+    # pass unconditionally and are kept only to pin that behaviour, the same
+    # way 1381 does for FT.AGGREGATE.)
+    #
+    # The seven JSON failures are exactly unsupported_tests.md 5.2, the reason
+    # this suite is HASH-only. When 1381 lands: drop the skip, and 5.2 can
+    # come off with the class parametrized over both key types -- but
+    # test_load_unknown_field's `LOAD 1 $.price` case has to be gated to HASH
+    # first, because that path resolves on a JSON index and would XPASS for
+    # the wrong reason.
+    @pytest.mark.skip(reason="needs PR 1381 plus the all_content follow-up in "
+                             "ft_hybrid.cc; enable once both have merged")
+    def test_loadall_feeding_a_stage(self, key_type):
+        self.setup_data(key_type)
+        cases = [
+            # `LOAD *` plus one stage, one per stage kind.
+            (LOAD_ALL, ["SORTBY", "2", "@price", "ASC"]),
+            (LOAD_ALL, ["SORTBY", "2", "@title", "ASC"]),
+            # A tag sort key takes only four values over the corpus, so the
+            # page boundary lands inside a tie that the two engines break
+            # differently. The unique second key is what makes it comparable.
+            (LOAD_ALL, ["SORTBY", "4", "@color", "ASC", "@price", "ASC"]),
+            # A column fusion produced rather than one the document carries.
+            (LOAD_ALL, ["SORTBY", "2", "@hybrid_score", "DESC"]),
+            (LOAD_ALL, ["GROUPBY", "1", "@color",
+                        "REDUCE", "COUNT", "0", "AS", "cnt"]),
+            (LOAD_ALL, ["GROUPBY", "1", "@color",
+                        "REDUCE", "SUM", "1", "@price", "AS", "total"]),
+            # APPLY and FILTER over a field only `LOAD *` brings in. The
+            # reference refuses both, so these record an error.
+            (LOAD_ALL, ["APPLY", "@price * 2", "AS", "doubled"]),
+            (LOAD_ALL, ["FILTER", "@price < 25"]),
+            # Two stages: the field has to survive one hop further down.
+            (LOAD_ALL, ["SORTBY", "2", "@price", "ASC",
+                        "APPLY", "@price * 2", "AS", "doubled"]),
+            (LOAD_ALL, ["GROUPBY", "1", "@color",
+                        "REDUCE", "SUM", "1", "@price", "AS", "total",
+                        "APPLY", "@total * 2", "AS", "bumped"]),
+            (LOAD_ALL, ["APPLY", "@price * 2", "AS", "doubled",
+                        "SORTBY", "2", "@doubled", "ASC"]),
+            (LOAD_ALL, ["FILTER", "@price < 25",
+                        "SORTBY", "2", "@price", "ASC"]),
+            # Controls, which separate "the stage works" from "`LOAD *` fed
+            # the stage": the same stage behind an explicit LOAD, and behind
+            # no LOAD at all.
+            (["LOAD", "1", "@price"], ["SORTBY", "2", "@price", "ASC"]),
+            (NO_LOAD, ["SORTBY", "2", "@price", "ASC"]),
+            (NO_LOAD, ["GROUPBY", "1", "@color",
+                       "REDUCE", "COUNT", "0", "AS", "cnt"]),
+        ]
+        for load, tail in cases:
+            self.hybrid(key_type, "@title:alpha", load=load, tail=tail)
+
     # TODO(load-unknown-field): Redis lets a LOAD name a field the index does
     # not have and simply returns no column for it; Valkey rejects the command
     # with "Index field `x` does not exist". FT.AGGREGATE does the same thing
@@ -716,16 +791,138 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             self.hybrid(key_type, "@title:alpha", tail=tail,
                         vector_score_as="vector_score")
 
-    # TODO(fused-score-default-name): with no LOAD clause AND no COMBINE alias,
-    # Redis emits the fused score as `__score`; valkey-search emits no score
-    # column at all. Every other shape hides it -- under `LOAD *` neither
-    # engine emits a score column, and with an alias both emit the alias -- so
-    # the divergence is only reachable here. See unsupported_tests.md 5.5.
     def test_unaliased_fused_score_without_load(self, key_type):
+        """No LOAD and no COMBINE alias: the fused score is named `__score`.
+
+        The narrowest shape in which the default score name is observable at
+        all -- any LOAD clause replaces the default projection, and any
+        COMBINE alias renames the column -- so this is the case that pins the
+        name itself.
+        """
         self.setup_data(key_type)
         for query in ["@title:alpha", "@body:canyon"]:
             self.hybrid(key_type, query, fused_score_as=None, load=NO_LOAD,
-                        search_score_as=None, xfail=True)
+                        search_score_as=None)
+
+    def test_output_score_across_combine_and_load(self, key_type):
+        """Every COMBINE method against every LOAD shape, unaliased.
+
+        The default score column is emitted when the caller gave no LOAD
+        clause and dropped when they gave one, whichever way the scores were
+        fused. Sweeping the methods together is what separates the emission
+        rule from any one fusion method: an RRF-only sweep would leave open
+        whether LINEAR carries its score differently.
+        """
+        self.setup_data(key_type)
+        for combine in [("RRF", ["CONSTANT", "60"]),
+                        ("RRF", ["CONSTANT", "1"]),
+                        ("LINEAR", ["ALPHA", "0.5", "BETA", "0.5"]),
+                        ("LINEAR", ["ALPHA", "0.9", "BETA", "0.1"])]:
+            for load in [NO_LOAD,
+                         LOAD_ALL,
+                         ["LOAD", "1", "@price"],
+                         ["LOAD", "2", "@price", "@color"],
+                         ["LOAD", "1", "@__key"]]:
+                self.hybrid(key_type, "@title:alpha", combine=combine,
+                            load=load, fused_score_as=None,
+                            search_score_as=None)
+
+    def test_output_score_alias_across_combine_and_load(self, key_type):
+        """The same sweep with COMBINE ... YIELD_SCORE_AS.
+
+        A named score is an explicit request, so unlike the default it
+        survives every LOAD shape. Pairing this with the sweep above is what
+        makes the reply's score column a function of two inputs rather than
+        one.
+        """
+        self.setup_data(key_type)
+        for combine in [("RRF", ["CONSTANT", "60"]),
+                        ("LINEAR", ["ALPHA", "0.5", "BETA", "0.5"])]:
+            for load in [NO_LOAD,
+                         LOAD_ALL,
+                         ["LOAD", "1", "@price"],
+                         ["LOAD", "2", "@price", "@color"]]:
+                self.hybrid(key_type, "@title:alpha", combine=combine,
+                            load=load, fused_score_as="hybrid_score",
+                            search_score_as=None)
+
+    def test_per_arm_score_alias_combinations(self, key_type):
+        """Each arm named, neither, and both, against every LOAD shape.
+
+        A per-arm alias is an explicit request like the COMBINE alias, so it
+        reaches the reply under `LOAD *` as well -- including for JSON, where
+        `LOAD *` returns the document as a single `$` column and the aliases
+        sit beside it. A document only one arm found carries only that arm's
+        alias, which the narrow SEARCH query below is chosen to produce.
+        """
+        self.setup_data(key_type)
+        aliases = [(None, None),
+                   ("text_score", None),
+                   (None, "vector_score"),
+                   ("text_score", "vector_score")]
+        for search_as, vector_as in aliases:
+            for load in [NO_LOAD, LOAD_ALL, ["LOAD", "1", "@price"]]:
+                # A wide query, where most rows are in both arms.
+                self.hybrid(key_type, "@title:alpha", load=load,
+                            search_score_as=search_as,
+                            vector_score_as=vector_as,
+                            fused_score_as=None)
+                # A narrow one, where most rows are in the vector arm only
+                # and so carry no text-arm alias.
+                self.hybrid(key_type, "@title:epsilon", load=load,
+                            search_score_as=search_as,
+                            vector_score_as=vector_as,
+                            fused_score_as=None)
+
+    def test_score_columns_json(self, key_type):
+        """The score-column rules again, on a JSON index.
+
+        The class sweeps HASH only, because a pipeline stage naming an
+        indexed field does not resolve against a JSON document under `LOAD *`
+        (see the note on the class, and unsupported_tests.md 5.2). None of the
+        score columns depend on that: a score alias is written by fusion, not
+        read out of the document, so it is reachable on JSON where an
+        `@color` reference is not. This sweep therefore uses no pipeline
+        stage, and pins that the emission rules are the same for both key
+        types on both engines.
+
+        `key_type` is ignored: this case names its own.
+        """
+        self.setup_data("json")
+        for load in [NO_LOAD, LOAD_ALL, ["LOAD", "1", "@price"]]:
+            # Unaliased, so the default `__score` rule is what is under test.
+            self.hybrid("json", "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None)
+            # Each arm named, then both, then all three.
+            self.hybrid("json", "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as="text_score")
+            self.hybrid("json", "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None,
+                        vector_score_as="vector_score")
+            self.hybrid("json", "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as="text_score",
+                        vector_score_as="vector_score")
+            self.hybrid("json", "@title:alpha", load=load,
+                        fused_score_as="hybrid_score",
+                        search_score_as="text_score",
+                        vector_score_as="vector_score")
+            # A narrow query, so most rows are in the vector arm only and
+            # carry no text-arm alias.
+            self.hybrid("json", "@title:epsilon", load=load,
+                        fused_score_as=None, search_score_as="text_score",
+                        vector_score_as="vector_score")
+
+    def test_per_arm_and_fused_score_aliases_together(self, key_type):
+        """All three aliases at once, and the fused one renamed away from the
+        default, so that three independently named score columns have to coexist
+        in one reply."""
+        self.setup_data(key_type)
+        for load in [NO_LOAD, LOAD_ALL, ["LOAD", "1", "@price"],
+                     ["LOAD", "2", "@price", "@title"]]:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        search_score_as="text_score",
+                        vector_score_as="vector_score",
+                        fused_score_as="hybrid_score")
 
     def test_unaliased_fused_score_with_explicit_load(self, key_type):
         """No score named anywhere, and a LOAD clause that names its columns.

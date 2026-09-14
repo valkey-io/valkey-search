@@ -54,10 +54,19 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // operation. And modify the common search returns list accordingly
   CHECK(!params.no_content);
   bool content = false;
+  // `LOAD *` asks for the whole record. It is not a short circuit: a field
+  // named by a pipeline stage still has to be fetched by name alongside it,
+  // because on a JSON index the whole record arrives as the single `$` root
+  // and no `@name` resolves against that blob. Fall through into the same
+  // load processing every other clause gets, with an empty `loads_`, so the
+  // implicit loads below are collected exactly as usual.
   if (params.loadall_) {
     CHECK(params.return_attributes.empty());
-    return absl::OkStatus();
-  } else {
+    params.all_content = true;
+  }
+  // Bare scope, kept where the `else` used to be so that `loads_to_process`
+  // stays local and the body below is not reindented. It has no other effect.
+  {
     std::vector<LoadField> loads_to_process = params.loads_;
 
     // A field named by a pipeline stage but absent from the LOAD clause still
@@ -165,7 +174,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
     }
   }
-  params.no_content = !content;
+  // `LOAD *` on its own loads no named field, so `content` stays false even
+  // though the whole record is wanted. Nothing is fetched only when neither
+  // was asked for.
+  params.no_content = !content && !params.all_content;
   return absl::OkStatus();
 }
 

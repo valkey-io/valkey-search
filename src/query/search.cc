@@ -509,7 +509,13 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (!results.ok()) {
     return results;
   }
-  if (parameters.no_content || parameters.return_attributes.empty()) {
+  // `all_content` cannot be served from the indexes: the whole record is every
+  // field for a HASH and the `$` root document for JSON, and neither is
+  // reconstructible from the indexed attributes alone. Serving the named
+  // subset here would populate attribute_contents and make the main-thread
+  // fetch skip the neighbor entirely, dropping the rest of the record.
+  if (parameters.no_content || parameters.all_content ||
+      parameters.return_attributes.empty()) {
     return results;
   }
   struct AttributeInfo {

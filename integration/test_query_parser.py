@@ -273,6 +273,40 @@ class TestQueryParser(ValkeySearchTestCaseBase):
             "FT.SEARCH", "grpidx", "@f1:(foo bar)", "NOCONTENT")
         assert result[0] == 0
 
+        # Nested parentheses: the same '(' is used both to scope a field
+        # (@f:(...)) and to group and/or subexpressions, so the two uses must
+        # compose without ambiguity. The cases below pin that interaction; all
+        # counts are cross-checked against RediSearch on redis-stack-server.
+
+        # A field-scoped group wrapped in an outer grouping paren is unchanged:
+        # the outer '(' groups, the inner '(' scopes -- @f1:(foo|bar) on f1.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "(@f1:(foo|bar))", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"d1", b"d2"}
+
+        # An inner grouping paren nested inside the field-scoped group keeps the
+        # field scope: @f1:((foo|bar)) is still just foo|bar on f1.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:((foo|bar))", "NOCONTENT")
+        assert result[0] == 2
+        assert set(result[1:]) == {b"d1", b"d2"}
+
+        # Operator precedence inside a scoped group: | is OR and a nested ( )
+        # group is AND'd, so @f1:(foo | (bar baz)) is foo OR (bar AND baz), all
+        # on f1. Only d1 (foo) matches; no doc has both bar and baz in f1.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:(foo | (bar baz))", "NOCONTENT")
+        assert result[0] == 1
+        assert result[1] == b"d1"
+
+        # A nested OR group inside the scoped group ORs correctly:
+        # @f1:((foo|bar) | baz) is foo|bar|baz on f1.
+        result = client.execute_command(
+            "FT.SEARCH", "grpidx", "@f1:((foo|bar) | baz)", "NOCONTENT")
+        assert result[0] == 3
+        assert set(result[1:]) == {b"d1", b"d2", b"d3"}
+
         # An empty group is a syntax error, not a silent match-all/match-none.
         with pytest.raises(ResponseError):
             client.execute_command(

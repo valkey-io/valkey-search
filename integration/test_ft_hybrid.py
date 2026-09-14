@@ -994,27 +994,60 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
             checked += 1
         assert checked == self.NUM_DOCS
 
-    def test_score_column_appears_only_when_named(self):
-        """The fused score reaches the reply under the caller's alias. Without
-        YIELD_SCORE_AS there is no score column at all."""
+    def test_named_fused_score_survives_every_load_shape(self):
+        """COMBINE ... YIELD_SCORE_AS is an explicit request, so the column it
+        names is in the reply whatever the LOAD clause says."""
         client = self.server.get_new_client()
         self.setup_index(client)
-        named = self._hybrid(
-            client, "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "h",
-            "LIMIT", "0", "3")
-        for rec in named[1:]:
-            assert b"h" in self._rec_to_dict(rec), f"missing alias in {rec}"
+        for load in ([], ["LOAD", "*"], ["LOAD", "1", "@title"]):
+            reply = self._hybrid(
+                client, "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "h",
+                *load, "LIMIT", "0", "3")
+            for rec in reply[1:]:
+                assert b"h" in self._rec_to_dict(rec), \
+                    f"missing alias under {load or 'no LOAD'}: {rec}"
+
+    def test_unnamed_fused_score_follows_the_load_clause(self):
+        """With no alias the fused score is named `__score`, and it is in the
+        reply only when the caller gave no LOAD clause.
+
+        A LOAD clause replaces the default projection outright, which is the
+        rule the reference follows: `LOAD 1 @title` drops the score just as
+        `LOAD *` does. Both spellings are here because the narrower one is the
+        easy one to get wrong.
+        """
+        client = self.server.get_new_client()
+        self.setup_index(client)
 
         for extra in (
             ["COMBINE", "RRF", "0", "LIMIT", "0", "3"],   # COMBINE, no alias
             ["LIMIT", "0", "3"],                          # no COMBINE at all
         ):
-            unnamed = self._hybrid(client, *extra)
-            for rec in unnamed[1:]:
+            reply = self._hybrid(client, *extra)
+            for rec in reply[1:]:
+                assert b"__score" in self._rec_to_dict(rec), \
+                    f"no default score column without a LOAD clause: {rec}"
+
+        for load in (["LOAD", "*"], ["LOAD", "1", "@title"]):
+            reply = self._hybrid(client, "COMBINE", "RRF", "0", *load,
+                                 "LIMIT", "0", "3")
+            for rec in reply[1:]:
                 keys = set(self._rec_to_dict(rec))
-                # `__key` is a legitimate column; the fused score is not.
-                assert b"__hybrid_score" not in keys, \
-                    f"unnamed fused score leaked into the reply: {keys}"
+                assert b"__score" not in keys, \
+                    f"default score survived {load}: {keys}"
+
+    def test_yielding_the_default_score_name_without_a_load_is_rejected(self):
+        """`YIELD_SCORE_AS __score` names the column the default projection
+        already generates. Accepted once a LOAD clause has removed it."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError):
+            self._hybrid(client, "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                         "__score", "LIMIT", "0", "3")
+        reply = self._hybrid(client, "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                             "__score", "LOAD", "*", "LIMIT", "0", "3")
+        for rec in reply[1:]:
+            assert b"__score" in self._rec_to_dict(rec), rec
 
     @staticmethod
     def _rec_to_dict(rec):

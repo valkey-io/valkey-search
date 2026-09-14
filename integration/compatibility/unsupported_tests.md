@@ -398,6 +398,34 @@ a `LOAD` of `@__score` without the rename, so this is a degenerate answer
 rather than a rule. `test_load_renaming_the_score_column` records it `xfail`:
 matching it would mean deliberately dropping a column the caller asked for.
 
+It is the rename itself, not the name chosen: measured on HASH and on JSON,
+which behave identically, Redis drops the column whatever it is renamed to,
+and whatever else the clause loads.
+
+| clause | Redis | valkey-search |
+|---|---|---|
+| `LOAD 3 @__score AS s` | no columns | `s` |
+| `LOAD 3 @__score AS __key` | no columns | `__key` |
+| `LOAD 3 @__score AS price` | no columns | `price` |
+| `LOAD 4 @price @__score AS s` | `price` | `price`, `s` |
+| `LOAD 6 @__key AS a @__score AS b` | `a` | `a`, `b` |
+| `LOAD 7 @__key AS a @__score AS b @price` | `a`, `price` | all three |
+
+Feeding the renamed column to a later stage is worse still: Redis drops every
+*row*, not only the column, and says why in a warning.
+
+```
+... LOAD 3 @__score AS s APPLY "@s * 2" AS doubled_score ...
+redis:  [b'total_results', 20, b'results', [],
+         b'warnings', [b'SEARCH_VALUE_NOT_FOUND Could not find the value ...']]
+valkey: [3, [b's', b'0.0320184417069', b'doubled_score', b'0.0640368834138'], ...]
+```
+
+The key column, which is reserved in the same way, has none of this. Renaming
+it works on both engines, in both directions against a real field name, and
+the rename is reachable from a following `SORTBY` or `APPLY` -- all of which
+`_load_cases` sweeps and compares normally.
+
 Renaming a *different* field onto the score's name is the mirror image, and
 the engines resolve the clash the opposite way:
 
@@ -411,11 +439,24 @@ Reversing ours would mean discarding a field the LOAD clause named, so this is
 recorded rather than matched, in
 `test_load_renaming_another_field_onto_the_score_name`. Once `COMBINE ...
 YIELD_SCORE_AS` has renamed the score away there is no clash and both engines
-agree, which the same test pins.
+agree, which the same test pins. `LOAD 3 @__key AS __score` behaves the same
+way -- Redis protects the name against the key column exactly as it does
+against a document field -- and is swept there too.
+
+Redis does not protect `__key` in return: `LOAD 3 @price AS __key` emits the
+price under that name on both engines. The asymmetry is Redis', not ours.
 
 The suppression that produces this is by column index rather than by output
 name (`AggregateParameters::suppressed_reply_column_`). By name it also hid
 the renamed field, so the reply carried neither column.
+
+Two further shapes are not swept. `LOAD 6 @__key AS x @__score AS x` claims
+one output name twice; valkey-search rejects that whenever an `AS` is
+involved, which is the deliberate extra strictness the LOAD parser documents
+and the FT.AGGREGATE suite already covers. And an upper-case `@__KEY` or
+`@__SCORE` names nothing on either engine, because both match the reserved
+names case-sensitively -- that reaches 5.1 rather than anything here, and
+`test_load_unknown_field` sweeps it.
 
 Separately, `COMBINE ... YIELD_SCORE_AS hs LOAD 1 @__score` renames the score
 away and leaves `@__score` naming nothing. Redis ignores the unknown entry and

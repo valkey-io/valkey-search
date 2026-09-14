@@ -75,10 +75,6 @@ constexpr absl::string_view kDialectKw{"DIALECT"};
 // FT.HYBRID returns 10 rows when the caller omits LIMIT.
 constexpr size_t kDefaultHybridLimit = 10;
 
-// Column name the fused score is parked under when the caller did not name it
-// with COMBINE ... YIELD_SCORE_AS. Reserved, and hidden from the reply.
-constexpr absl::string_view kInternalHybridScore = "__hybrid_score";
-
 bool IsTopLevelKeyword(absl::string_view tok) {
   return absl::EqualsIgnoreCase(tok, kSearchKw) ||
          absl::EqualsIgnoreCase(tok, kVsimKw) ||
@@ -495,7 +491,8 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
     } else if (absl::EqualsIgnoreCase(kw, kYieldScoreAsKw)) {
       VMSDK_ASSIGN_OR_RETURN(auto alias_sv, inner_itr.GetStringView());
       inner_itr.Next();
-      env.score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
+      env.output_score_name = std::string(alias_sv);
+      env.output_score_name_explicit = true;
     } else if (absl::EqualsIgnoreCase(kw, kExprKw)) {
       if (env.fusion.method != FusionConfig::Method::kFunction) {
         return absl::InvalidArgumentError(
@@ -591,19 +588,10 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     }
     // Set the score_as on the aggregate the same way ft_aggregate.cc:91 does
     // for plain FT.AGGREGATE — so the post-fusion aggregate pipeline routes
-    // the fused score into a known field name.
-    if (env.score_as) {
-      env.agg->score_as = vmsdk::MakeUniqueValkeyString(
-          vmsdk::ToStringView(env.score_as.get()));
-    } else {
-      // No COMBINE ... YIELD_SCORE_AS. The pipeline still needs the fused
-      // score as a column, but the caller never asked to see it, so keep it
-      // under a reserved name and hide that column from the reply -- Redis
-      // returns no score field in this case either.
-      env.agg->score_as = vmsdk::MakeUniqueValkeyString(kInternalHybridScore);
-      env.score_as = vmsdk::MakeUniqueValkeyString(kInternalHybridScore);
-      env.agg->suppressed_reply_field_ = std::string(kInternalHybridScore);
-    }
+    // the fused score into a known field name. That name is `__score` unless
+    // COMBINE ... YIELD_SCORE_AS renamed it. Whether the column reaches the
+    // reply is decided after the suffix parse, once the LOAD clause is known.
+    env.agg->score_as = vmsdk::MakeUniqueValkeyString(env.output_score_name);
     // Pre-populate the two reserved record slots that AggregateParameters
     // expects: __key at kKeyColumn and the score alias at kScoreColumn.
     // Mirrors AggregateParameters::ParseCommand. Without this, MakeReference
@@ -696,11 +684,35 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     }
   }
 
+  const bool no_load_clause = env.agg->loads_.empty() && !env.agg->loadall_;
+
+  // Measured against the reference: with no LOAD the default projection is
+  // the document key and the fused score, so `__score` is in the reply and an
+  // APPLY/SORTBY can reference it. Any LOAD clause -- `LOAD *` or a named
+  // list -- replaces that default, and the fused score drops out unless
+  // COMBINE ... YIELD_SCORE_AS asked for it by name, which is an explicit
+  // request and is always honoured. The column itself stays registered either
+  // way so the pipeline can still sort on it.
+  if (!no_load_clause && !env.output_score_name_explicit) {
+    env.agg->suppressed_reply_field_ = env.output_score_name;
+  }
+
+  // `COMBINE ... YIELD_SCORE_AS __score` with no LOAD names the column the
+  // default projection already generates. The reference rejects that rather
+  // than emitting one column twice.
+  if (no_load_clause && env.output_score_name_explicit &&
+      env.output_score_name == kDefaultOutputScoreName) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("YIELD_SCORE_AS `", kDefaultOutputScoreName,
+                     "` collides with the default score column; either rename "
+                     "it or give a LOAD clause"));
+  }
+
   // With no LOAD clause at all, FT.HYBRID replies with the document key and
   // the score aliases. FT.AGGREGATE has no such default -- it loads `__key`
   // only when the LOAD clause names it -- so ask for it here, before the
   // clause is resolved.
-  if (env.agg->loads_.empty() && !env.agg->loadall_) {
+  if (no_load_clause) {
     env.agg->loads_.push_back(aggregate::LoadField{
         .identifier = "__key", .alias = "__key", .renamed = false});
   }
@@ -859,9 +871,10 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
         VMSDK_RETURN_IF_ERROR(reject_collision(*alias));
       }
     }
-    if (env.score_as) {
-      VMSDK_RETURN_IF_ERROR(
-          reject_collision(vmsdk::ToStringView(env.score_as.get())));
+    // Only an explicitly named fused score can collide: the default `__score`
+    // is suppressed whenever there is a LOAD clause to collide with.
+    if (env.output_score_name_explicit) {
+      VMSDK_RETURN_IF_ERROR(reject_collision(env.output_score_name));
     }
   }
 

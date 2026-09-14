@@ -18,11 +18,13 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/commands/ft_aggregate_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/query/multi_search.h"
 #include "testing/common.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -369,6 +371,123 @@ TEST_F(FTHybridParserTest, AVsimArmWithNoFilterIsNotAPrefilteredQuery) {
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ(VsimArm(**params).filter_parse_results.root_predicate, nullptr);
   EXPECT_FALSE(VsimArm(**params).vector_score_only);
+}
+
+// ---------------------------------------------------------------------
+// The name the fused score is generated under, and whether it reaches the
+// reply. Measured against the reference: with no LOAD clause the default
+// projection is the key and the score, any LOAD replaces that projection, and
+// a COMBINE ... YIELD_SCORE_AS name is an explicit request that survives it.
+// None of this is visible in the parse result other than here -- the reply
+// path reads `agg->score_as` and `agg->suppressed_reply_field_`.
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, NoCombineAliasNamesTheScoreScoreAndEmitsIt) {
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->output_score_name, "__score");
+  EXPECT_FALSE((*params)->output_score_name_explicit);
+  EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "__score");
+  EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+}
+
+TEST_F(FTHybridParserTest, CombineYieldScoreAsRenamesTheScore) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                       "hs"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->output_score_name, "hs");
+  EXPECT_TRUE((*params)->output_score_name_explicit);
+  EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "hs");
+  EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+}
+
+TEST_F(FTHybridParserTest, LoadAllHidesTheDefaultScore) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "LOAD", "*"});
+  VMSDK_EXPECT_OK(params);
+  // The column still exists -- a SORTBY on it has to resolve -- it just does
+  // not reach the caller.
+  EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "__score");
+  EXPECT_EQ((*params)->agg->suppressed_reply_field_, "__score");
+}
+
+TEST_F(FTHybridParserTest, ANamedLoadHidesTheDefaultScoreToo) {
+  // The case that separates "LOAD *" from "a LOAD clause": the reference drops
+  // the default score for either.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "LOAD", "1", "@n"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->agg->suppressed_reply_field_, "__score");
+}
+
+TEST_F(FTHybridParserTest, AnExplicitScoreNameSurvivesALoadClause) {
+  // `LOAD *` emits every schema field, so the alias is rejected if the schema
+  // claims to have a field by that name. The mock answers GetIdentifier for
+  // anything unless told otherwise, so say that `hs` is not a field -- which
+  // is what a real schema would say.
+  EXPECT_CALL(*index_schema_, GetIdentifier(absl::string_view("hs")))
+      .WillRepeatedly(::testing::Return(
+          absl::NotFoundError("no such field")));
+  for (const std::vector<std::string> &load :
+       {std::vector<std::string>{"LOAD", "*"},
+        std::vector<std::string>{"LOAD", "1", "@n"}}) {
+    std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                  "$q",     "KNN",       "2",    "K",
+                                  "5",      "COMBINE",   "RRF",  "2",
+                                  "YIELD_SCORE_AS",      "hs"};
+    args.insert(args.end(), load.begin(), load.end());
+    auto params = Parse(args);
+    VMSDK_EXPECT_OK(params);
+    EXPECT_EQ((*params)->output_score_name, "hs");
+    EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+  }
+}
+
+TEST_F(FTHybridParserTest, YieldingScoreAsScoreWithNoLoadIsRejected) {
+  // It names the column the default projection already generates. The
+  // reference refuses it rather than emitting one column twice.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                       "__score"});
+  EXPECT_FALSE(params.ok());
+}
+
+TEST_F(FTHybridParserTest, YieldingScoreAsScoreIsFineOnceALoadClauseExists) {
+  EXPECT_CALL(*index_schema_, GetIdentifier(absl::string_view("__score")))
+      .WillRepeatedly(::testing::Return(
+          absl::NotFoundError("no such field")));
+  // With a LOAD clause there is no default projection to collide with, so the
+  // same alias is accepted -- as the reference accepts it.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                       "__score", "LOAD", "*"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->output_score_name, "__score");
+  EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+}
+
+TEST_F(FTHybridParserTest, CombineFunctionTakesAYieldScoreAsToo) {
+  // FUNCTION is ours alone, so nothing outside this repo pins it. It has to
+  // follow the same naming rule as RRF and LINEAR.
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "FUNCTION", "4", "EXPR",
+             "@__search_score + @__vector_score", "YIELD_SCORE_AS", "fx"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->output_score_name, "fx");
+  EXPECT_TRUE((*params)->output_score_name_explicit);
+}
+
+TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "FUNCTION", "2", "EXPR",
+             "@__search_score + @__vector_score"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->output_score_name, "__score");
+  EXPECT_FALSE((*params)->output_score_name_explicit);
 }
 
 }  // namespace

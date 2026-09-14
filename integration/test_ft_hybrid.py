@@ -1036,6 +1036,26 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
                 assert b"__score" not in keys, \
                     f"default score survived {load}: {keys}"
 
+    def test_a_load_naming_the_score_column_brings_it_back(self):
+        """A LOAD replaces the default projection the score comes from, so
+        naming `@__score` in the clause is the only way to get the score
+        beside a chosen set of fields."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for load in (["LOAD", "1", "@__score"],
+                     ["LOAD", "2", "@title", "@__score"],
+                     ["LOAD", "2", "@__score", "@__key"]):
+            reply = self._hybrid(client, "COMBINE", "RRF", "0", *load,
+                                 "LIMIT", "0", "3")
+            for rec in reply[1:]:
+                assert b"__score" in self._rec_to_dict(rec), \
+                    f"{load} did not bring the score back: {rec}"
+        # The control: a LOAD that names something else still hides it.
+        reply = self._hybrid(client, "COMBINE", "RRF", "0",
+                             "LOAD", "1", "@title", "LIMIT", "0", "3")
+        for rec in reply[1:]:
+            assert b"__score" not in self._rec_to_dict(rec), rec
+
     def test_yielding_the_default_score_name_without_a_load_is_rejected(self):
         """`YIELD_SCORE_AS __score` names the column the default projection
         already generates. Accepted once a LOAD clause has removed it."""

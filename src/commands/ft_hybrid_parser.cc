@@ -686,15 +686,35 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
 
   const bool no_load_clause = env.agg->loads_.empty() && !env.agg->loadall_;
 
+  // A LOAD clause may name the score column back into the projection it
+  // otherwise replaces -- `LOAD 1 @__score`, or `LOAD 2 @price @__score`.
+  // That is as explicit a request as COMBINE ... YIELD_SCORE_AS, and the
+  // reference honours it, so it must not be suppressed.
+  //
+  // Only `identifier`, the name as written, counts. Matching `alias` too
+  // would catch `LOAD 3 @price AS __score`, which renames a different field
+  // onto the score's name and asks for no score at all: un-suppressing there
+  // put two columns called `__score` in one reply, one holding the fused
+  // score and one holding the price.
+  bool a_load_names_the_score = false;
+  for (const auto &load : env.agg->loads_) {
+    if (load.identifier == env.output_score_name) {
+      a_load_names_the_score = true;
+      break;
+    }
+  }
+
   // Measured against the reference: with no LOAD the default projection is
   // the document key and the fused score, so `__score` is in the reply and an
   // APPLY/SORTBY can reference it. Any LOAD clause -- `LOAD *` or a named
-  // list -- replaces that default, and the fused score drops out unless
-  // COMBINE ... YIELD_SCORE_AS asked for it by name, which is an explicit
-  // request and is always honoured. The column itself stays registered either
-  // way so the pipeline can still sort on it.
-  if (!no_load_clause && !env.output_score_name_explicit) {
-    env.agg->suppressed_reply_field_ = env.output_score_name;
+  // list -- replaces that default, and the fused score drops out unless it
+  // was asked for by name, either by COMBINE ... YIELD_SCORE_AS or by the
+  // LOAD clause itself. The column stays registered either way so the
+  // pipeline can still sort on it.
+  if (!no_load_clause && !env.output_score_name_explicit &&
+      !a_load_names_the_score) {
+    env.agg->suppressed_reply_column_ =
+        aggregate::AggregateParameters::kScoreColumn;
   }
 
   // `COMBINE ... YIELD_SCORE_AS __score` with no LOAD names the column the

@@ -374,6 +374,56 @@ score column rather than through a database field, and it is left as-is for
 the same reason. Not swept: the two divergent rows are Redis errors, so there
 is no reference answer worth recording.
 
+### 5.5b. `LOAD ... @__score AS <name>` — Redis emits no column at all
+
+**Status:** permanent divergence, marked `xfail`, and deliberately not matched.
+
+A `LOAD` clause that names `@__score` brings the fused score back into a
+projection the clause otherwise replaces, and both engines honour it — see
+`test_load_naming_the_score_column`, which sweeps it beside other fields,
+before and after them, next to `@__key`, next to the per-arm aliases, and
+feeding a following `SORTBY` or `APPLY`.
+
+Renaming it in the same clause is where they part:
+
+```
+... COMBINE RRF 0 LOAD 3 @__score AS s LIMIT 0 3 ...
+redis:  [b'total_results', 20, b'results', [[], [], []], b'warnings', []]
+valkey: [3, [b's', b'0.0320184417069'], [b's', b'0.0317460335791'], ...]
+```
+
+Redis accepts the rename and then returns rows carrying no columns at all.
+Every other `LOAD` rename in this suite emits the renamed column, and so does
+a `LOAD` of `@__score` without the rename, so this is a degenerate answer
+rather than a rule. `test_load_renaming_the_score_column` records it `xfail`:
+matching it would mean deliberately dropping a column the caller asked for.
+
+Renaming a *different* field onto the score's name is the mirror image, and
+the engines resolve the clash the opposite way:
+
+```
+... COMBINE RRF 0 LOAD 3 @price AS __score ...
+redis:  [('__score', <the fused score>)]   -- the rename is discarded
+valkey: [('__score', b'21')]               -- the price, as asked for
+```
+
+Reversing ours would mean discarding a field the LOAD clause named, so this is
+recorded rather than matched, in
+`test_load_renaming_another_field_onto_the_score_name`. Once `COMBINE ...
+YIELD_SCORE_AS` has renamed the score away there is no clash and both engines
+agree, which the same test pins.
+
+The suppression that produces this is by column index rather than by output
+name (`AggregateParameters::suppressed_reply_column_`). By name it also hid
+the renamed field, so the reply carried neither column.
+
+Separately, `COMBINE ... YIELD_SCORE_AS hs LOAD 1 @__score` renames the score
+away and leaves `@__score` naming nothing. Redis ignores the unknown entry and
+replies with `hs`; valkey-search rejects the command. That is 5.1 reached
+through the score column. The case is swept in
+`test_load_score_column_that_combine_renamed_away`, `xfail` against the same
+fix as 5.1.
+
 ### 5.6. COMBINE FUNCTION — a valkey-search extension, deliberately not swept
 
 **Status:** permanent divergence, by design.

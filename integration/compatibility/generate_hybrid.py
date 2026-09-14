@@ -911,6 +911,114 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             self.hybrid("json", "@title:epsilon", load=load,
                         fused_score_as=None, search_score_as="text_score",
                         vector_score_as="vector_score")
+        # A LOAD that names the score column back into the projection.
+        for load in [["LOAD", "1", "@__score"],
+                     ["LOAD", "2", "@price", "@__score"]]:
+            self.hybrid("json", "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None)
+
+    def test_load_naming_the_score_column(self, key_type):
+        """A LOAD clause that names `@__score` brings it back.
+
+        A LOAD replaces the default projection, which is where the fused score
+        normally comes from -- so naming the score in the LOAD clause is the
+        one way to get it alongside a chosen set of fields. It is as explicit
+        a request as COMBINE ... YIELD_SCORE_AS, and has to be honoured the
+        same way.
+        """
+        self.setup_data(key_type)
+        cases = [
+            ["LOAD", "1", "@__score"],
+            ["LOAD", "2", "@price", "@__score"],
+            ["LOAD", "2", "@__score", "@price"],
+            ["LOAD", "2", "@__score", "@__key"],
+            ["LOAD", "3", "@price", "@__score", "@color"],
+        ]
+        for load in cases:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None)
+        # And with no COMBINE clause at all, so the score is the default
+        # fusion's rather than a named method's.
+        self.hybrid(key_type, "@title:alpha", load=["LOAD", "1", "@__score"],
+                    fused_score_as=None, search_score_as=None, window=None)
+        # A loaded score column has to be reachable from a later stage, the
+        # same as any other loaded field.
+        self.hybrid(key_type, "@title:alpha",
+                    load=["LOAD", "1", "@__score"],
+                    tail=["SORTBY", "2", "@__score", "DESC"],
+                    fused_score_as=None, search_score_as=None)
+        # The alias ends in `score` so that compare_row() compares it as a
+        # float: the two engines format the same double to different
+        # precision, and a derived column is otherwise compared byte for byte.
+        self.hybrid(key_type, "@title:alpha",
+                    load=["LOAD", "1", "@__score"],
+                    tail=["APPLY", "@__score * 2", "AS", "doubled_score"],
+                    fused_score_as=None, search_score_as=None)
+        # Loading the score beside the per-arm aliases: three score columns,
+        # one asked for by LOAD and two by the arms.
+        self.hybrid(key_type, "@title:alpha",
+                    load=["LOAD", "2", "@__score", "@price"],
+                    fused_score_as=None, search_score_as="text_score",
+                    vector_score_as="vector_score")
+
+    # TODO(load-score-rename): `LOAD 3 @__score AS s` renames the score column
+    # and Redis then emits nothing at all -- three rows, zero columns each:
+    #
+    #   redis:  [b'total_results', 20, b'results', [[], [], []], ...]
+    #   valkey: [3, [b's', b'0.0320184417069'], [b's', b'0.0317460335791'], ...]
+    #
+    # The rename is accepted and the column is dropped, which is a degenerate
+    # answer rather than a rule worth matching: every other LOAD rename in
+    # this suite emits the renamed column, and so does a LOAD of `@__score`
+    # without the rename. Marked `xfail` rather than fixed, because matching
+    # it would mean deliberately dropping a column the caller asked for. See
+    # unsupported_tests.md 5.5b.
+    def test_load_renaming_the_score_column(self, key_type):
+        self.setup_data(key_type)
+        for load in [["LOAD", "3", "@__score", "AS", "s"],
+                     ["LOAD", "4", "@price", "@__score", "AS", "s"]]:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None,
+                        xfail=True)
+
+    # TODO(load-rename-onto-score): `LOAD 3 @price AS __score` renames a
+    # different field onto the name the default projection uses for the fused
+    # score. The two engines resolve the clash the opposite way:
+    #
+    #   redis:  [('__score', <the fused score>)]   -- the rename is discarded
+    #   valkey: [('__score', b'21')]               -- the price, as asked for
+    #
+    # Ours emits the column the caller named; Redis silently drops the field
+    # and keeps the score under it. Neither reply is malformed, and reversing
+    # ours would mean discarding a field the LOAD clause asked for by name, so
+    # this is recorded rather than matched. Once COMBINE has renamed the score
+    # away there is no clash and both engines agree, which the third case
+    # below pins. See unsupported_tests.md 5.5b.
+    def test_load_renaming_another_field_onto_the_score_name(self, key_type):
+        self.setup_data(key_type)
+        for load in [["LOAD", "3", "@price", "AS", "__score"],
+                     ["LOAD", "4", "@price", "AS", "__score", "@color"]]:
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        fused_score_as=None, search_score_as=None,
+                        xfail=True)
+        # With the fused score renamed by COMBINE, `__score` is free and the
+        # clash does not arise. Compared normally.
+        self.hybrid(key_type, "@title:alpha",
+                    load=["LOAD", "3", "@price", "AS", "__score"],
+                    fused_score_as="hybrid_score", search_score_as=None)
+
+    # TODO(load-unknown-field): the same gap as test_load_unknown_field and
+    # unsupported_tests.md 5.1, reached through the score column: COMBINE ...
+    # YIELD_SCORE_AS renames the fused score, so `@__score` no longer names
+    # anything, and Redis ignores the unknown LOAD entry while valkey-search
+    # rejects the command. Kept separate from that sweep because this is the
+    # one way a LOAD entry becomes unknown without the caller misspelling a
+    # field.
+    def test_load_score_column_that_combine_renamed_away(self, key_type):
+        self.setup_data(key_type)
+        self.hybrid(key_type, "@title:alpha", load=["LOAD", "1", "@__score"],
+                    fused_score_as="hybrid_score", search_score_as=None,
+                    xfail=True)
 
     def test_per_arm_and_fused_score_aliases_together(self, key_type):
         """All three aliases at once, and the fused one renamed away from the

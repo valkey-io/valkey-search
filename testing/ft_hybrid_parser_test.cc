@@ -379,7 +379,7 @@ TEST_F(FTHybridParserTest, AVsimArmWithNoFilterIsNotAPrefilteredQuery) {
 // projection is the key and the score, any LOAD replaces that projection, and
 // a COMBINE ... YIELD_SCORE_AS name is an explicit request that survives it.
 // None of this is visible in the parse result other than here -- the reply
-// path reads `agg->score_as` and `agg->suppressed_reply_field_`.
+// path reads `agg->score_as` and `agg->suppressed_reply_column_`.
 // ---------------------------------------------------------------------
 
 TEST_F(FTHybridParserTest, NoCombineAliasNamesTheScoreScoreAndEmitsIt) {
@@ -389,7 +389,7 @@ TEST_F(FTHybridParserTest, NoCombineAliasNamesTheScoreScoreAndEmitsIt) {
   EXPECT_EQ((*params)->output_score_name, "__score");
   EXPECT_FALSE((*params)->output_score_name_explicit);
   EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "__score");
-  EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+  EXPECT_FALSE((*params)->agg->suppressed_reply_column_.has_value());
 }
 
 TEST_F(FTHybridParserTest, CombineYieldScoreAsRenamesTheScore) {
@@ -400,7 +400,7 @@ TEST_F(FTHybridParserTest, CombineYieldScoreAsRenamesTheScore) {
   EXPECT_EQ((*params)->output_score_name, "hs");
   EXPECT_TRUE((*params)->output_score_name_explicit);
   EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "hs");
-  EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+  EXPECT_FALSE((*params)->agg->suppressed_reply_column_.has_value());
 }
 
 TEST_F(FTHybridParserTest, LoadAllHidesTheDefaultScore) {
@@ -410,7 +410,8 @@ TEST_F(FTHybridParserTest, LoadAllHidesTheDefaultScore) {
   // The column still exists -- a SORTBY on it has to resolve -- it just does
   // not reach the caller.
   EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "__score");
-  EXPECT_EQ((*params)->agg->suppressed_reply_field_, "__score");
+  EXPECT_EQ((*params)->agg->suppressed_reply_column_,
+            aggregate::AggregateParameters::kScoreColumn);
 }
 
 TEST_F(FTHybridParserTest, ANamedLoadHidesTheDefaultScoreToo) {
@@ -419,7 +420,8 @@ TEST_F(FTHybridParserTest, ANamedLoadHidesTheDefaultScoreToo) {
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                        "2", "K", "5", "LOAD", "1", "@n"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ((*params)->agg->suppressed_reply_field_, "__score");
+  EXPECT_EQ((*params)->agg->suppressed_reply_column_,
+            aggregate::AggregateParameters::kScoreColumn);
 }
 
 TEST_F(FTHybridParserTest, AnExplicitScoreNameSurvivesALoadClause) {
@@ -441,8 +443,36 @@ TEST_F(FTHybridParserTest, AnExplicitScoreNameSurvivesALoadClause) {
     auto params = Parse(args);
     VMSDK_EXPECT_OK(params);
     EXPECT_EQ((*params)->output_score_name, "hs");
-    EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+    EXPECT_FALSE((*params)->agg->suppressed_reply_column_.has_value());
   }
+}
+
+TEST_F(FTHybridParserTest, ALoadThatNamesTheScoreKeepsIt) {
+  // A LOAD replaces the default projection the score would otherwise come
+  // from, so naming it in the clause is the only way to get the score
+  // alongside a chosen set of fields.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "LOAD", "1", "@__score"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(vmsdk::ToStringView((*params)->agg->score_as.get()), "__score");
+  EXPECT_FALSE((*params)->agg->suppressed_reply_column_.has_value());
+}
+
+TEST_F(FTHybridParserTest, ALoadThatNamesTheScoreBesideAFieldKeepsIt) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "LOAD", "2", "@n", "@__score"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_FALSE((*params)->agg->suppressed_reply_column_.has_value());
+}
+
+TEST_F(FTHybridParserTest, ALoadThatDoesNotNameTheScoreStillHidesIt) {
+  // The control for the two above: it is naming the column that keeps it, not
+  // the mere presence of a LOAD entry that happens to resolve.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "LOAD", "1", "@n"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->agg->suppressed_reply_column_,
+            aggregate::AggregateParameters::kScoreColumn);
 }
 
 TEST_F(FTHybridParserTest, YieldingScoreAsScoreWithNoLoadIsRejected) {
@@ -465,7 +495,7 @@ TEST_F(FTHybridParserTest, YieldingScoreAsScoreIsFineOnceALoadClauseExists) {
                        "__score", "LOAD", "*"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->output_score_name, "__score");
-  EXPECT_TRUE((*params)->agg->suppressed_reply_field_.empty());
+  EXPECT_FALSE((*params)->agg->suppressed_reply_column_.has_value());
 }
 
 TEST_F(FTHybridParserTest, CombineFunctionTakesAYieldScoreAsToo) {

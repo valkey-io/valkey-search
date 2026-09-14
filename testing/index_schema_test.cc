@@ -1441,7 +1441,7 @@ TEST_F(IndexSchemaFriendTest, InTrackedMutationRecordsAfterConsumeNoCrash) {
   auto mutated_attributes =
       CreateMutatedAttributes(attribute_identifier, data_ptr);
   EXPECT_TRUE(index_schema->TrackMutatedRecord(
-      nullptr, key, std::move(mutated_attributes), 0, false, false, false));
+      nullptr, key, std::move(mutated_attributes), false, false, false));
   EXPECT_EQ(index_schema->GetMutatedRecordsSize(), 1u);
 
   // Consume the mutation. Because attributes was engaged, the entry stays in

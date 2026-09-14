@@ -532,6 +532,23 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             (["LOAD", "1", "@__key"], ["SORTBY", "2", "@__key", "ASC"]),
             (["LOAD", "1", "@__key"], ["APPLY", "upper(@__key)", "AS",
                                        "shout"]),
+            # The key column crossed with a real field name in both
+            # directions: a field renamed onto `__key`, and `__key` renamed
+            # onto a field's name. Neither engine reserves the name against
+            # either, so the rename is what reaches the reply -- unlike
+            # `__score`, which Redis does protect (5.5b).
+            (["LOAD", "3", "@price", "AS", "__key"], []),
+            (["LOAD", "4", "@price", "AS", "__key", "@color"], []),
+            (["LOAD", "3", "@__key", "AS", "price"], []),
+            (["LOAD", "4", "@__key", "AS", "price", "@color"], []),
+            # Naming it twice without a rename: one column, not two.
+            (["LOAD", "2", "@__key", "@__key"], []),
+            # A rename has to be reachable from the stages that follow it,
+            # the same as a renamed document field.
+            (["LOAD", "3", "@__key", "AS", "id"],
+             ["SORTBY", "2", "@id", "ASC"]),
+            (["LOAD", "3", "@__key", "AS", "id"],
+             ["APPLY", "upper(@id)", "AS", "shout"]),
             # Renaming an existing field. The LOAD count covers the `AS` and
             # the alias too.
             (["LOAD", "3", "@price", "AS", "cost"], []),
@@ -657,6 +674,12 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         # A JSON path against a HASH index names nothing, the same way an
         # unknown attribute does.
         cases += [["LOAD", "1", "$.price"]]
+        # The reserved column names are matched case-sensitively by both
+        # engines, so an upper-case spelling names nothing either. Included
+        # because the lower-case spellings are real columns, which makes this
+        # the one place a caller can reach the unknown-field gap by writing a
+        # name that exists.
+        cases += [["LOAD", "1", "@__KEY"], ["LOAD", "1", "@__SCORE"]]
         for load in cases:
             self.hybrid(key_type, "@title:alpha", load=load, xfail=True)
 
@@ -973,6 +996,8 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             ["LOAD", "2", "@__score", "@price"],
             ["LOAD", "2", "@__score", "@__key"],
             ["LOAD", "3", "@price", "@__score", "@color"],
+            # Named twice without a rename: one column, not two.
+            ["LOAD", "2", "@__score", "@__score"],
         ]
         for load in cases:
             self.hybrid(key_type, "@title:alpha", load=load,
@@ -1016,10 +1041,33 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     def test_load_renaming_the_score_column(self, key_type):
         self.setup_data(key_type)
         for load in [["LOAD", "3", "@__score", "AS", "s"],
-                     ["LOAD", "4", "@price", "@__score", "AS", "s"]]:
+                     ["LOAD", "4", "@price", "@__score", "AS", "s"],
+                     # Renamed onto the other reserved column's name.
+                     ["LOAD", "3", "@__score", "AS", "__key"],
+                     # Renamed onto a real field's name.
+                     ["LOAD", "3", "@__score", "AS", "price"],
+                     # Both reserved columns renamed at once, either order,
+                     # and with a document field alongside. Redis emits the
+                     # renamed key and drops the renamed score.
+                     ["LOAD", "6", "@__key", "AS", "a", "@__score", "AS", "b"],
+                     ["LOAD", "6", "@__score", "AS", "b", "@__key", "AS", "a"],
+                     ["LOAD", "7", "@__key", "AS", "a", "@__score", "AS", "b",
+                      "@price"]]:
             self.hybrid(key_type, "@title:alpha", load=load,
                         fused_score_as=None, search_score_as=None,
                         xfail=True)
+        # And the renamed score feeding a later stage. Redis drops every row
+        # here rather than only the column, with a warning:
+        #   [b'total_results', 20, b'results', [], b'warnings',
+        #    [b'SEARCH_VALUE_NOT_FOUND Could not find the value ...']]
+        self.hybrid(key_type, "@title:alpha",
+                    load=["LOAD", "3", "@__score", "AS", "s"],
+                    tail=["SORTBY", "2", "@s", "DESC"],
+                    fused_score_as=None, search_score_as=None, xfail=True)
+        self.hybrid(key_type, "@title:alpha",
+                    load=["LOAD", "3", "@__score", "AS", "s"],
+                    tail=["APPLY", "@s * 2", "AS", "doubled_score"],
+                    fused_score_as=None, search_score_as=None, xfail=True)
 
     # TODO(load-rename-onto-score): `LOAD 3 @price AS __score` renames a
     # different field onto the name the default projection uses for the fused
@@ -1037,7 +1085,11 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     def test_load_renaming_another_field_onto_the_score_name(self, key_type):
         self.setup_data(key_type)
         for load in [["LOAD", "3", "@price", "AS", "__score"],
-                     ["LOAD", "4", "@price", "AS", "__score", "@color"]]:
+                     ["LOAD", "4", "@price", "AS", "__score", "@color"],
+                     # The key column renamed onto the score's name: Redis
+                     # keeps the score and drops the rename, as it does for a
+                     # document field.
+                     ["LOAD", "3", "@__key", "AS", "__score"]]:
             self.hybrid(key_type, "@title:alpha", load=load,
                         fused_score_as=None, search_score_as=None,
                         xfail=True)

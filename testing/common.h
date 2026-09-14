@@ -279,6 +279,11 @@ class MockIndex : public indexes::VectorBase {
       std::optional<size_t> = std::nullopt, bool = false) override {
     return std::vector<indexes::Neighbor>{};
   }
+  absl::StatusOr<std::vector<indexes::Neighbor>> SearchRange(
+      absl::string_view, float, cancel::Token &,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> = nullptr) override {
+    return std::vector<indexes::Neighbor>{};
+  }
 };
 
 class MockKeyspaceEventSubscription : public KeyspaceEventSubscription {

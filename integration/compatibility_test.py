@@ -101,6 +101,8 @@ def parse_value(x, key_type):
     try:
         if x is None:
             # RESP nil: an APPLY whose expression evaluated to nothing.
+            # Both engines can return this (e.g. a string function applied to
+            # a numeric field on JSON), so represent it as None on both sides.
             result = None
         elif isinstance(x, list):
             # TOLIST reducer returns a Python list for both hash and json
@@ -159,19 +161,12 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
                 row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
             rows += [row]
     else:
-        # Detect NOCONTENT format: [count, key1, key2, ...] (no field arrays)
-        # vs normal format: [count, key1, [fields1], key2, [fields2], ...]
-        if len(rs) >= 2 and not isinstance(rs[1], list) and (len(rs) < 3 or not isinstance(rs[2], list)):
-            # NOCONTENT: just keys, no field arrays
-            for key in rs[1:]:
-                rows += [{"__key": key}]
-        else:
-            # Format: [count, key1, [fields1], key2, [fields2], ...]
-            for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
-                row = {"__key": key}
-                for i in range(0, len(value), 2):
-                    row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
-                rows += [row]
+        # Format: [count, key1, [fields1], key2, [fields2], ...]
+        for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
+            row = {"__key": key}
+            for i in range(0, len(value), 2):
+                row[parse_field(value[i], key_type)] = parse_value(value[i+1], key_type)
+            rows += [row]
     return rows
 
 def unpack_agg_result(rs, key_type):
@@ -241,6 +236,16 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             assert False
     return out
 
+def _is_numeric(x):
+    # nan/-nan don't survive float() on every platform, so name them explicitly.
+    if x in ("nan", "-nan", b"nan", b"-nan"):
+        return True
+    try:
+        float(x)
+        return True
+    except (ValueError, TypeError):
+        return False
+
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
@@ -287,21 +292,10 @@ def compare_number_eq(l, r):
         
     
 def compare_row(l, r, key_type):
-    # Valkey includes auto-generated vector range score fields (e.g. __v1_score)
-    # that Redis does not produce. Strip them only from the Valkey (left) side
-    # when they are absent from the Redis (right) side, so that we do not
-    # silently paper over real incompatibilities.
-    score_suffix = "_score"
-    def is_vr_score_field(k):
-        return k.startswith("__") and k.endswith(score_suffix) and k != "__key"
-
-    r_keys = set(r.keys())
-    l_filtered = {k: v for k, v in l.items()
-                  if not (is_vr_score_field(k) and k not in r_keys)}
-    r_filtered = dict(r)
-
-    lks = sorted(list(l_filtered.keys()))
-    rks = sorted(list(r_filtered.keys()))
+    lks = sorted(list(l.keys()))
+    rks = sorted(list(r.keys()))
+    #print("Comparing row: ", l, " and ", r)
+    #print("Sorted keys: ", lks, " and ", rks)
     if lks != rks:
         return False
     for i in range(len(lks)):
@@ -325,31 +319,46 @@ def compare_row(l, r, key_type):
                 print("RL: ", r)
                 print("VK: ", l)
                 return False
-        elif lks[i].startswith("v") and key_type == "json" and \
-                isinstance(l_filtered[lks[i]], list) and isinstance(r_filtered[rks[i]], list):
-            # Vector compare fields (only when values are actually lists)
-            if len(l_filtered[lks[i]]) != len(r_filtered[rks[i]]):
-                print("mismatch vector field length: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
+        elif lks[i].startswith("v") and key_type == "json":
+            # Vector compare fields
+            assert isinstance(l[lks[i]], list)
+            assert isinstance(r[rks[i]], list)
+            if len(l[lks[i]]) != len(r[rks[i]]):
+                print("mismatch vector field length: ", l[lks[i]], " ", r[rks[i]])
                 return False
-            for j in range(len(l_filtered[lks[i]])):
-                if not compare_number_eq(l_filtered[lks[i]][j], r_filtered[rks[i]][j]):
-                    print("mismatch vector field value: ", l_filtered[lks[i]], " ", r_filtered[rks[i]])
+            for i in range(l[lks[i]]):
+                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i]):
+                    print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
                     return False
         elif lks[i] == b'$' and rks[i] == b'$':
             try:
-                l_json = json_load(l_filtered[lks[i]])
-                r_json = json_load(r_filtered[rks[i]])
+                l_json = json_load(l[lks[i]])
+                r_json = json_load(r[rks[i]])
                 if l_json != r_json:
-                    print("mismatch JSON field: ", l_filtered[lks[i]], " and ", r_filtered[rks[i]])
+                    print("mismatch JSON field: ", l[lks[i]], " and ", r[rks[i]])
                     print("Loaded JSON: L:", l_json, " and R:", r_json)
                     return False
             except json.decoder.JSONDecodeError:
-                print("JSON decode error comparing: ", l_filtered[lks[i]], " and ", r_filtered[rks[i]])
+                print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
                 return False
-        elif l_filtered[lks[i]] != r_filtered[rks[i]]:
-            print("mismatch field: ", lks[i], " and ", rks[i], " ", l_filtered[lks[i]], "!=", r_filtered[rks[i]])
+        else:
+            lv, rv = l[lks[i]], r[rks[i]]
+            # Exact match is the fast path, which is what every loaded/stored
+            # field hits.
+            if lv == rv:
+                continue
+            # Values differ byte-for-byte. If both are numeric, fall back to the
+            # tolerant numeric compare -- it treats nan/-nan as equal and uses
+            # math.isclose, absorbing the two engines' differing float precision
+            # and negative-zero formatting on any server-computed numeric field
+            # (APPLY results, GROUPBY reducers). Non-numeric values (concat/
+            # lower/substr/timefmt string results, tags, keys) stay an exact
+            # match.
+            if _is_numeric(lv) and _is_numeric(rv) and compare_number_eq(lv, rv):
+                continue
+            print("mismatch field: ", lks[i], " and ", rks[i], " ", lv, "!=", rv)
             return False
-    return True
+    return True            
     
 def compare_results(expected, results):
     print("CMD:", printable_cmd(expected["cmd"]))
@@ -568,18 +577,6 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             test_case,
             expected["data_set_name"],
             expected["key_type"],
-        )
-
-        # Wait for indexing to complete on all primary nodes before querying.
-        # Without this wait, results can be partial if queries run before all
-        # shards finish indexing the newly loaded keys (flaky cluster failures).
-        index_name = f"{expected['key_type']}_idx1"
-        primary_clients = [
-            test_case.new_client_for_primary(i)
-            for i in range(test_case.CLUSTER_SIZE)
-        ]
-        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
-            primary_clients, index_name
         )
 
         data_set = next_data_set

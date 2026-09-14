@@ -1630,6 +1630,105 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+TEST_F(MetadataManagerReconciliationTest,
+       SkipsQueuedReconciliationAfterDemotion) {
+  GlobalMetadata existing_metadata;
+  GlobalMetadata proposed_metadata;
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV1Metadata, &existing_metadata));
+  ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(
+      kV2Metadata, &proposed_metadata));
+  existing_metadata.mutable_version_header()->set_top_level_fingerprint(
+      MetadataManager::ComputeTopLevelFingerprint(
+          existing_metadata.type_namespace_map()));
+  proposed_metadata.mutable_version_header()->set_top_level_fingerprint(
+      MetadataManager::ComputeTopLevelFingerprint(
+          proposed_metadata.type_namespace_map()));
+
+  FakeSafeRDB fake_rdb;
+  auto section = std::make_unique<data_model::RDBSection>();
+  section->set_type(data_model::RDB_SECTION_GLOBAL_METADATA);
+  section->mutable_global_metadata_contents()->CopyFrom(existing_metadata);
+  section->set_supplemental_count(0);
+  VMSDK_EXPECT_OK(test_metadata_manager_->LoadMetadata(
+      &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+  test_metadata_manager_->OnLoadingEnded(&fake_ctx_);
+
+  bool callback_called = false;
+  test_metadata_manager_->RegisterType(
+      "my_type",
+      [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+        return 1234;
+      },
+      [&](const ObjName&, const google::protobuf::Any*, uint64_t, uint32_t) {
+        callback_called = true;
+        return absl::OkStatus();
+      },
+      [](auto) { return kModuleVersion; }, vmsdk::ValkeyVersion{0, 0, 1});
+
+  int context_flags = 0;
+  ON_CALL(*kMockValkeyModule, GetContextFlags(testing::_))
+      .WillByDefault([&](ValkeyModuleCtx*) { return context_flags; });
+
+  std::string sender_id = "fake_sender";
+  sender_id += std::string(VALKEYMODULE_NODE_ID_LEN - sender_id.length(), 'a');
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      GetClusterNodeInfo(&fake_ctx_, testing::StrEq(sender_id), testing::_,
+                         testing::_, testing::_, testing::_))
+      .WillOnce(
+          [](ValkeyModuleCtx*, const char*, char* ip, char*, int* port, int*) {
+            strcpy(ip, "127.0.0.1");
+            *port = 1234;
+            return VALKEYMODULE_OK;
+          });
+
+  auto mock_client = std::make_shared<MockClient>();
+  EXPECT_CALL(*mock_client_pool_, GetClient(testing::StrEq("127.0.0.1:21528")))
+      .WillOnce(testing::Return(mock_client));
+  GetGlobalMetadataCallback metadata_callback;
+  EXPECT_CALL(*mock_client, GetGlobalMetadata(testing::_))
+      .WillOnce([&](GetGlobalMetadataCallback callback) {
+        metadata_callback = std::move(callback);
+      });
+
+  EXPECT_CALL(*kMockValkeyModule,
+              Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"),
+                   testing::StrEq("!Kcbb"), testing::_, testing::_, testing::_,
+                   testing::_, testing::_))
+      .Times(0);
+
+  ValkeyModuleEventLoopOneShotFunc pending_callback = nullptr;
+  void* pending_data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc callback, void* data) {
+        pending_callback = callback;
+        pending_data = data;
+        return VALKEYMODULE_OK;
+      });
+
+  std::string payload = proposed_metadata.version_header().SerializeAsString();
+  test_metadata_manager_->HandleClusterMessage(
+      &fake_ctx_, sender_id.c_str(), kMetadataBroadcastClusterMessageReceiverId,
+      reinterpret_cast<const unsigned char*>(payload.c_str()),
+      payload.length());
+  ASSERT_TRUE(metadata_callback);
+
+  GetGlobalMetadataResponse response;
+  response.mutable_metadata()->CopyFrom(proposed_metadata);
+  std::thread callback_thread(
+      [&] { metadata_callback(ToGrpcStatus(absl::OkStatus()), response); });
+  callback_thread.join();
+
+  ASSERT_NE(pending_callback, nullptr);
+  context_flags = VALKEYMODULE_CTX_FLAGS_SLAVE;
+  pending_callback(pending_data);
+
+  EXPECT_FALSE(callback_called);
+  EXPECT_TRUE(google::protobuf::util::MessageDifferencer::Equals(
+      *test_metadata_manager_->GetGlobalMetadata(), existing_metadata));
+}
+
 class MetadataManagerTest : public vmsdk::ValkeyTest {
  public:
   ValkeyModuleCtx* fake_ctx = reinterpret_cast<ValkeyModuleCtx*>(0xBADF00D0);

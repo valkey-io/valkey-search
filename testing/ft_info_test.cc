@@ -195,7 +195,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+"
+                            "*32\r\n+index_name\r\n+test_name\r\n+"
                             "aliases\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -214,7 +214,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "0\r\n+num_"
                             "terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$"
-                            "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "1\r\n0\r\n+filter_rejected_keys\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 "
@@ -253,7 +254,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+"
+                            "*32\r\n+index_name\r\n+test_name\r\n+"
                             "aliases\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -271,7 +272,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "0\r\n+num_"
                             "terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$"
-                            "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "1\r\n0\r\n+filter_rejected_keys\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 "
@@ -303,7 +305,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+"
+                            "*32\r\n+index_name\r\n+test_name\r\n+"
                             "aliases\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -316,7 +318,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
                             "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
-                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
+                            "filter_rejected_keys\r\n$1\r\n0\r\n+backfill_in_"
+                            "progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 "
@@ -349,7 +352,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+"
+                            "*32\r\n+index_name\r\n+test_name\r\n+"
                             "aliases\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -362,7 +365,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "num_docs\r\n:0\r\n+num_records\r\n:0\r\n+total_"
                             "term_occurrences\r\n:0\r\n+num_terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$1\r\n0\r\n+"
-                            "backfill_in_progress\r\n$1\r\n0\r\n+backfill_"
+                            "filter_rejected_keys\r\n$1\r\n0\r\n+backfill_in_"
+                            "progress\r\n$1\r\n0\r\n+backfill_"
                             "complete_percent\r\n$8\r\n1.000000\r\n+mutation_"
                             "queue_size\r\n$1\r\n0\r\n+recent_mutations_queue_"
                             "delay\r\n$5\r\n0 "
@@ -392,7 +396,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+"
+                            "*32\r\n+index_name\r\n+test_name\r\n+"
                             "aliases\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -405,7 +409,8 @@ INSTANTIATE_TEST_SUITE_P(
                             "0\r\n+total_term_occurrences\r\n:0\r\n+num_"
                             "terms\r\n:0\r\n+"
                             "hash_indexing_failures\r\n$"
-                            "1\r\n0\r\n+backfill_in_progress\r\n$1\r\n0\r\n+"
+                            "1\r\n0\r\n+filter_rejected_keys\r\n$1\r\n0\r\n+"
+                            "backfill_in_progress\r\n$1\r\n0\r\n+"
                             "backfill_complete_percent\r\n$8\r\n1.000000\r\n+"
                             "mutation_queue_size\r\n$1\r\n0\r\n+recent_"
                             "mutations_queue_delay\r\n$5\r\n0 "
@@ -463,7 +468,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*38\r\n+index_name\r\n+test_name\r\n+"
+                         "*40\r\n+index_name\r\n+test_name\r\n+"
                          "aliases\r\n*0\r\n+index_"
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -476,7 +481,9 @@ INSTANTIATE_TEST_SUITE_P(
                          "num_records\r\n:"
                          "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
                          "0\r\n+"
-                         "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
+                         "hash_indexing_failures\r\n$1\r\n0\r\n+filter_"
+                         "rejected_"
+                         "keys\r\n$1\r\n0\r\n+backfill_in_"
                          "progress\r\n$1\r\n0\r\n+backfill_complete_"
                          "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                          "size\r\n$1\r\n0\r\n+recent_mutations_queue_delay\r\n$"
@@ -517,7 +524,7 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*38\r\n+index_name\r\n+test_name\r\n+"
+                         "*40\r\n+index_name\r\n+test_name\r\n+"
                          "aliases\r\n*0\r\n+index_"
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
@@ -530,7 +537,9 @@ INSTANTIATE_TEST_SUITE_P(
                          "num_records\r\n:"
                          "0\r\n+total_term_occurrences\r\n:0\r\n+num_terms\r\n:"
                          "0\r\n+"
-                         "hash_indexing_failures\r\n$1\r\n0\r\n+backfill_in_"
+                         "hash_indexing_failures\r\n$1\r\n0\r\n+filter_"
+                         "rejected_"
+                         "keys\r\n$1\r\n0\r\n+backfill_in_"
                          "progress\r\n$1\r\n0\r\n+backfill_complete_"
                          "percent\r\n$8\r\n1.000000\r\n+mutation_queue_"
                          "size\r\n$1\r\n0\r\n+recent_mutations_queue_delay\r\n$"

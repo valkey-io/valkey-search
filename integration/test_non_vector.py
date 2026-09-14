@@ -8,6 +8,8 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
 import pytest
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -1025,6 +1027,50 @@ class TestNonVector(ValkeySearchTestCaseBase):
         assert result[0] == 1
         assert result[1] == b'multifield_product:4'
 
+    def test_zero_length_json_key_is_indexed(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 19.99, "rating": 4.8})
+        ) == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "",
+            "SCHEMA",
+            "$.category", "AS", "category", "TAG",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.rating", "AS", "rating", "NUMERIC"
+        ) == b"OK"
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@category:{books} @price:[19 20]"
+        )
+        assert result[0] == 1
+        assert result[1] == b""
+        assert result[2][0] == b"$"
+        assert json.loads(result[2][1].decode("utf-8")) == {
+            "category": "books",
+            "price": 19.99,
+            "rating": 4.8,
+        }
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 25.0, "rating": 4.8})
+        ) == b"OK"
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[25 25]", "NOCONTENT"
+            )[0] == 1
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[19 20]", "NOCONTENT"
+            )[0] == 0
+        )
+
     def test_bulk_limit_background_changes(self):
         """
             Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
@@ -1040,6 +1086,38 @@ class TestNonVector(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
+
+class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
+    """
+        The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;
+        issue #1353 item 4) is gated on search.emulate-release: pre-1.3.0
+        every sort key used '#'. debug-mode is required to set
+        emulate-release at the module version.
+    """
+
+    def test_sortkey_prefix_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "skg_idx", "ON", "HASH", "PREFIX", "1", "skg:",
+            "SCHEMA", "m", "TAG", "z", "TEXT", "SORTABLE",
+            "n", "NUMERIC") == b"OK"
+        assert client.execute_command(
+            "HSET", "skg:1", "m", "all", "z", "apple", "n", "1") == 3
+        # NUMERIC stays '#' on both sides of the gate.
+        for release, z_prefix in (("1.2.1", b"#"), ("1.3.0", b"$")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "skg_idx", "@m:{all}", "SORTBY", "z", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "z", "DIALECT", "2")
+            assert result == [1, b"skg:1", z_prefix + b"apple",
+                              [b"z", b"apple"]], f"emulate-release {release}"
+            result = client.execute_command(
+                "FT.SEARCH", "skg_idx", "@m:{all}", "SORTBY", "n", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
+            assert result == [1, b"skg:1", b"#1",
+                              [b"n", b"1"]], f"emulate-release {release}"
+
 
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """

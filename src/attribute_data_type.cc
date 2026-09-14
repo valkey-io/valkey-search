@@ -29,18 +29,18 @@ static JsonSharedAPIGetValueFn json_get;
 static std::optional<bool> is_json_loaded;
 void ResetJsonLoadedCache() { is_json_loaded = std::nullopt; }
 
-absl::StatusOr<vmsdk::UniqueValkeyString> HashAttributeDataType::GetRecord(
+absl::StatusOr<vmsdk::UniqueValkeyString> HashAttributeDataType::GetAttribute(
     [[maybe_unused]] ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     [[maybe_unused]] absl::string_view key,
     absl::string_view identifier) const {
   vmsdk::VerifyMainThread();
-  ValkeyModuleString *record{nullptr};
+  ValkeyModuleString *attribute{nullptr};
   ValkeyModule_HashGet(open_key, VALKEYMODULE_HASH_CFIELDS, identifier.data(),
-                       &record, nullptr);
-  if (!record) {
-    return absl::NotFoundError("No such record with identifier");
+                       &attribute, nullptr);
+  if (!attribute) {
+    return absl::NotFoundError("No such attribute with identifier");
   }
-  return vmsdk::UniqueValkeyString(record);
+  return vmsdk::UniqueValkeyString(attribute);
 }
 
 struct HashScanCallbackData {
@@ -68,7 +68,7 @@ void HashScanCallback(ValkeyModuleKey *key, ValkeyModuleString *field,
   }
 }
 
-bool HashHasRecord(ValkeyModuleKey *key, absl::string_view identifier) {
+bool HashHasAttribute(ValkeyModuleKey *key, absl::string_view identifier) {
   int exists;
   ValkeyModule_HashGet(key,
                        VALKEYMODULE_HASH_CFIELDS | VALKEYMODULE_HASH_EXISTS,
@@ -76,20 +76,19 @@ bool HashHasRecord(ValkeyModuleKey *key, absl::string_view identifier) {
   return exists;
 }
 
-absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
+absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllAttributes(
     ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
     ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   vmsdk::VerifyMainThread();
   if (!open_key) {
-    return absl::NotFoundError(absl::StrCat(
-        "No such record with key: `", vector_identifier.value_or(""), "`"));
+    return absl::NotFoundError(absl::StrCat("Key not found: `", key, "`"));
   }
   if (vector_identifier.has_value() &&
-      !HashHasRecord(open_key, vector_identifier.value())) {
-    return absl::NotFoundError(absl::StrCat("No such record with identifier: `",
-                                            vector_identifier.value_or(""),
-                                            "`"));
+      !HashHasAttribute(open_key, vector_identifier.value())) {
+    return absl::NotFoundError(
+        absl::StrCat("No such attribute with identifier: `",
+                     vector_identifier.value_or(""), "`"));
   }
   if (!identifiers.empty()) {
     size_t hash_len = ValkeyModule_ValueLength(open_key);
@@ -133,48 +132,49 @@ RecordsMap HashAttributeDataType::FetchSpecificFields(
   return content;
 }
 
-absl::Status NormalizeJsonRecord(absl::string_view record,
-                                 vmsdk::UniqueValkeyString &out_record) {
-  if (!record.empty() && record[0] != '[') {
-    return absl::NotFoundError("Invalid record");
+absl::Status NormalizeJsonAttribute(absl::string_view attribute,
+                                    vmsdk::UniqueValkeyString &out_attribute) {
+  if (!attribute.empty() && attribute[0] != '[') {
+    return absl::NotFoundError("Invalid attribute");
   }
   bool was_string = false;
-  if (absl::ConsumePrefix(&record, "[")) {
-    absl::ConsumeSuffix(&record, "]");
-    if (absl::ConsumePrefix(&record, "\"")) {
-      absl::ConsumeSuffix(&record, "\"");
+  if (absl::ConsumePrefix(&attribute, "[")) {
+    absl::ConsumeSuffix(&attribute, "]");
+    if (absl::ConsumePrefix(&attribute, "\"")) {
+      absl::ConsumeSuffix(&attribute, "\"");
       was_string = true;
     }
   }
   // The JSON module returns string values still JSON-escaped; decode them so
   // the indexed value matches the (already unescaped) query side. Done before
   // the empty check so a valid empty string ("") indexes as "" rather than
-  // being treated as a missing record.
+  // being treated as a missing attribute.
   if (was_string) {
-    auto decoded = vmsdk::JsonUnquote(record);
+    auto decoded = vmsdk::JsonUnquote(attribute);
     if (!decoded.has_value()) {
       return absl::InvalidArgumentError("Invalid JSON string value");
     }
-    auto record_ptr = vmsdk::MakeUniqueValkeyString(*decoded);
-    out_record.swap(record_ptr);
+    auto attribute_ptr = vmsdk::MakeUniqueValkeyString(*decoded);
+    out_attribute.swap(attribute_ptr);
     return absl::OkStatus();
   }
-  if (record.empty()) {
-    return absl::NotFoundError("Empty record");
+  if (attribute.empty()) {
+    return absl::NotFoundError("Empty attribute");
   }
-  auto record_ptr = vmsdk::MakeUniqueValkeyString(record);
-  out_record.swap(record_ptr);
+  auto attribute_ptr = vmsdk::MakeUniqueValkeyString(attribute);
+  out_attribute.swap(attribute_ptr);
   return absl::OkStatus();
 }
-// GetJsonRecord is the actual implementation for retrieving a JSON value.
+// GetJsonAttribute is the actual implementation for retrieving a JSON value.
 // If the JSON module is not loaded, it returns an error.
 // It prefers using the JSON shared API, and falls back to VM_Call if the API is
-// unavailable. On success, the result is stored in the `record` input
+// unavailable. On success, the result is stored in the `attribute` input
 // parameter. The caller may only check for the existence of the identifier
-// by passing nullptr as the `record` value.
-absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
-                           absl::string_view key, absl::string_view identifier,
-                           vmsdk::UniqueValkeyString *record) {
+// by passing nullptr as the `attribute` value.
+absl::Status GetJsonAttribute(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
+                              absl::string_view key,
+                              absl::string_view identifier,
+                              vmsdk::UniqueValkeyString *attribute) {
   vmsdk::VerifyMainThread();
   if (!IsJsonModuleSupported(ctx)) {
     return absl::UnavailableError("The JSON module is not supported");
@@ -183,23 +183,24 @@ absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
     if (!open_key) {
       return absl::NotFoundError(absl::StrCat("Key not found: `", key, "`"));
     }
-    ValkeyModuleString *record_str = nullptr;
-    if (json_get(open_key, identifier.data(), &record_str) ==
+    ValkeyModuleString *attribute_str = nullptr;
+    if (json_get(open_key, identifier.data(), &attribute_str) ==
         VALKEYMODULE_ERR) {
-      return absl::NotFoundError(
-          absl::StrCat("No such record with identifier: `", identifier, "`"));
+      return absl::NotFoundError(absl::StrCat(
+          "No such attribute with identifier: `", identifier, "`"));
     }
-    auto record_tmp = vmsdk::UniqueValkeyString(record_str);
-    if (!record) {
+    auto attribute_tmp = vmsdk::UniqueValkeyString(attribute_str);
+    if (!attribute) {
       return absl::OkStatus();
     }
-    return NormalizeJsonRecord(vmsdk::ToStringView(record_tmp.get()), *record);
+    return NormalizeJsonAttribute(vmsdk::ToStringView(attribute_tmp.get()),
+                                  *attribute);
   }
   auto reply = vmsdk::UniquePtrValkeyCallReply(ValkeyModule_Call(
       ctx, kJsonCmd.data(), "cc", key.data(), identifier.data()));
   if (reply == nullptr) {
     return absl::NotFoundError(
-        absl::StrCat("No such record with identifier: `", identifier, "`"));
+        absl::StrCat("No such attribute with identifier: `", identifier, "`"));
   }
   auto reply_type = ValkeyModule_CallReplyType(reply.get());
   if (reply_type != VALKEYMODULE_REPLY_STRING) {
@@ -208,31 +209,33 @@ absl::Status GetJsonRecord(ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
   }
   auto reply_str = vmsdk::UniqueValkeyString(
       ValkeyModule_CreateStringFromCallReply(reply.get()));
-  if (!record) {
+  if (!attribute) {
     return absl::OkStatus();
   }
-  return NormalizeJsonRecord(vmsdk::ToStringView(reply_str.get()), *record);
+  return NormalizeJsonAttribute(vmsdk::ToStringView(reply_str.get()),
+                                *attribute);
 }
 
-absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetRecord(
+absl::StatusOr<vmsdk::UniqueValkeyString> JsonAttributeDataType::GetAttribute(
     ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key, absl::string_view key,
     absl::string_view identifier) const {
-  vmsdk::UniqueValkeyString record;
-  VMSDK_RETURN_IF_ERROR(GetJsonRecord(ctx, open_key, key, identifier, &record));
-  return record;
+  vmsdk::UniqueValkeyString attribute;
+  VMSDK_RETURN_IF_ERROR(
+      GetJsonAttribute(ctx, open_key, key, identifier, &attribute));
+  return attribute;
 }
 
-absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllRecords(
+absl::StatusOr<RecordsMap> JsonAttributeDataType::FetchAllAttributes(
     ValkeyModuleCtx *ctx, const std::optional<std::string> &vector_identifier,
     ValkeyModuleKey *open_key, absl::string_view key,
     const absl::flat_hash_set<absl::string_view> &identifiers) const {
   // First, validate that a JSON object exists for the given key using the
   // vector identifier.
-  VMSDK_RETURN_IF_ERROR(GetJsonRecord(ctx, open_key, key,
-                                      vector_identifier.value_or(""), nullptr));
+  VMSDK_RETURN_IF_ERROR(GetJsonAttribute(
+      ctx, open_key, key, vector_identifier.value_or(""), nullptr));
   RecordsMap key_value_content;
   for (const auto &identifier : identifiers) {
-    auto str = GetRecord(ctx, open_key, key, identifier);
+    auto str = GetAttribute(ctx, open_key, key, identifier);
     if (!str.ok()) {
       continue;
     }

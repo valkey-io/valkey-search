@@ -9,13 +9,14 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FILTER_PARSER_H_
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"
 
@@ -85,8 +86,6 @@ class FilterParser {
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 
-  absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
-                                             std::string& processed_content);
   struct TokenResult {
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
@@ -98,6 +97,7 @@ class FilterParser {
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       const std::optional<std::string>& field_or_default);
+
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
@@ -124,8 +124,12 @@ class FilterParser {
       const std::string& field_name);
   void SkipWhitespace();
 
-  char Peek() const { return expression_[pos_]; }
+  // Handles backslash escaping for both quoted and unquoted text.
+  absl::StatusOr<bool> HandleBackslashEscape(
+      const indexes::text::PunctuationSet& punct,
+      std::string& processed_content);
 
+  char Peek() const { return expression_[pos_]; }
   bool IsEnd() const { return pos_ >= expression_.length(); }
   bool Match(char expected, bool skip_whitespace = true);
   bool MatchInsensitive(const std::string& expected);
@@ -142,6 +146,16 @@ class FilterParser {
       bool not_rightmost_bracket);
   void FlagNestedComposedPredicate(
       std::unique_ptr<query::Predicate>& predicate);
+
+  // Returns true if the byte at pos_ starts a multi-byte UTF-8 sequence
+  // that the language considers a query delimiter (non-ASCII punctuation).
+  // On match, advances pos_ past the full codepoint and returns true.
+  // On non-match or invalid UTF-8, does not advance and returns false.
+  bool IsNonAsciiDelimiter(const indexes::text::PunctuationSet& punct);
+  // Appends the multi-byte codepoint at pos_ to dest and advances pos_.
+  // Caller must ensure pos_ points to a lead byte >= 0x80.
+  void ConsumeNonAsciiByte(std::string& dest);
+
   // Parses a QMA block after `=> {`. Returns the weight value on success.
   absl::StatusOr<double> ParseQMABlock();
   // If the parser is positioned at a `=> { ... }` QMA block, consumes it and

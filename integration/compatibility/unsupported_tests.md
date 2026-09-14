@@ -424,6 +424,63 @@ through the score column. The case is swept in
 `test_load_score_column_that_combine_renamed_away`, `xfail` against the same
 fix as 5.1.
 
+### 5.5c. Malformed COMBINE scalars — not swept
+
+**Status:** deliberate, and the well-formed values are swept normally.
+
+`CONSTANT`, `WINDOW`, `ALPHA` and `BETA` now reject every token that is not
+wholly the number the caller wrote. The shared scalar parser reaches
+`std::from_chars`, which reports success on whatever numeric prefix it finds,
+so before this these were accepted and acted on as a *different* number:
+
+```
+WINDOW 20abc     -> 20        WINDOW 1.5   -> 1     WINDOW 0x10 -> 0 (unlimited)
+CONSTANT 60abc   -> 60        CONSTANT 1e3 -> 1     CONSTANT 1.5 -> 1
+```
+
+Acting on a number nobody wrote is worse than either engine's answer, so these
+are refused. What remains are error-message differences and a handful of
+spellings one engine takes and the other does not, none of which change an
+answer, so none are swept:
+
+| input | Redis | valkey-search |
+|---|---|---|
+| `ALPHA ""`, `ALPHA nan` | accepted as 0 | rejected |
+| `ALPHA inf`, `ALPHA 1e400` | rejected | rejected |
+| `ALPHA "0.5 "` (trailing space) | rejected | accepted |
+| `CONSTANT -1` | accepted, every score infinity | rejected |
+| `CONSTANT ""` | accepted as 0 | rejected |
+| `WINDOW 1e3`, `WINDOW 0x10` | accepted | rejected |
+| `WINDOW 4294967295` | rejected, above its maximum | accepted |
+
+`ALPHA` and `BETA` are checked by IEEE bit pattern rather than with
+`std::isfinite`, because this project builds with `-ffast-math`, which implies
+`-ffinite-math-only` and lets the compiler fold that call to `true`. It did:
+`ALPHA inf` was accepted and produced infinite scores with the call in place.
+`src/expr/value.cc` and `src/indexes/scoring/scorer.h` avoid the same trap the
+same way.
+
+The fractional constants and the out-of-range weights the reference does take
+are swept, in `test_rrf_fractional_constants` and `test_linear_weight_range`.
+
+### 5.5d. `WINDOW 0` — unlimited here, rejected by Redis
+
+**Status:** deliberate extension.
+
+```
+... COMBINE RRF 2 WINDOW 0 ...
+Redis:  (error) SEARCH_PARSE_ARGS WINDOW: Value below minimum
+Valkey: the whole union, with no per-arm cap
+```
+
+Zero is this engine's "do not cap the arms", and `COMBINE FUNCTION` depends on
+it: a user expression is expected to see every candidate, so FUNCTION with no
+`WINDOW` defaults to zero rather than inheriting the RRF/LINEAR default of 20.
+Not swept, because the reference has no answer to compare against.
+`test_window_zero_means_unlimited` and two parser unit tests pin it instead --
+worth pinning precisely because nothing outside this repo does, and because
+reading zero as "take no rows" would empty the reply rather than fill it.
+
 ### 5.6. COMBINE FUNCTION — a valkey-search extension, deliberately not swept
 
 **Status:** permanent divergence, by design.

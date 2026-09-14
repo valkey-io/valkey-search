@@ -520,6 +520,112 @@ TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
   EXPECT_FALSE((*params)->output_score_name_explicit);
 }
 
+// ---------------------------------------------------------------------
+// COMBINE scalar arguments.
+//
+// The shared `ParseParamValue` reaches `std::from_chars`, which succeeds on
+// whatever prefix of the token looks numeric, so every one of these was
+// previously accepted and silently acted on as a different number than the
+// caller wrote. The reference rejects them.
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, WindowRejectsAnythingButAWholeNumber) {
+  for (absl::string_view bad : {"1.5", "20abc", "abc", "", "-1", "1e3", "0x10",
+                                "4294967296"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW",
+                         std::string(bad)});
+    EXPECT_FALSE(params.ok()) << "WINDOW accepted `" << bad << "`";
+  }
+}
+
+TEST_F(FTHybridParserTest, WindowTakesAWholeNumber) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW", "7"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.window, 7u);
+}
+
+TEST_F(FTHybridParserTest, WindowZeroMeansUnlimited) {
+  // Not a pass-through of the reference, which rejects `WINDOW 0` outright.
+  // Zero is this engine's "do not cap the arms", and COMBINE FUNCTION relies
+  // on it -- see the FunctionDefaultsToAnUnlimitedWindow case below.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW", "0"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.window, 0u);
+}
+
+TEST_F(FTHybridParserTest, FunctionDefaultsToAnUnlimitedWindow) {
+  // A user expression is expected to see every candidate, so FUNCTION with no
+  // WINDOW must not inherit the RRF/LINEAR default of 20.
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "FUNCTION", "2", "EXPR",
+             "@__search_score + @__vector_score"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.window, 0u);
+}
+
+TEST_F(FTHybridParserTest, RrfConstantIsAFractionalNumber) {
+  // The reference honours fractional constants -- `CONSTANT 1.5` ranks
+  // strictly between 1 and 2 -- so truncating to an integer is wrong.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "CONSTANT",
+                       "1.5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_DOUBLE_EQ((*params)->fusion.rrf_constant, 1.5);
+}
+
+TEST_F(FTHybridParserTest, RrfConstantRejectsJunkAndNonFiniteAndNegative) {
+  for (absl::string_view bad : {"60abc", "abc", "", "nan", "inf", "-inf",
+                                "1e400", "-1", "-0.5", "0.5.5"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "2", "K", "5", "COMBINE", "RRF", "2", "CONSTANT",
+                         std::string(bad)});
+    EXPECT_FALSE(params.ok()) << "CONSTANT accepted `" << bad << "`";
+  }
+}
+
+TEST_F(FTHybridParserTest, RrfConstantAcceptsZeroAndLargeValues) {
+  for (absl::string_view good : {"0", "0.5", "60", "4294967296", "1e3"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "2", "K", "5", "COMBINE", "RRF", "2", "CONSTANT",
+                         std::string(good)});
+    VMSDK_EXPECT_OK(params) << "CONSTANT rejected `" << good << "`";
+  }
+}
+
+TEST_F(FTHybridParserTest, AlphaAndBetaMustBeFiniteNumbers) {
+  // `nan` and `inf` reach a fused score and poison every comparison against
+  // it. std::isfinite cannot catch them here: the project builds with
+  // -ffast-math, which folds that call to true, so the parser tests the IEEE
+  // bit pattern instead. These cases are what prove it.
+  for (absl::string_view bad : {"abc", "", "nan", "inf", "-inf", "1e400",
+                                "0.5.5", "1,5", "1/2"}) {
+    auto alpha = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                        "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA",
+                        std::string(bad), "BETA", "0.5"});
+    EXPECT_FALSE(alpha.ok()) << "ALPHA accepted `" << bad << "`";
+    auto beta = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA", "0.5",
+                       "BETA", std::string(bad)});
+    EXPECT_FALSE(beta.ok()) << "BETA accepted `" << bad << "`";
+  }
+}
+
+TEST_F(FTHybridParserTest, AlphaAndBetaAcceptAnyFiniteWeight) {
+  // Negative and greater-than-one weights are meaningful -- they subtract an
+  // arm, or amplify it -- and the reference accepts both.
+  for (absl::string_view good : {"0", "0.5", "1", "-0.5", "2.5", "1e3",
+                                 "+0.5"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA",
+                         std::string(good), "BETA", "0.5"});
+    VMSDK_EXPECT_OK(params) << "ALPHA rejected `" << good << "`";
+  }
+}
+
 }  // namespace
 }  // namespace query
 }  // namespace valkey_search

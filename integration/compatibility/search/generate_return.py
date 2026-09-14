@@ -18,6 +18,10 @@ class TestReturnClauseCompatibility(BaseCompatibilityTest):
 
     def test_repeated_return_clauses(self, key_type):
         self.setup_data(RETURN_CLAUSE_DATA_SET, key_type)
+        # Redis >= 8.8 with search-workers > 0 indexes asynchronously, so a
+        # write may not be search-visible immediately; give the tiny data set
+        # a moment before recording oracle answers.
+        time.sleep(0.5)
         idx = f"{key_type}_idx1"
         for tail in (
             # A later RETURN overrides an earlier RETURN 0 (the item-7 case).

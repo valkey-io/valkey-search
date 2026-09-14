@@ -1128,7 +1128,7 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
         debug-mode is required to set emulate-release at the module version.
     """
 
-    def test_return_clause_gate(self):
+    def test_divergence_return_clause_gate(self):
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
             "FT.CREATE", "rcg_idx", "ON", "HASH", "PREFIX", "1", "rcg:",
@@ -1136,6 +1136,11 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
         assert client.execute_command(
             "HSET", "rcg:1", "m", "all", "p", "10",
             "title", "hello world") == 3
+        # TODO: remove the valkey-side indexing barriers like this one.
+        # valkey-search blocks the writing client until its own mutation is
+        # indexed, so a single-connection write-then-search cannot observe a
+        # stale index; the barrier is kept only for test-suite convention.
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "rcg_idx")
 
         with_title = [1, b"rcg:1", [b"title", b"hello world"]]
         id_only = [1, b"rcg:1"]

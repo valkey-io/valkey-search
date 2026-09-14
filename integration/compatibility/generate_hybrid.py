@@ -519,8 +519,19 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             # A single field, and a subset of fields.
             (["LOAD", "1", "@price"], []),
             (["LOAD", "2", "@price", "@color"], []),
-            # The document key is loadable by name.
+            # The document key is loadable by name, beside a field in either
+            # order, renamed, and reachable from a following stage. It is a
+            # reserved column rather than a document field, so none of that is
+            # implied by the field cases above -- and the score column, the
+            # other reserved one, diverges on exactly the rename (5.5b).
             (["LOAD", "1", "@__key"], []),
+            (["LOAD", "2", "@__key", "@price"], []),
+            (["LOAD", "2", "@price", "@__key"], []),
+            (["LOAD", "3", "@__key", "AS", "id"], []),
+            (["LOAD", "4", "@__key", "AS", "id", "@price"], []),
+            (["LOAD", "1", "@__key"], ["SORTBY", "2", "@__key", "ASC"]),
+            (["LOAD", "1", "@__key"], ["APPLY", "upper(@__key)", "AS",
+                                       "shout"]),
             # Renaming an existing field. The LOAD count covers the `AS` and
             # the alias too.
             (["LOAD", "3", "@price", "AS", "cost"], []),

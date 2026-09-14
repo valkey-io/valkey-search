@@ -619,6 +619,115 @@ Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 
 Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 
+// Filter comparison semantics (matches Redisearch FT.CREATE FILTER): a
+// comparison that involves a missing field is FALSE, not "unknown". The
+// document is simply not admitted, and a negation of that comparison is true
+// -- `!(@absent == 'x')` admits every key, while both `@absent == 'x'` and
+// `@absent != 'x'` admit none. Two-valued, so nothing propagates and the
+// operators are order-insensitive.
+//
+// Measured against redis:latest (search 81000), which is the compatibility
+// reference. RediSearch 2.10.20 answered these with three-valued SQL NULL
+// logic instead, keeping the document on a missing operand; Redis changed it,
+// and this follows the current engine. FT.CREATE FILTER has never shipped, so
+// there is no released behavior to preserve behind search.emulate-release.
+//
+// The guard is on IsNil() specifically, not on Compare()==kUNORDERED:
+// kUNORDERED also arises from NaN (e.g. inf - inf, or a division by zero),
+// which is a real computed value rather than a missing field and keeps the
+// ordinary comparison behavior. For all non-Nil operands these fall through
+// to the same operators as APPLY -- which is what Redisearch does: it answers
+// an unordered comparison as though the operands were equal (== and <= and >=
+// true, != and < and > false). Both engine versions agree on that, which is
+// why the "filter num <op> nan" cases in HARD_NUM_FILTER_EXPRS were unaffected
+// by the reference switch. (A NUMERIC field whose stored value is literally
+// "nan" cannot be used to test it: both engines treat that as invalid data and
+// drop the whole key from the index before any query can observe it.)
+static bool EitherNil(const Value& l, const Value& r) {
+  return l.IsNil() || r.IsNil();
+}
+
+// True when one operand is a runtime number and the other is a string that is
+// not one. Redisearch answers that pair as IEEE-unordered -- != is true and
+// every other comparison is false -- rather than falling back to a byte-order
+// comparison of the two, which is what Compare() would do.
+//
+// Only a bare numeric literal or a number-returning function (strlen, abs, ...)
+// is a runtime number here. A NUMERIC-declared field is not: its value reaches
+// the filter as the raw bytes, so `@a > @b` over two NUMERIC fields is a string
+// comparison on both engines while `@a > 5` is numeric.
+//
+// This cannot be folded into Compare() as a kUNORDERED result. NaN produces
+// kUNORDERED too, and there Redisearch answers as though the operands were
+// equal (== true, != false) -- the opposite mapping, pinned by the
+// "filter num <op> nan" compatibility cases.
+static bool NumberVersusNonNumericString(const Value& l, const Value& r) {
+  auto one_way = [](const Value& num, const Value& str) {
+    return num.IsDouble() && str.IsString() && !str.AsDouble().has_value();
+  };
+  return one_way(l, r) || one_way(r, l);
+}
+
+Value FilterFuncEq(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l == r);
+}
+
+Value FilterFuncNe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(true);
+  }
+  return Value(l != r);
+}
+
+Value FilterFuncLt(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l < r);
+}
+
+Value FilterFuncLe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l <= r);
+}
+
+Value FilterFuncGt(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l > r);
+}
+
+Value FilterFuncGe(const Value& l, const Value& r) {
+  if (EitherNil(l, r)) {
+    return Value(false);
+  }
+  if (NumberVersusNonNumericString(l, r)) {
+    return Value(false);
+  }
+  return Value(l >= r);
+}
+
 Value FuncLor(const Value& l, const Value& r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
   auto lv = l.AsBool();
@@ -716,6 +825,9 @@ Value FuncSqrt(const Value& o) {
 }
 
 Value FuncStrlen(const Value& o) {
+  if (o.IsNil()) {
+    return Value(Value::Nil("strlen of nil"));
+  }
   if (o.IsArray()) {
     return ApplyToElements(o.GetArray(), FuncStrlen);
   }
@@ -746,6 +858,9 @@ Value FuncStartswith(const Value& l, const Value& r) {
   }
 
   // Case 4: Both scalars (existing behavior)
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("startswith with nil"));
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -779,6 +894,9 @@ Value FuncContains(const Value& l, const Value& r) {
   }
 
   // Case 4: Both scalars (existing behavior)
+  if (l.IsNil() || r.IsNil()) {
+    return Value(Value::Nil("contains with nil"));
+  }
   auto ls = l.AsStringView();
   auto rs = r.AsStringView();
   if (!ls || !rs) {
@@ -798,10 +916,12 @@ Value FuncContains(const Value& l, const Value& r) {
 }
 
 Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
+  if (l.IsNil()) {
+    return Value(Value::Nil("substr of nil"));
+  }
   if (l.IsArray() || m.IsArray() || r.IsArray()) {
     return Value(Value::Nil("SUBSTR does not accept lists as parameters"));
   }
-
   auto ls = l.AsStringView();
   auto offset_p = m.AsInteger();
   auto length_p = r.AsInteger();
@@ -891,6 +1011,11 @@ static bool DateNegativeTsReturnsNil() {
 }
 
 Value FuncConcat(const absl::InlinedVector<Value, 4>& values) {
+  for (auto& v : values) {
+    if (v.IsNil()) {
+      return Value(Value::Nil("concat with nil"));
+    }
+  }
   std::string result;
   for (auto& v : values) {
     auto s = v.AsStringView();

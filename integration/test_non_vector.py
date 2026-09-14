@@ -1087,6 +1087,78 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
+class TestSortByTieBreak(ValkeySearchTestCaseBase):
+    """
+        SORTBY ties order by document key, following the sort direction
+        (issue #1353 item 8). Documents missing the sort field still
+        sort last in both directions, ordered by key among themselves.
+        Not strictly a Redis-compatibility fix: RediSearch breaks ties by insertion
+        order, which valkey-search does not track.
+    """
+
+    def test_sortby_ties_order_by_key(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "tie_idx", "ON", "HASH", "PREFIX", "1", "tie:",
+            "SCHEMA", "m", "TAG", "p", "NUMERIC") == b"OK"
+        # Identical sort values; load order deliberately matches neither key
+        # order nor its reverse, so a pass cannot come from retrieval order.
+        for i in [7, 3, 10, 1, 8, 5, 2, 9, 4, 6]:
+            assert client.execute_command(
+                "HSET", f"tie:{i:03d}", "m", "all", "p", "100") == 2
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "tie_idx", "@m:{all}", "NOCONTENT",
+                "DIALECT", "2")[0] == 10
+        )
+
+        def row(i):
+            return [f"tie:{i:03d}".encode(), [b"p", b"100"]]
+
+        asc = [10] + [e for i in range(1, 11) for e in row(i)]
+        desc = [10] + [e for i in range(10, 0, -1) for e in row(i)]
+        for direction, full in (("ASC", asc), ("DESC", desc)):
+            result = client.execute_command(
+                "FT.SEARCH", "tie_idx", "@m:{all}", "SORTBY", "p", direction,
+                "LIMIT", "0", "10", "RETURN", "1", "p", "DIALECT", "2")
+            assert result == full, f"SORTBY {direction}"
+            # The truncating LIMIT path must yield a prefix of the full reply.
+            result = client.execute_command(
+                "FT.SEARCH", "tie_idx", "@m:{all}", "SORTBY", "p", direction,
+                "LIMIT", "0", "5", "RETURN", "1", "p", "DIALECT", "2")
+            assert result == [10] + full[1:11], f"SORTBY {direction} LIMIT 5"
+
+    def test_sortby_missing_field_docs_order_by_key(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "tiem_idx", "ON", "HASH", "PREFIX", "1", "tiem:",
+            "SCHEMA", "m", "TAG", "p", "NUMERIC") == b"OK"
+        docs = [("tiem:4", None), ("tiem:1", "20"), ("tiem:3", None),
+                ("tiem:2", "10")]
+        for key, p in docs:
+            args = ["HSET", key, "m", "all"] + (["p", p] if p else [])
+            assert client.execute_command(*args) == len(args[2:]) // 2
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "tiem_idx", "@m:{all}", "NOCONTENT",
+                "DIALECT", "2")[0] == 4
+        )
+
+        # Docs missing the sort field come last in BOTH directions, ordered
+        # by key among themselves following the sort direction.
+        result = client.execute_command(
+            "FT.SEARCH", "tiem_idx", "@m:{all}", "SORTBY", "p", "ASC",
+            "RETURN", "1", "m", "DIALECT", "2")
+        assert result == [4, b"tiem:2", [b"m", b"all"], b"tiem:1",
+                          [b"m", b"all"], b"tiem:3", [b"m", b"all"],
+                          b"tiem:4", [b"m", b"all"]]
+        result = client.execute_command(
+            "FT.SEARCH", "tiem_idx", "@m:{all}", "SORTBY", "p", "DESC",
+            "RETURN", "1", "m", "DIALECT", "2")
+        assert result == [4, b"tiem:1", [b"m", b"all"], b"tiem:2",
+                          [b"m", b"all"], b"tiem:4", [b"m", b"all"],
+                          b"tiem:3", [b"m", b"all"]]
+
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """
         The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;

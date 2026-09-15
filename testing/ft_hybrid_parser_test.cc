@@ -626,6 +626,104 @@ TEST_F(FTHybridParserTest, AlphaAndBetaAcceptAnyFiniteWeight) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Per-arm score aliases in a pipeline stage.
+//
+// Fusion writes each arm's score into the fused record's attribute map, but
+// nothing declares it a pipeline column, so a stage naming it used to be
+// rejected against the index schema. FT.HYBRID's index-interface shim now
+// answers for these names; what that produces is only visible in the parse
+// result, which is why these sit here.
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, ASortByAPerArmAliasResolves) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5", "SORTBY", "2",
+                       "@ts", "DESC"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, APerArmAliasColumnIsNumeric) {
+  // Not cosmetic: the column is filled by parsing the text fusion wrote, and
+  // only a numeric column parses it. A string column would order 0.9 above
+  // 0.53 while still looking like a successful sort.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5", "SORTBY", "2",
+                       "@ts", "DESC"});
+  VMSDK_EXPECT_OK(params);
+  const auto &info = (*params)->agg->record_info_by_index_;
+  auto it = std::find_if(info.begin(), info.end(), [](const auto &i) {
+    return i.output_name_ == "ts";
+  });
+  ASSERT_NE(it, info.end()) << "no column was created for the alias";
+  EXPECT_EQ(it->data_type_, indexes::IndexerType::kNumeric);
+  // Its identifier has to be the alias itself: that is the key fusion used,
+  // and it is what the record-population step matches a column against.
+  EXPECT_EQ(it->identifier_, "ts");
+}
+
+TEST_F(FTHybridParserTest, TheVsimArmsAliasResolvesToo) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "YIELD_SCORE_AS", "vs", "SORTBY", "2",
+                       "@vs", "ASC"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, AGroupByAPerArmAliasResolves) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM", "@vector",
+             "$q", "KNN", "2", "K", "5", "GROUPBY", "1", "@ts", "REDUCE",
+             "COUNT", "0", "AS", "cnt"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, APerArmAliasIsNotReachableUnderLoadAll) {
+  // `LOAD *` projects the document's own fields; a fused score is not one of
+  // them, and the reference refuses the reference there.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "*",
+                       "SORTBY", "2", "@ts", "DESC"});
+  EXPECT_FALSE(params.ok());
+}
+
+TEST_F(FTHybridParserTest, APerArmAliasIsReachableUnderANamedLoad) {
+  // The control for the case above: a LOAD clause as such does not hide it.
+  EXPECT_CALL(*index_schema_, GetIdentifier(absl::string_view("n")))
+      .WillRepeatedly(::testing::Return(std::string("n")));
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "1",
+                       "@n", "SORTBY", "2", "@ts", "DESC"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, NoColumnIsCreatedForAnAliasNoStageNames) {
+  // The alias still reaches the reply, by the same path as before; creating a
+  // column for it unasked would move it out of that path for every query.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  const auto &info = (*params)->agg->record_info_by_index_;
+  EXPECT_TRUE(std::none_of(info.begin(), info.end(), [](const auto &i) {
+    return i.output_name_ == "ts";
+  }));
+}
+
+TEST_F(FTHybridParserTest, AnArmAliasNamingTheFusedScoreIsRejected) {
+  // It would write the arm's score into the fused score's column, and the
+  // caller could not tell which they were reading.
+  auto by_default = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "__score",
+                           "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  EXPECT_FALSE(by_default.ok());
+  auto renamed = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "hs", "VSIM",
+                        "@vector", "$q", "KNN", "2", "K", "5", "COMBINE",
+                        "RRF", "2", "YIELD_SCORE_AS", "hs"});
+  EXPECT_FALSE(renamed.ok());
+  // And the VSIM arm, which is parsed by a different function.
+  auto vsim = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                     "2", "K", "5", "YIELD_SCORE_AS", "__score"});
+  EXPECT_FALSE(vsim.ok());
+}
+
 }  // namespace
 }  // namespace query
 }  // namespace valkey_search

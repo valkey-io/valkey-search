@@ -184,6 +184,37 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
+  // A SORTBY with no LIMIT pages at 10.
+  //
+  // Redisearch applies that page only when the query sorts: an FT.AGGREGATE
+  // with no SORTBY and no LIMIT returns everything, and so does one with an
+  // explicit LIMIT, however wide. Measured over 40 documents --
+  //
+  //   no SORTBY, no LIMIT        40 rows      SORTBY, no LIMIT      10 rows
+  //   no SORTBY, LIMIT 0 1000    40 rows      SORTBY, LIMIT 0 1000  40 rows
+  //
+  // -- which is why this sits here rather than in the sort stage. It used to
+  // live there, as a `MAX` defaulted to 10, and that truncated a sorted query
+  // to ten rows even when LIMIT asked for more. `MAX` still bounds the sort
+  // stage's own output, so a query that gave one already has its page.
+  if (!stages_.empty()) {
+    const SortBy *sortby = nullptr;
+    bool has_limit = false;
+    for (const auto &stage : stages_) {
+      if (const auto *s = dynamic_cast<const SortBy *>(stage.get())) {
+        sortby = s;
+      } else if (dynamic_cast<const Limit *>(stage.get()) != nullptr) {
+        has_limit = true;
+      }
+    }
+    if (sortby != nullptr && !has_limit && sortby->max_ == SortBy::kNoMax) {
+      auto page = std::make_unique<Limit>();
+      page->offset_ = 0;
+      page->limit_ = kDefaultSortedPage;
+      stages_.emplace_back(std::move(page));
+    }
+  }
+
   // Set limit parameters based on GetSerializationRange logic
   auto range = GetSerializationRange();
   limit.first_index = range.start_index;

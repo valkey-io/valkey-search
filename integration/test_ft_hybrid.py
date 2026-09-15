@@ -1004,8 +1004,8 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
         assert result[0] <= 12
 
     def test_sortby_max_bounds_the_rows_the_sort_emits(self):
-        """`SORTBY ... MAX n` keeps the n best rows and drops the rest, and
-        with no MAX the stage keeps 10.
+        """`SORTBY ... MAX n` keeps the n best rows and drops the rest; with
+        no MAX nothing is dropped.
 
         This is an extension, and it does not mean what the same word means in
         the reference. FT.HYBRID there refuses `MAX` outright
@@ -1013,12 +1013,12 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
         takes it as a hint about how much to sort rather than how much to
         return: with 40 documents the reference replies with all 40 whether
         MAX is 5, 25 or absent. Here it truncates. Measured, not assumed --
-        see the note in generate_hybrid.py beside test_pipeline_stages_over_
-        scores.
+        see unsupported_tests.md 5.4d.
 
-        The default of 10 is the part worth watching: it silently drops rows a
-        wider LIMIT asked for, which is why this pins it rather than leaving
-        it to be discovered.
+        With no MAX nothing is capped, which is what the reference does. That
+        used to default to 10 and drop rows a wider LIMIT had asked for,
+        saying nothing about it, so the no-MAX case is pinned here beside the
+        capped ones.
         """
         client = self.server.get_new_client()
         self.setup_index(client)
@@ -1044,12 +1044,11 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
         assert len(wide) == len(unsorted_rows)
         assert wide == sorted(unsorted_rows)
 
-        # And with no MAX, the stage's own default.
+        # And with no MAX at all: every row, in order.
         defaulted = keys("SORTBY", "2", "@__key", "ASC")
-        assert len(defaulted) == 10, \
-            f"expected the sort stage's default of 10, got {len(defaulted)}"
-        assert defaulted == sorted(unsorted_rows)[:10], \
-            "the default kept rows that are not the 10 best"
+        assert defaulted == sorted(unsorted_rows), \
+            (f"a SORTBY with no MAX returned {len(defaulted)} of "
+             f"{len(unsorted_rows)} rows; it must cap nothing")
 
     def test_window_zero_means_unlimited(self):
         """`WINDOW 0` lifts the cap rather than removing every candidate.

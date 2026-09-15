@@ -760,13 +760,23 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     # which compares replies as they arrive.
 
     def test_sortby(self, key_type):
+        """The page is wide enough to hold every fused row, deliberately.
+
+        Two documents here share a fused score, and the usual page of ten cuts
+        between them. Which of two equally-scored rows survives that cut is
+        not specified by either engine -- they order the pair differently in
+        the fused list to begin with -- so paging through the tie compares
+        something neither engine promises. Comparing the whole ordering
+        compares the sort.
+        """
         self.setup_data(key_type)
         for sort in [
             ["SORTBY", "2", "@price", "ASC"],
             ["SORTBY", "2", "@price", "DESC"],
             ["SORTBY", "2", "@hybrid_score", "DESC"],
         ]:
-            self.hybrid(key_type, "@title:alpha", tail=sort)
+            self.hybrid(key_type, "@title:alpha", tail=sort,
+                        limit=("0", "100"))
 
     def test_sortby_every_kind_of_column(self, key_type):
         """SORTBY over each kind of column a fused record carries, alone and
@@ -803,7 +813,10 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             ["SORTBY", "4", "@vector_score", "DESC", "@price", "ASC"],
         ]
         for sort in cases:
+            # Wide page, for the reason test_sortby gives: the default page
+            # cuts between two rows that share a fused score.
             self.hybrid(key_type, "@title:alpha", tail=sort,
+                        limit=("0", "100"),
                         vector_score_as="vector_score")
 
     def test_sortby_per_arm_score_is_reachable(self, key_type):
@@ -835,39 +848,43 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                 self.hybrid(key_type, "@title:alpha", load=load, tail=sort,
                             vector_score_as="vector_score")
 
-    # Grouping *by* a per-arm alias is not swept, though it now works: the
-    # comparison cannot be made honestly. Grouped rows come back in no
-    # promised order, and the harness compares FT.HYBRID replies positionally,
-    # so the sweep needs a trailing SORTBY to be deterministic -- and a SORTBY
-    # here keeps only 10 rows, so nineteen groups become ten. Writing MAX does
-    # not help: the reference refuses `SORTBY ... MAX` on FT.HYBRID outright.
-    #
-    # That 10 is this engine's sort stage defaulting its MAX, and it is a
-    # divergence of its own, in the shared aggregate sort rather than in
-    # FT.HYBRID. Measured over 40 documents with a unique numeric field, with
-    # LIMIT 0 1000 so nothing else could be capping:
-    #
-    #                            FT.AGGREGATE        FT.HYBRID
-    #   no MAX      redis        40 rows, sorted     40 rows, sorted
-    #               valkey       10 rows             10 rows
-    #   MAX 5       redis        40 rows, sorted     rejects MAX
-    #               valkey        5 rows              5 rows
-    #   MAX 25      redis        40 rows, sorted     rejects MAX
-    #               valkey       25 rows             25 rows
-    #
-    # So the reference sorts and returns everything, on both commands, and its
-    # FT.AGGREGATE `MAX` is a hint about how much to sort rather than how much
-    # to return -- with 40 documents the reply is all 40 and fully ordered
-    # whether MAX says 5, 25 or nothing. Here MAX truncates, and its default
-    # of 10 silently drops rows a wider LIMIT asked for. The existing sweeps
-    # never caught that because they all pin LIMIT 0 10.
-    #
-    # MAX is deliberately not swept: the reference rejects it on this command,
-    # so there is no answer to compare against. `test_ft_hybrid.py::
-    # test_sortby_max_bounds_the_rows_the_sort_emits` pins what it does here
-    # instead, and `test_groupby_per_arm_score` pins that the grouping works.
-    # When the default stops truncating, group by an alias with a trailing
-    # SORTBY and no MAX, and these compare.
+    def test_groupby_per_arm_score(self, key_type):
+        """Grouping *by* an arm's score, which the reference also allows.
+
+        Distinct from a reducer *over* one, which the reference answers with
+        `-inf` for most groups; that is a degraded answer rather than a
+        capability, and is left unswept. Grouping by the alias is a plain key
+        lookup, and the group a row lands in says whether the column carries
+        the arm's value or something else.
+
+        Each case sorts by its own group key and asks for a page wider than
+        the group count, because neither engine promises an order for grouped
+        rows and the comparison is positional. That trailing SORTBY is also
+        why this could not be swept until the sort stage stopped capping
+        itself at ten rows: nineteen groups paged to ten compare nothing.
+        """
+        self.setup_data(key_type)
+        for load in [NO_LOAD, ["LOAD", "1", "@price"]]:
+            for key in ["@text_score", "@vector_score"]:
+                self.hybrid(key_type, "@title:alpha", load=load,
+                            tail=["GROUPBY", "1", key,
+                                  "REDUCE", "COUNT", "0", "AS", "cnt",
+                                  "SORTBY", "2", key, "DESC"],
+                            limit=("0", "100"),
+                            vector_score_as="vector_score")
+            self.hybrid(key_type, "@title:alpha", load=load,
+                        tail=["GROUPBY", "2", "@text_score", "@vector_score",
+                              "REDUCE", "COUNT", "0", "AS", "cnt",
+                              "SORTBY", "4", "@text_score", "DESC",
+                              "@vector_score", "DESC"],
+                        limit=("0", "100"),
+                        vector_score_as="vector_score")
+
+    # `SORTBY ... MAX` is deliberately not swept: the reference refuses it on
+    # this command, so there is no answer to compare against, and what it
+    # means on the reference's FT.AGGREGATE is an open question -- see
+    # unsupported_tests.md 5.4d. test_ft_hybrid.py::
+    # test_sortby_max_bounds_the_rows_the_sort_emits pins what it does here.
 
     def test_pipeline_stages_over_scores(self, key_type):
         """The other stages, over the same columns. The fused score is

@@ -15,6 +15,7 @@ FT.SEARCH <index> <query>
   [SORTBY <field> [ ASC | DESC]]
   [TIMEOUT <timeout>]
   [VERBATIM]
+  [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
   [WITHSCORES]
   [WITHSORTKEYS]
 ```
@@ -36,6 +37,7 @@ FT.SEARCH <index> <query>
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `SCORER <scorer>` (Optional): Selects the relevance scoring function used to rank text results.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (Optional): Returns at most `<count>` of the keys selected by the `LIMIT` clause and saves the remaining keys in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. If it is given more than once, the last one is used. This option is a Valkey extension.
 - `WITHSCORES` (Optional): Augments the output with the relevance score computed for each returned key.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
@@ -64,6 +66,14 @@ If the index is on `HASH` keys, then the result is the same as if a `RETURN` cla
 
 If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as a string.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
+
+### `WITHCURSOR` was specified.
+
+The response is a three element array:
+
+1. The count of the number of keys which match the query, as above.
+2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
+3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
 
 # Examples
 

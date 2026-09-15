@@ -218,6 +218,15 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       });
 }
 
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructWithCursorParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        VMSDK_ASSIGN_OR_RETURN(parameters.cursor_options,
+                               ParseCursorOptions(itr));
+        return absl::OkStatus();
+      });
+}
+
 vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   vmsdk::KeyValueParser<SearchCommand> parser;
   parser.AddParamParser(query::kDialectParam,
@@ -257,6 +266,7 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   parser.AddParamParser(query::kScorer,
                         GENERATE_ENUM_PARSER(SearchCommand, scorer,
                                              *indexes::scoring::kScorerByStr));
+  parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
 
   return parser;
 }

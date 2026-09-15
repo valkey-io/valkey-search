@@ -136,6 +136,7 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "hnsw_search_exceptions_count",
             "number_of_attributes",
             "number_of_indexes",
+            "num_cursors",
             "total_active_write_threads",
             "total_indexed_documents",
             "background_indexing_status",

@@ -211,6 +211,83 @@ TEST_F(AggregateTest, PrefaceParserTest) {
   }
 }
 
+TEST_F(AggregateTest, WithCursorParserTest) {
+  struct CursorValue {
+    int64_t count;
+    int64_t max_idle_ms;
+  };
+  struct {
+    std::string text;
+    bool ok;
+    std::optional<CursorValue> cursor;
+    size_t stages;
+  } test_cases[] = {
+      {"LIMIT 0 5", true, std::nullopt, 1},
+      {"WITHCURSOR", true, CursorValue{1000, 300000}, 0},
+      {"withcursor count 5", true, CursorValue{5, 300000}, 0},
+      {"WITHCURSOR MAXIDLE 10 COUNT 7", true, CursorValue{7, 10}, 0},
+      {"WITHCURSOR COUNT 5 LIMIT 0 5", true, CursorValue{5, 300000}, 1},
+      {"LIMIT 0 5 WITHCURSOR COUNT 5 SORTBY 1 @n1", true,
+       CursorValue{5, 300000}, 2},
+      {"WITHCURSOR COUNT 1 WITHCURSOR COUNT 3", true, CursorValue{3, 300000},
+       0},
+      {"WITHCURSOR COUNT 1 WITHCURSOR", true, CursorValue{1000, 300000}, 0},
+      {"WITHCURSOR COUNT 100000", true, CursorValue{100000, 300000}, 0},
+      {"WITHCURSOR COUNT", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT x", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT 0", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT -1", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT 100001", false, std::nullopt, 0},
+      {"WITHCURSOR MAXIDLE", false, std::nullopt, 0},
+      {"WITHCURSOR MAXIDLE 0", false, std::nullopt, 0},
+  };
+  for (auto &tc : test_cases) {
+    auto argv = vmsdk::ToValkeyStringVector(tc.text);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto result = CreateAggregateParser().Parse(params, itr);
+    EXPECT_EQ(result.ok(), tc.ok) << tc.text << " Status: " << result;
+    if (tc.ok) {
+      ASSERT_EQ(params.cursor_options.has_value(), tc.cursor.has_value())
+          << tc.text;
+      if (tc.cursor) {
+        EXPECT_EQ(params.cursor_options->count, tc.cursor->count) << tc.text;
+        EXPECT_EQ(params.cursor_options->max_idle,
+                  absl::Milliseconds(tc.cursor->max_idle_ms))
+            << tc.text;
+      }
+      EXPECT_EQ(params.stages_.size(), tc.stages) << tc.text;
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
+TEST_F(AggregateTest, WithCursorMaxIdleConfigTest) {
+  auto &max_idle = options::GetCursorMaxIdleMs();
+  VMSDK_EXPECT_OK(max_idle.SetValue(100));
+  for (auto [text, ok, expected_ms] : {std::tuple{"WITHCURSOR", true, 100},
+                                       {"WITHCURSOR MAXIDLE 100", true, 100},
+                                       {"WITHCURSOR MAXIDLE 101", false, 0}}) {
+    auto argv = vmsdk::ToValkeyStringVector(text);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto result = CreateAggregateParser().Parse(params, itr);
+    EXPECT_EQ(result.ok(), ok) << text << " Status: " << result;
+    if (ok) {
+      EXPECT_EQ(params.cursor_options->max_idle,
+                absl::Milliseconds(expected_ms));
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+  VMSDK_EXPECT_OK(max_idle.SetValue(INT64_MAX));
+}
+
 struct TestStage {
   const char *stage_in_;
   const char *stage_out_;

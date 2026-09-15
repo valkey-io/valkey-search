@@ -250,11 +250,21 @@ target_link_libraries(schema_manager PUBLIC coordinator_cc_proto)
 target_link_libraries(schema_manager PUBLIC metadata_manager)
 target_link_libraries(schema_manager PUBLIC valkey_module)
 
+set(SRCS_CURSOR ${CMAKE_CURRENT_LIST_DIR}/cursor.cc
+                ${CMAKE_CURRENT_LIST_DIR}/cursor.h)
+
+valkey_search_add_static_library(cursor "${SRCS_CURSOR}")
+target_include_directories(cursor PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(cursor PUBLIC valkey_search)
+target_link_libraries(cursor PUBLIC vmsdklib)
+target_link_libraries(cursor PUBLIC valkey_module)
+
 set(SRCS_SERVER_EVENTS ${CMAKE_CURRENT_LIST_DIR}/server_events.cc
                        ${CMAKE_CURRENT_LIST_DIR}/server_events.h)
 
 valkey_search_add_static_library(server_events "${SRCS_SERVER_EVENTS}")
 target_include_directories(server_events PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(server_events PUBLIC cursor)
 target_link_libraries(server_events PUBLIC schema_manager)
 target_link_libraries(server_events PUBLIC valkey_search)
 target_link_libraries(server_events PUBLIC metadata_manager)

@@ -249,6 +249,32 @@ TEST_F(UtilsTest, JsonUnquoteStringTest) {
     EXPECT_TRUE(!JsonUnquote(sv)) << "Input was: " << sv << "\n";
   }
 }
+
+TEST_F(UtilsTest, Crc32) {
+  std::string all_bytes;
+  for (int i = 0; i < 256; ++i) {
+    all_bytes += char(i);
+  }
+  // Expected values from Python's zlib.crc32().
+  std::vector<std::pair<std::string, uint32_t>> testcases{
+      {"", 0x00000000},
+      {"a", 0xE8B7BE43},
+      {"123456789", 0xCBF43926},
+      {"The quick brown fox jumps over the lazy dog", 0x414FA339},
+      {all_bytes, 0x29058C73},
+      {std::string(32, '\x00'), 0x190A55AD},
+      {std::string(32, '\xFF'), 0xFF6CAB0B},
+  };
+  for (auto &[data, expected] : testcases) {
+    EXPECT_EQ(Crc32(data), expected) << "Input: " << StringToHex(data);
+    // Extending a CRC across any split matches the one-shot result.
+    for (size_t split = 0; split <= data.size(); ++split) {
+      absl::string_view sv(data);
+      EXPECT_EQ(Crc32(sv.substr(split), Crc32(sv.substr(0, split))), expected)
+          << "Split: " << split;
+    }
+  }
+}
 }  // namespace
 
 struct DummyObject {

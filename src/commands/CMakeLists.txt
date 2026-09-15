@@ -6,6 +6,7 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec.h
     ${CMAKE_CURRENT_LIST_DIR}/ft_create.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_cursor.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_debug.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_info.cc 
@@ -18,6 +19,7 @@ set(SRCS_COMMANDS
 
 valkey_search_add_static_library(commands "${SRCS_COMMANDS}")
 target_include_directories(commands PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(commands PUBLIC cursor)
 target_link_libraries(commands PUBLIC ft_create_parser)
 target_link_libraries(commands PUBLIC ft_search_parser)
 target_link_libraries(commands PUBLIC index_schema)
@@ -39,6 +41,7 @@ set(SRCS_FT_SEARCH_PARSER ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.cc
 
 valkey_search_add_static_library(ft_search_parser "${SRCS_FT_SEARCH_PARSER}")
 target_include_directories(ft_search_parser PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(ft_search_parser PUBLIC cursor)
 target_link_libraries(ft_search_parser PUBLIC filter_parser)
 target_link_libraries(ft_search_parser PUBLIC index_schema)
 target_link_libraries(ft_search_parser PUBLIC metrics)

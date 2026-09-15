@@ -74,6 +74,26 @@ static auto query_string_bytes =
                           UINT_MAX)                  // max size
         .Build();
 
+/// Register the "--cursor-max-count" flag. The largest COUNT accepted by
+/// WITHCURSOR and FT.CURSOR READ.
+constexpr absl::string_view kCursorMaxCountConfig{"cursor-max-count"};
+static auto cursor_max_count =
+    config::NumberBuilder(kCursorMaxCountConfig,  // name
+                          100000,                 // default
+                          1,                      // min
+                          INT64_MAX)              // max
+        .Build();
+
+/// Register the "--cursor-max-idle-ms" flag. The largest MAXIDLE accepted by
+/// WITHCURSOR.
+constexpr absl::string_view kCursorMaxIdleMsConfig{"cursor-max-idle-ms"};
+static auto cursor_max_idle_ms =
+    config::NumberBuilder(kCursorMaxIdleMsConfig,  // name
+                          INT64_MAX,               // default
+                          1,                       // min
+                          INT64_MAX)               // max
+        .Build();
+
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
@@ -699,6 +719,14 @@ vmsdk::config::Number &GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number &GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number &>(*max_term_expansions);
+}
+
+vmsdk::config::Number &GetCursorMaxCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*cursor_max_count);
+}
+
+vmsdk::config::Number &GetCursorMaxIdleMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*cursor_max_idle_ms);
 }
 
 vmsdk::config::Number &GetMaxGroupKeyExpansion() {

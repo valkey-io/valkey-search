@@ -90,6 +90,9 @@ struct FTSearchParserTestCase {  // NOLINT
   // WITHSCORES and SCORER test fields
   bool with_scores{false};
   indexes::scoring::ScorerType scorer{indexes::scoring::ScorerType::kBm25Std};
+  // WITHCURSOR test fields
+  std::optional<int64_t> cursor_count;
+  std::optional<int64_t> cursor_max_idle_ms;
 };
 
 class FTSearchParserTest
@@ -285,6 +288,14 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
               test_case.sortby_enabled);
     EXPECT_EQ(search_params.value()->with_sort_keys, test_case.with_sort_keys);
     EXPECT_EQ(search_params.value()->with_scores, test_case.with_scores);
+    ASSERT_EQ(search_params.value()->cursor_options.has_value(),
+              test_case.cursor_count.has_value());
+    if (test_case.cursor_count.has_value()) {
+      EXPECT_EQ(search_params.value()->cursor_options->count,
+                *test_case.cursor_count);
+      EXPECT_EQ(search_params.value()->cursor_options->max_idle,
+                absl::Milliseconds(*test_case.cursor_max_idle_ms));
+    }
     if (test_case.sortby_enabled) {
       EXPECT_EQ(search_params.value()->sortby_parameter->field,
                 test_case.sortby_field);
@@ -1037,6 +1048,58 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_error_message =
                 "Error parsing value for the parameter `SLOP`",
             .search_parameters_str = "SLOP -100",
+        },
+        // WITHCURSOR parameter tests
+        {
+            .test_name = "withcursor_default",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "WITHCURSOR",
+            .cursor_count = 1000,
+            .cursor_max_idle_ms = 300000,
+        },
+        {
+            .test_name = "withcursor_count_maxidle",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "withcursor maxidle 100 count 5",
+            .cursor_count = 5,
+            .cursor_max_idle_ms = 100,
+        },
+        {
+            .test_name = "withcursor_last_wins",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "WITHCURSOR COUNT 5 WITHCURSOR COUNT 7",
+            .cursor_count = 7,
+            .cursor_max_idle_ms = 300000,
+        },
+        {
+            .test_name = "withcursor_count_zero",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .expected_error_message = "Error parsing value for the parameter "
+                                      "`WITHCURSOR` - COUNT must be between 1 "
+                                      "and 100000",
+            .search_parameters_str = "WITHCURSOR COUNT 0",
+        },
+        {
+            .test_name = "withcursor_maxidle_bad",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .expected_error_message = "Error parsing value for the parameter "
+                                      "`WITHCURSOR` - Bad MAXIDLE value: ",
+            .search_parameters_str = "WITHCURSOR MAXIDLE x",
         },
         // WITHSCORES parameter tests
         {

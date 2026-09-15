@@ -9,6 +9,7 @@
 #define VMSDK_SRC_UTILS_H_
 #include <absl/strings/str_format.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -117,6 +118,11 @@ size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
 std::string PrintableBytes(absl::string_view sv);
 std::string StringToHex(std::string_view s);
+
+// IEEE 802.3 CRC-32, bit-compatible with zlib's crc32(): reflected polynomial
+// 0xEDB88320, init and final xor 0xFFFFFFFF. Not CRC-32C (absl::crc32c_t).
+// Pass a previous result as `crc` to extend it over more data.
+uint32_t Crc32(absl::string_view data, uint32_t crc = 0);
 
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=

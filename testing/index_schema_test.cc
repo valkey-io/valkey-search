@@ -2019,8 +2019,7 @@ TEST_F(IndexSchemaFriendTest, WeightedMemoryAccounting) {
     }
 
     // Update with smaller data: decrement the difference in external memory.
-    auto mutated_attrs3 =
-        CreateMutatedAttributes("text_id", initial_data);
+    auto mutated_attrs3 = CreateMutatedAttributes("text_id", initial_data);
     EXPECT_FALSE(index_schema->TrackMutatedRecord(
         nullptr, key6, std::move(mutated_attrs3), 0, false, false, false));
     {

@@ -210,9 +210,12 @@ static std::vector<TestStage> TestStages{
     {"FILTER @fred", nullptr},
     {"FILTER @n1 + @n2", nullptr},
     {"FILTER @n1", "FILTER: @n1"},
-    {"SORtBY 1 @n1", "SORTBY: ASC:@n1 MAX:10"},
-    {"SORTBY 2 @n1 ASC", "SORTBY: ASC:@n1 MAX:10"},
-    {"SORTBY 2 @n1 DESC", "SORTBY: DESC:@n1 MAX:10"},
+    // No MAX in the dump: a SORTBY caps nothing unless the query says MAX.
+    // It used to default to 10, which truncated a sorted reply to ten rows
+    // whatever LIMIT asked for.
+    {"SORtBY 1 @n1", "SORTBY: ASC:@n1"},
+    {"SORTBY 2 @n1 ASC", "SORTBY: ASC:@n1"},
+    {"SORTBY 2 @n1 DESC", "SORTBY: DESC:@n1"},
     {"SORTBY", nullptr},
     {"SORTBY 1", nullptr},
     {"SOrTBY 2 @n1", nullptr},

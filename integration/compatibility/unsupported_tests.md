@@ -324,41 +324,40 @@ on our side: bare, spaced, parenthesized and both give byte-identical rows.
 Every single-predicate filter -- text, tag, numeric, negation, distributed
 union -- matches the reference exactly, and those are swept normally.
 
-### 5.4d. `SORTBY` keeps only 10 rows unless `MAX` says otherwise
+### 5.4d. What `SORTBY ... MAX` means — not swept
 
-**Status:** open, in the shared aggregate sort, and not FT.HYBRID-specific.
+**Status:** open, narrow, and not FT.HYBRID-specific.
 
-The reference sorts and returns every row. This engine's sort stage defaults
-its `MAX` to 10 and drops the rest, whatever `LIMIT` asked for. Measured over
-40 documents with a unique numeric field, `LIMIT 0 1000` throughout so that
-nothing else could be capping:
+The row-count half of this is fixed: the sort stage used to default its `MAX`
+to 10 and drop the rest, so a `SORTBY` over more than ten rows returned ten of
+them whatever `LIMIT` asked for. It now caps nothing unless the query says
+`MAX`, which is what the reference does on both commands. Measured over 40
+documents with a unique numeric field, `LIMIT 0 1000` throughout:
 
 | | | FT.AGGREGATE | FT.HYBRID |
 |---|---|---|---|
 | no MAX | redis | 40 rows, sorted | 40 rows, sorted |
-| | valkey | 10 rows | 10 rows |
+| | valkey | 40 rows, sorted | 40 rows, sorted |
 | MAX 5 | redis | 40 rows, sorted | rejects `MAX` |
 | | valkey | 5 rows | 5 rows |
 | MAX 25 | redis | 40 rows, sorted | rejects `MAX` |
 | | valkey | 25 rows | 25 rows |
 
-Two differences, not one. The default truncates, silently: a caller asking for
-`LIMIT 0 100` gets 10 rows and nothing says why. And `MAX` itself means
-something else — for the reference's FT.AGGREGATE it is a hint about how much
-to sort, not how much to return, so the reply is all 40 rows and fully ordered
-whether MAX says 5, 25 or nothing; here it truncates. On FT.HYBRID the
-reference refuses `MAX` outright (`SEARCH_PARSE_ARGS MAX: Unknown argument`).
+What remains is the meaning of the clause itself. Here `MAX n` returns n rows.
+For the reference's FT.AGGREGATE it changes nothing observable: the reply is
+all 40 rows and fully ordered whether MAX says 5, 25 or nothing, tail
+included. Redisearch documents it as an optimization — sort only as far as the
+top n — which would leave the tail unordered, and on 40 documents it evidently
+does not bother. What it does on an input large enough for the optimization to
+engage is not established; that is the open question.
 
-Not swept, for the reason the numbers show: with no MAX the two engines return
-different row counts for every sorted query over more than ten rows, and with
-MAX the reference has no answer at all on this command. The existing sweeps
-miss it because they pin `LIMIT 0 10`, where the truncation is invisible.
-`test_ft_hybrid.py::test_sortby_max_bounds_the_rows_the_sort_emits` pins the
-local behaviour so a change to it is deliberate.
+On FT.HYBRID the reference refuses `MAX` outright: `SEARCH_PARSE_ARGS MAX:
+Unknown argument`.
 
-The bounded heap the default comes from looks like a memory guard rather than
-an oversight, so the fix is a decision about that guard rather than a
-one-line default change.
+Not swept, because on this command the reference has no answer to compare
+against. `test_ft_hybrid.py::test_sortby_max_bounds_the_rows_the_sort_emits`
+pins the local behaviour, the no-MAX case included, so a change to either is
+deliberate.
 
 ### 5.5. Referencing `@__score` under a LOAD clause — valkey accepts, Redis rejects
 

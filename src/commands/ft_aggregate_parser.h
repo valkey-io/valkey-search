@@ -8,6 +8,7 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_AGGREGATE_PARSER_H
 
 #include <cstddef>
+#include <limits>
 #include <optional>
 
 #include "absl/container/flat_hash_map.h"
@@ -262,6 +263,10 @@ struct Attribute : expr::Expression::AttributeReference {
                        const expr::Expression::Record& record) const override;
 };
 
+// Rows a sorted FT.AGGREGATE returns when the query gives no LIMIT. Matches
+// Redisearch; see the note at the call site in ft_aggregate.cc.
+inline constexpr size_t kDefaultSortedPage = 10;
+
 class Limit : public Stage {
  public:
   size_t offset_;
@@ -375,7 +380,16 @@ class SortBy : public Stage {
     Direction direction_;
     std::unique_ptr<expr::Expression> expr_;
   };
-  size_t max_{10};
+  // No cap unless the query asks for one.
+  //
+  // This used to default to 10, which truncated silently: a `SORTBY` over
+  // more than ten rows returned ten of them whatever `LIMIT` asked for, and
+  // nothing in the reply said why. Redisearch sorts and returns everything,
+  // on FT.AGGREGATE and FT.HYBRID alike. `MAX` still caps, and still means
+  // "return this many" here rather than Redisearch's "sort at least this
+  // many" -- see unsupported_tests.md 5.4d.
+  static constexpr size_t kNoMax = std::numeric_limits<size_t>::max();
+  size_t max_{kNoMax};
   absl::InlinedVector<SortKey, 4> sortkeys_;
   void Dump(std::ostream& os) const override {
     os << "SORTBY:";
@@ -392,7 +406,7 @@ class SortBy : public Stage {
       }
       os << k.expr_.get();
     }
-    if (max_) {
+    if (max_ != kNoMax) {
       os << " MAX:" << max_;
     }
   }

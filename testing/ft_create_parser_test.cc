@@ -735,6 +735,70 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             .test_name = "sortable_unf_at_end_of_schema",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku as sku TAG SORTABLE UNF",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "sku",
+                              .attribute_alias = "sku",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             .test_name = "sortable_unf_followed_by_another_attribute",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG SORTABLE UNF "
+                            "price NUMERIC SORTABLE UNF",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         },
+                                         {
+                                             .identifier = "price",
+                                             .attribute_alias = "price",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kNumeric,
+                                         }}},
+         },
+         {
+             .test_name = "nohl_ignored",
+             .success = true,
+             .command_str = "idx1 on HASH NOHL SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             .test_name = "unf_without_sortable_is_rejected",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF",
+             .expected_error_message =
+                 "Invalid field type for field `UNF`: Missing argument",
+         },
+         {
             .test_name = "score_field_supported",
             .success = true,
             .command_str =

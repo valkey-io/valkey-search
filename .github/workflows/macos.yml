@@ -29,6 +29,8 @@ jobs:
     # Checkout the code from the repository
     - name: Checkout Code
       uses: actions/checkout@v3
+      with:
+        submodules: recursive
 
     # Set up Docker to build and run the container
     - name: Build Code

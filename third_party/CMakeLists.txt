@@ -4,7 +4,8 @@ add_subdirectory(hnswlib)
 add_subdirectory(snowball)
 add_subdirectory(icu)
 
-# third_party/svslib (SVS runtime FetchContent) is not wired here yet.
-# Phase 2 replaces FetchContent with a git submodule; there is no benefit to
-# fetching the pre-built runtime tarball while vector_svs itself is not
-# compiled (see src/indexes/CMakeLists.txt).
+# SVS is compiled as a git submodule; supported on x86_64 Linux only.
+if(UNIX AND NOT APPLE
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    add_subdirectory(svs ${CMAKE_CURRENT_BINARY_DIR}/svs-build)
+endif()

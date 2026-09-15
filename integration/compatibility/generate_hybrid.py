@@ -806,27 +806,52 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             self.hybrid(key_type, "@title:alpha", tail=sort,
                         vector_score_as="vector_score")
 
-    # TODO(stage-refs-per-arm-score): Redis resolves a per-arm YIELD_SCORE_AS
-    # alias in a SORTBY whenever the LOAD clause is anything other than
-    # `LOAD *`, and sorts by it. valkey-search rejects the reference outright,
-    # at parse time, under every LOAD clause: "Index field `vector_score` does
-    # not exist". The fused COMBINE alias is reachable in stages on both
-    # engines; only the per-arm ones are not, here.
-    #
-    # When the per-arm aliases become reachable these will start matching, the
-    # run will print XPASS, and both the `xfail=True` and the entry in
-    # unsupported_tests.md should be removed.
     def test_sortby_per_arm_score_is_reachable(self, key_type):
+        """Sorting by an arm's own score, under each LOAD clause that allows
+        it.
+
+        Most documents are found by one arm only, so most rows carry one
+        arm's alias and not the other's. That makes these cases turn on two
+        things at once: the alias resolving at all, and a row that has no
+        value for the sort key going last rather than tying with everything.
+        """
         self.setup_data(key_type)
         for load in [NO_LOAD, ["LOAD", "1", "@price"],
                      ["LOAD", "2", "@price", "@color"]]:
             for sort in [
                 ["SORTBY", "2", "@vector_score", "DESC"],
                 ["SORTBY", "2", "@text_score", "DESC"],
+                ["SORTBY", "2", "@vector_score", "ASC"],
+                ["SORTBY", "2", "@text_score", "ASC"],
                 ["SORTBY", "4", "@text_score", "DESC", "@vector_score", "ASC"],
+                # A per-arm key first, then a field to break its ties, and the
+                # same pair the other way round.
+                ["SORTBY", "4", "@vector_score", "DESC", "@price", "ASC"],
+                ["SORTBY", "4", "@price", "ASC", "@vector_score", "DESC"],
+                # The fused score against a per-arm one: every row has the
+                # former, only some have the latter.
+                ["SORTBY", "4", "@hybrid_score", "DESC", "@text_score", "ASC"],
             ]:
                 self.hybrid(key_type, "@title:alpha", load=load, tail=sort,
-                            vector_score_as="vector_score", xfail=True)
+                            vector_score_as="vector_score")
+
+    # Grouping *by* a per-arm alias is not swept, though it now works: the
+    # comparison cannot be made honestly. Grouped rows come back in no
+    # promised order, and the harness compares FT.HYBRID replies positionally,
+    # so the sweep needs a trailing SORTBY to be deterministic -- and a SORTBY
+    # here returns at most 10 rows, because this engine's sort stage defaults
+    # its MAX to 10 and truncates. Nineteen groups against ten is not a
+    # comparison of grouping. Writing MAX explicitly does not help: the
+    # reference rejects `SORTBY ... MAX` outright.
+    #
+    # That truncation is its own defect, in the shared aggregate sort rather
+    # than in FT.HYBRID -- a plain `SORTBY 2 @price ASC LIMIT 0 100` returns
+    # 10 rows here and 21 from the reference. The existing sweeps never caught
+    # it because they all pin LIMIT 0 10. When it is fixed, group by an alias
+    # with a trailing SORTBY and no MAX, and these compare.
+    #
+    # test_ft_hybrid.py::test_groupby_per_arm_score covers that the grouping
+    # itself works.
 
     def test_pipeline_stages_over_scores(self, key_type):
         """The other stages, over the same columns. The fused score is

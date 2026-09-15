@@ -306,21 +306,88 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             assert abs(float(row[b"scaled"]) -
                        float(row[b"hscore"]) * 1000) < 1e-6
 
-    def test_sortby_per_arm_score_alias_is_rejected(self):
-        """A per-arm YIELD_SCORE_AS alias is not a column any stage resolves.
-        It is neither a field of the index nor anything LOAD can name, and the
-        stage parser rejects it before the query runs.
+    def test_sortby_per_arm_score_orders_by_that_arm(self):
+        """Sorting by an arm's own alias orders by that arm's score, not by
+        the fused one.
 
-        Redis resolves it in a SORTBY under every LOAD clause except `LOAD *`.
-        That divergence is recorded in
-        integration/compatibility/unsupported_tests.md and swept, xfail, by
-        generate_hybrid.py::test_sortby_per_arm_score_is_reachable."""
+        Asserting the order rather than merely that the command is accepted:
+        the column is filled by parsing the text fusion wrote, and a column
+        typed as a string would sort 0.9 above 0.53 while still looking like
+        a successful sort.
+        """
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for alias in ("vscore", "sscore"):
+            for direction, reverse in (("DESC", True), ("ASC", False)):
+                rows = self._fused_rows(client, "SORTBY", "2", f"@{alias}",
+                                        direction)
+                got = [float(r[alias.encode()]) for r in rows
+                       if alias.encode() in r]
+                assert got == sorted(got, reverse=reverse), \
+                    f"@{alias} {direction} came back as {got}"
+
+    def test_sortby_per_arm_score_puts_rows_without_it_last(self):
+        """A document only one arm found has no alias for the other arm. Those
+        rows sort after every row that has a value, ascending and descending
+        alike, rather than tying with them.
+
+        This is the half of the behaviour that is easy to get wrong and hard
+        to see: a tie leaves the row wherever it already was, so the reply
+        still looks sorted until you notice the gaps."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        for alias in ("vscore", "sscore"):
+            for direction in ("DESC", "ASC"):
+                rows = self._fused_rows(client, "SORTBY", "2", f"@{alias}",
+                                        direction)
+                present = [alias.encode() in r for r in rows]
+                assert present == sorted(present, reverse=True), \
+                    (f"@{alias} {direction}: rows carrying the alias are "
+                     f"{present}, which interleaves them with rows that do "
+                     f"not carry it")
+                assert any(present), f"no row carried @{alias}"
+
+    def test_per_arm_score_alias_is_not_reachable_under_load_all(self):
+        """`LOAD *` projects the document's own fields, and a fused score is
+        not one of them. The reference refuses the reference there, so this
+        one stays refused."""
         client = self.server.get_new_client()
         self.setup_index(client)
         for alias in ("vscore", "sscore"):
             with pytest.raises(ResponseError,
                                match=rf"Index field `{alias}` does not exist"):
-                self._fused_rows(client, "SORTBY", "2", f"@{alias}", "DESC")
+                self._fused_rows(client, "LOAD", "*",
+                                 "SORTBY", "2", f"@{alias}", "DESC")
+
+    def test_groupby_per_arm_score(self):
+        """Grouping by an arm's alias groups by that arm's score."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        rows = self._fused_rows(client, "GROUPBY", "1", "@vscore",
+                                "REDUCE", "COUNT", "0", "AS", "cnt")
+        assert rows, "grouping by a per-arm alias returned nothing"
+        for r in rows:
+            assert b"cnt" in r, r
+
+    def test_arm_alias_naming_the_fused_score_is_rejected(self):
+        """An arm naming the fused score's column would write its own score
+        into it, and the caller could not tell which they were reading."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        with pytest.raises(ResponseError, match=r"collides with the fused"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello", "YIELD_SCORE_AS", "hscore",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+                "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "hscore",
+                "LIMIT", "0", "3", "PARAMS", "2", "q", self.Q)
+        # The default name is the same question without a COMBINE alias.
+        with pytest.raises(ResponseError, match=r"collides with the fused"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello", "YIELD_SCORE_AS", "__score",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "10",
+                "LIMIT", "0", "3", "PARAMS", "2", "q", self.Q)
 
     # ---------------------------------------------------------------------
     # COMBINE FUNCTION: user-defined scoring expression over per-arm scores.

@@ -205,45 +205,34 @@ an answer differs -- the accepted command returns what the omitted clause
 returns -- so recording it would pin an error-message mismatch and no more.
 Noted here because it is the same shape of leniency as 5.3.
 
-### 5.4. Per-arm score aliases in a pipeline stage — TODO, marked `xfail`
+### 5.4. Per-arm score aliases in a pipeline stage — fixed
 
-**Status:** open.
+**Status:** closed. Kept as a heading so the numbering of the sections below
+does not shift.
 
-A per-arm `YIELD_SCORE_AS` alias reaches the reply on both engines, but only
-Redis lets a later stage refer to it:
+A per-arm `YIELD_SCORE_AS` alias is now resolvable from a `SORTBY` or a
+`GROUPBY` key, under the same LOAD clauses the reference allows it under, and
+`test_sortby_per_arm_score_is_reachable` and `test_groupby_per_arm_score`
+compare normally.
 
-```
-FT.HYBRID idx SEARCH @title:alpha YIELD_SCORE_AS ts
-              VSIM @vec $q KNN 2 K 10 YIELD_SCORE_AS vs
-              COMBINE RRF 2 YIELD_SCORE_AS hs
-              LOAD 1 @price SORTBY 2 @vs DESC ...
-Redis:  sorts by the VSIM arm's score
-Valkey: (error) Index field `vs` does not exist
-```
+Two things had to change, and only the first was FT.HYBRID's. Fusion writes
+each arm's score into the fused record's attribute map but nothing declared it
+as a pipeline column, so the stage parser asked the index schema, found no
+such field, and rejected the command; FT.HYBRID's own index-interface shim now
+answers for those aliases. Separately, a row with no value for the sort key
+compared `kUNORDERED` against every other row, which the sort read as a tie
+and left it wherever it lay -- and most rows carry one arm's alias but not the
+other's, so that scrambled exactly these queries. That second defect was in
+the shared aggregate sort and reproduced on plain FT.AGGREGATE with no hybrid
+search involved; a missing key now sorts last in both directions, as it does
+in the reference.
 
-Redis resolves such an alias in a `SORTBY` under every `LOAD` clause except
-`LOAD *`, where it rejects it as "Property `vs` not loaded nor in schema".
-valkey-search rejects it under every `LOAD` clause, at parse time, because the
-stage parser resolves `@name` against the index schema and a score alias is
-not a field. The `COMBINE` alias is reachable in stages on both engines; only
-the per-arm ones are not.
-
-`test_sortby_per_arm_score_is_reachable` sweeps the shapes Redis accepts,
-marked `xfail`. `test_sortby_every_kind_of_column` and
-`test_pipeline_stages_over_scores` sweep the rest, including the `LOAD *`
-forms both engines reject and the `APPLY`, `FILTER` and `GROUPBY` references
-neither resolves.
-
-Two Redis behaviours here are not worth matching and are deliberately not
-swept. Under a non-`LOAD *` clause, an `APPLY` or `FILTER` over a per-arm
-alias returns an empty result set with a `SEARCH_VALUE_NOT_FOUND` warning
-rather than an error, and a `GROUPBY` reducer over one returns `-inf` for most
-groups. Those are soft failures, not a capability; recording them would pin
-Redis's degraded answer as the target.
-
-When the aliases become reachable these will start matching, the run will
-print `XPASS`, and both the `xfail=True` in `generate_hybrid.py` and this
-section should be removed.
+`APPLY` and `FILTER` over a per-arm alias resolve too, but stay unswept: the
+reference answers an empty result set with a `SEARCH_VALUE_NOT_FOUND` warning
+rather than computing anything, and a `GROUPBY` *reducer* over one returns
+`-inf` for most groups. Those are degraded answers, not targets. `LOAD *` is
+still refused on both engines, which `test_sortby_every_kind_of_column` and
+`test_pipeline_stages_over_scores` pin.
 
 ### 5.4b. `POLICY` — valkey accepts and discards, Redis rejects
 

@@ -168,6 +168,24 @@ struct SortFunctor {
     for (auto &sk : *sortkeys_) {
       auto lvalue = sk.expr_->Evaluate(ctx, *l);
       auto rvalue = sk.expr_->Evaluate(ctx, *r);
+      // A record that has no value for this key sorts after one that does,
+      // ascending and descending alike, which is what Redisearch does.
+      //
+      // Without this the pair is `kUNORDERED`, which read as a tie: every
+      // record missing the key compared equal to every other record, so a
+      // stable sort left them wherever they happened to be and they came back
+      // interleaved with the sorted ones. Answering the direction here rather
+      // than through the switch below is deliberate -- "missing goes last" is
+      // not a smaller-or-larger claim, so DESC must not flip it.
+      const bool l_missing = lvalue.IsNil();
+      const bool r_missing = rvalue.IsNil();
+      if (l_missing != r_missing) {
+        return r_missing;
+      }
+      if (l_missing) {
+        // Both missing: undecided on this key, try the next one.
+        continue;
+      }
       auto cmp = expr::Compare(lvalue, rvalue);
       switch (cmp) {
         case expr::Ordering::kEQUAL:

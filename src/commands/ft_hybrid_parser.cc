@@ -668,25 +668,82 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // compilation (APPLY/FILTER/REDUCE) to resolve @<field> references. Stack
   // allocate the interface — it only needs to be alive during the agg-parser
   // walk below, then we clear the pointer before returning.
+  //
+  // It also answers for the per-arm YIELD_SCORE_AS aliases, which is what
+  // makes `SORTBY 2 @vs DESC` resolve. Fusion writes each arm's score into the
+  // fused neighbor's attribute_contents under the alias, but nothing declares
+  // it as a record column, so without this the stage parser asks the schema,
+  // finds no such field, and rejects the whole command. Answering here rather
+  // than pre-registering the columns means a column is created only for an
+  // alias a stage actually names; a query that merely returns the alias is
+  // untouched.
   struct HybridIndexInterface : public aggregate::IndexInterface {
     std::shared_ptr<IndexSchema> schema;
-    explicit HybridIndexInterface(std::shared_ptr<IndexSchema> s)
-        : schema(std::move(s)) {}
+    // The named arms' aliases, and the aggregate they would become columns
+    // of. Held by pointer: both outlive this stack-allocated interface.
+    const std::vector<std::optional<std::string>> *arm_aliases;
+    const aggregate::AggregateParameters *agg;
+    HybridIndexInterface(std::shared_ptr<IndexSchema> s,
+                         const std::vector<std::optional<std::string>> *aliases,
+                         const aggregate::AggregateParameters *a)
+        : schema(std::move(s)), arm_aliases(aliases), agg(a) {}
+
+    // True when `name` is an arm's score alias and a stage may reach it.
+    //
+    // `LOAD *` is excluded to match the reference, which resolves a per-arm
+    // alias under every LOAD clause except that one -- there it answers
+    // "Property `vs` not loaded nor in schema", on the reasoning that `LOAD *`
+    // projects the document's own fields and a synthesized score is not one.
+    // Read at resolve time, so it is set whenever the LOAD clause precedes the
+    // stage, which is how the clause is written. A `LOAD *` placed after the
+    // stage would not be seen; the reference is order-sensitive here too (see
+    // unsupported_tests.md 5.4c), so this is left as it is.
+    bool IsReachableArmAlias(absl::string_view name) const {
+      if (agg != nullptr && agg->loadall_) {
+        return false;
+      }
+      for (const auto &alias : *arm_aliases) {
+        if (alias.has_value() && *alias == name) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     absl::StatusOr<indexes::IndexerType> GetFieldType(
         absl::string_view s) const override {
+      if (IsReachableArmAlias(s)) {
+        // Numeric, not kNone: the column is filled by parsing the text fusion
+        // wrote, and ProcessFieldValue only produces a number for kNumeric.
+        // A string column would make SORTBY compare lexically, ordering 0.9
+        // above 0.53. kNone is also refused outright by MakeReference's type
+        // check on this path.
+        return indexes::IndexerType::kNumeric;
+      }
       VMSDK_ASSIGN_OR_RETURN(auto indexer, schema->GetIndex(s));
       return indexer->GetIndexerType();
     }
     absl::StatusOr<std::string> GetIdentifier(
         absl::string_view alias) const override {
+      if (IsReachableArmAlias(alias)) {
+        // Its own identifier. That is the key fusion used in
+        // attribute_contents, which is what the record-population step matches
+        // a column against, and it keeps MakeReference on the branch that
+        // honours the numeric type above.
+        return std::string(alias);
+      }
       return schema->GetIdentifier(alias);
     }
     absl::StatusOr<std::string> GetAlias(
         absl::string_view identifier) const override {
+      if (IsReachableArmAlias(identifier)) {
+        return std::string(identifier);
+      }
       return schema->GetAlias(identifier);
     }
   };
-  HybridIndexInterface ii(env.index_schema);
+  HybridIndexInterface ii(env.index_schema, &env.per_arm_score_alias,
+                          env.agg.get());
   env.agg->parse_vars_.index_interface_ = &ii;
   // The aggregate parser owns the rest of the iterator (LOAD/APPLY/FILTER/
   // GROUPBY/SORTBY/LIMIT/PARAMS/TIMEOUT/SCORER). Strip POLICY tokens before
@@ -955,6 +1012,19 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // is suppressed whenever there is a LOAD clause to collide with.
     if (env.output_score_name_explicit) {
       VMSDK_RETURN_IF_ERROR(reject_collision(env.output_score_name));
+    }
+    // An arm naming the fused score's column writes its own score into it:
+    // the record-population step matches a column by identifier, and the
+    // alias fusion attached wins over the fused value already in the slot.
+    // The reference keeps the fused score and ignores the arm's alias; rather
+    // than pick a winner silently, refuse the clash. `__key` is refused by
+    // the LOAD collision above, which sees the synthetic key entry.
+    for (const auto &alias : env.per_arm_score_alias) {
+      if (alias.has_value() && *alias == env.output_score_name) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "YIELD_SCORE_AS `", *alias,
+            "` collides with the fused score's column; rename one of them"));
+      }
     }
   }
 

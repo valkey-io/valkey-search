@@ -298,6 +298,12 @@ class IndexSchema : public KeyspaceEventSubscription,
                                   const Key &key,
                                   vmsdk::StopWatch *delay_capturer);
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
+
+  // Alias management for standalone mode: keeps the in-memory proto's aliases
+  // field in sync with the Forward_Alias_Map so that RDB serialization
+  // persists aliases correctly.
+  void SetAliases(std::vector<std::string> aliases);
+  const std::vector<std::string> &GetAliases() const { return aliases_; }
   using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {
     using AttributeData = valkey_search::AttributeData;
@@ -494,6 +500,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t fingerprint_{0};
   uint32_t version_{0};
   bool skip_initial_scan_{false};
+  // Written by SetAliases() on main thread (under SchemaManager mutex).
+  // Read by RespondWithInfo() on main thread (FT.INFO command handler).
+  // Read by ToProto() on main thread or BGSAVE fork (no concurrent writes).
+  // Not guarded by MainThreadAccessGuard because ToProto() must be callable
+  // from the BGSAVE child process.
+  std::vector<std::string> aliases_;
 
   std::string filter_expression_str_;
   std::unique_ptr<expr::Expression> compiled_filter_;

@@ -32,6 +32,7 @@ constexpr absl::string_view kWriteCategory{"@write"};
 constexpr absl::string_view kFastCategory{"@fast"};
 constexpr absl::string_view kSlowCategory{"@slow"};
 constexpr absl::string_view kAdminCategory{"@admin"};
+constexpr absl::string_view kDangerousCategory{"@dangerous"};
 
 constexpr absl::string_view kCreateCommand{"FT.CREATE"};
 constexpr absl::string_view kDropIndexCommand{"FT.DROPINDEX"};
@@ -56,7 +57,7 @@ const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{
 const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
-    kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
+    kSearchCategory, kSlowCategory, kAdminCategory, kDangerousCategory};
 const absl::flat_hash_set<absl::string_view> kExplainCliCmdPermissions{
     kSearchCategory, kReadCategory, kFastCategory};
 

@@ -26,10 +26,12 @@ namespace valkey_search::indexes::text {
 ProximityIterator::ProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
                         kProximityTermsInlineCapacity>&& iters,
-    std::optional<uint32_t> slop, bool in_order, bool skip_positional_checks)
+    std::optional<uint32_t> slop, bool in_order, bool skip_positional_checks,
+    float weight)
     : iters_(std::move(iters)),
       slop_(slop),
       in_order_(in_order),
+      weight_(weight),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       skip_positional_checks_(skip_positional_checks) {
@@ -114,25 +116,24 @@ bool ProximityIterator::NextKey() {
 
 bool ProximityIterator::FindCommonKey() {
   // 1) Validate children and compute min/max among current keys
-  Key min_key;
-  Key max_key;
-  for (auto& iter : iters_) {
-    auto k = iter->CurrentKey();
-    if (!min_key || k < min_key) {
-      min_key = k;
-    }
-    if (!max_key || k > max_key) {
-      max_key = k;
-    }
+  // Raw pointers to avoid ref counting. Safe because max_key points to the
+  // child with the largest key, and SeekForwardKey on that child is a no-op
+  // (already >= target), so its CurrentKey() is not invalidated.
+  const Key* min_key = &iters_[0]->CurrentKey();
+  const Key* max_key = min_key;
+  for (size_t i = 1; i < iters_.size(); ++i) {
+    const Key& k = iters_[i]->CurrentKey();
+    if (k < *min_key) min_key = &k;
+    if (k > *max_key) max_key = &k;
   }
   // 2) If min == max, we found a common key
-  if (min_key == max_key) {
-    current_key_ = max_key;
+  if (*min_key == *max_key) {
+    current_key_ = *max_key;
     return true;
   }
   // 3) Advance all iterators that are strictly behind the current max_key
   for (auto& iter : iters_) {
-    iter->SeekForwardKey(max_key);
+    iter->SeekForwardKey(*max_key);
   }
   return false;
 }

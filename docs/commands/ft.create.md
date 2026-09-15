@@ -11,7 +11,9 @@ For indexes on `JSON` keys, the path is a `JSON` path to the data of the declare
 FT.CREATE <index-name>
     [ON HASH | ON JSON]
     [PREFIX <count> <prefix> [<prefix>...]]
+    [FILTER <expression>]
     [SCORE default_value]
+    [SCORE_FIELD <field_name>]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
     [MINSTEMSIZE <min_stem_size>]
@@ -35,6 +37,14 @@ FT.CREATE <index-name>
 
 - `PREFIX <prefix-count> <prefix>` (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type.
 
+- `FILTER <expression>` (optional): A boolean expression evaluated for each candidate key during ingestion; only keys for which it evaluates to true are included in the index. A comparison involving a missing field is **false**, so a key that has no `status` field is admitted by neither `@status == 'active'` nor `@status != 'active'` — a negation such as `!(@status == 'active')` admits it instead, because the comparison it negates is false. The number of keys excluded by the filter is reported by `FT.INFO` as `filter_rejected_keys`.
+
+  See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
+
+  A field's value always reaches the expression as its stored bytes, whatever type the `SCHEMA` declares — a `NUMERIC` field is not a number to a `FILTER`. A comparison is numeric only when one side really is a number, meaning a bare numeric literal such as `5` or a number-returning function such as `strlen()`. So `@price > 100` compares numerically, while `@price > '100'` and `@price > @cost` compare the values as strings, byte by byte. In a numeric comparison a value that is not a number is unordered: `@price != 5` is true for it and every other comparison is false.
+
+  Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field makes the comparison false). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
+
 - `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
 
 - `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word required for it to be subjected to stemming. The default value is 4.
@@ -47,7 +57,9 @@ FT.CREATE <index-name>
 
 - `SKIPINITIALSCAN` (optional): If specified, this option skips the normal backfill operation for an index. If this option is specified, pre-existing keys which match the `PREFIX` clause will not be loaded into the index during a backfill operation. This clause has no effect on processing of key mutations _after_ an index is created, i.e., keys which are mutated after an index is created and satisfy the data type and `PREFIX` clause will be inserted into that index.
 
-- `SCORE` (optional): The current implementation only allows the value to be 1.0. This parameter is accepted to make valkey-search more interoperable with RediSearch. (default: 1.0)
+- `SCORE` (optional): Sets the default document score used for text search ranking. The value must be between 0.0 and 1.0. When `SCORE_FIELD` is configured, this value is used as the fallback if a document's score field is missing or cannot be parsed. (default: 1.0)
+
+- `SCORE_FIELD <field_name>` (optional): Specifies the name of a hash field whose numeric value is used as the per-document score. When configured, the value of this field is read during ingestion and stored as the document's relevance score for text search ranking. If the field is missing or cannot be parsed as a valid number, the index-level `SCORE` default is used. The raw value is stored without clamping; the scoring algorithm determines how to handle values at query time.
 
 ## Field types
 
@@ -74,12 +86,12 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
 
 - `FLAT:` This algorithm provides exact answers, but has runtime proportional to the number of indexed vectors and thus may not be appropriate for large data sets.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
-  - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
+  - `TYPE [FLOAT32 | FLOAT16 | BFLOAT16]` (required): Element data type. `FLOAT16` and `BFLOAT16` halve the memory used per vector at some cost in precision; see [Supported Data Types](../topics/search-data-formats.md#supported-data-types).
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm
   - `INITIAL_CAP <size>` (optional): Initial index size.
 - `HNSW:` The HNSW algorithm provides approximate answers, but operates substantially faster than `FLAT`.
   - `DIM <number>` (required): Specifies the number of dimensions in a vector.
-  - `TYPE FLOAT32` (required): Data type, currently only FLOAT32 is supported.
+  - `TYPE [FLOAT32 | FLOAT16 | BFLOAT16]` (required): Element data type. `FLOAT16` and `BFLOAT16` halve the memory used per vector at some cost in precision; see [Supported Data Types](../topics/search-data-formats.md#supported-data-types).
   - `INITIAL_CAP <size>` (optional): Initial index size.
   - `M <number>` (optional): Number of maximum allowed outgoing edges for each node in the graph in each layer. on layer zero the maximal number of outgoing edges will be 2\*M. Default is 16, the maximum is 512\.
   - `EF_CONSTRUCTION <number>` (optional): controls the number of vectors examined during index construction. Higher values for this parameter will improve recall ratio at the expense of longer index creation times. The default value is 200\. Maximum value is 4096\.

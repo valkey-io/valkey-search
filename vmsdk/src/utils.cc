@@ -10,12 +10,15 @@
 #include <iomanip>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "vmsdk/src/log.h"
@@ -38,7 +41,9 @@ void RunAnyInvocable(void *invocable) {
   absl::AnyInvocable<void()> *fn = (absl::AnyInvocable<void()> *)invocable;
   {
     absl::MutexLock lock(&outstanding_callbacks_mu);
-    outstanding_callbacks.erase(fn);
+    if (outstanding_callbacks.erase(fn) == 0) {
+      return;
+    }
   }
   (*fn)();
   delete fn;
@@ -91,7 +96,7 @@ void MarkAsShuttingDown() { shutting_down.store(true); }
 bool IsShuttingDown() { return shutting_down.load(); }
 
 int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
-  if (IsMainThread() && !force_async) {
+  if (IsMainThread() && (!force_async || IsShuttingDown())) {
     fn();
     return VALKEYMODULE_OK;
   }
@@ -115,11 +120,24 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
 }
 
 void DrainPendingMainCallbacks() {
-  absl::MutexLock lock(&outstanding_callbacks_mu);
-  for (absl::AnyInvocable<void()> *fn : outstanding_callbacks) {
-    delete fn;
+  VerifyMainThread();
+  while (true) {
+    absl::flat_hash_set<absl::AnyInvocable<void()> *> callbacks_to_run;
+    {
+      absl::MutexLock lock(&outstanding_callbacks_mu);
+      if (outstanding_callbacks.empty()) {
+        break;
+      }
+      callbacks_to_run = std::move(outstanding_callbacks);
+      outstanding_callbacks.clear();
+    }
+    for (absl::AnyInvocable<void()> *fn : callbacks_to_run) {
+      if (fn) {
+        (*fn)();
+        delete fn;
+      }
+    }
   }
-  outstanding_callbacks.clear();
 }
 
 std::string WrongArity(absl::string_view cmd) {
@@ -382,6 +400,31 @@ std::string PrintableBytes(absl::string_view sv) {
     }
   }
   return result;
+}
+
+absl::StatusOr<ValkeyVersion> ValkeyVersion::FromString(
+    absl::string_view text) {
+  std::vector<absl::string_view> parts = absl::StrSplit(text, '.');
+  if (parts.size() != 3) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid version '", text, "': expected '<major>.<minor>.<patch>'"));
+  }
+  unsigned components[3];
+  const unsigned limits[3] = {0xFFFF, 0xFF, 0xFF};
+  const char *labels[3] = {"major", "minor", "patch"};
+  for (int i = 0; i < 3; ++i) {
+    if (parts[i].empty() || !absl::SimpleAtoi(parts[i], &components[i])) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Invalid version '", text, "': ", labels[i], " is not a number"));
+    }
+    if (components[i] > limits[i]) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Invalid version '", text, "': ", labels[i], " out of range"));
+    }
+  }
+  return ValkeyVersion(static_cast<uint16_t>(components[0]),
+                       static_cast<uint8_t>(components[1]),
+                       static_cast<uint8_t>(components[2]));
 }
 
 std::string StringToHex(std::string_view s) {

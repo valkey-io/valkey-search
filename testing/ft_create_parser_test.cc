@@ -60,10 +60,11 @@ struct FTCreateParameters {
   data_model::AttributeDataType on_data_type{
       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH};
   std::vector<absl::string_view> prefixes;
-  float score{1.0};
+  float score{1.0f};
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
+  std::string filter;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -133,6 +134,23 @@ TEST_P(FTCreateParserTest, ParseParams) {
               test_case.expected.attributes.size());
     EXPECT_EQ(index_schema_proto->skip_initial_scan(),
               test_case.expected.skip_initial_scan);
+    if (!test_case.expected.score_field.empty()) {
+      EXPECT_TRUE(index_schema_proto->has_score_field());
+      EXPECT_EQ(index_schema_proto->score_field(),
+                test_case.expected.score_field);
+    }
+    if (test_case.expected.score != 1.0f) {
+      EXPECT_TRUE(index_schema_proto->has_score());
+      EXPECT_FLOAT_EQ(index_schema_proto->score(), test_case.expected.score);
+    }
+
+    // Verify filter
+    if (!test_case.expected.filter.empty()) {
+      EXPECT_TRUE(index_schema_proto->has_filter());
+      EXPECT_EQ(index_schema_proto->filter(), test_case.expected.filter);
+    } else {
+      EXPECT_FALSE(index_schema_proto->has_filter());
+    }
 
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
@@ -666,6 +684,39 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             // Regression test for issue #1195: the same source field may be
+             // indexed multiple times under distinct aliases (e.g. once as
+             // TEXT and once as TAG). Uniqueness is keyed on the alias, not the
+             // source identifier, matching RediSearch behavior.
+             .test_name = "same_identifier_distinct_aliases_text_and_tag",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku as sku_text TEXT "
+                            "sku as sku_tag TAG ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+                 .weight = 1.0,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku_text",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kText,
+                                         },
+                                         {
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku_tag",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         }}},
+         },
+         {
              .test_name = "happy_path_skip_initial_scan",
              .success = true,
              .command_str = "idx1 on HASH SKIPINITIALSCAN SCHEMA hash_field1 as "
@@ -683,6 +734,55 @@ INSTANTIATE_TEST_SUITE_P(
                               .indexer_type = indexes::IndexerType::kTag,
                           }}},
          },
+         {
+            .test_name = "score_field_supported",
+            .success = true,
+            .command_str =
+                " idx1 SCORE_FIELD my_score SCHEMA hash_field1 vector hnsw "
+                "6 TYPE FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .hnsw_parameters =
+                {{
+                    {
+                        .dimensions = 5,
+                        .distance_metric = data_model::DISTANCE_METRIC_IP,
+                        .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                    },
+                }},
+            .expected =
+                {.index_schema_name = "idx1",
+                .score_field = "my_score",
+                .attributes =
+                    {{
+                        .identifier = "hash_field1",
+                        .attribute_alias = "hash_field1",
+                        .indexer_type = indexes::IndexerType::kHNSW,
+                    }}},
+        },
+         {
+            .test_name = "score_preserved_with_skipinitialscan",
+            .success = true,
+            .command_str =
+                " idx1 SCORE 0.5 SKIPINITIALSCAN SCHEMA hash_field1 vector hnsw "
+                "6 TYPE FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .hnsw_parameters =
+                {{
+                    {
+                        .dimensions = 5,
+                        .distance_metric = data_model::DISTANCE_METRIC_IP,
+                        .vector_data_type = data_model::VECTOR_DATA_TYPE_FLOAT32,
+                    },
+                }},
+            .expected =
+                {.index_schema_name = "idx1",
+                .score = 0.5,
+                .skip_initial_scan = true,
+                .attributes =
+                    {{
+                        .identifier = "hash_field1",
+                        .attribute_alias = "hash_field1",
+                        .indexer_type = indexes::IndexerType::kHNSW,
+                    }}},
+        },
          {
              .test_name = "invalid_separator",
              .success = false,
@@ -801,6 +901,39 @@ INSTANTIATE_TEST_SUITE_P(
                  "Invalid field type for field `hash_field1`: Invalid range: "
                  "Value below minimum; EF_CONSTRUCTION must be a positive "
                  "integer greater than 0 and cannot exceed 1000000.",
+         },
+         {
+             .test_name = "invalid_block_size_zero",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector flat 10 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP INITIAL_CAP 15000 BLOCK_SIZE 0",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value below minimum; BLOCK_SIZE must be a positive integer "
+                 "greater than 0 and cannot exceed 10000000.",
+         },
+         {
+             .test_name = "invalid_block_size_too_big",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector flat 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP BLOCK_SIZE 20000000",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value above maximum; BLOCK_SIZE must be a positive integer "
+                 "greater than 0 and cannot exceed 10000000.",
+         },
+         {
+             .test_name = "invalid_initial_cap_too_big",
+             .success = false,
+             .command_str = "idx1 SChema hash_field1 as "
+                            "hash_field11 vector hnsw 8 TYPE  FLOAT32 DIM 3 "
+                            "DISTANCE_METRIC IP INITIAL_CAP 2147483647",
+             .expected_error_message =
+                 "Invalid field type for field `hash_field1`: Invalid range: "
+                 "Value above maximum; INITIAL_CAP must be a positive integer "
+                 "greater than 0 and cannot exceed 10000000.",
          },
          {
              .test_name = "invalid_as",
@@ -1060,13 +1193,163 @@ INSTANTIATE_TEST_SUITE_P(
                  "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
          },
          {
-             .test_name = "unexpected_filter",
+             .test_name = "happy_path_filter_with_tag",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH FILTER \"@status=='active'\" SCHEMA "
+                 "status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             .test_name = "filter_empty_expression",
              .success = false,
              .command_str =
-                 " idx1 filter aa SChema hash_field1 vector hnsw 6 TYPE "
-                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+                 "idx1 on HASH FILTER \"\" SCHEMA status tag ",
              .expected_error_message =
-                 "The parameter `FILTER` is not supported",
+                 "FILTER expression cannot be empty",
+         },
+         {
+             // FILTER is a pre-SCHEMA option like SCORE and LANGUAGE, so it
+             // must be accepted after them, not only immediately after
+             // PREFIX. It used to be parsed once before the flexible
+             // ordering loop, which made this form fail with
+             // "Unexpected parameter `FILTER`".
+             .test_name = "filter_after_score_and_language",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: SCORE 0.5 LANGUAGE english "
+                 "FILTER \"@status=='active'\" SCHEMA status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             // ... and before them, interleaved with the other options.
+             .test_name = "filter_before_score_and_skipinitialscan",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: FILTER \"@price>100\" "
+                 "SKIPINITIALSCAN SCORE 0.5 SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .skip_initial_scan = true,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // An empty expression is rejected wherever FILTER appears, not
+             // just in the position the old pre-loop parse handled.
+             .test_name = "filter_empty_expression_after_score",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"\" SCHEMA status tag ",
+             .expected_error_message =
+                 "FILTER expression cannot be empty",
+         },
+         {
+             // PREFIX is parsed from the flexible ordering loop too, so it
+             // no longer has to come first among the pre-SCHEMA options.
+             .test_name = "prefix_after_score_and_filter",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"@price>100\" "
+                 "PREFIX 1 p: SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             .test_name = "prefix_between_other_options",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SKIPINITIALSCAN PREFIX 2 a: b: LANGUAGE english "
+                 "SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"a:", "b:"},
+                  .skip_initial_scan = true,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // A hash-tagged index still requires a PREFIX clause; the check
+             // moved out of ParsePrefixes() to after the ordering loop, so it
+             // must still fire when PREFIX appears in a late position...
+             .test_name = "hash_tagged_index_with_late_prefix",
+             .success = true,
+             .command_str =
+                 "idx{a} on HASH SCORE 0.5 PREFIX 1 p{a} SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx{a}",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p{a}"},
+                  .score = 0.5,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // ... and must still reject a hash-tagged index that has other
+             // pre-SCHEMA options but no PREFIX at all.
+             .test_name = "hash_tagged_index_missing_prefix_with_options",
+             .success = false,
+             .command_str = "idx{a} on HASH SCORE 0.5 SCHEMA price numeric ",
+             .expected_error_message =
+                 "PREFIX parameter is required for hash-tagged indexes",
+         },
+         {
+             // Two PREFIX clauses are rejected outright rather than appended,
+             // so repeats cannot slip past the max-prefixes bound.
+             .test_name = "duplicate_prefix_clause",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 a: PREFIX 1 b: SCHEMA price numeric ",
+             .expected_error_message = "`PREFIX` specified multiple times",
          },
          {
              .test_name = "invalid_language_parameter_value",
@@ -1091,18 +1374,20 @@ INSTANTIATE_TEST_SUITE_P(
                  " idx1 SCORE 2 SChema hash_field1 vector hnsw 6 TYPE "
                  "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
              .expected_error_message = "`SCORE` parameter with a value `2` is "
-                                       "not supported. The only "
-                                       "supported value is `1.0`",
-         },
+                          "not supported. The value must be between "
+                          "0.0 and 1.0",
+         }, 
          {
-             .test_name = "unexpected_score_field",
-             .success = false,
-             .command_str =
-                 " idx1 SCORE_FIELD SChema hash_field1 vector hnsw 6 TYPE "
-                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
-             .expected_error_message =
-                 "The parameter `SCORE_FIELD` is not supported",
-         },
+            .test_name = "invalid_negative_score_parameter_value",
+            .success = false,
+            .command_str =
+                " idx1 SCORE -0.5 SChema hash_field1 vector hnsw 6 TYPE "
+                "FLOAT32 DIM 5 DISTANCE_METRIC IP ",
+            .expected_error_message =
+                "`SCORE` parameter with a value `-0.5` is "
+                "not supported. The value must be between "
+                "0.0 and 1.0",
+        },
          {
              .test_name = "invalid_parameter_before_schema",
              .success = false,

@@ -1252,6 +1252,43 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
         # assert (result[0], result[1]) == (1, b"doc:1")
 
+    def test_zero_length_hash_key_is_indexed(self):
+        client: Valkey = self.server.get_new_client()
+
+        client.execute_command("HSET", "", "content", "backfilltoken")
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "",
+            "SCHEMA", "content", "TEXT", "NOSTEM"
+        )
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command("FT.SEARCH", "idx", "@content:backfilltoken")
+        assert result[0] == 1
+        assert result[1] == b""
+        assert dict(zip(result[2][::2], result[2][1::2])) == {
+            b"content": b"backfilltoken"
+        }
+
+        client.execute_command("HSET", "", "content", "livetoken")
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@content:livetoken", "NOCONTENT"
+            )[0] == 1
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@content:backfilltoken", "NOCONTENT"
+            )[0] == 0
+        )
+
+        result = client.execute_command("FT.SEARCH", "idx", "@content:livetoken")
+        assert result[0] == 1
+        assert result[1] == b""
+        assert dict(zip(result[2][::2], result[2][1::2])) == {
+            b"content": b"livetoken"
+        }
+
     def test_nooffsets_option(self):
         """
         Test FT.CREATE NOOFFSETS option disables offsets storage
@@ -1952,6 +1989,62 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         result = client.execute_command("FT.SEARCH", "idx1", 'race', "RETURN", "6", "content", "AS", "text_content", "price", "AS", "numeric_content")
         assert result == [1, b"doc:1", [b"text_content", b"I am going to a race", b"numeric_content", b"100"]]
 
+    def test_content_fetch_specific_and_all_fields(self):
+        """Test that content fetch works correctly for both the HashGet path
+        (RETURN fewer than half the fields) and the scan path (RETURN all or
+        no RETURN clause). Exercises FetchSpecificFields and FetchAllFields."""
+        client: Valkey = self.server.get_new_client()
+        # Create index with 10 TEXT fields
+        fields = [f"f{i}" for i in range(1, 11)]
+        schema_args = []
+        for f in fields:
+            schema_args.extend([f, "TEXT", "NOSTEM"])
+        client.execute_command("FT.CREATE", "idx_content", "ON", "HASH",
+                              "SCHEMA", *schema_args)
+        # Insert docs with all 10 fields populated
+        field_values = {f"f{i}": f"value{i}" for i in range(1, 11)}
+        for doc_id in range(1, 4):
+            args = []
+            for k, v in field_values.items():
+                args.extend([k, f"{v}_doc{doc_id}"])
+            client.execute_command("HSET", f"doc:{doc_id}", *args)
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_content")
+
+        # Path 1: FetchSpecificFields - RETURN 2 fields (2 <= 10/2=5)
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "2", "f1", "f2")
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        assert doc_fields == {b"f1": b"value1_doc1", b"f2": b"value2_doc1"}
+
+        # Path 1b: RETURN 1 field
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "1", "f5")
+        assert result[0] == 1
+        assert result[2] == [b"f5", b"value5_doc1"]
+
+        # Path 2: FetchAllFields (scan) - RETURN 8 fields (8 > 10/2=5)
+        ret_fields = [f"f{i}" for i in range(1, 9)]
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "8", *ret_fields)
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 9):
+            assert doc_fields[f"f{i}".encode()] == f"value{i}_doc1".encode()
+
+        # Path 3: FetchAllFields (scan) - no RETURN clause (all fields)
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1")
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 11):
+            assert doc_fields[f"f{i}".encode()] == f"value{i}_doc1".encode()
+
+        # Path 1c: RETURN non-existent field (should be empty)
+        result = client.execute_command("FT.SEARCH", "idx_content", "value1_doc1",
+                                        "RETURN", "1", "nonexistent")
+        assert result[0] == 1
+        assert result[2] == []
+
     def test_nested_composed_or_with_slop(self):
         """Test nested composed OR queries with SLOP parameter"""
         client: Valkey = self.server.get_new_client()
@@ -2248,9 +2341,8 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # ft.info
         info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
         assert info_data["num_docs"] == 9
-        # Current behavior: doc:9 tag is not rejected
-        assert info_data["hash_indexing_failures"] == 4  # doc: 5, doc:6, doc:7, doc:8
-        assert info_data["num_records"] == 5 # doc:1 to 4 , doc:9
+        assert info_data["hash_indexing_failures"] == 5  # doc:5 to doc:9
+        assert info_data["num_records"] == 4 # doc:1 to 4
         # Query parsing: Verify tokenization handles non-ASCII
         assert client.execute_command("FT.SEARCH", "idx", "“smart")[0] == 1
         assert client.execute_command("FT.SEARCH", "idx", "café")[0] == 1
@@ -2264,7 +2356,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         assert client.execute_command("FT.SEARCH", "idx", b"invalid\xff")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx", b"\xff\xfe")[0] == 0
         assert client.execute_command("FT.SEARCH", "idx",  b"%invalid\xff%")[0] == 0
-        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 1 #tag with non utf8 gives result
+        assert client.execute_command("FT.SEARCH", "idx", b"@category:{invalid\xc3}")[0] == 0
         with pytest.raises(ResponseError) as e:
             client.execute_command("FT.SEARCH", "idx", b"@price:invalid\xc3 invalid\xc3]")
         assert "Invalid filter expression" in str(e.value)

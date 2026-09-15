@@ -9,11 +9,11 @@
 #define VALKEYSEARCH_SRC_QUERY_PREDICATE_H_
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_set.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -31,6 +31,10 @@ class TextIterator;
 class TextIndexSchema;
 class TextIndex;
 }  // namespace valkey_search::indexes::text
+
+namespace valkey_search::indexes::scoring {
+class Scorer;
+}  // namespace valkey_search::indexes::scoring
 
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
@@ -54,6 +58,13 @@ class NumericPredicate;
 
 struct EvaluationResult {
   bool matches;
+  // Per-document relevance score carried out of a main-thread revalidation
+  // (see response_generator.cc VerifyFilter). Only meaningful when
+  // matches == true and the caller requested a recompute; it is filled with a
+  // value produced through the same Scorer seam as the shard-side
+  // ScoreTextQuery (search.cc SingleDocumentScorer), so it is on the same
+  // scale. Left at 0.0f on the membership-only fast path.
+  float score{0.0f};
   std::unique_ptr<valkey_search::indexes::text::TextIterator> filter_iterator;
 
   // Constructor 1: For non-text predicates (no iterator)
@@ -108,9 +119,12 @@ class Predicate {
   // Returns a human-readable description of this predicate node for
   // FT.EXPLAINCLI output.
   virtual std::string Describe() const = 0;
+  float GetWeight() const { return weight_; }
+  void SetWeight(float weight) { weight_ = weight; }
 
  private:
   PredicateType type_;
+  float weight_{1.0f};
 };
 
 class NegatePredicate : public Predicate {
@@ -198,9 +212,12 @@ class TextPredicate : public Predicate {
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
+  // Enclosing OR group weights, folded in here because an OR is a sum: it
+  // distributes onto the leaf exactly, unlike an AND with slop.
   virtual std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const = 0;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const = 0;
   virtual size_t EstimateSize(bool is_vec_query) const = 0;
   // Returns the field name if a specific field was targeted, or nullopt for
   // default (all text fields) searches.
@@ -209,11 +226,21 @@ class TextPredicate : public Predicate {
     field_name_ = std::move(field_name);
   }
 
+  // Query-selected scorer, stamped on during planning so the scored
+  // TermIterator built by BuildTextIterator uses it instead of a hardcoded
+  // scorer. Null => unscored (constant stub). Mutable/const: it is a
+  // query-scoped selection set while walking an otherwise-const predicate tree.
+  void SetScorer(const indexes::scoring::Scorer* scorer) const {
+    scorer_ = scorer;
+  }
+  const indexes::scoring::Scorer* GetScorer() const { return scorer_; }
+
  private:
   // Optional field name used locally by FT.EXPLAINCLI for display purposes.
   // Not serialized or sent over the network. Set during query parsing in
   // FilterParser; nullopt indicates a default (all text fields) search.
   std::optional<std::string> field_name_;
+  mutable const indexes::scoring::Scorer* scorer_ = nullptr;
 
  protected:
   std::string FieldInfo() const {
@@ -239,7 +266,8 @@ class TermPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   bool IsExact() const { return exact_; }
   size_t EstimateSize(bool is_vec_query) const override;
@@ -272,7 +300,8 @@ class PrefixPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
@@ -303,7 +332,8 @@ class SuffixPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
@@ -334,7 +364,8 @@ class InfixPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
@@ -366,7 +397,8 @@ class FuzzyPredicate : public TextPredicate {
       bool require_positions) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
-      FieldMaskPredicate field_mask, bool require_positions) const override;
+      FieldMaskPredicate field_mask, bool require_positions,
+      float or_weight_multiplier) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {

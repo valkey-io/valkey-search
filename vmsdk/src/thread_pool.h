@@ -22,7 +22,6 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
-#include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/thread_monitoring.h"
@@ -55,11 +54,14 @@ class ThreadPool {
   /// method will internally call `JoinTerminatedWorkers`
   void JoinWorkers();
 
-  /// Cleanup after threads that self terminated after pool resize operation and
-  /// were placed in the `pending_join_threads_` queue.
+  /// Reap any workers that have flagged themselves as joinable (e.g. after a
+  /// pool resize). Acquires no locks while calling pthread_join.
   void JoinTerminatedWorkers();
 
   absl::Status MarkForStop(StopMode stop_mode);
+  /// Suspend all workers until `ResumeWorkers` is called. On success no task
+  /// is running and none can start, but a worker may still hold `queue_mutex_`,
+  /// so a fork child must not touch the pool.
   absl::Status SuspendWorkers();
   bool IsSuspended() const {
     absl::MutexLock lock(&queue_mutex_);
@@ -68,7 +70,7 @@ class ThreadPool {
   absl::Status ResumeWorkers();
   virtual ~ThreadPool();
 
-  size_t Size() const { return threads_.Size(); }
+  size_t Size() const;
   size_t QueueSize() const ABSL_LOCKS_EXCLUDED(queue_mutex_);
   enum class Priority { kLow = 0, kHigh = 1, kMax = 2 };
   virtual bool Schedule(absl::AnyInvocable<void()> task, Priority priority)
@@ -82,19 +84,12 @@ class ThreadPool {
   /// A struct representing a worker thread
   struct Thread {
     bool IsShutdown() const { return shutdown_flag.load(); }
-    void Shutdown(absl::AnyInvocable<void()> callback = nullptr) {
-      if (callback != nullptr) {
-        shutdown_callback = std::move(callback);
-      }
-      shutdown_flag.store(true);
-    }
+    void Shutdown() { shutdown_flag.store(true); }
 
-    /// If `shutdown_callback is` not null, call it
-    void InvokeShutdownCallback() {
-      if (shutdown_callback.has_value()) {
-        (*shutdown_callback)();
-      }
-    }
+    /// True once the worker has returned from its main loop and the underlying
+    /// pthread is safe to pthread_join.
+    bool IsJoinable() const { return joinable_flag.load(); }
+    void MarkJoinable() { joinable_flag.store(true); }
 
     absl::StatusOr<double> GetThreadCPUPercentage() {
       if (!thread_monitor_) {
@@ -109,10 +104,10 @@ class ThreadPool {
 
     pthread_t thread_id = 0;
     std::atomic_bool shutdown_flag = false;
-    /// If not null, the thread will call this callback when it exits via the
-    /// shutdown_flag
-    std::optional<absl::AnyInvocable<void()>> shutdown_callback = std::nullopt;
+    std::atomic_bool joinable_flag = false;
     std::unique_ptr<vmsdk::ThreadMonitor> thread_monitor_;
+    /// Set at thread creation; used for hung-thread diagnostics in JoinWorkers.
+    std::string name;
   };
 
   absl::StatusOr<double> GetAvgCPUPercentage();
@@ -147,8 +142,19 @@ class ThreadPool {
   void IncrThreadCountBy(size_t count);
   void DecrThreadCountBy(size_t count, bool sync);
 
-  inline void AwaitSuspensionCleared()
+  /// Wait while the pool is suspended, unless `thread` is already retired.
+  inline void AwaitSuspensionCleared(const Thread& thread)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_);
+  /// True once every running worker is waiting in AwaitSuspensionCleared.
+  inline bool AllWorkersSuspended() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
+    return suspended_workers_ == active_workers_;
+  }
+  /// True once every waiting worker has left AwaitSuspensionCleared.
+  inline bool NoWorkerSuspended() const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
+    return suspended_workers_ == 0;
+  }
   inline bool QueueReady() const ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
     for (const auto& queue : priority_tasks_) {
       if (!queue.empty()) {
@@ -163,7 +169,6 @@ class ThreadPool {
   }
   size_t initial_thread_count_ = 0;
   ThreadSafeVector<std::shared_ptr<Thread>> threads_;
-  ThreadSafeVector<std::shared_ptr<Thread>> pending_join_threads_;
   mutable absl::Mutex queue_mutex_;
   absl::CondVar condition_ ABSL_GUARDED_BY(queue_mutex_);
   std::vector<std::queue<TaskWithTime>> priority_tasks_
@@ -171,8 +176,10 @@ class ThreadPool {
   std::string name_prefix_;
   std::optional<StopMode> stop_mode_ ABSL_GUARDED_BY(queue_mutex_);
   bool started_{false};
-  std::unique_ptr<absl::BlockingCounter> blocking_refcount_;
   bool suspend_workers_ ABSL_GUARDED_BY(queue_mutex_){false};
+  /// Counts of running and suspended workers, updated by the workers.
+  size_t active_workers_ ABSL_GUARDED_BY(queue_mutex_){0};
+  size_t suspended_workers_ ABSL_GUARDED_BY(queue_mutex_){0};
 
   // Suspend and resume are mutually exclusive.
   mutable absl::Mutex suspend_resume_mutex_;
@@ -193,6 +200,8 @@ class ThreadPool {
   std::atomic<double> recent_avg_wait_time_{0.0};
 
   FRIEND_TEST(ThreadPoolTest, DynamicSizing);
+  FRIEND_TEST(ThreadPoolTest, RepeatedResizeWhileSuspended);
+  FRIEND_TEST(ThreadPoolTest, ResizeDownWithQueuedTasks);
 };
 
 }  // namespace vmsdk

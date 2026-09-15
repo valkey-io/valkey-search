@@ -17,6 +17,7 @@
 namespace valkey_search {
 namespace options {
 vmsdk::config::Number &GetMaxKnn();
+vmsdk::config::Number &GetMaxTimeoutMs();
 }  // namespace options
 
 absl::Status VerifyQueryString(query::SearchParameters &parameters);
@@ -33,11 +34,14 @@ struct SearchCommand : public QueryCommand {
   // By default, FT.SEARCH does not require complete results and can be
   // optimized with LIMIT based trimming. Implement the correct logic here to
   // return true when those clauses are present.
-  bool RequiresCompleteResults() const override { return sortby.has_value(); }
+  bool RequiresCompleteResults() const override {
+    return sortby_parameter.has_value();
+  }
+
   query::SerializationRange GetSerializationRange() const;
 
-  std::optional<query::SortByParameter> sortby;
   bool with_sort_keys{false};
+  bool with_scores{false};
 };
 
 }  // namespace valkey_search

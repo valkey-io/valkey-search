@@ -10,10 +10,12 @@ FT.SEARCH <index> <query>
   [NOCONTENT]
   [PARAMS <count> <name> <value> [ <name> <value> ...]]
   [RETURN <count> <field> [AS <name>] <field> [AS <name>]...]
+  [SCORER <scorer>]
   [SLOP <slop>]
   [SORTBY <field> [ ASC | DESC]]
   [TIMEOUT <timeout>]
   [VERBATIM]
+  [WITHSCORES]
   [WITHSORTKEYS]
 ```
 
@@ -33,6 +35,8 @@ FT.SEARCH <index> <query>
 - `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
+- `SCORER <scorer>` (Optional): Selects the relevance scoring function used to rank text results.
+- `WITHSCORES` (Optional): Augments the output with the relevance score computed for each returned key.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
 Response

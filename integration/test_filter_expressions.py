@@ -930,3 +930,35 @@ class TestFilterExpressions(ValkeySearchTestCaseBase):
         assert result[0] == 3
         keys = set(result[i].decode('utf-8') for i in range(1, len(result)))
         assert keys == {"item:1", "item:2", "item:3"}
+
+    def test_tag_escaped_closing_brace(self):
+        """
+        Test that a tag containing a literal '}' can be queried using
+        backslash escaping: @field:{value\\}more}
+
+        The closing brace inside the tag value must be escaped so the
+        parser doesn't treat it as the end of the tag expression.
+        Ref: https://github.com/valkey-io/valkey-search/issues/454
+        """
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "esc_brace_idx",
+            "ON", "HASH",
+            "PREFIX", "1", "doc:",
+            "SCHEMA", "tags", "TAG", "SEPARATOR", ","
+        ) == b"OK"
+
+        # Store a tag that contains multiple '}' characters
+        assert client.execute_command("HSET", "doc:1", "tags", "tag-containing-}-and-}") == 1
+        assert client.execute_command("HSET", "doc:2", "tags", "other") == 1
+
+        # Query with escaped braces — matches the issue's example
+        result = client.execute_command(
+            "FT.SEARCH", "esc_brace_idx",
+            r"@tags:{ tag-containing-\}-and-\} }",
+            "NOCONTENT"
+        )
+        assert result[0] == 1
+        keys = set(result[i].decode('utf-8') for i in range(1, len(result)))
+        assert keys == {"doc:1"}

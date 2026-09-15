@@ -27,6 +27,7 @@
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 #include "vmsdk/src/module.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -57,6 +58,7 @@ class LoadTest : public ValkeySearchTestWithParam<LoadTestCase> {
  public:
   void SetUp() override {
     ValkeySearchTestWithParam<LoadTestCase>::SetUp();
+    ValkeySearch::InitInstance(std::make_unique<TestableValkeySearch>());
     CHECK(options::Reset().ok());
     vmsdk::SetModuleLoaded("json", true);
   }
@@ -336,13 +338,13 @@ TEST_P(LoadTest, load) {
         .WillRepeatedly(testing::Return(0));
   }
   vmsdk::module::Options options = {
+      .name = kModuleName,
       .version = kModuleVersion,
       .minimum_valkey_server_version = kMinimumServerVersion,
   };
   auto load_res = vmsdk::module::OnLoadDone(
       ValkeySearch::Instance().OnLoad(&fake_ctx_, args.data(), args.size()),
       &fake_ctx_, options);
-  vmsdk::ResetValkeyAlloc();
   EXPECT_EQ(load_res, test_case.expected_load_ret);
   auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   auto reader_thread_pool = ValkeySearch::Instance().GetReaderThreadPool();
@@ -385,7 +387,7 @@ TEST_F(ValkeySearchTest, FullSyncFork) {
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
   EXPECT_TRUE(writer_thread_pool->IsSuspended());
   EXPECT_FALSE(reader_thread_pool->IsSuspended());
-  absl::SleepFor(absl::Seconds(5));
+  absl::SleepFor(absl::Milliseconds(1100));
   ValkeyModuleEvent eid;
   ValkeyModuleCtx fake_ctx;
   ValkeySearch::Instance().OnServerCronCallback(&fake_ctx, eid, 0, nullptr);
@@ -535,12 +537,14 @@ TEST_F(ValkeySearchTest, Info) {
       "indexing\nbackground_indexing_status: 'IN_PROGRESS'\n"
       "memory\nused_memory_bytes: 18408\nused_memory_human: '17.98KiB'\n");
 #endif
+  VMSDK_EXPECT_OK(writer_thread_pool->ResumeWorkers());
+  VMSDK_EXPECT_OK(reader_thread_pool->ResumeWorkers());
   StringInternStore::SetMemoryUsage(0);  // reset memory pool
 }
 
 TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
   InitThreadPools(std::nullopt, 5, 1);
-  auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
   Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
@@ -558,7 +562,7 @@ TEST_F(ValkeySearchTest, OnForkChildDiedCallback) {
 TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   VMSDK_EXPECT_OK(options::GetMaxWorkerSuspensionSecs().SetValue(0));
   InitThreadPools(std::nullopt, 5, 1);
-  auto writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
+  auto* writer_thread_pool = ValkeySearch::Instance().GetWriterThreadPool();
   VMSDK_EXPECT_OK(writer_thread_pool->SuspendWorkers());
   ValkeyModuleEvent eid;
   Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt = 0;
@@ -568,6 +572,105 @@ TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   EXPECT_EQ(
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
   EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
+}
+
+// Tests for VALKEY_SEARCH_COMPATIBILITY_FIX (see src/valkey_search_options.h
+// and the "Compatibility Defects" section of COMPATIBILITY.md). Uses fix
+// version 1.1.0 so SetEmulateRelease can move both above and below it within
+// the configured [1.0.0, kModuleVersion] range.
+class CompatibilityFixTest : public vmsdk::ValkeyTest {
+ protected:
+  void SetUp() override {
+    vmsdk::ValkeyTest::SetUp();
+    saved_emulate_release_ = options::GetEmulateRelease().GetValue();
+  }
+  void TearDown() override {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(saved_emulate_release_));
+    vmsdk::ValkeyTest::TearDown();
+  }
+
+  static void SetEmulateRelease(vmsdk::ValkeyVersion v) {
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(v));
+  }
+
+  static std::string DumpCompatibilitySection() {
+    ValkeyModuleInfoCtx info_ctx;
+    vmsdk::info_field::DoSection(&info_ctx, "compatibility",
+                                 /*for_crash_report=*/0);
+    return info_ctx.info_capture.GetInfo();
+  }
+
+ private:
+  vmsdk::ValkeyVersion saved_emulate_release_{0};
+};
+
+struct CompatibilityFixPathCase {
+  std::string name;
+  vmsdk::ValkeyVersion emulate_release;
+  char expected;  // 'F' if fixed branch must run, 'O' if legacy branch must run
+};
+
+class CompatibilityFixPathTest
+    : public CompatibilityFixTest,
+      public ::testing::WithParamInterface<CompatibilityFixPathCase> {};
+
+// Fix declared at 1.1.0; rows exercise emulate-release below/at/above it. All
+// rows share the same macro call site, so iterating across them also verifies
+// that the per-site state correctly tracks dynamic SET-config changes.
+TEST_P(CompatibilityFixPathTest, SelectsPathFromEmulateRelease) {
+  SetEmulateRelease(GetParam().emulate_release);
+  char result = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "compat_test_path_selection", [] { return 'F'; },
+      [] { return 'O'; });
+  EXPECT_EQ(result, GetParam().expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    EmulateRelease, CompatibilityFixPathTest,
+    ::testing::Values(CompatibilityFixPathCase{"below_fix", {1, 0, 0}, 'O'},
+                      CompatibilityFixPathCase{"equals_fix", {1, 1, 0}, 'F'},
+                      CompatibilityFixPathCase{"above_fix", {1, 2, 0}, 'F'}),
+    [](const ::testing::TestParamInfo<CompatibilityFixPathCase>& info) {
+      return info.param.name;
+    });
+
+TEST_F(CompatibilityFixTest, SupportsVoidReturn) {
+  SetEmulateRelease({1, 0, 0});
+  int fixed_calls = 0;
+  int old_calls = 0;
+  VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 1, 0, "test_void_return", [&] { ++fixed_calls; },
+      [&] { ++old_calls; });
+  EXPECT_EQ(fixed_calls, 0);
+  EXPECT_EQ(old_calls, 1);
+}
+
+TEST_F(CompatibilityFixTest, OldPathIncrementsLabelInfoField) {
+  SetEmulateRelease({1, 0, 0});
+
+  for (int i = 0; i < 3; ++i) {
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 1, 0, "test_label_increments", [&] { return 0; }, [&] { return 0; });
+  }
+
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::HasSubstr("compatibility-test_label_increments: 3"));
+}
+
+TEST_F(CompatibilityFixTest, FixedPathDoesNotIncrementCounter) {
+  SetEmulateRelease({1, 1, 0});
+
+  for (int i = 0; i < 3; ++i) {
+    VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 1, 0, "test_label_no_increment", [&] { return 0; },
+        [&] { return 0; });
+  }
+
+  // The counter is initialized on first macro invocation regardless of which
+  // path runs, but the fixed path must not increment it.
+  EXPECT_THAT(DumpCompatibilitySection(),
+              ::testing::HasSubstr("compatibility-test_label_no_increment: 0"));
 }
 
 class MockPthreadAtfork {

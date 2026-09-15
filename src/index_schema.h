@@ -28,7 +28,9 @@
 #include "absl/time/time.h"
 #include "gtest/gtest_prod.h"
 #include "src/attribute.h"
+#include "src/attribute_data.h"
 #include "src/attribute_data_type.h"
+#include "src/expr/expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -53,7 +55,7 @@ namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
 
-inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+inline absl::Status GenerateIndexNotFoundError(int db_num,
                                                absl::string_view name) {
   return absl::NotFoundError(absl::StrFormat(
       "Index with name '%s' not found in database %d", name, db_num));
@@ -84,13 +86,20 @@ struct AttributeInfo {
 };
 
 class IndexSchema : public KeyspaceEventSubscription,
+                    public expr::Expression::CompileContext,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
+  static constexpr float kDefaultDocumentScore = 1.0f;
+
   struct IndexKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
+    float document_score{kDefaultDocumentScore};
   };
 
-  using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
+  // Transparent functors so GetDocumentScore() can probe with a borrowed key.
+  using IndexKeyInfoMap =
+      absl::flat_hash_map<Key, IndexKeyInfo, InternedStringPtrHash,
+                          InternedStringPtrEq>;
 
   struct InfoIndexPartitionData {
     uint64_t num_docs;
@@ -118,6 +127,11 @@ class IndexSchema : public KeyspaceEventSubscription,
     ResultCnt<std::atomic<uint64_t>> subscription_add;
     std::atomic<uint32_t> document_cnt{0};
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
+    // Written only during index-time FILTER evaluation, which runs on the
+    // main thread, so it is a plain integer.
+    // Number of documents excluded from the index because they did not satisfy
+    // the FILTER expression.
+    uint64_t filter_rejected_keys{0};
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
     mutable absl::Mutex mutex_;
@@ -170,12 +184,62 @@ class IndexSchema : public KeyspaceEventSubscription,
     return subscribed_key_prefixes_;
   }
 
+  std::vector<const indexes::VectorBase *> GetVectorIndexes() const override;
+
   inline const std::string &GetName() const { return name_; }
-  inline std::uint32_t GetDBNum() const { return db_num_; }
+  inline int GetDBNum() const { return db_num_; }
+  inline const std::optional<uint16_t> &GetSingleSlotNumber() const {
+    return single_slot_number_;
+  }
+  inline float GetScore() const { return score_; }
+  inline const std::string &GetScoreField() const {
+    CHECK(score_field_.has_value())
+        << "GetScoreField() called without HasScoreField() guard";
+    return score_field_.value();
+  }
+  inline bool HasScoreField() const { return score_field_.has_value(); }
+  float GetDocumentScore(BorrowedInternedStringPtr key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    auto itr = index_key_info_.find(key);
+    if (itr == index_key_info_.end()) {
+      return score_;
+    }
+    return itr->second.document_score;
+  }
+
+  uint32_t GetDocumentLength(BorrowedInternedStringPtr key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetKeyDocLen(key);
+  }
+
+  uint32_t GetDocumentNorm(const Key &key) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetKeyNorm(key);
+  }
+
+  uint64_t GetTotalDocumentLength() const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    if (!text_index_schema_) {
+      return 0;
+    }
+    return text_index_schema_->GetMetadata().total_doc_len.load();
+  }
 
   void CreateTextIndexSchema() {
     text_index_schema_ = std::make_shared<indexes::text::TextIndexSchema>(
         language_, punctuation_, with_offsets_, stop_words_, min_stem_size_);
+    // BM25's N is the count of ALL indexed docs, not just text-bearing keys.
+    // IndexSchema owns text_index_schema_, so `this` outlives the callback; the
+    // scoring hot path already holds time_sliced_mutex_ in read phase when this
+    // runs, so reading index_key_info_ needs no extra lock.
+    text_index_schema_->SetTotalDocsProvider(
+        [this]() -> uint32_t { return index_key_info_.size(); });
   }
   std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema() const {
     return text_index_schema_;
@@ -223,7 +287,8 @@ class IndexSchema : public KeyspaceEventSubscription,
       std::unique_ptr<data_model::IndexSchema> index_schema_proto,
       SupplementalContentIter &&supplemental_iter);
 
-  bool IsInCurrentDB(ValkeyModuleCtx *ctx) const;
+  bool IsInDB(int db_num) const override { return db_num_ == db_num; }
+  bool IsInCurrentDB(ValkeyModuleCtx *ctx) const override;
 
   virtual void OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info);
   virtual void OnLoadingEnded(ValkeyModuleCtx *ctx);
@@ -233,12 +298,10 @@ class IndexSchema : public KeyspaceEventSubscription,
                                   const Key &key,
                                   vmsdk::StopWatch *delay_capturer);
   std::unique_ptr<data_model::IndexSchema> ToProto() const;
+  using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {
-    struct AttributeData {
-      vmsdk::UniqueValkeyString data;
-      indexes::DeletionType deletion_type{indexes::DeletionType::kNone};
-    };
-    std::optional<absl::flat_hash_map<std::string, AttributeData>> attributes;
+    using AttributeData = valkey_search::AttributeData;
+    std::optional<MutatedAttributes> attributes;
     std::vector<vmsdk::BlockedClient> blocked_clients;
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
@@ -247,17 +310,15 @@ class IndexSchema : public KeyspaceEventSubscription,
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
+    float document_score{kDefaultDocumentScore};
   };
-  using MutatedAttributes =
-      absl::flat_hash_map<std::string, DocumentMutation::AttributeData>;
-  vmsdk::TimeSlicedMRMWMutex &GetTimeSlicedMutex() {
+  vmsdk::TimeSlicedMRMWMutex &GetTimeSlicedMutex()
+      ABSL_LOCK_RETURNED(time_sliced_mutex_) {
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
   bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
-  void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
-                                     indexes::VectorBase *vector_index);
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;
   InfoIndexPartitionData GetInfoIndexPartitionData() const;
@@ -295,8 +356,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
   }
 
+  size_t GetDbKeyInfoSize() const { return db_key_info_.Get().size(); }
+
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
-    vmsdk::VerifyMainThread();
     auto itr = db_key_info_.Get().find(key);
     CHECK(itr != db_key_info_.Get().end())
         << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
@@ -324,7 +386,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
                                       MutationSequenceNumber sequence_number)
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
   }
 
@@ -375,6 +437,21 @@ class IndexSchema : public KeyspaceEventSubscription,
     return attributes_;
   }
 
+  // Compile the FILTER against the current attributes. Separate from Create()
+  // because the RDB path only has its attributes once the supplemental
+  // content has been read. Idempotent; a no-op when there is no FILTER.
+  absl::Status CompileFilter();
+  bool HasFilter() const { return compiled_filter_ != nullptr; }
+  const std::string &GetFilterExpression() const {
+    return filter_expression_str_;
+  }
+
+  // CompileContext interface
+  absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
+  MakeReference(absl::string_view name, bool create) override;
+  absl::StatusOr<expr::Value> GetParam(absl::string_view s) const override;
+  bool UseFilterComparisonSemantics() const override { return true; }
+
   // Returns attributes sorted by alias (map key) for deterministic ordering.
   // Use this instead of iterating attributes_ directly in any serialization
   // path (RDB, FT.INFO, protobuf).
@@ -397,12 +474,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   std::vector<std::string> subscribed_key_prefixes_;
   std::unique_ptr<AttributeDataType> attribute_data_type_;
   std::string name_;
-  uint32_t db_num_{0};
+  int db_num_{0};
+  std::optional<uint16_t> single_slot_number_;
   data_model::Language language_{data_model::LANGUAGE_ENGLISH};
   std::string punctuation_;
   bool with_offsets_{true};
   std::vector<std::string> stop_words_;
   uint32_t min_stem_size_{4};
+  float score_{kDefaultDocumentScore};
+  std::optional<std::string> score_field_;
   std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
   // Precomputed text field information for searches
   uint64_t all_text_field_mask_{0ULL};
@@ -415,12 +495,15 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint32_t version_{0};
   bool skip_initial_scan_{false};
 
+  std::string filter_expression_str_;
+  std::unique_ptr<expr::Expression> compiled_filter_;
+
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   std::vector<uint64_t> attributes_indexed_data_size_;
 
   InternedStringHashMap<DocumentMutation> tracked_mutated_records_
       ABSL_GUARDED_BY(mutated_records_mutex_);
-  bool is_destructing_ ABSL_GUARDED_BY(mutated_records_mutex_){false};
+  std::atomic<bool> is_destructing_{false};
   mutable absl::Mutex mutated_records_mutex_;
 
   MutationSequenceNumber schema_mutation_sequence_number_{0};
@@ -430,7 +513,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // For proper sequencing and thread-safety, we separate reads/writes into
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
-  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(mutated_records_mutex_);
 
   struct BackfillJob {
     BackfillJob() = delete;
@@ -449,11 +532,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   };
 
   vmsdk::MainThreadAccessGuard<std::optional<BackfillJob>> backfill_job_;
-  absl::flat_hash_map<std::string, indexes::VectorBase *>
-      vector_externalizer_subscriptions_;
-  void VectorExternalizer(const Key &key,
-                          absl::string_view attribute_identifier,
-                          vmsdk::UniqueValkeyString &record);
 
   mutable Stats stats_;
 
@@ -463,34 +541,53 @@ class IndexSchema : public KeyspaceEventSubscription,
   void ProcessMutation(ValkeyModuleCtx *ctx,
                        MutatedAttributes &mutated_attributes,
                        const Key &interned_key, bool from_backfill,
-                       bool is_delete);
+                       bool is_delete,
+                       float document_score = kDefaultDocumentScore);
   bool ScheduleMutation(bool from_backfill, const Key &key,
                         vmsdk::ThreadPool::Priority priority,
                         absl::BlockingCounter *blocking_counter);
   void EnqueueMultiMutation(const Key &key);
+  // Drains the multi/exec queue on the calling thread, for when the mutations
+  // thread pool is suspended.
+  void ProcessMultiQueueInline();
   void DrainMutationQueue(ValkeyModuleCtx *ctx) const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   void SyncProcessMutation(ValkeyModuleCtx *ctx,
                            MutatedAttributes &mutated_attributes,
-                           const Key &key);
-  void ProcessAttributeMutation(ValkeyModuleCtx *ctx,
+                           const Key &key)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
+  // Processes a single attribute mutation. Returns true if the attribute's
+  // value was invalid data (not conforming to the field's type), which the
+  // caller may use to drop the whole key (Redisearch-compatible behavior).
+  bool ProcessAttributeMutation(ValkeyModuleCtx *ctx,
                                 const Attribute &attribute, const Key &key,
-                                vmsdk::UniqueValkeyString data,
-                                indexes::DeletionType deletion_type);
+                                AttributeData &&data)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
+  // Removes the key from every attribute index (and the schema-level text
+  // index). Used to implement the Redisearch-compatible behavior of dropping
+  // the entire key when any field contains invalid data.
+  void RemoveKeyFromAllIndexes(ValkeyModuleCtx *ctx, const Key &key)
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_);
   static void BackfillScanCallback(ValkeyModuleCtx *ctx,
                                    ValkeyModuleString *keyname,
                                    ValkeyModuleKey *key, void *privdata);
   bool DeleteIfNotInValkeyDict(ValkeyModuleCtx *ctx, ValkeyModuleString *key,
                                const Attribute &attribute);
   vmsdk::BlockedClientCategory GetBlockedCategoryFromProto() const;
+  // Checks if a key is known to the schema: in db_key_info_, in-flight in the
+  // mutation tracker, or tracked/untracked by any underlying index.
+  // REQUIRES: Valkey Main Thread.
+  bool IsKeyTracked(const Key &key) const
+      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   bool InTrackedMutationRecords(const Key &key,
                                 const std::string &identifier) const;
   bool TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
                           MutatedAttributes &&mutated_attributes,
                           MutationSequenceNumber sequence_number,
                           bool from_backfill, bool block_client,
-                          bool from_multi)
+                          bool from_multi,
+                          float document_score = kDefaultDocumentScore)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
@@ -498,7 +595,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
-      ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_)
+          ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
   size_t GetMutatedRecordsSize() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
@@ -533,12 +631,26 @@ class IndexSchema : public KeyspaceEventSubscription,
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
 
+  // Evaluates the compiled FILTER expression for a document. `open_key` is the
+  // still-open key of the document (may be null for a deleted key) and `key` is
+  // its name; both let references to fields not declared in the schema read
+  // their values directly off the key (HASH only). Runs on the main thread.
+  bool EvaluateFilter(const MutatedAttributes &mutated_attributes,
+                      ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
+                      absl::string_view key) const;
+
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
+  FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoadWithVectorSharing);
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
+  friend class IndexSchemaFriendTest;
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
+  FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
   FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
+  FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
+  FRIEND_TEST(IndexSchemaFriendTest,
+              InTrackedMutationRecordsAfterConsumeNoCrash);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);
 };

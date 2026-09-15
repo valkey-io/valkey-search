@@ -77,6 +77,14 @@
 #if !defined(SIMSIMD_TARGET_NEON_BF16)
 #define SIMSIMD_TARGET_NEON_BF16 SIMSIMD_TARGET_NEON
 #endif // !defined(SIMSIMD_TARGET_NEON_BF16)
+// VALKEYSEARCH BEGIN
+// FEAT_FHM: the FMLAL/FMLAL2 widening f16 FMAs, which read bf16-width inputs
+// and accumulate in f32. Optional from Armv8.2, so it needs its own gate and
+// its own runtime capability bit rather than riding on NEON_F16 (FEAT_FP16).
+#if !defined(SIMSIMD_TARGET_NEON_FHM)
+#define SIMSIMD_TARGET_NEON_FHM SIMSIMD_TARGET_NEON
+#endif // !defined(SIMSIMD_TARGET_NEON_FHM)
+// VALKEYSEARCH END
 
 // Compiling for Arm: SIMSIMD_TARGET_SVE
 #if !defined(SIMSIMD_TARGET_SVE) || (SIMSIMD_TARGET_SVE && !SIMSIMD_TARGET_ARM)
@@ -309,7 +317,23 @@ typedef unsigned short simsimd_bf16_t;
  */
 #ifndef SIMSIMD_UNCOMPRESS_BF16
 #if SIMSIMD_NATIVE_BF16
-#define SIMSIMD_UNCOMPRESS_BF16(x) (SIMSIMD_IDENTIFY(x))
+// VALKEYSEARCH BEGIN
+// When SIMSIMD_NATIVE_BF16 is 1, simsimd_bf16_t is typedef'd to _Float16 on
+// x86 or __fp16 on Arm. Both are IEEE half -- 1 sign, 5 exponent, 10 mantissa
+// -- not bfloat16's 1/8/7. SIMSIMD_IDENTIFY therefore asks the compiler to
+// widen the value as half precision, and the serial kernels
+// (simsimd_dot_bf16_serial, simsimd_l2sq_bf16_serial) read every stored
+// bfloat16 as the wrong number: the bf16 encoding of 1.0, 0x3F80, decodes as
+// 1.875.
+//
+// Reinterpret the 2 bytes and decompress them the same way the non-native
+// build does, by shifting into the high half of a float. This makes the serial
+// path correct regardless of how simsimd typed the value, which matters on
+// hardware with no SIMD bf16 kernel to dispatch to -- Arm cores without
+// FEAT_BF16, for instance, where simsimd offers no shift-based fallback.
+#define SIMSIMD_UNCOMPRESS_BF16(x) \
+    (simsimd_uncompress_bf16(*(unsigned short const *)&(x)))
+// VALKEYSEARCH END
 #else
 #define SIMSIMD_UNCOMPRESS_BF16(x) (simsimd_uncompress_bf16(x))
 #endif

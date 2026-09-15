@@ -242,67 +242,46 @@ TEST_P(ThreadPoolTest, ConcurrentWorkers) {
   std::unique_lock<std::mutex> lock(mutex);
   condition.wait(lock, [&] { return last_task == 0; });
 }
-#ifdef BROKEN_UNIT_TEST
 TEST_F(ThreadPoolTest, priority) {
-  // Test that high priority tasks are executed before low priority tasks
-  const size_t thread_count = 5;
-  ThreadPool thread_pool("test-pool", thread_count);
-  const size_t tasks = thread_count * 2;
+  // Test that high priority tasks are dequeued (and executed) before low
+  // priority tasks. A single-threaded pool ensures dequeue order matches
+  // execution order, eliminating the race that existed with multiple threads.
+  ThreadPool thread_pool("test-pool", 1);
+  const size_t tasks = 10;
   std::atomic<int> pending_run_low_priority = tasks;
   std::atomic<int> pending_run_high_priority = tasks;
   absl::BlockingCounter pending_tasks(tasks * 2);
-  absl::Mutex mutex;
-  {
-    absl::MutexLock lock(&mutex);
-    for (size_t i = 0; i < thread_count; ++i) {
-      EXPECT_TRUE(
-          thread_pool.Schedule([&mutex] { absl::MutexLock lock(&mutex); },
-                               ThreadPool::Priority::kHigh));
-    }
-    //// The logic below fails, because it assumes that the scheduling of tasks
-    /// and their execution is the same. Which it is / not. It's possible for a
-    /// low priority task to be started while a high priority task is still
-    /// running. This isn't / true. As the high prio threads decrement the
-    /// blocking counter and terminate, it's possible for a low priority /
-    /// thread to get started (since there's an idle thread in the pool) and
-    /// then to beat the remaining high priority / threads to win access to the
-    /// mutex. In other words, the mutex access doesn't honor the thread
-    /// priorities and that / causes this test to fail intermittently.
-    for (size_t i = 0; i < tasks; ++i) {
-      EXPECT_TRUE(thread_pool.Schedule(
-          [&pending_run_low_priority, &pending_run_high_priority,
-           &pending_tasks, &mutex]() {
-            absl::MutexLock lock(&mutex);
-            // Making sure that all high priority tasks were executed before any
-            // low priority
-            EXPECT_EQ(pending_run_high_priority, 0);
-            --pending_run_low_priority;
-            pending_tasks.DecrementCount();
-          },
-          ThreadPool::Priority::kLow));
-    }
-    for (size_t i = 0; i < tasks; ++i) {
-      EXPECT_TRUE(thread_pool.Schedule(
-          [&pending_run_low_priority, &pending_run_high_priority, &tasks,
-           &pending_tasks, &mutex]() {
-            absl::MutexLock lock(&mutex);
-            // Making sure that no low priority tasks were executed before
-            // high priority tasks
-            EXPECT_EQ(pending_run_low_priority, tasks);
-            --pending_run_high_priority;
-            pending_tasks.DecrementCount();
-          },
-          ThreadPool::Priority::kHigh));
-    }
-    EXPECT_GE(thread_pool.QueueSize(), tasks * 2);
+  // Queue low-priority tasks first, then high-priority tasks.
+  // The priority queue should still execute high-priority tasks first.
+  for (size_t i = 0; i < tasks; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule(
+        [&pending_run_low_priority, &pending_run_high_priority,
+         &pending_tasks]() {
+          // All high priority tasks should have completed before any low
+          // priority task runs
+          EXPECT_EQ(pending_run_high_priority, 0);
+          --pending_run_low_priority;
+          pending_tasks.DecrementCount();
+        },
+        ThreadPool::Priority::kLow));
   }
+  for (size_t i = 0; i < tasks; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule(
+        [&pending_run_low_priority, &pending_run_high_priority, &tasks,
+         &pending_tasks]() {
+          // No low priority tasks should have run yet
+          EXPECT_EQ(pending_run_low_priority, tasks);
+          --pending_run_high_priority;
+          pending_tasks.DecrementCount();
+        },
+        ThreadPool::Priority::kHigh));
+  }
+  EXPECT_GE(thread_pool.QueueSize(), tasks * 2);
   // Now that tasks have been loaded to the thread pool, start the workers
   thread_pool.StartWorkers();
-  // wait for all tasks to finish
+  // Wait for all tasks to finish
   pending_tasks.Wait();
-  // EXPECT_EQ(thread_pool.QueueSize(), 0);
 }
-#endif
 TEST_F(ThreadPoolTest, DynamicSizing) {
   const size_t thread_count = 10;
   ThreadPool thread_pool("test-pool", thread_count);
@@ -313,7 +292,6 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   EXPECT_EQ(thread_pool.Size(), 5);
 
   thread_pool.JoinTerminatedWorkers();
-  EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
 
   EXPECT_EQ(thread_pool.Size(), 5);
   thread_pool.Resize(15, true);
@@ -322,7 +300,139 @@ TEST_F(ThreadPoolTest, DynamicSizing) {
   thread_pool.JoinWorkers();
 
   EXPECT_EQ(thread_pool.threads_.Size(), 0);
-  EXPECT_EQ(thread_pool.pending_join_threads_.Size(), 0);
+}
+
+TEST_F(ThreadPoolTest, ResizeWhileSuspended) {
+  ThreadPool thread_pool("test-pool", 4);
+  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+
+  // CONFIG SET can resize a pool at any time, including while a fork holds it
+  // suspended.
+  thread_pool.Resize(16);
+  thread_pool.Resize(2);
+  thread_pool.Resize(8);
+
+  // Workers created during the suspension must wait before taking a task.
+  absl::Notification notification;
+  EXPECT_TRUE(thread_pool.Schedule([&notification]() { notification.Notify(); },
+                                   ThreadPool::Priority::kHigh));
+  EXPECT_FALSE(notification.WaitForNotificationWithTimeout(absl::Seconds(1)));
+
+  // Resuming must not wait for workers that were retired during the suspension.
+  StopWatch stop_watch;
+  VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(5));
+  EXPECT_TRUE(notification.WaitForNotificationWithTimeout(absl::Seconds(5)));
+  thread_pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, RepeatedResizeWhileSuspended) {
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+
+  // Workers retired while suspended must exit and get cleaned up on their
+  // own; otherwise each resize up adds replacements and threads accumulate.
+  constexpr size_t kCycles = 20;
+  for (size_t i = 0; i < kCycles; ++i) {
+    thread_pool.Resize(8);
+    thread_pool.Resize(1);
+    thread_pool.JoinTerminatedWorkers();
+  }
+
+  // All retired workers must be cleaned up while the pool is still suspended,
+  // leaving only the survivor.
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (absl::Now() < deadline) {
+    thread_pool.JoinTerminatedWorkers();
+    if (thread_pool.threads_.Size() == 1) {
+      break;
+    }
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  EXPECT_EQ(thread_pool.threads_.Size(), 1u);
+  EXPECT_EQ(thread_pool.Size(), 1u);
+
+  VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  thread_pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, SynchronousResizeWhileSuspended) {
+  ThreadPool thread_pool("test-pool", 4);
+  thread_pool.StartWorkers();
+  VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+
+  // A synchronous resize waits for the retired workers to finish, which they
+  // can only do if the suspension lets them exit.
+  StopWatch stop_watch;
+  thread_pool.Resize(1, /*wait_for_resize=*/true);
+  EXPECT_LT(stop_watch.Duration(), absl::Seconds(5));
+  EXPECT_EQ(thread_pool.Size(), 1u);
+
+  VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  thread_pool.JoinWorkers();
+}
+
+TEST_F(ThreadPoolTest, ResizeDownWithQueuedTasks) {
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+
+  // Keep the only worker busy so tasks pile up behind it.
+  absl::Notification started, release;
+  EXPECT_TRUE(thread_pool.Schedule(
+      [&started, &release]() {
+        started.Notify();
+        release.WaitForNotification();
+      },
+      ThreadPool::Priority::kHigh));
+  std::atomic<int> executed{0};
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_TRUE(thread_pool.Schedule([&executed]() { ++executed; },
+                                     ThreadPool::Priority::kHigh));
+  }
+  started.WaitForNotification();
+
+  // A retired worker must exit without draining the queue.
+  thread_pool.Resize(0);
+  release.Notify();
+  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  while (thread_pool.threads_.Size() > 0 && absl::Now() < deadline) {
+    thread_pool.JoinTerminatedWorkers();
+    absl::SleepFor(absl::Milliseconds(10));
+  }
+  EXPECT_EQ(thread_pool.threads_.Size(), 0u);
+  EXPECT_EQ(executed.load(), 0);
+  EXPECT_EQ(thread_pool.QueueSize(), 5u);
+
+  // The queued tasks run once the pool is resized back up.
+  thread_pool.Resize(1);
+  thread_pool.JoinWorkers();
+  EXPECT_EQ(executed.load(), 5);
+}
+
+TEST_F(ThreadPoolTest, ConcurrentResizeAndSuspendResume) {
+  ThreadPool thread_pool("test-pool", 4);
+  thread_pool.StartWorkers();
+  std::atomic_bool stop{false};
+  // Stands in for the config-set path resizing the pool, plus the cron callback
+  // cleaning up the workers it retired.
+  std::thread resizer([&thread_pool, &stop]() {
+    for (size_t i = 0; !stop; ++i) {
+      thread_pool.Resize(i % 2 == 0 ? 1 : 4);
+      thread_pool.JoinTerminatedWorkers();
+      absl::SleepFor(absl::Milliseconds(1));
+    }
+  });
+  for (size_t i = 0; i < 200; ++i) {
+    VMSDK_EXPECT_OK(thread_pool.SuspendWorkers());
+    // Give the resizer a chance to run inside the suspension window.
+    absl::SleepFor(absl::Milliseconds(1));
+    VMSDK_EXPECT_OK(thread_pool.ResumeWorkers());
+  }
+  stop = true;
+  resizer.join();
+  thread_pool.JoinWorkers();
 }
 
 namespace {

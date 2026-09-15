@@ -1,6 +1,16 @@
 valkey_search_create_proto_library("src/index_schema.proto"
                                    "index_schema_cc_proto")
 
+set(SRCS_SCORING
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/scorer.cc
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.h
+    ${CMAKE_CURRENT_LIST_DIR}/scoring/bm25std_scorer.cc)
+
+valkey_search_add_static_library(scoring "${SRCS_SCORING}")
+target_include_directories(scoring PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(scoring PUBLIC vmsdklib)
+
 add_library(index_base INTERFACE ${SRCS_INDEX_BASE})
 target_include_directories(index_base INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(index_base INTERFACE index_schema_cc_proto)
@@ -20,7 +30,6 @@ target_link_libraries(vector_base PUBLIC tag)
 target_link_libraries(vector_base PUBLIC attribute_data_type)
 target_link_libraries(vector_base PUBLIC index_schema_cc_proto)
 target_link_libraries(vector_base PUBLIC rdb_serialization)
-target_link_libraries(vector_base PUBLIC vector_externalizer)
 target_link_libraries(vector_base PUBLIC predicate)
 target_link_libraries(vector_base PUBLIC allocator)
 target_link_libraries(vector_base PUBLIC intrusive_ref_count)
@@ -30,6 +39,18 @@ target_link_libraries(vector_base PUBLIC iostream)
 target_link_libraries(vector_base PUBLIC valkey_module)
 target_link_libraries(vector_base PUBLIC vmsdklib)
 
+set(SRCS_VECTOR_TYPE ${CMAKE_CURRENT_LIST_DIR}/vector_type.cc
+                     ${CMAKE_CURRENT_LIST_DIR}/vector_type.h)
+
+valkey_search_add_static_library(vector_type "${SRCS_VECTOR_TYPE}")
+target_include_directories(vector_type PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(vector_type PUBLIC index_base)
+target_link_libraries(vector_type PUBLIC vector_base)
+target_link_libraries(vector_type PUBLIC index_schema_cc_proto)
+target_link_libraries(vector_type PUBLIC hnswlib_vmsdk)
+target_link_libraries(vector_type PUBLIC vmsdklib)
+target_link_libraries(vector_type PUBLIC valkey_module)
+
 set(SRCS_VECTOR_HNSW ${CMAKE_CURRENT_LIST_DIR}/vector_hnsw.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_hnsw.h)
 
@@ -37,6 +58,7 @@ valkey_search_add_static_library(vector_hnsw "${SRCS_VECTOR_HNSW}")
 target_include_directories(vector_hnsw PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(vector_hnsw PUBLIC index_base)
 target_link_libraries(vector_hnsw PUBLIC vector_base)
+target_link_libraries(vector_hnsw PUBLIC vector_type)
 target_link_libraries(vector_hnsw PUBLIC attribute_data_type)
 target_link_libraries(vector_hnsw PUBLIC metrics)
 target_link_libraries(vector_hnsw PUBLIC rdb_serialization)
@@ -53,7 +75,7 @@ target_include_directories(numeric PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(numeric PUBLIC index_base)
 target_link_libraries(numeric PUBLIC rdb_serialization)
 target_link_libraries(numeric PUBLIC predicate_header)
-target_link_libraries(numeric PUBLIC segment_tree)
+target_link_libraries(numeric PUBLIC numeric_btree)
 target_link_libraries(numeric PUBLIC string_interning)
 target_link_libraries(numeric PUBLIC valkey_module)
 
@@ -63,6 +85,10 @@ set(SRCS_UNIVERSAL_SET_FETCHER ${CMAKE_CURRENT_LIST_DIR}/universal_set_fetcher.c
 valkey_search_add_static_library(universal_set_fetcher "${SRCS_UNIVERSAL_SET_FETCHER}")
 target_link_libraries(universal_set_fetcher PUBLIC index_base)
 
+set(SRCS_RAX_LIB ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c)
+valkey_search_add_static_library(rax_lib "${SRCS_RAX_LIB}")
+target_include_directories(rax_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/text)
+
 set(SRCS_TAG ${CMAKE_CURRENT_LIST_DIR}/tag.cc ${CMAKE_CURRENT_LIST_DIR}/tag.h)
 
 valkey_search_add_static_library(tag "${SRCS_TAG}")
@@ -70,11 +96,11 @@ target_include_directories(tag PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(tag PUBLIC index_base)
 target_link_libraries(tag PUBLIC rdb_serialization)
 target_link_libraries(tag PUBLIC predicate_header)
-target_link_libraries(tag PUBLIC patricia_tree)
 target_link_libraries(tag PUBLIC string_interning)
 target_link_libraries(tag PUBLIC valkey_module)
 target_link_libraries(tag PUBLIC vmsdklib)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
+target_link_libraries(tag PUBLIC rax_lib)
 
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)
@@ -83,6 +109,7 @@ valkey_search_add_static_library(vector_flat "${SRCS_VECTOR_FLAT}")
 target_include_directories(vector_flat PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(vector_flat PUBLIC index_base)
 target_link_libraries(vector_flat PUBLIC vector_base)
+target_link_libraries(vector_flat PUBLIC vector_type)
 target_link_libraries(vector_flat PUBLIC attribute_data_type)
 target_link_libraries(vector_flat PUBLIC metrics)
 target_link_libraries(vector_flat PUBLIC rdb_serialization)
@@ -115,8 +142,7 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/fuzzy.h
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/flat_position_map.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/rax_wrapper.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/rax/rax.c)
+              ${CMAKE_CURRENT_LIST_DIR}/text/rax_wrapper.cc)
 
 valkey_search_add_static_library(text "${SRCS_TEXT}")
 target_include_directories(text PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -127,4 +153,6 @@ target_link_libraries(text PUBLIC string_interning)
 target_link_libraries(text PUBLIC valkey_module)
 target_link_libraries(text PUBLIC snowball)
 target_link_libraries(text PUBLIC scanner)
-target_link_libraries(text PUBLIC icu) 
+target_link_libraries(text PUBLIC icu)
+target_link_libraries(text PUBLIC rax_lib)
+target_link_libraries(text PUBLIC scoring)

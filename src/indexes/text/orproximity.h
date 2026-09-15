@@ -8,12 +8,12 @@
 #ifndef _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 #define _VALKEY_SEARCH_INDEXES_TEXT_ORPROXIMITY_H_
 
-#include <set>
 #include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_iterator.h"
+#include "src/utils/inlined_priority_queue.h"
 
 namespace valkey_search::indexes::text {
 
@@ -32,7 +32,8 @@ class OrProximityIterator : public TextIterator {
  public:
   OrProximityIterator(
       absl::InlinedVector<std::unique_ptr<TextIterator>,
-                          kProximityTermsInlineCapacity>&& iters);
+                          kProximityTermsInlineCapacity>&& iters,
+      float weight = 1.0f);
 
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
@@ -49,22 +50,38 @@ class OrProximityIterator : public TextIterator {
   FieldMaskPredicate CurrentFieldMask() const override;
   bool IsIteratorValid() const override;
 
+  // OR semantics: every term present in the document is scored; sum the
+  // already-weighted scores of active children on the current key, scaled by
+  // this group's own weight.
+  float GetScore() const override {
+    float total = 0.0f;
+    for (size_t idx : current_key_indices_) {
+      total += iters_[idx]->GetScore();
+    }
+    return total * weight_;
+  }
+
  private:
   absl::InlinedVector<std::unique_ptr<TextIterator>,
                       kProximityTermsInlineCapacity>
       iters_;
+  float weight_;
   Key current_key_;
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
   FieldMaskPredicate query_field_mask_;
 
-  // Multiset for efficient key management
-  std::multiset<std::pair<Key, size_t>> key_set_;
+  // InlinedPriorityQueue for efficient key management (no heap allocation).
+  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+                                      kProximityTermsInlineCapacity>
+      key_set_;
   // Current iterators on same key
   absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
       current_key_indices_;
-  // Multiset for position optimization (supports future SeekForwardPosition)
-  std::multiset<std::pair<Position, size_t>> pos_set_;
+  // InlinedPriorityQueue for position management (no heap allocation)
+  valkey_search::InlinedPriorityQueue<std::pair<Position, size_t>,
+                                      kProximityTermsInlineCapacity>
+      pos_set_;
   absl::InlinedVector<size_t, kProximityTermsInlineCapacity>
       current_pos_indices_;
 

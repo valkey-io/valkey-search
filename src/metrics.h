@@ -27,11 +27,11 @@ class Metrics {
   ~Metrics() = default;
 
   struct Stats {
-    uint64_t reclaimable_memory{0};
     uint64_t query_successful_requests_cnt{0};
     uint64_t query_failed_requests_cnt{0};
     uint64_t query_result_record_dropped_cnt{0};
     uint64_t query_hybrid_requests_cnt{0};
+    std::atomic<uint64_t> reclaimable_memory{0};
     std::atomic<uint64_t> query_nonvector_requests_cnt{0};
     std::atomic<uint64_t> query_vector_requests_cnt{0};
     std::atomic<uint64_t> query_text_requests_cnt{0};
@@ -42,6 +42,7 @@ class Metrics {
     std::atomic<uint64_t> hnsw_modify_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_search_exceptions_cnt{0};
     std::atomic<uint64_t> hnsw_create_exceptions_cnt{0};
+    std::atomic<uint64_t> hnsw_duplicate_label_on_load_cnt{0};
     std::atomic<uint64_t> flat_add_exceptions_cnt{0};
     std::atomic<uint64_t> flat_remove_exceptions_cnt{0};
     std::atomic<uint64_t> flat_modify_exceptions_cnt{0};

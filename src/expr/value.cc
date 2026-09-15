@@ -319,6 +319,24 @@ static Ordering CompareStrings(const absl::string_view l,
   }
 }
 
+// Does an unordered comparison count as equality?
+//
+// `Compare` answers kUNORDERED when either side is missing, and every
+// comparison operator used to fold that into a match: `@a == @b` was true when
+// either field was absent, and so were `<=` and `>=`. Redisearch matches
+// nothing in that case -- a missing value is not equal to a present one, and
+// not equal to another missing one either.
+//
+// That leniency is well-defined and an application may be relying on it, so it
+// is gated. Callers that need their own reading of "unordered" -- grouping,
+// where two missing keys are one group, and sorting, where they tie -- ask
+// `Compare` directly rather than going through these operators.
+bool UnorderedIsEqual() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "expr_unordered_is_not_equal", [] { return false; },
+      [] { return true; });
+}
+
 Ordering Compare(const Value& l, const Value& r) {
   // First equivalent types
 

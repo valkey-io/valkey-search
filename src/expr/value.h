@@ -176,9 +176,14 @@ Value ApplyElementWise(const Value::Array vec1, const Value::Array vec2,
 //
 // These orderings aren't IEEE compatible, but they match the legacy
 //
+// True when an unordered comparison -- one with a missing operand -- should
+// be treated as equality. Gated; see the definition in value.cc.
+bool UnorderedIsEqual();
+
 static inline bool operator==(const Value &l, const Value &r) {
   auto res = Compare(l, r);
-  return res == Ordering::kEQUAL || res == Ordering::kUNORDERED;
+  return res == Ordering::kEQUAL ||
+         (res == Ordering::kUNORDERED && UnorderedIsEqual());
 }
 
 static inline bool operator!=(const Value &l, const Value &r) {
@@ -192,7 +197,8 @@ static inline bool operator<(const Value &l, const Value &r) {
 
 static inline bool operator<=(const Value &l, const Value &r) {
   auto res = Compare(l, r);
-  return res != Ordering::kGREATER;
+  return res == Ordering::kLESS || res == Ordering::kEQUAL ||
+         (res == Ordering::kUNORDERED && UnorderedIsEqual());
 }
 
 static inline bool operator>(const Value &l, const Value &r) {
@@ -201,7 +207,8 @@ static inline bool operator>(const Value &l, const Value &r) {
 
 static inline bool operator>=(const Value &l, const Value &r) {
   auto res = Compare(l, r);
-  return res != Ordering::kLESS;
+  return res == Ordering::kGREATER || res == Ordering::kEQUAL ||
+         (res == Ordering::kUNORDERED && UnorderedIsEqual());
 }
 
 // Dyadic Numerical Functions

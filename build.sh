@@ -36,6 +36,7 @@ Usage: build.sh [options...]
     --no-build                        By default, build.sh always triggers a build. This option disables this behavior.
     --test-errors-stdout              When a test fails, dump the captured tests output to stdout.
     --run-integration-tests[=pattern] Run integration tests.
+    --parallel[=N] | -j[=N]           Run integration tests in parallel with N workers (default: all CPU cores).
     --no-system-modules               Disable system dependencies and force building from submodules.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
@@ -64,6 +65,17 @@ Example usage:
 
 EOF
 }
+
+function is_valid_parallel_workers() {
+    local val="$1"
+    [[ "$val" == "auto" || "$val" == "logical" || "$val" =~ ^[0-9]+$ ]]
+}
+
+PARALLEL_WORKERS="${PARALLEL_WORKERS:=auto}"
+if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+    echo "ERROR: Invalid PARALLEL_WORKERS environment variable: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer." >&2
+    exit 1
+fi
 
 ## Parse command line arguments
 while [ $# -gt 0 ]; do
@@ -126,6 +138,30 @@ while [ $# -gt 0 ]; do
         shift || true
         echo "Running integration tests with pattern=${TEST_PATTERN}"
         ;;
+    --parallel | -j)
+        shift || true
+        if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+            if is_valid_parallel_workers "$1"; then
+                PARALLEL_WORKERS="$1"
+                shift || true
+            else
+                echo "ERROR: Invalid value for --parallel: '$1'. Supported values: 0, auto, logical, or positive integer." >&2
+                exit 1
+            fi
+        else
+            PARALLEL_WORKERS="auto"
+        fi
+        echo "Running integration tests in parallel (workers=${PARALLEL_WORKERS})"
+        ;;
+    --parallel=* | -j=*)
+        PARALLEL_WORKERS="${1#*=}"
+        shift || true
+        if ! is_valid_parallel_workers "${PARALLEL_WORKERS}"; then
+            echo "ERROR: Invalid value for --parallel: '${PARALLEL_WORKERS}'. Supported values: 0, auto, logical, or positive integer." >&2
+            exit 1
+        fi
+        echo "Running integration tests in parallel (workers=${PARALLEL_WORKERS})"
+        ;;
     --retries=*)
         INTEG_RETRIES=${1#*=}
         shift || true
@@ -142,12 +178,14 @@ while [ $# -gt 0 ]; do
     --asan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
         SAN_BUILD="address"
+        export ASAN_BUILD=1
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
     --tsan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=thread"
         SAN_BUILD="thread"
+        export TSAN_BUILD=1
         shift || true
         echo "Using extra cmake arguments: ${CMAKE_EXTRA_ARGS}"
         ;;
@@ -197,6 +235,11 @@ fi
 
 # Import our functions, needs to be done after parsing the command line arguments
 export SAN_BUILD
+if [[ "${SAN_BUILD}" == "address" ]]; then
+    export ASAN_BUILD=1
+elif [[ "${SAN_BUILD}" == "thread" ]]; then
+    export TSAN_BUILD=1
+fi
 export ROOT_DIR
 . "${ROOT_DIR}/scripts/common.rc"
 
@@ -205,6 +248,111 @@ if [[ "${CMAKE_GENERATOR}" == "Ninja" ]]; then
 else
   BUILD_TOOL="make -j$(num_proc)"
 fi
+
+function determine_ninja() {
+    local os_name=$(uname -s)
+    if [[ "${os_name}" == "Darwin" ]]; then
+        # ninja can be installed via "brew"
+        echo "ninja"
+    else
+        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
+        # Ubuntu / Mint et al will report "ID_LIKE=debian"
+        local debian_output=$(cat /etc/*-release 2>/dev/null | grep -i debian | wc -l)
+        if [ ${debian_output} -gt 0 ]; then
+            echo "ninja"
+        else
+            echo "ninja-build"
+        fi
+    fi
+}
+
+function check_subcommand_dependencies() {
+    local subcommands=()
+    if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+        subcommands+=("--run-integration-tests")
+    fi
+    if [[ -n "${RUN_TEST}" ]]; then
+        subcommands+=("--run-tests")
+    fi
+    if [[ "${RUN_BUILD}" == "yes" && ${#subcommands[@]} -eq 0 ]]; then
+        subcommands+=("build")
+    fi
+
+    if [[ ${#subcommands[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    local build_tool=$(determine_ninja)
+    if [[ "${BUILD_TOOL}" =~ make ]]; then
+        build_tool="make"
+    fi
+
+    local missing=()
+
+    # Build tools needed for compilation
+    if ! command -v cmake &>/dev/null; then
+        missing+=("cmake")
+    fi
+    if ! command -v "${build_tool}" &>/dev/null && ! command -v ninja &>/dev/null && ! command -v ninja-build &>/dev/null && ! command -v make &>/dev/null; then
+        missing+=("${build_tool}")
+    fi
+    if ! command -v git &>/dev/null; then
+        missing+=("git")
+    fi
+
+    local has_c_compiler=false
+    for c_comp in gcc clang cc; do
+        if command -v "${c_comp}" &>/dev/null; then
+            has_c_compiler=true
+            break
+        fi
+    done
+    if [[ "${has_c_compiler}" == "false" ]]; then
+        missing+=("gcc or clang")
+    fi
+
+    local has_cxx_compiler=false
+    for cxx_comp in g++ clang++ c++; do
+        if command -v "${cxx_comp}" &>/dev/null; then
+            has_cxx_compiler=true
+            break
+        fi
+    done
+    if [[ "${has_cxx_compiler}" == "false" ]]; then
+        missing+=("g++ or clang++")
+    fi
+
+    # Integration test specific external dependencies
+    if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+        if ! command -v python3 &>/dev/null; then
+            missing+=("python3")
+        fi
+        if ! command -v memtier_benchmark &>/dev/null; then
+            missing+=("memtier_benchmark")
+        fi
+        if ! command -v script &>/dev/null; then
+            missing+=("script")
+        fi
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "" >&2
+        printf "${RED}ERROR: Missing required CLI binaries for %s:${RESET}\n" "${subcommands[*]}" >&2
+        for tool in "${missing[@]}"; do
+            printf "  ${RED}- %s${RESET}\n" "${tool}" >&2
+        done
+        echo "" >&2
+        printf "${YELLOW}Note: It is strongly recommended to run within the repository devcontainer where all dependencies are pre-installed:${RESET}\n" >&2
+        local run_cmd=".devcontainer/run_in_docker.sh ./build.sh"
+        if [ -n "${ARGV}" ]; then
+            run_cmd="${run_cmd} ${ARGV}"
+        fi
+        printf "    ${GREEN}%s${RESET}\n\n" "${run_cmd}" >&2
+        exit 1
+    fi
+}
+
+check_subcommand_dependencies
 
 function build_icu_if_needed() {
     printf "${BOLD_PINK}Checking ICU dependencies...${RESET}\n"
@@ -335,45 +483,6 @@ function format() {
     printf "Applied clang-format\n"
 }
 
-function check_tool() {
-    local tool_name=$1
-    local message=$2
-    printf "Checking for ${tool_name}..."
-    command -v "${tool_name}" >/dev/null ||
-        (printf "${RED}failed${RESET}.\n${RED}ERROR${RESET} - could not locate tool '${tool_name}'. ${message}\n" && exit 1)
-    printf "${GREEN}ok${RESET}\n"
-}
-
-function determine_ninja() {
-    local os_name=$(uname -s)
-    if [[ "${os_name}" == "Darwin" ]]; then
-        # ninja is can be installed via "brew"
-        echo "ninja"
-    else
-        # Check for ninja. On RedHat based Linux, it is called ninja-build, while on Debian based Linux, it is simply ninja
-        # Ubuntu / Mint et al will report "ID_LIKE=debian"
-        local debian_output=$(cat /etc/*-release | grep -i debian | wc -l)
-        if [ ${debian_output} -gt 0 ]; then
-            echo "ninja"
-        else
-            echo "ninja-build"
-        fi
-    fi
-}
-
-function check_tools() {
-    local tools="cmake g++ gcc"
-    for tool in $tools; do
-        check_tool ${tool}
-    done
-
-    local build_tool=$(determine_ninja)
-    if [[ "${BUILD_TOOL}" =~ make ]]; then
-        build_tool="make"
-    fi
-    check_tool ${build_tool}
-}
-
 function check_and_clean_on_branch_change() {
     local current_branch=$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
     local branch_stamp="${BUILD_DIR}/.last_build_branch"
@@ -453,7 +562,6 @@ printf "Checking if configure is required..."
 
 FORCE_CMAKE=$(is_configure_required)
 printf "${GREEN}${FORCE_CMAKE}${RESET}\n"
-check_tools
 
 START_TIME=$(date +%s)
 
@@ -462,6 +570,11 @@ build_icu_if_needed
 
 if [[ "${RUN_CMAKE}" == "yes" ]] || [[ "${FORCE_CMAKE}" == "yes" ]]; then
     configure
+fi
+
+local_build_dir="${BUILD_DIR#${ROOT_DIR}/}"
+if [ -f "${BUILD_DIR}/compile_commands.json" ]; then
+    ln -sf "${local_build_dir}/compile_commands.json" "${ROOT_DIR}/compile_commands.json"
 fi
 
 if [[ "${RUN_BUILD}" == "yes" ]]; then
@@ -483,9 +596,15 @@ if [ -n "${RUN_TEST}" ]; then
         test_filter="-R ${RUN_TEST}"
     fi
     test_jobs=${JOBS:-$(num_proc)}
-    printf "${BOLD_PINK}Running unit tests (-j ${test_jobs})...${RESET}\n"
+    test_timeout=${TEST_TIMEOUT:-60}
+    if [[ "${SAN_BUILD}" != "no" && -z "${TEST_TIMEOUT}" ]]; then
+        test_timeout=120
+    fi
+    printf '%b%s%b\n' "${BOLD_PINK}" \
+        "Running unit tests (-j ${test_jobs}, timeout ${test_timeout}s)..." \
+        "${RESET}"
     set -o pipefail
-    if ! GTEST_COLOR=yes CLICOLOR_FORCE=1 ctest --test-dir "${BUILD_DIR}" ${test_filter} -j ${test_jobs} --output-on-failure 2>&1 | tee "${BUILD_DIR}/tests.out"; then
+    if ! GTEST_COLOR=yes CLICOLOR_FORCE=1 ctest --test-dir "${BUILD_DIR}" ${test_filter} -j ${test_jobs} --timeout "${test_timeout}" --output-on-failure 2>&1 | tee "${BUILD_DIR}/tests.out"; then
         EXIT_CODE=1
         if [ -f "${BUILD_DIR}/Testing/Temporary/LastTest.log" ]; then
             sed -i -r "s/\x1B\[[0-9;]*[a-zA-Z]//g" "${BUILD_DIR}/Testing/Temporary/LastTest.log"
@@ -524,24 +643,44 @@ elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     else
         # Abseil based tests do not support filtering tests based on "-k" flag
         # so when the TEST_PATTERN env variable is found, skip Abseil based tests
+        absl_params="${params}"
+        if [[ -n "${PARALLEL_WORKERS}" ]]; then
+            absl_params="${absl_params} --parallel=${PARALLEL_WORKERS}"
+        fi
+        export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
         pushd testing/integration >/dev/null
-        ./run.sh ${params}
+        ./run.sh ${absl_params} || EXIT_CODE=1
         popd >/dev/null
     fi
 
     # Run OSS integration tests
-    pushd integration >/dev/null
-    if [[ "${TEST_PATTERN}" == "oss" ]]; then
-        TEST_PATTERN=""
+    if [[ ${EXIT_CODE} -ne 0 ]]; then
+        echo ""
+        LOG_ERROR " ** Abseil based integration tests failed, skipping OSS integration tests **"
+        echo ""
+    else
+        pushd integration >/dev/null
+        if [[ "${TEST_PATTERN}" == "oss" ]]; then
+            TEST_PATTERN=""
+        fi
+        export TEST_PATTERN=${TEST_PATTERN}
+        export INTEG_RETRIES=${INTEG_RETRIES}
+        export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
+        integ_params="${params}"
+        if [[ -n "${PARALLEL_WORKERS}" ]]; then
+            integ_params="${integ_params} --parallel=${PARALLEL_WORKERS}"
+        fi
+        # Run will run ASan or normal tests based on the environment variable SAN_BUILD
+        ./run.sh ${integ_params} || EXIT_CODE=1
+        popd >/dev/null
     fi
-    export TEST_PATTERN=${TEST_PATTERN}
-    export INTEG_RETRIES=${INTEG_RETRIES}
-    export MODULE_PATH=${BUILD_DIR}/libsearch.${MODULE_EXT}
-    # Run will run ASan or normal tests based on the environment variable SAN_BUILD
-    ./run.sh ${params} || EXIT_CODE=1
-    popd >/dev/null
 fi
 
 END_TIME=$(date +%s)
 TEST_RUNTIME=$((END_TIME - START_TIME))
+if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+    printf "\n${GREEN}Total integration tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))
+elif [ -n "${RUN_TEST}" ]; then
+    printf "\n${GREEN}Unit tests execution time: %dm %ds (${TEST_RUNTIME}s)${RESET}\n\n" $((TEST_RUNTIME / 60)) $((TEST_RUNTIME % 60))
+fi
 exit ${EXIT_CODE}

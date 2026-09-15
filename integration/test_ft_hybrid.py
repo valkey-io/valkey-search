@@ -1003,6 +1003,54 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
             f"WINDOW must not truncate the fused list; got {result[0]} rows"
         assert result[0] <= 12
 
+    def test_sortby_max_bounds_the_rows_the_sort_emits(self):
+        """`SORTBY ... MAX n` keeps the n best rows and drops the rest, and
+        with no MAX the stage keeps 10.
+
+        This is an extension, and it does not mean what the same word means in
+        the reference. FT.HYBRID there refuses `MAX` outright
+        (`SEARCH_PARSE_ARGS MAX: Unknown argument`), and FT.AGGREGATE there
+        takes it as a hint about how much to sort rather than how much to
+        return: with 40 documents the reference replies with all 40 whether
+        MAX is 5, 25 or absent. Here it truncates. Measured, not assumed --
+        see the note in generate_hybrid.py beside test_pipeline_stages_over_
+        scores.
+
+        The default of 10 is the part worth watching: it silently drops rows a
+        wider LIMIT asked for, which is why this pins it rather than leaving
+        it to be discovered.
+        """
+        client = self.server.get_new_client()
+        self.setup_index(client)
+
+        def keys(*tail):
+            reply = self._hybrid(client, "COMBINE", "RRF", "2", "WINDOW",
+                                 "100", *tail, "LIMIT", "0", "100")
+            return [self._rec_to_dict(rec)[b"__key"] for rec in reply[1:]]
+
+        unsorted_rows = keys()
+        assert len(unsorted_rows) > 10, \
+            f"the fused set must exceed the cap to test it, got " \
+            f"{len(unsorted_rows)}"
+
+        for n in (1, 5, 17):
+            got = keys("SORTBY", "2", "@__key", "ASC", "MAX", str(n))
+            assert len(got) == n, f"MAX {n} returned {len(got)} rows"
+            assert got == sorted(got)[:n], \
+                f"MAX {n} kept {got}, which is not the first {n} in order"
+
+        # A MAX wider than the set is not a cap at all.
+        wide = keys("SORTBY", "2", "@__key", "ASC", "MAX", "1000")
+        assert len(wide) == len(unsorted_rows)
+        assert wide == sorted(unsorted_rows)
+
+        # And with no MAX, the stage's own default.
+        defaulted = keys("SORTBY", "2", "@__key", "ASC")
+        assert len(defaulted) == 10, \
+            f"expected the sort stage's default of 10, got {len(defaulted)}"
+        assert defaulted == sorted(unsorted_rows)[:10], \
+            "the default kept rows that are not the 10 best"
+
     def test_window_zero_means_unlimited(self):
         """`WINDOW 0` lifts the cap rather than removing every candidate.
 

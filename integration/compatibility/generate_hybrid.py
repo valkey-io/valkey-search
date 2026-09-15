@@ -839,19 +839,35 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     # comparison cannot be made honestly. Grouped rows come back in no
     # promised order, and the harness compares FT.HYBRID replies positionally,
     # so the sweep needs a trailing SORTBY to be deterministic -- and a SORTBY
-    # here returns at most 10 rows, because this engine's sort stage defaults
-    # its MAX to 10 and truncates. Nineteen groups against ten is not a
-    # comparison of grouping. Writing MAX explicitly does not help: the
-    # reference rejects `SORTBY ... MAX` outright.
+    # here keeps only 10 rows, so nineteen groups become ten. Writing MAX does
+    # not help: the reference refuses `SORTBY ... MAX` on FT.HYBRID outright.
     #
-    # That truncation is its own defect, in the shared aggregate sort rather
-    # than in FT.HYBRID -- a plain `SORTBY 2 @price ASC LIMIT 0 100` returns
-    # 10 rows here and 21 from the reference. The existing sweeps never caught
-    # it because they all pin LIMIT 0 10. When it is fixed, group by an alias
-    # with a trailing SORTBY and no MAX, and these compare.
+    # That 10 is this engine's sort stage defaulting its MAX, and it is a
+    # divergence of its own, in the shared aggregate sort rather than in
+    # FT.HYBRID. Measured over 40 documents with a unique numeric field, with
+    # LIMIT 0 1000 so nothing else could be capping:
     #
-    # test_ft_hybrid.py::test_groupby_per_arm_score covers that the grouping
-    # itself works.
+    #                            FT.AGGREGATE        FT.HYBRID
+    #   no MAX      redis        40 rows, sorted     40 rows, sorted
+    #               valkey       10 rows             10 rows
+    #   MAX 5       redis        40 rows, sorted     rejects MAX
+    #               valkey        5 rows              5 rows
+    #   MAX 25      redis        40 rows, sorted     rejects MAX
+    #               valkey       25 rows             25 rows
+    #
+    # So the reference sorts and returns everything, on both commands, and its
+    # FT.AGGREGATE `MAX` is a hint about how much to sort rather than how much
+    # to return -- with 40 documents the reply is all 40 and fully ordered
+    # whether MAX says 5, 25 or nothing. Here MAX truncates, and its default
+    # of 10 silently drops rows a wider LIMIT asked for. The existing sweeps
+    # never caught that because they all pin LIMIT 0 10.
+    #
+    # MAX is deliberately not swept: the reference rejects it on this command,
+    # so there is no answer to compare against. `test_ft_hybrid.py::
+    # test_sortby_max_bounds_the_rows_the_sort_emits` pins what it does here
+    # instead, and `test_groupby_per_arm_score` pins that the grouping works.
+    # When the default stops truncating, group by an alias with a trailing
+    # SORTBY and no MAX, and these compare.
 
     def test_pipeline_stages_over_scores(self, key_type):
         """The other stages, over the same columns. The fused score is

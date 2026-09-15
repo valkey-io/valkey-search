@@ -20,13 +20,13 @@ A cursor is destroyed when its last row has been read, when it is deleted with `
 1. An array whose first element is the number of rows returned, followed by one element for each row. A row of an `FT.AGGREGATE` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
 2. The cursor id to use for the next `FT.CURSOR READ`, or 0 if all rows have been returned, in which case the cursor has been destroyed.
 
-`FT.CURSOR DEL` returns OK.
+`FT.CURSOR DEL` returns OK. It applies the same checks as `FT.CURSOR READ`: `<index-name>` must name an existing index, which need not be the cursor's own, and the cursor must belong to the currently selected database. A cursor whose index has been dropped can still be deleted.
 
 Errors:
 
-- `Index with name '<index-name>' not found in database <db>`: the named index does not exist.
-- `Cursor not found, id: <cursor-id>` / `Cursor does not exist`: there is no such cursor in this database.
-- `The index was dropped while the cursor was idle`: the cursor's index was dropped (and possibly recreated) after the cursor was created.
+- `Index with name '<index-name>' not found in database <db>` (`READ` and `DEL`): the named index does not exist.
+- `Cursor not found, id: <cursor-id>` (`READ`) / `Cursor does not exist` (`DEL`): there is no such cursor in this database.
+- `The index was dropped while the cursor was idle` (`READ` only): the cursor's index was dropped (and possibly recreated) after the cursor was created.
 
 # Example
 

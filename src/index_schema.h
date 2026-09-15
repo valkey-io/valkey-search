@@ -650,7 +650,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
-  FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
+  FRIEND_TEST(IndexSchemaFriendTest, WeightedMemoryAccounting);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,

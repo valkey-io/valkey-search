@@ -115,9 +115,9 @@ This table shows the actual computation that Search uses when computing the dist
 
 ### Field options
 
-`SORTABLE` (optional): This parameter is accepted for compatibility, but has no effect and is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`.
+`SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
 
-- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps a sortable field's sort value in its original, un-normalized form rather than lowercased. `SORTBY` already compares the stored field value directly, so this parameter is accepted for compatibility and has no effect.
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps a sortable field's sort value in its original, un-normalized form rather than lowercased. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
 ## Examples
 

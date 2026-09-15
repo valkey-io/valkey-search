@@ -42,6 +42,8 @@ An array of key value pairs.
   - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field.
   - `type` (string) One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`
   - Type-specific extension (see below)
+  - `SORTABLE` (bare token) Present only if the attribute was declared `SORTABLE`. Requires `search.emulate-release` >= 1.3.0.
+  - `UNF` (bare token) Present only if the attribute was declared `SORTABLE UNF`, and always immediately after `SORTABLE`. Requires `search.emulate-release` >= 1.3.0.
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.

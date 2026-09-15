@@ -32,6 +32,8 @@ struct AttributeParameters {
   absl::string_view identifier;
   absl::string_view attribute_alias;
   indexes::IndexerType indexer_type{indexes::IndexerType::kNone};
+  bool sortable{false};
+  bool unf{false};
 };
 
 // Default stop words
@@ -197,6 +199,10 @@ TEST_P(FTCreateParserTest, ParseParams) {
                 test_case.expected.attributes[i].identifier);
       EXPECT_EQ(index_schema_proto->attributes(i).alias(),
                 test_case.expected.attributes[i].attribute_alias);
+      EXPECT_EQ(index_schema_proto->attributes(i).sortable(),
+                test_case.expected.attributes[i].sortable);
+      EXPECT_EQ(index_schema_proto->attributes(i).unf(),
+                test_case.expected.attributes[i].unf);
       if (test_case.expected.attributes[i].indexer_type ==
           indexes::IndexerType::kFlat) {
         EXPECT_TRUE(index_schema_proto->attributes(i)
@@ -748,6 +754,25 @@ INSTANTIATE_TEST_SUITE_P(
                               .identifier = "sku",
                               .attribute_alias = "sku",
                               .indexer_type = indexes::IndexerType::kTag,
+                              .sortable = true,
+                              .unf = true,
+                          }}},
+         },
+         {
+             .test_name = "sortable_only_sets_sortable",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG SORTABLE",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "sku",
+                              .attribute_alias = "sku",
+                              .indexer_type = indexes::IndexerType::kTag,
+                              .sortable = true,
                           }}},
          },
          {
@@ -766,12 +791,16 @@ INSTANTIATE_TEST_SUITE_P(
                                              .attribute_alias = "sku",
                                              .indexer_type =
                                                  indexes::IndexerType::kTag,
+                                             .sortable = true,
+                                             .unf = true,
                                          },
                                          {
                                              .identifier = "price",
                                              .attribute_alias = "price",
                                              .indexer_type =
                                                  indexes::IndexerType::kNumeric,
+                                             .sortable = true,
+                                             .unf = true,
                                          }}},
          },
          {

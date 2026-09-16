@@ -443,8 +443,8 @@ std::optional<absl::string_view> CurrentVectorBytes(
     return std::nullopt;
   }
   absl::flat_hash_set<absl::string_view> want{vector_identifier};
-  auto records = attribute_data_type.FetchAllAttributes(ctx, vector_identifier,
-                                                     key_obj.get(), key, want);
+  auto records = attribute_data_type.FetchAllAttributes(
+      ctx, vector_identifier, key_obj.get(), key, want);
   if (!records.ok()) {
     return std::nullopt;
   }

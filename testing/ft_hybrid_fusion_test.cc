@@ -36,7 +36,8 @@ namespace {
 // establishes.
 class FusionConversionTest : public ValkeySearchTest {};
 
-std::vector<indexes::Neighbor> NeighborsAt(const std::vector<float> &distances) {
+std::vector<indexes::Neighbor> NeighborsAt(
+    const std::vector<float> &distances) {
   std::vector<indexes::Neighbor> out;
   out.reserve(distances.size());
   for (size_t i = 0; i < distances.size(); ++i) {
@@ -154,8 +155,8 @@ TEST_F(FusionConversionTest, EachMetricIsStrictlyMonotoneInItsOwnDirection) {
 // conservative answer.
 TEST_F(FusionConversionTest, UnspecifiedMetricFallsBackToL2) {
   auto ns = NeighborsAt({0.0f, 1.0f, 3.0f});
-  ConvertVectorArmScoresToSimilarity(
-      ns, data_model::DISTANCE_METRIC_UNSPECIFIED);
+  ConvertVectorArmScoresToSimilarity(ns,
+                                     data_model::DISTANCE_METRIC_UNSPECIFIED);
   EXPECT_FLOAT_EQ(ns[0].score, 1.0f);
   EXPECT_FLOAT_EQ(ns[1].score, 0.5f);
   EXPECT_FLOAT_EQ(ns[2].score, 0.25f);

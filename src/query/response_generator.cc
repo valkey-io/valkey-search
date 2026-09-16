@@ -442,7 +442,15 @@ std::optional<absl::string_view> CurrentVectorBytes(
   if (!key_obj) {
     return std::nullopt;
   }
-  absl::flat_hash_set<absl::string_view> want{vector_identifier};
+  // Inserted rather than brace-initialized on purpose.
+  // `want{vector_identifier}` deduces std::initializer_list<std::string> --
+  // copying the element is an exact match, so it beats the user-defined
+  // conversion to string_view -- and the set ends up viewing a copy inside the
+  // list's backing array, which dies at the end of the statement. Insert
+  // converts to string_view first, so the view is of `vector_identifier`,
+  // which outlives the fetch.
+  absl::flat_hash_set<absl::string_view> want;
+  want.insert(vector_identifier);
   auto records = attribute_data_type.FetchAllAttributes(
       ctx, vector_identifier, key_obj.get(), key, want);
   if (!records.ok()) {

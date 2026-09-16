@@ -134,6 +134,51 @@ def do_save_restore_test(test, index: Index, expected_writes: List[int], expecte
     
     '''
 
+def wait_for_backfill_complete(client: Valkey, index_name: str):
+    waiters.wait_for_true(
+        lambda: FTInfoParser(client.execute_command("FT.INFO", index_name)).is_backfill_complete()
+    )
+
+
+def create_zero_length_vector_index(
+    client: Valkey, index_name: str, index_type: str, extra_args: list[str]
+):
+    assert client.execute_command(
+        "FT.CREATE",
+        index_name,
+        "ON",
+        "HASH",
+        "PREFIX",
+        "1",
+        "",
+        "SCHEMA",
+        "v",
+        "VECTOR",
+        index_type,
+        str(6 + len(extra_args)),
+        "TYPE",
+        "FLOAT32",
+        "DIM",
+        "3",
+        "DISTANCE_METRIC",
+        "L2",
+        *extra_args,
+    ) == b"OK"
+
+
+def zero_length_vector_knn_search(client: Valkey, index_name: str, vector: bytes):
+    return client.execute_command(
+        "FT.SEARCH",
+        index_name,
+        "*=>[KNN 1 @v $BLOB]",
+        "PARAMS",
+        "2",
+        "BLOB",
+        vector,
+        "NOCONTENT",
+    )
+
+
 class TestSaveRestore_v1_v1(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "no"
@@ -146,6 +191,7 @@ class TestSaveRestore_v1_v1(ValkeySearchTestCaseDebugMode):
         ])
     def test_saverestore_v1_v1(self, parameters):
         do_save_restore_test(self, parameters[0], parameters[1], parameters[2])
+
 
 class TestSaveRestore_v1_v2(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
@@ -161,6 +207,7 @@ class TestSaveRestore_v1_v2(ValkeySearchTestCaseDebugMode):
     def test_saverestore_v1_v2(self, parameters):
         do_save_restore_test(self, parameters[0], parameters[1], parameters[2])
 
+
 class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
@@ -175,6 +222,7 @@ class TestSaveRestore_v2_v1(ValkeySearchTestCaseDebugMode):
     def test_saverestore_v2_v1(self, parameters):
         do_save_restore_test(self, parameters[0], parameters[1], parameters[2])
 
+
 class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"
@@ -188,6 +236,62 @@ class TestSaveRestore_v2_v2(ValkeySearchTestCaseDebugMode):
         ])
     def test_saverestore_v2_v2(self, parameters):
         do_save_restore_test(self, parameters[0], parameters[1], parameters[2])
+
+
+class TestZeroLengthKeySaveRestore(ValkeySearchTestCaseDebugMode):
+    def append_startup_args(self, args):
+        args["search.rdb_write_v2"] = "yes"
+        args["search.rdb_read_v2"] = "yes"
+        return args
+
+    def test_zero_length_hash_key_restore_v2(self):
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "",
+            "SCHEMA", "content", "TEXT", "NOSTEM"
+        )
+        self.client.execute_command("HSET", "", "content", "persisttoken")
+        wait_for_backfill_complete(self.client, "idx")
+
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:persisttoken")
+        assert result[0] == 1
+        assert result[1] == b""
+
+        self.client.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+        wait_for_backfill_complete(self.client, "idx")
+
+        result = self.client.execute_command("FT.SEARCH", "idx", "@content:persisttoken")
+        assert result[0] == 1
+        assert result[1] == b""
+
+    @pytest.mark.parametrize(
+        "index_type,extra_args",
+        [
+            ("HNSW", ["M", "2", "EF_CONSTRUCTION", "1"]),
+            ("FLAT", []),
+        ],
+    )
+    def test_zero_length_hash_key_vector_restore_v2(
+        self, index_type: str, extra_args: list[str]
+    ):
+        query_vector = float_to_bytes([1.0, 2.0, 3.0])
+
+        create_zero_length_vector_index(self.client, "idx", index_type, extra_args)
+        self.client.hset("", mapping={"v": query_vector})
+        wait_for_backfill_complete(self.client, "idx")
+
+        result = zero_length_vector_knn_search(self.client, "idx", query_vector)
+        assert result[0] == 1
+        assert result[1] == b""
+
+        self.client.execute_command("SAVE")
+        self.server.restart(remove_rdb=False)
+        wait_for_backfill_complete(self.client, "idx")
+
+        result = zero_length_vector_knn_search(self.client, "idx", query_vector)
+        assert result[0] == 1
+        assert result[1] == b""
+
 
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):

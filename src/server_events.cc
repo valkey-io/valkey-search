@@ -12,6 +12,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
+#include "src/vector_registry.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -25,7 +26,12 @@ void OnForkChildCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
 void OnFlushDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                        uint64_t subevent, void *data) {
-  SchemaManager::Instance().OnFlushDBCallback(ctx, eid, subevent, data);
+  if (subevent & VALKEYMODULE_SUBEVENT_FLUSHDB_END) {
+    auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
+    SchemaManager::Instance().OnFlushEndDBCallback(ctx, eid, subevent,
+                                                   flush_info);
+    VectorRegistry::Instance().OnFlushDB(flush_info);
+  }
 }
 
 void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
@@ -39,7 +45,9 @@ void OnLoadingCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
 
 void OnSwapDBCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                       uint64_t subevent, void *data) {
-  SchemaManager::Instance().OnSwapDB((ValkeyModuleSwapDbInfo *)data);
+  auto *swap_info = static_cast<ValkeyModuleSwapDbInfo *>(data);
+  SchemaManager::Instance().OnSwapDB(swap_info);
+  VectorRegistry::Instance().OnSwapDB(swap_info);
 }
 
 void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
@@ -50,30 +58,33 @@ void OnServerCronCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
     coordinator::MetadataManager::Instance().OnServerCronCallback(
         ctx, eid, subevent, data);
   }
+  VectorRegistry::Instance().OnServerCronCallback(ctx, eid, subevent, data);
 }
 
 void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
                         uint64_t subevent, void *data) {
-  // Mark the module as shutting down so that RunByMain() stops
-  // scheduling new tasks.
-  vmsdk::MarkAsShuttingDown();
   // Clear all PausePoints so any waiting worker threads wake up and exit
   // their spin loops, then join all thread pools so every in-flight task
   // completes before we tear down index schemas.  This ordering matters:
   //   1. ClearAllPausePoints       – unblocks workers stuck in PausePoint().
   //   2. JoinAllThreadPools        – drains task queues and waits for every
   //                                  worker thread to exit.
-  //   3. DrainPendingMainCallbacks – frees any RunByMain() one-shots that
-  //                                  workers enqueued after passing the
-  //                                  IsShuttingDown() check; the event loop
-  //                                  won't run them now and they'd otherwise
-  //                                  leak.
-  //   4. OnShutdownCallback        – removes all index schemas on the main
+  //   3. MarkAsShuttingDown        – stops accepting new RunByMain() tasks now
+  //                                  that background workers have exited.
+  //   4. DrainPendingMainCallbacks – executes and frees any RunByMain()
+  //   one-shots
+  //                                  that workers enqueued (e.g. deferred
+  //                                  deleters); the event loop won't run them
+  //                                  now and they'd otherwise leak.
+  //   5. OnShutdownCallback        – removes all index schemas on the main
   //                                  thread.
+  //   6. Destruct                  – cleans up VectorRegistry tracked entries.
   vmsdk::debug::ClearAllPausePoints();
   ValkeySearch::Instance().JoinAllThreadPools();
+  vmsdk::MarkAsShuttingDown();
   vmsdk::DrainPendingMainCallbacks();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
+  VectorRegistry::Destruct();
 }
 
 void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }

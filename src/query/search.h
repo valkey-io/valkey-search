@@ -269,6 +269,14 @@ struct SearchParameters {
     return sortby_parameter.has_value();
   }
 
+  // True when the search needs no post-search processing: a NOCONTENT reply
+  // where nothing (e.g. SORTBY) requires loading and reordering the full result
+  // set first. When true, the query can complete on the background thread and
+  // skip content loading.
+  bool NoProcessingRequired() const {
+    return no_content && !RequiresCompleteResults();
+  }
+
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
   // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result

@@ -167,10 +167,10 @@ TEST_F(UtilsTest, DisplayAsSIBytes) {
       {1ull << 50, "1.00PiB"}};
   for (auto &[value, expected] : testcases) {
     char buffer[100];
-    size_t bytes = DisplayAsSIBytes(value, buffer, sizeof(buffer));
+    DisplayAsSIBytes(value, buffer, sizeof(buffer));
     EXPECT_EQ(expected, std::string(buffer));
     std::memset(buffer, -1, sizeof(buffer));
-    bytes = DisplayAsSIBytes(value, buffer, 1);
+    DisplayAsSIBytes(value, buffer, 1);
     EXPECT_EQ(buffer[0], 0);
     EXPECT_EQ(buffer[1], '\xFF');  // untouched.
   }
@@ -277,6 +277,26 @@ TEST_F(UtilsTest, DestructByMainThread) {
 
   EXPECT_FALSE(deleted);
   kMockValkeyModule->RunPendingOneShots();
+  EXPECT_TRUE(deleted);
+}
+
+TEST_F(UtilsTest, DestructByMainThreadDrainedAtShutdown) {
+  ThreadPool thread_pool("test-pool", 1);
+  thread_pool.StartWorkers();
+
+  bool deleted = false;
+  EXPECT_TRUE(thread_pool.Schedule(
+      [&]() {
+        std::unique_ptr<DummyObject, DestructByMainThread<DummyObject>> ptr(
+            new DummyObject(&deleted));
+        ptr.reset();
+      },
+      ThreadPool::Priority::kLow));
+
+  thread_pool.JoinWorkers();
+
+  EXPECT_FALSE(deleted);
+  DrainPendingMainCallbacks();
   EXPECT_TRUE(deleted);
 }
 

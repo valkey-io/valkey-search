@@ -1003,52 +1003,52 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
             f"WINDOW must not truncate the fused list; got {result[0]} rows"
         assert result[0] <= 12
 
-    def test_sortby_max_bounds_the_rows_the_sort_emits(self):
-        """`SORTBY ... MAX n` keeps the n best rows and drops the rest; with
-        no MAX nothing is dropped.
+    def test_sortby_returns_every_row_the_limit_asks_for(self):
+        """A SORTBY does not cap the page; the LIMIT does.
 
-        This is an extension, and it does not mean what the same word means in
-        the reference. FT.HYBRID there refuses `MAX` outright
-        (`SEARCH_PARSE_ARGS MAX: Unknown argument`), and FT.AGGREGATE there
-        takes it as a hint about how much to sort rather than how much to
-        return: with 40 documents the reference replies with all 40 whether
-        MAX is 5, 25 or absent. Here it truncates. Measured, not assumed --
-        see unsupported_tests.md 5.4d.
-
-        With no MAX nothing is capped, which is what the reference does. That
-        used to default to 10 and drop rows a wider LIMIT had asked for,
-        saying nothing about it, so the no-MAX case is pinned here beside the
-        capped ones.
+        The sort stage carries a retention bound that defaults to 10, and
+        `ResolveSortByBounds` raises it from the LIMIT beside it. FT.AGGREGATE
+        asks for that resolution at the end of its own parse; FT.HYBRID drives
+        the aggregate parser itself and has to ask separately, which is what
+        this pins. Without it a sorted FT.HYBRID returned 10 rows whatever the
+        LIMIT said, and the reference returned the whole fused set.
         """
         client = self.server.get_new_client()
         self.setup_index(client)
+        # The resolution is gated: without this the sort keeps its parse-time
+        # bound of 10 and the reply is capped there, which is the behaviour
+        # this test exists to say is gone.
+        client.execute_command("CONFIG", "SET", "search.emulate-release",
+                               "1.3.0")
 
         def keys(*tail):
             reply = self._hybrid(client, "COMBINE", "RRF", "2", "WINDOW",
-                                 "100", *tail, "LIMIT", "0", "100")
+                                 "100", *tail)
             return [self._rec_to_dict(rec)[b"__key"] for rec in reply[1:]]
 
-        unsorted_rows = keys()
-        assert len(unsorted_rows) > 10, \
-            f"the fused set must exceed the cap to test it, got " \
-            f"{len(unsorted_rows)}"
+        everything = keys("LIMIT", "0", "100")
+        assert len(everything) > 10, \
+            f"the fused set must exceed 10 to be worth testing, got " \
+            f"{len(everything)}"
 
-        for n in (1, 5, 17):
-            got = keys("SORTBY", "2", "@__key", "ASC", "MAX", str(n))
-            assert len(got) == n, f"MAX {n} returned {len(got)} rows"
-            assert got == sorted(got)[:n], \
-                f"MAX {n} kept {got}, which is not the first {n} in order"
+        sorted_wide = keys("SORTBY", "2", "@__key", "ASC", "LIMIT", "0", "100")
+        assert sorted_wide == sorted(everything), \
+            (f"a SORTBY under a wide LIMIT returned {len(sorted_wide)} of "
+             f"{len(everything)} rows")
 
-        # A MAX wider than the set is not a cap at all.
-        wide = keys("SORTBY", "2", "@__key", "ASC", "MAX", "1000")
-        assert len(wide) == len(unsorted_rows)
-        assert wide == sorted(unsorted_rows)
+        # A narrower LIMIT is still the page, and it is the sorted head of the
+        # set rather than an arbitrary ten.
+        page = keys("SORTBY", "2", "@__key", "ASC", "LIMIT", "0", "4")
+        assert page == sorted(everything)[:4], page
 
-        # And with no MAX at all: every row, in order.
-        defaulted = keys("SORTBY", "2", "@__key", "ASC")
-        assert defaulted == sorted(unsorted_rows), \
-            (f"a SORTBY with no MAX returned {len(defaulted)} of "
-             f"{len(unsorted_rows)} rows; it must cap nothing")
+        # MAX raises the sort's bound and never lowers it below the LIMIT, so
+        # on this command it cannot shrink the page. The reference refuses the
+        # clause outright here; see unsupported_tests.md 5.4d.
+        for n in ("1", "5", "1000"):
+            capped = keys("SORTBY", "2", "@__key", "ASC", "MAX", n,
+                          "LIMIT", "0", "100")
+            assert capped == sorted(everything), \
+                f"MAX {n} shrank the page to {len(capped)} rows"
 
     def test_window_zero_means_unlimited(self):
         """`WINDOW 0` lifts the cap rather than removing every candidate.

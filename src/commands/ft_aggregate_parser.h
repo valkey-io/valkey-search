@@ -100,6 +100,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
   MakeReference(const absl::string_view s, bool create) override;
 
+  bool UseFilterComparisonSemantics() const override { return false; }
+
   absl::StatusOr<expr::Value> GetParam(
       const absl::string_view s) const override {
     auto it = parse_vars.params.find(s);
@@ -263,10 +265,6 @@ struct Attribute : expr::Expression::AttributeReference {
                        const expr::Expression::Record& record) const override;
 };
 
-// Rows a sorted FT.AGGREGATE returns when the query gives no LIMIT. Matches
-// Redisearch; see the note at the call site in ft_aggregate.cc.
-inline constexpr size_t kDefaultSortedPage = 10;
-
 class Limit : public Stage {
  public:
   size_t offset_;
@@ -380,16 +378,12 @@ class SortBy : public Stage {
     Direction direction_;
     std::unique_ptr<expr::Expression> expr_;
   };
-  // No cap unless the query asks for one.
-  //
-  // This used to default to 10, which truncated silently: a `SORTBY` over
-  // more than ten rows returned ten of them whatever `LIMIT` asked for, and
-  // nothing in the reply said why. Redisearch sorts and returns everything,
-  // on FT.AGGREGATE and FT.HYBRID alike. `MAX` still caps, and still means
-  // "return this many" here rather than Redisearch's "sort at least this
-  // many" -- see unsupported_tests.md 5.4d.
-  static constexpr size_t kNoMax = std::numeric_limits<size_t>::max();
-  size_t max_{kNoMax};
+  // Redis keeps 10 sorted records when SORTBY is given neither a MAX nor an
+  // adjacent LIMIT to derive a bound from. ResolveSortByBounds() replaces this
+  // once the whole pipeline is known.
+  static constexpr size_t kDefaultMax = 10;
+  static constexpr size_t kUnbounded = std::numeric_limits<size_t>::max();
+  size_t max_{kDefaultMax};
   absl::InlinedVector<SortKey, 4> sortkeys_;
   void Dump(std::ostream& os) const override {
     os << "SORTBY:";
@@ -406,11 +400,16 @@ class SortBy : public Stage {
       }
       os << k.expr_.get();
     }
-    if (max_ != kNoMax) {
+    if (max_ != kUnbounded) {
       os << " MAX:" << max_;
     }
   }
 };
+
+// Fixes up every SORTBY stage's retention bound once the whole pipeline has
+// been parsed, because the bound depends on the LIMIT stages around it. Must
+// run after parsing and before execution.
+void ResolveSortByBounds(AggregateParameters& params);
 
 absl::StatusOr<std::unique_ptr<QueryCommand>> ParseAggregateParameters(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc,

@@ -11,6 +11,7 @@ For indexes on `JSON` keys, the path is a `JSON` path to the data of the declare
 FT.CREATE <index-name>
     [ON HASH | ON JSON]
     [PREFIX <count> <prefix> [<prefix>...]]
+    [FILTER <expression>]
     [SCORE default_value]
     [SCORE_FIELD <field_name>]
     [LANGUAGE <language>]
@@ -35,6 +36,14 @@ FT.CREATE <index-name>
 - `ON HASH | ON JSON` (optional): Only keys that match the specified type are included into this index. If omitted, HASH is assumed.
 
 - `PREFIX <prefix-count> <prefix>` (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type.
+
+- `FILTER <expression>` (optional): A boolean expression evaluated for each candidate key during ingestion; only keys for which it evaluates to true are included in the index. A comparison involving a missing field is **false**, so a key that has no `status` field is admitted by neither `@status == 'active'` nor `@status != 'active'` — a negation such as `!(@status == 'active')` admits it instead, because the comparison it negates is false. The number of keys excluded by the filter is reported by `FT.INFO` as `filter_rejected_keys`.
+
+  See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
+
+  A field's value always reaches the expression as its stored bytes, whatever type the `SCHEMA` declares — a `NUMERIC` field is not a number to a `FILTER`. A comparison is numeric only when one side really is a number, meaning a bare numeric literal such as `5` or a number-returning function such as `strlen()`. So `@price > 100` compares numerically, while `@price > '100'` and `@price > @cost` compare the values as strings, byte by byte. In a numeric comparison a value that is not a number is unordered: `@price != 5` is true for it and every other comparison is false.
+
+  Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field makes the comparison false). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
 
 - `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
 

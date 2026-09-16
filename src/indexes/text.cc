@@ -15,6 +15,7 @@
 #include "src/indexes/text/fuzzy.h"
 #include "src/indexes/text/term.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search::indexes {
 
@@ -34,9 +35,11 @@ Text::Text(const data_model::TextIndex &text_index_proto,
 }
 
 absl::StatusOr<RecordResult> Text::AddRecord(const InternedStringPtr &key,
-                                             absl::string_view data) {
+                                             AttributeData &&data) {
+  auto str = data.ConsumeString();
   auto result = text_index_schema_->StageAttributeData(
-      key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+      key, vmsdk::ToStringView(str.get()), text_field_number_, !no_stem_,
+      with_suffix_trie_);
   if (!result.ok()) {
     return result.status();
   }
@@ -77,12 +80,14 @@ absl::StatusOr<bool> Text::RemoveRecord(const InternedStringPtr &key,
 }
 
 absl::StatusOr<RecordResult> Text::ModifyRecord(const InternedStringPtr &key,
-                                                absl::string_view data) {
+                                                AttributeData &&data) {
   // The old key value has already been removed from the index by a call to
   // TextIndexSchema::DeleteKey() at this point, so we simply add the new key
   // data
+  auto str = data.ConsumeString();
   auto result = text_index_schema_->StageAttributeData(
-      key, data, text_field_number_, !no_stem_, with_suffix_trie_);
+      key, vmsdk::ToStringView(str.get()), text_field_number_, !no_stem_,
+      with_suffix_trie_);
 
   absl::MutexLock lock(&index_mutex_);
   if (!result.ok() || !*result) {

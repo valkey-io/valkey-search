@@ -285,7 +285,7 @@ absl::StatusOr<RecordsMap> FetchRecordForRevalidation(
   if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
     return absl::NotFoundError("Key expired");
   }
-  return attribute_data_type.FetchAllRecords(ctx, vector_identifier,
+  return attribute_data_type.FetchAllAttributes(ctx, vector_identifier,
                                              key_obj.get(), key, identifiers);
 }
 

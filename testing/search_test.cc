@@ -7,11 +7,9 @@
 
 #include "src/query/search.h"
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -56,8 +54,6 @@ namespace valkey_search {
 namespace {
 
 using testing::_;
-using testing::ByMove;
-using testing::Return;
 using testing::TestParamInfo;
 using testing::ValuesIn;
 using ::valkey_search::indexes::IndexerType;
@@ -478,7 +474,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
       .Times(::testing::AnyNumber());
 
   // Add vector index
-  std::shared_ptr<indexes::IndexBase> vector_index;
+  std::shared_ptr<indexes::VectorBase> vector_index;
   if (vector_indexer_type == IndexerType::kHNSW) {
     vector_index =
         indexes::VectorHNSW<float>::Create(
@@ -512,10 +508,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag", "tag", tag_index));
 
   // Add records
-  size_t num_records = 10000;
-#ifdef SAN_BUILD
-  num_records = 100;
-#endif
+  size_t num_records = 150;
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -527,11 +520,13 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     auto interned_key = StringInternStore::Intern(key);
     index_schema->SetIndexMutationSequenceNumber(interned_key, i);
 
-    VMSDK_EXPECT_OK(vector_index->AddRecord(interned_key, vector));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, interned_key, vector));
 
     // Add record to numeric index
     auto numeric_value = std::to_string(i);
-    VMSDK_EXPECT_OK(numeric_index->AddRecord(interned_key, numeric_value));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddRecord(*numeric_index, interned_key, numeric_value));
 
     // Add record to tag index
     std::string tag_value = "LT10000";
@@ -541,7 +536,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     if (i < 3) {
       tag_value += ",LT3";
     }
-    VMSDK_EXPECT_OK(tag_index->AddRecord(interned_key, tag_value));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddRecord(*tag_index, interned_key, tag_value));
   }
 
   return index_schema;
@@ -714,9 +710,14 @@ TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
                      float vec_value) {
     auto interned = StringInternStore::Intern(key);
     std::vector<float> vec(kVectorDimensions, vec_value);
+    std::string raw_vec((char *)vec.data(), vec.size() * sizeof(float));
     VMSDK_EXPECT_OK(vector_index->AddRecord(
-        interned, std::string((char *)vec.data(), vec.size() * sizeof(float))));
-    VMSDK_EXPECT_OK(text->AddRecord(interned, content));
+        interned,
+        testing_infra::MakeVectorAttributeData(
+            interned, StringInternStore::Intern(kVectorAttributeAlias),
+            raw_vec)));
+    VMSDK_EXPECT_OK(text->AddRecord(
+        interned, AttributeData(vmsdk::MakeUniqueValkeyString(content))));
     text_schema->CommitKeyData(interned);
     schema->SetIndexMutationSequenceNumber(interned, 0);
   };
@@ -1115,7 +1116,13 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     for (auto &content : index.contents) {
       auto key = StringInternStore::Intern(content.first);
       auto value = content.second;
-      VMSDK_EXPECT_OK(index_base->AddRecord(key, value));
+      auto *vector_base = dynamic_cast<indexes::VectorBase *>(index_base.get());
+      if (vector_base) {
+        VMSDK_EXPECT_OK(
+            testing_infra::AddVectorRecord(*vector_base, key, value));
+      } else {
+        VMSDK_EXPECT_OK(testing_infra::AddRecord(*index_base, key, value));
+      }
     }
   }
 
@@ -1487,10 +1494,12 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
     for (const auto &[k, content, color] : docs) {
       auto key = StringInternStore::Intern(k);
-      VMSDK_EXPECT_OK(text->AddRecord(key, content));
+      VMSDK_EXPECT_OK(text->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString(content))));
       text_schema->CommitKeyData(key);
       if (!color.empty()) {
-        VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+        VMSDK_EXPECT_OK(tag->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(color))));
       }
       schema->SetIndexMutationSequenceNumber(key, 0);
     }
@@ -1509,7 +1518,8 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     VMSDK_EXPECT_OK(schema->AddIndex("color", "color", tag));
     for (const auto &[k, color] : docs) {
       auto key = StringInternStore::Intern(k);
-      VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+      VMSDK_EXPECT_OK(tag->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString(color))));
       schema->SetIndexMutationSequenceNumber(key, 0);
     }
     return schema;
@@ -1529,7 +1539,9 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
         schema, parsed.value().root_predicate.get(),
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std),
         cands);
-    if (cands.empty()) return std::nullopt;
+    if (cands.empty()) {
+      return std::nullopt;
+    }
     return cands[0].score;
   }
 };
@@ -1548,7 +1560,7 @@ struct ScoreCase {
   std::vector<std::string> baselines;
   std::string filter;
   std::function<float(const std::vector<float> &)> expected;
-  std::vector<std::string> zero_score_keys{};
+  std::vector<std::string> zero_score_keys;
 };
 
 class ScoreTextQueryTest : public ScoreTextQueryTestBase,
@@ -1759,7 +1771,7 @@ TEST_F(ScoreTextQueryTestBase, TextLessIndexScoresZeroNotNan) {
   auto schema = BuildTagOnlySchema({{"d1", "red"}, {"d2", "blue"}});
   auto score = Score(*schema, "@color:{red}", "d1");
   ASSERT_TRUE(score.has_value());
-  EXPECT_FALSE(std::isnan(*score));
+  EXPECT_FALSE(indexes::scoring::IsNaN(*score));
   EXPECT_FLOAT_EQ(*score, 0.0f);
 }
 

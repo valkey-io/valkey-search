@@ -7,6 +7,7 @@
 
 #include "vmsdk/src/module.h"
 
+#include <cstring>
 #include <fstream>
 #include <list>
 #include <string>
@@ -16,6 +17,7 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/deferred_init.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
@@ -70,19 +72,31 @@ absl::Status RegisterCommands(ValkeyModuleCtx *ctx,
 }
 
 int OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
-           const Options &options) {
-  if (ValkeyModule_Init(ctx, options.name.c_str(), options.version,
-                        VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {
-    ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING,
-                     "Failed to init module");
-    return VALKEYMODULE_ERR;
-  }
+           const Options &options, const char *module_name,
+           vmsdk::ValkeyVersion module_version) {
+  // ValkeyModule_Init already ran, from the VALKEY_MODULE macro, before the
+  // deferred static initializers -- it is what establishes ValkeyModule_Alloc.
   auto status = vmsdk::InitLogging(ctx);
   if (!status.ok()) {
     ValkeyModule_Log(ctx, VALKEYMODULE_LOGLEVEL_WARNING,
                      "Failed to init logging, %s", status.message().data());
     return VALKEYMODULE_ERR;
   }
+  // `options` was still zero-initialized when ValkeyModule_Init was given
+  // module_name/module_version. Now that it is constructed, confirm the module
+  // was registered under the name and version it describes itself with.
+  if (options.name == nullptr || std::strcmp(options.name, module_name) != 0 ||
+      options.version != module_version) {
+    VMSDK_LOG(WARNING, ctx)
+        << "Module registered as '" << module_name << "' v" << module_version
+        << " but describes itself as '"
+        << (options.name == nullptr ? "(null)" : options.name) << "' v"
+        << options.version
+        << ". The VALKEY_MODULE arguments must match the Options fields.";
+    return VALKEYMODULE_ERR;
+  }
+  VMSDK_LOG(NOTICE, ctx) << "Ran " << vmsdk::GetDeferredInitializerCount()
+                         << " deferred static initializers";
   if (ValkeyModule_GetServerVersion == nullptr) {
     VMSDK_LOG(WARNING, ctx)
         << "ValkeyModule_GetServerVersion function is not available";
@@ -147,7 +161,8 @@ int OnLoadDone(absl::Status status, ValkeyModuleCtx *ctx,
   if (status.ok()) {
     VMSDK_LOG(NOTICE, ctx) << options.name
                            << " module was successfully loaded!";
-    vmsdk::UseValkeyAlloc();
+    // The switch to the Valkey allocator happened at the top of
+    // ValkeyModule_OnLoad, before static initialization -- see VALKEY_MODULE.
     return VALKEYMODULE_OK;
   }
   VMSDK_LOG(WARNING, ctx) << status.message().data();

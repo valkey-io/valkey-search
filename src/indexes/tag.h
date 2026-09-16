@@ -21,6 +21,7 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "src/attribute_data.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/rax/rax.h"
 #include "src/query/predicate.h"
@@ -49,14 +50,14 @@ class Tag : public IndexBase {
   ~Tag() override;
 
   absl::StatusOr<RecordResult> AddRecord(const InternedStringPtr &key,
-                                         absl::string_view data) override
+                                         AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<bool> RemoveRecord(
       const InternedStringPtr &key,
       DeletionType deletion_type = DeletionType::kNone) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr &key,
-                                            absl::string_view data) override
+                                            AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);

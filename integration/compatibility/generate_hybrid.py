@@ -173,13 +173,6 @@ KNN_CLAUSES = [
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestHybridCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "hybrid-answers.pickle.gz"
-    # TODO(reference-image): temporary. FT.HYBRID needs the Redis 8.4+ query
-    # engine, which redis/redis-stack-server does not have. A separate PR moves
-    # BaseCompatibilityTest.DOCKER_IMAGE to redis:latest for every generator;
-    # once that lands this override can be dropped and this class can inherit
-    # the shared image again.
-    DOCKER_IMAGE = "redis:8"
-
     DATA_SET = "hybrid text"
 
     def setup_data(self, key_type):

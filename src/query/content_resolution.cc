@@ -52,7 +52,13 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
   // A caller that wants no content still comes through here for the checks
   // above -- FT.HYBRID runs the contention check whatever its LOAD clause
   // asked for -- but there is nothing to fetch for it.
-  if (params->no_content) {
+  //
+  // NOCONTENT alone is not enough to skip the fetch: a SORTBY has to read the
+  // sort field off each document even when the reply carries only keys, which
+  // is what NoProcessingRequired() adds. Testing `no_content` here instead
+  // left the sort nothing to compare, so a sorted NOCONTENT search came back
+  // in arbitrary order -- the defect #1217 fixed, reintroduced from this side.
+  if (params->NoProcessingRequired()) {
     params->QueryCompleteMainThread(std::move(params));
     return;
   }

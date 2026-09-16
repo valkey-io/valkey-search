@@ -67,7 +67,7 @@ class TestHNSWAllowReplaceDeleted(ValkeySearchTestCaseDebugMode):
         info_before = client.info("SEARCH")
         exc_before = int(info_before.get("search_hnsw_add_exceptions_count", 0))
 
-        os.environ.pop("SKIPLOGCLEAN", None)
+        os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
 
@@ -165,7 +165,7 @@ class TestReplaceDeletedOnLoad(ValkeySearchTestCaseDebugMode):
 
         # RDB save + reload
         client.execute_command("SAVE")
-        os.environ.pop("SKIPLOGCLEAN", None)
+        os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
 

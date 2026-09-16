@@ -74,6 +74,13 @@ class CombineFunctionContext : public expr::Expression::CompileContext {
     return absl::InvalidArgumentError(
         "PARAMS are not available inside COMBINE FUNCTION");
   }
+
+  // A COMBINE FUNCTION expression computes a score, the way APPLY computes a
+  // value -- it is not deciding whether to admit a document. So it takes the
+  // default reading of a comparison against a missing arm score rather than
+  // the filter one, which would answer false and make an arm a document is
+  // absent from look like an arm it scored zero in.
+  bool UseFilterComparisonSemantics() const override { return false; }
 };
 
 }  // namespace valkey_search::query

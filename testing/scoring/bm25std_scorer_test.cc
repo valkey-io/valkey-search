@@ -15,9 +15,14 @@
 #include "gtest/gtest.h"
 #include "src/indexes/scoring/scorer.h"
 #include "testing/scoring/scoring_test_data.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes::scoring {
 namespace {
+
+class Bm25StdScorerTest : public vmsdk::ValkeyTest {};
+class Bm25StdScorerDeathTest : public vmsdk::ValkeyTest {};
+class ScorerFloatClassificationTest : public vmsdk::ValkeyTest {};
 
 constexpr float kFloatTolerance = 1e-4f;
 
@@ -52,19 +57,19 @@ float ScoreLeaf(const Bm25StdScorer& scorer, const LeafData& leaf,
 
 // --- Direct scorer math ---
 
-TEST(Bm25StdScorerTest, IdentityNameAndType) {
+TEST_F(Bm25StdScorerTest, IdentityNameAndType) {
   Bm25StdScorer scorer;
   EXPECT_EQ(scorer.Name(), "BM25STD");
   EXPECT_EQ(scorer.Type(), ScorerType::kBm25Std);
 }
 
-TEST(Bm25StdScorerTest, ScoreLeafCorpusReference) {
+TEST_F(Bm25StdScorerTest, ScoreLeafCorpusReference) {
   Bm25StdScorer scorer;
   LeafData leaf = test_data::LeafForHello(test_data::kDocs[4]);
   EXPECT_NEAR(ScoreLeaf(scorer, leaf, 1.0f), 0.574385f, kFloatTolerance);
 }
 
-TEST(Bm25StdScorerTest, ScoreLeafLeafWeightScalesLinearly) {
+TEST_F(Bm25StdScorerTest, ScoreLeafLeafWeightScalesLinearly) {
   Bm25StdScorer scorer;
   LeafData leaf = test_data::LeafForHello(test_data::kDocs[0]);
   const float base = ScoreLeaf(scorer, leaf, 1.0f);
@@ -72,21 +77,21 @@ TEST(Bm25StdScorerTest, ScoreLeafLeafWeightScalesLinearly) {
   EXPECT_EQ(ScoreLeaf(scorer, leaf, 0.0f), 0.0f);
 }
 
-TEST(Bm25StdScorerTest, ScoreLeafZeroFrequencyReturnsZero) {
+TEST_F(Bm25StdScorerTest, ScoreLeafZeroFrequencyReturnsZero) {
   Bm25StdScorer scorer;
   LeafData leaf = test_data::LeafForWorld(test_data::kDocs[4]);
   ASSERT_EQ(leaf.term_frequency, 0u);
   EXPECT_EQ(ScoreLeaf(scorer, leaf, 1.0f), 0.0f);
 }
 
-TEST(Bm25StdScorerTest, ScoreLeafEmptyIndexReturnsZero) {
+TEST_F(Bm25StdScorerTest, ScoreLeafEmptyIndexReturnsZero) {
   Bm25StdScorer scorer;
   LeafData leaf = MakeLeaf(/*N=*/0, /*total_doc_len=*/0,
                            /*dt=*/0, /*F=*/0, /*doc_len=*/0);
   EXPECT_EQ(ScoreLeaf(scorer, leaf, 1.0f), 0.0f);
 }
 
-TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
+TEST_F(Bm25StdScorerTest, IdfDifferentiatesByDt) {
   Bm25StdScorer scorer;
   const float hello =
       ScoreLeaf(scorer, test_data::LeafForHello(test_data::kDocs[0]), 1.0f);
@@ -98,7 +103,7 @@ TEST(Bm25StdScorerTest, IdfDifferentiatesByDt) {
   EXPECT_GT(unique, rare);
 }
 
-TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
+TEST_F(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
   Bm25StdScorer scorer;
   const float doc4 =
       ScoreLeaf(scorer, test_data::LeafForHello(test_data::kDocs[3]), 1.0f);
@@ -112,24 +117,39 @@ TEST(Bm25StdScorerTest, LengthNormalizationFavorsShorterDoc) {
 // and can be transiently out of sync). The scorer must not abort production on
 // this transient skew: the guard is debug-only (DCHECK), so it dies in debug
 // builds but is tolerated in release.
-TEST(Bm25StdScorerDeathTest, DtGreaterThanNIsDebugOnly) {
+TEST_F(Bm25StdScorerDeathTest, DtGreaterThanNIsDebugOnly) {
   Bm25StdScorer scorer;
   LeafData leaf = MakeLeaf(/*N=*/2, /*total_doc_len=*/20,
                            /*dt=*/3, /*F=*/1, /*doc_len=*/10);
   EXPECT_DEBUG_DEATH(ScoreLeaf(scorer, leaf, 1.0f), "");
 }
 
-TEST(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {
+inline float MakeInf() {
+  constexpr uint32_t kBits = 0x7F800000U;
+  float val;
+  std::memcpy(&val, &kBits, sizeof(val));
+  return val;
+}
+
+inline float MakeNegInf() {
+  constexpr uint32_t kBits = 0xFF800000U;
+  float val;
+  std::memcpy(&val, &kBits, sizeof(val));
+  return val;
+}
+
+TEST_F(Bm25StdScorerTest, ComposeMultipliesByDocumentScore) {
   Bm25StdScorer scorer;
   EXPECT_NEAR(scorer.ComposeDocumentScore(0.5f, /*document_score=*/0.7f),
               0.5f * 0.7f, kFloatTolerance);
 }
 
-TEST(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
+TEST_F(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
   Bm25StdScorer scorer;
-  const float kInf = std::numeric_limits<float>::infinity();
+  const float kInf = MakeInf();
+  const float kNegInf = MakeNegInf();
   EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, kInf), kInf);
-  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, -kInf), -kInf);
+  EXPECT_EQ(scorer.ComposeDocumentScore(0.5f, kNegInf), kNegInf);
 }
 
 // The mirror of the case above. An infinite sum_of_terms times a zero document
@@ -137,13 +157,14 @@ TEST(Bm25StdScorerTest, ComposeInfinityShortCircuits) {
 // wrong: SearchResult::TrimResults sorts on it, and NaN compares false against
 // everything, which violates strict weak ordering and makes std::sort
 // undefined.
-TEST(Bm25StdScorerTest, ComposeInfiniteSumWithZeroDocumentScoreIsNotNaN) {
+TEST_F(Bm25StdScorerTest, ComposeInfiniteSumWithZeroDocumentScoreIsNotNaN) {
   Bm25StdScorer scorer;
-  const float kInf = std::numeric_limits<float>::infinity();
+  const float kInf = MakeInf();
+  const float kNegInf = MakeNegInf();
   EXPECT_FALSE(IsNaN(scorer.ComposeDocumentScore(kInf, 0.0f)));
   EXPECT_EQ(scorer.ComposeDocumentScore(kInf, 0.0f), kInf);
-  EXPECT_FALSE(IsNaN(scorer.ComposeDocumentScore(-kInf, 0.0f)));
-  EXPECT_EQ(scorer.ComposeDocumentScore(-kInf, 0.0f), -kInf);
+  EXPECT_FALSE(IsNaN(scorer.ComposeDocumentScore(kNegInf, 0.0f)));
+  EXPECT_EQ(scorer.ComposeDocumentScore(kNegInf, 0.0f), kNegInf);
 }
 
 // IsInf/IsNaN exist because the build uses -ffast-math (-ffinite-math-only),
@@ -151,16 +172,17 @@ TEST(Bm25StdScorerTest, ComposeInfiniteSumWithZeroDocumentScoreIsNotNaN) {
 // std::isnan and the `f != f` idiom to a constant. Construct the NaN from its
 // bit pattern so the test does not depend on the optimizer preserving one
 // either.
-TEST(ScorerFloatClassificationTest, DetectsInfAndNaNBitPatterns) {
+TEST_F(ScorerFloatClassificationTest, DetectsInfAndNaNBitPatterns) {
   static constexpr uint32_t kQuietNaNBits = 0x7FC00000U;
   float nan_value;
   std::memcpy(&nan_value, &kQuietNaNBits, sizeof(nan_value));
   EXPECT_TRUE(IsNaN(nan_value));
   EXPECT_FALSE(IsInf(nan_value));
 
-  const float kInf = std::numeric_limits<float>::infinity();
+  const float kInf = MakeInf();
+  const float kNegInf = MakeNegInf();
   EXPECT_TRUE(IsInf(kInf));
-  EXPECT_TRUE(IsInf(-kInf));
+  EXPECT_TRUE(IsInf(kNegInf));
   EXPECT_FALSE(IsNaN(kInf));
 
   for (float finite : {0.0f, -0.0f, 1.5f, std::numeric_limits<float>::max()}) {

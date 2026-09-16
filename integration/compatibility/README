@@ -8,6 +8,9 @@ generators come and go. Today that list is:
     generate.py         -> aggregate-answers.pickle.gz
     generate_text.py    -> text-search-answers.pickle.gz
     generate_array.py   -> array-input-answers.pickle.gz
+    generate_expr.py    -> expr-answers.pickle.gz
+    generate_sortkey.py -> sortkey-answers.pickle.gz
+    generate_filter.py  -> filter-answers.pickle.gz
     generate_hybrid.py  -> hybrid-answers.pickle.gz
 
 Or, to regenerate just one, cd to this directory and run pytest on it -- but
@@ -15,14 +18,11 @@ note that a run narrowed with -k, or one that fails part way, deliberately
 declines to write its answer file, because a partial run would replace a
 complete file with a short one.
 
-Both forms require Docker. The generators spin up a reference engine to capture
-answers, in a container named Generate-search-NNNN on a port docker assigns, so
-concurrent runs on one machine do not collide. A generator that fails part way
-leaves its answer file untouched rather than replacing it with a short one.
-
-The image is per-generator (BaseCompatibilityTest.DOCKER_IMAGE). Most use
-redis/redis-stack-server; generate_hybrid.py overrides it to redis:8, because
-FT.HYBRID does not exist in the redis-stack image's RediSearch 2.x.
+Both forms require Docker. The generators spin up redis:latest to
+capture reference answers, in a container named Generate-search-NNNN on a port
+docker assigns, so concurrent runs on one machine do not collide. A generator
+that fails part way leaves its answer file untouched rather than replacing it
+with a short one.
 
 Each pickle stores a SHA256 of every .py file in this directory. The
 compatibility integration test (integration/compatibility_test.py) verifies

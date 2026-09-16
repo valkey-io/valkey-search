@@ -801,6 +801,15 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     }
   }
 
+  // SORTBY's retention bound is a property of the whole pipeline, so it can
+  // only be settled once every stage is parsed. FT.AGGREGATE does this at the
+  // end of its own ParseCommand; FT.HYBRID drives the aggregate parser itself
+  // and so has to ask too. Without it a sorted reply is capped at the SORTBY
+  // stage's parse-time default of 10 whatever LIMIT asked for -- measured,
+  // `SORTBY 2 @price ASC LIMIT 0 100` returned 10 rows against the
+  // reference's 24.
+  aggregate::ResolveSortByBounds(*env.agg);
+
   const bool no_load_clause = env.agg->loads_.empty() && !env.agg->loadall_;
 
   // A LOAD clause may name the score column back into the projection it

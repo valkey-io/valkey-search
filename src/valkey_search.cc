@@ -28,6 +28,7 @@
 #include "src/coordinator/metadata_manager.h"
 #include "src/coordinator/server.h"
 #include "src/coordinator/util.h"
+#include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/schema_manager.h"
@@ -1182,6 +1183,8 @@ absl::StatusOr<int> GetValkeyLocalPort(ValkeyModuleCtx *ctx) {
 }
 
 absl::Status ValkeySearch::Startup(ValkeyModuleCtx *ctx) {
+  // Must run before any thread pool is started; see InitSimsimdDispatch.
+  indexes::InitSimsimdDispatch();
   reader_thread_pool_ = std::make_unique<vmsdk::ThreadPool>(
       "read-worker-", options::GetReaderThreadCount().GetValue(),
       options::GetThreadPoolWaitTimeSamples().GetValue());

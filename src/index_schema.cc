@@ -1303,8 +1303,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       [] { return false; });
 
   // Redis reports the index-level flags of FT.CREATE as bare tokens in an
-  // index_options array, with NOOFFSETS implying NOHL. Adding the pair changes
-  // the reply shape, so it is gated alongside the score_field change above.
+  // index_options array. Only NOHL is reported: NOOFFSETS is not derived from
+  // with_offsets_, which defaults to false on a schema proto that predates the
+  // field, so an index restored from an older RDB would claim NOOFFSETS it was
+  // never created with. Adding the pair changes the reply shape, so it is gated
+  // alongside the score_field change above.
   const bool index_options_reported = VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 3, 0, "ft_info_index_options", [] { return true; },
       [] { return false; });
@@ -1324,12 +1327,8 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
   if (index_options_reported) {
     ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
-    ValkeyModule_ReplyWithArray(
-        ctx, (with_offsets_ ? 0 : 1) + ((no_hl_ || !with_offsets_) ? 1 : 0));
-    if (!with_offsets_) {
-      ValkeyModule_ReplyWithSimpleString(ctx, "NOOFFSETS");
-    }
-    if (no_hl_ || !with_offsets_) {
+    ValkeyModule_ReplyWithArray(ctx, no_hl_ ? 1 : 0);
+    if (no_hl_) {
       ValkeyModule_ReplyWithSimpleString(ctx, "NOHL");
     }
   }

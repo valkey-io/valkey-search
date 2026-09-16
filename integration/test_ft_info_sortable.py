@@ -88,15 +88,6 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
         ) == b"OK"
         assert index_options(client, "idxnohl") == [b"NOHL"]
 
-    def test_index_options_nooffsets_implies_nohl(self):
-        """NOOFFSETS implies NOHL, as measured against RediSearch 2.10.20."""
-        client = self._client()
-        assert client.execute_command(
-            "FT.CREATE", "idxnooff", "ON", "HASH", "PREFIX", "1", "o:",
-            "NOOFFSETS", "SCHEMA", "t", "TEXT",
-        ) == b"OK"
-        assert index_options(client, "idxnooff") == [b"NOOFFSETS", b"NOHL"]
-
     def test_index_options_empty_without_flags(self):
         client = self._client()
         self._create(client)

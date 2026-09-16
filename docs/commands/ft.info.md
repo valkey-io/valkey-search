@@ -28,6 +28,7 @@ The LOCAL response contains both the definition of the index as well as the stat
 An array of key value pairs.
 
 - `index_name` (string) The index name
+- `index_options` (array of bare tokens) The index-level options the index was created with. Contains `NOHL` if `FT.CREATE` was given `NOHL`, and is otherwise empty. Requires `search.emulate-release` to be `1.3.0` or later; below that the field is not emitted at all. Note that `NOOFFSETS` is not reported here even when set, unlike RediSearch.
 - `index_definition` (an array of key/value pairs)
   - `key_type` (string) `HASH` or `JSON`
   - `prefixes` (array of strings) The declared prefixes for this index

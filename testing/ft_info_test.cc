@@ -62,15 +62,23 @@ constexpr absl::string_view kFixedScoreInfoSegment =
     "+default_score\r\n1\r\n+score_field\r\n+\r\n";
 constexpr absl::string_view kLegacyScoreInfoSegment =
     "+default_score\r\n$1\r\n1\r\n";
+// Emitted only at 1.3.0 and later. Empty for every case below, none of which
+// sets no_hl.
+constexpr absl::string_view kIndexOptionsSegment = "+index_options\r\n*0\r\n";
 
 // Rewrites a fixed-shape expectation into the pre-1.3.0 shape. Replies that do
 // not contain an index_definition block (error cases) are returned unchanged.
+// index_options is gated at the same version, so it is dropped here too, which
+// shrinks the top-level array by the two elements of that pair.
 std::string ToLegacyScoreInfoShape(absl::string_view fixed) {
   if (!absl::StrContains(fixed, kFixedScoreInfoSegment)) {
     return std::string(fixed);
   }
   return absl::StrReplaceAll(
       fixed, {{"+index_definition\r\n*8\r\n", "+index_definition\r\n*6\r\n"},
+              {"*32\r\n+index_name", "*30\r\n+index_name"},
+              {"*40\r\n+index_name", "*38\r\n+index_name"},
+              {kIndexOptionsSegment, ""},
               {kFixedScoreInfoSegment, kLegacyScoreInfoSegment}});
 }
 
@@ -195,7 +203,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*32\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
@@ -253,7 +262,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*32\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
@@ -303,7 +313,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*32\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
@@ -349,7 +360,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*32\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
@@ -392,7 +404,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                         .expect_return_failure = false,
                         .expected_output =
-                            "*30\r\n+index_name\r\n+test_name\r\n+index_"
+                            "*32\r\n+index_name\r\n+test_name\r\n+index_"
+                            "options\r\n*0\r\n+index_"
                             "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                             "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                             "1\r\n+score_field\r\n+\r\n+"
@@ -463,7 +476,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*40\r\n+index_name\r\n+test_name\r\n+index_"
+                         "options\r\n*0\r\n+index_"
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                          "1\r\n+score_field\r\n+\r\n+attributes\r\n*"
@@ -518,7 +532,8 @@ INSTANTIATE_TEST_SUITE_P(
                         )",
                      .expect_return_failure = false,
                      .expected_output =
-                         "*38\r\n+index_name\r\n+test_name\r\n+index_"
+                         "*40\r\n+index_name\r\n+test_name\r\n+index_"
+                         "options\r\n*0\r\n+index_"
                          "definition\r\n*8\r\n+key_type\r\n+HASH\r\n+"
                          "prefixes\r\n*1\r\n+prefix_1\r\n+default_score\r\n"
                          "1\r\n+score_field\r\n+\r\n+attributes\r\n*"

@@ -29,13 +29,10 @@ namespace {
 // A cursor over the rows 0..num_rows-1, replying `[n, row...]`.
 class FakeCursor : public Cursor {
  public:
-  FakeCursor(size_t num_rows, uint32_t db_num = 0,
-             std::string index_name = "idx",
+  FakeCursor(size_t num_rows, std::string index_name = "idx",
              std::weak_ptr<IndexSchema> index_schema = {},
-             absl::Duration max_idle = absl::Seconds(10),
-             bool *destroyed = nullptr)
-      : Cursor(db_num, std::move(index_name), std::move(index_schema),
-               max_idle),
+             CursorOptions options = {}, bool *destroyed = nullptr)
+      : Cursor(std::move(index_name), std::move(index_schema), options),
         num_rows_(num_rows),
         destroyed_(destroyed) {}
   ~FakeCursor() override {
@@ -94,11 +91,14 @@ class FTCursorTest : public ValkeySearchTest {
     return SchemaManager::Instance().GetIndexSchema(db_num, name).value();
   }
 
-  uint64_t InsertCursor(size_t num_rows, bool *destroyed = nullptr) {
+  uint64_t InsertCursor(size_t num_rows, bool *destroyed = nullptr,
+                        int db_num = 0, std::string index_name = "idx",
+                        CursorOptions options = {}) {
+    auto index = GetIndex(index_name, db_num);
     return CursorTable::Instance().Insert(
-        std::make_unique<FakeCursor>(num_rows, 0, "idx", GetIndex("idx"),
-                                     absl::Seconds(10), destroyed),
-        absl::Now());
+        std::make_unique<FakeCursor>(num_rows, index_name, index, options,
+                                     destroyed),
+        db_num, absl::Now());
   }
 
   absl::Status Run(absl::string_view command) {
@@ -193,30 +193,27 @@ TEST_F(FTCursorTest, WrongDb) {
   EXPECT_EQ(CursorTable::Instance().Size(), 1);
 }
 
-TEST_F(FTCursorTest, IndexDroppedAndRecreated) {
-  auto id = InsertCursor(5);
-  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(0, "idx"));
-  EXPECT_THAT(Run(absl::StrCat("FT.CURSOR READ idx ", id)).message(),
-              testing::HasSubstr("not found"));
-  EXPECT_EQ(CursorTable::Instance().Size(), 1);
-  CreateIndex("idx", 0);
-  EXPECT_THAT(Run(absl::StrCat("FT.CURSOR READ idx ", id)).message(),
-              testing::HasSubstr("The index was dropped while the cursor"));
-  EXPECT_EQ(CursorTable::Instance().Size(), 0);
-
-  id = InsertCursor(5);
-  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(0, "idx"));
-  CreateIndex("idx", 0);
-  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR DEL idx ", id)));
-  EXPECT_EQ(CursorTable::Instance().Size(), 0);
-
-  // Reading through another index still detects the drop.
+TEST_F(FTCursorTest, IndexRemovalDiscardsCursors) {
+  bool destroyed = false;
+  auto id = InsertCursor(5, &destroyed);
+  // Cursors of other indexes and other databases are untouched.
   CreateIndex("other", 0);
-  id = InsertCursor(5);
+  CreateIndex("idx", 1);
+  auto other_index = InsertCursor(5, nullptr, 0, "other");
+  auto other_db = InsertCursor(5, nullptr, 1);
+
   VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(0, "idx"));
+  EXPECT_TRUE(destroyed);
+  EXPECT_EQ(CursorTable::Instance().Size(), 2);
   EXPECT_THAT(Run(absl::StrCat("FT.CURSOR READ other ", id)).message(),
-              testing::HasSubstr("The index was dropped while the cursor"));
-  EXPECT_EQ(CursorTable::Instance().Size(), 0);
+              testing::HasSubstr("Cursor not found"));
+  EXPECT_NE(CursorTable::Instance().Lookup(other_index), nullptr);
+  EXPECT_NE(CursorTable::Instance().Lookup(other_db), nullptr);
+
+  // A recreated index does not resurrect them.
+  CreateIndex("idx", 0);
+  EXPECT_THAT(Run(absl::StrCat("FT.CURSOR READ idx ", id)).message(),
+              testing::HasSubstr("Cursor not found"));
 }
 
 TEST_F(FTCursorTest, ExpireIdle) {
@@ -224,9 +221,9 @@ TEST_F(FTCursorTest, ExpireIdle) {
   auto now = absl::Now();
   auto add = [&](absl::Duration max_idle) {
     return table.Insert(
-        std::make_unique<FakeCursor>(1, 0, "idx", std::weak_ptr<IndexSchema>{},
-                                     max_idle),
-        now);
+        std::make_unique<FakeCursor>(1, "idx", std::weak_ptr<IndexSchema>{},
+                                     CursorOptions{.max_idle = max_idle}),
+        0, now);
   };
   add(absl::Seconds(1));
   add(absl::Seconds(2));
@@ -244,13 +241,14 @@ TEST_F(FTCursorTest, TouchPostponesExpiration) {
   auto now = absl::Now();
   auto make = [] {
     return std::make_unique<FakeCursor>(
-        1, 0, "idx", std::weak_ptr<IndexSchema>{}, absl::Seconds(10));
+        1, "idx", std::weak_ptr<IndexSchema>{},
+        CursorOptions{.max_idle = absl::Seconds(10)});
   };
-  auto first = table.Insert(make(), now);
-  auto second = table.Insert(make(), now);
+  auto first = table.Insert(make(), 0, now);
+  auto second = table.Insert(make(), 0, now);
   table.Touch(first, now + absl::Seconds(5));
   // Inserting and erasing other entries must not disturb first's position.
-  auto third = table.Insert(make(), now);
+  auto third = table.Insert(make(), 0, now);
   table.Erase(second);
   EXPECT_EQ(table.ExpireIdle(now + absl::Seconds(10)), 1);
   EXPECT_EQ(table.Lookup(third), nullptr);
@@ -262,23 +260,86 @@ TEST_F(FTCursorTest, TouchPostponesExpiration) {
 TEST_F(FTCursorTest, IdGeneration) {
   auto now = absl::Now();
   auto make = [] {
-    return std::make_unique<FakeCursor>(
-        1, 0, "idx", std::weak_ptr<IndexSchema>{}, absl::Seconds(10));
+    return std::make_unique<FakeCursor>(1, "idx", std::weak_ptr<IndexSchema>{});
   };
   // The 31 bit counter is the upper half, the CRC the lower half.
   CursorTable table(0x9abcdef0, 0);
-  EXPECT_EQ(table.Insert(make(), now), uint64_t{1} << 32 | 0x9abcdef0);
-  EXPECT_EQ(table.Insert(make(), now), uint64_t{2} << 32 | 0x9abcdef0);
+  EXPECT_EQ(table.Insert(make(), 0, now), uint64_t{1} << 32 | 0x9abcdef0);
+  EXPECT_EQ(table.Insert(make(), 0, now), uint64_t{2} << 32 | 0x9abcdef0);
 
   // With a zero CRC the counter wraps to 0 at 2^31, and the zero id is
   // skipped.
   CursorTable zero_crc(0, 0x7FFFFFFE);
-  EXPECT_EQ(zero_crc.Insert(make(), now), uint64_t{0x7FFFFFFF} << 32);
-  EXPECT_EQ(zero_crc.Insert(make(), now), uint64_t{1} << 32);
+  EXPECT_EQ(zero_crc.Insert(make(), 0, now), uint64_t{0x7FFFFFFF} << 32);
+  EXPECT_EQ(zero_crc.Insert(make(), 0, now), uint64_t{1} << 32);
 
   // With a non-zero CRC a zero counter still yields a non-zero id.
   CursorTable wrapped(7, 0x7FFFFFFF);
-  EXPECT_EQ(wrapped.Insert(make(), now), 7);
+  EXPECT_EQ(wrapped.Insert(make(), 0, now), 7);
+}
+
+TEST_F(FTCursorTest, SwapDb) {
+  auto id = InsertCursor(5);
+  auto &table = CursorTable::Instance();
+
+  // SWAPDB moves index schemas between databases; cursors follow them.
+  ValkeyModuleSwapDbInfo swap_info{.dbnum_first = 0, .dbnum_second = 1};
+  SchemaManager::Instance().OnSwapDB(&swap_info);
+  EXPECT_EQ(table.GetDbNum(id), 1);
+  // The cursor is gone from its original database, along with its index...
+  EXPECT_THAT(Run(absl::StrCat("FT.CURSOR READ idx ", id)).message(),
+              testing::HasSubstr("not found in database 0"));
+  // ... and readable from the one its index moved to.
+  ON_CALL(*kMockValkeyModule, GetSelectedDb(&fake_ctx_))
+      .WillByDefault(testing::Return(1));
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id, " COUNT 1")));
+
+  // Swapping with a database that holds no cursors also works.
+  table.SwapDb(1, 7);
+  EXPECT_EQ(table.GetDbNum(id), 7);
+  table.SwapDb(7, 1);
+  EXPECT_EQ(table.GetDbNum(id), 1);
+  // Erasing finds the cursor under its new database.
+  table.EraseIndex(0, "idx");
+  EXPECT_NE(table.Lookup(id), nullptr);
+  table.EraseIndex(1, "idx");
+  EXPECT_EQ(table.Lookup(id), nullptr);
+}
+
+TEST_F(FTCursorTest, ReadDefaultCountComesFromTheCursor) {
+  auto id = InsertCursor(10, nullptr, 0, "idx", CursorOptions{.count = 3});
+  // No COUNT on READ: the WITHCURSOR COUNT is used.
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id)));
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            absl::StrCat("*2\r\n*4\r\n:3\r\n:0\r\n:1\r\n:2\r\n:", id, "\r\n"));
+  // An explicit COUNT overrides it, for that read only.
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id, " COUNT 1")));
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            absl::StrCat("*2\r\n*2\r\n:1\r\n:3\r\n:", id, "\r\n"));
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id)));
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            absl::StrCat("*2\r\n*4\r\n:3\r\n:4\r\n:5\r\n:6\r\n:", id, "\r\n"));
+}
+
+TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {
+  InitThreadPools(/*readers=*/std::nullopt, /*writers=*/1, /*utility=*/1);
+  auto &background = const_cast<vmsdk::config::Boolean &>(
+      options::GetSearchResultBackgroundCleanup());
+  const bool saved = background.GetValue();
+
+  VMSDK_EXPECT_OK(background.SetValue(false));
+  bool destroyed = false;
+  CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
+  EXPECT_TRUE(destroyed);
+
+  VMSDK_EXPECT_OK(background.SetValue(true));
+  destroyed = false;
+  CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
+  EXPECT_FALSE(destroyed);
+  WaitWorkerTasksAreCompleted(*ValkeySearch::Instance().GetUtilityThreadPool());
+  EXPECT_TRUE(destroyed);
+
+  VMSDK_EXPECT_OK(background.SetValue(saved));
 }
 
 TEST_F(FTCursorTest, ShowCursors) {

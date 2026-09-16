@@ -154,6 +154,18 @@ Measured against Redis 8:
     the cursor (reproducible; either key alone, or a TAG query, loses
     nothing).
 - **`FT.SEARCH ... WITHCURSOR`** is a valkey-search extension; Redis rejects it.
+- **Index removal.** valkey-search discards an index's cursors as soon as the
+  index is removed (`FT.DROPINDEX`, `FLUSHDB`, replica full sync), so a later
+  read replies `Cursor not found`. Redis keeps the cursor and replies
+  `SEARCH_INDEX_DROPPED_BG The index was dropped while the cursor was idle`
+  once an index of that name exists again. valkey-search still replies that
+  when an index is dropped and recreated between two reads through a
+  different index name.
+- **ACL.** valkey-search applies the index's key-prefix permissions to
+  `FT.CURSOR READ` / `DEL`, as it does to the query itself. Redis checks
+  nothing beyond the command's own ACL.
+- **Timeouts.** A timed-out valkey-search cursor query returns the rows it
+  gathered, whatever `search.enable-partial-results` says.
 - **Limits.** `COUNT` and `MAXIDLE` must be between 1 and the
   `search.cursor-max-count` / `search.cursor-max-idle-ms` configs; out of range
   values are an error rather than being clamped.

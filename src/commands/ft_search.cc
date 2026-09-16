@@ -226,15 +226,17 @@ namespace {
 class CursorSearchResult : public Cursor {
  public:
   CursorSearchResult(std::unique_ptr<SearchCommand> command, size_t next,
-                     size_t end, absl::Duration max_idle)
-      : Cursor(command->db_num, command->index_schema_name,
-               command->index_schema, max_idle),
+                     size_t end)
+      : Cursor(command->index_schema_name, command->index_schema,
+               *command->cursor_options),
         command_(std::move(command)),
         next_(next),
         end_(end) {
     command_->adopted_by_cursor = true;
     // Don't keep a dropped index alive; READ supplies the live schema.
     command_->index_schema = nullptr;
+    // The query itself is over; only its saved output is still held.
+    command_->DeclareOperationTerminated();
   }
   size_t RemainingRows() const override { return end_ - next_; }
   void ReplyRows(ValkeyModuleCtx *ctx,
@@ -409,8 +411,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   CHECK(&search_result == &this->search_result);
   auto cursor = std::make_unique<CursorSearchResult>(
       std::unique_ptr<SearchCommand>(this), range.start_index + count,
-      range.end_index, cursor_options->max_idle);
-  auto id = CursorTable::Instance().Insert(std::move(cursor), absl::Now());
+      range.end_index);
+  auto id =
+      CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
 }
 

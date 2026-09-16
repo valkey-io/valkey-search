@@ -160,6 +160,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->parse_vars.ClearAtEndOfParse();
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);
+    if (parameters->cursor_options.has_value()) {
+      // A cursor holds whatever the query found: a timeout hands back the rows
+      // gathered so far rather than an error, whatever the partial results
+      // setting says.
+      parameters->enable_partial_results = true;
+    }
     VMSDK_RETURN_IF_ERROR(
         AclPrefixCheck(ctx, acl::KeyAccess::kRead,
                        parameters->index_schema->GetKeyPrefixes()));

@@ -7,11 +7,13 @@ FT.CURSOR DEL <index-name> <cursor-id>
 
 - `<index-name>` (required): The name of an existing index. As in Redis, it need not be the index the cursor was created on.
 - `<cursor-id>` (required): The cursor id returned by the command that created the cursor, or by a previous `FT.CURSOR READ`.
-- `COUNT <count>` (optional): The maximum number of rows to return. It must be between 1 and `search.cursor-max-count`. The default is 1000.
+- `COUNT <count>` (optional): The maximum number of rows to return, for this read only. It must be between 1 and `search.cursor-max-count`. The default is the `COUNT` of the `WITHCURSOR` clause that created the cursor (itself 1000 when that clause gave no `COUNT`).
 
-A cursor holds the rows of a query result that have not yet been returned to the client, as of when the query ran: later changes to the data are not visible. A cursor belongs to the database it was created in: it can only be read or deleted by a connection whose currently selected database is that database. In cluster mode a cursor exists only on the node that executed the query.
+A cursor holds the rows of a query result that have not yet been returned to the client, as of when the query ran: later changes to the data are not visible. A cursor belongs to the database it was created in: it can only be read or deleted by a connection whose currently selected database is that database. If `SWAPDB` moves the cursor's index to another database, its cursors move with it. In cluster mode a cursor exists only on the node that executed the query.
 
-A cursor is destroyed when its last row has been read, when it is deleted with `FT.CURSOR DEL`, or when it has not been read for longer than its `MAXIDLE` time. Reading a cursor restarts its idle time. If the index the cursor was created on has been dropped, `FT.CURSOR READ` returns an error and destroys the cursor.
+Reading or deleting a cursor requires the same key permissions as querying its index: a user who could not run the `FT.SEARCH` or `FT.AGGREGATE` that created the cursor cannot read or delete it either.
+
+A cursor is destroyed when its last row has been read, when it is deleted with `FT.CURSOR DEL`, when it has not been read for longer than its `MAXIDLE` time, or when its index is removed (`FT.DROPINDEX`, `FLUSHDB`, `FLUSHALL`, or a replica synchronising with its primary). Reading a cursor restarts its idle time.
 
 `RESPONSE`
 
@@ -20,13 +22,14 @@ A cursor is destroyed when its last row has been read, when it is deleted with `
 1. An array whose first element is the number of rows returned, followed by one element for each row. A row of an `FT.AGGREGATE` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
 2. The cursor id to use for the next `FT.CURSOR READ`, or 0 if all rows have been returned, in which case the cursor has been destroyed.
 
-`FT.CURSOR DEL` returns OK. It applies the same checks as `FT.CURSOR READ`: `<index-name>` must name an existing index, which need not be the cursor's own, and the cursor must belong to the currently selected database. A cursor whose index has been dropped can still be deleted.
+`FT.CURSOR DEL` returns OK. It applies the same checks as `FT.CURSOR READ`: `<index-name>` must name an existing index, which need not be the cursor's own, the cursor must belong to the currently selected database, and the user must have permission to read the cursor's index.
 
 Errors:
 
 - `Index with name '<index-name>' not found in database <db>` (`READ` and `DEL`): the named index does not exist.
-- `Cursor not found, id: <cursor-id>` (`READ`) / `Cursor does not exist` (`DEL`): there is no such cursor in this database.
-- `The index was dropped while the cursor was idle` (`READ` only): the cursor's index was dropped (and possibly recreated) after the cursor was created.
+- `Cursor not found, id: <cursor-id>` (`READ`) / `Cursor does not exist` (`DEL`): there is no such cursor in this database, including a cursor discarded because its index was removed.
+- `The user does not have permission to access the key prefix...` (`READ` and `DEL`): the user may not read the cursor's index.
+- `The index was dropped while the cursor was idle` (`READ` only): the cursor's index was replaced between the cursor's creation and this read.
 
 # Example
 

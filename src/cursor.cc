@@ -87,7 +87,17 @@ uint32_t CursorTable::ComputeIdCrc(ValkeyModuleCtx *ctx) {
 
 CursorTable::~CursorTable() { Clear(); }
 
-uint64_t CursorTable::Insert(std::unique_ptr<Cursor> cursor, absl::Time now) {
+CursorTable::DbCursors &CursorTable::DbCursorsFor(int db_num) {
+  auto &db = by_db_[db_num];
+  if (db == nullptr) {
+    db = std::make_unique<DbCursors>();
+    db->db_num = db_num;
+  }
+  return *db;
+}
+
+uint64_t CursorTable::Insert(std::unique_ptr<Cursor> cursor, int db_num,
+                             absl::Time now) {
   vmsdk::VerifyMainThread();
   uint64_t id;
   do {
@@ -96,8 +106,10 @@ uint64_t CursorTable::Insert(std::unique_ptr<Cursor> cursor, absl::Time now) {
     counter_ = (counter_ + 1) & 0x7FFFFFFF;
     id = (uint64_t{counter_} << 32) | id_crc_;
   } while (id == 0 || cursors_.contains(id));
+  auto &db = DbCursorsFor(db_num);
+  db.by_index[cursor->GetIndexName()].insert(id);
   auto expiration = by_expiration_.emplace(now + cursor->GetMaxIdle(), id);
-  cursors_.emplace(id, Entry{std::move(cursor), expiration});
+  cursors_.emplace(id, Entry{std::move(cursor), expiration, &db});
   return id;
 }
 
@@ -105,6 +117,13 @@ Cursor *CursorTable::Lookup(uint64_t id) const {
   vmsdk::VerifyMainThread();
   auto itr = cursors_.find(id);
   return itr == cursors_.end() ? nullptr : itr->second.cursor.get();
+}
+
+int CursorTable::GetDbNum(uint64_t id) const {
+  vmsdk::VerifyMainThread();
+  auto itr = cursors_.find(id);
+  CHECK(itr != cursors_.end());
+  return itr->second.db->db_num;
 }
 
 void CursorTable::Touch(uint64_t id, absl::Time now) {
@@ -122,9 +141,46 @@ void CursorTable::Erase(uint64_t id) {
   auto itr = cursors_.find(id);
   CHECK(itr != cursors_.end());
   by_expiration_.erase(itr->second.expiration);
+  auto &by_index = itr->second.db->by_index;
+  auto index_itr = by_index.find(itr->second.cursor->GetIndexName());
+  CHECK(index_itr != by_index.end());
+  index_itr->second.erase(id);
+  if (index_itr->second.empty()) {
+    by_index.erase(index_itr);
+  }
   auto cursor = std::move(itr->second.cursor);
   cursors_.erase(itr);
   Destroy(std::move(cursor));
+}
+
+void CursorTable::EraseIndex(int db_num, absl::string_view index_name) {
+  vmsdk::VerifyMainThread();
+  auto db_itr = by_db_.find(db_num);
+  if (db_itr == by_db_.end()) {
+    return;
+  }
+  auto index_itr = db_itr->second->by_index.find(index_name);
+  if (index_itr == db_itr->second->by_index.end()) {
+    return;
+  }
+  // Erase() removes entries from this set, so work from a copy of the ids.
+  std::vector<uint64_t> ids(index_itr->second.begin(), index_itr->second.end());
+  for (auto id : ids) {
+    Erase(id);
+  }
+}
+
+void CursorTable::SwapDb(int first, int second) {
+  vmsdk::VerifyMainThread();
+  if (first == second) {
+    return;
+  }
+  auto &first_db = DbCursorsFor(first);
+  auto &second_db = DbCursorsFor(second);
+  // The entries point at the DbCursors, so swap the databases the two carry
+  // rather than their contents.
+  std::swap(first_db.db_num, second_db.db_num);
+  std::swap(by_db_[first], by_db_[second]);
 }
 
 size_t CursorTable::ExpireIdle(absl::Time now) {
@@ -154,7 +210,7 @@ void CursorTable::ForEach(
 void CursorTable::Destroy(std::unique_ptr<Cursor> cursor) {
   cursor->ReleaseMainThreadState();
   if (ValkeySearch::HasInstance()) {
-    ValkeySearch::Instance().ScheduleUtilityTask(
+    ValkeySearch::Instance().ScheduleSearchResultCleanup(
         [cursor = std::move(cursor)]() mutable { cursor.reset(); });
   }
 }

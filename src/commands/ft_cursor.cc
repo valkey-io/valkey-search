@@ -8,6 +8,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/str_cat.h"
 #include "absl/time/clock.h"
+#include "src/acl.h"
 #include "src/commands/commands.h"
 #include "src/cursor.h"
 #include "src/schema_manager.h"
@@ -39,7 +40,7 @@ absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   uint64_t id;
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, id)).SetPrepend()
       << "Bad cursor id: ";
-  int64_t count = kDefaultCursorCount;
+  std::optional<int64_t> count;
   if (is_read && itr.PopIfNextIgnoreCase("COUNT")) {
     VMSDK_ASSIGN_OR_RETURN(count, ParseCursorCount(itr));
   }
@@ -57,18 +58,25 @@ absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
   auto &table = CursorTable::Instance();
   Cursor *cursor = table.Lookup(id);
-  if (cursor == nullptr || cursor->GetDbNum() != db_num) {
+  if (cursor == nullptr || table.GetDbNum(id) != db_num) {
     return absl::NotFoundError(is_read
                                    ? absl::StrCat("Cursor not found, id: ", id)
                                    : "Cursor does not exist");
+  }
+  // The rows of a cursor are the rows of its own index, so reading or
+  // releasing one needs the same key permissions FT.SEARCH and FT.AGGREGATE
+  // require of that index.
+  auto index_schema =
+      SchemaManager::Instance().GetIndexSchema(db_num, cursor->GetIndexName());
+  if (index_schema.ok()) {
+    VMSDK_RETURN_IF_ERROR(AclPrefixCheck(ctx, acl::KeyAccess::kRead,
+                                         (*index_schema)->GetKeyPrefixes()));
   }
   if (!is_read) {
     table.Erase(id);
     ValkeyModule_ReplyWithSimpleString(ctx, "OK");
     return absl::OkStatus();
   }
-  auto index_schema = SchemaManager::Instance().GetIndexSchema(
-      cursor->GetDbNum(), cursor->GetIndexName());
   if (!index_schema.ok() || !cursor->IsSameIndex(*index_schema)) {
     table.Erase(id);
     return absl::NotFoundError(
@@ -77,7 +85,8 @@ absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
   table.Touch(id, absl::Now());
   ValkeyModule_ReplyWithArray(ctx, 2);
-  cursor->ReplyRows(ctx, *index_schema, count);
+  cursor->ReplyRows(ctx, *index_schema,
+                    count.value_or(cursor->GetDefaultCount()));
   if (cursor->RemainingRows() > 0) {
     ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
   } else {

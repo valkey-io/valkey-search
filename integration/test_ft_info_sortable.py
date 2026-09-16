@@ -1,11 +1,10 @@
-"""Integration tests for the FT.INFO fields added alongside NOHL / SORTABLE UNF.
+"""Integration tests for SORTABLE / UNF in the FT.INFO attributes reply.
 
 Redis reports these as bare tokens with no value, which no generic key/value
-parser can read, so they are reported here as pairs: `sortable` / `unf` on the
-attribute, and a top-level `highlighting` stating whether highlighting is
-available at all. Both change the reply shape, so they are gated behind
-`search.emulate-release` >= 1.3.0 (see COMPATIBILITY.md). These tests run under
-debug-mode so the ceiling can be lifted to the (as yet unreleased) fix version.
+parser can read, so they are reported here as `sortable` / `unf` pairs. That
+changes the reply shape, so it is gated behind `search.emulate-release` >= 1.3.0
+(see COMPATIBILITY.md). These tests run under debug-mode so the ceiling can be
+lifted to the (as yet unreleased) fix version.
 """
 
 import pytest
@@ -16,13 +15,6 @@ from valkeytestframework.conftest import resource_port_tracker
 
 FIX_RELEASE = "1.3.0"
 LEGACY_RELEASE = "1.0.0"
-
-
-def top_level(client, index_name, field):
-    """Return the value of a top-level FT.INFO field, or None if absent."""
-    info = client.execute_command("FT.INFO", index_name)
-    key = field.encode()
-    return info[info.index(key) + 1] if key in info else None
 
 
 def attribute_of(client, index_name, alias):
@@ -55,7 +47,6 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
             "plain", "TAG",
             "sorted", "TAG", "SORTABLE",
             "unsorted_form", "TAG", "SORTABLE", "UNF",
-            "body", "TEXT",
         ) == b"OK"
 
     def test_attribute_pairs_reported_when_declared(self):
@@ -83,36 +74,10 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
         for attribute in attributes:
             assert len(attribute) % 2 == 0, attribute
 
-    def test_highlighting_is_reported_as_zero(self):
-        """HIGHLIGHT and SUMMARIZE are not implemented, so this is always 0."""
-        client = self._client()
-        self._create(client)
-        assert top_level(client, "idx", "highlighting") == b"0"
-
-    def test_highlighting_reported_without_nohl(self):
-        """The value is a capability, not an echo of NOHL."""
-        client = self._client()
-        assert client.execute_command(
-            "FT.CREATE", "idxplain", "ON", "HASH", "PREFIX", "1", "q:",
-            "SCHEMA", "t", "TEXT",
-        ) == b"OK"
-        assert top_level(client, "idxplain", "highlighting") == b"0"
-
-    def test_highlighting_absent_without_text_fields(self):
-        """It sits with the text-schema fields, which a non-text index omits."""
-        client = self._client()
-        assert client.execute_command(
-            "FT.CREATE", "idxnotext", "ON", "HASH", "PREFIX", "1", "r:",
-            "SCHEMA", "t", "TAG", "n", "NUMERIC",
-        ) == b"OK"
-        assert top_level(client, "idxnotext", "highlighting") is None
-        assert top_level(client, "idxnotext", "with_offsets") is None
-
     def test_fields_absent_before_fix_release(self):
         client = self._client(LEGACY_RELEASE)
         self._create(client)
 
-        assert top_level(client, "idx", "highlighting") is None
         for alias in ("plain", "sorted", "unsorted_form"):
             attribute = attribute_of(client, "idx", alias)
             assert b"sortable" not in attribute

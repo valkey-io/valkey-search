@@ -58,7 +58,6 @@ An array of key value pairs.
 - `punctuation` (string) list of punctuation characters.
 - `stopwords` (array of strings) list of `stopwords`.
 - `with_offsets` (string) "1" if offsets are included. "0" if offsets are not included
-- `highlighting` (string) `1` if the index can serve `HIGHLIGHT` and `SUMMARIZE`, `0` otherwise. Always `0`, since neither is implemented. Emitted only for indexes with text fields, as both act only on text, and requires `search.emulate-release` to be `1.3.0` or later. RediSearch instead reports the `NOHL` flag as a bare token in a top-level `index_options` array, which valkey-search does not emit.
 - `min_stem_size` (integer) Minimum stemming size for this field.
 
 ### TAG Field Type Extension

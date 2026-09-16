@@ -1301,23 +1301,11 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  // Redis reports NOHL as a bare token in an index_options array, which no
-  // generic key/value parser can read. Reported here as a pair stating whether
-  // highlighting is available, alongside the other text-schema fields, since
-  // HIGHLIGHT and SUMMARIZE act only on text. Adding the pair changes the reply
-  // shape, so it is gated alongside the score_field change above.
-  const bool highlighting_reported = VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 3, 0, "ft_info_highlighting", [] { return true; },
-      [] { return false; });
-
   int arrSize = 30;  // includes the filter_rejected_keys counter
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
                    // key-value pairs = 8 items)
-    if (highlighting_reported) {
-      arrSize += 2;
-    }
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
@@ -1418,14 +1406,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
 
     ValkeyModule_ReplyWithSimpleString(ctx, "with_offsets");
     ValkeyModule_ReplyWithSimpleString(ctx, with_offsets_ ? "1" : "0");
-
-    if (highlighting_reported) {
-      // HIGHLIGHT and SUMMARIZE act only on text fields and are not
-      // implemented, so this is always 0. NOHL therefore needs no storage: it
-      // asks to disable something that is already unavailable.
-      ValkeyModule_ReplyWithSimpleString(ctx, "highlighting");
-      ValkeyModule_ReplyWithSimpleString(ctx, "0");
-    }
 
     ValkeyModule_ReplyWithSimpleString(ctx, "min_stem_size");
     ValkeyModule_ReplyWithLongLong(ctx, min_stem_size_);

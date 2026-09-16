@@ -151,9 +151,45 @@ class TextIndexSchema {
   // Takes a borrowed key so neither scoring path (post-filter walk in
   // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
   // callers wrap their key in a BorrowedInternedStringPtr.
+  // No locking needed because only called from read phase.
   uint32_t GetKeyDocLen(BorrowedInternedStringPtr key) const {
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
+  }
+
+  // Locking-enabled version of GetKeyDocLen.
+  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key, bool lock) const {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) per_key_guard.emplace(per_key_text_indexes_mutex_);
+    return GetKeyDocLen(key);
+  }
+
+  // The scoring inputs a key's posting entry carries. Deliberately drops
+  // PostingValue::map: DeleteKeyData destroys the FlatPositionMap, so a pointer
+  // to it must not outlive the bucket lock, and scoring never reads positions.
+  struct KeyPostingStats {
+    uint32_t tf = 0;
+    uint32_t doc_len = 0;
+  };
+
+  // Per-key scoring lookup: resolves `word` in the key's own text index and
+  // returns that key's posting stats, holding the word's bucket mutex — the one
+  // CommitKeyData/DeleteKeyData take across a Postings insert/erase — so it is
+  // safe outside the read phase. nullopt when the key does not carry the word.
+  //
+  // `per_key_index` comes from GetPerKeyTextIndex() and is rebuilt wholesale on
+  // every mutation, so unlike a Postings pinned earlier it always reaches the
+  // live object: re-indexing a word's last holder destroys that Postings and
+  // installs a fresh one.
+  std::optional<KeyPostingStats> LookupKeyPosting(
+      const TextIndex &per_key_index, absl::string_view word,
+      BorrowedInternedStringPtr key) {
+    auto postings = per_key_index.GetPrefix().FindPostingsTarget(word);
+    if (!postings) return std::nullopt;
+    absl::MutexLock word_lock(&rax_target_mutex_pool_.Get(word));
+    auto entry = postings->LookupKey(key);
+    if (!entry) return std::nullopt;
+    return KeyPostingStats{entry->tf, entry->doc_len};
   }
 
   uint32_t GetKeyNorm(const InternedStringPtr &key) const {

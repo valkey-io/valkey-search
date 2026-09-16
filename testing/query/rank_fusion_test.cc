@@ -139,7 +139,7 @@ TEST_F(RRFTest, WindowTruncatesArmContribution) {
 
 TEST_F(RRFTest, ConstantVariationPreservesOrdering) {
   auto arm0 = Vec(N("doc:1", 0.1f), N("doc:2", 0.2f), N("doc:3", 0.3f));
-  for (uint32_t k : {1u, 60u, 1000u}) {
+  for (double k : {1.0, 60.0, 1000.0}) {
     std::vector<ArmInput> arms;
     arms.push_back({.neighbors = &arm0, .rrf_constant = k, .window = 0});
     auto fused = RRF(std::move(arms));

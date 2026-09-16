@@ -30,6 +30,7 @@
 #include "src/attribute.h"
 #include "src/attribute_data.h"
 #include "src/attribute_data_type.h"
+#include "src/expr/expr.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/text/text_index.h"
@@ -85,6 +86,7 @@ struct AttributeInfo {
 };
 
 class IndexSchema : public KeyspaceEventSubscription,
+                    public expr::Expression::CompileContext,
                     public std::enable_shared_from_this<IndexSchema> {
  public:
   static constexpr float kDefaultDocumentScore = 1.0f;
@@ -125,6 +127,11 @@ class IndexSchema : public KeyspaceEventSubscription,
     ResultCnt<std::atomic<uint64_t>> subscription_add;
     std::atomic<uint32_t> document_cnt{0};
     std::atomic<uint32_t> backfill_inqueue_tasks{0};
+    // Written only during index-time FILTER evaluation, which runs on the
+    // main thread, so it is a plain integer.
+    // Number of documents excluded from the index because they did not satisfy
+    // the FILTER expression.
+    uint64_t filter_rejected_keys{0};
     uint64_t mutation_queue_size_ ABSL_GUARDED_BY(mutex_){0};
     absl::Duration mutations_queue_delay_ ABSL_GUARDED_BY(mutex_);
     mutable absl::Mutex mutex_;
@@ -430,6 +437,21 @@ class IndexSchema : public KeyspaceEventSubscription,
     return attributes_;
   }
 
+  // Compile the FILTER against the current attributes. Separate from Create()
+  // because the RDB path only has its attributes once the supplemental
+  // content has been read. Idempotent; a no-op when there is no FILTER.
+  absl::Status CompileFilter();
+  bool HasFilter() const { return compiled_filter_ != nullptr; }
+  const std::string &GetFilterExpression() const {
+    return filter_expression_str_;
+  }
+
+  // CompileContext interface
+  absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
+  MakeReference(absl::string_view name, bool create) override;
+  absl::StatusOr<expr::Value> GetParam(absl::string_view s) const override;
+  bool UseFilterComparisonSemantics() const override { return true; }
+
   // Returns attributes sorted by alias (map key) for deterministic ordering.
   // Use this instead of iterating attributes_ directly in any serialization
   // path (RDB, FT.INFO, protobuf).
@@ -472,6 +494,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t fingerprint_{0};
   uint32_t version_{0};
   bool skip_initial_scan_{false};
+
+  std::string filter_expression_str_;
+  std::unique_ptr<expr::Expression> compiled_filter_;
 
   vmsdk::ThreadPool *mutations_thread_pool_{nullptr};
   std::vector<uint64_t> attributes_indexed_data_size_;
@@ -605,6 +630,14 @@ class IndexSchema : public KeyspaceEventSubscription,
   mutable vmsdk::TimeSlicedMRMWMutex time_sliced_mutex_;
   vmsdk::MainThreadAccessGuard<std::deque<Key>> multi_mutations_keys_;
   vmsdk::MainThreadAccessGuard<bool> schedule_multi_exec_processing_{false};
+
+  // Evaluates the compiled FILTER expression for a document. `open_key` is the
+  // still-open key of the document (may be null for a deleted key) and `key` is
+  // its name; both let references to fields not declared in the schema read
+  // their values directly off the key (HASH only). Runs on the main thread.
+  bool EvaluateFilter(const MutatedAttributes &mutated_attributes,
+                      ValkeyModuleCtx *ctx, ValkeyModuleKey *open_key,
+                      absl::string_view key) const;
 
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoad);
   FRIEND_TEST(IndexSchemaRDBTest, SaveAndLoadWithVectorSharing);

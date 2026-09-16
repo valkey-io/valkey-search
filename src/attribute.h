@@ -36,8 +36,6 @@ class Attribute {
   inline const std::string& GetAlias() const { return alias_; }
   inline const std::string& GetIdentifier() const { return identifier_; }
   std::shared_ptr<indexes::IndexBase> GetIndex() const { return index_; }
-  inline bool IsSortable() const { return sortable_; }
-  inline bool IsUnf() const { return unf_; }
   std::unique_ptr<data_model::Attribute> ToProto() const {
     auto attribute_proto = std::make_unique<data_model::Attribute>();
     attribute_proto->set_alias(alias_);

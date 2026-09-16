@@ -5,31 +5,21 @@
  */
 
 #include <algorithm>
-#include <ranges>
 #include <string>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "debug.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
-#include "src/query/response_generator.h"
-#include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
-#include "vmsdk/src/info.h"
 
 namespace valkey_search {
 namespace aggregate {
-
-CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
-TEST_COUNTER(ForceTimeoutAggregateCancels);
-DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
-DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
 struct RealIndexInterface : public IndexInterface {
   std::shared_ptr<IndexSchema> schema_;
@@ -211,294 +201,6 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   return absl::OkStatus();
 }
 
-// Forward declaration for recursive serialization
-void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
-
-void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
-  ValkeyModule_ReplyWithArray(ctx, vec->size());
-  for (const auto &elem : *vec) {
-    SerializeValueToResp(ctx, elem);
-  }
-}
-
-void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
-  if (value.IsArray()) {
-    SerializeArrayToResp(ctx, value.GetArray());
-  } else if (value.IsBool()) {
-    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
-  } else if (value.IsDouble()) {
-    // IsDouble() guarantees AsString() returns a value.
-    auto value_str = *value.AsString();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
-  } else if (value.IsString()) {
-    auto value_sv = value.GetStringView();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-  } else {
-    // Fallback for Nil and unknown types
-    ValkeyModule_ReplyWithNull(ctx);
-  }
-}
-
-bool ReplyWithValue(ValkeyModuleCtx *ctx,
-                    data_model::AttributeDataType data_type,
-                    std::string_view name, indexes::IndexerType indexer_type,
-                    const expr::Value &value, int dialect) {
-  if (value.IsNil()) {
-    // 1.3.0 fix: a field the key never had stays out of the reply, but
-    // something that evaluated to nothing is named with a nil value, which is
-    // what Redisearch does. Before the fix every nil was left out.
-    return VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "aggregate_nil_alias_named",
-        [&] {
-          if (value.IsMissing()) {
-            return false;
-          }
-          ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-          ValkeyModule_ReplyWithNull(ctx);
-          return true;
-        },
-        [] { return false; });
-  }
-
-  // Handle array values with RESP array serialization
-  if (value.IsArray()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    SerializeArrayToResp(ctx, value.GetArray());
-    return true;
-  }
-
-  if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    // Guarded by IsNil() check above; AsStringView always succeeds here.
-    auto value_sv = *value.AsStringView();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-  } else {
-    if (name != "$") {
-      indexes::AssertValidIndexerType(indexer_type);
-    }
-    std::string_view value_view = *value.AsStringView();
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    if (dialect == 2) {
-      ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
-                                         value_view.size());
-    } else {
-      std::string s = absl::StrCat("[", value_view, "]");
-      ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
-    }
-  }
-  return true;
-}
-
-// Process the query setup for vector vs non-vector queries and set up indices
-absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
-    ValkeyModuleCtx *ctx, std::vector<indexes::Neighbor> &neighbors,
-    AggregateParameters &parameters) {
-  size_t key_index = 0, scores_index = 0;
-
-  std::optional<std::string> vector_identifier;
-
-  if (parameters.load_key) {
-    key_index = AggregateParameters::kKeyColumn;
-  }
-  if (parameters.IsVectorQuery()) {
-    VMSDK_ASSIGN_OR_RETURN(
-        vector_identifier,
-        parameters.index_schema->GetIdentifier(parameters.attribute_alias));
-
-    scores_index = AggregateParameters::kScoreColumn;
-  }
-
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
-
-  return std::make_pair(key_index, scores_index);
-}
-
-// Process a single field value and convert it to the appropriate type
-absl::StatusOr<expr::Value> ProcessFieldValue(
-    std::string_view value, indexes::IndexerType indexer_type,
-    data_model::AttributeDataType data_type) {
-  switch (indexer_type) {
-    case indexes::IndexerType::kNumeric: {
-      auto numeric_value = vmsdk::To<double>(value);
-      if (numeric_value.ok()) {
-        return expr::Value(numeric_value.value());
-      } else {
-        // Return error status to indicate field should be skipped
-        return absl::InvalidArgumentError("Invalid numeric value");
-      }
-    }
-    default:
-      // JSON string values are already JSON-decoded when fetched/indexed
-      // (NormalizeJsonRecord), so they are treated the same as HASH values
-      // here. Decoding again would double-decode and corrupt escapes.
-      return expr::Value(value);
-  }
-}
-
-// Create records from neighbors and populate their fields
-absl::Status CreateRecordsFromNeighbors(
-    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
-    size_t key_index, size_t scores_index, RecordSet &records) {
-  auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
-
-  for (auto &n : neighbors) {
-    // One slot per record column. Not record_indexes_by_alias_.size(): that
-    // map holds a name per resolvable alias, which is neither an over- nor an
-    // under-count of the columns (a rename adds a key without adding a column;
-    // two columns reading one field add a column per output name). Size by the
-    // column table itself.
-    auto rec =
-        std::make_unique<Record>(parameters.record_info_by_index_.size());
-
-    // Set key field if requested
-    if (parameters.load_key) {
-      rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
-    }
-
-    // Set score field for vector queries
-    if (parameters.IsVectorQuery()) {
-      rec->fields_.at(scores_index) = expr::Value(n.score);
-    }
-
-    // Process attribute contents
-    if (n.attribute_contents.has_value() && !parameters.no_content) {
-      bool should_drop_record = false;
-
-      // 1/ Each column pulls its own value out of the fetched records, keyed
-      //    by the identifier that column sources. Columns whose identifier was
-      //    not fetched (__key, the score, and columns synthesized by a later
-      //    pipeline stage) are left as they are.
-      //
-      //    The record was sized from record_info_by_index_, so indexing it by
-      //    a field index is in range. CHECK rather than assert: asserts are
-      //    compiled out of release builds, which is how the slot-bookkeeping
-      //    corruption in #1251 went undetected into an out-of-bounds write.
-      CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
-      for (size_t i = 0; i < rec->fields_.size(); ++i) {
-        const auto &info = parameters.record_info_by_index_[i];
-        auto itr = n.attribute_contents->find(info.identifier_);
-        if (itr == n.attribute_contents->end()) {
-          continue;
-        }
-        auto processed_value =
-            ProcessFieldValue(vmsdk::ToStringView(itr->second.value.get()),
-                              info.data_type_, data_type);
-        if (processed_value.ok()) {
-          rec->fields_[i] = std::move(*processed_value);
-        } else if (info.data_type_ != indexes::IndexerType::kNumeric) {
-          // For JSON unquote failures, drop the entire record
-          should_drop_record = true;
-          break;
-        }
-        // For numeric failures, skip the field but continue with the record
-      }
-
-      if (should_drop_record) {
-        continue;  // Skip adding this record to the set
-      }
-
-      // 2/ Anything fetched that no column sources is passed through as an
-      //    extra field. This is how LOAD * surfaces the contents of a key,
-      //    since it builds no columns of its own.
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
-        if (parameters.record_identifiers_.contains(name)) {
-          continue;
-        }
-        rec->extra_fields_.push_back(std::make_pair(
-            std::string(name),
-            expr::Value(vmsdk::ToStringView(records_map_value.value.get()))));
-      }
-    }
-
-    records.push_back(std::move(rec));
-  }
-
-  return absl::OkStatus();
-}
-
-// Execute all aggregation stages on the record set
-absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
-                                      RecordSet &records) {
-  agg_input_records.Increment(records.size());
-  for (auto &stage : parameters.stages_) {
-    // Check for timeout
-    if (parameters.cancellation_token->IsCancelled() ||
-        // Testing purpose only
-        ForceTimeoutAggregate.GetValue()) {
-      ForceTimeoutAggregateCancels.Increment(1);
-      return absl::CancelledError(
-          "Aggregate operation cancelled due to timeout");
-    }
-    VMSDK_RETURN_IF_ERROR(stage->Execute(records));
-  }
-  agg_output_records.Increment(records.size());
-  return absl::OkStatus();
-}
-
-// Generate the final response from processed records
-absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
-                              AggregateParameters &parameters,
-                              RecordSet &records) {
-  ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
-
-  while (!records.empty()) {
-    auto rec = records.pop_front();
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
-
-    size_t array_count = 0;
-
-    // Process referenced fields
-    CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
-    for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].output_name_,
-              parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
-              parameters.dialect)) {
-        array_count += 2;
-      }
-    }
-
-    // Process unreferenced (extra) fields
-    for (const auto &[name, value] : rec->extra_fields_) {
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              name, indexes::IndexerType::kNone, value, parameters.dialect)) {
-        array_count += 2;
-      }
-    }
-
-    ValkeyModule_ReplySetArrayLength(ctx, array_count);
-  }
-
-  return absl::OkStatus();
-}
-
-absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
-                            std::vector<indexes::Neighbor> &neighbors,
-                            AggregateParameters &parameters) {
-  // 1. Process query setup and get key/score indices
-  VMSDK_ASSIGN_OR_RETURN(
-      auto indices, ProcessNeighborsForProcessing(ctx, neighbors, parameters));
-  auto [key_index, scores_index] = indices;
-
-  // 2. Create records from neighbors
-  RecordSet records(&parameters);
-  VMSDK_RETURN_IF_ERROR(CreateRecordsFromNeighbors(
-      neighbors, parameters, key_index, scores_index, records));
-
-  // 3. Execute aggregation stages
-  VMSDK_RETURN_IF_ERROR(ExecuteAggregationStages(parameters, records));
-
-  // 4. Generate the response
-  VMSDK_RETURN_IF_ERROR(GenerateResponse(ctx, parameters, records));
-
-  return absl::OkStatus();
-}
-
 // Returns whether the entire search results are needed to be able to form the
 // aggregated response.
 bool AggregateParameters::RequiresCompleteResults() const {
@@ -522,7 +224,7 @@ query::SerializationRange AggregateParameters::GetSerializationRange() const {
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
                                     query::SearchResult &result) {
-  auto status = SendReplyInner(ctx, result.neighbors, *this);
+  auto status = RunAggregatePipeline(ctx, result.neighbors, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, status.message().data());

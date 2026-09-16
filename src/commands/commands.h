@@ -8,11 +8,17 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 #define VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
 
+#include <memory>
+#include <vector>
+
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "src/coordinator/client_pool.h"
 #include "src/query/search.h"
+#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/command_parser.h"
+#include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -41,6 +47,7 @@ constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
+constexpr absl::string_view kHybridCommand{"FT.HYBRID"};
 constexpr absl::string_view kInternalUpdateCommand{"FT.INTERNAL_UPDATE"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
@@ -80,8 +87,32 @@ absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc);
 absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
+absl::Status FTHybridCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                         int argc);
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc);
+
+// Generic dispatch entry shared by FT.SEARCH, FT.AGGREGATE, FT.HYBRID. The
+// `Cmd` type must satisfy the duck-typed contract documented in commands.cc:
+//   - Field access: index_schema_name, db_num, index_schema,
+//   cancellation_token,
+//     timeout_ms, enable_partial_results, local_only,
+//     index_fingerprint_version, slot_fingerprint, blocked_client.
+//   - Static methods:
+//       static absl::Status Cmd::ParseAfterIndex(Cmd&, vmsdk::ArgsIterator&);
+//       static absl::Status Cmd::ExecuteSyncLocal(ValkeyModuleCtx*,
+//                                                 std::unique_ptr<Cmd>);
+//       static absl::Status Cmd::DispatchLocalAsync(
+//           ValkeyModuleCtx*, std::unique_ptr<Cmd>, vmsdk::ThreadPool*);
+//       static absl::Status Cmd::DispatchFanoutAsync(
+//           ValkeyModuleCtx*, std::unique_ptr<Cmd>,
+//           std::vector<vmsdk::cluster_map::NodeInfo>&,
+//           coordinator::ClientPool*, vmsdk::ThreadPool*);
+// The dispatch hooks own BlockedClient setup (different commands need
+// different async::Reply/Timeout/Free callbacks).
+template <typename Cmd>
+absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                            int argc, std::unique_ptr<Cmd> parameters);
 
 //
 // Common stuff for FT.SEARCH and FT.AGGREGATE command
@@ -89,10 +120,37 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
 struct QueryCommand : public query::SearchParameters {
   QueryCommand(int db_num) : query::SearchParameters(0, nullptr, db_num) {}
   //
-  // Start of command.
+  // Start of command. Thin wrapper around ExecuteCommand<QueryCommand> kept
+  // for source-compat with FTSearchCmd / FTAggregateCmd call sites.
   //
   static absl::Status Execute(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                               int argc, std::unique_ptr<QueryCommand> cmd);
+
+  // ----- Hooks consumed by ExecuteCommand<QueryCommand> -----
+
+  // Parse the leading bare query string and forward the rest of `itr` to the
+  // subclass-specific ParseCommand. Called by ExecuteCommand after index name.
+  static absl::Status ParseAfterIndex(QueryCommand &cmd,
+                                      vmsdk::ArgsIterator &itr);
+
+  // Synchronous local execution path used inside MULTI/EXEC or when the
+  // server does not support parallel queries. Runs query::Search inline,
+  // sends the reply, and returns OkStatus.
+  static absl::Status ExecuteSyncLocal(ValkeyModuleCtx *ctx,
+                                       std::unique_ptr<QueryCommand> cmd);
+
+  // Asynchronous local dispatch on the reader thread pool. Sets up the
+  // blocked-client callbacks before scheduling.
+  static absl::Status DispatchLocalAsync(ValkeyModuleCtx *ctx,
+                                         std::unique_ptr<QueryCommand> cmd,
+                                         vmsdk::ThreadPool *pool);
+
+  // Asynchronous cluster-fanout dispatch. Sets up the blocked-client callbacks
+  // before fanning out.
+  static absl::Status DispatchFanoutAsync(
+      ValkeyModuleCtx *ctx, std::unique_ptr<QueryCommand> cmd,
+      std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
+      coordinator::ClientPool *client_pool, vmsdk::ThreadPool *pool);
 
   //
   // Parse command (after index and query string)

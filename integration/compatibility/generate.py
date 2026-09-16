@@ -50,6 +50,11 @@ class BaseCompatibilityTest:
     
     # Subclasses must define this
     ANSWER_FILE_NAME = None
+
+    # Reference engine image. Subclasses override it when they need a command
+    # the default image does not implement -- FT.HYBRID, for instance, only
+    # exists in the Redis 8.4+ query engine. The container name carries a
+    # random suffix either way, so two generators never collide on it.
     
     @classmethod
     def setup_class(cls):

@@ -227,6 +227,10 @@ static std::vector<TestStage> TestStages{
     {"FILTER @fred", nullptr},
     {"FILTER @n1 + @n2", nullptr},
     {"FILTER @n1", "FILTER: @n1"},
+    // The dump shows the bound the clause itself parsed. ResolveSortByBounds
+    // raises it afterwards from a neighbouring LIMIT, which is why a SORTBY
+    // no longer truncates a wider page; what is printed here is the default
+    // it starts from.
     {"SORtBY 1 @n1", "SORTBY: ASC:@n1 MAX:10"},
     {"SORTBY 2 @n1 ASC", "SORTBY: ASC:@n1 MAX:10"},
     {"SORTBY 2 @n1 DESC", "SORTBY: DESC:@n1 MAX:10"},

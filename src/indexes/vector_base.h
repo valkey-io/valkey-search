@@ -253,6 +253,9 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   virtual size_t GetCapacity() const = 0;
   bool GetNormalize() const { return normalize_; }
+  data_model::DistanceMetric GetDistanceMetric() const {
+    return distance_metric_;
+  }
   int GetDBNum() const { return db_num_; }
   void OnSwapDB(int new_db_num) override { db_num_ = new_db_num; }
   std::unique_ptr<data_model::Index> ToProto() const override;
@@ -335,6 +338,17 @@ class VectorBase : public IndexBase {
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
   }
+  // Distance between `query` and the vector in `record`, where `record` is the
+  // raw bytes just read back from the database rather than anything the index
+  // holds.
+  //
+  // Used when a document was mutated after the search scored it: the distance
+  // the neighbor carries describes the vector the search saw, and the reply is
+  // about a different one. Taking the bytes as an argument is what keeps this
+  // callable from the main thread, where the index structures are not held
+  // under a reader lock.
+  absl::StatusOr<float> RecomputeDistance(absl::string_view record,
+                                          absl::string_view query) const;
   const InternedStringPtr &GetInternedAttributeIdentifier() const {
     return interned_attribute_identifier_;
   }

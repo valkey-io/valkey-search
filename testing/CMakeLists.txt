@@ -48,6 +48,7 @@ target_link_libraries(testing_common_coordinator INTERFACE client_pool)
 # 1. Commands Test Suite - consolidates FT command execution tests
 set(COMMANDS_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_fusion_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list_test.cc
@@ -69,7 +70,8 @@ finalize_test_flags(commands_test)
 # Commands Parser Test Suite - dedicated suite for aggregate and create command parsing tests
 set(COMMANDS_PARSER_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_parser_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/ft_create_parser_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_parser_test.cc)
 
 add_executable(commands_parser_test ${COMMANDS_PARSER_TEST_SOURCES})
 target_include_directories(commands_parser_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -159,6 +161,8 @@ finalize_test_flags(core_test)
 set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/find_vector_delimiter_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/query/multi_search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/query/rank_fusion_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})
@@ -167,6 +171,11 @@ target_include_directories(query_test PUBLIC ${CMAKE_CURRENT_LIST_DIR}/query)
 target_link_libraries(query_test PRIVATE testing_common_base)
 target_link_libraries(query_test PRIVATE testing_common_coordinator)
 target_link_libraries(query_test PRIVATE fanout)
+target_link_libraries(query_test PRIVATE multi_search)
+target_link_libraries(query_test PRIVATE rank_fusion)
+# multi_search transitively depends on AggregateParameters' vtable, defined in
+# the commands library (ft_aggregate.cc).
+target_link_libraries(query_test PRIVATE commands)
 target_link_libraries(query_test PRIVATE response_generator)
 target_link_libraries(query_test PRIVATE search_converter)
 target_link_libraries(query_test PRIVATE scoring)
@@ -176,7 +185,8 @@ finalize_test_flags(query_test)
 # 1. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/metadata_manager_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/coordinator/multi_search_test.cc)
 
 add_executable(coordinator_test ${COORDINATOR_TEST_SOURCES})
 target_include_directories(coordinator_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

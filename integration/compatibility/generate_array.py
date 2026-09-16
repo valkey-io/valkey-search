@@ -330,8 +330,9 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
     def test_sortby_missing_field(self, key_type):
         """SORTBY on an absent field.
 
-        Compare answers kUNORDERED against a nil and SortFunctor treats that
-        as a tie, so valkey leaves such records in scan order.
+        A record with no value for the key sorts after every record that has
+        one, ascending and descending alike, and two such records tie so the
+        next sort key decides between them. Both are Redisearch's rule.
         """
         self.setup_data(DATASET_EMPTY, key_type)
         for tail in [
@@ -339,6 +340,47 @@ class TestArrayInputCompatibility(BaseCompatibilityTest):
             "sortby 2 @t2 desc",
             "sortby 2 @n2 asc",
             "sortby 4 @t1 asc @n2 asc",
+        ]:
+            self._missing_pipeline(key_type, tail)
+
+    def test_compare_against_a_missing_field(self, key_type):
+        """A comparison with a missing operand matches nothing.
+
+        `Compare` answers "unordered" when either side is absent, and every
+        comparison operator used to read that as equality -- so `@a == @b` was
+        true whenever either field was missing, and so were `<=` and `>=`.
+        Comparing against a literal hid it, because the record was dropped for
+        other reasons; comparing two fields is what shows it.
+
+        Both are swept because the two directions fail differently: `==` and
+        `<=` used to admit records they should not, `!=` used to reject
+        records it should not.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for op in ["==", "!=", "<", "<=", ">", ">="]:
+            self._missing_pipeline(key_type, f"filter (@n2){op}(@n1)")
+            self._missing_pipeline(key_type, f"filter (@t2){op}(@t1)")
+        # And the same comparison as an APPLY, where the value itself reaches
+        # the reply rather than deciding whether the row survives.
+        for op in ["==", "!="]:
+            self._missing_pipeline(
+                key_type, f"apply (@n2){op}(@n1) as cmp")
+
+    def test_groupby_missing_field_many_groups(self, key_type):
+        """Grouping on an absent field, with enough distinct present values
+        that a hash collision is certain rather than occasional.
+
+        GroupKey compared its keys with the operator above, so a record with
+        no value was "equal" to whichever key the hash map happened to compare
+        it against, and it joined that group. With four distinct values it
+        almost never showed; the defect was found through a case with more.
+        """
+        self.setup_data(DATASET_EMPTY, key_type)
+        for tail in [
+            "groupby 1 @n2 reduce count 0 as c",
+            "groupby 1 @n1 reduce count 0 as c",
+            "groupby 2 @n2 @t2 reduce count 0 as c",
+            "groupby 1 @n2 reduce sum 1 @n1 as total",
         ]:
             self._missing_pipeline(key_type, tail)
 

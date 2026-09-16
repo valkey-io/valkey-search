@@ -334,7 +334,6 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       stop_words_(index_schema_proto.stop_words().begin(),
                   index_schema_proto.stop_words().end()),
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
-      no_hl_(index_schema_proto.no_hl()),
       filter_expression_str_(
           index_schema_proto.has_filter() ? index_schema_proto.filter() : ""),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
@@ -1302,14 +1301,13 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  // Redis reports the index-level flags of FT.CREATE as bare tokens in an
-  // index_options array. Only NOHL is reported: NOOFFSETS is not derived from
-  // with_offsets_, which defaults to false on a schema proto that predates the
-  // field, so an index restored from an older RDB would claim NOOFFSETS it was
-  // never created with. Adding the pair changes the reply shape, so it is gated
-  // alongside the score_field change above.
-  const bool index_options_reported = VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 3, 0, "ft_info_index_options", [] { return true; },
+  // Redis reports NOHL as a bare token in an index_options array, which no
+  // generic key/value parser can read. Reported here as a pair stating whether
+  // highlighting is available, which is what a client actually needs to know.
+  // Adding the pair changes the reply shape, so it is gated alongside the
+  // score_field change above.
+  const bool highlighting_reported = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_info_highlighting", [] { return true; },
       [] { return false; });
 
   int arrSize = 30;  // includes the filter_rejected_keys counter
@@ -1318,19 +1316,19 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
                    // key-value pairs = 8 items)
   }
-  if (index_options_reported) {
+  if (highlighting_reported) {
     arrSize += 2;
   }
   ValkeyModule_ReplyWithArray(ctx, arrSize);
   ValkeyModule_ReplyWithSimpleString(ctx, "index_name");
   ValkeyModule_ReplyWithSimpleString(ctx, name_.data());
 
-  if (index_options_reported) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "index_options");
-    ValkeyModule_ReplyWithArray(ctx, no_hl_ ? 1 : 0);
-    if (no_hl_) {
-      ValkeyModule_ReplyWithSimpleString(ctx, "NOHL");
-    }
+  if (highlighting_reported) {
+    // HIGHLIGHT and SUMMARIZE are not implemented, so this is always 0. NOHL is
+    // accepted by FT.CREATE and needs no storage: it asks to disable something
+    // that is already unavailable.
+    ValkeyModule_ReplyWithSimpleString(ctx, "highlighting");
+    ValkeyModule_ReplyWithSimpleString(ctx, "0");
   }
 
   ValkeyModule_ReplyWithSimpleString(ctx, "index_definition");
@@ -1460,7 +1458,6 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto() const {
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
-  index_schema_proto->set_no_hl(no_hl_);
   index_schema_proto->set_score(score_);
   if (score_field_.has_value()) {
     index_schema_proto->set_score_field(score_field_.value());

@@ -150,7 +150,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   absl::StatusOr<std::shared_ptr<indexes::IndexBase>> GetIndex(
       absl::string_view attribute_alias) const;
   inline bool HasTextOffsets() const { return with_offsets_; }
-  inline bool HasNoHl() const { return no_hl_; }
   inline uint32_t GetMinStemSize() const { return min_stem_size_; }
   inline FieldMaskPredicate GetStemTextFieldMask() const {
     return stem_text_field_mask_;
@@ -496,7 +495,6 @@ class IndexSchema : public KeyspaceEventSubscription,
   uint64_t fingerprint_{0};
   uint32_t version_{0};
   bool skip_initial_scan_{false};
-  bool no_hl_{false};
 
   std::string filter_expression_str_;
   std::unique_ptr<expr::Expression> compiled_filter_;

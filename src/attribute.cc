@@ -21,17 +21,20 @@ int Attribute::RespondWithInfo(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithSimpleString(ctx, "user_indexed_memory");
   ValkeyModule_ReplyWithLongLong(ctx, index_schema->GetSize(GetAlias()));
   int added_fields = index_->RespondWithInfo(ctx);
-  // Redis reports SORTABLE and UNF as bare tokens, present only when declared.
+  // Redis reports these as bare tokens, which no generic key/value parser can
+  // read, so they are reported as pairs like the other attribute properties.
   added_fields += VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 3, 0, "ft_info_sortable_flags",
       [&]() {
         int emitted = 0;
         if (sortable_) {
-          ValkeyModule_ReplyWithSimpleString(ctx, "SORTABLE");
-          ++emitted;
+          ValkeyModule_ReplyWithSimpleString(ctx, "sortable");
+          ValkeyModule_ReplyWithSimpleString(ctx, "1");
+          emitted += 2;
           if (unf_) {
-            ValkeyModule_ReplyWithSimpleString(ctx, "UNF");
-            ++emitted;
+            ValkeyModule_ReplyWithSimpleString(ctx, "unf");
+            ValkeyModule_ReplyWithSimpleString(ctx, "1");
+            emitted += 2;
           }
         }
         return emitted;

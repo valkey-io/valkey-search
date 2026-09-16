@@ -729,11 +729,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       index_schema_proto.set_skip_initial_scan(true);
     }
 
-    // Highlighting is not supported, so NOHL only affects what FT.INFO reports
+    // Highlighting is not supported, so NOHL is accepted and ignored
     VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoHlParam, false, itr));
-    if (res) {
-      index_schema_proto.set_no_hl(true);
-    }
 
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(

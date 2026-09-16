@@ -28,7 +28,7 @@ The LOCAL response contains both the definition of the index as well as the stat
 An array of key value pairs.
 
 - `index_name` (string) The index name
-- `index_options` (array of bare tokens) The index-level options the index was created with. Contains `NOHL` if `FT.CREATE` was given `NOHL`, and is otherwise empty. Requires `search.emulate-release` to be `1.3.0` or later; below that the field is not emitted at all. Note that `NOOFFSETS` is not reported here even when set, unlike RediSearch.
+- `highlighting` (string) `1` if the index can serve `HIGHLIGHT` and `SUMMARIZE`, `0` otherwise. Always `0`, since neither is implemented. Requires `search.emulate-release` to be `1.3.0` or later; below that the field is not emitted. RediSearch instead reports the `NOHL` flag as a bare token in an `index_options` array, which valkey-search does not emit.
 - `index_definition` (an array of key/value pairs)
   - `key_type` (string) `HASH` or `JSON`
   - `prefixes` (array of strings) The declared prefixes for this index
@@ -43,8 +43,8 @@ An array of key value pairs.
   - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field.
   - `type` (string) One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`
   - Type-specific extension (see below)
-  - `SORTABLE` (bare token) Present only if the attribute was declared `SORTABLE`. Requires `search.emulate-release` >= 1.3.0.
-  - `UNF` (bare token) Present only if the attribute was declared `SORTABLE UNF`, and always immediately after `SORTABLE`. Requires `search.emulate-release` >= 1.3.0.
+  - `sortable` (string) `1` if the attribute was declared `SORTABLE`; the pair is omitted otherwise. Requires `search.emulate-release` >= 1.3.0. RediSearch reports this as a bare `SORTABLE` token with no value.
+  - `unf` (string) `1` if the attribute was declared `SORTABLE UNF`; the pair is omitted otherwise, and it never appears without `sortable`. Requires `search.emulate-release` >= 1.3.0. RediSearch reports this as a bare `UNF` token with no value.
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.

@@ -52,7 +52,7 @@ FT.CREATE <index-name>
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
 
-- `NOHL` (optional): In RediSearch this disables the storage of the byte offsets used to highlight matches within a field. Highlighting is not implemented, so this parameter is accepted for compatibility and has no effect. Note that it does not disable the per-word offsets controlled by `NOOFFSETS`, which phrase and slop-based matching require.
+- `NOHL` (optional): In RediSearch this disables the storage of the byte offsets used to highlight matches within a field. Highlighting is not implemented, so this parameter is accepted for compatibility and has no effect; [`FT.INFO`](ft.info.md) reports `highlighting` as `0` for every index regardless. Note that it does not disable the per-word offsets controlled by `NOOFFSETS`, which phrase and slop-based matching require.
 
 - `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: [a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with].
 

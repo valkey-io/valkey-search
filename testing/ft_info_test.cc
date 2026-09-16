@@ -62,13 +62,13 @@ constexpr absl::string_view kFixedScoreInfoSegment =
     "+default_score\r\n1\r\n+score_field\r\n+\r\n";
 constexpr absl::string_view kLegacyScoreInfoSegment =
     "+default_score\r\n$1\r\n1\r\n";
-// Emitted only at 1.3.0 and later. Empty for every case below, none of which
-// sets no_hl.
-constexpr absl::string_view kIndexOptionsSegment = "+index_options\r\n*0\r\n";
+// Emitted only at 1.3.0 and later, always 0 since highlighting is not
+// implemented.
+constexpr absl::string_view kHighlightingSegment = "+highlighting\r\n+0\r\n";
 
 // Rewrites a fixed-shape expectation into the pre-1.3.0 shape. Replies that do
 // not contain an index_definition block (error cases) are returned unchanged.
-// index_options is gated at the same version, so it is dropped here too, which
+// highlighting is gated at the same version, so it is dropped here too, which
 // shrinks the top-level array by the two elements of that pair.
 std::string ToLegacyScoreInfoShape(absl::string_view fixed) {
   if (!absl::StrContains(fixed, kFixedScoreInfoSegment)) {
@@ -78,7 +78,7 @@ std::string ToLegacyScoreInfoShape(absl::string_view fixed) {
       fixed, {{"+index_definition\r\n*8\r\n", "+index_definition\r\n*6\r\n"},
               {"*32\r\n+index_name", "*30\r\n+index_name"},
               {"*40\r\n+index_name", "*38\r\n+index_name"},
-              {kIndexOptionsSegment, ""},
+              {kHighlightingSegment, ""},
               {kFixedScoreInfoSegment, kLegacyScoreInfoSegment}});
 }
 

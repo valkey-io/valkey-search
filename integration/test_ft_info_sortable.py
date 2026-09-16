@@ -1,10 +1,11 @@
-"""Integration tests for SORTABLE / UNF in the FT.INFO attributes reply.
+"""Integration tests for the FT.INFO fields added alongside NOHL / SORTABLE UNF.
 
-Redis reports SORTABLE and UNF as bare tokens on each attribute, present only
-when declared. Adding them changes the shape of the attributes array, so the
-fix is gated behind `search.emulate-release` >= 1.3.0 (see COMPATIBILITY.md).
-These tests run under debug-mode so the ceiling can be lifted to the (as yet
-unreleased) fix version.
+Redis reports these as bare tokens with no value, which no generic key/value
+parser can read, so they are reported here as pairs: `sortable` / `unf` on the
+attribute, and a top-level `highlighting` stating whether highlighting is
+available at all. Both change the reply shape, so they are gated behind
+`search.emulate-release` >= 1.3.0 (see COMPATIBILITY.md). These tests run under
+debug-mode so the ceiling can be lifted to the (as yet unreleased) fix version.
 """
 
 import pytest
@@ -17,19 +18,21 @@ FIX_RELEASE = "1.3.0"
 LEGACY_RELEASE = "1.0.0"
 
 
-def index_options(client, index_name):
-    """Return the index_options array from FT.INFO."""
+def top_level(client, index_name, field):
+    """Return the value of a top-level FT.INFO field, or None if absent."""
     info = client.execute_command("FT.INFO", index_name)
-    return info[info.index(b"index_options") + 1]
+    key = field.encode()
+    return info[info.index(key) + 1] if key in info else None
 
 
-def attribute_flags(client, index_name, alias):
-    """Return the flat attribute entry from FT.INFO for one alias."""
+def attribute_of(client, index_name, alias):
+    """Return one attribute entry from FT.INFO as a {key: value} dict."""
     info = client.execute_command("FT.INFO", index_name)
     attributes = info[info.index(b"attributes") + 1]
     for attribute in attributes:
-        if attribute[attribute.index(b"attribute") + 1] == alias.encode():
-            return [element for element in attribute if isinstance(element, bytes)]
+        pairs = dict(zip(attribute[::2], attribute[1::2]))
+        if pairs.get(b"attribute") == alias.encode():
+            return pairs
     raise AssertionError(f"attribute {alias} not found in FT.INFO")
 
 
@@ -47,66 +50,73 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
     def _create(self, client):
         assert client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "p:",
+            "NOHL",
             "SCHEMA",
             "plain", "TAG",
             "sorted", "TAG", "SORTABLE",
             "unsorted_form", "TAG", "SORTABLE", "UNF",
         ) == b"OK"
 
-    def test_flags_reported_when_declared(self):
+    def test_attribute_pairs_reported_when_declared(self):
         client = self._client()
         self._create(client)
 
-        assert b"SORTABLE" not in attribute_flags(client, "idx", "plain")
-        assert b"UNF" not in attribute_flags(client, "idx", "plain")
+        plain = attribute_of(client, "idx", "plain")
+        assert b"sortable" not in plain
+        assert b"unf" not in plain
 
-        sorted_flags = attribute_flags(client, "idx", "sorted")
-        assert b"SORTABLE" in sorted_flags
-        assert b"UNF" not in sorted_flags
+        sorted_attr = attribute_of(client, "idx", "sorted")
+        assert sorted_attr[b"sortable"] == b"1"
+        assert b"unf" not in sorted_attr
 
-        unf_flags = attribute_flags(client, "idx", "unsorted_form")
-        assert b"SORTABLE" in unf_flags
-        assert b"UNF" in unf_flags
-        # UNF follows SORTABLE, as in Redis.
-        assert unf_flags.index(b"UNF") == unf_flags.index(b"SORTABLE") + 1
+        unf_attr = attribute_of(client, "idx", "unsorted_form")
+        assert unf_attr[b"sortable"] == b"1"
+        assert unf_attr[b"unf"] == b"1"
 
-    def test_flags_absent_before_fix_release(self):
-        client = self._client(LEGACY_RELEASE)
-        self._create(client)
-
-        for alias in ("plain", "sorted", "unsorted_form"):
-            flags = attribute_flags(client, "idx", alias)
-            assert b"SORTABLE" not in flags
-            assert b"UNF" not in flags
-
-    def test_index_options_reports_nohl(self):
-        """Redis reports NOHL as a bare token in index_options."""
+    def test_every_attribute_entry_stays_pairwise(self):
+        """No bare tokens: each attribute entry must have an even length."""
         client = self._client()
-        assert client.execute_command(
-            "FT.CREATE", "idxnohl", "ON", "HASH", "PREFIX", "1", "n:",
-            "NOHL", "SCHEMA", "t", "TEXT",
-        ) == b"OK"
-        assert index_options(client, "idxnohl") == [b"NOHL"]
-
-    def test_index_options_empty_without_flags(self):
-        client = self._client()
-        self._create(client)
-        assert index_options(client, "idx") == []
-
-    def test_index_options_absent_before_fix_release(self):
-        client = self._client(LEGACY_RELEASE)
         self._create(client)
         info = client.execute_command("FT.INFO", "idx")
-        assert b"index_options" not in info
+        attributes = info[info.index(b"attributes") + 1]
+        for attribute in attributes:
+            assert len(attribute) % 2 == 0, attribute
 
-    def test_flags_survive_a_reload(self):
+    def test_highlighting_is_reported_as_zero(self):
+        """HIGHLIGHT and SUMMARIZE are not implemented, so this is always 0."""
+        client = self._client()
+        self._create(client)
+        assert top_level(client, "idx", "highlighting") == b"0"
+
+    def test_highlighting_reported_without_nohl(self):
+        """The value is a capability, not an echo of NOHL."""
+        client = self._client()
+        assert client.execute_command(
+            "FT.CREATE", "idxplain", "ON", "HASH", "PREFIX", "1", "q:",
+            "SCHEMA", "t", "TAG",
+        ) == b"OK"
+        assert top_level(client, "idxplain", "highlighting") == b"0"
+
+    def test_fields_absent_before_fix_release(self):
+        client = self._client(LEGACY_RELEASE)
+        self._create(client)
+
+        assert top_level(client, "idx", "highlighting") is None
+        for alias in ("plain", "sorted", "unsorted_form"):
+            attribute = attribute_of(client, "idx", alias)
+            assert b"sortable" not in attribute
+            assert b"unf" not in attribute
+
+    def test_attribute_pairs_survive_a_reload(self):
         """The flags are persisted on the attribute, not recomputed from argv."""
         client = self._client()
         self._create(client)
         client.execute_command("DEBUG", "RELOAD")
 
-        unf_flags = attribute_flags(client, "idx", "unsorted_form")
-        assert b"SORTABLE" in unf_flags
-        assert b"UNF" in unf_flags
-        assert b"SORTABLE" in attribute_flags(client, "idx", "sorted")
-        assert b"UNF" not in attribute_flags(client, "idx", "sorted")
+        unf_attr = attribute_of(client, "idx", "unsorted_form")
+        assert unf_attr[b"sortable"] == b"1"
+        assert unf_attr[b"unf"] == b"1"
+
+        sorted_attr = attribute_of(client, "idx", "sorted")
+        assert sorted_attr[b"sortable"] == b"1"
+        assert b"unf" not in sorted_attr

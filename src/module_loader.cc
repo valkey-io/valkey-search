@@ -57,6 +57,41 @@ vmsdk::module::Options options = {
                     &vmsdk::CreateCommand<valkey_search::FTDropIndexCmd>,
             },
             {
+                .cmd_name = valkey_search::kAliasAddCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasAddCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTAliasAddCmd>,
+                .arity = 3,
+            },
+            {
+                .cmd_name = valkey_search::kAliasDelCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasDelCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTAliasDelCmd>,
+                .arity = 2,
+            },
+            {
+                .cmd_name = valkey_search::kAliasUpdateCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasUpdateCmdPermissions),
+                .flags = {vmsdk::module::kWriteFlag, vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAliasUpdateCmd>,
+                .arity = 3,
+            },
+            {
+                .cmd_name = valkey_search::kAliasListCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kAliasListCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kFastFlag},
+                .cmd_func =
+                    &vmsdk::CreateCommand<valkey_search::FTAliasListCmd>,
+                .arity = 1,
+            },
+            {
                 .cmd_name = valkey_search::kInfoCommand,
                 .permissions =
                     ACLPermissionFormatter(valkey_search::kInfoCmdPermissions),

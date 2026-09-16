@@ -42,6 +42,10 @@ constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
 constexpr absl::string_view kInternalUpdateCommand{"FT.INTERNAL_UPDATE"};
+constexpr absl::string_view kAliasAddCommand{"FT.ALIASADD"};
+constexpr absl::string_view kAliasDelCommand{"FT.ALIASDEL"};
+constexpr absl::string_view kAliasUpdateCommand{"FT.ALIASUPDATE"};
+constexpr absl::string_view kAliasListCommand{"FT.ALIASLIST"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -57,6 +61,14 @@ const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
     kSearchCategory, kSlowCategory, kAdminCategory, kDangerousCategory};
+const absl::flat_hash_set<absl::string_view> kAliasAddCmdPermissions{
+    kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kAliasDelCmdPermissions{
+    kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kAliasUpdateCmdPermissions{
+    kSearchCategory, kWriteCategory, kFastCategory};
+const absl::flat_hash_set<absl::string_view> kAliasListCmdPermissions{
+    kSearchCategory, kReadCategory, kFastCategory};
 
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
@@ -82,6 +94,14 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc);
+absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                           int argc);
+absl::Status FTAliasDelCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                           int argc);
+absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                              int argc);
+absl::Status FTAliasListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                            int argc);
 
 //
 // Common stuff for FT.SEARCH and FT.AGGREGATE command

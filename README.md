@@ -18,6 +18,10 @@ FT.INFO
 FT._LIST
 FT.SEARCH
 FT.AGGREGATE
+FT.ALIASADD
+FT.ALIASDEL
+FT.ALIASLIST
+FT.ALIASUPDATE
 ```
 
 For a detailed description of the supported commands and configuration options, see the [Command Reference](https://valkey.io/commands/#search).

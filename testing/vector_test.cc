@@ -599,11 +599,17 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // RecomputeDistance across every storage type and every distance metric.
 //
 // The reply path refreshes a mutated document's distance by handing these
-// functions the bytes the document holds now, and the answer has to be the one
-// the index itself would give. Each combination reaches a different hnswlib
-// space, each of the 2-byte types rounds differently, and COSINE additionally
-// folds a normalization into the computation -- so agreement is worth checking
-// per combination rather than once.
+// functions the bytes the document holds now, and the answer has to be the
+// one the index itself would give. Each combination reaches a different
+// hnswlib space, each of the 2-byte types rounds differently, and COSINE
+// additionally folds a normalization into the computation -- so agreement is
+// worth checking per combination rather than once.
+//
+// One template with a named instantiation per storage type, rather than a
+// TYPED_TEST suite: gtest registers a typed test's name through typeid of
+// each type in the list, and arm64 macOS ships no typeinfo for _Float16, so
+// the suite compiled everywhere and then failed to link there. Naming the
+// instantiations is also how space_distance_test.cc covers these types.
 template <typename T>
 class RecomputeDistanceTest : public VectorIndexTest {
  protected:
@@ -635,111 +641,138 @@ class RecomputeDistanceTest : public VectorIndexTest {
         CreateFlatVectorIndexProto(kDims, metric, 10, 10),
         this->attribute_identifier, this->attribute_data_type, 0);
   }
+
+  void AgreesWithTheIndexForTheStoredVector() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    for (auto metric : Metrics()) {
+      auto index = this->MakeIndex(metric);
+      ASSERT_TRUE(index.ok()) << metric;
+      const std::string stored = Bytes({1.0f, 2.0f, 0.5f, 0.0f});
+      const std::string query = Bytes({0.5f, 1.5f, 0.0f, 0.25f});
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index.value(),
+                                                     IndexToKey(1), stored));
+
+      auto search = index.value()->Search(query, 1, CancelNever());
+      ASSERT_TRUE(search.ok()) << metric;
+      ASSERT_EQ(search.value().size(), 1u) << metric;
+
+      auto recomputed = index.value()->RecomputeDistance(stored, query);
+      ASSERT_TRUE(recomputed.ok()) << metric;
+      EXPECT_NEAR(*recomputed, search.value()[0].distance, Tolerance())
+          << "metric " << metric;
+    }
+  }
+
+  void AnswersForBytesTheIndexHasNeverSeen() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    for (auto metric : Metrics()) {
+      const std::string query = Bytes({1.0f, 0.0f, 0.0f, 0.0f});
+      const std::string old_vector = Bytes({1.0f, 0.5f, 0.0f, 0.0f});
+      const std::string new_vector = Bytes({8.0f, 3.0f, 0.0f, 0.0f});
+
+      // One index still holding what the search saw, and one holding what the
+      // document was rewritten to. The first is asked about the second's bytes,
+      // which is exactly the position the reply path is in.
+      auto stale = this->MakeIndex(metric);
+      auto fresh = this->MakeIndex(metric);
+      ASSERT_TRUE(stale.ok() && fresh.ok()) << metric;
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+          *stale.value(), IndexToKey(1), old_vector));
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+          *fresh.value(), IndexToKey(1), new_vector));
+
+      auto stale_search = stale.value()->Search(query, 1, CancelNever());
+      auto fresh_search = fresh.value()->Search(query, 1, CancelNever());
+      ASSERT_TRUE(stale_search.ok() && fresh_search.ok()) << metric;
+      ASSERT_EQ(stale_search.value().size(), 1u) << metric;
+      ASSERT_EQ(fresh_search.value().size(), 1u) << metric;
+      // Otherwise the agreement below would hold for the wrong reason.
+      ASSERT_GT(std::abs(stale_search.value()[0].distance -
+                         fresh_search.value()[0].distance),
+                Tolerance())
+          << "the two vectors are not far enough apart under metric " << metric;
+
+      auto recomputed = stale.value()->RecomputeDistance(new_vector, query);
+      ASSERT_TRUE(recomputed.ok()) << metric;
+      EXPECT_NEAR(*recomputed, fresh_search.value()[0].distance, Tolerance())
+          << "metric " << metric;
+    }
+  }
+
+  void RecomputedDistancesRankTheSameWayTheIndexDoes()
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    // The reply path re-sorts on these numbers, so the order they imply has to
+    // match the order the index itself produces.
+    for (auto metric : Metrics()) {
+      auto index = this->MakeIndex(metric);
+      ASSERT_TRUE(index.ok()) << metric;
+      const std::string query = Bytes({1.0f, 0.0f, 0.0f, 0.0f});
+      const std::vector<std::string> vectors = {
+          Bytes({1.0f, 0.25f, 0.0f, 0.0f}),
+          Bytes({2.0f, 1.0f, 0.0f, 0.0f}),
+          Bytes({6.0f, 4.0f, 0.0f, 0.0f}),
+      };
+      for (size_t i = 0; i < vectors.size(); ++i) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+            *index.value(), IndexToKey(i + 1), vectors[i]));
+      }
+
+      auto search = index.value()->Search(query, vectors.size(), CancelNever());
+      ASSERT_TRUE(search.ok()) << metric;
+      ASSERT_EQ(search.value().size(), vectors.size()) << metric;
+      // Search returns nearest first.
+      std::vector<std::string> index_order;
+      for (const auto &n : search.value()) {
+        index_order.push_back(std::string(n.external_id->Str()));
+      }
+
+      std::vector<std::pair<float, std::string>> recomputed;
+      for (size_t i = 0; i < vectors.size(); ++i) {
+        auto d = index.value()->RecomputeDistance(vectors[i], query);
+        ASSERT_TRUE(d.ok()) << metric;
+        recomputed.emplace_back(*d, std::string(IndexToKey(i + 1)->Str()));
+      }
+      std::stable_sort(recomputed.begin(), recomputed.end());
+      std::vector<std::string> recomputed_order;
+      for (const auto &entry : recomputed) {
+        recomputed_order.push_back(entry.second);
+      }
+
+      EXPECT_EQ(recomputed_order, index_order) << "metric " << metric;
+    }
+  }
 };
 
-using VectorStorageTypes = ::testing::Types<float, float16, bfloat16>;
-TYPED_TEST_SUITE(RecomputeDistanceTest, VectorStorageTypes);
+using RecomputeDistanceFp32 = RecomputeDistanceTest<float>;
+using RecomputeDistanceFp16 = RecomputeDistanceTest<float16>;
+using RecomputeDistanceBf16 = RecomputeDistanceTest<bfloat16>;
 
-TYPED_TEST(RecomputeDistanceTest, AgreesWithTheIndexForTheStoredVector)
-ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  for (auto metric : TestFixture::Metrics()) {
-    auto index = this->MakeIndex(metric);
-    ASSERT_TRUE(index.ok()) << metric;
-    const std::string stored = TestFixture::Bytes({1.0f, 2.0f, 0.5f, 0.0f});
-    const std::string query = TestFixture::Bytes({0.5f, 1.5f, 0.0f, 0.25f});
-    VMSDK_EXPECT_OK(
-        testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
-
-    auto search = index.value()->Search(query, 1, CancelNever());
-    ASSERT_TRUE(search.ok()) << metric;
-    ASSERT_EQ(search.value().size(), 1u) << metric;
-
-    auto recomputed = index.value()->RecomputeDistance(stored, query);
-    ASSERT_TRUE(recomputed.ok()) << metric;
-    EXPECT_NEAR(*recomputed, search.value()[0].distance,
-                TestFixture::Tolerance())
-        << "metric " << metric;
-  }
+TEST_F(RecomputeDistanceFp32, AgreesWithTheIndexForTheStoredVector) {
+  AgreesWithTheIndexForTheStoredVector();
+}
+TEST_F(RecomputeDistanceFp32, AnswersForBytesTheIndexHasNeverSeen) {
+  AnswersForBytesTheIndexHasNeverSeen();
+}
+TEST_F(RecomputeDistanceFp32, RecomputedDistancesRankTheSameWayTheIndexDoes) {
+  RecomputedDistancesRankTheSameWayTheIndexDoes();
 }
 
-TYPED_TEST(RecomputeDistanceTest, AnswersForBytesTheIndexHasNeverSeen)
-ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  for (auto metric : TestFixture::Metrics()) {
-    const std::string query = TestFixture::Bytes({1.0f, 0.0f, 0.0f, 0.0f});
-    const std::string old_vector = TestFixture::Bytes({1.0f, 0.5f, 0.0f, 0.0f});
-    const std::string new_vector = TestFixture::Bytes({8.0f, 3.0f, 0.0f, 0.0f});
-
-    // One index still holding what the search saw, and one holding what the
-    // document was rewritten to. The first is asked about the second's bytes,
-    // which is exactly the position the reply path is in.
-    auto stale = this->MakeIndex(metric);
-    auto fresh = this->MakeIndex(metric);
-    ASSERT_TRUE(stale.ok() && fresh.ok()) << metric;
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*stale.value(),
-                                                   IndexToKey(1), old_vector));
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*fresh.value(),
-                                                   IndexToKey(1), new_vector));
-
-    auto stale_search = stale.value()->Search(query, 1, CancelNever());
-    auto fresh_search = fresh.value()->Search(query, 1, CancelNever());
-    ASSERT_TRUE(stale_search.ok() && fresh_search.ok()) << metric;
-    ASSERT_EQ(stale_search.value().size(), 1u) << metric;
-    ASSERT_EQ(fresh_search.value().size(), 1u) << metric;
-    // Otherwise the agreement below would hold for the wrong reason.
-    ASSERT_GT(std::abs(stale_search.value()[0].distance -
-                       fresh_search.value()[0].distance),
-              TestFixture::Tolerance())
-        << "the two vectors are not far enough apart under metric " << metric;
-
-    auto recomputed = stale.value()->RecomputeDistance(new_vector, query);
-    ASSERT_TRUE(recomputed.ok()) << metric;
-    EXPECT_NEAR(*recomputed, fresh_search.value()[0].distance,
-                TestFixture::Tolerance())
-        << "metric " << metric;
-  }
+TEST_F(RecomputeDistanceFp16, AgreesWithTheIndexForTheStoredVector) {
+  AgreesWithTheIndexForTheStoredVector();
+}
+TEST_F(RecomputeDistanceFp16, AnswersForBytesTheIndexHasNeverSeen) {
+  AnswersForBytesTheIndexHasNeverSeen();
+}
+TEST_F(RecomputeDistanceFp16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
+  RecomputedDistancesRankTheSameWayTheIndexDoes();
 }
 
-TYPED_TEST(RecomputeDistanceTest, RecomputedDistancesRankTheSameWayTheIndexDoes)
-ABSL_NO_THREAD_SAFETY_ANALYSIS {
-  // The reply path re-sorts on these numbers, so the order they imply has to
-  // match the order the index itself produces.
-  for (auto metric : TestFixture::Metrics()) {
-    auto index = this->MakeIndex(metric);
-    ASSERT_TRUE(index.ok()) << metric;
-    const std::string query = TestFixture::Bytes({1.0f, 0.0f, 0.0f, 0.0f});
-    const std::vector<std::string> vectors = {
-        TestFixture::Bytes({1.0f, 0.25f, 0.0f, 0.0f}),
-        TestFixture::Bytes({2.0f, 1.0f, 0.0f, 0.0f}),
-        TestFixture::Bytes({6.0f, 4.0f, 0.0f, 0.0f}),
-    };
-    for (size_t i = 0; i < vectors.size(); ++i) {
-      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
-          *index.value(), IndexToKey(i + 1), vectors[i]));
-    }
-
-    auto search = index.value()->Search(query, vectors.size(), CancelNever());
-    ASSERT_TRUE(search.ok()) << metric;
-    ASSERT_EQ(search.value().size(), vectors.size()) << metric;
-    // Search returns nearest first.
-    std::vector<std::string> index_order;
-    for (const auto &n : search.value()) {
-      index_order.push_back(std::string(n.external_id->Str()));
-    }
-
-    std::vector<std::pair<float, std::string>> recomputed;
-    for (size_t i = 0; i < vectors.size(); ++i) {
-      auto d = index.value()->RecomputeDistance(vectors[i], query);
-      ASSERT_TRUE(d.ok()) << metric;
-      recomputed.emplace_back(*d, std::string(IndexToKey(i + 1)->Str()));
-    }
-    std::stable_sort(recomputed.begin(), recomputed.end());
-    std::vector<std::string> recomputed_order;
-    for (const auto &entry : recomputed) {
-      recomputed_order.push_back(entry.second);
-    }
-
-    EXPECT_EQ(recomputed_order, index_order) << "metric " << metric;
-  }
+TEST_F(RecomputeDistanceBf16, AgreesWithTheIndexForTheStoredVector) {
+  AgreesWithTheIndexForTheStoredVector();
+}
+TEST_F(RecomputeDistanceBf16, AnswersForBytesTheIndexHasNeverSeen) {
+  AnswersForBytesTheIndexHasNeverSeen();
+}
+TEST_F(RecomputeDistanceBf16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
+  RecomputedDistancesRankTheSameWayTheIndexDoes();
 }
 
 // RecomputeDistance answers the question the search answers, but from bytes

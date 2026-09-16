@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "src/commands/commands.h"
+#include "src/cursor.h"
 #include "src/keyspace_event_manager.h"
 #include "src/valkey_search.h"
 #include "src/version.h"
@@ -108,6 +109,13 @@ vmsdk::module::Options options = {
                 .cmd_func =
                     &vmsdk::CreateCommand<valkey_search::FTAggregateCmd>,
             },
+            {
+                .cmd_name = valkey_search::kCursorCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kCursorCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag},
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCursorCmd>,
+            },
         },
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
@@ -116,6 +124,9 @@ vmsdk::module::Options options = {
               std::make_unique<valkey_search::KeyspaceEventManager>());
           valkey_search::ValkeySearch::InitInstance(
               std::make_unique<valkey_search::ValkeySearch>());
+          valkey_search::CursorTable::InitInstance(
+              std::make_unique<valkey_search::CursorTable>(
+                  valkey_search::CursorTable::ComputeIdCrc(ctx), 0));
 
           return valkey_search::ValkeySearch::Instance().OnLoad(ctx, argv,
                                                                 argc);

@@ -195,6 +195,13 @@ class SearchParametersInFlightGuard {
   SearchParametersInFlightGuard &operator=(
       SearchParametersInFlightGuard &&) noexcept = default;
   ~SearchParametersInFlightGuard();
+  // Drops this object out of the count early, for an operation whose query is
+  // over while the object itself lives on (a cursor holding its output). The
+  // flag keeps the destructor from decrementing the count a second time.
+  void Terminate();
+
+ private:
+  bool terminated_{false};
 };
 }  // namespace detail
 
@@ -308,6 +315,10 @@ struct SearchParameters {
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
   SearchParameters(SearchParameters &&) = default;
+
+  // Declares the query operation finished, so that it no longer counts in
+  // GetSearchParametersInFlight() even though this object is still alive.
+  void DeclareOperationTerminated() { in_flight_guard_.Terminate(); }
 
  private:
   // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.

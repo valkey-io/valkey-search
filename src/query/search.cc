@@ -89,8 +89,12 @@ SearchParametersInFlightGuard::SearchParametersInFlightGuard(
     SearchParametersInFlightGuard &&) noexcept {
   SearchParametersInFlightCounter().fetch_add(1, std::memory_order_relaxed);
 }
-SearchParametersInFlightGuard::~SearchParametersInFlightGuard() {
-  SearchParametersInFlightCounter().fetch_sub(1, std::memory_order_relaxed);
+SearchParametersInFlightGuard::~SearchParametersInFlightGuard() { Terminate(); }
+void SearchParametersInFlightGuard::Terminate() {
+  if (!terminated_) {
+    terminated_ = true;
+    SearchParametersInFlightCounter().fetch_sub(1, std::memory_order_relaxed);
+  }
 }
 }  // namespace detail
 

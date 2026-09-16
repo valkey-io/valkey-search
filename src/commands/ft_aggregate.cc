@@ -12,6 +12,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/time/clock.h"
 #include "debug.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
@@ -423,10 +424,13 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
-    // Check for timeout
-    if (parameters.cancellation_token->IsCancelled() ||
-        // Testing purpose only
-        ForceTimeoutAggregate.GetValue()) {
+    // Check for timeout. A WITHCURSOR query instead runs its pipeline over
+    // whatever the query phase found, so that the cursor holds a complete
+    // pipeline result of a partial input rather than an error.
+    if (!parameters.cursor_options.has_value() &&
+        (parameters.cancellation_token->IsCancelled() ||
+         // Testing purpose only
+         ForceTimeoutAggregate.GetValue())) {
       ForceTimeoutAggregateCancels.Increment(1);
       return absl::CancelledError(
           "Aggregate operation cancelled due to timeout");
@@ -437,14 +441,49 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
   return absl::OkStatus();
 }
 
-// Generate the final response from processed records
-absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
-                              AggregateParameters &parameters,
-                              RecordSet &records) {
-  ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
+namespace {
 
-  while (!records.empty()) {
+// The rows of an FT.AGGREGATE ... WITHCURSOR not yet read by the client.
+class CursorAggregateResult : public Cursor {
+ public:
+  CursorAggregateResult(std::unique_ptr<AggregateParameters> parameters,
+                        RecordSet records)
+      : Cursor(parameters->index_schema_name, parameters->index_schema,
+               *parameters->cursor_options),
+        parameters_(std::move(parameters)),
+        records_(std::move(records)) {
+    parameters_->adopted_by_cursor = true;
+    // Don't keep a dropped index alive; READ supplies the live schema.
+    parameters_->index_schema = nullptr;
+    // The query itself is over; only its saved output is still held.
+    parameters_->DeclareOperationTerminated();
+  }
+  size_t RemainingRows() const override { return records_.size(); }
+  void ReplyRows(ValkeyModuleCtx *ctx,
+                 const std::shared_ptr<IndexSchema> &index_schema,
+                 size_t count) override {
+    parameters_->index_schema = index_schema;
+    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()));
+    parameters_->index_schema = nullptr;
+  }
+  void ReleaseMainThreadState() override {
+    parameters_->ReleaseMainThreadState();
+  }
+
+ private:
+  std::unique_ptr<AggregateParameters> parameters_;
+  RecordSet records_;
+};
+
+}  // namespace
+
+void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
+                                       size_t count) {
+  auto &parameters = *this;
+  ValkeyModule_ReplyWithArray(ctx, 1 + count);
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+
+  for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
 
@@ -473,8 +512,6 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
 
     ValkeyModule_ReplySetArrayLength(ctx, array_count);
   }
-
-  return absl::OkStatus();
 }
 
 absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
@@ -494,8 +531,26 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   VMSDK_RETURN_IF_ERROR(ExecuteAggregationStages(parameters, records));
 
   // 4. Generate the response
-  VMSDK_RETURN_IF_ERROR(GenerateResponse(ctx, parameters, records));
-
+  if (!parameters.cursor_options.has_value()) {
+    parameters.ReplyRecords(ctx, records, records.size());
+    return absl::OkStatus();
+  }
+  // WITHCURSOR: [[count, row...], cursor_id]
+  ValkeyModule_ReplyWithArray(ctx, 2);
+  parameters.ReplyRecords(
+      ctx, records,
+      std::min(static_cast<size_t>(parameters.cursor_options->count),
+               records.size()));
+  if (records.empty()) {
+    ValkeyModule_ReplyWithLongLong(ctx, 0);
+    return absl::OkStatus();
+  }
+  const int db_num = parameters.db_num;
+  auto cursor = std::make_unique<CursorAggregateResult>(
+      std::unique_ptr<AggregateParameters>(&parameters), std::move(records));
+  auto id =
+      CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
   return absl::OkStatus();
 }
 

@@ -11,6 +11,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/status.h"
 #include "absl/strings/string_view.h"
+#include "src/cursor.h"
 #include "src/query/search.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -42,6 +43,7 @@ constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
 constexpr absl::string_view kInternalUpdateCommand{"FT.INTERNAL_UPDATE"};
+constexpr absl::string_view kCursorCommand{"FT.CURSOR"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -55,6 +57,8 @@ const absl::flat_hash_set<absl::string_view> kInfoCmdPermissions{
     kSearchCategory, kReadCategory, kFastCategory};
 const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
+const absl::flat_hash_set<absl::string_view> kCursorCmdPermissions{
+    kSearchCategory, kReadCategory, kSlowCategory};
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
     kSearchCategory, kSlowCategory, kAdminCategory, kDangerousCategory};
 
@@ -82,6 +86,9 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc);
+absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                         int argc);
+absl::Status ShowCursorsCmd(ValkeyModuleCtx *ctx);
 
 //
 // Common stuff for FT.SEARCH and FT.AGGREGATE command
@@ -112,8 +119,17 @@ struct QueryCommand : public query::SearchParameters {
   //
   void QueryCompleteBackground(std::unique_ptr<SearchParameters> self) override;
   void QueryCompleteMainThread(std::unique_ptr<SearchParameters> self) override;
+  //
+  // Releases the state that may only be released on the main thread.
+  //
+  void ReleaseMainThreadState();
 
   std::optional<vmsdk::BlockedClient> blocked_client;
+  // Set by WITHCURSOR.
+  std::optional<CursorOptions> cursor_options;
+  // Set when SendReply hands ownership of this command to a cursor; whoever
+  // owned it before must then release (not delete) it.
+  bool adopted_by_cursor{false};
 
  private:
   void QueryCompleteImpl(std::unique_ptr<SearchParameters> parameters);

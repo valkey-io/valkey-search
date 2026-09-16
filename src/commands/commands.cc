@@ -78,14 +78,12 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *parameters = static_cast<QueryCommand *>(privdata);
+  if (parameters->adopted_by_cursor) {
+    return;  // Now owned by the cursor table.
+  }
   // Some things can only be cleaned up on the main thread.
   // We need to do this here.
-  parameters->index_schema = nullptr;
-  // return_attributes holds ValkeyModuleStrings retained from client argv.
-  // Must be freed here (main thread) to avoid racing with freeClientArgv().
-  parameters->return_attributes.clear();
-  // Cleanup of score_as
-  parameters->score_as = nullptr;
+  parameters->ReleaseMainThreadState();
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [parameters]() { delete parameters; });
 }
@@ -162,6 +160,12 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     parameters->parse_vars.ClearAtEndOfParse();
     parameters->cancellation_token =
         cancel::Make(parameters->timeout_ms, nullptr);
+    if (parameters->cursor_options.has_value()) {
+      // A cursor holds whatever the query found: a timeout hands back the rows
+      // gathered so far rather than an error, whatever the partial results
+      // setting says.
+      parameters->enable_partial_results = true;
+    }
     VMSDK_RETURN_IF_ERROR(
         AclPrefixCheck(ctx, acl::KeyAccess::kRead,
                        parameters->index_schema->GetKeyPrefixes()));
@@ -199,6 +203,10 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
         return absl::OkStatus();
       }
       parameters->SendReply(ctx, parameters->search_result);
+      if (parameters->adopted_by_cursor) {
+        parameters.release();  // Now owned by the cursor table.
+        return absl::OkStatus();
+      }
       ValkeySearch::Instance().ScheduleSearchResultCleanup(
           [neighbors =
                std::move(parameters->search_result.neighbors)]() mutable {
@@ -260,6 +268,14 @@ absl::Status QueryCommand::Execute(ValkeyModuleCtx *ctx,
     ++Metrics::GetStats().query_failed_requests_cnt;
   }
   return status;
+}
+
+void QueryCommand::ReleaseMainThreadState() {
+  index_schema = nullptr;
+  // return_attributes holds ValkeyModuleStrings retained from client argv.
+  // Must be freed on the main thread to avoid racing with freeClientArgv().
+  return_attributes.clear();
+  score_as = nullptr;
 }
 
 void QueryCommand::QueryCompleteImpl(

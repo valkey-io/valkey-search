@@ -118,6 +118,58 @@ because the `array inputs` dataset gives `@n1` and `@n2` disjoint values in
 every group. The first elements can never coincide there, so both rules answer
 "not equal" under any order.
 
+### 1.6 Cursors
+
+No generator exercises `WITHCURSOR` or `FT.CURSOR`: cursor ids never match
+between engines. `integration/test_cursor.py` covers the behavior instead.
+Measured against Redis 8:
+
+- **Database.** Redis only creates indexes in db 0 (`Cannot create index on
+  db != 0`), sees them from every db, and does not check the db on
+  `FT.CURSOR READ` / `DEL`: a connection in db 1 can read or delete a cursor
+  created from db 0. A cursor evaluated at read time then loads its rows from
+  the reader's db (a db 1 read of a db 0 cursor over db 0 keys returned no
+  rows and ended the cursor), while a snapshotted (`SORTBY ... MAX`) cursor
+  returns its db 0 rows. valkey-search indexes are per database, so a cursor
+  can only be read or deleted from the database it was created in; from any
+  other database it replies `Cursor not found` / `Cursor does not exist`.
+  The index name is matched as in Redis: it must name an existing index, but
+  not necessarily the cursor's own.
+- **Rows are materialized up front.** Redis runs the pipeline incrementally as
+  the cursor is read; valkey-search computes the whole result when the query
+  runs and pages through it.
+- **Mutations while a cursor is open.** valkey-search cursors are a snapshot
+  as of the original query: later changes to the data are never visible and
+  no rows are lost. Redis only snapshots when a stage consumes the whole input
+  before emitting (e.g. `SORTBY ... MAX`, where modified and even deleted keys
+  come back with their old values). Otherwise Redis evaluates rows at
+  `FT.CURSOR READ` time and the result is neither a snapshot nor a consistent
+  live view. Measured on Redis 8.10.1 with `COUNT 2`:
+  - 200 documents: a modified unread key is returned with its new values, a
+    deleted one is omitted, and added matching keys appear.
+  - 20 documents: modifying any field of an unread key (even an unindexed one)
+    drops that key from the rest of the cursor, and added keys do not appear.
+  - 20 documents, `@price:[-inf +inf]`: adding keys with prices 5.5 and 100
+    after the first read dropped six unmodified matching keys from the rest of
+    the cursor (reproducible; either key alone, or a TAG query, loses
+    nothing).
+- **`FT.SEARCH ... WITHCURSOR`** is a valkey-search extension; Redis rejects it.
+- **Index removal.** valkey-search discards an index's cursors as soon as the
+  index is removed (`FT.DROPINDEX`, `FLUSHDB`, replica full sync), so a later
+  read replies `Cursor not found`. Redis keeps the cursor and replies
+  `SEARCH_INDEX_DROPPED_BG The index was dropped while the cursor was idle`
+  once an index of that name exists again. valkey-search still replies that
+  when an index is dropped and recreated between two reads through a
+  different index name.
+- **ACL.** valkey-search applies the index's key-prefix permissions to
+  `FT.CURSOR READ` / `DEL`, as it does to the query itself. Redis checks
+  nothing beyond the command's own ACL.
+- **Timeouts.** A timed-out valkey-search cursor query returns the rows it
+  gathered, whatever `search.enable-partial-results` says.
+- **Limits.** `COUNT` and `MAXIDLE` must be between 1 and the
+  `search.cursor-max-count` / `search.cursor-max-idle-ms` configs; out of range
+  values are an error rather than being clamped.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

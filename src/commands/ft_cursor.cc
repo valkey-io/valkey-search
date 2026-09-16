@@ -84,9 +84,11 @@ absl::Status FTCursorCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   }
 
   table.Touch(id, absl::Now());
+  if (count.has_value()) {
+    cursor->SetReadCount(*count);
+  }
   ValkeyModule_ReplyWithArray(ctx, 2);
-  cursor->ReplyRows(ctx, *index_schema,
-                    count.value_or(cursor->GetDefaultCount()));
+  cursor->ReplyRows(ctx, *index_schema, cursor->GetReadCount());
   if (cursor->RemainingRows() > 0) {
     ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
   } else {

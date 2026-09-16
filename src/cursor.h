@@ -51,7 +51,7 @@ class Cursor {
       : index_name_(std::move(index_name)),
         index_schema_(std::move(index_schema)),
         max_idle_(options.max_idle),
-        default_count_(options.count) {}
+        read_count_(options.count) {}
   virtual ~Cursor() = default;
 
   virtual size_t RemainingRows() const = 0;
@@ -65,9 +65,11 @@ class Cursor {
   virtual void ReleaseMainThreadState() {}
 
   const std::string &GetIndexName() const { return index_name_; }
-  // The COUNT of the WITHCURSOR clause that created this cursor, used by an
-  // FT.CURSOR READ that gives no COUNT of its own.
-  int64_t GetDefaultCount() const { return default_count_; }
+  // The number of rows an FT.CURSOR READ that gives no COUNT returns. It
+  // starts as the COUNT of the WITHCURSOR clause that created the cursor, and,
+  // as in Redis, a COUNT given to a READ replaces it for later reads.
+  int64_t GetReadCount() const { return read_count_; }
+  void SetReadCount(int64_t count) { read_count_ = count; }
   // True if `index_schema` is the same index the cursor was created against,
   // i.e. it has not been dropped (and possibly recreated) since.
   bool IsSameIndex(const std::shared_ptr<IndexSchema> &index_schema) const {
@@ -79,7 +81,7 @@ class Cursor {
   std::string index_name_;
   std::weak_ptr<IndexSchema> index_schema_;
   absl::Duration max_idle_;
-  int64_t default_count_;
+  int64_t read_count_;
 };
 
 //

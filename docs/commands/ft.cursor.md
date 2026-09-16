@@ -7,7 +7,7 @@ FT.CURSOR DEL <index-name> <cursor-id>
 
 - `<index-name>` (required): The name of an existing index. As in Redis, it need not be the index the cursor was created on.
 - `<cursor-id>` (required): The cursor id returned by the command that created the cursor, or by a previous `FT.CURSOR READ`.
-- `COUNT <count>` (optional): The maximum number of rows to return, for this read only. It must be between 1 and `search.cursor-max-count`. The default is the `COUNT` of the `WITHCURSOR` clause that created the cursor (itself 1000 when that clause gave no `COUNT`).
+- `COUNT <count>` (optional): The maximum number of rows to return. It must be between 1 and `search.cursor-max-count`. Without it the cursor's current read size is used, which starts as the `COUNT` of the `WITHCURSOR` clause that created the cursor (itself 1000 when that clause gave no `COUNT`). Giving a `COUNT` replaces that read size for later reads of this cursor, as in Redis.
 
 A cursor holds the rows of a query result that have not yet been returned to the client, as of when the query ran: later changes to the data are not visible. A cursor belongs to the database it was created in: it can only be read or deleted by a connection whose currently selected database is that database. If `SWAPDB` moves the cursor's index to another database, its cursors move with it. In cluster mode a cursor exists only on the node that executed the query.
 

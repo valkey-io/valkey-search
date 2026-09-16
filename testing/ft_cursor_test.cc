@@ -306,19 +306,23 @@ TEST_F(FTCursorTest, SwapDb) {
   EXPECT_EQ(table.Lookup(id), nullptr);
 }
 
-TEST_F(FTCursorTest, ReadDefaultCountComesFromTheCursor) {
+TEST_F(FTCursorTest, ReadCountComesFromTheCursor) {
   auto id = InsertCursor(10, nullptr, 0, "idx", CursorOptions{.count = 3});
   // No COUNT on READ: the WITHCURSOR COUNT is used.
   VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id)));
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
             absl::StrCat("*2\r\n*4\r\n:3\r\n:0\r\n:1\r\n:2\r\n:", id, "\r\n"));
-  // An explicit COUNT overrides it, for that read only.
+  // As in Redis, a COUNT on a READ replaces the cursor's read size.
   VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id, " COUNT 1")));
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
             absl::StrCat("*2\r\n*2\r\n:1\r\n:3\r\n:", id, "\r\n"));
   VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id)));
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
-            absl::StrCat("*2\r\n*4\r\n:3\r\n:4\r\n:5\r\n:6\r\n:", id, "\r\n"));
+            absl::StrCat("*2\r\n*2\r\n:1\r\n:4\r\n:", id, "\r\n"));
+  VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR READ idx ", id, " COUNT 4")));
+  EXPECT_EQ(
+      fake_ctx_.reply_capture.GetReply(),
+      absl::StrCat("*2\r\n*5\r\n:4\r\n:5\r\n:6\r\n:7\r\n:8\r\n:", id, "\r\n"));
 }
 
 TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {

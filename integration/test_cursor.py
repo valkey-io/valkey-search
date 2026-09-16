@@ -386,14 +386,16 @@ class TestCursorReadDefaultCount(ValkeySearchTestCaseBase):
         assert len(prices(batch)) == 2  # only 2 rows left of 5
         assert cursor == 0
 
-        # An explicit COUNT applies to that read only.
+        # As in Redis, a COUNT on a READ replaces the cursor's read size.
         batch, cursor = aggregate(client, "COUNT", "2")
         batch, cursor = client.execute_command(
             "FT.CURSOR", "READ", "idx", cursor, "COUNT", "1")
         assert len(prices(batch)) == 1
         batch, cursor = client.execute_command("FT.CURSOR", "READ", "idx", cursor)
-        assert len(prices(batch)) == 2
-        assert cursor == 0  # 2 + 1 + 2 rows read of 5
+        assert len(prices(batch)) == 1
+        batch, cursor = client.execute_command("FT.CURSOR", "READ", "idx", cursor)
+        assert len(prices(batch)) == 1
+        assert cursor == 0  # 2 + 1 + 1 + 1 rows read of 5
 
         # FT.SEARCH cursors behave the same way.
         _, rows, cursor = search(client, "NOCONTENT", "LIMIT", "0", "5",

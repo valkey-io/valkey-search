@@ -65,6 +65,7 @@ The BNF for a filter is:
                   | <phrase-match>
                   | <fuzzy-match>
                   | "(" <logical-or> ")"
+                  | <field-name> ":(" <logical-or> ")"
 
 ```
 
@@ -239,6 +240,20 @@ query1 query2 query3
 When two or more predicates of an AND operation contain text matchers, it becomes possible to also perform positional matching. Positional matching extends key-based matching to additionally require that matching words meet specified distance and ordering constraints. Positional matching is only applied within a single Text field. There is no positional relationship between terms in different Text fields.
 
 Position matching is enabled when either the `SLOP` or `INORDER` clauses are used on the command and applies to all multi-predicate AND operations within the current command.
+
+### Field-scoped Groups
+
+A field modifier followed by a parenthesized group, `@<field-name>:(...)`, scopes the whole group to that field: every bare term inside the parentheses is matched against `<field-name>` instead of all text fields. This is shorthand for repeating the field on each term.
+
+```
+@t:(hello | world)      matches hello or world in the t field, i.e. @t:hello | @t:world
+@t:(hello world)        matches hello and world in the t field, i.e. @t:hello @t:world
+@t:(hello)              equivalent to @t:hello
+-@t:(hello | world)     negates the scoped group
+@t:((hello | world) news)   nested grouping, all scoped to the t field
+```
+
+The field applies only inside the group; it does not leak to other predicates in the query. A different field modifier inside the group, such as `@t1:(hello | @t2:world)`, is a syntax error and is rejected.
 
 # Examples
 

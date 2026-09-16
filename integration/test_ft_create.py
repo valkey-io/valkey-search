@@ -149,16 +149,20 @@ class TestSearchFTCreateCMD(ValkeySearchTestCaseBase):
             "price", "NUMERIC", "SORTABLE", "UNF",
         ) == b"OK"
 
-        assert client.execute_command("HSET", "p:1", "sku", "b", "price", "2") == 2
-        assert client.execute_command("HSET", "p:2", "sku", "A", "price", "1") == 2
+        # 'a' and 'B' are chosen so the two candidate orderings disagree: raw
+        # bytes put 'B' (0x42) before 'a' (0x61), while the case-insensitive
+        # collation of #1353 item 3 would put 'a' first. A pair like 'A' and 'b'
+        # sorts identically under both and would prove nothing.
+        assert client.execute_command("HSET", "p:1", "sku", "a", "price", "2") == 2
+        assert client.execute_command("HSET", "p:2", "sku", "B", "price", "1") == 2
 
         result = client.execute_command(
-            "FT.SEARCH", "idxcompat", "@sku:{A}", "NOCONTENT"
+            "FT.SEARCH", "idxcompat", "@sku:{B}", "NOCONTENT"
         )
         assert result[0] == 1
         assert result[1] == b"p:2"
 
-        # UNF ordering: raw bytes, so uppercase 'A' precedes lowercase 'b'.
+        # UNF ordering is raw bytes, so uppercase 'B' precedes lowercase 'a'.
         result = client.execute_command(
             "FT.SEARCH", "idxcompat", "@price:[0 10]",
             "SORTBY", "sku", "ASC", "NOCONTENT",

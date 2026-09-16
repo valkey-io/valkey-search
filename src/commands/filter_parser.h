@@ -115,7 +115,9 @@ class FilterParser {
         : prev_predicate(std::move(pred)), not_rightmost_bracket(joined) {}
   };
 
-  absl::StatusOr<ParseResult> ParseExpression(uint32_t level);
+  absl::StatusOr<ParseResult> ParseExpression(
+      uint32_t level,
+      const std::optional<std::string>& default_field = std::nullopt);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(

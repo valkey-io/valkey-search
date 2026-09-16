@@ -55,6 +55,7 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
             "plain", "TAG",
             "sorted", "TAG", "SORTABLE",
             "unsorted_form", "TAG", "SORTABLE", "UNF",
+            "body", "TEXT",
         ) == b"OK"
 
     def test_attribute_pairs_reported_when_declared(self):
@@ -93,9 +94,19 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
         client = self._client()
         assert client.execute_command(
             "FT.CREATE", "idxplain", "ON", "HASH", "PREFIX", "1", "q:",
-            "SCHEMA", "t", "TAG",
+            "SCHEMA", "t", "TEXT",
         ) == b"OK"
         assert top_level(client, "idxplain", "highlighting") == b"0"
+
+    def test_highlighting_absent_without_text_fields(self):
+        """It sits with the text-schema fields, which a non-text index omits."""
+        client = self._client()
+        assert client.execute_command(
+            "FT.CREATE", "idxnotext", "ON", "HASH", "PREFIX", "1", "r:",
+            "SCHEMA", "t", "TAG", "n", "NUMERIC",
+        ) == b"OK"
+        assert top_level(client, "idxnotext", "highlighting") is None
+        assert top_level(client, "idxnotext", "with_offsets") is None
 
     def test_fields_absent_before_fix_release(self):
         client = self._client(LEGACY_RELEASE)

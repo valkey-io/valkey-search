@@ -62,21 +62,21 @@ constexpr absl::string_view kFixedScoreInfoSegment =
     "+default_score\r\n1\r\n+score_field\r\n+\r\n";
 constexpr absl::string_view kLegacyScoreInfoSegment =
     "+default_score\r\n$1\r\n1\r\n";
-// Emitted only at 1.3.0 and later, always 0 since highlighting is not
+// Emitted only at 1.3.0 and later, and only for indexes with text fields,
+// since HIGHLIGHT and SUMMARIZE act only on text. Always 0, as neither is
 // implemented.
 constexpr absl::string_view kHighlightingSegment = "+highlighting\r\n+0\r\n";
 
 // Rewrites a fixed-shape expectation into the pre-1.3.0 shape. Replies that do
 // not contain an index_definition block (error cases) are returned unchanged.
-// highlighting is gated at the same version, so it is dropped here too, which
-// shrinks the top-level array by the two elements of that pair.
+// highlighting is gated at the same version, so it is dropped here too. It is
+// only emitted for text indexes, so only their top-level count shrinks.
 std::string ToLegacyScoreInfoShape(absl::string_view fixed) {
   if (!absl::StrContains(fixed, kFixedScoreInfoSegment)) {
     return std::string(fixed);
   }
   return absl::StrReplaceAll(
       fixed, {{"+index_definition\r\n*8\r\n", "+index_definition\r\n*6\r\n"},
-              {"*32\r\n+index_name", "*30\r\n+index_name"},
               {"*40\r\n+index_name", "*38\r\n+index_name"},
               {kHighlightingSegment, ""},
               {kFixedScoreInfoSegment, kLegacyScoreInfoSegment}});
@@ -497,7 +497,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "size\r\n$1\r\n0\r\n+recent_mutations_queue_delay\r\n$"
                          "5\r\n0 "
                          "sec\r\n+state\r\n+ready\r\n+punctuation\r\n+\r\n+"
-                         "stop_words\r\n*0\r\n+with_offsets\r\n+0\r\n+min_stem_"
+                         "stop_words\r\n*0\r\n+with_offsets\r\n+0\r\n+"
+                         "highlighting\r\n+0\r\n+min_stem_"
                          "size\r\n:4\r\n+language\r\n+english\r\n"},
                 },
         },
@@ -554,7 +555,8 @@ INSTANTIATE_TEST_SUITE_P(
                          "5\r\n0 "
                          "sec\r\n+state\r\n+ready\r\n+punctuation\r\n+.,!?\r\n+"
                          "stop_words\r\n*3\r\n+the\r\n+and\r\n+or\r\n+with_"
-                         "offsets\r\n+1\r\n+min_stem_size\r\n:3\r\n+"
+                         "offsets\r\n+1\r\n+highlighting\r\n+0\r\n+min_stem_"
+                         "size\r\n:3\r\n+"
                          "language\r\n+english\r\n"},
                 },
         },

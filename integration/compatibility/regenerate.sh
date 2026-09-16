@@ -2,7 +2,7 @@
 # Regenerate the compatibility test pickle answer files
 # (aggregate-answers.pickle.gz and text-search-answers.pickle.gz).
 #
-# Requires Docker: the generators spin up redis/redis-stack-server on a port
+# Requires Docker: the generators spin up redis:latest on a port
 # docker picks, in a container named Generate-search-NNNN.
 # to capture reference answers.
 #

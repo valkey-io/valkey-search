@@ -308,9 +308,14 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
     scores_index = AggregateParameters::kScoreColumn;
   }
 
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
+  // If no content needs to be fetched from the keys to be used in the
+  // aggregation pipeline, there is no need to revalidate keys and recompute
+  // scores.
+  if (!parameters.NoProcessingRequired()) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
 
   return std::make_pair(key_index, scores_index);
 }

@@ -647,7 +647,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     ASSERT_TRUE(index.ok()) << metric;
     const std::string stored = TestFixture::Bytes({1.0f, 2.0f, 0.5f, 0.0f});
     const std::string query = TestFixture::Bytes({0.5f, 1.5f, 0.0f, 0.25f});
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
 
     auto search = index.value()->Search(query, 1, CancelNever());
     ASSERT_TRUE(search.ok()) << metric;
@@ -674,8 +675,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto stale = this->MakeIndex(metric);
     auto fresh = this->MakeIndex(metric);
     ASSERT_TRUE(stale.ok() && fresh.ok()) << metric;
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*stale.value(), IndexToKey(1), old_vector));
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*fresh.value(), IndexToKey(1), new_vector));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*stale.value(),
+                                                   IndexToKey(1), old_vector));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*fresh.value(),
+                                                   IndexToKey(1), new_vector));
 
     auto stale_search = stale.value()->Search(query, 1, CancelNever());
     auto fresh_search = fresh.value()->Search(query, 1, CancelNever());
@@ -710,7 +713,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         TestFixture::Bytes({6.0f, 4.0f, 0.0f, 0.0f}),
     };
     for (size_t i = 0; i < vectors.size(); ++i) {
-      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index.value(), IndexToKey(i + 1), vectors[i]));
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+          *index.value(), IndexToKey(i + 1), vectors[i]));
     }
 
     auto search = index.value()->Search(query, vectors.size(), CancelNever());
@@ -756,7 +760,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   };
   const std::string stored = bytes({1.0f, 0.0f, 0.0f, 0.0f});
   const std::string query = bytes({0.0f, 0.0f, 0.0f, 0.0f});
-  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
 
   auto search_res = index.value()->Search(query, 1, CancelNever());
   ASSERT_TRUE(search_res.ok());

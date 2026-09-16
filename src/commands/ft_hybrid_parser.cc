@@ -113,8 +113,9 @@ absl::StatusOr<uint64_t> ParseWholeUint(vmsdk::ArgsIterator &itr,
   uint64_t value = 0;
   if (tok.empty() || !absl::SimpleAtoi(tok, &value)) {
     return absl::InvalidArgumentError(
-        absl::StrCat("COMBINE ", keyword, " must be a non-negative integer, "
-                                          "got `",
+        absl::StrCat("COMBINE ", keyword,
+                     " must be a non-negative integer, "
+                     "got `",
                      tok, "`"));
   }
   return value;
@@ -527,8 +528,8 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
     } else if (absl::EqualsIgnoreCase(kw, kWindowKw)) {
       VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeUint(inner_itr, kWindowKw));
       if (v > std::numeric_limits<uint32_t>::max()) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "COMBINE WINDOW is out of range, got `", v, "`"));
+        return absl::InvalidArgumentError(
+            absl::StrCat("COMBINE WINDOW is out of range, got `", v, "`"));
       }
       env.fusion.window = static_cast<uint32_t>(v);
       saw_window = true;

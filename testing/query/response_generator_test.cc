@@ -457,7 +457,7 @@ TEST_F(ResponseGeneratorTest, VectorQueryDistanceRecomputedAndReordered) {
       .WillRepeatedly(testing::Return(
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH));
   EXPECT_CALL(data_type, FetchAllAttributes(&fake_ctx, testing::_, testing::_,
-                                         testing::_, testing::_))
+                                            testing::_, testing::_))
       .WillRepeatedly([&k1_now, &k2_now](
                           ValkeyModuleCtx *, const std::optional<std::string> &,
                           ValkeyModuleKey *, absl::string_view key,

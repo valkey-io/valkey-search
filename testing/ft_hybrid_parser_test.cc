@@ -24,8 +24,8 @@
 #include "testing/common.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
-#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace valkey_search {
 namespace query {
@@ -393,9 +393,9 @@ TEST_F(FTHybridParserTest, NoCombineAliasNamesTheScoreScoreAndEmitsIt) {
 }
 
 TEST_F(FTHybridParserTest, CombineYieldScoreAsRenamesTheScore) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
-                       "hs"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "hs"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->output_score_name, "hs");
   EXPECT_TRUE((*params)->output_score_name_explicit);
@@ -430,15 +430,24 @@ TEST_F(FTHybridParserTest, AnExplicitScoreNameSurvivesALoadClause) {
   // anything unless told otherwise, so say that `hs` is not a field -- which
   // is what a real schema would say.
   EXPECT_CALL(*index_schema_, GetIdentifier(absl::string_view("hs")))
-      .WillRepeatedly(::testing::Return(
-          absl::NotFoundError("no such field")));
+      .WillRepeatedly(::testing::Return(absl::NotFoundError("no such field")));
   for (const std::vector<std::string> &load :
        {std::vector<std::string>{"LOAD", "*"},
         std::vector<std::string>{"LOAD", "1", "@n"}}) {
-    std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector",
-                                  "$q",     "KNN",       "2",    "K",
-                                  "5",      "COMBINE",   "RRF",  "2",
-                                  "YIELD_SCORE_AS",      "hs"};
+    std::vector<std::string> args{"SEARCH",
+                                  "@n:[0 10]",
+                                  "VSIM",
+                                  "@vector",
+                                  "$q",
+                                  "KNN",
+                                  "2",
+                                  "K",
+                                  "5",
+                                  "COMBINE",
+                                  "RRF",
+                                  "2",
+                                  "YIELD_SCORE_AS",
+                                  "hs"};
     args.insert(args.end(), load.begin(), load.end());
     auto params = Parse(args);
     VMSDK_EXPECT_OK(params);
@@ -478,16 +487,15 @@ TEST_F(FTHybridParserTest, ALoadThatDoesNotNameTheScoreStillHidesIt) {
 TEST_F(FTHybridParserTest, YieldingScoreAsScoreWithNoLoadIsRejected) {
   // It names the column the default projection already generates. The
   // reference refuses it rather than emitting one column twice.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
-                       "__score"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "__score"});
   EXPECT_FALSE(params.ok());
 }
 
 TEST_F(FTHybridParserTest, YieldingScoreAsScoreIsFineOnceALoadClauseExists) {
   EXPECT_CALL(*index_schema_, GetIdentifier(absl::string_view("__score")))
-      .WillRepeatedly(::testing::Return(
-          absl::NotFoundError("no such field")));
+      .WillRepeatedly(::testing::Return(absl::NotFoundError("no such field")));
   // With a LOAD clause there is no default projection to collide with, so the
   // same alias is accepted -- as the reference accepts it.
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
@@ -511,10 +519,9 @@ TEST_F(FTHybridParserTest, CombineFunctionTakesAYieldScoreAsToo) {
 }
 
 TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
-  auto params =
-      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
-             "5", "COMBINE", "FUNCTION", "2", "EXPR",
-             "@__search_score + @__vector_score"});
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "FUNCTION", "2", "EXPR",
+                       "@__search_score + @__vector_score"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->output_score_name, "__score");
   EXPECT_FALSE((*params)->output_score_name_explicit);
@@ -530,11 +537,11 @@ TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
 // ---------------------------------------------------------------------
 
 TEST_F(FTHybridParserTest, WindowRejectsAnythingButAWholeNumber) {
-  for (absl::string_view bad : {"1.5", "20abc", "abc", "", "-1", "1e3", "0x10",
-                                "4294967296"}) {
-    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                         "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW",
-                         std::string(bad)});
+  for (absl::string_view bad :
+       {"1.5", "20abc", "abc", "", "-1", "1e3", "0x10", "4294967296"}) {
+    auto params =
+        Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+               "5", "COMBINE", "RRF", "2", "WINDOW", std::string(bad)});
     EXPECT_FALSE(params.ok()) << "WINDOW accepted `" << bad << "`";
   }
 }
@@ -559,10 +566,9 @@ TEST_F(FTHybridParserTest, WindowZeroMeansUnlimited) {
 TEST_F(FTHybridParserTest, FunctionDefaultsToAnUnlimitedWindow) {
   // A user expression is expected to see every candidate, so FUNCTION with no
   // WINDOW must not inherit the RRF/LINEAR default of 20.
-  auto params =
-      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
-             "5", "COMBINE", "FUNCTION", "2", "EXPR",
-             "@__search_score + @__vector_score"});
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "FUNCTION", "2", "EXPR",
+                       "@__search_score + @__vector_score"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->fusion.window, 0u);
 }
@@ -570,9 +576,9 @@ TEST_F(FTHybridParserTest, FunctionDefaultsToAnUnlimitedWindow) {
 TEST_F(FTHybridParserTest, RrfConstantIsAFractionalNumber) {
   // The reference honours fractional constants -- `CONSTANT 1.5` ranks
   // strictly between 1 and 2 -- so truncating to an integer is wrong.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "COMBINE", "RRF", "2", "CONSTANT",
-                       "1.5"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "CONSTANT", "1.5"});
   VMSDK_EXPECT_OK(params);
   EXPECT_DOUBLE_EQ((*params)->fusion.rrf_constant, 1.5);
 }
@@ -580,18 +586,18 @@ TEST_F(FTHybridParserTest, RrfConstantIsAFractionalNumber) {
 TEST_F(FTHybridParserTest, RrfConstantRejectsJunkAndNonFiniteAndNegative) {
   for (absl::string_view bad : {"60abc", "abc", "", "nan", "inf", "-inf",
                                 "1e400", "-1", "-0.5", "0.5.5"}) {
-    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                         "2", "K", "5", "COMBINE", "RRF", "2", "CONSTANT",
-                         std::string(bad)});
+    auto params =
+        Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+               "5", "COMBINE", "RRF", "2", "CONSTANT", std::string(bad)});
     EXPECT_FALSE(params.ok()) << "CONSTANT accepted `" << bad << "`";
   }
 }
 
 TEST_F(FTHybridParserTest, RrfConstantAcceptsZeroAndLargeValues) {
   for (absl::string_view good : {"0", "0.5", "60", "4294967296", "1e3"}) {
-    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                         "2", "K", "5", "COMBINE", "RRF", "2", "CONSTANT",
-                         std::string(good)});
+    auto params =
+        Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+               "5", "COMBINE", "RRF", "2", "CONSTANT", std::string(good)});
     VMSDK_EXPECT_OK(params) << "CONSTANT rejected `" << good << "`";
   }
 }
@@ -601,8 +607,8 @@ TEST_F(FTHybridParserTest, AlphaAndBetaMustBeFiniteNumbers) {
   // it. std::isfinite cannot catch them here: the project builds with
   // -ffast-math, which folds that call to true, so the parser tests the IEEE
   // bit pattern instead. These cases are what prove it.
-  for (absl::string_view bad : {"abc", "", "nan", "inf", "-inf", "1e400",
-                                "0.5.5", "1,5", "1/2"}) {
+  for (absl::string_view bad :
+       {"abc", "", "nan", "inf", "-inf", "1e400", "0.5.5", "1,5", "1/2"}) {
     auto alpha = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                         "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA",
                         std::string(bad), "BETA", "0.5"});
@@ -617,8 +623,8 @@ TEST_F(FTHybridParserTest, AlphaAndBetaMustBeFiniteNumbers) {
 TEST_F(FTHybridParserTest, AlphaAndBetaAcceptAnyFiniteWeight) {
   // Negative and greater-than-one weights are meaningful -- they subtract an
   // arm, or amplify it -- and the reference accepts both.
-  for (absl::string_view good : {"0", "0.5", "1", "-0.5", "2.5", "1e3",
-                                 "+0.5"}) {
+  for (absl::string_view good :
+       {"0", "0.5", "1", "-0.5", "2.5", "1e3", "+0.5"}) {
     auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                          "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA",
                          std::string(good), "BETA", "0.5"});
@@ -637,9 +643,9 @@ TEST_F(FTHybridParserTest, AlphaAndBetaAcceptAnyFiniteWeight) {
 // ---------------------------------------------------------------------
 
 TEST_F(FTHybridParserTest, ASortByAPerArmAliasResolves) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
-                       "@vector", "$q", "KNN", "2", "K", "5", "SORTBY", "2",
-                       "@ts", "DESC"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM", "@vector",
+             "$q", "KNN", "2", "K", "5", "SORTBY", "2", "@ts", "DESC"});
   VMSDK_EXPECT_OK(params);
 }
 
@@ -647,14 +653,13 @@ TEST_F(FTHybridParserTest, APerArmAliasColumnIsNumeric) {
   // Not cosmetic: the column is filled by parsing the text fusion wrote, and
   // only a numeric column parses it. A string column would order 0.9 above
   // 0.53 while still looking like a successful sort.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
-                       "@vector", "$q", "KNN", "2", "K", "5", "SORTBY", "2",
-                       "@ts", "DESC"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM", "@vector",
+             "$q", "KNN", "2", "K", "5", "SORTBY", "2", "@ts", "DESC"});
   VMSDK_EXPECT_OK(params);
   const auto &info = (*params)->agg->record_info_by_index_;
-  auto it = std::find_if(info.begin(), info.end(), [](const auto &i) {
-    return i.output_name_ == "ts";
-  });
+  auto it = std::find_if(info.begin(), info.end(),
+                         [](const auto &i) { return i.output_name_ == "ts"; });
   ASSERT_NE(it, info.end()) << "no column was created for the alias";
   EXPECT_EQ(it->data_type_, indexes::IndexerType::kNumeric);
   // Its identifier has to be the alias itself: that is the key fusion used,
@@ -663,17 +668,16 @@ TEST_F(FTHybridParserTest, APerArmAliasColumnIsNumeric) {
 }
 
 TEST_F(FTHybridParserTest, TheVsimArmsAliasResolvesToo) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "YIELD_SCORE_AS", "vs", "SORTBY", "2",
-                       "@vs", "ASC"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "YIELD_SCORE_AS", "vs", "SORTBY", "2", "@vs", "ASC"});
   VMSDK_EXPECT_OK(params);
 }
 
 TEST_F(FTHybridParserTest, AGroupByAPerArmAliasResolves) {
-  auto params =
-      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM", "@vector",
-             "$q", "KNN", "2", "K", "5", "GROUPBY", "1", "@ts", "REDUCE",
-             "COUNT", "0", "AS", "cnt"});
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5", "GROUPBY", "1",
+                       "@ts", "REDUCE", "COUNT", "0", "AS", "cnt"});
   VMSDK_EXPECT_OK(params);
 }
 
@@ -691,8 +695,8 @@ TEST_F(FTHybridParserTest, APerArmAliasIsReachableUnderANamedLoad) {
   EXPECT_CALL(*index_schema_, GetIdentifier(absl::string_view("n")))
       .WillRepeatedly(::testing::Return(std::string("n")));
   auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "ts", "VSIM",
-                       "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "1",
-                       "@n", "SORTBY", "2", "@ts", "DESC"});
+                       "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "1", "@n",
+                       "SORTBY", "2", "@ts", "DESC"});
   VMSDK_EXPECT_OK(params);
 }
 
@@ -715,12 +719,12 @@ TEST_F(FTHybridParserTest, AnArmAliasNamingTheFusedScoreIsRejected) {
                            "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
   EXPECT_FALSE(by_default.ok());
   auto renamed = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "hs", "VSIM",
-                        "@vector", "$q", "KNN", "2", "K", "5", "COMBINE",
-                        "RRF", "2", "YIELD_SCORE_AS", "hs"});
+                        "@vector", "$q", "KNN", "2", "K", "5", "COMBINE", "RRF",
+                        "2", "YIELD_SCORE_AS", "hs"});
   EXPECT_FALSE(renamed.ok());
   // And the VSIM arm, which is parsed by a different function.
-  auto vsim = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                     "2", "K", "5", "YIELD_SCORE_AS", "__score"});
+  auto vsim = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2",
+                     "K", "5", "YIELD_SCORE_AS", "__score"});
   EXPECT_FALSE(vsim.ok());
 }
 

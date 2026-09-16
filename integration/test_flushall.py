@@ -23,6 +23,29 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
 
         assert client.execute_command("FT._LIST") == []
 
+    def test_flushall_multidb_CMD(self):
+        """
+            FLUSHALL must drop the indexes of every DB, not just DB 0
+        """
+        num_dbs = 3
+        clients = []
+        for db_num in range(num_dbs):
+            client = self.server.get_new_client()
+            client.select(db_num)
+            clients.append(client)
+
+        index = Index("hnsw", [Vector("v", 3, type="HNSW", m=2, efc=1), Numeric("n")])
+        for client in clients:
+            index.create(client)
+            index.load_data(client, 100)
+            assert 100 == index.info(client).num_docs
+
+        clients[0].execute_command("FLUSHALL SYNC")
+
+        for db_num, client in enumerate(clients):
+            assert client.execute_command("DBSIZE") == 0
+            assert client.execute_command("FT._LIST") == [], f"index left behind in DB {db_num}"
+
 class TestFlushAllCME(ValkeySearchClusterTestCase):
 
     def sum_docs(self, index: Index) -> int:

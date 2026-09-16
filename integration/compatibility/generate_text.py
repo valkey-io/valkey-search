@@ -306,7 +306,8 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         return args
 
     def _run_test(self, builder_fn, data_set_name, key_type, dialect, schema_type,
-              inorder=False, slop=False, check_parsing=False, field=None, query_str=None, exclude_all=False):
+              inorder=False, slop=False, check_parsing=False, field=None, query_str=None, exclude_all=False,
+              field_scoped=False):
         """Helper to run a test with given term builder function
         Args:
             builder_fn: Function that takes (vocab, rng) and returns term(s) or query string
@@ -334,6 +335,15 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
 
             try:
                 current_query = self._build_query(builder_fn, vocab, rng, renderer, query_str)
+                # Scope the whole group to one field: @f:(...). The inner vocab
+                # is already drawn from selected_field, so matches are real.
+                # render_shape wraps depth>=1 output in a single outer (), so
+                # prefix directly; otherwise add the group parens.
+                if field_scoped:
+                    if current_query.startswith("(") and current_query.endswith(")"):
+                        current_query = f"@{selected_field}:{current_query}"
+                    else:
+                        current_query = f"@{selected_field}:({current_query})"
                 if current_query in seen:
                     continue
                 seen.add(current_query)
@@ -425,6 +435,22 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
     @pytest.mark.skip(reason="Not sure when these got broken")
     def test_text_search_group_depth3_inorder_slop(self, key_type, dialect, schema_type):
         self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, inorder=True, slop=True, check_parsing=True)
+
+    # ========================================================================
+    # field-scoped groups: @f:(a | b c) -- the group binds to a single field
+    # ========================================================================
+
+    def test_text_search_field_scoped_group_depth1(self, key_type, dialect, schema_type):
+        """Test field-scoped group @f:(a | b) at depth 1."""
+        self._run_test(gen_depth1, "pure text", key_type, dialect, schema_type, field_scoped=True)
+
+    def test_text_search_field_scoped_group_depth2(self, key_type, dialect, schema_type):
+        """Test field-scoped group @f:(...) at depth 2."""
+        self._run_test(gen_depth2, "pure text", key_type, dialect, schema_type, field_scoped=True)
+
+    def test_text_search_field_scoped_group_depth3(self, key_type, dialect, schema_type):
+        """Test field-scoped group @f:(...) at depth 3."""
+        self._run_test(gen_depth3, "pure text", key_type, dialect, schema_type, field_scoped=True)
 
     # ========================================================================
     # text with special characters

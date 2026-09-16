@@ -1131,33 +1131,33 @@ class TestSortByTieBreak(ValkeySearchTestCaseBase):
     def test_sortby_missing_field_docs_order_by_key(self):
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
-            "FT.CREATE", "tiem_idx", "ON", "HASH", "PREFIX", "1", "tiem:",
+            "FT.CREATE", "tie_miss_idx", "ON", "HASH", "PREFIX", "1", "tie_miss:",
             "SCHEMA", "m", "TAG", "p", "NUMERIC") == b"OK"
-        docs = [("tiem:4", None), ("tiem:1", "20"), ("tiem:3", None),
-                ("tiem:2", "10")]
+        docs = [("tie_miss:4", None), ("tie_miss:1", "20"), ("tie_miss:3", None),
+                ("tie_miss:2", "10")]
         for key, p in docs:
             args = ["HSET", key, "m", "all"] + (["p", p] if p else [])
             assert client.execute_command(*args) == len(args[2:]) // 2
         waiters.wait_for_true(
             lambda: client.execute_command(
-                "FT.SEARCH", "tiem_idx", "@m:{all}", "NOCONTENT",
+                "FT.SEARCH", "tie_miss_idx", "@m:{all}", "NOCONTENT",
                 "DIALECT", "2")[0] == 4
         )
 
         # Docs missing the sort field come last in BOTH directions, ordered
         # by key among themselves following the sort direction.
         result = client.execute_command(
-            "FT.SEARCH", "tiem_idx", "@m:{all}", "SORTBY", "p", "ASC",
+            "FT.SEARCH", "tie_miss_idx", "@m:{all}", "SORTBY", "p", "ASC",
             "RETURN", "1", "m", "DIALECT", "2")
-        assert result == [4, b"tiem:2", [b"m", b"all"], b"tiem:1",
-                          [b"m", b"all"], b"tiem:3", [b"m", b"all"],
-                          b"tiem:4", [b"m", b"all"]]
+        assert result == [4, b"tie_miss:2", [b"m", b"all"], b"tie_miss:1",
+                          [b"m", b"all"], b"tie_miss:3", [b"m", b"all"],
+                          b"tie_miss:4", [b"m", b"all"]]
         result = client.execute_command(
-            "FT.SEARCH", "tiem_idx", "@m:{all}", "SORTBY", "p", "DESC",
+            "FT.SEARCH", "tie_miss_idx", "@m:{all}", "SORTBY", "p", "DESC",
             "RETURN", "1", "m", "DIALECT", "2")
-        assert result == [4, b"tiem:1", [b"m", b"all"], b"tiem:2",
-                          [b"m", b"all"], b"tiem:4", [b"m", b"all"],
-                          b"tiem:3", [b"m", b"all"]]
+        assert result == [4, b"tie_miss:1", [b"m", b"all"], b"tie_miss:2",
+                          [b"m", b"all"], b"tie_miss:4", [b"m", b"all"],
+                          b"tie_miss:3", [b"m", b"all"]]
 
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """

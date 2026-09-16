@@ -14,6 +14,7 @@
 #include <new>
 #include <vector>
 
+#include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
 #include "absl/synchronization/mutex.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
@@ -40,6 +41,9 @@ class ShardedAtomic {
 
   // THE HOT PATH (Write)
   inline void Add(T n) {
+    if (ABSL_PREDICT_FALSE(node_destroyed_)) {
+      return;
+    }
     ThreadLocalNode &node = GetLocalNode();
     if (ABSL_PREDICT_FALSE(index_ >= node.capacity)) {
       node.EnsureCapacity(index_ + 1);
@@ -49,6 +53,9 @@ class ShardedAtomic {
   }
 
   inline void Subtract(T n) {
+    if (ABSL_PREDICT_FALSE(node_destroyed_)) {
+      return;
+    }
     ThreadLocalNode &node = GetLocalNode();
     if (ABSL_PREDICT_FALSE(index_ >= node.capacity)) {
       node.EnsureCapacity(index_ + 1);
@@ -104,9 +111,21 @@ class ShardedAtomic {
   // specific type T
   class CounterRegistry {
    public:
+    // Never destroyed, deliberately. A thread's ThreadLocalNode unregisters
+    // itself here from its destructor, so the registry has to outlive every
+    // node. glibc guarantees that on its own -- it runs thread_local
+    // destructors before static ones -- but musl has no
+    // __cxa_thread_atexit_impl, so libstdc++'s fallback puts both in one LIFO
+    // list. There the order depends on which thread first reached Instance():
+    // if that was a worker thread, this registry is destroyed before the main
+    // thread's node, whose destructor then walks a freed vector. It shows up
+    // as a SIGSEGV in exit() after every test has passed.
+    //
+    // NoDestructor also keeps the initialization off the heap: a new here
+    // would allocate, and this registry underpins the allocation accounting.
     static CounterRegistry &Instance() {
-      static CounterRegistry instance;
-      return instance;
+      static absl::NoDestructor<CounterRegistry> instance;
+      return *instance;
     }
 
     size_t AllocateIndex() {
@@ -201,6 +220,31 @@ class ShardedAtomic {
     size_t next_index_ ABSL_GUARDED_BY(mutex_){0};
   };
 
+  // Set once this thread's node has been destroyed, after which Add and
+  // Subtract must not touch it.
+  //
+  // A thread_local is destroyed in reverse order of construction, and this
+  // node is constructed on the thread's first accounted allocation -- so any
+  // thread_local built before that one is destroyed after it. If such an
+  // object frees memory from its destructor, free() reports the size here and
+  // GetLocalNode() hands back the destroyed node, whose values array has
+  // already been returned to the system allocator. glibc leaves that memory
+  // mapped and the write silently lands in a freed chunk; musl unmaps it and
+  // the process dies, which is how this was found (valkey-server SIGSEGVs in
+  // a worker thread during SHUTDOWN on Alpine).
+  //
+  // The flag is a separate object rather than a values=nullptr store in
+  // ~ThreadLocalNode because a store to the object being destroyed is a dead
+  // store the compiler may drop (gcc -flifetime-dse); verified that clearing
+  // values there does not stop the crash. It is trivially destructible, so it
+  // stays readable for the lifetime of the thread and needs no ordering of
+  // its own.
+  //
+  // Counts already accumulated survive: ~ThreadLocalNode folds them into the
+  // registry's retired totals. What is dropped is allocation activity after
+  // this thread's node is gone, which is thread-exit teardown only.
+  static inline thread_local bool node_destroyed_{false};
+
   static ThreadLocalNode &GetLocalNode() {
     static thread_local ThreadLocalNode node;
     return node;
@@ -222,6 +266,9 @@ ShardedAtomic<T>::ThreadLocalNode::ThreadLocalNode() {
 
 template <typename T>
 ShardedAtomic<T>::ThreadLocalNode::~ThreadLocalNode() {
+  // Before anything else: Unregister and deallocate below may themselves
+  // allocate or free, and must not re-enter this node.
+  node_destroyed_ = true;
   CounterRegistry::Instance().Unregister(this);
   if (values) {
     RawSystemAllocator<std::atomic<T>, DisableRawSystemAllocatorReporting>

@@ -439,9 +439,19 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
+  // Same gate as the non-vector drain loop: a solved query's fetchers are exact
+  // rather than candidate generators, so the per-key re-check only repeats work
+  // the fetcher already did -- for text that means a prefix or suffix radix walk
+  // of up to max-term-expansions words, or a stem variant lookup, per candidate.
+  // Only AND with numeric/tag (which keeps just the smallest child's fetchers)
+  // and negation (which scans the universal set) leave work for the evaluator.
+  const bool requires_prefilter_evaluation =
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                      parameters.filter_parse_results.is_match_all);
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
-                              : nullptr;
+      requires_prefilter_evaluation && parameters.index_schema
+          ? parameters.index_schema->GetTextIndexSchema()
+          : nullptr;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -453,15 +463,20 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
-      const valkey_search::indexes::text::TextIndex *text_index =
-          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
-                            : nullptr;
-      indexes::PrefilterEvaluator key_evaluator(
-          text_index, parameters.filter_parse_results.query_operations);
-      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // 3. Evaluate predicate
-      if (key_evaluator.Evaluate(
-              *parameters.filter_parse_results.root_predicate, key)) {
+      bool matched = true;
+      if (requires_prefilter_evaluation) {
+        const valkey_search::indexes::text::TextIndex *text_index =
+            text_index_schema
+                ? text_index_schema->GetPerKeyTextIndex(key, false)
+                : nullptr;
+        indexes::PrefilterEvaluator key_evaluator(
+            text_index, parameters.filter_parse_results.query_operations);
+        BACKGROUND_PAUSEPOINT("search_prefilter_eval");
+        // 3. Evaluate predicate
+        matched = key_evaluator.Evaluate(
+            *parameters.filter_parse_results.root_predicate, key);
+      }
+      if (matched) {
         bool result = appender(key, result_keys);
         if (needs_dedup && result) {
           result_keys.insert(key->Str().data());

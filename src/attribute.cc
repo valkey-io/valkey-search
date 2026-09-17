@@ -22,20 +22,26 @@ int Attribute::RespondWithInfo(ValkeyModuleCtx* ctx,
   ValkeyModule_ReplyWithLongLong(ctx, index_schema->GetSize(GetAlias()));
   int added_fields = index_->RespondWithInfo(ctx);
   // Redis reports these as bare tokens, which no generic key/value parser can
-  // read, so they are reported as pairs like the other attribute properties.
+  // read, so they are reported as pairs like CASESENSITIVE. Each is reported
+  // only where it can mean something: Redis rejects SORTABLE on a vector, and
+  // UNF suppresses a normalization that a number never has.
+  const auto indexer_type = index_->GetIndexerType();
+  const bool sortable_applies = !indexes::IsVectorIndex(indexer_type);
+  const bool unf_applies = indexer_type == indexes::IndexerType::kTag ||
+                           indexer_type == indexes::IndexerType::kText;
   added_fields += VALKEY_SEARCH_COMPATIBILITY_FIX(
       1, 3, 0, "ft_info_sortable_flags",
       [&]() {
         int emitted = 0;
-        if (sortable_) {
+        if (sortable_applies) {
           ValkeyModule_ReplyWithSimpleString(ctx, "SORTABLE");
-          ValkeyModule_ReplyWithSimpleString(ctx, "1");
+          ValkeyModule_ReplyWithSimpleString(ctx, sortable_ ? "1" : "0");
           emitted += 2;
-          if (unf_) {
-            ValkeyModule_ReplyWithSimpleString(ctx, "UNF");
-            ValkeyModule_ReplyWithSimpleString(ctx, "1");
-            emitted += 2;
-          }
+        }
+        if (unf_applies) {
+          ValkeyModule_ReplyWithSimpleString(ctx, "UNF");
+          ValkeyModule_ReplyWithSimpleString(ctx, unf_ ? "1" : "0");
+          emitted += 2;
         }
         return emitted;
       },

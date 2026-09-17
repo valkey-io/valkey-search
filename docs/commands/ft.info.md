@@ -42,8 +42,8 @@ An array of key value pairs.
   - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field.
   - `type` (string) One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`
   - Type-specific extension (see below)
-  - `SORTABLE` (string) `1` if the attribute was declared `SORTABLE`; the pair is omitted otherwise. Requires `search.emulate-release` >= 1.3.0. RediSearch reports this as a bare token with no value.
-  - `UNF` (string) `1` if the attribute was declared `SORTABLE UNF`; the pair is omitted otherwise, and it never appears without `SORTABLE`. Requires `search.emulate-release` >= 1.3.0. RediSearch reports this as a bare token with no value.
+  - `SORTABLE` (string) `1` if the attribute was declared `SORTABLE`, `0` otherwise. Not reported for `VECTOR` attributes, which cannot be declared `SORTABLE`. Requires `search.emulate-release` >= 1.3.0. RediSearch reports this as a bare token present only when declared.
+  - `UNF` (string) `1` if the attribute was declared `SORTABLE UNF`, `0` otherwise. Reported only for `TAG` and `TEXT` attributes, the only types whose sort value is normalized. Requires `search.emulate-release` >= 1.3.0. RediSearch reports this as a bare token present only when declared.
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.

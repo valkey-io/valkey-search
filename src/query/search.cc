@@ -513,6 +513,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (parameters.no_content || parameters.return_attributes.empty()) {
     return results;
   }
+  // A SORTBY on a stored field is compared against attribute_contents, and
+  // only the main-thread fetch adds that field beyond RETURN (GetContent).
+  // Index-served content carries just the RETURN attributes, so decline.
+  const bool sort_by_vec_score =
+      parameters.sortby_parameter && parameters.score_as &&
+      parameters.sortby_parameter->field ==
+          vmsdk::ToStringView(parameters.score_as.get());
+  if (parameters.sortby_parameter && !sort_by_vec_score) {
+    return results;
+  }
   struct AttributeInfo {
     const ReturnAttribute *attribute;
     indexes::IndexBase *index;

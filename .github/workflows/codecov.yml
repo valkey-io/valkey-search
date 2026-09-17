@@ -50,10 +50,8 @@ jobs:
           restore-keys: |
             ccache-codecov-unittests-${{ github.ref }}-
             ccache-codecov-unittests-
-            ccache-codecov-
 
       - name: Build and Run Unit Tests with Coverage
-        id: test-run
         run: |
           mkdir -p test-results .ccache
           docker run --privileged --rm \
@@ -61,30 +59,26 @@ jobs:
             -v "$(pwd):/workspace" \
             -e CCACHE_DIR=/workspace/.ccache \
             -e CCACHE_MAXSIZE=1G \
-            -e CMAKE_EXTRA_ARGS="-DCMAKE_CXX_FLAGS=--coverage -DCMAKE_SHARED_LINKER_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage" \
+            -e CMAKE_EXTRA_ARGS="-DCMAKE_C_FLAGS=--coverage -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_SHARED_LINKER_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage" \
             --user "ubuntu:ubuntu" \
             presubmit-image \
             bash -c '
               set -euo pipefail
-              which lcov >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lcov)
-              
+
               # Run Unit Tests
               sudo -E ci/build_ubuntu.sh --debug --run-tests --unittest-output=/workspace/test-results
-              sudo chmod -R 777 /workspace/test-results
-              
+
               # Capture Unit Tests coverage trace
-              sudo lcov --capture --directory .build-debug/ --output-file /workspace/test-results/unittests_raw.info --ignore-errors mismatch,unused,inconsistent,empty,gcov
-              sudo lcov --remove /workspace/test-results/unittests_raw.info \
+              sudo lcov --capture --directory .build-debug/ --output-file /tmp/unittests_raw.info --ignore-errors mismatch,unused,inconsistent,empty,gcov,negative
+              sudo lcov --remove /tmp/unittests_raw.info \
                    "/usr/*" \
                    "/opt/*" \
                    "*/third_party/*" \
                    "*/submodules/*" \
                    "*/testing/*" \
-                   "*/vmsdk/testing/*" \
                    "*/.build*/*" \
                    --output-file /workspace/test-results/unittests.info \
-                   --ignore-errors mismatch,unused,inconsistent,empty
-              sudo chmod -R 777 /workspace/test-results
+                   --ignore-errors mismatch,unused,inconsistent,empty,negative
             '
 
       - name: Update Test Results Permissions
@@ -131,10 +125,8 @@ jobs:
           restore-keys: |
             ccache-codecov-integration-${{ github.ref }}-
             ccache-codecov-integration-
-            ccache-codecov-
 
       - name: Build and Run Integration Tests with Coverage
-        id: test-run
         run: |
           mkdir -p test-results .ccache
           docker run --privileged --rm \
@@ -142,31 +134,26 @@ jobs:
             -v "$(pwd):/workspace" \
             -e CCACHE_DIR=/workspace/.ccache \
             -e CCACHE_MAXSIZE=1G \
-            -e CMAKE_EXTRA_ARGS="-DCMAKE_CXX_FLAGS=--coverage -DCMAKE_SHARED_LINKER_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage" \
+            -e CMAKE_EXTRA_ARGS="-DCMAKE_C_FLAGS=--coverage -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_SHARED_LINKER_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage" \
             --user "ubuntu:ubuntu" \
             presubmit-image \
             bash -c '
               set -euo pipefail
-              which lcov >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lcov)
-              
+
               # Run Integration Tests
-              export MODULE_PATH=/workspace/.build-debug/libsearch.so
-              sudo -E MODULE_PATH=/workspace/.build-debug/libsearch.so ci/build_ubuntu.sh --debug --run-integration-tests=oss --integration-output=/workspace/test-results
-              sudo chmod -R 777 /workspace/test-results
-              
+              sudo -E ci/build_ubuntu.sh --debug --run-integration-tests --integration-output=/workspace/test-results
+
               # Capture Integration Tests coverage trace
-              sudo lcov --capture --directory .build-debug/ --output-file /workspace/test-results/integration_raw.info --ignore-errors mismatch,unused,inconsistent,empty,gcov
-              sudo lcov --remove /workspace/test-results/integration_raw.info \
+              sudo lcov --capture --directory .build-debug/ --output-file /tmp/integration_raw.info --ignore-errors mismatch,unused,inconsistent,empty,gcov,negative
+              sudo lcov --remove /tmp/integration_raw.info \
                    "/usr/*" \
                    "/opt/*" \
                    "*/third_party/*" \
                    "*/submodules/*" \
                    "*/testing/*" \
-                   "*/vmsdk/testing/*" \
                    "*/.build*/*" \
                    --output-file /workspace/test-results/integration.info \
-                   --ignore-errors mismatch,unused,inconsistent,empty
-              sudo chmod -R 777 /workspace/test-results
+                   --ignore-errors mismatch,unused,inconsistent,empty,negative
             '
 
       - name: Update Test Results Permissions

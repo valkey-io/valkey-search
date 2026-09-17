@@ -112,7 +112,11 @@ struct Postings {
 
   // Look up the posting entry (tf + doc_len) for a specific key in one find,
   // only used in extra-step scoring. Returns nullopt if the key is absent.
-  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key) const;
+  // One Postings is shared by every TEXT field, so key presence alone does not
+  // mean the term occurred in a requested field: nullopt unless it falls in
+  // `field_mask`. `~0ULL` means any field and skips the per-position scan.
+  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key,
+                                        uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();

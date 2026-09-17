@@ -1516,6 +1516,42 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     return schema;
   }
 
+  // Schema with two TEXT fields ("title" stems, "body" is NOSTEM) sharing one
+  // posting tree, plus a numeric field "rating" so combined text+numeric
+  // queries parse. Docs are (key, title, body); "" skips that field.
+  std::shared_ptr<MockIndexSchema> BuildTwoTextFieldSchema(
+      const std::vector<std::tuple<std::string, std::string, std::string>>
+          &docs) {
+    auto schema = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    schema->CreateTextIndexSchema();
+    auto text_schema = schema->GetTextIndexSchema();
+    auto title = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/false, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("title", "title", title));
+    auto body = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("body", "body", body));
+    auto numeric =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
+    for (const auto &[k, title_text, body_text] : docs) {
+      auto key = StringInternStore::Intern(k);
+      if (!title_text.empty()) {
+        VMSDK_EXPECT_OK(title->AddRecord(key, title_text));
+      }
+      if (!body_text.empty()) {
+        VMSDK_EXPECT_OK(body->AddRecord(key, body_text));
+      }
+      text_schema->CommitKeyData(key);
+      schema->SetIndexMutationSequenceNumber(key, 0);
+    }
+    return schema;
+  }
+
   // Score `key` against `filter`; nullopt when the predicate did not match.
   std::optional<float> Score(MockIndexSchema &schema, absl::string_view filter,
                              const std::string &key) {
@@ -1934,6 +1970,69 @@ TEST_F(ScoreTextQueryTestBase, StemRecomputePathMatchesExtraStep) {
       *schema, parsed.value().root_predicate.get(), scorer);
   auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
   ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// --- Field-scoped extra-step admission ---
+// All TEXT fields share one posting tree, so a key's presence in a term's
+// posting list does not mean the term occurred in the queried field. A doc
+// holding the term only in ANOTHER field must contribute nothing on the
+// extra-step path (the numeric clause forces it; ScoreTextQuery keeps the
+// candidate at score 0 rather than dropping it), matching term.cc's
+// in-iterator gating via ContainsFields.
+TEST_F(ScoreTextQueryTestBase, FieldScopedTermGatesExtraStepAdmission) {
+  auto schema =
+      BuildTwoTextFieldSchema({{"d1", "hello", ""}, {"d2", "", "hello"}});
+  // d1 carries `hello` only in title: the @body leaf must contribute nothing.
+  auto d1 = Score(*schema, "@body:hello @rating:[0 100]", "d1");
+  ASSERT_TRUE(d1.has_value());
+  EXPECT_FLOAT_EQ(*d1, 0.0f);
+  auto d2 = Score(*schema, "@body:hello @rating:[0 100]", "d2");
+  ASSERT_TRUE(d2.has_value());
+  EXPECT_GT(*d2, 0.0f);
+  // Unscoped, the mask covers all fields (the ~0ULL sentinel): both score, and
+  // equally (same tf, doc_len, and df).
+  auto u1 = Score(*schema, "hello @rating:[0 100]", "d1");
+  auto u2 = Score(*schema, "hello @rating:[0 100]", "d2");
+  ASSERT_TRUE(u1 && u2);
+  EXPECT_FLOAT_EQ(*u1, *u2);
+}
+
+// A stemmed field-scoped term must not score a doc whose only inflection lives
+// in a NOSTEM field: the inflection posting exists (d2 put `runs` in the stem
+// tree via the stemming title field), but d3 carries `runs` only in body.
+TEST_F(ScoreTextQueryTestBase, StemVariantInNoStemFieldNotScored) {
+  auto schema = BuildTwoTextFieldSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "", "runs"}});
+  auto d1 = Score(*schema, "@title:running @rating:[0 100]", "d1");
+  auto d2 = Score(*schema, "@title:running @rating:[0 100]", "d2");
+  ASSERT_TRUE(d1 && d2);
+  EXPECT_GT(*d1, *d2);  // exact form outranks the inflection
+  // d3's `runs` is in the shared posting list but only at body positions.
+  auto d3 = Score(*schema, "@title:running @rating:[0 100]", "d3");
+  ASSERT_TRUE(d3.has_value());
+  EXPECT_FLOAT_EQ(*d3, 0.0f);
+}
+
+// The recompute path (SingleDocumentScorer) walks the same grouped ScoreNode,
+// so field-scoped admission must agree with the extra-step path.
+TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {
+  auto schema =
+      BuildTwoTextFieldSchema({{"d1", "hello", ""}, {"d2", "", "hello"}});
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@body:hello @rating:[0 100]";
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::SingleDocumentScorer document_scorer(
+      *schema, parsed.value().root_predicate.get(), scorer);
+  // SingleDocumentScorer reports a non-match as nullopt (its caller owns the
+  // keep-or-drop decision); the field-scoped leaf must reject d1.
+  EXPECT_FALSE(document_scorer.Score(StringInternStore::Intern("d1")));
+  auto recomputed = document_scorer.Score(StringInternStore::Intern("d2"));
+  auto extra_step = Score(*schema, filter, "d2");
+  ASSERT_TRUE(recomputed && extra_step);
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
 }
 

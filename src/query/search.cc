@@ -658,6 +658,10 @@ struct TermGroup {
   // Query-invariant BM25 IDF for this group, computed once here instead of per
   // candidate document.
   float idf = 0.0f;
+  // One posting tree serves every TEXT field, so a posting only supplies
+  // scoring inputs when the key carries the term in a field the predicate asked
+  // for.
+  uint64_t field_mask = ~0ULL;
 };
 
 // A term leaf's scoring inputs resolved once per query. A stemmed query term
@@ -687,6 +691,17 @@ struct ResolvedLeaf {
 // walk can look leaves up without a dynamic_cast: a hit is a scored term leaf,
 // a miss is a non-scored text predicate (prefix/suffix/fuzzy).
 using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
+
+// Collapses an all-fields mask (what the parser builds for an unscoped query)
+// to the `~0ULL` sentinel, so LookupKey skips the per-position scan. Field
+// numbers are dense from 0 (TextIndexSchema::AllocateTextFieldNumber).
+uint64_t ScoringFieldMask(uint64_t field_mask,
+                          const indexes::text::TextIndexSchema *schema) {
+  const uint8_t num_fields = schema->GetNumTextFields();
+  if (num_fields == 0 || num_fields >= 64) return field_mask;
+  const uint64_t all_fields = (1ULL << num_fields) - 1;
+  return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
+}
 
 // Runs once per query to hoist all document-independent scoring work out of the
 // per-candidate loop. Walks the predicate tree and, for each TermPredicate
@@ -731,7 +746,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // literal): one posting list, IDF from that word's own df. Ingestion
       // stores original words in the posting tree, resolved via
       // FindPostingsTarget; an absent word adds no group.
-      auto add_word_group = [&](absl::string_view word) {
+      auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
         auto postings = prefix.FindPostingsTarget(word);
         if (!postings) return;
         const uint32_t dt =
@@ -739,6 +754,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         TermGroup group;
         group.postings.push_back(std::move(postings));
         group.idf = scorer->PrecomputeIDF({total_docs, dt});
+        group.field_mask = field_mask;
         leaf.groups.push_back(std::move(group));
       };
 
@@ -746,7 +762,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // Leaf 1: the exact surface term. For a stemmed term this same word is
       // scored again in the inflection group below (it is one of its parents) —
       // the deliberate exact-match boost.
-      add_word_group(word);
+      add_word_group(word, ScoringFieldMask(term_pred->GetFieldMask(),
+                                            text_index_schema.get()));
 
       const uint64_t stem_field_mask =
           term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
@@ -767,7 +784,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         // differs from the query word (else it is Leaf 1) and is itself
         // indexed.
         if (stemmed != word) {
-          add_word_group(stemmed);
+          add_word_group(stemmed, ScoringFieldMask(stem_field_mask,
+                                                   text_index_schema.get()));
         }
 
         // Leaf 3: the stem inflection group. F sums the per-doc frequencies of
@@ -782,6 +800,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
           const uint32_t dt =
               std::min<uint32_t>(stem_distinct_docs, total_docs);
           stem.idf = scorer->PrecomputeIDF({total_docs, dt});
+          stem.field_mask =
+              ScoringFieldMask(stem_field_mask, text_index_schema.get());
           leaf.groups.push_back(std::move(stem));
         }
       }
@@ -892,7 +912,9 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 
       // A stemmed term sums several independent BM25 leaves, each with its own
       // IDF and its own F (term frequency summed across that group's postings).
-      // The document matches the leaf if any group contains its key. doc_len is
+      // The document matches the leaf if any group contains its key in a field
+      // the group's mask admits (all TEXT fields share one posting tree, so
+      // presence alone is not occurrence in a queried field). doc_len is
       // co-located in the posting entry (identical across postings for one
       // key), so the same LookupKey that yields tf yields it — no separate
       // per-key scoring-map probe. avg_doc_len is corpus-wide (precomputed in
@@ -904,7 +926,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       for (const TermGroup &group : leaf.groups) {
         uint32_t tf = 0;
         for (const auto &postings : group.postings) {
-          if (auto entry = postings->LookupKey(key)) {
+          if (auto entry = postings->LookupKey(key, group.field_mask)) {
             tf += entry->tf;
             doc_len = entry->doc_len;
           }

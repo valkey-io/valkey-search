@@ -1011,13 +1011,13 @@ INSTANTIATE_TEST_SUITE_P(
                 "\"\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?\"",
             .create_success = true,
             .expected_tree_structure = "AND(slop=0, inorder=true){\n"
-                                       "  TEXT-TERM(\"\\\\\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\\\\\", field=*)\n"
                                        "  TEXT-TERM(\"hello\", field=*)\n"
                                        "  TEXT-TERM(\"how\", field=*)\n"
-                                       "  TEXT-TERM(\"\\are\", field=*)\n"
-                                       "  TEXT-TERM(\"\\\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\are\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\", field=*)\n"
                                        "  TEXT-TERM(\"you\", field=*)\n"
-                                       "  TEXT-TERM(\"\\\\doing?\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\\\\doing?\", field=*)\n"
                                        "}\n",
         },
         {
@@ -1025,13 +1025,13 @@ INSTANTIATE_TEST_SUITE_P(
             .filter = "\\\\\\\\\\Hello, \\how \\\\are \\\\\\you \\\\\\\\doing?",
             .create_success = true,
             .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"\\\\\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\\\\\", field=*)\n"
                                        "  TEXT-TERM(\"hello\", field=*)\n"
                                        "  TEXT-TERM(\"how\", field=*)\n"
-                                       "  TEXT-TERM(\"\\are\", field=*)\n"
-                                       "  TEXT-TERM(\"\\\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\are\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\", field=*)\n"
                                        "  TEXT-TERM(\"you\", field=*)\n"
-                                       "  TEXT-TERM(\"\\\\doing?\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\\\\doing?\", field=*)\n"
                                        "}\n",
         },
         {
@@ -1052,11 +1052,11 @@ INSTANTIATE_TEST_SUITE_P(
                       "\\\\\\\\\\%doing?",
             .create_success = true,
             .expected_tree_structure = "AND{\n"
-                                       "  TEXT-TERM(\"\\\\(hello\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\\\\(hello\", field=*)\n"
                                        "  TEXT-TERM(\"$how\", field=*)\n"
-                                       "  TEXT-TERM(\"\\*are\", field=*)\n"
-                                       "  TEXT-TERM(\"\\-you\", field=*)\n"
-                                       "  TEXT-TERM(\"\\\\%doing?\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\*are\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\-you\", field=*)\n"
+                                       "  TEXT-TERM(\"\\\\\\\\%doing?\", field=*)\n"
                                        "}\n",
         },
         {
@@ -1079,9 +1079,23 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  TEXT-TERM(\"hello\", field=*)\n"
                                        "  TEXT-TERM(\"how\", field=*)\n"
                                        "  TEXT-TERM(\"are\", field=*)\n"
-                                       "  TEXT-TERM(\"you\\\\%\", field=*)\n"
+                                       "  TEXT-TERM(\"you\\\\\\\\%\", field=*)\n"
                                        "  TEXT-TERM(\"doing\", field=*)\n"
                                        "}\n",
+        },
+        {
+            .test_name = "weighted_term_integer",
+            .filter = "(hello)=>{$weight:2}",
+            .create_success = true,
+            .expected_tree_structure =
+                "TEXT-TERM(\"hello\", field=*, weight=2)\n",
+        },
+        {
+            .test_name = "weighted_term_decimal",
+            .filter = "(world)=>{$weight:2.5}",
+            .create_success = true,
+            .expected_tree_structure =
+                "TEXT-TERM(\"world\", field=*, weight=2.5)\n",
         },
         {
             .test_name = "default_field_with_escape_query_syntax",

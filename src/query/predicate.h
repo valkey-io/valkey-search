@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -246,6 +247,26 @@ class TextPredicate : public Predicate {
   std::string FieldInfo() const {
     return field_name_.has_value() ? "field=" + field_name_.value() : "field=*";
   }
+
+  // FT.EXPLAINCLI displays the term between double quotes. Escape backslash and
+  // double-quote in the (already-unescaped) term so the rendered line is
+  // unambiguous, e.g. a term of `a"b` prints as TEXT-TERM("a\"b", ...).
+  static std::string EscapeForDisplay(absl::string_view term) {
+    std::string out;
+    out.reserve(term.size());
+    for (char c : term) {
+      if (c == '\\' || c == '"') out.push_back('\\');
+      out.push_back(c);
+    }
+    return out;
+  }
+
+  // Renders the query weight for FT.EXPLAINCLI, but only when it differs from
+  // the default of 1.0 so unweighted queries stay uncluttered.
+  std::string WeightInfo() const {
+    return GetWeight() == 1.0f ? ""
+                               : absl::StrFormat(", weight=%g", GetWeight());
+  }
 };
 
 class TermPredicate : public TextPredicate {
@@ -272,7 +293,8 @@ class TermPredicate : public TextPredicate {
   bool IsExact() const { return exact_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
-    return "TEXT-TERM(\"" + term_ + "\", " + FieldInfo() + ")";
+    return "TEXT-TERM(\"" + EscapeForDisplay(term_) + "\", " + FieldInfo() +
+           WeightInfo() + ")";
   }
 
  private:
@@ -305,7 +327,8 @@ class PrefixPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
-    return "TEXT-PREFIX(\"" + term_ + "\", " + FieldInfo() + ")";
+    return "TEXT-PREFIX(\"" + EscapeForDisplay(term_) + "\", " + FieldInfo() +
+           WeightInfo() + ")";
   }
 
  private:
@@ -337,7 +360,8 @@ class SuffixPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
-    return "TEXT-SUFFIX(\"" + term_ + "\", " + FieldInfo() + ")";
+    return "TEXT-SUFFIX(\"" + EscapeForDisplay(term_) + "\", " + FieldInfo() +
+           WeightInfo() + ")";
   }
 
  private:
@@ -369,7 +393,8 @@ class InfixPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
-    return "TEXT-INFIX(\"" + term_ + "\", " + FieldInfo() + ")";
+    return "TEXT-INFIX(\"" + EscapeForDisplay(term_) + "\", " + FieldInfo() +
+           WeightInfo() + ")";
   }
 
  private:
@@ -402,9 +427,9 @@ class FuzzyPredicate : public TextPredicate {
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
   size_t EstimateSize(bool is_vec_query) const override;
   std::string Describe() const override {
-    return "TEXT-FUZZY(\"" + term_ +
+    return "TEXT-FUZZY(\"" + EscapeForDisplay(term_) +
            "\", distance=" + std::to_string(distance_) + ", " + FieldInfo() +
-           ")";
+           WeightInfo() + ")";
   }
 
  private:

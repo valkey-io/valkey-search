@@ -2,8 +2,8 @@ import time
 
 import pytest
 
-from ..data_sets import RETURN_CLAUSE_DATA_SET
-from ..generate import BaseCompatibilityTest
+from .data_sets import RETURN_CLAUSE_DATA_SET
+from .generate import BaseCompatibilityTest
 
 '''
 Capture RediSearch answers for repeated RETURN clauses (issue #1353 item 7):
@@ -14,7 +14,7 @@ the last RETURN clause wins, including a later clause overriding an earlier
 
 @pytest.mark.parametrize("key_type", ["hash"])
 class TestReturnClauseCompatibility(BaseCompatibilityTest):
-    ANSWER_FILE_NAME = "search/return-answers.pickle.gz"
+    ANSWER_FILE_NAME = "return-answers.pickle.gz"
 
     def test_repeated_return_clauses(self, key_type):
         self.setup_data(RETURN_CLAUSE_DATA_SET, key_type)

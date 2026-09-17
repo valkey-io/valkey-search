@@ -11,13 +11,13 @@ _COMPAT_DIR = os.path.dirname(os.path.abspath(__file__))
 # per-command subdirectory (e.g. search/); all paths are relative to this
 # directory and ANSWER_FILE_NAME must match the "answers" entry.
 GENERATORS = [
-    {"generator": "generate.py",         "answers": "aggregate-answers.pickle.gz",   "cluster": True},
-    {"generator": "generate_text.py",    "answers": "text-search-answers.pickle.gz", "cluster": False},
+    {"generator": "generate.py",         "answers": "aggregate-answers.pickle.gz",    "cluster": True},
+    {"generator": "generate_text.py",    "answers": "text-search-answers.pickle.gz",  "cluster": False},
     {"generator": "generate_array.py",   "answers": "array-input-answers.pickle.gz",  "cluster": False},
     {"generator": "generate_expr.py",    "answers": "expr-answers.pickle.gz",         "cluster": False},
     {"generator": "generate_sortkey.py", "answers": "sortkey-answers.pickle.gz",      "cluster": False},
     {"generator": "generate_filter.py",  "answers": "filter-answers.pickle.gz",       "cluster": False},
-    {"generator": "search/generate_return.py", "answers": "search/return-answers.pickle.gz", "cluster": False},
+    {"generator": "generate_return.py",  "answers": "return-answers.pickle.gz",       "cluster": False},
 ]
 
 

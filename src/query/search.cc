@@ -441,10 +441,11 @@ void EvaluatePrefilteredKeys(
   }
   // Same gate as the non-vector drain loop: a solved query's fetchers are exact
   // rather than candidate generators, so the per-key re-check only repeats work
-  // the fetcher already did -- for text that means a prefix or suffix radix walk
-  // of up to max-term-expansions words, or a stem variant lookup, per candidate.
-  // Only AND with numeric/tag (which keeps just the smallest child's fetchers)
-  // and negation (which scans the universal set) leave work for the evaluator.
+  // the fetcher already did -- for text that means a prefix or suffix radix
+  // walk of up to max-term-expansions words, or a stem variant lookup, per
+  // candidate. Only AND with numeric/tag (which keeps just the smallest child's
+  // fetchers) and negation (which scans the universal set) leave work for the
+  // evaluator.
   const bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
                       parameters.filter_parse_results.is_match_all);
@@ -1008,7 +1009,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // one-term invariant. doc_len is co-located in the matched posting entry.
       if (!leaf.expansion_terms.empty()) {
         for (const auto &term : leaf.expansion_terms) {
-          if (auto entry = term.postings->LookupKey(key, leaf.field_mask)) {
+          if (auto entry =
+                  term.postings->GetPostingDocStats(key, leaf.field_mask)) {
             return score_ctx.scorer->ScoreLeaf(
                 {term.idf, entry->tf, entry->doc_len, score_ctx.avg_doc_len,
                  predicate->GetWeight()});
@@ -1035,7 +1037,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         const uint64_t field_mask = (i == 0 && leaf.has_original)
                                         ? leaf.field_mask
                                         : leaf.stem_field_mask;
-        if (auto entry = leaf.postings[i]->LookupKey(key, field_mask)) {
+        if (auto entry =
+                leaf.postings[i]->GetPostingDocStats(key, field_mask)) {
           tf += entry->tf;
           doc_len = entry->doc_len;
         }

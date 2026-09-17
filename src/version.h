@@ -31,7 +31,7 @@ constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 3, 0);
 //
 // Set the minimum acceptable server version
 //
-constexpr auto kMinimumServerVersion = vmsdk::ValkeyVersion(9, 0, 1);
+constexpr auto kMinimumServerVersion = vmsdk::ValkeyVersion(9, 1, 0);
 
 namespace valkey_search {
 

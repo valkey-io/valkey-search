@@ -306,7 +306,9 @@ class IndexSchema : public KeyspaceEventSubscription,
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
-    std::vector<uint8_t> weighted_buffer;
+    // Memory charged to Valkey for queued asynchronous ingestion work.
+    // This is accounting only; the bytes are not physically allocated.
+    size_t weighted_memory{0};
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
@@ -590,7 +592,9 @@ class IndexSchema : public KeyspaceEventSubscription,
                           float document_score = kDefaultDocumentScore)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
 
-  size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
+  size_t ComputeWeightedMemory(const MutatedAttributes &attributes) const;
+  void UpdateWeightedMemory(DocumentMutation &mutation, size_t memory)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutated_records_mutex_);
 
   // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
@@ -646,7 +650,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, FlatConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
-  FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
+  FRIEND_TEST(IndexSchemaFriendTest, WeightedMemoryAccounting);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(IndexSchemaFriendTest, InvalidDataDropsKey);
   FRIEND_TEST(IndexSchemaFriendTest,

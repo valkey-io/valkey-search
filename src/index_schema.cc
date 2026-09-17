@@ -2117,9 +2117,8 @@ bool IndexSchema::InTrackedMutationRecords(
   return true;
 }
 
-// This function is used to compute how much memory will be allocated
-// in approximate as a result of ingestion.
-size_t IndexSchema::ComputeWeightedBufferSize(
+// Computes the approximate memory impact of a queued ingestion mutation.
+size_t IndexSchema::ComputeWeightedMemory(
     const MutatedAttributes &attributes) const {
   size_t total = 0;
   for (const auto &[alias, attr_data] : attributes) {
@@ -2132,6 +2131,18 @@ size_t IndexSchema::ComputeWeightedBufferSize(
     total += data_size * weight;
   }
   return total / 100;
+}
+
+void IndexSchema::UpdateWeightedMemory(DocumentMutation &mutation,
+                                       size_t memory) {
+  if (memory > mutation.weighted_memory) {
+    CHECK_EQ(ValkeyModule_IncrExternalMemory(memory - mutation.weighted_memory),
+             VALKEYMODULE_OK);
+  } else if (memory < mutation.weighted_memory) {
+    CHECK_EQ(ValkeyModule_DecrExternalMemory(mutation.weighted_memory - memory),
+             VALKEYMODULE_OK);
+  }
+  mutation.weighted_memory = memory;
 }
 
 // Returns true if the inserted key not exists otherwise false
@@ -2150,10 +2161,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.from_multi = from_multi;
     itr->second.sequence_number = sequence_number;
     itr->second.document_score = document_score;
-    // Allocate memory buffer proportional to data size and mutation weights
-    // Buffer is freed when the mutation record is erased.
-    itr->second.weighted_buffer.resize(
-        ComputeWeightedBufferSize(itr->second.attributes.value()));
+    UpdateWeightedMemory(itr->second,
+                         ComputeWeightedMemory(itr->second.attributes.value()));
     if (ABSL_PREDICT_TRUE(block_client)) {
       vmsdk::BlockedClient blocked_client(ctx, true,
                                           GetBlockedCategoryFromProto());
@@ -2177,10 +2186,8 @@ bool IndexSchema::TrackMutatedRecord(ValkeyModuleCtx *ctx, const Key &key,
     itr->second.attributes.value()[mutated_attribute.first] =
         std::move(mutated_attribute.second);
   }
-  // Allocate memory buffer proportional to data size and mutation weights
-  // Buffer is freed when the mutation record is erased.
-  itr->second.weighted_buffer.resize(
-      ComputeWeightedBufferSize(itr->second.attributes.value()));
+  UpdateWeightedMemory(itr->second,
+                       ComputeWeightedMemory(itr->second.attributes.value()));
 
   if (ABSL_PREDICT_TRUE(block_client) &&
       ABSL_PREDICT_TRUE(!itr->second.from_multi)) {
@@ -2224,6 +2231,7 @@ void IndexSchema::MarkAsDestructing() {
   absl::flat_hash_map<indexes::VectorBase *, std::vector<InternedStringPtr>>
       pending_keys_by_index;
   for (auto &[key, mutation] : tracked_mutated_records_) {
+    UpdateWeightedMemory(mutation, 0);
     if (mutation.attributes) {
       for (const auto &[alias, attr_data] : *mutation.attributes) {
         if (attr_data.IsVector()) {
@@ -2263,6 +2271,7 @@ IndexSchema::ConsumeTrackedMutatedAttribute(const Key &key, bool first_time) {
     // Delete this tracked document if no additional mutations were tracked
     if (!itr->second.attributes.has_value()) {
       queries_to_notify = std::move(itr->second.waiting_queries);
+      UpdateWeightedMemory(itr->second, 0);
       tracked_mutated_records_.erase(itr);
       // Will notify after releasing lock
     } else {

@@ -22,6 +22,47 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         args["search.writer-threads"] = "2"
         return args
 
+    def test_queued_mutation_external_memory_accounting(self):
+        """Queued mutations are charged to and released from Valkey memory."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT"
+        )
+
+        baseline = client.info("memory")["used_memory_module_external"]
+        payload = "x" * 1000
+        expected_charge = len(payload) * 550 // 100
+        client.execute_command("FT._DEBUG PAUSEPOINT SET mutation_processing")
+
+        hset_thread, _, hset_err = run_in_thread(
+            lambda: self.server.get_new_client().execute_command(
+                "HSET", "doc:1", "content", payload
+            )
+        )
+
+        def mutation_is_queued():
+            if hset_err[0] is not None:
+                raise hset_err[0]
+            if not hset_thread.is_alive():
+                raise RuntimeError("HSET finished before reaching mutation_processing")
+            return client.execute_command(
+                "FT._DEBUG PAUSEPOINT TEST", "mutation_processing"
+            ) > 0
+
+        waiters.wait_for_true(mutation_is_queued)
+        assert client.info("memory")["used_memory_module_external"] == (
+            baseline + expected_charge
+        )
+
+        client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
+        hset_thread.join()
+        assert hset_err[0] is None
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+        waiters.wait_for_true(
+            lambda: client.info("memory")["used_memory_module_external"] == baseline
+        )
+
     def test_fulltext_inflight_blocking_with_pausepoint(self):
         """Test that full-text queries block and retry on sequential in-flight mutations."""
         client: Valkey = self.server.get_new_client()

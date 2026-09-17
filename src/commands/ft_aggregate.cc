@@ -176,6 +176,12 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
+  // Non-vector queries have no KNN AS clause to name the score field, so
+  // default to Redis' ADDSCORES name. This also makes @__score resolvable by
+  // LOAD and by stages (SORTBY/APPLY/GROUPBY) via record_indexes_by_alias_.
+  if (score_as == nullptr) {
+    score_as = vmsdk::MakeUniqueValkeyString("__score");
+  }
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", "__key",
                            indexes::IndexerType::kNone) == kKeyColumn);
@@ -306,6 +312,9 @@ absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
         parameters.index_schema->GetIdentifier(parameters.attribute_alias));
 
     scores_index = AggregateParameters::kScoreColumn;
+  } else if (parameters.addscores_) {
+    // ADDSCORES: expose the relevance score (__score) to the pipeline.
+    scores_index = AggregateParameters::kScoreColumn;
   }
 
   // If no content needs to be fetched from the keys to be used in the
@@ -362,8 +371,8 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
 
-    // Set score field for vector queries
-    if (parameters.IsVectorQuery()) {
+    // Set score field for vector queries and ADDSCORES
+    if (parameters.IsVectorQuery() || parameters.addscores_) {
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 

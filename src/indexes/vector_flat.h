@@ -11,13 +11,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/bfloat16.h"
+#include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "third_party/hnswlib/bruteforce.h"
@@ -27,10 +31,28 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-class VectorFlat : public VectorBase {
+class VectorFlat : public VectorType<T> {
+ protected:
+  // VectorType<T> is a dependent base, so inherited names are not found by
+  // unqualified lookup. Re-declare the ones used below (including inside
+  // thread-safety annotations, which cannot be written as member).
+  using VectorType<T>::resize_mutex_;
+  using VectorType<T>::dimensions_;
+  using VectorType<T>::normalize_;
+  using VectorType<T>::space_;
+  using VectorType<T>::CreateReply;
+  using VectorType<T>::GetCapacity;
+  using VectorType<T>::GetDataTypeSize;
+  using VectorType<T>::GetVectorAllocator;
+  using VectorType<T>::GetVectorDataSize;
+  using VectorType<T>::IsValidSizeVector;
+  using VectorType<T>::EmitDataTypeInfo;
+  using VectorType<T>::SetProtoDataType;
+  using VectorType<T>::Init;
+
  public:
   using FlatIndex =
-      hnswlib::BruteforceSearch<T, std::shared_ptr<const VectorRecord>>;
+      hnswlib::BruteforceSearch<float, std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -44,7 +66,6 @@ class VectorFlat : public VectorBase {
       SupplementalContentChunkIter &&iter,
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
-  size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float> *GetSpace() const {
     return space_.get();
@@ -58,11 +79,16 @@ class VectorFlat : public VectorBase {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
+  // `ef_runtime` is accepted to match VectorBase::Search and ignored: it tunes
+  // the HNSW candidate list and has no meaning for a brute-force scan.
+  // Defaults must match VectorBase::Search exactly -- see the note there.
   absl::StatusOr<std::vector<Neighbor>> Search(
       absl::string_view query, uint64_t count,
       cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr,
-      bool enable_partial_results = false) ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      std::optional<size_t> ef_runtime = std::nullopt,
+      bool enable_partial_results = false) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
@@ -82,9 +108,9 @@ class VectorFlat : public VectorBase {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  T ComputeDistance(absl::string_view query, const VectorRecord *vector_record,
-                    float query_magnitude) const override
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  float ComputeDistance(
+      absl::string_view query, const VectorRecord *vector_record,
+      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVector(
@@ -101,7 +127,6 @@ class VectorFlat : public VectorBase {
              data_model::AttributeDataType attribute_data_type, int db_num);
 
   std::unique_ptr<FlatIndex> algo_ ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   const uint32_t block_size_;
 };
 }  // namespace valkey_search::indexes

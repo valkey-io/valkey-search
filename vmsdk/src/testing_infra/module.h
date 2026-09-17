@@ -706,8 +706,10 @@ inline int TestValkeyModule_HashGetDefaultImpl(ValkeyModuleKey *key, int flags,
                                                const char *field,
                                                ValkeyModuleString **value_out,
                                                void *terminating_null) {
-  CHECK(false);
-  return VALKEYMODULE_ERR;
+  if (value_out) {
+    *value_out = nullptr;
+  }
+  return VALKEYMODULE_OK;
 }
 
 inline int TestValkeyModule_GetApiDefaultImpl(const char *name, void *func) {

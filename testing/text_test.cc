@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
@@ -22,7 +21,6 @@
 #include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
-#include "testing/common.h"
 
 namespace valkey_search::indexes {
 
@@ -105,7 +103,8 @@ class TextTest : public ::testing::Test {
   void AddRecordAndCommitKey(Text *text_index, const InternedStringPtr &key,
                              absl::string_view data,
                              std::shared_ptr<text::TextIndexSchema> schema) {
-    auto result = text_index->AddRecord(key, data);
+    auto result = text_index->AddRecord(
+        key, AttributeData(vmsdk::MakeUniqueValkeyString(data)));
     ASSERT_TRUE(result.ok()) << result.status();
     ASSERT_EQ(result.value(), indexes::RecordResult::kAdded);
     schema->CommitKeyData(key);
@@ -186,7 +185,9 @@ TEST_P(TextIndexParameterizedTest, ValidateIndexStructure) {
     ValidateIndexStructure(test_case, active_schema);
   } else {
     // For failure cases, test directly without the helper
-    auto result = text_index_->AddRecord(key, test_case.input_text);
+    auto result = text_index_->AddRecord(
+        key,
+        AttributeData(vmsdk::MakeUniqueValkeyString(test_case.input_text)));
     EXPECT_FALSE(result.ok())
         << "Test case should fail: " << test_case.description;
   }
@@ -415,7 +416,8 @@ class StemScoringTest : public TextTest {
                               /*exact=*/false);
     pred.SetScorer(scoring::GetScorer(scoring::ScorerType::kBm25Std));
     return pred.BuildTextIterator(schema->GetTextIndex(), ~0ULL,
-                                  /*require_positions=*/false);
+                                  /*require_positions=*/false,
+                                  /*or_weight_multiplier=*/1.0f);
   }
 
   std::pair<std::shared_ptr<text::TextIndexSchema>, std::unique_ptr<Text>>

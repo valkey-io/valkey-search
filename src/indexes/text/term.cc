@@ -23,7 +23,8 @@ TermIterator::TermIterator(
     float leaf_weight, uint32_t num_doc_contain_term,
     uint32_t stem_num_doc_contain_term, uint32_t root_num_doc_contain_term,
     bool has_root, const TextIndexSchema* text_index_schema,
-    const scoring::Scorer* scorer)
+    const scoring::Scorer* scorer,
+    absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
@@ -42,17 +43,30 @@ TermIterator::TermIterator(
     const auto stats = text_index_schema_->GetIndexScoringStats();
     if (stats.total_docs > 0) {
       scorer_ = scorer;
-      // clamp to keep dt <= total_docs
-      idf_ = scorer_->PrecomputeIDF(
-          {stats.total_docs,
-           std::min(num_doc_contain_term_, stats.total_docs)});
-      idf_stem_ = scorer_->PrecomputeIDF(
-          {stats.total_docs,
-           std::min(stem_num_doc_contain_term, stats.total_docs)});
-      idf_root_ = scorer_->PrecomputeIDF(
-          {stats.total_docs,
-           std::min(root_num_doc_contain_term, stats.total_docs)});
       avg_doc_len_ = stats.avg_doc_len;
+      // total_docs and the doc counts come from separate, independently-locked
+      // counters and can be transiently out of sync, so clamp to keep
+      // dt <= total_docs (matches ResolveLeaves in search.cc).
+      if (!per_term_dt.empty()) {
+        // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term.
+        per_term_idf_.reserve(per_term_dt.size());
+        for (uint32_t dt : per_term_dt) {
+          per_term_idf_.push_back(scorer_->PrecomputeIDF(
+              {stats.total_docs, std::min(dt, stats.total_docs)}));
+        }
+      } else {
+        // Term mode: the exact word, plus the stem root literal and the stem
+        // inflection group when the query stems.
+        idf_ = scorer_->PrecomputeIDF(
+            {stats.total_docs,
+             std::min(num_doc_contain_term_, stats.total_docs)});
+        idf_stem_ = scorer_->PrecomputeIDF(
+            {stats.total_docs,
+             std::min(stem_num_doc_contain_term, stats.total_docs)});
+        idf_root_ = scorer_->PrecomputeIDF(
+            {stats.total_docs,
+             std::min(root_num_doc_contain_term, stats.total_docs)});
+      }
     }
   }
 
@@ -75,8 +89,21 @@ float TermIterator::GetScore() const {
     return 1.0f;
   }
 
-  // Sum three separate BM25 leaves per the industry standard: exact word
-  // (idx 0), stem root literal (next iterator), and the stem inflection group.
+  // Expansion mode: contribute a SINGLE matched term's BM25 (own IDF + own F),
+  // never the sum. Which term is unspecified, so take the merge's front.
+  if (!per_term_idf_.empty()) {
+    const size_t chosen = current_key_indices_.front();
+    const uint32_t term_frequency =
+        static_cast<uint32_t>(key_iterators_[chosen].GetTermFrequency());
+    return scorer_->ScoreLeaf({per_term_idf_[chosen], term_frequency,
+                               key_iterators_[chosen].GetDocLen(), avg_doc_len_,
+                               leaf_weight_});
+  }
+
+  // Term mode: sum three separate BM25 leaves per the industry standard: exact
+  // word (idx 0), stem root literal (next iterator), and the stem inflection
+  // group. Within each leaf F is document-wide, so sum the term frequency
+  // across every word/field iterator of that leaf on this key.
   const size_t root_index = has_original_ ? 1 : 0;
   uint32_t exact_tf = 0;
   uint32_t root_tf = 0;

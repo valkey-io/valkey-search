@@ -22,6 +22,16 @@ def _get_vmsdk_info(client: Valkey) -> dict[str, str]:
     return info_data
 
 
+
+def _get_active_allocations(client: Valkey, index_name: str = None, attr_name: str = "vec") -> int:
+    info = _get_vmsdk_info(client)
+    return int(info.get("vector_registry_active_allocations", 0))
+
+
+def _get_chunk_count(client: Valkey) -> int:
+    info = _get_vmsdk_info(client)
+    return int(info.get("vector_registry_chunk_count", 0))
+
 def _get_vector_registry_stats(client: Valkey) -> dict[str, int]:
     raw_stats = client.execute_command("FT._DEBUG", "VECTOR_SHARING_STATS")
     stats_data = {}
@@ -95,13 +105,19 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
             got_bytes = client.hget(key, "vec")
             assert got_bytes == expected_bytes, f"HGET returned unexpected value for key {key}"
 
-        # 4. Drop the index and ensure vector registry indicates it is empty
+        # 4. Drop the index
         vector_index.drop(client)
 
         waiters.wait_for_equal(
             lambda: int(_get_vmsdk_info(client)["vector_registry_entry_cnt"]),
             0,
         )
+        waiters.wait_for_equal(
+            lambda: int(_get_vmsdk_info(client)["vector_registry_pending_unshare_cnt"]),
+            0,
+        )
+        assert _get_active_allocations(client) == 0
+        assert _get_chunk_count(client) == 0
 
         # 5. Reverify that issuing hget still returns expected values
         for key, expected_bytes in expected_vectors.items():
@@ -140,10 +156,9 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         # 1. Initial stats should be 0
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
         assert stats["hash_sharing_errors"] == 0
         assert stats["hash_sharing_hits"] == 0
-        assert stats["lookup_record_hits"] == 0
-        assert stats["lookup_record_misses"] == 0
 
         # 2. Ingest a vector and verify increments
         key1 = "doc:1"
@@ -154,34 +169,27 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 1
-        # LookupRecord is called exactly once during AddRecord for the new document
-        assert stats["lookup_record_hits"] == 1
-        assert stats["lookup_record_misses"] == 0
 
         # 3. Update document with the EXACT SAME vector
         client.hset(key1, mapping={"vec": vec_bytes1})
 
         # Since HSET overwrites the reference with a raw string,
-        # Track reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
-        # AddRecord also calls LookupRecord (Hit).
+        # DedupOrConstruct reuses the VectorRecord and re-shares it with Valkey (hash_sharing_hits becomes 2).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 2
-        assert stats["lookup_record_hits"] == 2
-        assert stats["lookup_record_misses"] == 0
+        info = _get_vmsdk_info(client)
+        assert int(info["vector_registry_dedup_cnt"]) == 1
 
         # 4. Update document with a DIFFERENT vector
         vec_data2 = [3.0] * dim
         vec_bytes2 = float_to_bytes(vec_data2)
         client.hset(key1, mapping={"vec": vec_bytes2})
 
-        # Track sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
-        # AddRecord calls LookupRecord (Hit).
+        # DedupOrConstruct sees the content differs, replaces it, and shares it (hash_sharing_hits becomes 3).
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 1
         assert stats["hash_sharing_hits"] == 3
-        assert stats["lookup_record_hits"] == 3
-        assert stats["lookup_record_misses"] == 0
 
         # 5. Delete the document and verify drop in entry count
         client.delete(key1)
@@ -191,40 +199,47 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         )
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
 
+    @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
     @pytest.mark.parametrize("index_type,distance_metric", [
         ("HNSW", "L2"),
         ("HNSW", "COSINE"),
         ("FLAT", "L2"),
         ("FLAT", "COSINE"),
     ])
-    def test_vector_registry_deletion_coverage(self, index_type: str, distance_metric: str):
+    def test_vector_registry_deletion_coverage(self, data_type: KeyDataType, index_type: str, distance_metric: str):
         """
-        Verify that document deletion correctly erases the registry entry for both index types
-        and both distance metrics. By starting from 0 and asserting the count drops to 0,
-        we mathematically guarantee that the specific key was the one erased.
+        Verify that document deletion correctly erases the registry entry for both index types,
+        both distance metrics, and both HASH and JSON data types. By starting from 0 and asserting
+        the count drops to 0, we mathematically guarantee that the specific key was the one erased.
         """
         client: Valkey = self.server.get_new_client()
         dim = 8
-        index_name = f"del_cov_{index_type}_{distance_metric}"
+        data_type_str = "hash" if data_type == KeyDataType.HASH else "json"
+        index_name = f"del_cov_{data_type_str}_{index_type}_{distance_metric}"
 
         vector_index = Index(
             index_name,
             [Vector("vec", dim, type=index_type, distance=distance_metric)],
             prefixes=["doc:"],
-            type=KeyDataType.HASH,
+            type=data_type,
         )
         vector_index.create(client)
 
         # 1. Initial stats should be 0
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
 
         # 2. Ingest a vector and verify increments
         key1 = "doc:1"
         vec_data1 = [1.0] * dim
-        vec_bytes1 = float_to_bytes(vec_data1)
-        client.hset(key1, mapping={"vec": vec_bytes1})
+        if data_type == KeyDataType.HASH:
+            vec_bytes1 = float_to_bytes(vec_data1)
+            client.hset(key1, mapping={"vec": vec_bytes1})
+        else:
+            client.execute_command("JSON.SET", key1, "$", f'{{"vec":{vec_data1}}}')
 
         waiters.wait_for_equal(
             lambda: vector_index.info(client).num_docs,
@@ -244,6 +259,140 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
 
         stats = _get_vector_registry_stats(client)
         assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
+
+    @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
+    @pytest.mark.parametrize("index_type,distance_metric", [
+        ("HNSW", "L2"),
+        ("HNSW", "COSINE"),
+        ("FLAT", "L2"),
+        ("FLAT", "COSINE"),
+    ])
+    def test_vector_registry_missing_field_coverage(self, data_type: KeyDataType, index_type: str, distance_metric: str):
+        """
+        Verify that removing the vector field (HDEL for HASH, JSON.DEL for JSON) or updating
+        the record without the vector field removes the entry from the vector registry by
+        verifying that the entry count drops to 0.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        data_type_str = "hash" if data_type == KeyDataType.HASH else "json"
+        index_name = f"missing_cov_{data_type_str}_{index_type}_{distance_metric}"
+
+        vector_index = Index(
+            index_name,
+            [Vector("vec", dim, type=index_type, distance=distance_metric)],
+            prefixes=["doc:"],
+            type=data_type,
+        )
+        vector_index.create(client)
+
+        # 1. Initial stats should be 0
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
+
+        # 2. Ingest a vector along with another field
+        key1 = "doc:1"
+        vec_data1 = [1.0] * dim
+        if data_type == KeyDataType.HASH:
+            vec_bytes1 = float_to_bytes(vec_data1)
+            client.hset(key1, mapping={"vec": vec_bytes1, "other": "val"})
+        else:
+            client.execute_command("JSON.SET", key1, "$", f'{{"vec":{vec_data1},"other":"val"}}')
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            1,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 1
+
+        # 3. Remove the vector field while keeping the document alive, and verify drop to 0 in vector registry
+        if data_type == KeyDataType.HASH:
+            client.hdel(key1, "vec")
+        else:
+            client.execute_command("JSON.DEL", key1, "$.vec")
+
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["entry_cnt"],
+            0,
+        )
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+        assert stats["pending_unshare_cnt"] == 0
+
+    @pytest.mark.parametrize("data_type", [KeyDataType.HASH, KeyDataType.JSON])
+    @pytest.mark.parametrize("index_type,distance_metric", [
+        ("HNSW", "L2"),
+        ("HNSW", "COSINE"),
+        ("FLAT", "L2"),
+        ("FLAT", "COSINE"),
+    ])
+    def test_vector_registry_drop_index_coverage(self, data_type: KeyDataType, index_type: str, distance_metric: str):
+        """
+        Verify that dropping an index erases all its tracked entries from the vector registry,
+        while leaving the underlying hash/json keys alive with valid values.
+        """
+        client: Valkey = self.server.get_new_client()
+        dim = 8
+        data_type_str = "hash" if data_type == KeyDataType.HASH else "json"
+        index_name = f"drop_cov_{data_type_str}_{index_type}_{distance_metric}"
+
+        vector_index = Index(
+            index_name,
+            [Vector("vec", dim, type=index_type, distance=distance_metric)],
+            prefixes=["doc:"],
+            type=data_type,
+        )
+        vector_index.create(client)
+
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == 0
+        assert _get_active_allocations(client, index_name) == 0
+
+        num_docs = 5
+        raw_vectors = {}
+        for i in range(num_docs):
+            key = f"doc:{i}"
+            vec_data = [float(i + j) for j in range(dim)]
+            if data_type == KeyDataType.HASH:
+                vec_bytes = float_to_bytes(vec_data)
+                raw_vectors[key] = vec_bytes
+                client.hset(key, mapping={"vec": vec_bytes})
+            else:
+                raw_vectors[key] = vec_data
+                client.execute_command("JSON.SET", key, "$", f'{{"vec":{vec_data}}}')
+
+        waiters.wait_for_equal(
+            lambda: vector_index.info(client).num_docs,
+            num_docs,
+        )
+        stats = _get_vector_registry_stats(client)
+        assert stats["entry_cnt"] == num_docs
+
+        # Drop the index and verify entry count and pending unshares drop to 0
+        vector_index.drop(client)
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["entry_cnt"],
+            0,
+        )
+        waiters.wait_for_equal(
+            lambda: _get_vector_registry_stats(client)["pending_unshare_cnt"],
+            0,
+        )
+        assert _get_active_allocations(client) == 0
+        assert _get_chunk_count(client) == 0
+
+        # Reverify that the documents still exist and have valid values
+        for key, expected_val in raw_vectors.items():
+            if data_type == KeyDataType.HASH:
+                assert client.hget(key, "vec") == expected_val
+            else:
+                res = client.execute_command("JSON.GET", key, "$.vec")
+                assert res is not None
 
     def test_hash_sharing_errors_coverage(self):
         """
@@ -284,6 +433,124 @@ class TestVectorRegistrySharingOn(ValkeySearchTestCaseDebugMode):
         finally:
             # Ensure we reset the control variable even if asserts fail
             client.execute_command("FT._DEBUG CONTROLLED_VARIABLE SET ForceHashSharingError 0")
+
+class TestVectorFieldTypeConflict(ValkeySearchTestCaseDebugMode):
+    """A HASH field may not be indexed as two different vector data types.
+
+    The bytes in a hash field are interpreted according to the index's declared
+    TYPE, and the 16 bits of a FLOAT16 element and of a BFLOAT16 element are
+    unrelated values. Two indexes reading the same field at different types
+    cannot both be right, so FT.CREATE rejects the second one when their key
+    prefixes overlap.
+    """
+
+    def _create(self, client: Valkey, name: str, prefix, field: str,
+                vtype: str, dim: int = 3) -> str:
+        args = ["FT.CREATE", name, "ON", "HASH"]
+        if prefix is not None:
+            args += ["PREFIX", "1", prefix]
+        args += ["SCHEMA", field, "VECTOR", "FLAT", "6", "DIM", str(dim),
+                 "TYPE", vtype, "DISTANCE_METRIC", "L2"]
+        try:
+            client.execute_command(*args)
+            return ""
+        except Exception as e:  # noqa: BLE001 - surfacing the server message
+            return str(e)
+
+    @pytest.mark.parametrize(
+        "prefix_a,prefix_b",
+        [
+            ("k:", "k:"),        # identical prefixes
+            ("doc:", "doc:x"),   # one nested inside the other
+            ("p:", None),        # no PREFIX means every key
+        ],
+        # Explicit ids: the default ones embed the key prefixes, and a colon in
+        # a test name reaches the per-test log directory, which the CI artifact
+        # upload rejects.
+        ids=["identical_prefixes", "nested_prefixes", "no_prefix"],
+    )
+    def test_conflicting_types_rejected(self, prefix_a, prefix_b):
+        client: Valkey = self.server.get_new_client()
+        assert self._create(client, "first", prefix_a, "v", "FLOAT16") == ""
+        err = self._create(client, "second", prefix_b, "v", "BFLOAT16")
+        assert err, "second index should have been rejected"
+        assert "FLOAT16" in err and "first" in err, (
+            f"error should name the conflicting type and index: {err}"
+        )
+        # The rejected schema must not have been partially created.
+        names = client.execute_command("FT._LIST")
+        assert b"second" not in names, f"rejected index was still created: {names}"
+
+    @pytest.mark.parametrize(
+        "desc,prefix_a,field_a,type_a,prefix_b,field_b,type_b",
+        [
+            # Same type is fine -- e.g. an HNSW and a FLAT index over one field.
+            ("same type", "q:", "v", "FLOAT16", "q:", "v", "FLOAT16"),
+            # Different fields never conflict.
+            ("different fields", "r:", "v1", "FLOAT16", "r:", "v2", "BFLOAT16"),
+            # Disjoint prefixes can never share a key.
+            ("disjoint prefixes", "s:", "v", "FLOAT16", "t:", "v", "BFLOAT16"),
+        ],
+        ids=["same_type", "different_fields", "disjoint_prefixes"],
+    )
+    def test_non_conflicting_combinations_allowed(
+        self, desc, prefix_a, field_a, type_a, prefix_b, field_b, type_b
+    ):
+        client: Valkey = self.server.get_new_client()
+        assert self._create(client, "one", prefix_a, field_a, type_a) == ""
+        err = self._create(client, "two", prefix_b, field_b, type_b)
+        assert err == "", f"{desc} should be allowed but was rejected: {err}"
+
+    def _create_two_vector_fields(self, client: Valkey, name: str,
+                                  type_a: str, type_b: str) -> str:
+        """One FT.CREATE declaring the identifier `v` twice, under two aliases.
+
+        The aliases differ so nothing else rejects the command first; the
+        identifier -- the actual hash field name -- is the same in both.
+        """
+        args = ["FT.CREATE", name, "ON", "HASH", "PREFIX", "1", "k:", "SCHEMA",
+                "v", "AS", "v_a", "VECTOR", "FLAT", "6", "DIM", "3",
+                "TYPE", type_a, "DISTANCE_METRIC", "L2",
+                "v", "AS", "v_b", "VECTOR", "FLAT", "6", "DIM", "3",
+                "TYPE", type_b, "DISTANCE_METRIC", "L2"]
+        try:
+            client.execute_command(*args)
+            return ""
+        except Exception as e:  # noqa: BLE001 - surfacing the server message
+            return str(e)
+
+    def test_self_conflicting_schema_rejected(self):
+        """A single schema may not declare one field at two vector types.
+
+        The cross-index check is not enough: one FT.CREATE can name the same
+        hash field twice under different aliases, which reaches the same
+        impossible state -- one field, two incompatible interpretations -- but
+        never involves a second index.
+        """
+        client: Valkey = self.server.get_new_client()
+        err = self._create_two_vector_fields(client, "selfconflict",
+                                             "FLOAT16", "BFLOAT16")
+        assert err, "schema declaring `v` as both FLOAT16 and BFLOAT16 " \
+                    "should have been rejected"
+        assert "FLOAT16" in err and "v" in err, (
+            f"error should name the field and the conflicting type: {err}"
+        )
+        names = client.execute_command("FT._LIST")
+        assert b"selfconflict" not in names, (
+            f"rejected index was still created: {names}"
+        )
+
+    def test_self_consistent_schema_allowed(self):
+        """The same field twice at the *same* type stays legal.
+
+        Guards the fix against over-rejecting: two aliases over one field is
+        only a problem when the declared types disagree.
+        """
+        client: Valkey = self.server.get_new_client()
+        err = self._create_two_vector_fields(client, "selfconsistent",
+                                             "FLOAT16", "FLOAT16")
+        assert err == "", f"same-type duplicate should be allowed: {err}"
+
 
 class TestVectorRegistryMemoryDelta(ValkeySearchTestCaseDebugMode):
     """

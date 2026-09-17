@@ -28,6 +28,17 @@ using ExprPtr = std::unique_ptr<Expression>;
 constexpr absl::string_view kInvalidOrMissingExpression{
     "Invalid or missing expression"};
 
+// 1.3.0 fix shared by every expression site: a reference to a field the key
+// does not have propagates as missing, rather than the operator or function
+// substituting a reason of its own -- which read as "evaluated to nothing" and
+// so kept the record and the alias. Returns true when the new (propagating)
+// behavior should be taken. Single counter for all the sites below.
+static bool MissingPropagates() {
+  return VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "expr_missing_propagates", [] { return true; },
+      [] { return false; });
+}
+
 struct Constant : Expression {
   Constant(std::string constant) : constant_(std::move(constant)) {}
   Constant(double constant) : constant_(constant) {}
@@ -72,14 +83,21 @@ struct AttributeValue : Expression {
 };
 
 struct Not : Expression {
-  Not(ExprPtr &&p) : expr_(std::move(p)) {}
+  explicit Not(ExprPtr &&p) : expr_(std::move(p)) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
-    auto Primary = expr_->Evaluate(ctx, record).AsBool();
-    if (Primary) {
-      return Value(!*Primary);
-    } else {
-      return Value{};
+    auto value = expr_->Evaluate(ctx, record);
+    // No FILTER special case here: a missing field already made its
+    // comparison false (FilterFunc* in value.cc), so negating it gives true,
+    // which is what Redisearch answers for `!(@absent == 'x')`.
+    //
+    // AsBool reads a nil as false, so without this `!(@absent)` answers true
+    // -- a wrong value rather than merely an unpropagated one.
+    if (value.IsMissing() && MissingPropagates()) {
+      return Value::Missing();
     }
+    // AsBool has a result for every other alternative, so the optional is
+    // always engaged; the dereference is safe.
+    return Value(!*value.AsBool());
   }
   void Dump(std::ostream &os) const override {
     os << '!';
@@ -118,12 +136,22 @@ struct FunctionCall : Expression {
   absl::InlinedVector<ExprPtr, 4> params_;
 };
 
-template <Value (*func1)(const Value &o)>
+// Redisearch drops a record whose expression reached for a field the key does
+// not have, so a missing argument short-circuits the whole call. exists() is
+// the exception: answering that question *is* its job, so it asks for the
+// missing value with kMissingIsAnArgument.
+constexpr bool kMissingIsAnArgument = true;
+
+template <Value (*func1)(const Value &o), bool pass_missing = false>
 Value MonadicFunctionProxy(
     Expression::EvalContext &ctx, const Expression::Record &record,
     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 1);
-  return (*func1)(params[0]->Evaluate(ctx, record));
+  auto value = params[0]->Evaluate(ctx, record);
+  if (!pass_missing && value.IsMissing() && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func1)(value);
 };
 
 template <Value (*func2)(const Value &l, const Value &r)>
@@ -131,8 +159,12 @@ Value DyadicFunctionProxy(Expression::EvalContext &ctx,
                           const Expression::Record &record,
                           const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 2);
-  return (*func2)(params[0]->Evaluate(ctx, record),
-                  params[1]->Evaluate(ctx, record));
+  auto l = params[0]->Evaluate(ctx, record);
+  auto r = params[1]->Evaluate(ctx, record);
+  if ((l.IsMissing() || r.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func2)(l, r);
 };
 
 template <Value (*func3)(const Value &l, const Value &m, const Value &r)>
@@ -140,9 +172,14 @@ Value TriadicFunctionProxy(
     Expression::EvalContext &ctx, const Expression::Record &record,
     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 3);
-  return (*func3)(params[0]->Evaluate(ctx, record),
-                  params[1]->Evaluate(ctx, record),
-                  params[2]->Evaluate(ctx, record));
+  auto l = params[0]->Evaluate(ctx, record);
+  auto m = params[1]->Evaluate(ctx, record);
+  auto r = params[2]->Evaluate(ctx, record);
+  if ((l.IsMissing() || m.IsMissing() || r.IsMissing()) &&
+      MissingPropagates()) {
+    return Value::Missing();
+  }
+  return (*func3)(l, m, r);
 };
 
 using Func = Value (*)(Expression::EvalContext &ctx,
@@ -169,7 +206,11 @@ Value ProxyTimefmt(Expression::EvalContext &ctx,
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
   }
-  return FuncTimefmt(params[0]->Evaluate(ctx, record), fmt);
+  auto value = params[0]->Evaluate(ctx, record);
+  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return FuncTimefmt(value, fmt);
 }
 
 Value ProxyParsetime(Expression::EvalContext &ctx,
@@ -180,7 +221,11 @@ Value ProxyParsetime(Expression::EvalContext &ctx,
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
   }
-  return FuncParsetime(params[0]->Evaluate(ctx, record), fmt);
+  auto value = params[0]->Evaluate(ctx, record);
+  if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
+    return Value::Missing();
+  }
+  return FuncParsetime(value, fmt);
 }
 
 struct FunctionTableEntry {
@@ -190,7 +235,7 @@ struct FunctionTableEntry {
 };
 
 static std::map<std::string, FunctionTableEntry> function_table{
-    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists>}},
+    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>}},
 
     {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>}},
     {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>}},
@@ -262,6 +307,23 @@ struct Dyadic : Expression {
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto lvalue = lexpr_->Evaluate(ctx, record);
     auto rvalue = rexpr_->Evaluate(ctx, record);
+    // Redisearch drops a record whose APPLY expression reached for a field the
+    // key does not have, however deep in the expression that reference sat.
+    // Without this the operator manufactures its own reason ("Add requires
+    // numeric operands"), which reads as "evaluated to nothing" and keeps the
+    // record. Safe only because a field named by a stage is now loaded
+    // implicitly, so an unpopulated slot means the key really lacks it.
+    // `&&` is the exception, measured against Redis 8: a missing operand
+    // there is simply falsy, so the record is kept and the alias replies 0,
+    // whichever side the reference sat on. Letting the operator run gives
+    // exactly that, because AsBool() already reads a nil as false. Redis 8
+    // also truncates the result stream after such a row, which is not
+    // reproduced here; see known_differences.md.
+    const bool logical_and = name_ == "&&";
+    if (!logical_and && (lvalue.IsMissing() || rvalue.IsMissing()) &&
+        MissingPropagates()) {
+      return Value::Missing();
+    }
     return (*func_)(lvalue, rvalue);
   }
   void Dump(std::ostream &os) const override {
@@ -496,28 +558,42 @@ struct Compiler {
   // The precedence ordering is (highest to lowest)
   //
   //  Primary: Number, Field, ()
-  //  MulOp: * / ^
-  //  AddOp: + -
-  //  CmpOp: < <= == != > >=
-  //  LandOp: &&
-  //  LorOp: ||
+  //  PowOp:   ^                 (Redisearch-compatible since 1.3.0)
+  //  MulOp:   * /
+  //  AddOp:   + -
+  //  CmpOp:   < <= == != > >=
+  //  LandOp:  &&                (Redisearch-compatible since 1.3.0)
+  //  LorOp:   ||
   //
+  // Pre-1.3.0 valkey-search put `^` at the same precedence as `*` and `/`,
+  // making expressions like `@a*@b^@c` parse as `(@a*@b)^@c` instead of the
+  // Redisearch-compatible `@a*(@b^@c)`. Pre-1.3.0 also put `&&` and `||` at
+  // the same level, making `@a||@b&&@c` parse as `(@a||@b)&&@c` instead of
+  // the C/SQL-standard `@a||(@b&&@c)` that Redisearch follows. Both fixes are
+  // gated by search.emulate-release per COMPATIBILITY.md.
   absl::StatusOr<ExprPtr> LorOp(CompileContext &ctx) {
-    static std::vector<DyadicOp> ops{
-        {"||", &FuncLor},
+    static const std::vector<DyadicOp> kFixedLorOps{{"||", &FuncLor}};
+    static const std::vector<DyadicOp> kLegacyLogicalOps{{"||", &FuncLor},
+                                                         {"&&", &FuncLand}};
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::LandOp, kFixedLorOps); };
+    auto legacy = [&] {
+      return DoDyadic(ctx, &Compiler::CmpOp, kLegacyLogicalOps);
     };
-    return DoDyadic(ctx, &Compiler::LandOp, ops);
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_logical_precedence", fixed, legacy);
   }
   absl::StatusOr<ExprPtr> LandOp(CompileContext &ctx) {
-    static std::vector<DyadicOp> ops{
-        {"&&", &FuncLand},
-    };
+    static const std::vector<DyadicOp> ops{{"&&", &FuncLand}};
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
-    static std::vector<DyadicOp> ops{{"<=", &FuncLe}, {"<", &FuncLt},
-                                     {"==", &FuncEq}, {"!=", &FuncNe},
-                                     {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> apply_ops{{"<=", &FuncLe}, {"<", &FuncLt},
+                                           {"==", &FuncEq}, {"!=", &FuncNe},
+                                           {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> filter_ops{
+        {"<=", &FilterFuncLe}, {"<", &FilterFuncLt},  {"==", &FilterFuncEq},
+        {"!=", &FilterFuncNe}, {">=", &FilterFuncGe}, {">", &FilterFuncGt}};
+    auto &ops = ctx.UseFilterComparisonSemantics() ? filter_ops : apply_ops;
     return DoDyadic(ctx, &Compiler::AddOp, ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext &ctx) {
@@ -525,9 +601,43 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::MulOp, ops);
   }
   absl::StatusOr<ExprPtr> MulOp(CompileContext &ctx) {
-    static std::vector<DyadicOp> ops{
+    // Hoisted out of the lambda bodies because the preprocessor splits macro
+    // arguments on commas and would see the brace-initializers as multiple
+    // args.
+    static const std::vector<DyadicOp> kFixedMulOps{{"*", &FuncMul},
+                                                    {"/", &FuncDiv}};
+    static const std::vector<DyadicOp> kLegacyMulOps{
         {"*", &FuncMul}, {"/", &FuncDiv}, {"^", &FuncPower}};
-    return DoDyadic(ctx, &Compiler::Primary, ops);
+    auto fixed = [&] { return DoDyadic(ctx, &Compiler::PowOp, kFixedMulOps); };
+    auto legacy = [&] {
+      return DoDyadic(ctx, &Compiler::Primary, kLegacyMulOps);
+    };
+    return VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_aggregate_pow_precedence", fixed, legacy);
+  }
+  // `^` is right-associative in Redisearch: `a^b^c` == `a^(b^c)`. DoDyadic
+  // would produce a left-fold (`(a^b)^c`), so recurse into PowOp for the rhs
+  // instead. Each recursion grows the C++ stack, so this level must guard the
+  // depth counter itself — Primary's DepthGuard releases on every return and
+  // would otherwise let `a^b^c^…^z` bypass search.query-string-depth.
+  absl::StatusOr<ExprPtr> PowOp(CompileContext &ctx) {
+    DepthGuard guard(depth_);
+    if (depth_ > options::GetQueryStringDepth().GetValue()) {
+      return absl::InvalidArgumentError("Expression too complex");
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto lvalue, Primary(ctx));
+    if (!lvalue) {
+      return nullptr;
+    }
+    if (s_.SkipWhiteSpacePopWord("^")) {
+      VMSDK_ASSIGN_OR_RETURN(auto rvalue, PowOp(ctx));
+      if (!rvalue) {
+        return absl::InvalidArgumentError("Invalid or missing expression");
+      }
+      lvalue = std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue),
+                                        &FuncPower, "^");
+    }
+    return lvalue;
   }
 
   absl::StatusOr<ExprPtr> ParseExpression(CompileContext &ctx) {

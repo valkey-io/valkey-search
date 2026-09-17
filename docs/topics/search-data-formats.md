@@ -110,74 +110,175 @@ See the [query documentation](search-query.md#numeric-range-match) for details o
 
 A vector field contains a fixed-length array of floating-point numbers. The data format differs between HASH and JSON index types.
 
-## Supported Data Type
+## Supported Data Types
 
-Currently, only `FLOAT32` (32-bit IEEE 754 single-precision floating-point) is supported. The data type is specified as a required parameter in the [`FT.CREATE`](../commands/ft.create.md) command:
+Three element types are supported. All are little-endian and all work with every
+distance metric; they differ only in how many bytes each element occupies and how
+much precision it retains.
+
+| `TYPE` | Bytes per element | sign / exponent / mantissa bits | Largest finite magnitude | Approx. decimal digits |
+| --- | --- | --- | --- | --- |
+| `FLOAT32` | 4 | 1 / 8 / 23 | ~3.4e38 | ~7 |
+| `FLOAT16` | 2 | 1 / 5 / 10 | 65504 | ~3 |
+| `BFLOAT16` | 2 | 1 / 8 / 7 | ~3.4e38 | ~2 |
+
+`FLOAT16` and `BFLOAT16` both halve the memory a vector occupies compared with
+`FLOAT32`. They differ in how they spend their 16 bits. `FLOAT16` keeps more
+mantissa, so it is more precise, but its exponent range is much smaller: values
+above 65504 in magnitude overflow to infinity. `BFLOAT16` is simply the top 16
+bits of a `FLOAT32`, so it keeps the full `FLOAT32` exponent range and trades
+away precision instead.
+
+As a rule of thumb, embeddings that are normalized or otherwise bounded suit
+`FLOAT16`, while data with a wide dynamic range suits `BFLOAT16`.
+
+Choosing a 2-byte type is lossy: each element is rounded to the target type when
+it is ingested, and the rounded value is what the index stores and compares. Recall
+may therefore differ slightly from the same data indexed as `FLOAT32`.
+
+The data type is specified as a required parameter in the [`FT.CREATE`](../commands/ft.create.md) command, and is reported back by [`FT.INFO`](../commands/ft.info.md) as the attribute's `data_type`:
 
 ```
-FT.CREATE idx SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2
+FT.CREATE idx SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT16 DIM 3 DISTANCE_METRIC L2
 ```
+
+### Version requirement
+
+An index schema that declares `FLOAT16` or `BFLOAT16` records a minimum module
+version of 1.3.0. A module older than that refuses to load such an index rather
+than misreading its 2-byte elements as `FLOAT32`. This matters when downgrading,
+and in mixed-version clusters: keep to `FLOAT32` if an index has to be readable
+by modules earlier than 1.3.0. Indexes that use only `FLOAT32` are unaffected.
+
+### BFLOAT16 hardware requirement
+
+`BFLOAT16` indexes require a CPU that provides a SIMD BF16 conversion path:
+Haswell or newer on x86-64, or NEON-BF16/SVE-BF16 on ARM. On a CPU without one,
+creating a `BFLOAT16` index -- or loading one from an RDB -- fails with an error
+rather than producing incorrect distances. `FLOAT32` and `FLOAT16` indexes have
+no such requirement.
 
 ## HASH Vector Format
 
-For HASH-type indexes, vectors are stored as raw binary blobs. Each element is a 32-bit IEEE 754 single-precision float in little-endian byte order. The total blob size must be exactly `DIM * 4` bytes.
+For HASH-type indexes, vectors are stored as raw binary blobs. Each element is
+written in little-endian byte order using the index's declared `TYPE`, so the
+total blob size must be exactly `DIM * <bytes per element>`: `DIM * 4` for
+`FLOAT32`, `DIM * 2` for `FLOAT16` and `BFLOAT16`.
 
-For example, a 3-dimensional FLOAT32 vector `[0.0, 0.0, 1.0]` is stored as 12 bytes:
+The same 3-dimensional vector `[0.0, 0.0, 1.0]` in each type:
 
 ```
-\x00\x00\x00\x00   (0.0 as little-endian FLOAT32)
-\x00\x00\x00\x00   (0.0 as little-endian FLOAT32)
-\x00\x00\x80\x3f   (1.0 as little-endian FLOAT32)
+FLOAT32  (12 bytes)   \x00\x00\x00\x00  \x00\x00\x00\x00  \x00\x00\x80\x3f
+FLOAT16  (6 bytes)    \x00\x00          \x00\x00          \x00\x3c
+BFLOAT16 (6 bytes)    \x00\x00          \x00\x00          \x80\x3f
 ```
+
+Note that the `BFLOAT16` encoding of 1.0 is the high half of the `FLOAT32`
+encoding (`\x80\x3f`), which is what makes the conversion a truncation of the
+top two bytes rather than a change of layout.
 
 In Python, a HASH vector can be created with:
 
 ```python
 import numpy as np
+
+# FLOAT32
 vector = np.array([0.0, 0.0, 1.0], dtype=np.float32).tobytes()
+
+# FLOAT16
+vector = np.array([0.0, 0.0, 1.0], dtype=np.float16).tobytes()
+
 client.hset("doc:1", mapping={"embedding": vector})
 ```
 
-Or equivalently with `struct`:
+Or equivalently with `struct`, whose format characters are `f` for `FLOAT32` and
+`e` for `FLOAT16`:
 
 ```python
 import struct
-vector = struct.pack("<3f", 0.0, 0.0, 1.0)  # '<' = little-endian, 'f' = float32
-client.hset("doc:1", mapping={"embedding": vector})
+vector = struct.pack("<3f", 0.0, 0.0, 1.0)  # '<' = little-endian, 'f' = FLOAT32
+vector = struct.pack("<3e", 0.0, 0.0, 1.0)  # 'e' = FLOAT16
 ```
 
-If the blob size does not match the expected `DIM * 4` bytes, the vector is rejected and the key is not indexed for that field.
+Neither `numpy` nor `struct` has a native `BFLOAT16` type. Encode it by rounding
+each `FLOAT32` to nearest-even and keeping the top two bytes:
+
+```python
+import struct
+
+def to_bfloat16(values):
+    packed = struct.pack(f"<{len(values)}f", *values)
+    out = bytearray()
+    for i in range(len(values)):
+        u = int.from_bytes(packed[i * 4:i * 4 + 4], "little")
+        u = (u + 0x7FFF + ((u >> 16) & 1)) & 0xFFFFFFFF  # round to nearest, ties to even
+        out += u.to_bytes(4, "little")[2:4]              # keep the high half
+    return bytes(out)
+
+client.hset("doc:1", mapping={"embedding": to_bfloat16([0.0, 0.0, 1.0])})
+```
+
+The `ml_dtypes` package provides a `bfloat16` dtype usable with `numpy` if you
+would rather not hand-roll the conversion.
+
+If the blob size does not match the size implied by `DIM` and `TYPE`, the vector
+is rejected and the key is not indexed for that field. A `FLOAT32`-encoded blob
+supplied to a `FLOAT16` index is the common way to hit this: it is twice the
+expected length.
 
 ## JSON Vector Format
 
-For JSON type indexes, vectors are stored as a JSON string containing a bracketed, comma-separated list of floating-point values:
+For JSON type indexes, a vector may be written either as a **native JSON array**
+of numbers or as a **JSON string** containing a bracketed, comma-separated list.
+Both forms are supported and equivalent -- they index identically and return
+identical distances:
 
 ```
-JSON.SET doc:1 $ '{"embedding": "[1.0, 0.0, 0.0]"}'
+JSON.SET doc:1 $ '{"embedding": [1.0, 0.0, 0.0]}'     # native array
+JSON.SET doc:2 $ '{"embedding": "[1.0, 0.0, 0.0]"}'   # quoted string
 ```
 
-Note that the vector is a JSON **string value** (enclosed in quotes), not a native JSON array. The search module parses this string internally, splitting on commas (with whitespace skipped) and converting each element to a 32-bit float.
+Prefer the native array. It is ordinary JSON, so other readers of the document
+see a real array rather than an opaque string, and it needs no client-side
+formatting. The quoted string is the older form, still supported for documents
+already written that way.
 
-In Python:
+Either form is converted element by element to the index's declared `TYPE`. For
+a `FLOAT16` or `BFLOAT16` index the values are therefore rounded to 2-byte
+precision on ingest, exactly as a binary blob would be.
+
+In Python, with the native array form:
 
 ```python
-import json
+client.json().set("doc:1", "$", {"embedding": [1.0, 0.0, 0.0]})
+```
+
+Or with the string form:
+
+```python
 vector = [1.0, 0.0, 0.0]
-vector_str = "[" + ",".join(str(v) for v in vector) + "]"
-client.json().set("doc:1", "$", {"embedding": vector_str})
+client.json().set("doc:2", "$",
+                  {"embedding": "[" + ",".join(str(v) for v in vector) + "]"})
 ```
 
-The parser is flexible about whitespace and extra commas:
-
-```
-"[0.1, 0.2, 0.3]"       --> valid
-"[ 0.1, ,0.2,0.3,]"     --> valid (extra commas and spaces are tolerated)
-"[0.1, 0.2, a]"          --> rejected (non-numeric element)
-```
+A value containing a non-numeric element, or whose element count does not match
+`DIM`, is not indexed for that field: the key is left out of vector search
+results, exactly as an incorrectly sized binary blob would be.
 
 ## Query Vectors
 
-Regardless of whether the index is on HASH or JSON keys, query vectors provided via `PARAMS` to `FT.SEARCH` must always use the binary blob format (the same format as HASH vectors).
+Regardless of whether the index is on HASH or JSON keys, query vectors provided
+via `PARAMS` to `FT.SEARCH` must always use the binary blob format (the same
+format as HASH vectors), encoded with the index's declared `TYPE`.
+
+A query blob whose length does not match `DIM * <bytes per element>` is
+rejected. Querying a 3-dimensional `FLOAT16` index with a `FLOAT32`-encoded blob,
+for instance, returns:
+
+```
+Error parsing vector similarity parameters: query vector blob size (12) does not
+match index's expected size (6).
+```
 
 ## Examples of Vector Field Values
 
@@ -194,7 +295,21 @@ A 3-dimensional vector with JSON storage:
 ```
 FT.CREATE idx ON JSON SCHEMA $.vec AS vec VECTOR FLAT 6 TYPE FLOAT32 DIM 3 DISTANCE_METRIC L2
 
+JSON.SET doc:1 $ '{"vec": [1.0, 0.0, 0.0]}'
+```
+
+The same document using the string form, which is equivalent:
+
+```
 JSON.SET doc:1 $ '{"vec": "[1.0, 0.0, 0.0]"}'
+```
+
+The same vector in a `FLOAT16` index, where each element is 2 bytes rather than 4:
+
+```
+FT.CREATE idx ON HASH SCHEMA vec VECTOR FLAT 6 TYPE FLOAT16 DIM 3 DISTANCE_METRIC L2
+
+HSET doc:1 vec "\x00\x3c\x00\x00\x00\x00"
 ```
 
 # Text Fields

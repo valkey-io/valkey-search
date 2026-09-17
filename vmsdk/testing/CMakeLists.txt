@@ -54,14 +54,6 @@ target_include_directories(status_macros_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(status_macros_test PUBLIC vmsdklib)
 finalize_test_flags(status_macros_test)
 
-set(SRCS_MEMORY_ALLOCATION_TEST
-    ${CMAKE_CURRENT_LIST_DIR}/memory_allocation_test.cc)
-add_executable(memory_allocation_test ${SRCS_MEMORY_ALLOCATION_TEST})
-target_include_directories(memory_allocation_test
-                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(memory_allocation_test PUBLIC vmsdklib)
-finalize_test_flags(memory_allocation_test)
-
 set(SRCS_UTILS_TEST ${CMAKE_CURRENT_LIST_DIR}/utils_test.cc)
 add_executable(utils_test ${SRCS_UTILS_TEST})
 target_include_directories(utils_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

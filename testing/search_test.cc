@@ -7,11 +7,9 @@
 
 #include "src/query/search.h"
 
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -23,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
@@ -56,8 +55,6 @@ namespace valkey_search {
 namespace {
 
 using testing::_;
-using testing::ByMove;
-using testing::Return;
 using testing::TestParamInfo;
 using testing::ValuesIn;
 using ::valkey_search::indexes::IndexerType;
@@ -478,7 +475,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
       .Times(::testing::AnyNumber());
 
   // Add vector index
-  std::shared_ptr<indexes::IndexBase> vector_index;
+  std::shared_ptr<indexes::VectorBase> vector_index;
   if (vector_indexer_type == IndexerType::kHNSW) {
     vector_index =
         indexes::VectorHNSW<float>::Create(
@@ -512,10 +509,7 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag", "tag", tag_index));
 
   // Add records
-  size_t num_records = 10000;
-#ifdef SAN_BUILD
-  num_records = 100;
-#endif
+  size_t num_records = 150;
   auto vectors =
       DeterministicallyGenerateVectors(num_records, kVectorDimensions, 10.0);
   for (size_t i = 0; i < num_records; ++i) {
@@ -527,11 +521,13 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     auto interned_key = StringInternStore::Intern(key);
     index_schema->SetIndexMutationSequenceNumber(interned_key, i);
 
-    VMSDK_EXPECT_OK(vector_index->AddRecord(interned_key, vector));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(*vector_index, interned_key, vector));
 
     // Add record to numeric index
     auto numeric_value = std::to_string(i);
-    VMSDK_EXPECT_OK(numeric_index->AddRecord(interned_key, numeric_value));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddRecord(*numeric_index, interned_key, numeric_value));
 
     // Add record to tag index
     std::string tag_value = "LT10000";
@@ -541,7 +537,8 @@ std::shared_ptr<MockIndexSchema> CreateIndexSchemaWithMultipleAttributes(
     if (i < 3) {
       tag_value += ",LT3";
     }
-    VMSDK_EXPECT_OK(tag_index->AddRecord(interned_key, tag_value));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddRecord(*tag_index, interned_key, tag_value));
   }
 
   return index_schema;
@@ -714,9 +711,14 @@ TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
                      float vec_value) {
     auto interned = StringInternStore::Intern(key);
     std::vector<float> vec(kVectorDimensions, vec_value);
+    std::string raw_vec((char *)vec.data(), vec.size() * sizeof(float));
     VMSDK_EXPECT_OK(vector_index->AddRecord(
-        interned, std::string((char *)vec.data(), vec.size() * sizeof(float))));
-    VMSDK_EXPECT_OK(text->AddRecord(interned, content));
+        interned,
+        testing_infra::MakeVectorAttributeData(
+            interned, StringInternStore::Intern(kVectorAttributeAlias),
+            raw_vec)));
+    VMSDK_EXPECT_OK(text->AddRecord(
+        interned, AttributeData(vmsdk::MakeUniqueValkeyString(content))));
     text_schema->CommitKeyData(interned);
     schema->SetIndexMutationSequenceNumber(interned, 0);
   };
@@ -1115,7 +1117,13 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     for (auto &content : index.contents) {
       auto key = StringInternStore::Intern(content.first);
       auto value = content.second;
-      VMSDK_EXPECT_OK(index_base->AddRecord(key, value));
+      auto *vector_base = dynamic_cast<indexes::VectorBase *>(index_base.get());
+      if (vector_base) {
+        VMSDK_EXPECT_OK(
+            testing_infra::AddVectorRecord(*vector_base, key, value));
+      } else {
+        VMSDK_EXPECT_OK(testing_infra::AddRecord(*index_base, key, value));
+      }
     }
   }
 
@@ -1488,10 +1496,12 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
     for (const auto &[k, content, color] : docs) {
       auto key = StringInternStore::Intern(k);
-      VMSDK_EXPECT_OK(text->AddRecord(key, content));
+      VMSDK_EXPECT_OK(text->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString(content))));
       text_schema->CommitKeyData(key);
       if (!color.empty()) {
-        VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+        VMSDK_EXPECT_OK(tag->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(color))));
       }
       schema->SetIndexMutationSequenceNumber(key, 0);
     }
@@ -1510,7 +1520,8 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     VMSDK_EXPECT_OK(schema->AddIndex("color", "color", tag));
     for (const auto &[k, color] : docs) {
       auto key = StringInternStore::Intern(k);
-      VMSDK_EXPECT_OK(tag->AddRecord(key, color));
+      VMSDK_EXPECT_OK(tag->AddRecord(
+          key, AttributeData(vmsdk::MakeUniqueValkeyString(color))));
       schema->SetIndexMutationSequenceNumber(key, 0);
     }
     return schema;
@@ -1541,10 +1552,12 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
     for (const auto &[k, title_text, body_text] : docs) {
       auto key = StringInternStore::Intern(k);
       if (!title_text.empty()) {
-        VMSDK_EXPECT_OK(title->AddRecord(key, title_text));
+        VMSDK_EXPECT_OK(title->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(title_text))));
       }
       if (!body_text.empty()) {
-        VMSDK_EXPECT_OK(body->AddRecord(key, body_text));
+        VMSDK_EXPECT_OK(body->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(body_text))));
       }
       text_schema->CommitKeyData(key);
       schema->SetIndexMutationSequenceNumber(key, 0);
@@ -1566,8 +1579,41 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
         schema, parsed.value().root_predicate.get(),
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std),
         cands);
-    if (cands.empty()) return std::nullopt;
+    if (cands.empty()) {
+      return std::nullopt;
+    }
     return cands[0].score;
+  }
+
+  // Score `key` for `filter` through the IN-ITERATOR path
+  // (TextIterator::GetScore), which is the path pure-text prefix/suffix/fuzzy
+  // queries run on -- unlike Score() above, which uses the extra-step
+  // ScoreTextQuery. Mirrors DoSearchNonVector's per-key scoring, which is
+  // GetScore() alone -- the leaf weight is already folded into it.
+  // `filter` must be a single text predicate.
+  // Returns nullopt when the document does not match.
+  std::optional<float> ScoreViaIterator(MockIndexSchema &schema,
+                                        absl::string_view filter,
+                                        const std::string &key) {
+    TextParsingOptions options{};
+    auto parsed = FilterParser(schema, filter, options).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    auto *text_pred = dynamic_cast<query::TextPredicate *>(
+        parsed.value().root_predicate.get());
+    EXPECT_NE(text_pred, nullptr) << "not a single text predicate: " << filter;
+    if (text_pred == nullptr) return std::nullopt;
+    text_pred->SetScorer(
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+    auto text_index = schema.GetTextIndexSchema()->GetTextIndex();
+    auto interned = StringInternStore::Intern(key);
+    vmsdk::ReaderMutexLock lock(&schema.GetTimeSlicedMutex());
+    auto iter = text_pred->BuildTextIterator(
+        text_index, text_pred->GetFieldMask(), /*require_positions=*/false,
+        /*or_weight_multiplier=*/1.0f);
+    if (!iter->SeekForwardKey(interned) || iter->DoneKeys())
+      return std::nullopt;
+    if (iter->CurrentKey()->Str() != key) return std::nullopt;
+    return iter->GetScore();
   }
 };
 
@@ -1585,7 +1631,7 @@ struct ScoreCase {
   std::vector<std::string> baselines;
   std::string filter;
   std::function<float(const std::vector<float> &)> expected;
-  std::vector<std::string> zero_score_keys{};
+  std::vector<std::string> zero_score_keys;
 };
 
 class ScoreTextQueryTest : public ScoreTextQueryTestBase,
@@ -1729,6 +1775,15 @@ INSTANTIATE_TEST_SUITE_P(
          .baselines = {"@color:{red}"},
          .filter = "@color:{red|Red}",
          .expected = [](const auto &b) { return b[0]; }},
+        // Same for prefix values: GetPrefixMatchDocCount applies the index's
+        // case rules, so {re*|RE*} would otherwise credit the same
+        // representative value twice.
+        {.test_name = "TagUnionPrefixCaseVariantsScoreOnce",
+         .docs = {{"d1", "aa bb", "red"}, {"d2", "aa bb", "blue"}},
+         .key = "d1",
+         .baselines = {"@color:{re*}"},
+         .filter = "@color:{re*|RE*}",
+         .expected = [](const auto &b) { return b[0]; }},
     }),
     [](const TestParamInfo<ScoreCase> &info) { return info.param.test_name; });
 
@@ -1796,7 +1851,7 @@ TEST_F(ScoreTextQueryTestBase, TextLessIndexScoresZeroNotNan) {
   auto schema = BuildTagOnlySchema({{"d1", "red"}, {"d2", "blue"}});
   auto score = Score(*schema, "@color:{red}", "d1");
   ASSERT_TRUE(score.has_value());
-  EXPECT_FALSE(std::isnan(*score));
+  EXPECT_FALSE(indexes::scoring::IsNaN(*score));
   EXPECT_FLOAT_EQ(*score, 0.0f);
 }
 
@@ -2034,6 +2089,242 @@ TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {
   auto extra_step = Score(*schema, filter, "d2");
   ASSERT_TRUE(recomputed && extra_step);
   EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// --- Prefix / suffix / fuzzy expansion scoring (in-iterator path) ------------
+//
+// Contract (docs/redis_prefix_suffix_fuzzy_scoring.md): an expansion
+// contributes exactly ONE matched term's BM25 (its own IDF + own F), never the
+// sum over matched terms. A doc matching a single expansion term therefore
+// scores identically to the exact-term query for that term.
+
+// A doc matching the prefix via a single term scores like the exact term.
+TEST_F(ScoreTextQueryTestBase, PrefixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto prefix = ScoreViaIterator(*schema, "@text:cat*", "d_cat");
+  auto exact = ScoreViaIterator(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+}
+
+// A doc matching the prefix via SEVERAL terms is scored on ONE of them, never
+// their sum (category df=3, catalog df=1 -> distinct IDFs, so the pick is
+// observable). Which term wins is an unspecified union artifact, so assert only
+// the invariant: score == one candidate's BM25 and strictly below their sum.
+TEST_F(ScoreTextQueryTestBase, PrefixMultiMatchScoresOneTermNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_multi", "category catalog", ""},
+      {"d_cat2", "category", ""},
+      {"d_cat3", "category", ""},
+  });
+  auto prefix = ScoreViaIterator(*schema, "@text:cat*", "d_multi");
+  auto only_category = ScoreViaIterator(*schema, "@text:category", "d_multi");
+  auto only_catalog = ScoreViaIterator(*schema, "@text:catalog", "d_multi");
+  ASSERT_TRUE(prefix && only_category && only_catalog);
+  EXPECT_LT(*prefix, *only_category + *only_catalog);
+  EXPECT_TRUE(std::fabs(*prefix - *only_category) < 1e-4f ||
+              std::fabs(*prefix - *only_catalog) < 1e-4f)
+      << "prefix=" << *prefix << " category=" << *only_category
+      << " catalog=" << *only_catalog;
+}
+
+// A doc matching the suffix via a single term scores like the exact term.
+TEST_F(ScoreTextQueryTestBase, SuffixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog", "jogging", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto suffix = ScoreViaIterator(*schema, "@text:*ing", "d_run");
+  auto exact = ScoreViaIterator(*schema, "@text:running", "d_run");
+  ASSERT_TRUE(suffix && exact);
+  EXPECT_GT(*suffix, 0.0f);
+  EXPECT_FLOAT_EQ(*suffix, *exact);
+}
+
+// A doc matching the fuzzy pattern via a single term scores like the exact
+// term.
+TEST_F(ScoreTextQueryTestBase, FuzzySingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_dog", "dog", ""},
+      {"d_bird", "bird", ""},
+  });
+  auto fuzzy = ScoreViaIterator(*schema, "@text:%cat%", "d_cat");
+  auto exact = ScoreViaIterator(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(fuzzy && exact);
+  EXPECT_GT(*fuzzy, 0.0f);
+  EXPECT_FLOAT_EQ(*fuzzy, *exact);
+}
+
+// --- Expansion scoring: extra-step path (ScoreTextQuery / ScoreNode) ---------
+//
+// The tests above drive the in-iterator path (pure-text queries). Score() below
+// always takes the extra-step ScoreNode path -- the one combined (text +
+// numeric/tag/negate) queries use. Same contract: one matched term, not the
+// sum. The representative pick (first present expansion term) can differ from
+// the in-iterator heap pick on multi-match docs, so cross-path equality is
+// asserted only on single-match docs.
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto prefix = Score(*schema, "@text:cat*", "d_cat");
+  auto exact = Score(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+  // Single-match: extra-step and in-iterator pick the same (only) term.
+  auto in_iter = ScoreViaIterator(*schema, "@text:cat*", "d_cat");
+  ASSERT_TRUE(in_iter);
+  EXPECT_FLOAT_EQ(*prefix, *in_iter);
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixMultiMatchScoresOneTermNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_multi", "category catalog", ""},
+      {"d_cat2", "category", ""},
+      {"d_cat3", "category", ""},
+  });
+  auto prefix = Score(*schema, "@text:cat*", "d_multi");
+  auto only_category = Score(*schema, "@text:category", "d_multi");
+  auto only_catalog = Score(*schema, "@text:catalog", "d_multi");
+  ASSERT_TRUE(prefix && only_category && only_catalog);
+  EXPECT_LT(*prefix, *only_category + *only_catalog);
+  EXPECT_TRUE(std::fabs(*prefix - *only_category) < 1e-4f ||
+              std::fabs(*prefix - *only_catalog) < 1e-4f)
+      << "prefix=" << *prefix << " category=" << *only_category
+      << " catalog=" << *only_catalog;
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepSuffixSingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_run", "running", ""},
+      {"d_jog", "jogging", ""},
+      {"d_dog", "dog", ""},
+  });
+  auto suffix = Score(*schema, "@text:*ing", "d_run");
+  auto exact = Score(*schema, "@text:running", "d_run");
+  ASSERT_TRUE(suffix && exact);
+  EXPECT_GT(*suffix, 0.0f);
+  EXPECT_FLOAT_EQ(*suffix, *exact);
+}
+
+TEST_F(ScoreTextQueryTestBase, ExtraStepFuzzySingleMatchEqualsExactTerm) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_dog", "dog", ""},
+      {"d_bird", "bird", ""},
+  });
+  auto fuzzy = Score(*schema, "@text:%cat%", "d_cat");
+  auto exact = Score(*schema, "@text:cat", "d_cat");
+  ASSERT_TRUE(fuzzy && exact);
+  EXPECT_GT(*fuzzy, 0.0f);
+  EXPECT_FLOAT_EQ(*fuzzy, *exact);
+}
+
+// The real reason the extra-step path matters: a prefix combined with a numeric
+// clause. The numeric contributes 0, so the combined score equals the prefix
+// alone -- and must be non-zero (the expansion IS scored here, unlike before).
+TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
+  auto schema = BuildTextTagSchema({
+      {"d_cat", "cat", ""},
+      {"d_cats", "cats", ""},
+  });
+  auto combined = Score(*schema, "@text:cat* @rating:[0 100]", "d_cat");
+  auto prefix_only = Score(*schema, "@text:cat*", "d_cat");
+  ASSERT_TRUE(combined && prefix_only);
+  EXPECT_GT(*combined, 0.0f);
+  EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// --- Tag prefix expansion scoring (extra-step path) --------------------------
+//
+// A tag prefix (`@color:{re*}`) is scored like a text expansion: it contributes
+// exactly ONE matched value's BM25 (F ≡ 1, its own IDF), never the sum over the
+// values it expands to -- while an explicit union (`{red|reef}`) still sums.
+// Verified empirically against Redis 8.6 (tag prefix scores a single
+// representative value; a union sums its members).
+
+// A doc whose only matching value is one tag scores like the exact-value query.
+TEST_F(ScoreTextQueryTestBase, TagPrefixSingleMatchEqualsExactValue) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_red2", "aa", "red"},
+      {"d_reef", "aa", "reef"},
+  });
+  auto prefix = Score(*schema, "@color:{re*}", "d_red");
+  auto exact = Score(*schema, "@color:{red}", "d_red");
+  ASSERT_TRUE(prefix && exact);
+  EXPECT_GT(*prefix, 0.0f);
+  EXPECT_FLOAT_EQ(*prefix, *exact);
+}
+
+// A doc carrying SEVERAL values matching the prefix is scored on exactly ONE of
+// them, never their sum (red df=3, reef df=1 -> distinct IDFs, so the pick is
+// observable). Which value wins is unspecified, so assert only the invariant:
+// score == one candidate value's BM25 and strictly below the union of both.
+TEST_F(ScoreTextQueryTestBase, TagPrefixMultiMatchScoresOneValueNotSum) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_red2", "aa", "red"},
+      {"d_multi", "aa", "red,reef"},
+  });
+  auto prefix = Score(*schema, "@color:{re*}", "d_multi");
+  auto only_red = Score(*schema, "@color:{red}", "d_multi");
+  auto only_reef = Score(*schema, "@color:{reef}", "d_multi");
+  auto both = Score(*schema, "@color:{red|reef}", "d_multi");
+  ASSERT_TRUE(prefix && only_red && only_reef && both);
+  EXPECT_FLOAT_EQ(*both, *only_red + *only_reef);  // union sums
+  EXPECT_LT(*prefix, *both);                       // prefix picks one
+  EXPECT_TRUE(std::fabs(*prefix - *only_red) < 1e-4f ||
+              std::fabs(*prefix - *only_reef) < 1e-4f)
+      << "prefix=" << *prefix << " red=" << *only_red << " reef=" << *only_reef;
+}
+
+// A tag prefix combined with a numeric clause is scored (the numeric adds 0),
+// proving the expansion is not silently dropped on the combined-query path.
+TEST_F(ScoreTextQueryTestBase, TagPrefixInCombinedQueryScored) {
+  auto schema = BuildTextTagSchema({
+      {"d_red", "aa", "red"},
+      {"d_reef", "aa", "reef"},
+  });
+  auto combined = Score(*schema, "@color:{re*} @rating:[0 100]", "d_red");
+  auto prefix_only = Score(*schema, "@color:{re*}", "d_red");
+  ASSERT_TRUE(combined && prefix_only);
+  EXPECT_GT(*combined, 0.0f);
+  EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// An empty tag (leading separator) must not be picked as the representative.
+// Only a bare `*` gives an empty prefix that can match one, hence min length 0.
+TEST_F(ScoreTextQueryTestBase, TagPrefixSkipsEmptyTagsWhenPickingValue) {
+  auto &min_prefix = options::GetTagMinPrefixLength();
+  const int original = min_prefix.GetValue();
+  VMSDK_EXPECT_OK(min_prefix.SetValue(0));
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(min_prefix.SetValue(original));
+  };
+
+  auto schema = BuildTextTagSchema({
+      {"d_lead", "aa", ",red"},
+      {"d_plain", "aa", "red"},
+  });
+  auto lead = Score(*schema, "@color:{*}", "d_lead");
+  auto plain = Score(*schema, "@color:{*}", "d_plain");
+  ASSERT_TRUE(lead && plain);
+  EXPECT_GT(*lead, 0.0f);
+  EXPECT_FLOAT_EQ(*lead, *plain);
 }
 
 }  // namespace

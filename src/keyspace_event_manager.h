@@ -16,10 +16,15 @@
 #include "absl/container/flat_hash_set.h"
 #include "src/attribute_data_type.h"
 #include "src/utils/patricia_tree.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
+namespace indexes {
+class VectorBase;
+}  // namespace indexes
+
 using StartSubscriptionFunction =
     std::function<absl::Status(ValkeyModuleCtx *, int)>;
 
@@ -44,6 +49,11 @@ class KeyspaceEventSubscription {
   virtual void OnKeyspaceNotification(ValkeyModuleCtx *ctx, int type,
                                       const char *event,
                                       ValkeyModuleString *key) = 0;
+  virtual std::vector<const indexes::VectorBase *> GetVectorIndexes() const = 0;
+  virtual bool IsInDB(int db_num) const { return true; }
+  virtual bool IsInCurrentDB(ValkeyModuleCtx *ctx) const {
+    return IsInDB(ValkeyModule_GetSelectedDb(ctx));
+  }
 };
 
 class KeyspaceEventManager {
@@ -60,6 +70,8 @@ class KeyspaceEventManager {
   inline bool HasSubscription(KeyspaceEventSubscription *subscription) const {
     return subscriptions_.Get().contains(subscription);
   }
+  std::vector<KeyspaceEventSubscription *> GetMatchingSubscriptions(
+      absl::string_view key, int type, int db_num = -1);
   static void InitInstance(std::unique_ptr<KeyspaceEventManager> instance);
   static KeyspaceEventManager &Instance();
 
@@ -73,12 +85,18 @@ class KeyspaceEventManager {
     return VALKEYMODULE_OK;
   }
 
+  void ProcessMoveNotification(ValkeyModuleCtx *ctx, int type,
+                               ValkeyModuleString *dst_key,
+                               const char *dst_event);
+
   vmsdk::MainThreadAccessGuard<absl::flat_hash_set<KeyspaceEventSubscription *>>
       subscriptions_;
   // TODO: b/355561165 - Migrate to PatriciaTreeSet
   vmsdk::MainThreadAccessGuard<PatriciaTree<KeyspaceEventSubscription *>>
       subscription_trie_{/*case_sensitive=*/true};
   int subscribed_types_bit_mask_{0};
+  vmsdk::UniqueValkeyString moved_src_key_;
+  int src_db_num_{-1};
 };
 
 }  // namespace valkey_search

@@ -1,7 +1,0 @@
-**`query::SearchParameters`** — engine-facing query job. Holds all inputs (`index_schema`, `query`, filter, `k`/`ef`, `limit`, `timeout`, `return_attributes`, `scorer`, `sortby`, `parse_vars`), the `SearchResult` output, a `cancellation_token`, and an in-flight guard. Defines the pure-virtual completion contract (`QueryCompleteBackground` / `QueryCompleteMainThread`, `RequiresCompleteResults`, `Pre/PostParseQueryString`). The whole query engine (`Search`, `SearchAsync`, `ResolveContent`, fanout) operates on this base — no Valkey client concepts.
-
-**`QueryCommand : SearchParameters`** — Valkey-command adapter shared by FT.SEARCH and FT.AGGREGATE. Adds `blocked_client`, the static `Execute(ctx, argv, argc, unique_ptr<QueryCommand>)` lifecycle driver (block client → `SearchAsync` → reply → free), and implements the base's `QueryComplete*` hooks to unblock the client and hand off to the main thread. Declares command-shaped virtuals `ParseCommand` and `SendReply`.
-
-**`SearchCommand : QueryCommand`** — FT.SEARCH concrete implementation. Provides `ParseCommand` (LIMIT/RETURN/SORTBY/…), `SendReply` (FT.SEARCH reply format), `PostParseQueryString`, `GetSerializationRange`, `RequiresCompleteResults` (true iff SORTBY), plus FT.SEARCH-only fields `with_sort_keys`/`with_scores`. (`AggregateParameters` is its FT.AGGREGATE sibling.)
-
-Bonus: `LocalResponderSearch : SearchParameters` lives in the fanout path — same engine plumbing, no `QueryCommand` layer because there's no client to block; results go back over the coordinator RPC.

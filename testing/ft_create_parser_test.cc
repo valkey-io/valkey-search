@@ -841,6 +841,43 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             // Redis does the same: a token in identifier position is a field
+             // name, so this creates a field literally called UNF.
+             .test_name = "unf_without_sortable_becomes_a_field_name",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF TEXT",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+                 .weight = 1.0,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         },
+                                         {
+                                             .identifier = "UNF",
+                                             .attribute_alias = "UNF",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kText,
+                                         }}},
+         },
+         {
+             .test_name = "unf_without_sortable_before_a_field_is_rejected",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF body TEXT",
+             .expected_error_message =
+                 "Invalid field type for field `UNF`: Unknown argument `body`",
+         },
+         {
              .test_name = "unf_without_sortable_is_rejected",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA sku TAG UNF",

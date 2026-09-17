@@ -2069,6 +2069,52 @@ TEST_F(ScoreTextQueryTestBase, StemVariantInNoStemFieldNotScored) {
   EXPECT_FLOAT_EQ(*d3, 0.0f);
 }
 
+// Querying `running` also scores the stem root `run` — but only in fields that
+// stem. d3 and d4 both hold `run`, d3 in NOSTEM body and d4 in stemming title,
+// so only d4 may score.
+TEST_F(ScoreTextQueryTestBase, StemRootLiteralInNoStemFieldNotScored) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
+                                         {"d2", "runs", ""},
+                                         {"d3", "", "run"},
+                                         {"d4", "run", ""}});
+  const std::string filter = "@title:running @rating:[0 100]";
+  auto d3 = Score(*schema, filter, "d3");
+  ASSERT_TRUE(d3.has_value());
+  EXPECT_FLOAT_EQ(*d3, 0.0f);
+  auto d4 = Score(*schema, filter, "d4");
+  ASSERT_TRUE(d4.has_value());
+  EXPECT_GT(*d4, 0.0f);
+  // Searching `run` directly does find d3, so the 0 above is the field gate and
+  // not a missing posting.
+  auto literal = Score(*schema, "@body:run @rating:[0 100]", "d3");
+  ASSERT_TRUE(literal.has_value());
+  EXPECT_GT(*literal, 0.0f);
+  // Pure-text queries score in the iterator instead; same verdict expected.
+  EXPECT_FALSE(ScoreViaIterator(*schema, "@title:running", "d3"));
+  EXPECT_TRUE(ScoreViaIterator(*schema, "@title:running", "d4"));
+}
+
+// Same rule with no field named: an unscoped query searches body too, yet
+// stemming stays off there, so `run`/`runs` in body still score nothing. This is
+// the only query shape where "all fields" and "stemming fields" differ.
+TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
+                                         {"d2", "runs", ""},
+                                         {"d3", "", "run"},
+                                         {"d5", "", "runs"}});
+  const std::string filter = "running @rating:[0 100]";
+  auto d1 = Score(*schema, filter, "d1");
+  ASSERT_TRUE(d1.has_value());
+  EXPECT_GT(*d1, 0.0f);
+  // d3 holds the root `run`, d5 the inflection `runs` -- both in body only.
+  for (const auto &key : {"d3", "d5"}) {
+    auto score = Score(*schema, filter, key);
+    ASSERT_TRUE(score.has_value()) << key;
+    EXPECT_FLOAT_EQ(*score, 0.0f) << key;
+    EXPECT_FALSE(ScoreViaIterator(*schema, "running", key)) << key;
+  }
+}
+
 // The recompute path (SingleDocumentScorer) walks the same grouped ScoreNode,
 // so field-scoped admission must agree with the extra-step path.
 TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {
@@ -2246,6 +2292,31 @@ TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
   ASSERT_TRUE(combined && prefix_only);
   EXPECT_GT(*combined, 0.0f);
   EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// A field-scoped expansion must represent a doc by a term it carries in THAT
+// field. d1 holds alxta in title and alzta in body, so `@body:al*` may only
+// score it on alzta -- even though alxta sorts first among the matched terms.
+// The two terms have different doc counts, so the wrong pick is visible.
+TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "alxta", "alzta"},
+                                         {"d2", "alxta", ""},
+                                         {"d3", "alxta", ""},
+                                         {"d4", "alxta", ""}});
+  auto alzta = Score(*schema, "@body:alzta @rating:[0 100]", "d1");
+  auto alxta = Score(*schema, "@title:alxta @rating:[0 100]", "d1");
+  ASSERT_TRUE(alzta && alxta);
+  ASSERT_GT(*alzta, *alxta) << "fixture must give the two terms distinct IDFs";
+  // Prefix, suffix and fuzzy all expand to both terms; all must pick alzta.
+  for (const auto &pattern : {"@body:al*", "@body:*ta", "@body:%alata%"}) {
+    auto scoped = Score(*schema, absl::StrCat(pattern, " @rating:[0 100]"), "d1");
+    ASSERT_TRUE(scoped.has_value()) << pattern;
+    EXPECT_FLOAT_EQ(*scoped, *alzta) << pattern;
+    // Pure-text queries score in the iterator instead; same pick expected.
+    auto in_iter = ScoreViaIterator(*schema, pattern, "d1");
+    ASSERT_TRUE(in_iter.has_value()) << pattern;
+    EXPECT_FLOAT_EQ(*in_iter, *alzta) << pattern;
+  }
 }
 
 // --- Tag prefix expansion scoring (extra-step path) --------------------------

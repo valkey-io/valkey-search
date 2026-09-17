@@ -891,6 +891,10 @@ void SchemaManager::OnFlushEndDBCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] uint64_t subevent,
                                          void *data) {
   auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
+  if (flush_info == nullptr) {
+    VMSDK_LOG(WARNING, ctx)
+        << "FLUSHDB event without flush info, assuming all databases";
+  }
   SchemaManager::Instance().OnFlushDBEnded(ctx,
                                            flush_info ? flush_info->dbnum : -1);
 }

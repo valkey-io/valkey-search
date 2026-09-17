@@ -132,3 +132,48 @@ class TestSearchFTCreateCMD(ValkeySearchTestCaseBase):
                 "price", "AS", "dup", "TAG",
             )
         assert "Duplicate field in schema - dup" in str(e.value)
+
+    def test_nohl_and_sortable_unf_accepted(self):
+        """Regression test for issues #1370 and #1371.
+
+        NOHL and SORTABLE UNF are RediSearch compatibility no-ops: highlighting
+        is not implemented, and SORTBY already compares the raw field value.
+        """
+        client = self.server.get_new_client()
+
+        assert client.execute_command(
+            "FT.CREATE", "idxcompat", "ON", "HASH", "PREFIX", "1", "p:",
+            "NOHL",
+            "SCHEMA",
+            "sku", "TAG", "SORTABLE", "UNF",
+            "price", "NUMERIC", "SORTABLE", "UNF",
+        ) == b"OK"
+
+        assert client.execute_command("HSET", "p:1", "sku", "a", "price", "2") == 2
+        assert client.execute_command("HSET", "p:2", "sku", "B", "price", "1") == 2
+
+        result = client.execute_command(
+            "FT.SEARCH", "idxcompat", "@sku:{B}", "NOCONTENT"
+        )
+        assert result[0] == 1
+        assert result[1] == b"p:2"
+
+        # UNF ordering is raw bytes, so uppercase 'B' precedes lowercase 'a'.
+        result = client.execute_command(
+            "FT.SEARCH", "idxcompat", "@price:[0 10]",
+            "SORTBY", "sku", "ASC", "NOCONTENT",
+        )
+        assert result[0] == 2
+        assert result[1] == b"p:2"
+        assert result[2] == b"p:1"
+
+    def test_unf_without_sortable_rejected(self):
+        """A bare UNF is not valid RediSearch syntax and must still fail."""
+        client = self.server.get_new_client()
+        with pytest.raises(valkey.exceptions.ResponseError) as e:
+            client.execute_command(
+                "FT.CREATE", "idxunf", "ON", "HASH",
+                "SCHEMA",
+                "sku", "TAG", "UNF",
+            )
+        assert "UNF" in str(e.value)

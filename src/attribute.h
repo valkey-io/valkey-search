@@ -25,8 +25,14 @@ class IndexSchema;
 class Attribute {
  public:
   Attribute(absl::string_view alias, absl::string_view identifier,
-            std::shared_ptr<indexes::IndexBase> index, uint16_t pos)
-      : alias_(alias), identifier_(identifier), index_(index), position_(pos) {}
+            std::shared_ptr<indexes::IndexBase> index, uint16_t pos,
+            bool sortable = false, bool unf = false)
+      : alias_(alias),
+        identifier_(identifier),
+        index_(index),
+        position_(pos),
+        sortable_(sortable),
+        unf_(unf) {}
   inline const std::string& GetAlias() const { return alias_; }
   inline const std::string& GetIdentifier() const { return identifier_; }
   std::shared_ptr<indexes::IndexBase> GetIndex() const { return index_; }
@@ -35,6 +41,8 @@ class Attribute {
     attribute_proto->set_alias(alias_);
     attribute_proto->set_identifier(identifier_);
     attribute_proto->set_allocated_index(index_->ToProto().release());
+    attribute_proto->set_sortable(sortable_);
+    attribute_proto->set_unf(unf_);
     return attribute_proto;
   }
 
@@ -58,6 +66,8 @@ class Attribute {
   std::shared_ptr<indexes::IndexBase> index_;
   AttributePosition position_{
       UINT16_MAX};  // The attribute position during creation.
+  bool sortable_{false};
+  bool unf_{false};
 };
 
 }  // namespace valkey_search

@@ -95,6 +95,12 @@
         "optional": true
       },
       {
+        "name": "NOHL",
+        "type": "pure-token",
+        "optional": true,
+        "token": "NOHL"
+      },
+      {
         "name": "offsets",
         "type": "oneof",
         "optional": true,
@@ -346,10 +352,22 @@
                 ]
               },
               {
-                "name": "SORTABLE",
+                "name": "sortable",
+                "type": "block",
                 "optional": true,
-                "type": "pure-token",
-                "token": "SORTABLE"
+                "arguments": [
+                  {
+                    "name": "SORTABLE",
+                    "type": "pure-token",
+                    "token": "SORTABLE"
+                  },
+                  {
+                    "name": "UNF",
+                    "type": "pure-token",
+                    "optional": true,
+                    "token": "UNF"
+                  }
+                ]
               }
             ]
           }

@@ -18,6 +18,7 @@ FT.CREATE <index-name>
     [SKIPINITIALSCAN]
     [MINSTEMSIZE <min_stem_size>]
     [WITHOFFSETS | NOOFFSETS]
+    [NOHL]
     [NOSTOPWORDS | STOPWORDS <count> <word> word ...]
     [PUNCTUATION <punctuation>]
     SCHEMA
@@ -27,7 +28,7 @@ FT.CREATE <index-name>
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
                 | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE] [WEIGHT <weight>]
                 | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
-            [SORTABLE]
+            [SORTABLE [UNF]]
         )+
 ```
 
@@ -50,6 +51,8 @@ FT.CREATE <index-name>
 - `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word required for it to be subjected to stemming. The default value is 4.
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
+
+- `NOHL` (optional): In RediSearch this disables the storage of the byte offsets used to highlight matches within a field. Highlighting is not implemented, so this parameter is accepted for compatibility and has no effect. Note that it does not disable the per-word offsets controlled by `NOOFFSETS`, which phrase and slop-based matching require.
 
 - `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: [a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with].
 
@@ -112,7 +115,9 @@ This table shows the actual computation that Search uses when computing the dist
 
 ### Field options
 
-`SORTABLE` (optional): This parameter is accepted for compatibility, but has no effect and is not required.
+`SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
+
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps a sortable field's sort value in its original, un-normalized form rather than lowercased. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
 ## Examples
 

@@ -280,7 +280,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           std::shared_ptr<indexes::IndexBase> index,
           IndexFactory(ctx, res.get(), attribute, std::nullopt));
       VMSDK_RETURN_IF_ERROR(
-          res->AddIndex(attribute.alias(), attribute.identifier(), index));
+          res->AddIndex(attribute.alias(), attribute.identifier(), index,
+                        attribute.sortable(), attribute.unf()));
     }
   }
   // Compiling the FILTER resolves every @reference against the attributes, so
@@ -510,12 +511,14 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
-                                   std::shared_ptr<indexes::IndexBase> index) {
+                                   std::shared_ptr<indexes::IndexBase> index,
+                                   bool sortable, bool unf) {
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
-       Attribute{attribute_alias, identifier, index,
-                 static_cast<AttributePosition>(
-                     attributes_indexed_data_size_.size())}});
+       Attribute{
+           attribute_alias, identifier, index,
+           static_cast<AttributePosition>(attributes_indexed_data_size_.size()),
+           sortable, unf}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
@@ -1865,7 +1868,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               IndexFactory(ctx, index_schema.get(), attribute,
                            supplemental_iter.IterateChunks()));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
-              attribute.alias(), attribute.identifier(), index));
+              attribute.alias(), attribute.identifier(), index,
+              attribute.sortable(), attribute.unf()));
           break;
         }
         case data_model::SupplementalContentType::

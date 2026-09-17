@@ -61,6 +61,8 @@ message Attribute {
   string alias = 1;
   string identifier = 2;
   Index index = 3;
+  bool sortable = 4;
+  bool unf = 5;
 }
 
 message Index {

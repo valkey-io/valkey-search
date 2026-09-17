@@ -18,6 +18,7 @@
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/metrics.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
 #include "vmsdk/src/testing_infra/module.h"
@@ -307,8 +308,14 @@ TEST_F(SchemaManagerTest, TestLoadIndexDuringReplication) {
   section->mutable_index_schema_contents()->CopyFrom(test_index_schema_proto_);
   section->set_supplemental_count(0);
 
+  Metrics::GetStats().rdb_restore_completed_indexes = 0;
   VMSDK_EXPECT_OK(SchemaManager::Instance().LoadIndex(
       &fake_ctx_, std::move(section), SupplementalContentIter(&fake_rdb, 0)));
+
+  // A staged index has had its full RDB payload read, so it counts as restored
+  // even though it is not live for serving yet.
+  EXPECT_EQ(Metrics::GetStats().rdb_restore_completed_indexes, 1);
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfStagedIndexSchemas(), 1);
 
   // Should be staged, but not applied.
   VMSDK_EXPECT_OK(

@@ -25,6 +25,17 @@ enum RDBSectionType {
   RDB_SECTION_UNSET = 0;
   RDB_SECTION_INDEX_SCHEMA = 1;
   RDB_SECTION_GLOBAL_METADATA = 2;
+  RDB_SECTION_SNAPSHOT_INFO = 3;
+}
+
+// Payload-wide facts captured at RDB save time. Unlike the other RDBSection
+// types, this one is owned by the RDB framework itself rather than by a
+// component, and is always written as the first section.
+message SnapshotInfo {
+  // Number of index schemas present when this RDB was written. Readers that
+  // do not find a SnapshotInfo section are loading a pre-SnapshotInfo RDB and
+  // must derive the index count from the section count instead.
+  uint64 num_indexes = 1;
 }
 
 message RDBSection {
@@ -33,6 +44,7 @@ message RDBSection {
   oneof contents {
     IndexSchema index_schema_contents = 3;
     coordinator.GlobalMetadata global_metadata_contents = 4;
+    SnapshotInfo snapshot_info_contents = 5;
   }
 }
 

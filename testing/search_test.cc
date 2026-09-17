@@ -2095,8 +2095,8 @@ TEST_F(ScoreTextQueryTestBase, StemRootLiteralInNoStemFieldNotScored) {
 }
 
 // Same rule with no field named: an unscoped query searches body too, yet
-// stemming stays off there, so `run`/`runs` in body still score nothing. This is
-// the only query shape where "all fields" and "stemming fields" differ.
+// stemming stays off there, so `run`/`runs` in body still score nothing. This
+// is the only query shape where "all fields" and "stemming fields" differ.
 TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
   auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
                                          {"d2", "runs", ""},
@@ -2309,7 +2309,8 @@ TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
   ASSERT_GT(*alzta, *alxta) << "fixture must give the two terms distinct IDFs";
   // Prefix, suffix and fuzzy all expand to both terms; all must pick alzta.
   for (const auto &pattern : {"@body:al*", "@body:*ta", "@body:%alata%"}) {
-    auto scoped = Score(*schema, absl::StrCat(pattern, " @rating:[0 100]"), "d1");
+    auto scoped =
+        Score(*schema, absl::StrCat(pattern, " @rating:[0 100]"), "d1");
     ASSERT_TRUE(scoped.has_value()) << pattern;
     EXPECT_FLOAT_EQ(*scoped, *alzta) << pattern;
     // Pure-text queries score in the iterator instead; same pick expected.

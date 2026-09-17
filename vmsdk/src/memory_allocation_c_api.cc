@@ -61,14 +61,8 @@
 
 #include "absl/base/optimization.h"
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
-
-extern "C" {
-// glibc's fortified realpath. Declared here because <stdlib.h> only exposes it
-// when _FORTIFY_SOURCE is on. Distinct from the realpath defined below, so
-// calling it does not recurse.
-char* __realpath_chk(const char* path, char* resolved, size_t resolved_len);
-}  // extern "C"
 
 // Each definition below must repeat the exception specification of the libc
 // declaration it redefines. glibc declares these noexcept (__THROW); musl
@@ -183,29 +177,18 @@ char* strdup(const char* s) VMSDK_LIBC_NOEXCEPT {
   return copy;
 }
 
-// realpath(path, nullptr) and getcwd(nullptr, 0) return a buffer glibc
+// realpath(path, nullptr) and getcwd(nullptr, 0) return a buffer libc
 // allocated with its own malloc, which free() above would hand to
-// ValkeyModule_Free. Both are reimplemented so the result comes from our
-// allocator instead.
+// ValkeyModule_Free. getcwd is reimplemented so the result comes from our
+// allocator instead; it goes straight to the kernel, since calling the libc
+// function of the same name would bind to this definition and recurse.
 //
-// Neither may call the libc function of the same name: that name binds to the
-// definition here and would recurse. getcwd goes straight to the kernel, and
-// realpath delegates to glibc's fortified entry point, which is a distinct
-// symbol this file does not define. ICU's uprv_tzname already calls
-// __realpath_chk directly with its own buffer, which allocates nothing.
+// realpath(path, nullptr) allocates its result, like getcwd(nullptr, 0), so
+// it is reimplemented for the same reason. The implementation lives in
+// vmsdk::RealPath, where the unit tests can reach it; linked in here, its
+// strdup is the one above, so both forms stay on the module's allocator.
 char* realpath(const char* path, char* resolved_path) VMSDK_LIBC_NOEXCEPT {
-  // __realpath_chk resolves into a caller-provided buffer and __chk_fail()s if
-  // it is smaller than PATH_MAX, which is also what POSIX requires callers of
-  // realpath() to supply. Resolve into our own buffer either way, so a failure
-  // leaves the caller's untouched.
-  char resolved[PATH_MAX];
-  if (__realpath_chk(path, resolved, sizeof(resolved)) == nullptr) {
-    return nullptr;
-  }
-  if (resolved_path != nullptr) {
-    return strcpy(resolved_path, resolved);
-  }
-  return strdup(resolved);
+  return vmsdk::RealPath(path, resolved_path);
 }
 
 char* getcwd(char* buf, size_t size) VMSDK_LIBC_NOEXCEPT {

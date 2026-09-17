@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_UTILS_CANCEL_H_
 
 #include <memory>
+#include <stop_token>
 
 #include "grpcpp/server_context.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -29,7 +30,11 @@ namespace cancel {
 struct Base {
   virtual ~Base() = default;
   virtual bool IsCancelled() = 0;
+  // Cancel may run stop callbacks on this thread.
+  // Do not call it while holding a lock that a callback may need.
+  // Keep callbacks non-blocking.
   virtual void Cancel() = 0;
+  virtual std::stop_token GetStopToken() = 0;
 };
 
 using Token = std::shared_ptr<Base>;

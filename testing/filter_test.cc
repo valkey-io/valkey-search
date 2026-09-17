@@ -11,7 +11,6 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
-#include "src/commands/ft_create_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
@@ -114,8 +113,10 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
   // Add TEXT data for basic tests (exact_term, exact_prefix, proximity, etc.)
   auto key1 = StringInternStore::Intern("key1");
   std::string test_data = "word hello my name is hello how are you doing?";
-  VMSDK_EXPECT_OK(text_index_1->AddRecord(key1, test_data));
-  VMSDK_EXPECT_OK(text_index_2->AddRecord(key1, test_data));
+  VMSDK_EXPECT_OK(text_index_1->AddRecord(
+      key1, AttributeData(vmsdk::MakeUniqueValkeyString(test_data))));
+  VMSDK_EXPECT_OK(text_index_2->AddRecord(
+      key1, AttributeData(vmsdk::MakeUniqueValkeyString(test_data))));
 
   text_index_schema->CommitKeyData(key1);
 }
@@ -1746,6 +1747,84 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,  // "a|b" should match, numeric doesn't
             .key = "key_pipe",
+        },
+        // =================================================================
+        // Field-scoped text group: @field:(a|b|c) — issue #1214
+        // =================================================================
+        {
+            .test_name = "text_field_group_or",
+            .filter = "@text_field1:(word|missing)",
+            .create_success = true,
+            .evaluate_success = true,  // key1 text_field1 contains "word"
+            .key = "key1",
+            .expected_tree_structure =
+                "OR{\n"
+                "  TEXT-TERM(\"word\", field_mask=1)\n"
+                "  TEXT-TERM(\"missing\", field_mask=1)\n"
+                "}\n",
+        },
+        {
+            .test_name = "text_field_group_single_term",
+            .filter = "@text_field1:(word)",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure = "TEXT-TERM(\"word\", field_mask=1)\n",
+        },
+        {
+            .test_name = "text_field_group_scopes_field",
+            // Bare terms inside the group are scoped to text_field1 (mask=1),
+            // not all text fields (mask=3).
+            .filter = "@text_field2:(word)",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure = "TEXT-TERM(\"word\", field_mask=2)\n",
+        },
+        {
+            .test_name = "text_field_group_and",
+            .filter = "@text_field1:(hello name)",
+            .create_success = true,
+            .evaluate_success = true,  // both words present in text_field1
+            .key = "key1",
+            .expected_tree_structure = "AND{\n"
+                                       "  TEXT-TERM(\"hello\", field_mask=1)\n"
+                                       "  TEXT-TERM(\"name\", field_mask=1)\n"
+                                       "}\n",
+        },
+        {
+            // A leading field-scoped group followed by an AND term must stay a
+            // nested subtree, not flatten into one AND (regression for the
+            // no_prev_grp handling in the @field:(...) branch).
+            .test_name = "text_field_group_then_and_term",
+            .filter = "@text_field1:(hello word) @text_field2:name",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key1",
+            .expected_tree_structure =
+                "AND{\n"
+                "  AND{\n"
+                "    TEXT-TERM(\"hello\", field_mask=1)\n"
+                "    TEXT-TERM(\"word\", field_mask=1)\n"
+                "  }\n"
+                "  TEXT-TERM(\"name\", field_mask=2)\n"
+                "}\n",
+        },
+        {
+            .test_name = "text_field_group_inner_field_modifier_rejected",
+            // A field modifier inside a field-scoped group is a syntax error,
+            // matching RediSearch.
+            .filter = "@text_field1:(word | @text_field2:hello)",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected character at position 22: `@`",
+        },
+        {
+            .test_name = "text_field_group_empty",
+            .filter = "@text_field1:()",
+            .create_success = false,
+            .create_expected_error_message =
+                "Empty brackets detected at Position: 14",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

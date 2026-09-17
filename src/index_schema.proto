@@ -41,6 +41,7 @@ message IndexSchema {
   uint32 min_stem_size = 12;
   bool skip_initial_scan = 13;
   optional string score_field = 14;
+  optional string filter = 15;
 }
 
 
@@ -106,6 +107,8 @@ enum DistanceMetric {
 enum VectorDataType {
   VECTOR_DATA_TYPE_UNSPECIFIED = 0;
   VECTOR_DATA_TYPE_FLOAT32 = 1;
+  VECTOR_DATA_TYPE_FLOAT16 = 2;
+  VECTOR_DATA_TYPE_BFLOAT16 = 3;
 }
 
 message HNSWAlgorithm {

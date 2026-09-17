@@ -1252,6 +1252,43 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # result = client.execute_command("FT.SEARCH", "idx", '-@content:"manager" @skills:{python}')
         # assert (result[0], result[1]) == (1, b"doc:1")
 
+    def test_zero_length_hash_key_is_indexed(self):
+        client: Valkey = self.server.get_new_client()
+
+        client.execute_command("HSET", "", "content", "backfilltoken")
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "",
+            "SCHEMA", "content", "TEXT", "NOSTEM"
+        )
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command("FT.SEARCH", "idx", "@content:backfilltoken")
+        assert result[0] == 1
+        assert result[1] == b""
+        assert dict(zip(result[2][::2], result[2][1::2])) == {
+            b"content": b"backfilltoken"
+        }
+
+        client.execute_command("HSET", "", "content", "livetoken")
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@content:livetoken", "NOCONTENT"
+            )[0] == 1
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@content:backfilltoken", "NOCONTENT"
+            )[0] == 0
+        )
+
+        result = client.execute_command("FT.SEARCH", "idx", "@content:livetoken")
+        assert result[0] == 1
+        assert result[1] == b""
+        assert dict(zip(result[2][::2], result[2][1::2])) == {
+            b"content": b"livetoken"
+        }
+
     def test_nooffsets_option(self):
         """
         Test FT.CREATE NOOFFSETS option disables offsets storage

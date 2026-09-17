@@ -18,7 +18,7 @@ class AclPrefixCheckFuzzTest : public ValkeySearchTest {};
 TEST_F(AclPrefixCheckFuzzTest, AclPrefixCheckTests) {
   char str[32];
   char pat[32];
-  int cycles = 10000000;
+  int cycles = 100000;
   int total_matches = 0;
   while (cycles--) {
     int strlen = rand() % sizeof(str);

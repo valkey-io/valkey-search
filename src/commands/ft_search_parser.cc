@@ -104,15 +104,10 @@ absl::Status Verify(query::SearchParameters &parameters) {
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
+  // An unused PARAM is allowed (matching RediSearch, which does not check
+  // whether a declared parameter is referenced). Tear down parse_vars to avoid
+  // dangling pointers into the argument buffer.
+  parameters.parse_vars.ClearAtEndOfParse();
   return absl::OkStatus();
 }
 
@@ -332,15 +327,10 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
-  // Validate all parameters used, nuke the map to avoid dangling pointers
-  while (!parameters.parse_vars.params.empty()) {
-    auto begin = parameters.parse_vars.params.begin();
-    if (begin->second.first == 0) {
-      return absl::NotFoundError(
-          absl::StrCat("Parameter `", begin->first, "` not used."));
-    }
-    parameters.parse_vars.params.erase(begin);
-  }
+  // An unused PARAM is allowed (matching RediSearch, which does not check
+  // whether a declared parameter is referenced). Tear down parse_vars to avoid
+  // dangling pointers into the argument buffer.
+  parameters.parse_vars.ClearAtEndOfParse();
   return absl::OkStatus();
 }
 

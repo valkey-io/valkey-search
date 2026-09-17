@@ -38,7 +38,7 @@ class TestFlushAllCMD(ValkeySearchTestCaseBase):
         for client in clients:
             index.create(client)
             index.load_data(client, 100)
-            assert 100 == index.info(client).num_docs
+            waiters.wait_for_equal(lambda: index.info(client).num_docs, 100)
 
         clients[0].execute_command("FLUSHALL SYNC")
 

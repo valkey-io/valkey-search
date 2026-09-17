@@ -640,26 +640,39 @@ SchemaManager::AccumulateIndexSchemaResults(
   return total_cnt;
 }
 
-void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
+void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx, int dbnum) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  int selected_db = ValkeyModule_GetSelectedDb(ctx);
-  if (!db_to_index_schemas_.contains(selected_db)) {
+  if (dbnum != -1) {
+    FlushDBIndexSchemas(ctx, dbnum);
+    return;
+  }
+  std::vector<uint32_t> db_nums;
+  db_nums.reserve(db_to_index_schemas_.size());
+  for (const auto &[db_num, _] : db_to_index_schemas_) {
+    db_nums.push_back(db_num);
+  }
+  for (auto db_num : db_nums) {
+    FlushDBIndexSchemas(ctx, static_cast<int>(db_num));
+  }
+}
+
+void SchemaManager::FlushDBIndexSchemas(ValkeyModuleCtx *ctx, int db_num) {
+  if (!db_to_index_schemas_.contains(db_num)) {
     return;
   }
 
-  auto to_delete = GetIndexSchemasInDBInternal(selected_db);
-  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on FLUSHDB of DB "
-                         << selected_db;
+  auto to_delete = GetIndexSchemasInDBInternal(db_num);
+  VMSDK_LOG(NOTICE, ctx) << "Deleting index schema on FLUSHDB of DB " << db_num;
   absl::once_flag log_recreate_once;
   for (const auto &name : to_delete) {
     VMSDK_LOG(DEBUG, ctx) << "Deleting index schema "
                           << vmsdk::config::RedactIfNeeded(name)
-                          << " on FLUSHDB of DB " << selected_db;
-    auto old_schema = RemoveIndexSchemaInternal(selected_db, name);
+                          << " on FLUSHDB of DB " << db_num;
+    auto old_schema = RemoveIndexSchemaInternal(db_num, name);
     if (!old_schema.ok()) {
       VMSDK_LOG(WARNING, ctx) << "Unable to delete index schema "
                               << vmsdk::config::RedactIfNeeded(name)
-                              << " on FLUSHDB of DB " << selected_db;
+                              << " on FLUSHDB of DB " << db_num;
       continue;
     }
     if (coordinator_enabled_) {
@@ -668,17 +681,17 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
       // FT.DROPINDEX must be done explicitly.
       absl::call_once(log_recreate_once, [&]() {
         VMSDK_LOG(NOTICE, ctx)
-            << "Recreating index schema on FLUSHDB of DB " << selected_db;
+            << "Recreating index schema on FLUSHDB of DB " << db_num;
       });
       auto to_add = old_schema.value()->ToProto();
       VMSDK_LOG(DEBUG, ctx)
           << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
-          << " on FLUSHDB of DB " << selected_db;
+          << " on FLUSHDB of DB " << db_num;
       auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
       if (!add_status.ok()) {
         VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
                                 << vmsdk::config::RedactIfNeeded(name)
-                                << " on FLUSHDB of DB " << selected_db;
+                                << " on FLUSHDB of DB " << db_num;
       }
     }
     // Move expensive destruction (radix trees, posting lists, per-key indexes)
@@ -876,8 +889,14 @@ absl::Status SchemaManager::LoadIndex(
 void SchemaManager::OnFlushEndDBCallback(ValkeyModuleCtx *ctx,
                                          [[maybe_unused]] ValkeyModuleEvent eid,
                                          [[maybe_unused]] uint64_t subevent,
-                                         [[maybe_unused]] void *data) {
-  SchemaManager::Instance().OnFlushDBEnded(ctx);
+                                         void *data) {
+  auto *flush_info = static_cast<ValkeyModuleFlushInfo *>(data);
+  if (flush_info == nullptr) {
+    VMSDK_LOG(WARNING, ctx)
+        << "FLUSHDB event without flush info, assuming all databases";
+  }
+  SchemaManager::Instance().OnFlushDBEnded(ctx,
+                                           flush_info ? flush_info->dbnum : -1);
 }
 
 void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,

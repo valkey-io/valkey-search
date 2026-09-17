@@ -54,16 +54,16 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
         self._create(client)
 
         plain = attribute_of(client, "idx", "plain")
-        assert b"sortable" not in plain
-        assert b"unf" not in plain
+        assert b"SORTABLE" not in plain
+        assert b"UNF" not in plain
 
         sorted_attr = attribute_of(client, "idx", "sorted")
-        assert sorted_attr[b"sortable"] == b"1"
-        assert b"unf" not in sorted_attr
+        assert sorted_attr[b"SORTABLE"] == b"1"
+        assert b"UNF" not in sorted_attr
 
         unf_attr = attribute_of(client, "idx", "unsorted_form")
-        assert unf_attr[b"sortable"] == b"1"
-        assert unf_attr[b"unf"] == b"1"
+        assert unf_attr[b"SORTABLE"] == b"1"
+        assert unf_attr[b"UNF"] == b"1"
 
     def test_every_attribute_entry_stays_pairwise(self):
         """No bare tokens: each attribute entry must have an even length."""
@@ -80,8 +80,8 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
 
         for alias in ("plain", "sorted", "unsorted_form"):
             attribute = attribute_of(client, "idx", alias)
-            assert b"sortable" not in attribute
-            assert b"unf" not in attribute
+            assert b"SORTABLE" not in attribute
+            assert b"UNF" not in attribute
 
     def test_attribute_pairs_survive_a_reload(self):
         """The flags are persisted on the attribute, not recomputed from argv."""
@@ -90,9 +90,9 @@ class TestFtInfoSortable(ValkeySearchTestCaseDebugMode):
         client.execute_command("DEBUG", "RELOAD")
 
         unf_attr = attribute_of(client, "idx", "unsorted_form")
-        assert unf_attr[b"sortable"] == b"1"
-        assert unf_attr[b"unf"] == b"1"
+        assert unf_attr[b"SORTABLE"] == b"1"
+        assert unf_attr[b"UNF"] == b"1"
 
         sorted_attr = attribute_of(client, "idx", "sorted")
-        assert sorted_attr[b"sortable"] == b"1"
-        assert b"unf" not in sorted_attr
+        assert sorted_attr[b"SORTABLE"] == b"1"
+        assert b"UNF" not in sorted_attr

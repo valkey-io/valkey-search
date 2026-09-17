@@ -729,7 +729,8 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
       index_schema_proto.set_skip_initial_scan(true);
     }
 
-    // Highlighting is not supported, so NOHL is accepted and ignored
+    // Highlighting is not supported, so NOHL is accepted and the match
+    // result deliberately discarded
     VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoHlParam, false, itr));
 
     // Try unsupported field parameters

@@ -28,11 +28,11 @@ int Attribute::RespondWithInfo(ValkeyModuleCtx* ctx,
       [&]() {
         int emitted = 0;
         if (sortable_) {
-          ValkeyModule_ReplyWithSimpleString(ctx, "sortable");
+          ValkeyModule_ReplyWithSimpleString(ctx, "SORTABLE");
           ValkeyModule_ReplyWithSimpleString(ctx, "1");
           emitted += 2;
           if (unf_) {
-            ValkeyModule_ReplyWithSimpleString(ctx, "unf");
+            ValkeyModule_ReplyWithSimpleString(ctx, "UNF");
             ValkeyModule_ReplyWithSimpleString(ctx, "1");
             emitted += 2;
           }

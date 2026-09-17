@@ -821,6 +821,26 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             // Redis accepts NOHL in any pre-SCHEMA position, and twice.
+             .test_name = "nohl_accepted_in_any_position_and_repeated",
+             .success = true,
+             .command_str = "idx1 on HASH PREFIX 1 p: NOHL SKIPINITIALSCAN NOHL "
+                            "SCHEMA hash_field1 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .prefixes = {"p:"},
+                          .skip_initial_scan = true,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
              .test_name = "unf_without_sortable_is_rejected",
              .success = false,
              .command_str = "idx1 on HASH SCHEMA sku TAG UNF",

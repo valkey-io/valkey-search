@@ -10,9 +10,8 @@
 
 #include <cstddef>
 #include <cstdlib>
-#include <type_traits>
 
-#include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // VMSDK_USE_VALKEY_ALLOC_OVERRIDES is defined when this build routes the
 // module's heap through ValkeyModule_Alloc/Free. When it is not defined, the
@@ -41,64 +40,48 @@
 #define VMSDK_USE_VALKEY_ALLOC_OVERRIDES 1
 #endif
 
-#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
-extern "C" {
-// glibc's allocator, reached by name so that it is not captured by the module's
-// own malloc/free (see memory_allocation_c_api.cc). Used by RawSystemAllocator
-// below.
-void* __libc_malloc(size_t size);
-void __libc_free(void* ptr);
-}  // extern "C"
-#endif  // VMSDK_USE_VALKEY_ALLOC_OVERRIDES
-
 namespace vmsdk {
 
-// The system allocator, named so that the module's own malloc/free cannot
-// capture it. Where the module does not define those (sanitizer builds, macOS)
-// the plain names already are the system allocator, and __libc_malloc does not
-// exist outside glibc.
+// An allocation that is never reported to the memory accounting, which is what
+// makes it safe to use from inside the accounting itself.
+//
+// The module defines malloc, and every call to it reports, so the counters
+// cannot use malloc without re-entering themselves. ValkeyModule_Alloc is the
+// same heap without the reporting, so it breaks that cycle.
+//
+// It is always established by the time this runs. In the module the only path
+// here is from inside the module's own malloc, which has just called it, and
+// static initializers are deferred until after the allocator switch (see
+// vmsdk/deferred_init.lds). In the unit tests, which link this without the
+// module's malloc, vmsdk/src/testing_infra/module.h installs a plain
+// malloc-backed implementation before main -- late enough to need no
+// allocation during static initialization, which is why ShardedAtomic's
+// containers carry inline capacity.
 inline void* RawSystemMalloc(std::size_t size) {
-#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
-  return __libc_malloc(size);
-#else
-  return std::malloc(size);
-#endif
+  return ValkeyModule_Alloc(size);
 }
 
-inline void RawSystemFree(void* ptr) {
-#ifdef VMSDK_USE_VALKEY_ALLOC_OVERRIDES
-  __libc_free(ptr);
-#else
-  std::free(ptr);
-#endif
-}
+inline void RawSystemFree(void* ptr) { ValkeyModule_Free(ptr); }
 
 }  // namespace vmsdk
 
 namespace vmsdk {
 
-struct DisableRawSystemAllocatorReporting {
-};  // Pass this (or void) to DISABLE reporting
-
-// RawSystemAllocator allocates straight from glibc, bypassing both the Valkey
-// allocator and the memory accounting.
+// RawSystemAllocator allocates without reporting to the memory accounting.
 //
 // This is not an optimization and it cannot be replaced with std::allocator.
 // The accounting counters are themselves ShardedAtomics, so
 // ReportAllocMemorySize -> ShardedAtomic::Add allocates: it constructs a
 // thread_local ThreadLocalNode, whose constructor registers it in a vector, and
 // it grows that node's value array under resize_mutex. Route those allocations
-// through the module allocator and each one calls ReportAllocMemorySize again,
+// through a reporting allocator and each one calls ReportAllocMemorySize again,
 // re-entering either a thread_local's own initialization or a non-reentrant
 // absl::Mutex. Tried it: the module hangs on a futex during load, accumulating
 // no CPU time, before the server ever accepts connections.
 //
-// Allocating from Valkey but skipping the accounting would break the cycle too,
-// but ShardedAtomic is also linked into the unit test executables, where
-// ValkeyModule_Alloc is a mock that is unset until a fixture installs it. Going
-// straight to glibc is what keeps this allocator independent of everything it
-// underpins.
-template <typename T, typename Tag = void>
+// Reporting is not optional here, which is why there is no knob for it: an
+// instance that reported would be exactly the cycle above.
+template <typename T>
 struct RawSystemAllocator {
   // NOLINTNEXTLINE
   typedef T value_type;
@@ -108,18 +91,10 @@ struct RawSystemAllocator {
   constexpr RawSystemAllocator(const RawSystemAllocator<U>&) noexcept {}
   // NOLINTNEXTLINE
   T* allocate(std::size_t n) {
-    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportAllocMemorySize(n * sizeof(T));
-    }
     return static_cast<T*>(RawSystemMalloc(n * sizeof(T)));
   }
   // NOLINTNEXTLINE
-  void deallocate(T* p, std::size_t) {
-    if constexpr (!std::is_same_v<Tag, DisableRawSystemAllocatorReporting>) {
-      ReportFreeMemorySize(sizeof(T));
-    }
-    RawSystemFree(p);
-  }
+  void deallocate(T* p, std::size_t) { RawSystemFree(p); }
 };
 
 }  // namespace vmsdk

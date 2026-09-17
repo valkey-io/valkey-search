@@ -16,6 +16,7 @@
 
 #include "absl/base/no_destructor.h"
 #include "absl/base/thread_annotations.h"
+#include "absl/container/inlined_vector.h"
 #include "absl/synchronization/mutex.h"
 #include "vmsdk/src/memory_allocation_overrides.h"
 
@@ -122,7 +123,8 @@ class ShardedAtomic {
     // as a SIGSEGV in exit() after every test has passed.
     //
     // NoDestructor also keeps the initialization off the heap: a new here
-    // would allocate, and this registry underpins the allocation accounting.
+    // would allocate through the module allocator, which reports the
+    // allocation, which reaches this function again.
     static CounterRegistry &Instance() {
       static absl::NoDestructor<CounterRegistry> instance;
       return *instance;
@@ -204,17 +206,25 @@ class ShardedAtomic {
     }
 
    private:
+    // Inline capacity, so that constructing a ShardedAtomic allocates nothing.
+    // Every instance's constructor calls AllocateIndex, which appends to
+    // retired_totals_, and the instances that matter are globals -- so without
+    // this, the first allocation of the process happens during static
+    // initialization, before anything has established an allocator. Eight
+    // covers the three counters the module defines today with room to spare;
+    // beyond that these grow on the heap as before, by which time the
+    // allocator is in place.
+    static constexpr size_t kInlineCapacity = 8;
+
     mutable absl::Mutex mutex_;
-    std::vector<ThreadLocalNode *,
-                RawSystemAllocator<ThreadLocalNode *,
-                                   DisableRawSystemAllocatorReporting>>
+    absl::InlinedVector<ThreadLocalNode *, kInlineCapacity,
+                        RawSystemAllocator<ThreadLocalNode *>>
         nodes_ ABSL_GUARDED_BY(mutex_);
 
-    std::vector<T, RawSystemAllocator<T, DisableRawSystemAllocatorReporting>>
+    absl::InlinedVector<T, kInlineCapacity, RawSystemAllocator<T>>
         retired_totals_ ABSL_GUARDED_BY(mutex_);
 
-    std::vector<size_t,
-                RawSystemAllocator<size_t, DisableRawSystemAllocatorReporting>>
+    absl::InlinedVector<size_t, kInlineCapacity, RawSystemAllocator<size_t>>
         free_indices_ ABSL_GUARDED_BY(mutex_);
 
     size_t next_index_ ABSL_GUARDED_BY(mutex_){0};
@@ -271,8 +281,7 @@ ShardedAtomic<T>::ThreadLocalNode::~ThreadLocalNode() {
   node_destroyed_ = true;
   CounterRegistry::Instance().Unregister(this);
   if (values) {
-    RawSystemAllocator<std::atomic<T>, DisableRawSystemAllocatorReporting>
-        alloc;
+    RawSystemAllocator<std::atomic<T>> alloc;
     alloc.deallocate(values, capacity);
   }
 }
@@ -291,7 +300,7 @@ void ShardedAtomic<T>::ThreadLocalNode::EnsureCapacity(size_t min_capacity) {
   size_t new_capacity =
       std::max(capacity * 2, std::max(min_capacity, (size_t)64));
 
-  RawSystemAllocator<std::atomic<T>, DisableRawSystemAllocatorReporting> alloc;
+  RawSystemAllocator<std::atomic<T>> alloc;
   std::atomic<T> *new_values = alloc.allocate(new_capacity);
 
   for (size_t i = 0; i < capacity; ++i) {

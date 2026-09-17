@@ -42,6 +42,7 @@ constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
 constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
 constexpr absl::string_view kInternalUpdateCommand{"FT.INTERNAL_UPDATE"};
+constexpr absl::string_view kExplainCliCommand{"FT.EXPLAINCLI"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -57,6 +58,8 @@ const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
     kSearchCategory, kSlowCategory, kAdminCategory, kDangerousCategory};
+const absl::flat_hash_set<absl::string_view> kExplainCliCmdPermissions{
+    kSearchCategory, kReadCategory, kFastCategory};
 
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
@@ -82,6 +85,8 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
 absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
                                  ValkeyModuleString **argv, int argc);
+absl::Status FTExplainCliCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+                             int argc);
 
 //
 // Common stuff for FT.SEARCH and FT.AGGREGATE command

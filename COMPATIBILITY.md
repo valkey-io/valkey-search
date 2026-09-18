@@ -20,21 +20,11 @@ The following are explicitly **not** goals of Valkey Search compatibility with R
 
 **Security Architecture.** Valkey Search security architecture is somewhat more restrictive than Redisearch. Valkey Search enforces a user's ACL keyspace restrictions on query operations (FT.SEARCH, FT.AGGREGATE), while Redisearch does not.
 
-## Compatibility Version Mapping
-
-To validate compatibility where it's expected, identical requests are sent to Valkey Search and Redisearch and the responses are compared for equality. Both Valkey and Redis projects promise not to make breaking changes within a major version, which provides a simple mapping from Valkey Search version to Redis major version as long as all parties adhere to their promise. Valkey Search doesn't follow the same release cadence as Redisearch, so breaking Redisearch changes will not be reflected as the default in Valkey Search until the next major version release. Breaking changes may be brought in to a minor or patch release behind a gate with the existing behaviour preserved as the default, like was done for 1.3. Users can manually opt in to the breaking changes early via a config (see [Sunsetting of Incompatible Behavior](COMPATIBILITY.md#sunsetting-of-incompatible-behavior)).
-
-| Valkey Search version | Compatibility target            |
-| --------------------- | ------------------------------- |
-| 1.3                   | Redis 8                         |
-| 1.2                   | RediSearch 2                    |
-| < 1.2                 | Unspecified (manual validation) |
-
 ## Expected Compatibility
 
 This section describes the areas where Valkey Search intends to behave the same as Redisearch from an application's point of view. **Observable differences in these areas are considered bugs.** If an application written against Redisearch produces different results, fails where it previously succeeded, or succeeds where it previously failed in any of the following dimensions, that is a defect in Valkey Search and should be reported as such.
 
-The contract applies only to Redisearch Dialect 2 with features that Valkey Search actually implements. Valkey Search may not include every feature of Redisearch. An application that attempts to use a Redisearch feature Valkey Search does not support will receive an error — typically indicating that the command, option, field type, or query construct is not recognized or not implemented. That error is the intended behavior and is **not** a compatibility bug. The supported surface may also _exceed_ Redisearch: Valkey Search may add new syntax and commands, or accept combinations of existing elements that Redisearch rejects (see [Extensions](#extensions) below). The authoritative source for which features are supported is the Valkey Search documentation and the release notes for the specific release of Valkey Search being deployed; those should be consulted to determine the supported surface.
+The contract applies only to features that Valkey Search actually implements. Valkey Search may not include every feature of Redisearch. An application that attempts to use a Redisearch feature Valkey Search does not support will receive an error — typically indicating that the command, option, field type, or query construct is not recognized or not implemented. That error is the intended behavior and is **not** a compatibility bug. The supported surface may also _exceed_ Redisearch: Valkey Search may add new syntax and commands, or accept combinations of existing elements that Redisearch rejects (see [Extensions](#extensions) below). The authoritative source for which features are supported is the Valkey Search documentation and the release notes for the specific release of Valkey Search being deployed; those should be consulted to determine the supported surface.
 
 ### Command and argument syntax
 

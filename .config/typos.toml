@@ -5,8 +5,7 @@ ignore-hidden = true
 extend-exclude = [
     "third_party/snowball/**",
     "third_party/icu/**",
-    "src/indexes/text/rax/**",
-    "rfc/multi-language-support.md"
+    "src/indexes/text/rax/**"
 ]
 
 [default]

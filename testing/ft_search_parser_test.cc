@@ -736,11 +736,15 @@ INSTANTIATE_TEST_SUITE_P(
                 "argument is missing",
         },
         {
-            .test_name = "extra_blob",
-            .success = false,
+            // An unused PARAM is tolerated (RediSearch does not require every
+            // declared parameter to be referenced), so EXTRABLOB going unused
+            // is not an error.
+            .test_name = "extra_blob_unused_is_ok",
+            .success = true,
             .params_str = " PARAMS 4 EXTRABLOB 123",
             .filter_str = " * => [KNN 10 @vec $BLOB]",
-            .expected_error_message = "Parameter `EXTRABLOB` not used.",
+            .attribute_alias = "vec",
+            .k = 10,
         },
         {
             .test_name = "duplicate_blob",

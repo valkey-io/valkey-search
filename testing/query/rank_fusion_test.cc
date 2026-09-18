@@ -14,8 +14,10 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -60,6 +62,46 @@ std::optional<double> AliasScore(const indexes::Neighbor& n,
   }
   auto sv = vmsdk::ToStringView(it->second.value.get());
   return std::stod(std::string(sv));
+}
+
+// Add an attribute to a neighbor the way the content producers do: the map key
+// is a string_view into the identifier the mapped value itself owns.
+void AddAttribute(indexes::Neighbor& n, absl::string_view identifier,
+                  absl::string_view value) {
+  if (!n.attribute_contents.has_value()) {
+    n.attribute_contents.emplace();
+  }
+  auto id_str = vmsdk::MakeUniqueValkeyString(identifier);
+  auto val_str = vmsdk::MakeUniqueValkeyString(value);
+  auto id_view = vmsdk::ToStringView(id_str.get());
+  n.attribute_contents->emplace(
+      id_view, RecordsMapValue(std::move(id_str), std::move(val_str)));
+}
+
+// A RecordsMap key must be a string_view into the bytes its own mapped value
+// owns. Checks the pointers, not just the text: a key left behind by an
+// overwrite that replaced the value in place would still compare equal by
+// content while pointing at freed memory.
+void ExpectKeysViewOwnIdentifiers(const indexes::Neighbor& n) {
+  ASSERT_TRUE(n.attribute_contents.has_value());
+  for (const auto& [key, value] : *n.attribute_contents) {
+    auto owned = vmsdk::ToStringView(value.GetIdentifier());
+    EXPECT_EQ(key.data(), owned.data())
+        << "key `" << key << "` does not view its own value's identifier";
+    EXPECT_EQ(key, owned);
+  }
+}
+
+std::optional<std::string> AttributeValue(const indexes::Neighbor& n,
+                                          absl::string_view identifier) {
+  if (!n.attribute_contents.has_value()) {
+    return std::nullopt;
+  }
+  auto it = n.attribute_contents->find(identifier);
+  if (it == n.attribute_contents->end()) {
+    return std::nullopt;
+  }
+  return std::string(vmsdk::ToStringView(it->second.value.get()));
 }
 
 // vmsdk::ValkeyTest::SetUp installs the mock module-API table. Required
@@ -204,6 +246,33 @@ TEST_F(RRFTest, ScoreAliasPropagatesPerArmDistance) {
   ASSERT_NE(doc2, nullptr);
   EXPECT_TRUE(AliasScore(*doc2, "search_score").has_value());
   EXPECT_FALSE(AliasScore(*doc2, "vec_score").has_value());
+}
+
+// A neighbor can arrive at fusion already carrying a database field whose
+// identifier equals the arm's score_alias (the cluster path brings full
+// document content into fusion). The requested score must win, and the map
+// must stay well-formed: overwriting in place would leave the surviving key
+// pointing at the freed identifier of the value it replaced.
+TEST_F(RRFTest, ScoreAliasOverwritesCollidingAttribute) {
+  auto arm0 = Vec(N("doc:1", 0.5f));
+  AddAttribute(arm0[0], "search_score", "from_database");
+  AddAttribute(arm0[0], "title", "hello");
+  std::vector<ArmInput> arms;
+  arms.push_back({.neighbors = &arm0,
+                  .score_alias = std::string("search_score"),
+                  .rrf_constant = 60,
+                  .window = 0});
+  auto fused = RRF(std::move(arms));
+  ASSERT_EQ(fused.size(), 1u);
+  const auto* doc1 = Find(fused, "doc:1");
+  ASSERT_NE(doc1, nullptr);
+  ASSERT_TRUE(doc1->attribute_contents.has_value());
+  // The colliding field was replaced, not duplicated or dropped.
+  EXPECT_EQ(doc1->attribute_contents->size(), 2u);
+  EXPECT_EQ(AttributeValue(*doc1, "title"), "hello");
+  ASSERT_TRUE(AliasScore(*doc1, "search_score").has_value());
+  EXPECT_NEAR(*AliasScore(*doc1, "search_score"), 0.5, 1e-6);
+  ExpectKeysViewOwnIdentifiers(*doc1);
 }
 
 TEST_F(RRFTest, DeterministicTieBreakByExternalId) {

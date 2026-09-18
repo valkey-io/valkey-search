@@ -209,7 +209,19 @@ void RestoreAliases(std::vector<indexes::Neighbor> &neighbors,
       // the content fetch already populated. The user explicitly asked for the
       // score under this alias, so it must win — overwrite rather than emplace
       // (which would silently keep the database field and drop the score).
-      n.attribute_contents->insert_or_assign(k, std::move(v));
+      //
+      // Erase-then-emplace, NOT insert_or_assign: a RecordsMap key is a
+      // string_view into the bytes its own mapped value owns (see the
+      // producers in query/search.cc, query/rank_fusion.cc and
+      // attribute_data_type.cc). insert_or_assign would replace the mapped
+      // value — freeing the identifier the surviving key points at — while
+      // keeping that stale key, so every later find()/rehash would read freed
+      // memory. Erasing first drops the old key with its value; the emplaced
+      // key then views the identifier the new value owns. `k` views the
+      // source value's identifier, which the erase does not touch and the
+      // move below preserves, so it stays valid across both calls.
+      n.attribute_contents->erase(k);
+      n.attribute_contents->emplace(k, std::move(v));
     }
   }
 }
@@ -615,30 +627,6 @@ void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   });
 }
 
-// Inline (synchronous, main-thread) variant used by the MULTI/EXEC fast path.
-// Already atomic by virtue of running on the main thread with no concurrent
-// mutations, so it fetches content directly without the re-queue machinery.
-void ResolveFusedContentInline(ValkeyModuleCtx *ctx,
-                               MultiSearchParameters &params,
-                               std::vector<indexes::Neighbor> &fused) {
-  auto saved = SaveAndClearAliases(fused);
-  FusedResolver resolver;
-  resolver.index_schema = params.index_schema;
-  resolver.db_num = params.db_num;
-  if (params.agg != nullptr) {
-    resolver.return_attributes =
-        CopyReturnAttributes(params.agg->return_attributes);
-    resolver.no_content = WantsNoDatabaseContent(*params.agg);
-  }
-  if (!resolver.no_content) {
-    query::ProcessNeighborsForReply(ctx,
-                                    params.index_schema->GetAttributeDataType(),
-                                    fused, resolver, std::nullopt);
-  }
-  RestoreAliases(fused, saved);
-  MarkContentResolved(fused);
-}
-
 }  // namespace query
 
 namespace async {
@@ -694,49 +682,16 @@ absl::Status MultiSearchParameters::ParseAfterIndex(MultiSearchParameters &cmd,
   return ParseFtHybridCommand(cmd, itr);
 }
 
-// Synchronous-fast-path for inside MULTI/EXEC or no-parallel-queries mode.
-// Runs each arm inline on the main thread (no per-arm content resolution),
-// fuses, then resolves content for the fused list once — all on the main
-// thread, so it is inherently atomic — then sends the reply.
+// FT.HYBRID has no synchronous local execution path. Running the arms inline
+// on the main thread skips the machinery that makes a multi-arm reply
+// trustworthy: the per-arm revalidation and rescore against queued mutations
+// (ArmGate + RevalidateArmsBeforeFusion), which the async path performs
+// between fusion and the reply. Rather than carry a second, weaker
+// implementation, the two situations that would take this path are refused.
 absl::Status MultiSearchParameters::ExecuteSyncLocal(
-    ValkeyModuleCtx *ctx, std::unique_ptr<MultiSearchParameters> cmd) {
-  for (auto &arm : cmd->arms) {
-    // The envelope's cancellation token is created after ParseAfterIndex
-    // returns, so every arm is still carrying the null one it copied during
-    // the parse. The async local path and the fanout path both repair this;
-    // without it query::Search dereferences a null shared_ptr on its first
-    // line and takes the server down.
-    arm->cancellation_token = cmd->cancellation_token;
-    // Uncapped for the reason the async path uncaps (see
-    // PerformMultiSearchLocalAsync): fusion needs each arm's full match set,
-    // and the aggregate pipeline's LIMIT is what bounds the reply. Left at the
-    // per-arm default this path answers the same query with fewer rows than
-    // the async one.
-    arm->limit.first_index = 0;
-    arm->limit.number = std::numeric_limits<uint64_t>::max();
-    // Run the index search only; defer the database content fetch until after
-    // fusion so the multi-arm result is validated as a unit.
-    arm->no_content = true;
-    auto s = query::Search(*arm, query::SearchMode::kLocal);
-    if (!s.ok()) {
-      ValkeyModule_ReplyWithError(ctx, s.message().data());
-      ++Metrics::GetStats().query_failed_requests_cnt;
-      return absl::OkStatus();
-    }
-    cmd->per_arm_results.push_back(std::move(arm->search_result));
-  }
-  if (!cmd->enable_partial_results && cmd->cancellation_token &&
-      cmd->cancellation_token->IsCancelled()) {
-    ValkeyModule_ReplyWithError(ctx,
-                                "Search operation cancelled due to timeout");
-    ++Metrics::GetStats().query_failed_requests_cnt;
-    return absl::OkStatus();
-  }
-  auto fused = query::BuildFusedNeighbors(*cmd);
-  query::ResolveFusedContentInline(ctx, *cmd, fused);
-  cmd->search_result.neighbors = std::move(fused);
-  query::RunAggregateReply(ctx, *cmd);
-  return absl::OkStatus();
+    [[maybe_unused]] ValkeyModuleCtx *ctx,
+    [[maybe_unused]] std::unique_ptr<MultiSearchParameters> cmd) {
+  return absl::InvalidArgumentError(kSyncLocalUnsupportedMsg);
 }
 
 absl::Status MultiSearchParameters::DispatchLocalAsync(

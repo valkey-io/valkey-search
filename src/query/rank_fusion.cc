@@ -56,6 +56,18 @@ void AttachArmScore(indexes::Neighbor& n, const std::string& alias,
   // owned identifier_str's bytes for lifetime safety. The existing
   // RecordsMapValue stores the identifier internally; we use that as the key.
   auto identifier_view = vmsdk::ToStringView(identifier_str.get());
+  // The neighbor may already carry an attribute under this name (on the
+  // cluster path a shard response brings full document content into fusion).
+  // The user asked for the score under this alias, so it wins: erase the old
+  // entry, then emplace.
+  //
+  // Erase-then-emplace, NOT insert_or_assign: a RecordsMap key is a
+  // string_view into the bytes its own mapped value owns. insert_or_assign
+  // would replace the mapped value — freeing the identifier the surviving key
+  // points at — while keeping that stale key, leaving a dangling key that
+  // later find()/rehash reads. `identifier_view` points into identifier_str,
+  // which this call just built and the erase does not touch.
+  n.attribute_contents->erase(identifier_view);
   n.attribute_contents->emplace(
       identifier_view,
       RecordsMapValue(std::move(identifier_str), std::move(value_str)));

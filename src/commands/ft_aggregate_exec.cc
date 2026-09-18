@@ -1107,6 +1107,17 @@ absl::Status CreateRecordsFromNeighbors(
       //    corruption in #1251 went undetected into an out-of-bounds write.
       CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
       for (size_t i = 0; i < rec->fields_.size(); ++i) {
+        // The score column is already written, and an explicitly named score
+        // beats a database field of the same name: `LOAD *` over a document
+        // that happens to carry a field called `__score` (or whatever
+        // YIELD_SCORE_AS named the column) must not overwrite the score with
+        // it. Step 2 below drops the losing value rather than emitting it as
+        // a second column, because `record_identifiers_` holds the score's
+        // name. Only a vector query has a score column at `scores_index`;
+        // otherwise `scores_index` is 0, which is the key's slot.
+        if (parameters.IsVectorQuery() && i == scores_index) {
+          continue;
+        }
         const auto &info = parameters.record_info_by_index_[i];
         auto itr = n.attribute_contents->find(info.identifier_);
         if (itr == n.attribute_contents->end()) {

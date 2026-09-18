@@ -10,9 +10,15 @@
 #include <iostream>
 
 #include "gtest/gtest.h"
+#include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/indexes/vector_base.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "testing/common.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace {
 bool IsVerbose() {
@@ -1075,6 +1081,84 @@ TEST_F(AggregateExecTest, RandomSampleParseErrorsTest) {
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
   }
+}
+
+// ---------------------------------------------------------------------
+// The score column beats a stored field of the same name
+// ---------------------------------------------------------------------
+
+// Defined in src/commands/ft_aggregate_exec.cc.
+absl::Status CreateRecordsFromNeighbors(
+    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
+    size_t key_index, size_t scores_index, RecordSet &records);
+
+// StringInternStore::Intern and IndexSchema construction both need the
+// main-thread context this fixture establishes.
+class NeighborRecordTest : public ValkeySearchTest {
+ protected:
+  // A neighbor whose stored content carries a field literally named
+  // `__score`, which is what `LOAD *` fetches and what the score column would
+  // otherwise be overwritten by.
+  static indexes::Neighbor NeighborWithFields(
+      absl::string_view key, float score,
+      const std::vector<std::pair<absl::string_view, absl::string_view>>
+          &fields) {
+    RecordsMap contents;
+    for (const auto &[name, value] : fields) {
+      auto identifier = vmsdk::MakeUniqueValkeyString(name);
+      auto identifier_view = vmsdk::ToStringView(identifier.get());
+      contents.emplace(identifier_view,
+                       RecordsMapValue(std::move(identifier),
+                                       vmsdk::MakeUniqueValkeyString(value)));
+    }
+    return indexes::Neighbor(StringInternStore::Intern(key), score,
+                             std::move(contents));
+  }
+};
+
+TEST_F(NeighborRecordTest, LoadAllDoesNotOverwriteTheScoreColumn) {
+  auto index_schema = CreateVectorHNSWSchema("index_schema_key", &fake_ctx_);
+  ASSERT_TRUE(index_schema.ok()) << index_schema.status();
+
+  AggregateParameters params(0);
+  params.index_schema = *index_schema;
+  // IsVectorQuery() is `!attribute_alias.empty()`, so this is what makes the
+  // score column exist at all.
+  params.attribute_alias = "vector";
+  params.load_key = true;
+  params.loadall_ = true;
+  params.no_content = false;
+  ASSERT_EQ(params.AddRecordAttribute("__key", "__key", "__key",
+                                      indexes::IndexerType::kNone),
+            AggregateParameters::kKeyColumn);
+  ASSERT_EQ(params.AddRecordAttribute("__score", "__score", "__score",
+                                      indexes::IndexerType::kNone),
+            AggregateParameters::kScoreColumn);
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(NeighborWithFields(
+      "doc:1", 0.25f, {{"__score", "stored"}, {"price", "42"}}));
+
+  RecordSet records(&params);
+  VMSDK_EXPECT_OK(CreateRecordsFromNeighbors(
+      neighbors, params, AggregateParameters::kKeyColumn,
+      AggregateParameters::kScoreColumn, records));
+
+  ASSERT_EQ(records.size(), 1);
+  const Record &rec = *records[0];
+  // The distance survives: the fetched `__score` field did not land in the
+  // column.
+  const expr::Value &score = rec.fields_[AggregateParameters::kScoreColumn];
+  ASSERT_TRUE(score.IsDouble()) << "score column holds " << score;
+  EXPECT_DOUBLE_EQ(*score.AsDouble(), 0.25);
+
+  // And the losing value is dropped rather than emitted a second time:
+  // `record_identifiers_` holds `__score`, so step 2 of the conversion skips
+  // it. `price` is not a column, so it does pass through.
+  for (const auto &extra : rec.extra_fields_) {
+    EXPECT_NE(extra.first, "__score");
+  }
+  EXPECT_EQ(rec.extra_fields_.size(), 1);
 }
 
 }  // namespace aggregate

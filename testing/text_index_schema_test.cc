@@ -38,6 +38,7 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   // Stages a stemmed field 0 and commits, as an indexed document would.
   void CommitStemmed(TextIndexSchema &schema, const InternedStringPtr &key,
                      absl::string_view content) {
+    schema.DeleteKeyData(key);
     auto staged = schema.StageAttributeData(key, content, 0, /*stem=*/true,
                                             /*suffix=*/false);
     ASSERT_TRUE(staged.ok());
@@ -86,6 +87,19 @@ TEST_F(TextIndexSchemaTest, StemDistinctDocsDecrementsOnDelete) {
   auto key1 = StringInternStore::Intern("doc1");
   auto key2 = StringInternStore::Intern("doc2");
   CommitStemmed(*schema, key1, "running runs");
+  CommitStemmed(*schema, key2, "runs");
+  ASSERT_EQ(StemDistinctDocs(*schema, "running"), 2);
+
+  // Re-indexing doc2 with another inflection of the same root nets to 2: the
+  // delete decrements and the commit re-increments.
+  CommitStemmed(*schema, key2, "running");
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 2);
+
+  // Re-indexing doc2 off the root decrements without re-incrementing.
+  CommitStemmed(*schema, key2, "hello");
+  EXPECT_EQ(StemDistinctDocs(*schema, "running"), 1);
+
+  // Put doc2 back on the root for the deletion checks below.
   CommitStemmed(*schema, key2, "runs");
   ASSERT_EQ(StemDistinctDocs(*schema, "running"), 2);
 

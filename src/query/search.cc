@@ -439,13 +439,12 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
-  // Same gate as the non-vector drain loop: a solved query's fetchers are exact
-  // rather than candidate generators, so the per-key re-check only repeats work
-  // the fetcher already did -- for text that means a prefix or suffix radix
-  // walk of up to max-term-expansions words, or a stem variant lookup, per
-  // candidate. Only AND with numeric/tag (which keeps just the smallest child's
-  // fetchers) and negation (which scans the universal set) leave work for the
-  // evaluator.
+  // Skip per-key predicate re-evaluation when the query is fully solved by the
+  // entries fetchers and only yields valid keys. The non-vector path only
+  // reaches here for unsolved queries but this check benefits the hybrid
+  // pre-filter path. Note we don't score during this drain on purpose because
+  // the vast majority of keys are expected to be filtered out or miss the
+  // final KNN top-k.
   const bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
                       parameters.filter_parse_results.is_match_all);

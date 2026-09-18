@@ -92,27 +92,6 @@ void MultiSearchTracker::OnArmComplete(
   }
 }
 
-void MultiSearchTracker::SetOuterReaderLock(vmsdk::TimeSlicedMRMWMutex* mutex,
-                                            bool may_prolong) {
-  absl::MutexLock lock(&mu_);
-  outer_mutex_ = mutex;
-  outer_may_prolong_ = may_prolong;
-}
-
-void MultiSearchTracker::ReleaseOuterReaderLock() {
-  vmsdk::TimeSlicedMRMWMutex* mutex = nullptr;
-  bool may_prolong = false;
-  {
-    absl::MutexLock lock(&mu_);
-    mutex = outer_mutex_;
-    may_prolong = outer_may_prolong_;
-    outer_mutex_ = nullptr;
-  }
-  if (mutex != nullptr) {
-    mutex->Unlock(may_prolong, /*ignore_time_quota=*/false);
-  }
-}
-
 void MultiSearchTracker::Finalize() {
   std::unique_ptr<MultiSearchParameters> params;
   absl::Status first_error;
@@ -133,12 +112,6 @@ void MultiSearchTracker::Finalize() {
   if (any_arm_failed_.load() && !params->enable_partial_results) {
     params->search_result.status = first_error;
   }
-  // Release the outer reader lock — every arm has observed a consistent index
-  // snapshot by this point, so writers may now switch in. (Done BEFORE the
-  // user-supplied completion so a slow aggregate pipeline doesn't starve
-  // writers; the post-fusion ResolveContent acquires its own short-lived
-  // contention check independently.)
-  ReleaseOuterReaderLock();
   // Hand off to the user-supplied completion. Production code (Phase 4) runs
   // fusion + the aggregate pipeline + unblocks the client. Tests inspect
   // per_arm_results from inside this callback.
@@ -168,25 +141,31 @@ absl::Status PerformMultiSearchLocalAsync(
   std::vector<std::unique_ptr<MultiArmShim>> arms = std::move(parameters->arms);
   parameters->arms.clear();
   parameters->arms.resize(arm_count);  // keep size() == N for tracker init
-  // Acquire ONE reader lock on the index's time-sliced mutex BEFORE
-  // scheduling any arm. Each arm's own Search() will additionally take its
-  // own reader lock (recursive readers are fine — the mutex just counts), but
-  // this outer lock is what guarantees the mutex stays in read mode for the
-  // entire multi-arm operation. Without it, a writer could time-slice in
-  // between arm A releasing its inner lock and arm B acquiring its own,
-  // producing the "split-arm" inconsistency the user prohibited.
-  // Released in MultiSearchTracker::Finalize after every arm has reported.
-  vmsdk::TimeSlicedMRMWMutex* index_mutex = nullptr;
-  bool index_mutex_may_prolong = false;
-  if (parameters->index_schema != nullptr) {
-    index_mutex = &parameters->index_schema->GetTimeSlicedMutex();
-    index_mutex->ReaderLock(index_mutex_may_prolong,
-                            /*ignore_time_quota=*/false);
-  }
+  // No lock is taken here. Each arm takes its own reader lock on the index's
+  // time-sliced mutex for the duration of its own search, and nothing spans
+  // the arms.
+  //
+  // Cross-arm correctness does not come from a shared index snapshot; it comes
+  // from the post-search validation, after every arm has reported:
+  //   1. ArmGate runs ONE contention check over every (arm, key) probe and
+  //      parks the whole envelope until the mutation queue is quiescent.
+  //   2. RevalidateArmsBeforeFusion then re-checks each neighbor's sequence
+  //      number against the index and drops, re-verifies or rescores it.
+  //   3. Only then does fusion run, followed by a single content fetch.
+  // So an arm's stale entry is corrected, not merely inherited. The one case
+  // this does not cover is a document that became newly-matching between two
+  // arms' searches, which then appears in one arm rather than neither -- and
+  // RevalidateArmsBeforeFusion is explicitly one-directional about exactly
+  // that case already (see its comment: it "deliberately does not do ...
+  // recover a document the mutation made newly matching").
+  //
+  // Do not re-add an outer reader lock spanning the arms. It would deadlock:
+  // TimeSlicedMRMWMutex::Lock is not reentrant, so an arm's inner ReaderLock
+  // enters SwitchWithWait once the read quota has expired with a writer
+  // waiting, and the switch it waits for requires ShouldSwitch(), i.e.
+  // active_lock_count_ == 0 -- which an outer holder blocked on that very arm
+  // guarantees never happens.
   auto tracker = std::make_shared<MultiSearchTracker>(std::move(parameters));
-  if (index_mutex != nullptr) {
-    tracker->SetOuterReaderLock(index_mutex, index_mutex_may_prolong);
-  }
 
   for (size_t i = 0; i < arm_count; ++i) {
     arms[i]->tracker = tracker;

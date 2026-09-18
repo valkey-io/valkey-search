@@ -32,7 +32,6 @@
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/thread_pool.h"
-#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 
 // Forward declarations to avoid circular include with ft_aggregate_parser.h.
 namespace valkey_search::aggregate {
@@ -47,6 +46,15 @@ namespace valkey_search::query {
 // The column FT.HYBRID puts the fused score in when the caller did not name
 // one with COMBINE ... YIELD_SCORE_AS.
 inline constexpr absl::string_view kDefaultOutputScoreName{"__score"};
+
+// FT.HYBRID refuses the synchronous local execution path. Both of its
+// triggers -- MULTI/EXEC or Lua, and a disabled reader thread pool -- are
+// reported with this message; see MultiSearchParameters::ExecuteSyncLocal.
+inline constexpr absl::string_view kSyncLocalUnsupportedMsg{
+    "FT.HYBRID is not supported inside MULTI/EXEC or a Lua script, or when "
+    "the reader thread pool is disabled. Both force synchronous execution, on "
+    "which the per-arm results cannot be revalidated against concurrent "
+    "mutations before they are fused."};
 
 // Configuration for the COMBINE fusion stage. Populated by the FT.HYBRID
 // parser; consumed by `query::rank_fusion::{RRF,Linear,Function}` in
@@ -216,19 +224,8 @@ class MultiSearchTracker
   void OnArmComplete(size_t arm_index, SearchResult &&result,
                      std::unique_ptr<SearchParameters> arm_self);
 
-  // Outer reader lock that spans every arm of this multi-arm search. Set by
-  // PerformMultiSearchLocalAsync immediately after acquiring the index's
-  // time-sliced mutex in reader mode; released when Finalize completes (i.e.
-  // after all arms have observed a consistent pre-mutation index snapshot).
-  // This is the per-arm "both arms or neither" guarantee: as long as this
-  // outer lock is held, the time-sliced mutex stays in read mode, so a
-  // pending writer (mutation) cannot switch in between two arms' independent
-  // ReaderMutexLock acquisitions inside their respective Search() calls.
-  void SetOuterReaderLock(vmsdk::TimeSlicedMRMWMutex *mutex, bool may_prolong);
-
  private:
   void Finalize();
-  void ReleaseOuterReaderLock();
 
   absl::Mutex mu_;
   std::unique_ptr<MultiSearchParameters> parameters_ ABSL_GUARDED_BY(mu_);
@@ -237,8 +234,6 @@ class MultiSearchTracker
       ABSL_GUARDED_BY(mu_);
   std::atomic_bool any_arm_failed_{false};
   absl::Status first_error_ ABSL_GUARDED_BY(mu_);
-  vmsdk::TimeSlicedMRMWMutex *outer_mutex_ ABSL_GUARDED_BY(mu_){nullptr};
-  bool outer_may_prolong_ ABSL_GUARDED_BY(mu_){false};
 };
 
 // Schedules each arm onto the reader thread pool. Each arm carries a

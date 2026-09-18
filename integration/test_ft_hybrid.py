@@ -3,12 +3,13 @@
 Focuses on **control paths** as agreed in the plan, not on re-testing the
 aggregate pipeline (already covered by test_ft_aggregate / test_non_vector).
 This file verifies:
-  * Local-only command flow (single-instance, MULTI/EXEC, Lua, LOCALONLY).
+  * Local-only command flow (single-instance, LOCALONLY) and the refusal
+    of the synchronous path (MULTI/EXEC, Lua).
   * Score-alias propagation through the aggregate pipeline.
   * Cross-clause framing: SEARCH / VSIM / COMBINE / POLICY / aggregate suffix.
-  * Reserved-feature rejections (NOCONTENT, DIALECT).
+  * Reserved-feature rejections (NOCONTENT, a DIALECT other than 2).
   * VSIM RANGE parsed-but-not-implemented.
-  * SEARCH-arm vector content (Valkey super-set over the Redis spec).
+  * SEARCH-arm vector content, which belongs to VSIM and is refused.
 """
 
 import struct
@@ -30,6 +31,14 @@ from utils import IndexingTestHelper, run_in_thread
 
 def _vec(*xs: float) -> bytes:
     return struct.pack(f"{len(xs)}f", *xs)
+
+# The exact refusal FT.HYBRID returns when dispatch would take the synchronous
+# local path. Mirrors query::kSyncLocalUnsupportedMsg in src/query/multi_search.h.
+SYNC_LOCAL_NOT_SUPPORTED_ERR = (
+    "FT.HYBRID is not supported inside MULTI/EXEC or a Lua script, or when "
+    "the reader thread pool is disabled. Both force synchronous execution, on "
+    "which the per-arm results cannot be revalidated against concurrent "
+    "mutations before they are fused.")
 
 
 class TestFtHybridBase(ValkeySearchTestCaseBase):
@@ -159,8 +168,9 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
 
     # ---------------------------------------------------------------------
     # The synchronous dispatch path, which MULTI/EXEC and a server without
-    # parallel queries both take. It is a separate implementation of the same
-    # command, so what it has to prove is that it answers identically.
+    # parallel queries both take. FT.HYBRID has no correct implementation of
+    # it -- nothing there revalidates a fused arm against a queued mutation --
+    # so what it has to prove now is that it is refused, not that it answers.
     # ---------------------------------------------------------------------
 
     def _wide_index(self, client: Valkey, n: int = 40) -> bytes:
@@ -193,45 +203,54 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
                 "LIMIT", "0", "100",
                 "PARAMS", "2", "q", q]
 
-    def test_multi_exec_matches_the_direct_reply(self):
-        """FT.HYBRID inside a transaction takes the synchronous path, which
-        parses the arms before the cancellation token exists and does not
-        uncap them. Both defects are invisible until the same query is run
-        both ways and the replies compared."""
+    def test_multi_exec_is_refused_and_the_direct_reply_is_not(self):
+        """The same query answers outside a transaction and is refused inside
+        one. Was: the two replies had to match; the synchronous path that
+        produced the transaction's reply is gone, so the only thing left to
+        compare is answered-vs-refused."""
         client = self.server.get_new_client()
         n = 40
         q = self._wide_index(client, n)
         cmd = self._wide_query(q, n)
 
         direct = client.execute_command(*cmd)
-
-        pipe = client.pipeline(transaction=True)
-        pipe.execute_command(*cmd)
-        in_multi = pipe.execute()[0]
-
-        # Alive at all: this used to close the connection.
-        assert client.ping()
         assert direct[0] == n, f"direct returned {direct[0]} of {n}"
-        assert in_multi[0] == direct[0], (
-            f"transaction returned {in_multi[0]}, direct returned {direct[0]}")
-        as_rows = [self._rec_to_dict(r) for r in in_multi[1:]]
-        direct_rows = [self._rec_to_dict(r) for r in direct[1:]]
-        assert [r[b"__key"] for r in as_rows] == \
-            [r[b"__key"] for r in direct_rows]
-        assert [r[b"h"] for r in as_rows] == [r[b"h"] for r in direct_rows]
 
-    def test_multi_exec_is_cancellable_rather_than_crashing(self):
-        """The arms on the synchronous path must carry a real cancellation
-        token. A zero timeout is the cheapest way to make something actually
-        read it."""
+        assert client.execute_command("MULTI") == b"OK"
+        assert client.execute_command(*cmd) == b"QUEUED"
+        queued = client.execute_command("EXEC")
+        assert isinstance(queued[0], ResponseError), queued[0]
+        assert SYNC_LOCAL_NOT_SUPPORTED_ERR in str(queued[0]), queued[0]
+
+        # The refusal leaves the connection usable, and the command still
+        # answers on it.
+        assert client.ping()
+        assert client.execute_command(*cmd)[0] == n
+
+    def test_multi_exec_is_refused_rather_than_crashing(self):
+        """A transaction must get an error back, not a closed connection.
+        Was: the arms on the synchronous path had to carry a real cancellation
+        token or the server died reading it. The path is refused now, so the
+        crash is out of reach -- the surviving connection is what proves it."""
         client = self.server.get_new_client()
         q = self._wide_index(client, 12)
-        pipe = client.pipeline(transaction=True)
-        pipe.execute_command(*(self._wide_query(q, 12) +
-                               ["TIMEOUT", "100000"]))
-        result = pipe.execute()[0]
+        assert client.execute_command("MULTI") == b"OK"
+        assert client.execute_command(
+            *(self._wide_query(q, 12) + ["TIMEOUT", "10000"])) == b"QUEUED"
+        result = client.execute_command("EXEC")
         assert client.ping()
-        assert isinstance(result, list)
+        assert isinstance(result[0], ResponseError), result[0]
+        assert SYNC_LOCAL_NOT_SUPPORTED_ERR in str(result[0]), result[0]
+
+    def test_lua_is_refused(self):
+        """Lua shares the MULTI/EXEC trigger (vmsdk::MultiOrLua), so it must
+        get the same refusal."""
+        client = self.server.get_new_client()
+        q = self._wide_index(client, 8)
+        cmd = self._wide_query(q, 8)
+        with pytest.raises(ResponseError) as err:
+            client.eval("return redis.call(unpack(ARGV))", 0, *cmd)
+        assert SYNC_LOCAL_NOT_SUPPORTED_ERR in str(err.value), err.value
 
     # ---------------------------------------------------------------------
     # SORTBY over the fused record. Order is asserted here and only here:
@@ -421,28 +440,32 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             assert abs(h - (v + 1.0)) < 1e-3, f"h={h} v={v}"
 
     def test_combine_function_uses_both_arm_scores(self):
-        """All arms' scores are available to the function. Make BOTH arms
-        vector queries (Valkey super-set) so each arm yields a distinct,
-        non-zero score, then verify the fused score equals f(@s,@v) read back
-        from the per-arm aliases."""
+        """All arms' scores are available to the function: verify the fused
+        score equals f(@s,@v) read back from the per-arm aliases, with @s the
+        text arm's relevance score and @v the vector arm's distance.
+
+        This used to make both arms vector queries, which the SEARCH clause no
+        longer accepts -- the vector arm is VSIM's. What it is really about,
+        that the function sees *every* arm's score rather than only the vector
+        one (that is test_combine_function_uses_vsim_score), a text SEARCH arm
+        tests just as well."""
         client = self.server.get_new_client()
         self.setup_index(client)
-        q2 = _vec(10.0, 9.0, 8.0, 7.0)
         result = client.execute_command(
             "FT.HYBRID", self.INDEX,
-            # SEARCH arm is itself a vector query against $q (arm score = @s).
-            "SEARCH", "*=>[KNN 10 @vec $q]", "YIELD_SCORE_AS", "s",
-            # VSIM arm uses a different query vector $q2 (arm score = @v).
-            "VSIM", "@vec", "$q2", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
+            # Text arm (arm score = @s).
+            "SEARCH", "@title:hello", "SCORER", "BM25STD",
+            "YIELD_SCORE_AS", "s",
+            # Vector arm (arm score = @v).
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "10", "YIELD_SCORE_AS", "v",
             "COMBINE", "FUNCTION", "4", "EXPR", "@s * 10 + @v",
             "YIELD_SCORE_AS", "h",
-            "PARAMS", "4", "q", self.Q, "q2", q2,
+            "PARAMS", "2", "q", self.Q,
         )
         assert isinstance(result, list)
         assert result[0] == 10
         # Both per-arm score aliases must be present on every record, and the
         # fused score must equal the user expression evaluated over them.
-        saw_nonzero_s = False
         saw_nonzero_v = False
         for rec in result[1:]:
             d = self._rec_to_dict(rec)
@@ -451,12 +474,11 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             s = float(d[b"s"])
             v = float(d[b"v"])
             h = float(d[b"h"])
-            saw_nonzero_s = saw_nonzero_s or s > 0.0
             saw_nonzero_v = saw_nonzero_v or v > 0.0
             assert abs(h - (s * 10.0 + v)) < 1e-2, f"h={h} s={s} v={v}"
-        # The two arms use different query vectors, so across the result set
-        # both arms contribute genuinely distinct, non-trivial scores.
-        assert saw_nonzero_s and saw_nonzero_v
+        # The vector arm contributes a genuinely non-trivial score, so the
+        # arithmetic above is not comparing zeroes.
+        assert saw_nonzero_v
 
     def test_combine_function_default_arm_aliases(self):
         """Arm scores are reachable via positional default aliases even when
@@ -535,23 +557,51 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         )
         assert isinstance(result, list)
         assert result[0] == 10
+        # POLICY sits inside the VSIM clause, so the token after it still
+        # belongs to VSIM. This used to end the clause and leave
+        # YIELD_SCORE_AS to be read as a top-level keyword.
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+            "POLICY", "BATCHES", "YIELD_SCORE_AS", "vs",
+            "PARAMS", "2", "q", self.Q,
+        )
+        assert isinstance(result, list)
+        assert result[0] == 10
+        # The 5 docs the vector arm returned carry the alias; the rest of the
+        # union came from the text arm alone and have no vector score.
+        assert sum(b"vs" in self._rec_to_dict(rec) for rec in result[1:]) == 5
 
     # ---------------------------------------------------------------------
     # Reserved-feature rejections.
     # ---------------------------------------------------------------------
 
-    def test_dialect_rejected(self):
+    def test_dialect_two_accepted_others_rejected(self):
+        """DIALECT is range-checked as FT.SEARCH and FT.AGGREGATE check it,
+        except that FT.HYBRID implements the one dialect."""
         client = self.server.get_new_client()
         self.setup_index(client)
-        with pytest.raises(ResponseError,
-                            match=r"DIALECT is not configurable"):
-            client.execute_command(
-                "FT.HYBRID", self.INDEX,
-                "SEARCH", "@title:hello",
-                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-                "DIALECT", "2",
-                "PARAMS", "2", "q", self.Q,
-            )
+        result = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+            "DIALECT", "2",
+            "PARAMS", "2", "q", self.Q,
+        )
+        assert isinstance(result, list)
+        assert result[0] == 10
+        for dialect in ["1", "3"]:
+            with pytest.raises(ResponseError,
+                               match=r"DIALECT requires a non negative "
+                                     r"integer >=2 and <= 2"):
+                client.execute_command(
+                    "FT.HYBRID", self.INDEX,
+                    "SEARCH", "@title:hello",
+                    "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                    "DIALECT", dialect,
+                    "PARAMS", "2", "q", self.Q,
+                )
 
     def test_nocontent_rejected(self):
         client = self.server.get_new_client()
@@ -715,22 +765,23 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             scores("KNN", "4", "K", "5", "EF_RUNTIME", "200")
 
     # ---------------------------------------------------------------------
-    # SEARCH-arm vector content (Valkey super-set over the Redis spec).
+    # SEARCH-arm vector content: the vector arm is VSIM's, and a vector query
+    # written into SEARCH is refused rather than run by a path that the VSIM
+    # clause's K/EF_RUNTIME bounds and scoring rules never see.
     # ---------------------------------------------------------------------
 
-    def test_search_arm_can_contain_vector_query(self):
-        """Both arms can be vector queries (Valkey extends the Redis spec)."""
+    def test_search_arm_vector_query_rejected(self):
         client = self.server.get_new_client()
         self.setup_index(client)
-        result = client.execute_command(
-            "FT.HYBRID", self.INDEX,
-            "SEARCH", "*=>[KNN 5 @vec $q]",
-            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-            "PARAMS", "2", "q", self.Q,
-        )
-        assert isinstance(result, list)
-        # Both arms top-5 vector → fused union has between 5 and 10 docs.
-        assert 5 <= result[0] <= 10
+        with pytest.raises(ResponseError,
+                           match=r"A vector query is not supported in the "
+                                 r"SEARCH clause; use VSIM"):
+            client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "*=>[KNN 5 @vec $q]",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                "PARAMS", "2", "q", self.Q,
+            )
 
     # ---------------------------------------------------------------------
     # Required-clause + structural rejections.
@@ -923,6 +974,150 @@ class TestFtHybridLoad(ValkeySearchTestCaseDebugMode):
         self.setup_index(client)
         with pytest.raises(ResponseError, match=r"does not exist"):
             self._rows(client, "LOAD", "1", "@nosuchfield")
+
+class _ScoreAliasOverAStoredFieldTests:
+    """A YIELD_SCORE_AS alias naming a field the document also carries.
+
+    `LOAD *` emits whatever each key holds, which a query cannot be expected
+    to know in advance, so such a clash is no longer refused at parse time.
+    It is resolved at runtime under one rule: an explicitly named score --
+    per-arm or fused -- beats a database field of the same name. The column
+    appears once and holds the score.
+
+    Mixed into both the standalone and the cluster fixture: the two take
+    different code paths to attach the score (local RestoreAliases vs the
+    coordinator's fanout merge) and the point of the rule is that they agree.
+    """
+
+    INDEX = "aliasidx"
+    Q = _vec(1.0, 0.0, 0.0, 0.0)
+    PRICES = (0, 10, 20, 30, 40)
+    # A hash field that is not in the schema: only `LOAD *` surfaces it, and
+    # the old parse-time guard could not have caught a clash with it.
+    STORED = tuple(f"stored-{i}".encode() for i in range(5))
+
+    def _create_and_seed(self, command_client, write_client) -> None:
+        command_client.execute_command(
+            "FT.CREATE", self.INDEX,
+            "ON", "HASH", "PREFIX", "1", "adoc:",
+            "SCHEMA",
+            "title", "TEXT", "NOSTEM",
+            "price", "NUMERIC",
+            "vec", "VECTOR", "HNSW", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+        )
+        for i in range(5):
+            write_client.hset(
+                f"adoc:{i}",
+                mapping={
+                    "title": "hello world",
+                    "price": self.PRICES[i],
+                    "extra": self.STORED[i].decode(),
+                    "vec": _vec(1.0 + i, 0.0, 0.0, 0.0),
+                },
+            )
+        waiters.wait_for_true(
+            lambda: command_client.execute_command(
+                "FT.SEARCH", self.INDEX, "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 5,
+            timeout=15)
+
+    def _setup(self):
+        """Returns the client the FT.HYBRID commands run on."""
+        raise NotImplementedError
+
+    def _command(self, *, search_alias=None, vsim_alias=None,
+                 combine_alias=None, load=("LOAD", "*")):
+        cmd = ["FT.HYBRID", self.INDEX, "SEARCH", "@title:hello"]
+        if search_alias is not None:
+            cmd += ["YIELD_SCORE_AS", search_alias]
+        cmd += ["VSIM", "@vec", "$q", "KNN", "2", "K", "10"]
+        if vsim_alias is not None:
+            cmd += ["YIELD_SCORE_AS", vsim_alias]
+        if combine_alias is not None:
+            cmd += ["COMBINE", "RRF", "2", "YIELD_SCORE_AS", combine_alias]
+        cmd += list(load)
+        cmd += ["LIMIT", "0", "10", "PARAMS", "2", "q", self.Q]
+        return cmd
+
+    @staticmethod
+    def _rows(client, cmd):
+        """[(column names in reply order, {name: value}), ...]"""
+        result = client.execute_command(*cmd)
+        rows = []
+        for rec in result[1:]:
+            names = [bytes(n) for n in rec[0::2]]
+            rows.append((names, dict(zip(names, rec[1::2]))))
+        return rows
+
+    def _assert_alias_holds_the_score(self, rows, alias, shadowed):
+        """`alias` is emitted once per row and carries a score, not the
+        database field of the same name that `shadowed` lists the values of."""
+        assert len(rows) == 5, f"expected all 5 docs, got {len(rows)}"
+        for names, row in rows:
+            assert names.count(alias) == 1, \
+                f"`{alias.decode()}` appears {names.count(alias)} times: {names}"
+            value = row[alias]
+            assert value not in shadowed, \
+                f"`{alias.decode()}` holds the stored field {value!r}"
+            float(value)  # a score is a number; raises if the field won
+
+    def test_load_all_search_arm_alias_beats_a_stored_field(self):
+        client = self._setup()
+        rows = self._rows(client, self._command(search_alias="extra"))
+        self._assert_alias_holds_the_score(rows, b"extra", self.STORED)
+
+    def test_load_all_vsim_arm_alias_beats_a_stored_field(self):
+        client = self._setup()
+        rows = self._rows(client, self._command(vsim_alias="extra"))
+        self._assert_alias_holds_the_score(rows, b"extra", self.STORED)
+
+    def test_load_all_combine_alias_beats_a_stored_field(self):
+        client = self._setup()
+        rows = self._rows(client, self._command(combine_alias="extra"))
+        self._assert_alias_holds_the_score(rows, b"extra", self.STORED)
+
+    def test_load_all_alias_naming_an_indexed_field_is_served(self):
+        """The case the parse-time guard used to refuse: the alias names a
+        field of the schema, which under `LOAD *` is certain to be emitted.
+        Served now, and resolved the same way."""
+        client = self._setup()
+        prices = tuple(str(p).encode() for p in self.PRICES)
+        for placement in ("search_alias", "vsim_alias", "combine_alias"):
+            rows = self._rows(client, self._command(**{placement: "price"}))
+            self._assert_alias_holds_the_score(rows, b"price", prices)
+
+    def test_named_load_with_a_combine_alias_over_a_stored_field(self):
+        """A named LOAD alongside a fused-score alias that names a field the
+        LOAD clause does not mention. The LOAD column and the score column
+        both come back, each once, on either fixture."""
+        client = self._setup()
+        rows = self._rows(client, self._command(
+            combine_alias="extra", load=("LOAD", "1", "@price")))
+        assert len(rows) == 5
+        assert {int(row[b"price"]) for _, row in rows} == set(self.PRICES)
+        self._assert_alias_holds_the_score(rows, b"extra", self.STORED)
+        for names, _ in rows:
+            assert names.count(b"price") == 1, names
+
+
+class TestFtHybridScoreAliasOverAStoredField(
+        _ScoreAliasOverAStoredFieldTests, ValkeySearchTestCaseBase):
+
+    def _setup(self):
+        client: Valkey = self.server.get_new_client()
+        self._create_and_seed(client, client)
+        return client
+
+
+class TestFtHybridScoreAliasOverAStoredFieldCluster(
+        _ScoreAliasOverAStoredFieldTests, ValkeySearchClusterTestCase):
+
+    def _setup(self):
+        cluster: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        self._create_and_seed(client, cluster)
+        return client
 
 
 class TestFtHybridScoreShape(ValkeySearchTestCaseBase):

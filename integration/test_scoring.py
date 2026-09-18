@@ -99,6 +99,18 @@ PARTIAL_TEXT_DOCS = {
     **{f"doc:{i}": {"cat": "x", "rank": str(i)} for i in range(5, 11)},
 }
 
+# Every doc carries the same tag, so the tag leaf's IDF is constant and doc_len
+# alone ranks it: shortest body first. The vectors run the other way, so KNN
+# distance order is the exact reverse of tag-score order.
+TAG_VEC_DOCS = {
+    f"doc:{i}": {
+        "body": " ".join("one two three four five".split()[:i]),
+        "cat": "a",
+        "vec": _vec(round(0.6 - 0.1 * i, 1), 0.0),
+    }
+    for i in range(1, 6)
+}
+
 # Ten non-stopword tokens: doc_len is 10 in an indexed TEXT field, 0 anywhere
 # else, so the same value tells the two apart.
 TEN_WORDS = "one two three four five six seven eight nine ten"
@@ -580,6 +592,30 @@ class TestScoring(ValkeySearchTestCaseBase):
 
 
 # The kill switch is a dev config, so it needs debug-mode to be settable.
+    # Group 15: a hybrid tag=>[KNN] query ranks by tag score, not by distance.
+    # The reference (Redis 8.10.1 / search 81000) scores a tag-only prefilter
+    # exactly as it scores the same tag query without the KNN clause.
+    def test_hybrid_tag_vector(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, TAG_VEC_DOCS)
+        params = ("PARAMS", "2", "q", _vec(0.0, 0.0), "DIALECT", "2")
+
+        # Baseline: the tag query on its own ranks shortest-body-first.
+        keys, tag_only = search(client, IDX_MAIN, "@cat:{a}")
+        assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5"]
+        assert tag_only == pytest.approx({
+            "doc:1": 0.119641, "doc:2": 0.100750, "doc:3": 0.087011,
+            "doc:4": 0.076570, "doc:5": 0.068366,
+        }, abs=SCORE_ABS_TOL)
+
+        # Attaching KNN must not drop the tag relevance: same scores, same
+        # order, even though the KNN distance order is the exact reverse.
+        keys, hybrid = search(client, IDX_MAIN, "@cat:{a}=>[KNN 5 @vec $q]",
+                              *params)
+        assert hybrid == pytest.approx(tag_only, abs=SCORE_ABS_TOL)
+        assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5"]
+
+
 class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
 
     def test_scoring_disabled_zeroes_scores(self):

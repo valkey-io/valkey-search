@@ -26,6 +26,7 @@
 #include "src/commands/ft_hybrid_combine.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/expr/expr.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "vmsdk/src/command_parser.h"
@@ -260,11 +261,13 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
       arm->score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
     } else if (absl::EqualsIgnoreCase(next, kScorerKw)) {
       itr.Next();
-      // Parse-but-no-op in V1.
+      // Same validator FT.SEARCH uses, so the two commands accept and reject
+      // the same names with the same message. The arm's `scorer` is already
+      // seeded from the `default-scorer` config; this overrides it.
       VMSDK_ASSIGN_OR_RETURN(auto scorer_sv, itr.GetStringView());
-      (void)scorer_sv;
       itr.Next();
-      // TODO(text-scoring): apply the scorer when text scoring lands.
+      VMSDK_ASSIGN_OR_RETURN(arm->scorer,
+                             indexes::scoring::ParseScorerType(scorer_sv));
     } else if (absl::EqualsIgnoreCase(next, kNocontentKw)) {
       return absl::InvalidArgumentError(
           "NOCONTENT is not supported by FT.HYBRID");

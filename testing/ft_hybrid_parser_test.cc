@@ -24,6 +24,7 @@
 #include "src/commands/ft_create_parser.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/query/multi_search.h"
 #include "testing/common.h"
 #include "vmsdk/src/command_parser.h"
@@ -1111,6 +1112,54 @@ TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
   EXPECT_EQ(params.status().message(), BlobSizeError(kTooLong));
 }
 
+
+// ---------------------------------------------------------------------
+// SCORER
+// ---------------------------------------------------------------------
+//
+// The SEARCH arm shares FT.SEARCH's validator
+// (indexes::scoring::ParseScorerType), so the names the two commands take and
+// the message they produce for a name they do not take are the same by
+// construction. The VSIM arm has no scorer at all -- its score is a distance.
+
+TEST_F(FTHybridParserTest, ScorerNamesTheSearchArmsScorer) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "BM25STD", "VSIM",
+                       "@vector", "$q"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->arms.at(0)->scorer,
+            indexes::scoring::ScorerType::kBm25Std);
+}
+
+TEST_F(FTHybridParserTest, ScorerNameIsCaseInsensitive) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "bm25std", "VSIM",
+                       "@vector", "$q"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->arms.at(0)->scorer,
+            indexes::scoring::ScorerType::kBm25Std);
+}
+
+TEST_F(FTHybridParserTest, ScorerRejectsTfidf) {
+  // TFIDF is in the ScorerType enum but is not registered in kScorerByStr, so
+  // it is not selectable -- by FT.SEARCH either.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "TFIDF", "VSIM",
+                       "@vector", "$q"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "Unknown argument `TFIDF`");
+}
+
+TEST_F(FTHybridParserTest, ScorerRejectsAnUnknownName) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "banana", "VSIM",
+                       "@vector", "$q"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "Unknown argument `banana`");
+}
+
+TEST_F(FTHybridParserTest, ScorerOnTheVsimArmIsRejected) {
+  // A vector arm's score is a distance; there is nothing to score.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "SCORER", "BM25STD"});
+  ASSERT_FALSE(params.ok());
+}
 
 // ---------------------------------------------------------------------
 // Synchronous local dispatch

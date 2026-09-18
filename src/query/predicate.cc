@@ -164,6 +164,9 @@ EvaluationResult PrefixPredicate::Evaluate(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
+  absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
+                      indexes::text::kWordExpansionInlineCapacity>
+      postings_lifetime;
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
@@ -177,6 +180,7 @@ EvaluationResult PrefixPredicate::Evaluate(
       if (key_iter.SkipForwardKey(target_key) &&
           key_iter.ContainsFields(field_mask)) {
         key_iterators.emplace_back(std::move(key_iter));
+        postings_lifetime.push_back(postings);
       }
     }
     word_iter.Next();
@@ -189,7 +193,10 @@ EvaluationResult PrefixPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, require_positions);
+      std::move(key_iterators), field_mask, require_positions,
+      /*stem_field_mask=*/0, /*has_original=*/false, /*leaf_weight=*/1.0f,
+      /*num_doc_contain_term=*/0, /*text_index_schema=*/nullptr,
+      /*scorer=*/nullptr, std::move(postings_lifetime));
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -218,6 +225,9 @@ EvaluationResult SuffixPredicate::Evaluate(
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
+  absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
+                      indexes::text::kWordExpansionInlineCapacity>
+      postings_lifetime;
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   uint32_t word_count = 0;
@@ -234,6 +244,7 @@ EvaluationResult SuffixPredicate::Evaluate(
       if (key_iter.SkipForwardKey(target_key) &&
           key_iter.ContainsFields(field_mask)) {
         key_iterators.emplace_back(std::move(key_iter));
+        postings_lifetime.push_back(postings);
       }
     }
     word_iter.Next();
@@ -246,7 +257,10 @@ EvaluationResult SuffixPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, require_positions);
+      std::move(key_iterators), field_mask, require_positions,
+      /*stem_field_mask=*/0, /*has_original=*/false, /*leaf_weight=*/1.0f,
+      /*num_doc_contain_term=*/0, /*text_index_schema=*/nullptr,
+      /*scorer=*/nullptr, std::move(postings_lifetime));
   return BuildTextEvaluationResult(std::move(iterator));
 }
 
@@ -288,17 +302,23 @@ EvaluationResult FuzzyPredicate::Evaluate(
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   // Get all KeyIterators for words within edit distance
-  auto key_iters = indexes::text::FuzzySearch::Search(
+  auto fuzzy_result = indexes::text::FuzzySearch::Search(
       text_index.GetPrefix(), term_, distance_, max_words);
   // Filter to only include KeyIterators that match target_key and field_mask
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>
       filtered_key_iterators;
-  for (auto& key_iter : key_iters) {
+  absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
+                      indexes::text::kWordExpansionInlineCapacity>
+      filtered_postings_lifetime;
+  for (size_t i = 0; i < fuzzy_result.key_iterators.size(); ++i) {
     BACKGROUND_PAUSEPOINT("search_fuzzy_search");
+    auto& key_iter = fuzzy_result.key_iterators[i];
     if (key_iter.SkipForwardKey(target_key) &&
         key_iter.ContainsFields(field_mask)) {
       filtered_key_iterators.emplace_back(std::move(key_iter));
+      filtered_postings_lifetime.push_back(
+          std::move(fuzzy_result.postings_lifetime[i]));
     }
   }
   if (filtered_key_iterators.empty()) {
@@ -308,7 +328,10 @@ EvaluationResult FuzzyPredicate::Evaluate(
     return EvaluationResult(true);
   }
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(filtered_key_iterators), field_mask, require_positions);
+      std::move(filtered_key_iterators), field_mask, require_positions,
+      /*stem_field_mask=*/0, /*has_original=*/false, /*leaf_weight=*/1.0f,
+      /*num_doc_contain_term=*/0, /*text_index_schema=*/nullptr,
+      /*scorer=*/nullptr, std::move(filtered_postings_lifetime));
   return BuildTextEvaluationResult(std::move(iterator));
 }
 

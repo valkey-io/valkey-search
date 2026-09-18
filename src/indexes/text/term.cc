@@ -21,10 +21,13 @@ TermIterator::TermIterator(
     const FieldMaskPredicate query_field_mask, const bool require_positions,
     const FieldMaskPredicate stem_field_mask, bool has_original,
     float leaf_weight, uint32_t num_doc_contain_term,
-    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer)
+    const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer,
+    absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
+        postings_lifetime)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
+      postings_lifetime_(std::move(postings_lifetime)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       require_positions_(require_positions),

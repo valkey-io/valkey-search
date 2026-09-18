@@ -160,6 +160,18 @@ message SearchIndexPartitionRequest {
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
+  // Set for a VSIM arm carrying a FILTER: the filter decides membership, never
+  // the score, so the shard must keep the KNN distance as Neighbor.score even
+  // when the filter holds a text predicate. Not derivable from the rewritten
+  // query string -- `(<filter>)=>[KNN ...]` is indistinguishable from a
+  // `text=>[KNN ...]` hybrid query -- so it has to cross the wire.
+  bool vector_score_only = 21;
+  // Set when the query was the bare match-all (`*`). The match-all form leaves
+  // root_filter_predicate unset and query_operations at kNone, so without this
+  // flag the shard cannot tell match-all from an absent filter and would
+  // evaluate a null predicate. The shard never re-parses the query string, so
+  // it has to cross the wire.
+  bool is_match_all = 22;
 }
 
 message NeighborEntry {

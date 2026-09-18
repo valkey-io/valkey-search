@@ -203,7 +203,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.prefix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::PrefixPredicate>(
           text_index_schema, predicate.prefix().field_mask(),
@@ -215,7 +215,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.suffix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::SuffixPredicate>(
           text_index_schema, predicate.suffix().field_mask(),
@@ -227,7 +227,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.infix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::InfixPredicate>(
           text_index_schema, predicate.infix().field_mask(),
@@ -239,7 +239,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.fuzzy().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::FuzzyPredicate>(
           text_index_schema, predicate.fuzzy().field_mask(),
@@ -294,8 +294,10 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
+  parameters->filter_parse_results.is_match_all = request.is_match_all();
   parameters->sortby_parameter = SortByFromGRPC(request);
   parameters->scorer = ScorerFromGRPC(request.scorer());
+  parameters->vector_score_only = request.vector_score_only();
   return absl::OkStatus();
 }
 
@@ -474,8 +476,10 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->set_slot_fingerprint(parameters.slot_fingerprint);
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
+  request->set_is_match_all(parameters.filter_parse_results.is_match_all);
   SortByToGRPC(parameters.sortby_parameter, request.get());
   request->set_scorer(ScorerToGRPC(parameters.scorer));
+  request->set_vector_score_only(parameters.vector_score_only);
   return request;
 }
 

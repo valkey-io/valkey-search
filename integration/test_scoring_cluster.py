@@ -355,6 +355,9 @@ class TestScoringRecomputeCluster(ValkeySearchClusterTestCaseDebugMode):
             )
             > 0
         )
+        blocked_baseline = self._counter(
+            coordinator, "search_text_query_blocked_count"
+        )
         runner, res, err = run_in_thread(
             lambda: self.new_client_for_primary(0).execute_command(*cmd)
         )
@@ -364,7 +367,7 @@ class TestScoringRecomputeCluster(ValkeySearchClusterTestCaseDebugMode):
         waiters.wait_for_true(
             lambda: not runner.is_alive()
             or self._counter(coordinator, "search_text_query_blocked_count")
-            > 1
+            > blocked_baseline
         )
 
         # Unblock and reset the index state

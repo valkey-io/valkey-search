@@ -30,6 +30,19 @@ SCORING_DATASETS = {
     'scoring': {'schema': SCORING_SCHEMA},
 }
 
+SCORING_NUM_DOCS = 100
+# (term count, exact dt) per tier; must sum to the pool size
+SCORING_DT_TIERS = [(2, 90), (6, 50), (12, 20), (20, 5), (20, 1)]
+SCORING_TF_CHOICES = [1, 1, 1, 2, 3]
+# floor only: planted terms may already exceed it
+SCORING_DOC_LEN_RANGE = (3, 25)
+SCORING_CROSS_FIELD_RATE = 0.2
+# the text suite's first five colors; "orange" is skipped as it is also a pool word
+SCORING_TAG_FREQS = {"red": 40, "yellow": 25, "green": 20, "purple": 10, "blue": 5}
+SCORING_VECTOR_CLUSTERS = 5
+# cycled per doc; None omits the field, "abc" is unparseable as a score
+SCORING_BOOSTS = [2.0, 0.25, -1.0, None, "abc"]
+
 TEXT_DATASETS = {
     'pure text': {
         'schema': TEXT_SCHEMA,
@@ -197,8 +210,21 @@ SCHEMA_FLAGS = {
     "text": {
         "default": "WITHSUFFIXTRIE",
         "nostem": "WITHSUFFIXTRIE NOSTEM",
-        "docscore": "WITHSUFFIXTRIE NOSTEM",
     },
+    "tag": "",
+    "numeric": "",
+}
+
+# Scoring's own copy of SCHEMA_FLAGS. Separate because the text suite's entries
+# must keep WITHSUFFIXTRIE (its suffix queries CHECK-fail without the trie),
+# while scoring has no use for it: the trie is perf-only and the
+# prefix/suffix/fuzzy shapes are out of scope.
+#
+# NOSTEM on every text field: stem-expansion scoring diverges from the reference
+# engine, so stemming stays out of scope until that lands. Flags are therefore
+# variant-independent; only SCHEMA_INDEX_ATTRS varies.
+SCORING_SCHEMA_FLAGS = {
+    "text": "NOSTEM",
     "tag": "",
     "numeric": "",
     "vector": f"FLAT 6 TYPE FLOAT32 DIM {VECTOR_DIM} DISTANCE_METRIC L2",
@@ -208,7 +234,6 @@ SCHEMA_FLAGS = {
 # form of SCORE_FIELD; the bare attribute name is accepted and silently ignored,
 # leaving every document on the index-level SCORE.
 SCHEMA_INDEX_ATTRS = {
-    "default": {"hash": "", "json": ""},
     "nostem": {"hash": "", "json": ""},
     "docscore": {"hash": "SCORE 0.5 SCORE_FIELD boost",
                  "json": "SCORE 0.5 SCORE_FIELD $.boost"},
@@ -230,16 +255,21 @@ def _build_field_schema(field: str, field_type: str, schema_type: str, for_json:
         return f"$.{field} AS {field_def}"
     return field_def
 
+def _build_scoring_field(field: str, field_type: str, for_json: bool) -> str:
+    """One field's schema string, using the scoring suite's own flag table."""
+    field_def = f"{field} {field_type.upper()} {SCORING_SCHEMA_FLAGS[field_type]}".strip()
+    return f"$.{field} AS {field_def}" if for_json else field_def
+
 def _build_scoring_create(key_type: str, schema_type: str) -> str:
     """Build the FT.CREATE for one scoring schema variant."""
     parts = [
-        _build_field_schema(field, field_type, schema_type,
-                            for_json=(key_type == "json"))
+        _build_scoring_field(field, field_type, for_json=(key_type == "json"))
         for field_type in ("text", "tag", "numeric", "vector")
         for field in SCORING_SCHEMA[field_type]
     ]
     on = "HASH" if key_type == "hash" else "JSON"
-    head = f"FT.CREATE {key_type}_idx1 ON {on} PREFIX 1 {key_type}:"
+    # STOPWORDS 0: no term is ever dropped, so the two engines' default lists can't differ
+    head = f"FT.CREATE {key_type}_idx1 ON {on} PREFIX 1 {key_type}: STOPWORDS 0"
     attrs = SCHEMA_INDEX_ATTRS[schema_type][key_type]
     return " ".join(p for p in [head, attrs, "SCHEMA", *parts] if p)
 
@@ -1329,18 +1359,94 @@ def compute_return_data_sets():
     }
 
 
-def compute_scoring_data_sets(dataset_name, schema_type="default"):
-    """Build the scoring index for each key type. Documents are not generated yet."""
+def _scoring_vocab():
+    """Pool and filler terms, both reused from the text suite's vocabulary."""
+    pure = TEXT_DATASETS["pure text"]["field_values"]
+    pool = sorted(set(pure["title"]) | set(pure["body"]))
+    numeric = TEXT_DATASETS["numeric text"]["field_values"]
+    # alpha-only keeps that suite's number-like tokens out; disjoint from the pool
+    filler = sorted({w for w in numeric["title"] + numeric["body"] if w.isalpha()}
+                    - set(pool))
+    return pool, filler
+
+def compute_scoring_corpus(seed=123):
+    """Build the scoring corpus from a term -> doc incidence matrix.
+
+    Returns (docs, terms). docs maps doc id to field values, text fields as word
+    lists. terms maps term to {doc id: doc-wide TF}, so queries can be built with
+    exact expected hits: len(terms[t]) is that term's dt.
+    """
+    rng = random.Random(seed)
+    words, fillers = _scoring_vocab()
+    assert len(words) == sum(n for n, _ in SCORING_DT_TIERS), \
+        "SCORING_DT_TIERS must cover every pool word exactly once"
+    pool = iter(words)
+    docs = {i: {"title": [], "body": []} for i in range(SCORING_NUM_DOCS)}
+
+    terms = {}
+    for count, dt in SCORING_DT_TIERS:
+        for term in itertools.islice(pool, count):
+            terms[term] = {}
+            for doc in rng.sample(range(SCORING_NUM_DOCS), dt):
+                tf = rng.choice(SCORING_TF_CHOICES)
+                # cross-field pairs sit in both fields, doubling doc-wide TF
+                fields = (["title", "body"]
+                          if rng.random() < SCORING_CROSS_FIELD_RATE
+                          else [rng.choice(["title", "body"])])
+                for field in fields:
+                    docs[doc][field] += [term] * tf
+                terms[term][doc] = tf * len(fields)
+
+    tags = [v for v, n in SCORING_TAG_FREQS.items() for _ in range(n)]
+    rng.shuffle(tags)
+
+    for doc, fields in docs.items():
+        planted = len(fields["title"]) + len(fields["body"])
+        # filler repeats freely: only the queried term's dt feeds IDF, so filler
+        # dt is never read - filler moves doc_len and avg_doc_len, nothing else
+        for _ in range(max(0, rng.randint(*SCORING_DOC_LEN_RANGE) - planted)):
+            fields[rng.choice(["title", "body"])].append(rng.choice(fillers))
+        rng.shuffle(fields["title"])
+        rng.shuffle(fields["body"])
+        fields["t1"] = tags[doc]
+        # n1 == doc id, so any @n1:[a b] range has a count of exactly b - a + 1
+        fields["n1"] = doc
+        # one cluster per doc id residue; probe [c, c, c] returns that residue's docs
+        cluster = doc % SCORING_VECTOR_CLUSTERS
+        fields["v1"] = [cluster + doc / 10000.0] * VECTOR_DIM
+        fields["boost"] = SCORING_BOOSTS[doc % len(SCORING_BOOSTS)]
+
+    return docs, terms
+
+def compute_scoring_data_sets(dataset_name, schema_type="nostem"):
+    """Build the scoring index and documents for each key type."""
     if dataset_name not in SCORING_DATASETS:
         raise ValueError(f"Unknown dataset: {dataset_name}. "
                          f"Available: {list(SCORING_DATASETS.keys())}")
+    # load_data defaults schema_type to "default", which this suite does not have
+    if schema_type not in SCHEMA_INDEX_ATTRS:
+        raise ValueError(f"Unknown scoring schema type: {schema_type}. "
+                         f"Available: {list(SCHEMA_INDEX_ATTRS.keys())}")
 
+    corpus, _ = compute_scoring_corpus()
     data = {dataset_name: {}}
     for key_type in ["hash", "json"]:
+        sets = []
+        for doc, fields in corpus.items():
+            values = {
+                "title": " ".join(fields["title"]),
+                "body": " ".join(fields["body"]),
+                "t1": fields["t1"],
+                "n1": fields["n1"],
+                "v1": array_encode(key_type, fields["v1"]),
+            }
+            if fields["boost"] is not None:
+                values["boost"] = fields["boost"]
+            sets.append((f"{key_type}:{doc:03d}", values))
         data[dataset_name][CREATES_KEY(key_type)] = [
             _build_scoring_create(key_type, schema_type)
         ]
-        data[dataset_name][SETS_KEY(key_type)] = []
+        data[dataset_name][SETS_KEY(key_type)] = sets
     return data
 
 

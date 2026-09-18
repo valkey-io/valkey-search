@@ -21,6 +21,7 @@ Create a directory containing `SKILL.md` with:
 |-------|-------------|
 | [stale-prs](stale-prs/SKILL.md) | Find open PRs that haven't been updated in 30+ days |
 | [run-integration-tests](run-integration-tests/SKILL.md) | Run and diagnose the C++ and Python integration harnesses, including standalone and cluster modes |
+| [redisearch-compat-testing](redisearch-compat-testing/SKILL.md) | Measure RediSearch reference behavior in Docker to establish the parity target for a valkey-search change |
 
 ## TODO
 

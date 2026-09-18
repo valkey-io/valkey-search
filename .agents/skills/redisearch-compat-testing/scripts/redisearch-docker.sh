@@ -51,9 +51,16 @@ case "$cmd" in
       # would otherwise be silently ignored.
       actual_port="$(running_port)"
       actual_image="$(running_image)"
+      # Compare the container's CONFIGURED image reference (.Config.Image) against
+      # the requested RS_IMAGE. running_image() may resolve to a digest while
+      # RS_IMAGE is a tag, so use the configured reference for the equality check.
+      actual_configured_image="$(docker inspect -f '{{ .Config.Image }}' "$RS_NAME" 2>/dev/null || true)"
       echo "$RS_NAME already running (host port ${actual_port:-unknown}, image ${actual_image:-unknown})"
       if [ -n "$actual_port" ] && [ "$actual_port" != "$RS_PORT" ]; then
         echo "warning: requested RS_PORT=$RS_PORT but container is on $actual_port; run '$0 down' first to change it" >&2
+      fi
+      if [ -n "$actual_configured_image" ] && [ "$actual_configured_image" != "$RS_IMAGE" ]; then
+        echo "warning: requested RS_IMAGE=$RS_IMAGE but container uses $actual_configured_image; run '$0 down' first to change it" >&2
       fi
       echo "connect: $0 cli"
       exit 0

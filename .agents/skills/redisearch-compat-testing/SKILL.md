@@ -87,38 +87,41 @@ Use this for a one-off "what does RediSearch do here?" look. If the case can be 
 
    So: classify the divergence against `COMPATIBILITY.md`, then check whether the in-repo suite already covers it. If it falls under a non-goal (e.g. you are only comparing error *wording*), it is out of scope and Docker measurement is unnecessary. If it is an expected-compatibility area not already captured, proceed to measure.
 
-1. **Start RediSearch in Docker.** Use **`redis:latest`** (Redis 8, native RediSearch) to match the reference engine the in-repo harness records against; only pull in `redis/redis-stack-server` to explain a reference-vs-reference disagreement (see `known_differences.md §2`). The helper defaults to redis-stack for the interactive shell but takes any image via `RS_IMAGE`:
+1. **Start RediSearch in Docker.** Use **`redis:latest`** (Redis 8, native RediSearch) to match the reference engine the in-repo harness records against; only pull in `redis/redis-stack-server` to explain a reference-vs-reference disagreement (see `known_differences.md §2`). The helper defaults to redis-stack for the interactive shell but takes any image via `RS_IMAGE`. The helper lives in this skill's `scripts/` dir; run the examples below from there (the paths are relative to it):
 
    ```bash
-   RS_IMAGE=redis:latest scripts/redisearch-docker.sh up   # match the harness reference engine
-   scripts/redisearch-docker.sh cli                        # drop into redis-cli against it
-   scripts/redisearch-docker.sh down                       # stop and remove the container
+   cd .agents/skills/redisearch-compat-testing        # helper path is relative to here
+   RS_IMAGE=redis:latest ./scripts/redisearch-docker.sh up   # match the harness reference engine
+   ./scripts/redisearch-docker.sh cli                        # drop into redis-cli against it
+   ./scripts/redisearch-docker.sh down                       # stop and remove the container
    ```
 
 2. **Pin the image, then record the version you measured.** These are two distinct steps. RediSearch behavior can change across releases, so a parity claim is only meaningful with a fixed reference. The default `RS_IMAGE=redis/redis-stack-server:latest` is a **mutable tag** — fine for a quick look, but for any recorded parity claim set `RS_IMAGE` to a fixed tag or digest so the run is repeatable:
 
    ```bash
-   RS_IMAGE=redis/redis-stack-server:7.4.0-v1 scripts/redisearch-docker.sh up   # pin the image
-   scripts/redisearch-docker.sh cli FT._LIST                  # sanity: module loaded
-   scripts/redisearch-docker.sh cli MODULE LIST               # record the search module version
+   RS_IMAGE=redis/redis-stack-server:7.4.0-v1 ./scripts/redisearch-docker.sh up   # pin the image
+   ./scripts/redisearch-docker.sh cli FT._LIST                  # sanity: module loaded
+   ./scripts/redisearch-docker.sh cli MODULE LIST               # record the search module version
    ```
 
    Recording `MODULE LIST` documents which module build you tested; it does **not** by itself make the run reproducible — that requires pinning `RS_IMAGE`. `up` and `status` print the resolved image (repo digest when available) so the run is self-documenting.
 
-3. **Reproduce the exact command shape under question.** Build the smallest index + dataset that exercises the behavior, then run the exact FT.* command the valkey-search code path parses. Use `scripts/redisearch-docker.sh cli <ARGS...>` for one-offs or pipe a script into `... cli` on stdin. See `references/probe-recipes.md` for ready-made probes (unused PARAMS, DIALECT, SORTBY/LIMIT, ADDSCORES, RESP3).
+3. **Reproduce the exact command shape under question.** Build the smallest index + dataset that exercises the behavior, then run the exact FT.* command the valkey-search code path parses. Use `./scripts/redisearch-docker.sh cli <ARGS...>` for one-offs or pipe a script into `... cli` on stdin. See `references/probe-recipes.md` for ready-made probes (unused PARAMS, DIALECT, SORTBY/LIMIT, ADDSCORES, RESP3).
 
 4. **Diff against valkey-search — and prefer the harness for anything permanent.** For a quick check, run the same command shape against a local `valkey-server` loading `libsearch.so` (see `valkey-search-contrib`), passing any module args via a temporary `.conf` file per `AGENTS.md` (never on the command line), and compare replies. Where they differ, that gap is the bug (or the intended divergence). If the behavior can be generated, capture it as a `generate_*.py` case in `integration/compatibility/`, regenerate the pickle, and run the suite through the devcontainer the way `AGENTS.md` mandates:
 
    ```bash
-   .devcontainer/run_in_docker.sh ./build.sh --run-integration-tests --debug   # full suite
-   TEST_PATTERN=compatibility integration/run.sh                               # filter to the compat replay
+   .devcontainer/run_in_docker.sh ./build.sh --run-integration-tests --debug        # full suite
+   .devcontainer/run_in_docker.sh bash -c 'TEST_PATTERN=compatibility integration/run.sh'   # filter to the compat replay
    ```
+
+   The wrapper does not forward `TEST_PATTERN`, so set it *inside* the container (via `bash -c`) rather than on the host — running `integration/run.sh` directly on the host bypasses the reproducible environment `AGENTS.md` requires.
 
    A one-off manual diff protects nothing after you close the terminal; the generated case in `compatibility_test.py` is what guards against regression.
 
 5. **Document the measurement.** Put the RediSearch version, the exact commands, and the observed reply in the commit body and PR description, and state which `COMPATIBILITY.md` category the divergence falls under (expected-compatibility bug vs. non-goal). A parity claim without the reproducing commands is not verifiable.
 
-6. **Tear down.** `scripts/redisearch-docker.sh down` — the container is disposable; never leave it running.
+6. **Tear down.** `./scripts/redisearch-docker.sh down` — the container is disposable; never leave it running.
 
 ## Key facts
 
@@ -150,11 +153,11 @@ Use this for a one-off "what does RediSearch do here?" look. If the case can be 
 | Classify the divergence | read `COMPATIBILITY.md` at the valkey-search repo root |
 | Regenerate reference pickles | `./integration/compatibility/regenerate.sh` (uses `redis:latest`; commit the updated `*.pickle.gz`) |
 | Run the compat suite (per AGENTS.md) | `.devcontainer/run_in_docker.sh ./build.sh --run-integration-tests --debug` |
-| Filter to the compat replay | `TEST_PATTERN=compatibility integration/run.sh` |
-| Start RediSearch (harness reference) | `RS_IMAGE=redis:latest scripts/redisearch-docker.sh up` |
-| Start redis-stack (reference disagreement only) | `RS_IMAGE=redis/redis-stack-server:7.4.0-v1 scripts/redisearch-docker.sh up` |
-| One-off command | `scripts/redisearch-docker.sh cli FT.SEARCH idx '*'` |
-| Interactive shell | `scripts/redisearch-docker.sh cli` |
-| RESP3 reply shape | `scripts/redisearch-docker.sh cli -3 FT.SEARCH idx '*'` |
-| Capture module version | `scripts/redisearch-docker.sh cli MODULE LIST` |
-| Tear down | `scripts/redisearch-docker.sh down` |
+| Filter to the compat replay | `.devcontainer/run_in_docker.sh bash -c 'TEST_PATTERN=compatibility integration/run.sh'` |
+| Start RediSearch (harness reference) | `RS_IMAGE=redis:latest ./scripts/redisearch-docker.sh up` (from the skill dir) |
+| Start redis-stack (reference disagreement only) | `RS_IMAGE=redis/redis-stack-server:7.4.0-v1 ./scripts/redisearch-docker.sh up` |
+| One-off command | `./scripts/redisearch-docker.sh cli FT.SEARCH idx '*'` |
+| Interactive shell | `./scripts/redisearch-docker.sh cli` |
+| RESP3 reply shape | `./scripts/redisearch-docker.sh cli -3 FT.SEARCH idx '*'` |
+| Capture module version | `./scripts/redisearch-docker.sh cli MODULE LIST` |
+| Tear down | `./scripts/redisearch-docker.sh down` |

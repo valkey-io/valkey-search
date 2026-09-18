@@ -3,8 +3,10 @@
 Ready-made command sequences for measuring RediSearch reference behavior. These are for
 the *quick-look* path; if the behavior can be generated, add it to the repo's canonical
 harness (`integration/compatibility/`) instead so the check is permanent — see the skill's
-Overview. Run each against the Docker container (`scripts/redisearch-docker.sh cli <ARGS...>`),
-then run the same shape against `valkey-server` + `libsearch.so` and diff the replies.
+Overview. Run each against the Docker container with the skill's helper
+(`./scripts/redisearch-docker.sh cli <ARGS...>`, run from the skill dir
+`.agents/skills/redisearch-compat-testing`), then run the same shape against
+`valkey-server` + `libsearch.so` and diff the replies.
 
 Match the harness reference engine: start the container with `RS_IMAGE=redis:latest`
 (Redis 8, native RediSearch) — that is what `integration/compatibility/` records against.
@@ -19,7 +21,7 @@ non-goal — most commonly error-message *wording* — no measurement is needed.
 Always capture the version first so the result is reproducible:
 
 ```bash
-scripts/redisearch-docker.sh cli MODULE LIST
+./scripts/redisearch-docker.sh cli MODULE LIST
 ```
 
 ## Unused / undefined PARAMS (issue #1372)
@@ -85,8 +87,8 @@ Reply structure (arrays vs maps, field ordering) can differ by protocol version.
 both when the change touches reply format:
 
 ```
-scripts/redisearch-docker.sh cli    FT.SEARCH idx "*" DIALECT 2   # RESP2
-scripts/redisearch-docker.sh cli -3 FT.SEARCH idx "*" DIALECT 2   # RESP3
+./scripts/redisearch-docker.sh cli    FT.SEARCH idx "*" DIALECT 2   # RESP2
+./scripts/redisearch-docker.sh cli -3 FT.SEARCH idx "*" DIALECT 2   # RESP3
 ```
 
 ## Diffing against valkey-search

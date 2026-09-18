@@ -1,12 +1,20 @@
 # RediSearch probe recipes
 
-Ready-made command sequences for measuring RediSearch reference behavior. Run each
-against the Docker container (`scripts/redisearch-docker.sh cli <ARGS...>`), then run
-the same shape against `valkey-server` + `libsearch.so` and diff the replies.
+Ready-made command sequences for measuring RediSearch reference behavior. These are for
+the *quick-look* path; if the behavior can be generated, add it to the repo's canonical
+harness (`integration/compatibility/`) instead so the check is permanent — see the skill's
+Overview. Run each against the Docker container (`scripts/redisearch-docker.sh cli <ARGS...>`),
+then run the same shape against `valkey-server` + `libsearch.so` and diff the replies.
+
+Match the harness reference engine: start the container with `RS_IMAGE=redis:latest`
+(Redis 8, native RediSearch) — that is what `integration/compatibility/` records against.
+Only bring in `redis/redis-stack-server` to explain a reference-vs-reference disagreement
+(see `integration/compatibility/known_differences.md §2`).
 
 Before running any of these, classify the question against the repo's `COMPATIBILITY.md`
-(see the skill's step 0): if it is an explicit non-goal — most commonly error-message
-*wording* — no measurement is needed.
+(see the skill's step 0) and check `integration/compatibility/known_differences.md` /
+`unsupported_tests.md` — the case may already be documented. If it is an explicit
+non-goal — most commonly error-message *wording* — no measurement is needed.
 
 Always capture the version first so the result is reproducible:
 

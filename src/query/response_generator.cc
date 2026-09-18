@@ -31,6 +31,7 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -160,8 +161,17 @@ FilterVerification VerifyFilter(
     return {true, std::nullopt};
   }
   auto db_seq =
-      parameters.index_schema->GetDbMutationSequenceNumber(n.external_id);
-  if (db_seq == n.sequence_number) {
+      parameters.index_schema->TryGetDbMutationSequenceNumber(n.external_id);
+  if (!db_seq.has_value()) {
+    // The index stopped tracking the key between the search and this
+    // revalidation. A deleting mutation erases its entry, and so does an
+    // index-level FILTER that now rejects the document -- which leaves the
+    // key readable, so the content fetch above succeeded and we are the first
+    // to notice. Either way the document is no longer a member of the index,
+    // so it does not match and the caller drops it.
+    return {false, std::nullopt};
+  }
+  if (*db_seq == n.sequence_number) {
     return {true, std::nullopt};
   }
   predicate_revalidation.Increment();
@@ -199,14 +209,41 @@ FilterVerification VerifyFilter(
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
-    const indexes::text::TextIndex *text_index =
-        parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
-            n.external_id, true);
+    // We run on the main thread, outside the background search's reader lock,
+    // while ingestion workers mutate the index. A key's per-key TextIndex does
+    // NOT own private postings: CommitKeyData installs the very same
+    // InvasivePtr<Postings> that the per-index tree holds (see the sharing
+    // invariant in text_index.h and the "Per-key tree became unaligned" CHECK
+    // in text_index.cc), so walking this key's tree reaches Postings shared
+    // with every other key containing the token. The reader there
+    // (Postings::KeyIterator over key_to_positions_) races the writer's
+    // emplace/extract, which holds only the per-word bucket mutex we do not
+    // take. So hold the reader lock across BOTH the index lookup and the
+    // evaluation -- spanning the lookup also closes the returned-pointer
+    // lifetime hazard, since DeleteKeyData runs under the writer lock.
+    //
+    // The lock MUST be released before recompute(): it builds and calls
+    // SingleDocumentScorer, which acquires this same mutex internally, and
+    // TimeSlicedMRMWMutex is non-reentrant -- a nested acquire can deadlock in
+    // SwitchWithWait() (see the SingleDocumentScorer contract in search.h).
+    // Do not widen this scope. Cost is bounded: the sequence-number fast path
+    // above returns for any unmutated key, so we only lock for revalidated
+    // documents.
+    EvaluationResult result(false);
+    {
+      vmsdk::ReaderMutexLock lock(
+          &parameters.index_schema->GetTimeSlicedMutex());
+      // lock=false: the per-key map mutex is redundant under the reader lock,
+      // matching the in-query prefilter callers in search.cc.
+      const indexes::text::TextIndex *text_index =
+          parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
+              n.external_id, false);
 
-    PredicateEvaluator evaluator(
-        records, text_index, n.external_id,
-        parameters.filter_parse_results.query_operations);
-    EvaluationResult result = predicate->Evaluate(evaluator);
+      PredicateEvaluator evaluator(
+          records, text_index, n.external_id,
+          parameters.filter_parse_results.query_operations);
+      result = predicate->Evaluate(evaluator);
+    }
     return recompute(result);
   }
   PredicateEvaluator evaluator(
@@ -488,9 +525,15 @@ void ProcessNeighborsForReply(
   bool any_distance_recomputed = false;
   // A query is ordered by its KNN distance only when the distance is all it
   // ranks on: a `text=>[KNN ...]` query reports a distance but orders by text
-  // relevance, which ApplyHybridTextScore put in Neighbor.score.
+  // relevance, which ApplyHybridTextScore put in Neighbor.score. A VSIM arm
+  // carrying a text FILTER has the same shape but not the same meaning -- its
+  // filter decides membership only, so its score stays the distance, which is
+  // exactly what vector_score_only says and what ApplyHybridTextScore and
+  // TrimResults already read. This mirrors the coordinator's own
+  // per_arm_score_is_distance in ft_hybrid_parser.cc.
   const bool ranks_on_distance =
-      !parameters.IsNonVectorQuery() && !QueryHasTextPredicate(parameters);
+      !parameters.IsNonVectorQuery() &&
+      (parameters.vector_score_only || !QueryHasTextPredicate(parameters));
   indexes::VectorBase *vector_index = nullptr;
   if (!parameters.IsNonVectorQuery() && vector_identifier.has_value() &&
       parameters.index_schema != nullptr) {
@@ -532,25 +575,35 @@ void ProcessNeighborsForReply(
     // A vector query's distance is stale for the same reason and is refreshed
     // the same way, against the vector the document holds now rather than the
     // one the index was carrying when the search ran.
-    if (vector_index != nullptr &&
-        parameters.index_schema->GetDbMutationSequenceNumber(
-            neighbor.external_id) != neighbor.sequence_number) {
-      RecordsMap scratch;
-      auto bytes = CurrentVectorBytes(
-          ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
-          *vector_identifier, content.value(), scratch);
-      if (bytes.has_value()) {
-        auto distance =
-            vector_index->RecomputeDistance(*bytes, parameters.query);
-        if (distance.ok()) {
-          neighbor.distance = *distance;
-          // For a query ranked on the distance the two are the same number;
-          // where they are not, Neighbor.score is a relevance the distance
-          // must not overwrite.
-          if (ranks_on_distance) {
-            neighbor.score = *distance;
+    if (vector_index != nullptr) {
+      auto db_seq = parameters.index_schema->TryGetDbMutationSequenceNumber(
+          neighbor.external_id);
+      if (!db_seq.has_value()) {
+        // As in VerifyFilter: the index no longer tracks this key, so it is
+        // not a member of the index any more. A query carrying a filter has
+        // already dropped it there; an unfiltered vector query reaches it
+        // here. Leave the neighbor without content and the pass below erases
+        // it, which is also what keeps total_count in step.
+        continue;
+      }
+      if (*db_seq != neighbor.sequence_number) {
+        RecordsMap scratch;
+        auto bytes = CurrentVectorBytes(
+            ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
+            *vector_identifier, content.value(), scratch);
+        if (bytes.has_value()) {
+          auto distance =
+              vector_index->RecomputeDistance(*bytes, parameters.query);
+          if (distance.ok()) {
+            neighbor.distance = *distance;
+            // For a query ranked on the distance the two are the same number;
+            // where they are not, Neighbor.score is a relevance the distance
+            // must not overwrite.
+            if (ranks_on_distance) {
+              neighbor.score = *distance;
+            }
+            any_distance_recomputed = true;
           }
-          any_distance_recomputed = true;
         }
       }
     }

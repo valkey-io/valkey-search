@@ -132,7 +132,7 @@ absl::Status IndexSchema::TextInfoCmd(ValkeyModuleCtx* ctx,
       // Reply with parent words set
       const auto& stem_parents_ptr = stem_wi.GetStemParentsTarget();
       if (stem_parents_ptr) {
-        const auto& parents = *stem_parents_ptr;
+        const auto& parents = stem_parents_ptr->parents;
         ValkeyModule_ReplyWithArray(ctx, parents.size());
         for (const auto& parent : parents) {
           ValkeyModule_ReplyWithStringBuffer(ctx, parent.data(), parent.size());

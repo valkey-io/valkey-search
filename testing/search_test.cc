@@ -1474,14 +1474,15 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
   // (ScoreNode's numeric case returns 0 without touching the index).
   std::shared_ptr<MockIndexSchema> BuildTextTagSchema(
       const std::vector<std::tuple<std::string, std::string, std::string>>
-          &docs) {
+          &docs,
+      bool no_stem = true) {
     auto schema = CreateIndexSchema(kIndexSchemaName).value();
     EXPECT_CALL(*schema, GetIdentifier(::testing::_))
         .Times(::testing::AnyNumber());
     schema->CreateTextIndexSchema();
     auto text_schema = schema->GetTextIndexSchema();
     auto text = std::make_shared<indexes::Text>(
-        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        CreateTextIndexProto(/*with_suffix_trie=*/true, no_stem, 1.0),
         text_schema);
     VMSDK_EXPECT_OK(schema->AddIndex("text", "text", text));
     auto tag = std::make_shared<indexes::Tag>(
@@ -1521,6 +1522,44 @@ class ScoreTextQueryTestBase : public ValkeySearchTest {
       auto key = StringInternStore::Intern(k);
       VMSDK_EXPECT_OK(tag->AddRecord(
           key, AttributeData(vmsdk::MakeUniqueValkeyString(color))));
+      schema->SetIndexMutationSequenceNumber(key, 0);
+    }
+    return schema;
+  }
+
+  // Schema with two TEXT fields ("title" stems, "body" is NOSTEM) sharing one
+  // posting tree, plus a numeric field "rating" so combined text+numeric
+  // queries parse. Docs are (key, title, body); "" skips that field.
+  std::shared_ptr<MockIndexSchema> BuildTwoTextFieldSchema(
+      const std::vector<std::tuple<std::string, std::string, std::string>>
+          &docs) {
+    auto schema = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber());
+    schema->CreateTextIndexSchema();
+    auto text_schema = schema->GetTextIndexSchema();
+    auto title = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/false, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("title", "title", title));
+    auto body = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema->AddIndex("body", "body", body));
+    auto numeric =
+        std::make_shared<indexes::Numeric>(CreateNumericIndexProto());
+    VMSDK_EXPECT_OK(schema->AddIndex("rating", "rating", numeric));
+    for (const auto &[k, title_text, body_text] : docs) {
+      auto key = StringInternStore::Intern(k);
+      if (!title_text.empty()) {
+        VMSDK_EXPECT_OK(title->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(title_text))));
+      }
+      if (!body_text.empty()) {
+        VMSDK_EXPECT_OK(body->AddRecord(
+            key, AttributeData(vmsdk::MakeUniqueValkeyString(body_text))));
+      }
+      text_schema->CommitKeyData(key);
       schema->SetIndexMutationSequenceNumber(key, 0);
     }
     return schema;
@@ -1927,6 +1966,177 @@ TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
             indexes::scoring::ScorerType::kBm25Std);
 }
 
+// --- Stemmed-term scoring (extra-step path), docs/redis_stemming_scoring.md
+// --- A stemmed query term expands to a UNION of independent BM25 leaves that
+// are SUMMED, each with its own IDF and F: the exact surface term, the stem
+// root literal, and the stem inflection group. Oracle values are pinned
+// identically in the in-iterator path (text_test.cc
+// StemScoringTest.ThreeLeafScores...), so this also guards that the two scoring
+// paths agree.
+TEST_F(ScoreTextQueryTestBase, StemThreeLeafScoresMatchOracle) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  auto d1 = Score(*schema, "@text:running", "d1");
+  auto d2 = Score(*schema, "@text:running", "d2");
+  auto d3 = Score(*schema, "@text:running", "d3");
+  ASSERT_TRUE(d1 && d2 && d3);
+  // d1 "running": exact leaf (idf 0.98) + stem leaf (idf 0.47, dt=2 distinct).
+  EXPECT_NEAR(*d1, 1.450833f, 1e-3f);
+  // d3 "run": scored only on the stem root literal leaf (its own idf 0.98).
+  EXPECT_NEAR(*d3, 0.980829f, 1e-3f);
+  // d2 "runs": scored only on the stem inflection leaf.
+  EXPECT_NEAR(*d2, 0.470004f, 1e-3f);
+  // Exact-form match outranks the root literal, which outranks the inflection.
+  EXPECT_GT(*d1, *d3);
+  EXPECT_GT(*d3, *d2);
+}
+
+// $weight multiplies the WHOLE expansion — every leaf of the stemmed term.
+TEST_F(ScoreTextQueryTestBase, StemWeightScalesWholeExpansion) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  auto plain = Score(*schema, "@text:running", "d1");
+  auto weighted = Score(*schema, "(@text:running) => { $weight: 2; }", "d1");
+  ASSERT_TRUE(plain && weighted);
+  EXPECT_NEAR(*weighted, 2.0f * *plain, 1e-3f);
+}
+
+// The recompute path (SingleDocumentScorer) must match the shard-side
+// extra-step path (ScoreTextQuery) on a STEMMED query too — both walk the same
+// grouped ScoreNode, so a divergence in the stem split is caught here.
+TEST_F(ScoreTextQueryTestBase, StemRecomputePathMatchesExtraStep) {
+  auto schema = BuildTextTagSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "run", ""}},
+      /*no_stem=*/false);
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@text:running";
+
+  auto extra_step = Score(*schema, filter, "d1");
+  ASSERT_TRUE(extra_step.has_value());
+  EXPECT_GT(*extra_step, 0.0f);
+
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::SingleDocumentScorer document_scorer(
+      *schema, parsed.value().root_predicate.get(), scorer);
+  auto recomputed = document_scorer.Score(StringInternStore::Intern("d1"));
+  ASSERT_TRUE(recomputed.has_value());
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
+// --- Field-scoped extra-step admission ---
+// All TEXT fields share one posting tree, so a key's presence in a term's
+// posting list does not mean the term occurred in the queried field. A doc
+// holding the term only in ANOTHER field must contribute nothing on the
+// extra-step path (the numeric clause forces it; ScoreTextQuery keeps the
+// candidate at score 0 rather than dropping it), matching term.cc's
+// in-iterator gating via ContainsFields.
+TEST_F(ScoreTextQueryTestBase, FieldScopedTermGatesExtraStepAdmission) {
+  auto schema =
+      BuildTwoTextFieldSchema({{"d1", "hello", ""}, {"d2", "", "hello"}});
+  // d1 carries `hello` only in title: the @body leaf must contribute nothing.
+  auto d1 = Score(*schema, "@body:hello @rating:[0 100]", "d1");
+  ASSERT_TRUE(d1.has_value());
+  EXPECT_FLOAT_EQ(*d1, 0.0f);
+  auto d2 = Score(*schema, "@body:hello @rating:[0 100]", "d2");
+  ASSERT_TRUE(d2.has_value());
+  EXPECT_GT(*d2, 0.0f);
+  // Unscoped, the mask covers all fields (the ~0ULL sentinel): both score, and
+  // equally (same tf, doc_len, and df).
+  auto u1 = Score(*schema, "hello @rating:[0 100]", "d1");
+  auto u2 = Score(*schema, "hello @rating:[0 100]", "d2");
+  ASSERT_TRUE(u1 && u2);
+  EXPECT_FLOAT_EQ(*u1, *u2);
+}
+
+// A stemmed field-scoped term must not score a doc whose only inflection lives
+// in a NOSTEM field: the inflection posting exists (d2 put `runs` in the stem
+// tree via the stemming title field), but d3 carries `runs` only in body.
+TEST_F(ScoreTextQueryTestBase, StemVariantInNoStemFieldNotScored) {
+  auto schema = BuildTwoTextFieldSchema(
+      {{"d1", "running", ""}, {"d2", "runs", ""}, {"d3", "", "runs"}});
+  auto d1 = Score(*schema, "@title:running @rating:[0 100]", "d1");
+  auto d2 = Score(*schema, "@title:running @rating:[0 100]", "d2");
+  ASSERT_TRUE(d1 && d2);
+  EXPECT_GT(*d1, *d2);  // exact form outranks the inflection
+  // d3's `runs` is in the shared posting list but only at body positions.
+  auto d3 = Score(*schema, "@title:running @rating:[0 100]", "d3");
+  ASSERT_TRUE(d3.has_value());
+  EXPECT_FLOAT_EQ(*d3, 0.0f);
+}
+
+// Querying `running` also scores the stem root `run` — but only in fields that
+// stem. d3 and d4 both hold `run`, d3 in NOSTEM body and d4 in stemming title,
+// so only d4 may score.
+TEST_F(ScoreTextQueryTestBase, StemRootLiteralInNoStemFieldNotScored) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
+                                         {"d2", "runs", ""},
+                                         {"d3", "", "run"},
+                                         {"d4", "run", ""}});
+  const std::string filter = "@title:running @rating:[0 100]";
+  auto d3 = Score(*schema, filter, "d3");
+  ASSERT_TRUE(d3.has_value());
+  EXPECT_FLOAT_EQ(*d3, 0.0f);
+  auto d4 = Score(*schema, filter, "d4");
+  ASSERT_TRUE(d4.has_value());
+  EXPECT_GT(*d4, 0.0f);
+  // Searching `run` directly does find d3, so the 0 above is the field gate and
+  // not a missing posting.
+  auto literal = Score(*schema, "@body:run @rating:[0 100]", "d3");
+  ASSERT_TRUE(literal.has_value());
+  EXPECT_GT(*literal, 0.0f);
+  // Pure-text queries score in the iterator instead; same verdict expected.
+  EXPECT_FALSE(ScoreViaIterator(*schema, "@title:running", "d3"));
+  EXPECT_TRUE(ScoreViaIterator(*schema, "@title:running", "d4"));
+}
+
+// Same rule with no field named: an unscoped query searches body too, yet
+// stemming stays off there, so `run`/`runs` in body still score nothing. This
+// is the only query shape where "all fields" and "stemming fields" differ.
+TEST_F(ScoreTextQueryTestBase, UnscopedStemDoesNotReachNoStemField) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "running", ""},
+                                         {"d2", "runs", ""},
+                                         {"d3", "", "run"},
+                                         {"d5", "", "runs"}});
+  const std::string filter = "running @rating:[0 100]";
+  auto d1 = Score(*schema, filter, "d1");
+  ASSERT_TRUE(d1.has_value());
+  EXPECT_GT(*d1, 0.0f);
+  // d3 holds the root `run`, d5 the inflection `runs` -- both in body only.
+  for (const auto &key : {"d3", "d5"}) {
+    auto score = Score(*schema, filter, key);
+    ASSERT_TRUE(score.has_value()) << key;
+    EXPECT_FLOAT_EQ(*score, 0.0f) << key;
+    EXPECT_FALSE(ScoreViaIterator(*schema, "running", key)) << key;
+  }
+}
+
+// The recompute path (SingleDocumentScorer) walks the same grouped ScoreNode,
+// so field-scoped admission must agree with the extra-step path.
+TEST_F(ScoreTextQueryTestBase, FieldScopedRecomputePathAgrees) {
+  auto schema =
+      BuildTwoTextFieldSchema({{"d1", "hello", ""}, {"d2", "", "hello"}});
+  const auto *scorer =
+      indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
+  const std::string filter = "@body:hello @rating:[0 100]";
+  TextParsingOptions options{};
+  auto parsed = FilterParser(*schema, filter, options).Parse();
+  ASSERT_TRUE(parsed.ok()) << parsed.status();
+  query::SingleDocumentScorer document_scorer(
+      *schema, parsed.value().root_predicate.get(), scorer);
+  // SingleDocumentScorer reports a non-match as nullopt (its caller owns the
+  // keep-or-drop decision); the field-scoped leaf must reject d1.
+  EXPECT_FALSE(document_scorer.Score(StringInternStore::Intern("d1")));
+  auto recomputed = document_scorer.Score(StringInternStore::Intern("d2"));
+  auto extra_step = Score(*schema, filter, "d2");
+  ASSERT_TRUE(recomputed && extra_step);
+  EXPECT_FLOAT_EQ(*recomputed, *extra_step);
+}
+
 // --- Prefix / suffix / fuzzy expansion scoring (in-iterator path) ------------
 //
 // Contract (docs/redis_prefix_suffix_fuzzy_scoring.md): an expansion
@@ -2082,6 +2292,32 @@ TEST_F(ScoreTextQueryTestBase, ExtraStepPrefixInCombinedQueryScored) {
   ASSERT_TRUE(combined && prefix_only);
   EXPECT_GT(*combined, 0.0f);
   EXPECT_FLOAT_EQ(*combined, *prefix_only);
+}
+
+// A field-scoped expansion must represent a doc by a term it carries in THAT
+// field. d1 holds alxta in title and alzta in body, so `@body:al*` may only
+// score it on alzta -- even though alxta sorts first among the matched terms.
+// The two terms have different doc counts, so the wrong pick is visible.
+TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
+  auto schema = BuildTwoTextFieldSchema({{"d1", "alxta", "alzta"},
+                                         {"d2", "alxta", ""},
+                                         {"d3", "alxta", ""},
+                                         {"d4", "alxta", ""}});
+  auto alzta = Score(*schema, "@body:alzta @rating:[0 100]", "d1");
+  auto alxta = Score(*schema, "@title:alxta @rating:[0 100]", "d1");
+  ASSERT_TRUE(alzta && alxta);
+  ASSERT_GT(*alzta, *alxta) << "fixture must give the two terms distinct IDFs";
+  // Prefix, suffix and fuzzy all expand to both terms; all must pick alzta.
+  for (const auto &pattern : {"@body:al*", "@body:*ta", "@body:%alata%"}) {
+    auto scoped =
+        Score(*schema, absl::StrCat(pattern, " @rating:[0 100]"), "d1");
+    ASSERT_TRUE(scoped.has_value()) << pattern;
+    EXPECT_FLOAT_EQ(*scoped, *alzta) << pattern;
+    // Pure-text queries score in the iterator instead; same pick expected.
+    auto in_iter = ScoreViaIterator(*schema, pattern, "d1");
+    ASSERT_TRUE(in_iter.has_value()) << pattern;
+    EXPECT_FLOAT_EQ(*in_iter, *alzta) << pattern;
+  }
 }
 
 // --- Tag prefix expansion scoring (extra-step path) --------------------------

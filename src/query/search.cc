@@ -2504,6 +2504,8 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
     VMSDK_ASSIGN_OR_RETURN(
         parameters.parse_vars.score_as_string,
         SubstituteParam(parameters, parameters.parse_vars.score_as_string));
+    parameters.score_as =
+        vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
   }
   return absl::OkStatus();
 }

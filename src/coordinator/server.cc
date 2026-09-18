@@ -120,10 +120,15 @@ void SerializeNeighbors(SearchIndexPartitionResponse *response,
 // on_done callback supplied by the wrapping handler. on_done is responsible
 // for finishing the gRPC reactor (single-arm) or decrementing the multi-arm
 // completion counter and finishing when the last arm reports.
+//
+// on_done is held through a shared_ptr, not by value: the callback is
+// move-only, and EnqueueSearchRequest must keep a handle on it so it can
+// still finish the call when the operation is never scheduled (see there).
+// It is invoked exactly once -- here, or by EnqueueSearchRequest, never both.
 class RemoteResponderSearch : public query::SearchParameters {
  public:
   SearchIndexPartitionResponse *response;
-  ArmCompletionCallback on_done;
+  std::shared_ptr<ArmCompletionCallback> on_done;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   size_t total_count;
   void QueryCompleteBackground(
@@ -143,19 +148,19 @@ class RemoteResponderSearch : public query::SearchParameters {
  private:
   void QueryCompleteImpl() {
     if (!search_result.status.ok() && !enable_partial_results) {
-      on_done(ToGrpcStatus(search_result.status));
+      (*on_done)(ToGrpcStatus(search_result.status));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
     if (cancellation_token->IsCancelled()) {
-      on_done({grpc::StatusCode::DEADLINE_EXCEEDED,
-               std::string(query::kTimeoutMsg)});
+      (*on_done)({grpc::StatusCode::DEADLINE_EXCEEDED,
+                  std::string(query::kTimeoutMsg)});
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
-    on_done(grpc::Status::OK);
+    (*on_done)(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
 };
@@ -195,18 +200,27 @@ void Service::EnqueueSearchRequest(
     ArmCompletionCallback on_done) {
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
-  search_operation->on_done = std::move(on_done);
-  // SearchAsync unconditionally schedules the operation on the reader thread
-  // pool and currently always returns OkStatus; the moved-in on_done travels
-  // with the operation and is invoked from the scheduled task on completion.
-  // Guard defensively in case that ever changes — but never touch the
-  // moved-from operation here (that would be a use-after-move).
+  // Keep a handle on the (move-only) completion callback. The operation is
+  // about to be moved into SearchAsync, so on failure it is gone and cannot be
+  // asked for its callback back; sharing it is what lets this frame finish the
+  // call itself.
+  auto shared_on_done =
+      std::make_shared<ArmCompletionCallback>(std::move(on_done));
+  search_operation->on_done = shared_on_done;
   auto status =
       query::SearchAsync(std::move(search_operation), reader_thread_pool,
                          query::SearchMode::kRemote);
   if (!status.ok()) {
+    // The reader thread pool refused the task (it is in stop mode), so the
+    // operation was destroyed without running and nothing else will ever
+    // complete this arm. Terminate it here instead of leaving the caller's
+    // reactor -- or, for multi-arm, the completion counter -- unfinished until
+    // the client's deadline expires. Never touch `search_operation` here: it
+    // was moved from.
     VMSDK_LOG(WARNING, detached_ctx)
         << "Failed to enqueue search request: " << status.message();
+    RecordSearchMetrics(true, nullptr);
+    (*shared_on_done)(ToGrpcStatus(status));
   }
 }
 

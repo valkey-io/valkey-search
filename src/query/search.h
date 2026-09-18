@@ -58,6 +58,10 @@ constexpr absl::string_view kFailedPreconditionMsg{
 constexpr absl::string_view kTimeoutMsg{
     "Search operation cancelled due to timeout"};
 constexpr absl::string_view kQueueDepthMsg{"Search query queue depth exceeded"};
+// Reported when the reader thread pool refuses to schedule a search because it
+// has entered stop mode (this node is shutting down).
+constexpr absl::string_view kShuttingDownMsg{
+    "Search request rejected: the reader thread pool is shutting down"};
 constexpr uint32_t kDialect{2};
 
 // Parser keywords
@@ -341,6 +345,12 @@ using SearchResponseCallback =
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode);
 
+// Schedules `parameters` on `thread_pool`; the search and its completion run
+// on a pool worker. Returns UnavailableError (kShuttingDownMsg) if the pool
+// refuses the task because it is in stop mode: in that case the search will
+// never run and nothing will call the parameters' completion path, so the
+// caller owns terminating whatever is waiting on the query. `parameters` is
+// consumed either way.
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);

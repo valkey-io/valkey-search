@@ -318,7 +318,7 @@ void PerformRemoteSearchRequest(
 
   client->SearchIndexPartition(
       std::move(request),
-      [tracker, address = std::string(address)](
+      [tracker, address](
           grpc::Status status,
           coordinator::SearchIndexPartitionResponse &response) mutable {
         tracker->HandleResponse(response, address, status);
@@ -332,8 +332,8 @@ void PerformRemoteSearchRequestAsync(
     std::shared_ptr<SearchPartitionResultsTracker> tracker,
     vmsdk::ThreadPool *thread_pool) {
   thread_pool->Schedule(
-      [coordinator_client_pool, address = std::string(address),
-       request = std::move(request), tracker]() mutable {
+      [coordinator_client_pool, address, request = std::move(request),
+       tracker]() mutable {
         PerformRemoteSearchRequest(std::move(request), address,
                                    coordinator_client_pool, tracker);
       },

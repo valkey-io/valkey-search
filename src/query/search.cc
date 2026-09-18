@@ -939,6 +939,11 @@ struct ResolvedLeaf {
   const indexes::Tag *tag_index = nullptr;
   absl::InlinedVector<std::pair<std::string, float>, 4> tag_values;
 
+  // Tag prefix query values (`foo*`), as views into the TagPredicate's tag
+  // strings. Nothing is precomputed: the representative value is per-document,
+  // so Tag::GetPrefixMatchDocCount resolves its dt per candidate.
+  absl::InlinedVector<absl::string_view, 2> tag_prefixes;
+
   // --- Expansion leaf (Prefix/Suffix/Fuzzy) ---
   // One entry per matched expansion term: its posting list plus that term's own
   // precomputed IDF. An expansion contributes exactly ONE matched term's BM25
@@ -1153,6 +1158,14 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         std::string norm =
             case_sensitive ? value : absl::AsciiStrToLower(value);
         if (!seen.insert(norm).second) continue;
+        // A prefix value (`foo*`) is scored as an expansion: ScoreNode credits
+        // a single representative matched value per document (never the sum).
+        // Which value that is depends on the document, so only the prefix is
+        // recorded here; the dt/IDF resolve per candidate.
+        if (!value.empty() && value.back() == '*') {
+          leaf.tag_prefixes.push_back(value);
+          continue;
+        }
         uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
             tag_index->GetTagValueDocCount(value), total_docs));
         // A value absent from the index (dt == 0) has no matching document and
@@ -1300,7 +1313,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // without rejecting the already-admitted candidate.
       if (it == score_ctx.resolved.end()) return 0.0f;
       const ResolvedLeaf &leaf = it->second;
-      if (leaf.tag_index == nullptr || leaf.tag_values.empty()) return 0.0f;
+      if (leaf.tag_index == nullptr ||
+          (leaf.tag_values.empty() && leaf.tag_prefixes.empty())) {
+        return 0.0f;
+      }
 
       uint32_t doc_len = 0;
       if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
@@ -1318,6 +1334,19 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1, doc_len,
                                             score_ctx.avg_doc_len,
                                             predicate->GetWeight()});
+      }
+      // Each prefix contributes ONE matched value (the doc's first), never the
+      // sum; a union still sums. Clamp as ResolveLeaves does -- dt and
+      // total_docs come from independently-locked counters.
+      for (absl::string_view prefix : leaf.tag_prefixes) {
+        const uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
+            leaf.tag_index->GetPrefixMatchDocCount(prefix, key),
+            score_ctx.total_docs));
+        if (dt == 0) continue;
+        sum += score_ctx.scorer->ScoreLeaf(
+            {score_ctx.scorer->PrecomputeIDF({score_ctx.total_docs, dt}),
+             /*term_frequency=*/1, doc_len, score_ctx.avg_doc_len,
+             predicate->GetWeight()});
       }
       return sum;
     }

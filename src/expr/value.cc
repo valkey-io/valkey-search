@@ -107,6 +107,11 @@ std::string FormatDouble(double d) {
       return "nan";
     }
   }
+  // Normalize -0.0 to +0.0: IEEE 754 multiplication of 0 by a negative number
+  // produces -0.0, but redis:latest formats it as "0", not "-0".
+  if (d == 0.0) {
+    return "0";
+  }
   char storage[32];
   // Redisearch splits on integrality, and so does this. Integers print in
   // fixed notation: "%.12g" would turn an epoch-millisecond 1700000000123

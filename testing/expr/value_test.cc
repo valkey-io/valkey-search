@@ -1362,7 +1362,8 @@ TEST_F(ValueTest, FormatDoubleIntegralUsesFixedNotation) {
 
   // Non-integral, zero and the infinities keep to_chars' rendering.
   EXPECT_EQ(FormatDouble(1.5), "1.5");
-  EXPECT_EQ(FormatDouble(-0.0), "-0");
+  EXPECT_EQ(FormatDouble(-0.0),
+            "0");  // -0.0 normalizes to "0" per redis:latest
   EXPECT_EQ(FormatDouble(std::numeric_limits<double>::infinity()), "inf");
   EXPECT_EQ(FormatDouble(-std::numeric_limits<double>::infinity()), "-inf");
 }

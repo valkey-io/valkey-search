@@ -15,13 +15,16 @@
 #include <utility>
 
 #include "absl/container/flat_hash_set.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/match.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/commands/ft_hybrid_combine.h"
+#include "src/commands/ft_search_parser.h"
 #include "src/expr/expr.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
@@ -65,6 +68,24 @@ constexpr absl::string_view kReturnKw{"RETURN"};
 constexpr absl::string_view kNocontentKw{"NOCONTENT"};
 constexpr absl::string_view kDialectKw{"DIALECT"};
 
+// The aggregate's column 0, seeded before any clause is parsed (see the
+// AddRecordAttribute calls in ParseFtHybridCommand). A YIELD_SCORE_AS alias
+// naming it would ask for the same column to be both the key and the score,
+// so it is refused wherever the clause can appear. Matched exactly as the
+// seeding writes it: `__KEY` is a different output name and claims a column
+// of its own, as the rest of the column machinery is also case-sensitive.
+constexpr absl::string_view kKeyColumnName{"__key"};
+
+// Refuses a YIELD_SCORE_AS alias that names the reserved key column.
+absl::Status RejectReservedScoreAlias(absl::string_view alias) {
+  if (alias == kKeyColumnName) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "YIELD_SCORE_AS `", kKeyColumnName,
+        "` attempts to redefine the reserved `", kKeyColumnName, "` field"));
+  }
+  return absl::OkStatus();
+}
+
 // Returns true if `tok` matches one of the top-level FT.HYBRID keywords that
 // would terminate the SEARCH/VSIM scoped subclause scan. Used by both
 // ParseSearchClause and ParseVsimClause to know when to stop consuming
@@ -98,6 +119,27 @@ bool IsTopLevelKeyword(absl::string_view tok) {
 }
 
 namespace {
+
+// K and EF_RUNTIME are bounded exactly as FT.SEARCH bounds them in
+// VerifyQueryString -- same limits, same message -- because FT.HYBRID never
+// reaches that function.
+absl::Status VerifyKnnK(int k) {
+  const auto max_knn_value = options::GetMaxKnn().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(k, 1, max_knn_value))
+      << "KNN parameter must be a positive integer greater than 0 and cannot "
+         "exceed "
+      << max_knn_value << ".";
+  return absl::OkStatus();
+}
+
+absl::Status VerifyEfRuntime(unsigned ef) {
+  const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(ef, 1, max_ef_runtime_value))
+      << "`EF_RUNTIME` must be a positive integer greater than 0 and cannot "
+         "exceed "
+      << max_ef_runtime_value << ".";
+  return absl::OkStatus();
+}
 
 // Reads a whole token as a non-negative integer.
 //
@@ -166,9 +208,10 @@ void InitArmFromEnvelope(MultiSearchParameters &env, MultiArmShim &arm) {
 }
 
 // SEARCH arm: SEARCH <query> [SCORER ...] [YIELD_SCORE_AS name] [...]
-// The Valkey super-set allows any query the underlying parser accepts —
-// including vector expressions. The arm becomes a vector arm if its query
-// string contains `=>[KNN ...]` etc.
+// The query is any non-vector query the underlying parser accepts. A vector
+// expression -- `*=>[KNN ...]` and friends -- is the VSIM clause's job and is
+// refused; the arm it would build is only detectable once the query string has
+// been parsed, so the rejection lives in ParseFtHybridCommand.
 //
 // IMPORTANT: parse_vars.query_string and parse_vars.query_vector_string are
 // absl::string_view fields — they MUST point at storage that outlives parse
@@ -197,6 +240,14 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
       break;
     }
     auto next = next_or.value();
+    // POLICY is a top-level clause, so it would end the SEARCH arm here and
+    // leave the parse reporting a missing VSIM clause. Say what is wrong
+    // instead. (Inside VSIM it is a legitimate sub-clause; see
+    // ParseVsimClause.)
+    if (absl::EqualsIgnoreCase(next, kPolicyKw)) {
+      return absl::InvalidArgumentError(
+          "POLICY is not supported in the SEARCH clause");
+    }
     if (IsTopLevelKeyword(next)) {
       break;
     }
@@ -204,6 +255,7 @@ absl::Status ParseSearchClause(MultiSearchParameters &env,
       itr.Next();
       VMSDK_ASSIGN_OR_RETURN(auto alias_sv, itr.GetStringView());
       itr.Next();
+      VMSDK_RETURN_IF_ERROR(RejectReservedScoreAlias(alias_sv));
       per_arm_alias = std::string(alias_sv);
       arm->score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
     } else if (absl::EqualsIgnoreCase(next, kScorerKw)) {
@@ -315,9 +367,11 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       inner_itr.Next();
       if (absl::EqualsIgnoreCase(kw, kKKw)) {
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, arm->k));
+        VMSDK_RETURN_IF_ERROR(VerifyKnnK(arm->k));
       } else if (absl::EqualsIgnoreCase(kw, kEfRuntimeKw)) {
         unsigned ef = 0;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, ef));
+        VMSDK_RETURN_IF_ERROR(VerifyEfRuntime(ef));
         arm->ef = ef;
       } else if (absl::EqualsIgnoreCase(kw, kShardKRatioKw)) {
         // Parsed and discarded. It tunes how much of K each shard returns
@@ -366,6 +420,11 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       return absl::InvalidArgumentError("VSIM RANGE requires RADIUS");
     }
   }
+  if (!*vsim_uses_range) {
+    // Covers the default K, which applies when the KNN block is omitted or
+    // empty and can exceed a configured max-vector-knn below it.
+    VMSDK_RETURN_IF_ERROR(VerifyKnnK(arm->k));
+  }
 
   // VSIM-scoped tail subclauses (top-level YIELD_SCORE_AS for VSIM).
   std::optional<std::string> per_arm_alias;
@@ -378,19 +437,38 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
       break;
     }
     auto next = next_or.value();
-    // FILTER is checked before the top-level break, because inside a VSIM
-    // clause it means a pre-filter on the vector search rather than the
-    // aggregate stage it means everywhere else. A FILTER meant as that stage
-    // comes after COMBINE, which has already ended this loop.
-    if (IsTopLevelKeyword(next) && !absl::EqualsIgnoreCase(next, kFilterKw)) {
+    // FILTER, POLICY and BATCH_SIZE are checked before the top-level break,
+    // because inside a VSIM clause they belong to the vector search. FILTER
+    // means a pre-filter on it rather than the aggregate stage it means
+    // everywhere else -- a FILTER meant as that stage comes after COMBINE,
+    // which has already ended this loop -- and POLICY/BATCH_SIZE tune how that
+    // search runs. Letting POLICY end the loop left the token after it to be
+    // read as a top-level one: `KNN 2 K 5 POLICY BATCHES YIELD_SCORE_AS vs`
+    // reached the aggregate parser as a stray `YIELD_SCORE_AS`.
+    const bool vsim_scoped = absl::EqualsIgnoreCase(next, kFilterKw) ||
+                             absl::EqualsIgnoreCase(next, kPolicyKw) ||
+                             absl::EqualsIgnoreCase(next, kBatchSizeKw);
+    if (IsTopLevelKeyword(next) && !vsim_scoped) {
       break;
     }
     if (absl::EqualsIgnoreCase(next, kYieldScoreAsKw)) {
       itr.Next();
       VMSDK_ASSIGN_OR_RETURN(auto alias_sv, itr.GetStringView());
       itr.Next();
+      VMSDK_RETURN_IF_ERROR(RejectReservedScoreAlias(alias_sv));
       per_arm_alias = std::string(alias_sv);
       arm->score_as = vmsdk::MakeUniqueValkeyString(alias_sv);
+    } else if (absl::EqualsIgnoreCase(next, kPolicyKw) ||
+               absl::EqualsIgnoreCase(next, kBatchSizeKw)) {
+      // Both pick how the vector search executes rather than what it answers,
+      // so the value is read and discarded -- the same thing the top-level
+      // POLICY handler does with it.
+      itr.Next();
+      if (!itr.HasNext()) {
+        return absl::InvalidArgumentError(
+            absl::StrCat(next, " requires a value"));
+      }
+      itr.Next();
     } else if (absl::EqualsIgnoreCase(next, kFilterKw)) {
       // FILTER [count] <search-expression> [POLICY <p>] [BATCH_SIZE <n>]
       //
@@ -452,9 +530,8 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
 
   // With a pre-filter, the arm becomes an ordinary query in the FT.SEARCH
   // language -- `<filter>=>[KNN k @field $param]` -- and the existing parser
-  // populates it. That is the same path the Valkey-superset vector-in-SEARCH
-  // form takes, so the pre-filter gets the query planner's filtering for free
-  // instead of a second implementation inside this clause.
+  // populates it, so the pre-filter gets the query planner's filtering for
+  // free instead of a second implementation inside this clause.
   if (!vsim_filter.empty()) {
     std::string knn =
         absl::StrCat("=>[KNN ", arm->k, " @", arm->attribute_alias, " ",
@@ -552,6 +629,7 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
     } else if (absl::EqualsIgnoreCase(kw, kYieldScoreAsKw)) {
       VMSDK_ASSIGN_OR_RETURN(auto alias_sv, inner_itr.GetStringView());
       inner_itr.Next();
+      VMSDK_RETURN_IF_ERROR(RejectReservedScoreAlias(alias_sv));
       env.output_score_name = std::string(alias_sv);
       env.output_score_name_explicit = true;
     } else if (absl::EqualsIgnoreCase(kw, kExprKw)) {
@@ -657,13 +735,24 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // expects: __key at kKeyColumn and the score alias at kScoreColumn.
     // Mirrors AggregateParameters::ParseCommand. Without this, MakeReference
     // fails when any APPLY/FILTER/SORTBY references @<score_alias>.
-    CHECK_EQ(env.agg->AddRecordAttribute("__key", "__key", "__key",
-                                         indexes::IndexerType::kNone),
-             aggregate::AggregateParameters::kKeyColumn);
+    // AddRecordAttribute dedups on the output name and hands back the column
+    // that already carries it, so an alias equal to one of these two names
+    // would land the score in the wrong slot. RejectReservedScoreAlias and
+    // the `__score` guard below are what keep that from happening; the checks
+    // here are the backstop, and they report rather than abort so no future
+    // alias path can take the server down.
+    if (env.agg->AddRecordAttribute("__key", "__key", "__key",
+                                    indexes::IndexerType::kNone) !=
+        aggregate::AggregateParameters::kKeyColumn) {
+      return absl::InternalError("FT.HYBRID could not seed the `__key` column");
+    }
     auto score_sv = vmsdk::ToStringView(env.agg->score_as.get());
-    CHECK_EQ(env.agg->AddRecordAttribute(score_sv, score_sv, score_sv,
-                                         indexes::IndexerType::kNone),
-             aggregate::AggregateParameters::kScoreColumn);
+    if (env.agg->AddRecordAttribute(score_sv, score_sv, score_sv,
+                                    indexes::IndexerType::kNone) !=
+        aggregate::AggregateParameters::kScoreColumn) {
+      return absl::InternalError(absl::StrCat("FT.HYBRID could not seed the `",
+                                              score_sv, "` score column"));
+    }
   }
   // The aggregate parser uses parse_vars_.index_interface_ during expression
   // compilation (APPLY/FILTER/REDUCE) to resolve @<field> references. Stack
@@ -772,8 +861,18 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       continue;
     }
     if (absl::EqualsIgnoreCase(next_or.value(), kDialectKw)) {
-      return absl::InvalidArgumentError(
-          "DIALECT is not configurable for FT.HYBRID");
+      // Range-checked the way FT.SEARCH and FT.AGGREGATE check it in
+      // VerifyQueryString, except that FT.HYBRID implements the one dialect,
+      // so the range is a single value rather than 2..4.
+      itr.Next();
+      uint32_t dialect = 0;
+      VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, dialect));
+      if (dialect != 2) {
+        return absl::InvalidArgumentError(
+            "DIALECT requires a non negative integer >=2 and <= 2");
+      }
+      env.agg->dialect = dialect;
+      continue;
     }
     if (absl::EqualsIgnoreCase(next_or.value(), kNocontentKw)) {
       return absl::InvalidArgumentError(
@@ -903,20 +1002,30 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // AFTER ParseAfterIndex returns — honors the caller's requested timeout
   // instead of the pre-parse default.
   env.timeout_ms = env.agg->timeout_ms;
+  // FT.SEARCH bounds TIMEOUT in VerifyQueryString, which FT.HYBRID never
+  // reaches; same limit, same message.
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (env.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(kTimeoutParam,
+                     " must be a positive integer greater than 0 and "
+                     "cannot exceed ",
+                     max_timeout_ms, "."));
+  }
 
   // Now that PARAMS (if any) are populated on env.agg->parse_vars.params,
   // share the params map with each arm so $name resolves identically. Also
-  // run the per-arm pre/post-parse so vector arms (or vector-in-SEARCH per
-  // the Valkey super-set) get their k/ef/query-blob populated.
-  for (auto &arm : env.arms) {
+  // run the per-arm pre/post-parse so an arm carrying a query string gets its
+  // k/ef/query-blob populated.
+  for (size_t arm_index = 0; arm_index < env.arms.size(); ++arm_index) {
+    auto &arm = env.arms[arm_index];
     arm->parse_vars.params = env.agg->parse_vars.params;
     arm->timeout_ms = env.timeout_ms;
     arm->cancellation_token = env.cancellation_token;
     // Two paths:
-    //  - SEARCH arm (or any arm that came from a non-empty query string,
-    //    including a Valkey-super-set vector-in-SEARCH query like
-    //    `*=>[KNN ...]`): run the existing PreParseQueryString /
-    //    PostParseQueryString pipeline.
+    //  - Any arm that came from a non-empty query string -- the SEARCH arm,
+    //    and a VSIM arm whose FILTER was rewritten into one: run the existing
+    //    PreParseQueryString / PostParseQueryString pipeline.
     //  - Pure VSIM arm (no query string; @field, $param, K already set
     //    directly by the VSIM clause parser): skip PreParse (which would
     //    reject the empty query) and manually substitute the vector
@@ -944,6 +1053,27 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       }
       it->second.first++;  // bump usage refcount
       arm->query = std::string(it->second.second);
+      // A query string arm reaches this check inside PostParseQueryString ->
+      // PostParseVectorParameters; a pure VSIM arm skips both, so it has to
+      // ask here. Routing this branch through PostParseVectorParameters is
+      // not an option: that function reads parse_vars.k_string/ef_string/
+      // score_as_string, none of which the VSIM clause parser populates (it
+      // sets arm->k, arm->ef and arm->score_as directly), so it would die on
+      // `vmsdk::To<unsigned>("")` before reaching the size check. The message
+      // is spelled to match FT.SEARCH's, prefix included, so both spellings
+      // of the same mistake read the same. Without it the wrong size is only
+      // caught by VectorHNSW/VectorFlat::Search at execution, where
+      // enable-partial-results turns an error into a silently empty arm.
+      auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
+      CHECK(vector_index != nullptr);
+      if (arm->query.size() !=
+          static_cast<size_t>(vector_index->GetVectorDataSize())) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "Error parsing vector similarity parameters: query vector blob "
+            "size (",
+            arm->query.size(), ") does not match index's expected size (",
+            vector_index->GetVectorDataSize(), ")."));
+      }
       // Default score_as if the user didn't YIELD_SCORE_AS.
       if (!arm->score_as) {
         auto schema_default =
@@ -955,16 +1085,28 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     } else {
       VMSDK_RETURN_IF_ERROR(arm->PreParseQueryString());
       VMSDK_RETURN_IF_ERROR(arm->PostParseQueryString());
+      // The vector arm is VSIM's. A SEARCH arm written as a vector query --
+      // `*=>[KNN 10 @vec $q]` -- would reach the index by a path that neither
+      // the VSIM clause's K/EF_RUNTIME bounds nor its scoring rules see, so it
+      // is refused rather than quietly honoured. PreParseQueryString is what
+      // sets attribute_alias from the query string, so this is the first point
+      // at which it can be asked. Only the SEARCH arm is checked: the VSIM arm
+      // reaches here too when a FILTER rewrote it into a query string, and
+      // that one is a vector query by construction.
+      if (arm_index == 0 && arm->IsVectorQuery()) {
+        return absl::InvalidArgumentError(
+            "A vector query is not supported in the SEARCH clause; use VSIM");
+      }
     }
     // Record now whether this arm's score is a raw distance: `arms` is emptied
     // at dispatch (each shim is moved into SearchAsync), so fusion cannot ask
-    // the arm later. Neighbor::score is a KNN distance only for a pure vector
-    // arm; anything with a text predicate — a text SEARCH arm, or a
-    // `text=>[KNN ...]` arm whose score ApplyHybridTextScore overwrites with
-    // text relevance — carries a BM25-style relevance score instead.
-    // A VSIM arm's score is its distance whatever its pre-filter contains;
-    // only a SEARCH arm written as a vector query trades its distance for text
-    // relevance.
+    // the arm later. Neighbor::score is a KNN distance only for a vector arm;
+    // a text SEARCH arm carries a BM25-style relevance score instead. A VSIM
+    // arm's score stays its distance whatever its pre-filter contains, which
+    // is what vector_score_only says; the QueryHasTextPredicate arm of the
+    // test guards the `text=>[KNN ...]` shape that ApplyHybridTextScore
+    // overwrites with text relevance, which no FT.HYBRID arm can be written as
+    // any more but which costs nothing to keep answering correctly.
     env.per_arm_score_is_distance.push_back(
         arm->IsVectorQuery() &&
         (arm->vector_score_only || !QueryHasTextPredicate(*arm)));
@@ -987,26 +1129,26 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // Clear the now-stale stack-local index_interface_ pointer.
   env.agg->parse_vars_.index_interface_ = nullptr;
 
-  // A score alias naming a column the LOAD clause also emits is rejected
-  // rather than silently resolved. Both would land in the same reply column,
-  // and which one won was a matter of ordering: the content fetch writes the
-  // database field, then the alias merge overwrites it -- while replacing a
-  // map entry whose key is a view into the value being destroyed. The caller
-  // can rename either side. `LoadField::alias` is the emitted name, so this
-  // covers `LOAD 3 @price AS cost` as well as a plain `LOAD 1 @price`.
+  // A score alias naming a column the LOAD clause explicitly emits is
+  // rejected rather than silently resolved. Both would land in the same reply
+  // column, and the caller can rename either side. `LoadField::alias` is the
+  // emitted name, so this covers `LOAD 3 @price AS cost` as well as a plain
+  // `LOAD 1 @price`.
+  //
+  // `LOAD *` names no fields, so it is not a collision: it emits whatever the
+  // document happens to carry, which the query cannot be expected to know.
+  // Those are resolved at runtime instead, under one rule -- an explicitly
+  // named score always beats a database field of the same name. The per-arm
+  // aliases are attached by AttachArmScore, the fused score by the score
+  // column in CreateRecordsFromNeighbors, and both now win over the fetched
+  // field.
   if (env.agg != nullptr) {
     absl::flat_hash_set<absl::string_view> loaded;
     for (const auto &load : env.agg->loads_) {
       loaded.insert(load.alias);
     }
-    // `LOAD *` names no fields but emits every one the document carries, so
-    // the collision set there is the schema itself.
-    const bool load_all = env.agg->loadall_;
     auto reject_collision = [&](absl::string_view alias) -> absl::Status {
-      const bool collides = loaded.contains(alias) ||
-                            (load_all && env.index_schema != nullptr &&
-                             env.index_schema->GetIdentifier(alias).ok());
-      if (collides) {
+      if (loaded.contains(alias)) {
         return absl::InvalidArgumentError(
             absl::StrCat("YIELD_SCORE_AS `", alias,
                          "` collides with a column loaded by LOAD"));
@@ -1027,8 +1169,9 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // the record-population step matches a column by identifier, and the
     // alias fusion attached wins over the fused value already in the slot.
     // The reference keeps the fused score and ignores the arm's alias; rather
-    // than pick a winner silently, refuse the clash. `__key` is refused by
-    // the LOAD collision above, which sees the synthetic key entry.
+    // than pick a winner silently, refuse the clash. `__key` never reaches
+    // here at all: it is refused at each YIELD_SCORE_AS site, which is the
+    // only guard that runs before the reserved columns are seeded.
     for (const auto &alias : env.per_arm_score_alias) {
       if (alias.has_value() && *alias == env.output_score_name) {
         return absl::InvalidArgumentError(absl::StrCat(

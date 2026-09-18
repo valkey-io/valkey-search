@@ -12,18 +12,23 @@
 // it left EF_RUNTIME unset so the index's own value applies. Neither is
 // visible in a reply.
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/commands/ft_create_parser.h"
+#include "src/commands/ft_search_parser.h"
 #include "src/indexes/numeric.h"
 #include "src/query/multi_search.h"
 #include "testing/common.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/testing_infra/utils.h"
 #include "vmsdk/src/type_conversions.h"
 
@@ -68,7 +73,14 @@ class FTHybridParserTest : public ValkeySearchTest {
     full.push_back("2");
     full.push_back("q");
     full.push_back(std::string(kVectorDimensions * sizeof(float), '\0'));
+    return ParseExact(full);
+  }
 
+  // The same, with nothing appended. Only for the cases that turn on what
+  // follows the last token -- a trailing `POLICY` has a value when a PARAMS
+  // clause follows it.
+  absl::StatusOr<std::unique_ptr<MultiSearchParameters>> ParseExact(
+      const std::vector<std::string> &full) {
     argv_.clear();
     for (const auto &a : full) {
       argv_.push_back(vmsdk::MakeUniqueValkeyString(a));
@@ -277,14 +289,15 @@ TEST_F(FTHybridParserTest, FusedScoreAliasCollidingWithALoadedFieldIsRejected) {
               ::testing::HasSubstr("collides with a column loaded by LOAD"));
 }
 
-TEST_F(FTHybridParserTest, ScoreAliasCollidingWithLoadAllIsRejected) {
-  // `LOAD *` names no fields but emits every one the document carries, so a
-  // score alias that is a schema field collides just the same.
+TEST_F(FTHybridParserTest,
+       ScoreAliasCollidingWithLoadAllIsAcceptedAndResolvedAtRuntime) {
+  // `LOAD *` names no fields; it emits whatever each document happens to
+  // carry, which the query cannot be expected to know. Rejecting it refused
+  // commands that are perfectly serviceable, so the clash is resolved at
+  // runtime instead: the named score wins over the database field.
   auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "n", "VSIM",
                        "@vector", "$q", "KNN", "2", "K", "5", "LOAD", "*"});
-  ASSERT_FALSE(params.ok());
-  EXPECT_THAT(params.status().message(),
-              ::testing::HasSubstr("collides with a column loaded by LOAD"));
+  VMSDK_EXPECT_OK(params);
 }
 
 TEST_F(FTHybridParserTest, ScoreAliasNotNamingALoadedColumnIsAccepted) {
@@ -726,6 +739,399 @@ TEST_F(FTHybridParserTest, AnArmAliasNamingTheFusedScoreIsRejected) {
   auto vsim = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2",
                      "K", "5", "YIELD_SCORE_AS", "__score"});
   EXPECT_FALSE(vsim.ok());
+}
+
+// ---------------------------------------------------------------------
+// Range limits -- the same ones FT.SEARCH enforces in VerifyQueryString
+// ---------------------------------------------------------------------
+
+// Holds a configurable limit at `value` for the duration of a test, then puts
+// back whatever it was, so one test's limit cannot leak into the next.
+class ScopedLimit {
+ public:
+  ScopedLimit(vmsdk::config::Number &option, long long value)
+      : option_(option), saved_(option.GetValue()) {
+    VMSDK_EXPECT_OK(option.SetValue(value));
+  }
+  ~ScopedLimit() { VMSDK_EXPECT_OK(option_.SetValue(saved_)); }
+
+ private:
+  vmsdk::config::Number &option_;
+  long long saved_;
+};
+
+TEST_F(FTHybridParserTest, KAboveTheMaxIsRejected) {
+  ScopedLimit limit(options::GetMaxKnn(), 5);
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "6"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "Invalid range: Value above maximum; KNN parameter must be a "
+            "positive integer greater than 0 and cannot exceed 5.");
+}
+
+TEST_F(FTHybridParserTest, KAtTheMaxIsAccepted) {
+  // The control for the above: it is the limit that rejects, not the clause.
+  ScopedLimit limit(options::GetMaxKnn(), 5);
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 5);
+}
+
+TEST_F(FTHybridParserTest, KOfZeroIsRejected) {
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "0"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            absl::StrCat("Invalid range: Value below minimum; KNN parameter "
+                         "must be a positive integer greater than 0 and cannot "
+                         "exceed ",
+                         options::GetMaxKnn().GetValue(), "."));
+}
+
+TEST_F(FTHybridParserTest, TheDefaultKIsBoundedByTheMaxToo) {
+  // With no KNN block the default K applies, and a max below it has to refuse
+  // the command rather than let the default through unchecked.
+  ScopedLimit limit(options::GetMaxKnn(), 5);
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "Invalid range: Value above maximum; KNN parameter must be a "
+            "positive integer greater than 0 and cannot exceed 5.");
+}
+
+TEST_F(FTHybridParserTest, EfRuntimeAboveTheMaxIsRejected) {
+  ScopedLimit limit(options::GetMaxEfRuntime(), 5);
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "3", "EF_RUNTIME", "6"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "Invalid range: Value above maximum; `EF_RUNTIME` must be a "
+            "positive integer greater than 0 and cannot exceed 5.");
+}
+
+TEST_F(FTHybridParserTest, EfRuntimeAtTheMaxIsAccepted) {
+  ScopedLimit limit(options::GetMaxEfRuntime(), 5);
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "3", "EF_RUNTIME", "5"});
+  VMSDK_EXPECT_OK(params);
+  ASSERT_TRUE(VsimArm(**params).ef.has_value());
+  EXPECT_EQ(*VsimArm(**params).ef, 5u);
+}
+
+TEST_F(FTHybridParserTest, EfRuntimeOfZeroIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "3", "EF_RUNTIME", "0"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            absl::StrCat("Invalid range: Value below minimum; `EF_RUNTIME` "
+                         "must be a positive integer greater than 0 and cannot "
+                         "exceed ",
+                         options::GetMaxEfRuntime().GetValue(), "."));
+}
+
+TEST_F(FTHybridParserTest, TimeoutAboveTheMaxIsRejected) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "TIMEOUT", absl::StrCat(max_timeout_ms + 1)});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            absl::StrCat("TIMEOUT must be a positive integer greater than 0 "
+                         "and cannot exceed ",
+                         max_timeout_ms, "."));
+}
+
+TEST_F(FTHybridParserTest, TimeoutAtTheMaxIsAccepted) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "TIMEOUT", absl::StrCat(max_timeout_ms)});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->timeout_ms, static_cast<uint64_t>(max_timeout_ms));
+}
+
+// ---------------------------------------------------------------------
+// POLICY / BATCH_SIZE inside the VSIM clause
+//
+// Both tune how the vector search runs rather than what it answers, so the
+// value is read and discarded. What matters here is that reading it does not
+// end the VSIM clause -- the token after it still belongs to VSIM.
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, PolicyInsideVsimDoesNotSwallowTheNextToken) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "POLICY", "BATCHES", "YIELD_SCORE_AS", "vs"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(vmsdk::ToStringView(VsimArm(**params).score_as.get()), "vs");
+}
+
+TEST_F(FTHybridParserTest, BatchSizeInsideVsimDoesNotSwallowTheNextToken) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "BATCH_SIZE", "10", "YIELD_SCORE_AS", "vs"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(vmsdk::ToStringView(VsimArm(**params).score_as.get()), "vs");
+}
+
+TEST_F(FTHybridParserTest, PolicyInsideVsimWithNoValueIsRejected) {
+  // Parsed without the usual PARAMS suffix: with one, the clause would read
+  // `PARAMS` as POLICY's value.
+  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                            "KNN", "2", "K", "5", "POLICY"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "POLICY requires a value");
+}
+
+TEST_F(FTHybridParserTest, BatchSizeInsideVsimWithNoValueIsRejected) {
+  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                            "KNN", "2", "K", "5", "BATCH_SIZE"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "BATCH_SIZE requires a value");
+}
+
+TEST_F(FTHybridParserTest, PolicyWithNoModeBlockStillParses) {
+  // The regression guard for the spelling that reaches POLICY with no KNN
+  // block at all: the clause has to accept it and keep the default K.
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "POLICY", "local"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 10);
+}
+
+TEST_F(FTHybridParserTest, PolicyBeforeAnAggregateStageStillParses) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "POLICY", "local", "LIMIT", "0", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).k, 5);
+}
+
+TEST_F(FTHybridParserTest, PolicyInsideTheSearchClauseIsRejected) {
+  // POLICY is a top-level clause; inside SEARCH it used to end the arm and
+  // leave the next token looking like a missing VSIM clause.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "POLICY", "local", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "POLICY is not supported in the SEARCH clause");
+}
+
+// ---------------------------------------------------------------------
+// A vector query belongs in VSIM, not in SEARCH
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, AVectorQueryInTheSearchArmIsRejected) {
+  auto params = Parse({"SEARCH", "*=>[KNN 5 @vector $q]", "VSIM", "@vector",
+                       "$q", "KNN", "2", "K", "5"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "A vector query is not supported in the SEARCH clause; use VSIM");
+}
+
+TEST_F(FTHybridParserTest, ATextQueryInTheSearchArmIsAccepted) {
+  // The control for the above: it is the vector clause that is refused, not
+  // the SEARCH arm's query.
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_FALSE((*params)->arms.at(0)->IsVectorQuery());
+}
+
+// ---------------------------------------------------------------------
+// DIALECT -- range-checked, as FT.SEARCH and FT.AGGREGATE check it, except
+// that FT.HYBRID supports the one dialect.
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, DialectTwoIsAccepted) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "DIALECT", "2"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->agg->dialect, 2);
+}
+
+TEST_F(FTHybridParserTest, DialectBelowTwoIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "DIALECT", "1"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "DIALECT requires a non negative integer >=2 and <= 2");
+}
+
+TEST_F(FTHybridParserTest, DialectAboveTwoIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "DIALECT", "3"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "DIALECT requires a non negative integer >=2 and <= 2");
+}
+
+// ---------------------------------------------------------------------
+// YIELD_SCORE_AS __key -- the reserved key column
+//
+// `__key` is the aggregate's column 0, seeded before any clause is parsed.
+// An alias naming it is refused in every clause that can carry one, so the
+// answer does not depend on which arm asked or on whether a LOAD clause is
+// present.
+// ---------------------------------------------------------------------
+
+constexpr absl::string_view kKeyRedefinition =
+    "YIELD_SCORE_AS `__key` attempts to redefine the reserved `__key` field";
+
+TEST_F(FTHybridParserTest, SearchArmYieldScoreAsKeyIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "__key", "VSIM",
+                       "@vector", "$q", "KNN", "2", "K", "5"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kKeyRedefinition);
+}
+
+TEST_F(FTHybridParserTest, VsimArmYieldScoreAsKeyIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "YIELD_SCORE_AS", "__key"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kKeyRedefinition);
+}
+
+TEST_F(FTHybridParserTest, CombineYieldScoreAsKeyWithNoLoadIsRejected) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "__key"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kKeyRedefinition);
+}
+
+TEST_F(FTHybridParserTest, CombineYieldScoreAsKeyWithLoadAllIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                       "__key", "LOAD", "*"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kKeyRedefinition);
+}
+
+TEST_F(FTHybridParserTest, CombineYieldScoreAsKeyWithLoadFieldIsRejected) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS",
+                       "__key", "LOAD", "1", "@n"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kKeyRedefinition);
+}
+
+TEST_F(FTHybridParserTest, SearchArmYieldScoreAsNonReservedIsAccepted) {
+  // The control: it is the `__key` name that is refused, not the clause.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "text_score",
+                       "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, VsimArmYieldScoreAsNonReservedIsAccepted) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "YIELD_SCORE_AS", "vec_score"});
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, CombineYieldScoreAsNonReservedIsAccepted) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS", "fused"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->output_score_name, "fused");
+}
+
+// ---------------------------------------------------------------------
+// Vector blob size
+// ---------------------------------------------------------------------
+//
+// FT.SEARCH rejects a query blob whose size is not the index's vector data
+// size, in PostParseVectorParameters. A VSIM arm carrying a FILTER is
+// rewritten into a query string and reaches that check through
+// PostParseQueryString; a pure VSIM arm resolves its $param by hand and does
+// not, so the parser checks it there. Both spellings must produce the one
+// message, which is FT.SEARCH's.
+
+// Builds a PARAMS clause binding $q to a blob of `bytes` bytes.
+std::vector<std::string> ParamsWithBlobOf(size_t bytes) {
+  return {"PARAMS", "2", "q", std::string(bytes, '\0')};
+}
+
+std::string BlobSizeError(size_t got) {
+  return absl::StrCat(
+      "Error parsing vector similarity parameters: query vector blob size (",
+      got, ") does not match index's expected size (",
+      kVectorDimensions * sizeof(float), ").");
+}
+
+TEST_F(FTHybridParserTest, PureVsimArmRejectsOverLongVectorBlob) {
+  constexpr size_t kTooLong = kVectorDimensions * sizeof(float) + 4;
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",
+                                "@vector", "$q",       "KNN",
+                                "2",       "K",        "5"};
+  auto extra = ParamsWithBlobOf(kTooLong);
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), BlobSizeError(kTooLong));
+}
+
+TEST_F(FTHybridParserTest, PureVsimArmRejectsUnderLongVectorBlob) {
+  constexpr size_t kTooShort = kVectorDimensions * sizeof(float) - 4;
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",
+                                "@vector", "$q",       "KNN",
+                                "2",       "K",        "5"};
+  auto extra = ParamsWithBlobOf(kTooShort);
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), BlobSizeError(kTooShort));
+}
+
+TEST_F(FTHybridParserTest, PureVsimArmAcceptsCorrectlySizedVectorBlob) {
+  // The control: it is the size that is refused, not the clause.
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",
+                                "@vector", "$q",       "KNN",
+                                "2",       "K",        "5"};
+  auto extra = ParamsWithBlobOf(kVectorDimensions * sizeof(float));
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  VMSDK_EXPECT_OK(params);
+}
+
+TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
+  // The FILTER rewrites the arm into a query string, so this one reaches the
+  // check inside PostParseQueryString. Same message as the pure-VSIM arm.
+  constexpr size_t kTooLong = kVectorDimensions * sizeof(float) + 4;
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",   "@vector",
+                                "$q",     "KNN",       "2",      "K",
+                                "5",      "FILTER",    "@n:[0 3]"};
+  auto extra = ParamsWithBlobOf(kTooLong);
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), BlobSizeError(kTooLong));
+}
+
+
+// ---------------------------------------------------------------------
+// Synchronous local dispatch
+// ---------------------------------------------------------------------
+
+// ExecuteCommand<MultiSearchParameters> routes to this hook whenever the
+// command runs inside MULTI/EXEC or Lua, or the reader thread pool is
+// disabled. FT.HYBRID has no correct synchronous implementation, so the hook
+// is the refusal itself: calling it is the dispatch decision.
+TEST_F(FTHybridParserTest, ExecuteSyncLocalIsRefused) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q"});
+  VMSDK_EXPECT_OK(params);
+  auto status =
+      MultiSearchParameters::ExecuteSyncLocal(&fake_ctx_, std::move(*params));
+  ASSERT_FALSE(status.ok());
+  EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_EQ(status.message(), kSyncLocalUnsupportedMsg);
+  // Both triggers have to be visible in what the caller is told.
+  EXPECT_THAT(std::string(status.message()),
+              ::testing::AllOf(::testing::HasSubstr("MULTI/EXEC"),
+                               ::testing::HasSubstr("reader thread pool")));
 }
 
 }  // namespace

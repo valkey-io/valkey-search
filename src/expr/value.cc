@@ -116,11 +116,10 @@ std::string FormatDouble(double d) {
   // Redisearch splits on integrality, and so does this. Integers print in
   // fixed notation: "%.12g" would turn an epoch-millisecond 1700000000123
   // into "1.70000000012e+12" (the #1262 precision loss), and shortest-
-  // round-trip to_chars would shorten 1700000000 to "1.7e+09". Above 2^53
-  // integrality is an artifact of the binary representation, and the fixed
-  // expansion of a value like 1e300 would not fit storage, so the fixed path
-  // stops at 1e17 -- still well past epoch microseconds.
-  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+  // round-trip to_chars would shorten 1700000000 to "1.7e+09". redis:latest
+  // uses integer notation for integral values below ~2^63 (≈9.2e18); values
+  // above that switch to scientific. We match that threshold with 1e19.
+  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e19) {
     auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
                                    std::chars_format::fixed, 0);
     CHECK(ec == std::errc()) << "to_chars failed formatting integral double "

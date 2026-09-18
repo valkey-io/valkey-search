@@ -61,14 +61,18 @@
 
 #include "absl/base/optimization.h"
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
-extern "C" {
-// glibc's fortified realpath. Declared here because <stdlib.h> only exposes it
-// when _FORTIFY_SOURCE is on. Distinct from the realpath defined below, so
-// calling it does not recurse.
-char* __realpath_chk(const char* path, char* resolved, size_t resolved_len);
-}  // extern "C"
+// Each definition below must repeat the exception specification of the libc
+// declaration it redefines. glibc declares these noexcept (__THROW); musl
+// declares them with none, and clang rejects a noexcept definition of a
+// function first declared without one.
+#ifdef __GLIBC__
+#define VMSDK_LIBC_NOEXCEPT noexcept
+#else
+#define VMSDK_LIBC_NOEXCEPT
+#endif
 
 namespace {
 
@@ -86,7 +90,7 @@ size_t AlignSize(size_t size, size_t alignment = 16) {
 
 extern "C" {
 
-void* malloc(size_t size) noexcept {
+void* malloc(size_t size) VMSDK_LIBC_NOEXCEPT {
   // Force 16-byte alignment; Valkey may otherwise return 8-byte aligned memory.
   void* ptr = ValkeyModule_Alloc(AlignSize(size));
   if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
@@ -95,7 +99,7 @@ void* malloc(size_t size) noexcept {
   return ptr;
 }
 
-void free(void* ptr) noexcept {
+void free(void* ptr) VMSDK_LIBC_NOEXCEPT {
   if (ptr == nullptr) {
     return;
   }
@@ -103,7 +107,7 @@ void free(void* ptr) noexcept {
   ValkeyModule_Free(ptr);
 }
 
-void* calloc(size_t nmemb, size_t size) noexcept {
+void* calloc(size_t nmemb, size_t size) VMSDK_LIBC_NOEXCEPT {
   void* ptr = ValkeyModule_Calloc(nmemb, AlignSize(size));
   if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
     vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
@@ -111,7 +115,7 @@ void* calloc(size_t nmemb, size_t size) noexcept {
   return ptr;
 }
 
-void* realloc(void* ptr, size_t size) noexcept {
+void* realloc(void* ptr, size_t size) VMSDK_LIBC_NOEXCEPT {
   if (ABSL_PREDICT_FALSE(ptr == nullptr)) {
     return malloc(size);
   }
@@ -124,7 +128,7 @@ void* realloc(void* ptr, size_t size) noexcept {
   return new_ptr;
 }
 
-void* aligned_alloc(size_t alignment, size_t size) noexcept {
+void* aligned_alloc(size_t alignment, size_t size) VMSDK_LIBC_NOEXCEPT {
   void* ptr = ValkeyModule_Alloc(AlignSize(size, alignment));
   if (ABSL_PREDICT_TRUE(ptr != nullptr)) {
     vmsdk::ReportAllocMemorySize(ValkeyModule_MallocUsableSize(ptr));
@@ -132,16 +136,17 @@ void* aligned_alloc(size_t alignment, size_t size) noexcept {
   return ptr;
 }
 
-int posix_memalign(void** memptr, size_t alignment, size_t size) noexcept {
+int posix_memalign(void** memptr, size_t alignment,
+                   size_t size) VMSDK_LIBC_NOEXCEPT {
   *memptr = aligned_alloc(alignment, size);
   return *memptr == nullptr ? ENOMEM : 0;
 }
 
-void* valloc(size_t size) noexcept {
+void* valloc(size_t size) VMSDK_LIBC_NOEXCEPT {
   return aligned_alloc(sysconf(_SC_PAGESIZE), size);
 }
 
-size_t malloc_usable_size(void* ptr) noexcept {
+size_t malloc_usable_size(void* ptr) VMSDK_LIBC_NOEXCEPT {
   if (ABSL_PREDICT_FALSE(ptr == nullptr)) {
     return 0;
   }
@@ -162,7 +167,7 @@ size_t malloc_usable_size(void* ptr) noexcept {
 //
 
 // Reached from absl::InitializeSymbolizer and libstdc++'s message catalogs.
-char* strdup(const char* s) noexcept {
+char* strdup(const char* s) VMSDK_LIBC_NOEXCEPT {
   size_t size = strlen(s) + 1;
   char* copy = static_cast<char*>(malloc(size));
   if (ABSL_PREDICT_FALSE(copy == nullptr)) {
@@ -172,32 +177,21 @@ char* strdup(const char* s) noexcept {
   return copy;
 }
 
-// realpath(path, nullptr) and getcwd(nullptr, 0) return a buffer glibc
+// realpath(path, nullptr) and getcwd(nullptr, 0) return a buffer libc
 // allocated with its own malloc, which free() above would hand to
-// ValkeyModule_Free. Both are reimplemented so the result comes from our
-// allocator instead.
+// ValkeyModule_Free. getcwd is reimplemented so the result comes from our
+// allocator instead; it goes straight to the kernel, since calling the libc
+// function of the same name would bind to this definition and recurse.
 //
-// Neither may call the libc function of the same name: that name binds to the
-// definition here and would recurse. getcwd goes straight to the kernel, and
-// realpath delegates to glibc's fortified entry point, which is a distinct
-// symbol this file does not define. ICU's uprv_tzname already calls
-// __realpath_chk directly with its own buffer, which allocates nothing.
-char* realpath(const char* path, char* resolved_path) noexcept {
-  // __realpath_chk resolves into a caller-provided buffer and __chk_fail()s if
-  // it is smaller than PATH_MAX, which is also what POSIX requires callers of
-  // realpath() to supply. Resolve into our own buffer either way, so a failure
-  // leaves the caller's untouched.
-  char resolved[PATH_MAX];
-  if (__realpath_chk(path, resolved, sizeof(resolved)) == nullptr) {
-    return nullptr;
-  }
-  if (resolved_path != nullptr) {
-    return strcpy(resolved_path, resolved);
-  }
-  return strdup(resolved);
+// realpath(path, nullptr) allocates its result, like getcwd(nullptr, 0), so
+// it is reimplemented for the same reason. The implementation lives in
+// vmsdk::RealPath, where the unit tests can reach it; linked in here, its
+// strdup is the one above, so both forms stay on the module's allocator.
+char* realpath(const char* path, char* resolved_path) VMSDK_LIBC_NOEXCEPT {
+  return vmsdk::RealPath(path, resolved_path);
 }
 
-char* getcwd(char* buf, size_t size) noexcept {
+char* getcwd(char* buf, size_t size) VMSDK_LIBC_NOEXCEPT {
   if (buf != nullptr) {
     // Nothing is allocated on this path.
     if (size == 0) {

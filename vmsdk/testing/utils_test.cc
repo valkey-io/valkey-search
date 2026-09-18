@@ -7,6 +7,11 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <unistd.h>
+
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <iomanip>
 #include <memory>
 #include <string>
@@ -249,6 +254,39 @@ TEST_F(UtilsTest, JsonUnquoteStringTest) {
     EXPECT_TRUE(!JsonUnquote(sv)) << "Input was: " << sv << "\n";
   }
 }
+
+#ifdef __linux__
+// "." is relative, so a result starting with '/' shows it was resolved rather
+// than passed through, and getcwd gives the value it must resolve to.
+TEST_F(UtilsTest, RealPathIntoCallerBuffer) {
+  char cwd[PATH_MAX];
+  ASSERT_NE(getcwd(cwd, sizeof(cwd)), nullptr);
+
+  char buffer[PATH_MAX];
+  char *resolved = RealPath(".", buffer);
+  ASSERT_NE(resolved, nullptr);
+  EXPECT_EQ(resolved, buffer);
+  EXPECT_EQ(resolved[0], '/');
+  EXPECT_STREQ(resolved, cwd);
+}
+
+TEST_F(UtilsTest, RealPathAllocates) {
+  char cwd[PATH_MAX];
+  ASSERT_NE(getcwd(cwd, sizeof(cwd)), nullptr);
+
+  char *resolved = RealPath(".", nullptr);
+  ASSERT_NE(resolved, nullptr);
+  EXPECT_EQ(resolved[0], '/');
+  EXPECT_STREQ(resolved, cwd);
+  free(resolved);
+}
+
+TEST_F(UtilsTest, RealPathMissingPath) {
+  errno = 0;
+  EXPECT_EQ(RealPath("/nonexistent/vmsdk-realpath-test", nullptr), nullptr);
+  EXPECT_EQ(errno, ENOENT);
+}
+#endif
 }  // namespace
 
 struct DummyObject {

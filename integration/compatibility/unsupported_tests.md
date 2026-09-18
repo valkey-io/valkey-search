@@ -559,6 +559,39 @@ Not swept, because the reference has no answer to compare against.
 worth pinning precisely because nothing outside this repo does, and because
 reading zero as "take no rows" would empty the reply rather than fill it.
 
+### 5.5e. `YIELD_SCORE_AS` colliding with a database field — one row differs
+
+**Status:** deliberate, and narrow. Not swept: there is nothing to mark, since
+neither engine rejects the collision at parse time.
+
+A score alias may name a field the index already carries, and `LOAD *` then
+asks for that same name from the database. Neither engine refuses the command;
+both resolve the name at run time, and they resolve it differently.
+
+The reference applies a per-clause chain — whichever clause comes first in this
+order owns the column:
+
+| precedence | source of the column |
+|---|---|
+| 1 | the fused score, `COMBINE ... YIELD_SCORE_AS name` |
+| 2 | the VSIM arm's `YIELD_SCORE_AS name` |
+| 3 | the database field named by `LOAD`, and `__key` |
+| 4 | the SEARCH arm's `YIELD_SCORE_AS name` |
+
+valkey-search applies one uniform rule instead: an explicitly named score, on
+either arm or on `COMBINE`, always beats a database field of that name. That
+agrees with the chain everywhere but its last row, so the engines differ on
+exactly one shape — an alias declared on the **SEARCH** arm, colliding with a
+loaded field. The reference hands back the field; valkey-search hands back the
+score.
+
+The rationale and the full measured table are in
+https://github.com/valkey-io/valkey-search/issues/1408.
+
+Caveat on the measurement: it was taken on redis 8.10.1, search module 81000,
+over HASH keys, single node. Cluster mode and JSON keys were not measured
+against the reference, so the chain above is only known to hold for that shape.
+
 ### 5.6. COMBINE FUNCTION — a valkey-search extension, deliberately not swept
 
 **Status:** permanent divergence, by design.

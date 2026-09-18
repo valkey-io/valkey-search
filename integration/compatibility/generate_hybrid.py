@@ -1180,6 +1180,48 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                         vector_score_as="vector_score",
                         fused_score_as="hybrid_score")
 
+    def test_noncolliding_score_aliases_under_load_all(self, key_type):
+        """`LOAD *` with a yielded score whose name collides with nothing.
+
+        The corpus's only columns are the schema's -- title, body, color,
+        price, vec, vec_ip, vec_cos -- and `LOAD *` brings every one of them
+        into the reply. The aliases below match none of them, none of each
+        other, and neither reserved name (`__key`, `__score`), so there is
+        nothing for the alias to land on top of: the score column is simply
+        added beside the document.
+
+        That is the shape where the two engines have no room to disagree, and
+        it is pinned here on its own because collision handling is moving from
+        a parse-time rejection to a runtime resolution. Whatever that does to a
+        name that *does* collide, these four shapes have to keep answering
+        exactly as they do now, on each of the three YIELD_SCORE_AS positions
+        separately and on all three at once.
+
+        Both queries are swept for each shape: `@title:alpha` is wide, so most
+        rows are in both arms and carry both per-arm aliases, while
+        `@title:epsilon` matches one document, so nearly every row comes from
+        the vector arm alone and carries no SEARCH-arm alias at all. A rule
+        that only added the column when the arm found the row would look
+        correct under the first query and not the second.
+
+        Every alias ends in `score` for the reason hybrid() gives: that is what
+        makes compatibility_test.compare_row() compare it as a float.
+        """
+        self.setup_data(key_type)
+        # (search arm, vsim arm, combine)
+        alias_sets = [
+            ("uniq_search_score", None, None),
+            (None, "uniq_vsim_score", None),
+            (None, None, "uniq_fused_score"),
+            ("arm_text_score", "arm_vector_score", "fusion_total_score"),
+        ]
+        for search_as, vector_as, fused_as in alias_sets:
+            for query in ["@title:alpha", "@title:epsilon"]:
+                self.hybrid(key_type, query, load=LOAD_ALL,
+                            search_score_as=search_as,
+                            vector_score_as=vector_as,
+                            fused_score_as=fused_as)
+
     def test_unaliased_fused_score_with_explicit_load(self, key_type):
         """No score named anywhere, and a LOAD clause that names its columns.
 

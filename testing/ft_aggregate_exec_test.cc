@@ -8,11 +8,14 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <memory>
 
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
 #include "src/indexes/vector_base.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
@@ -1159,6 +1162,151 @@ TEST_F(NeighborRecordTest, LoadAllDoesNotOverwriteTheScoreColumn) {
     EXPECT_NE(extra.first, "__score");
   }
   EXPECT_EQ(rec.extra_fields_.size(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// In-stage cancellation
+//
+// The pipeline used to consult the cancellation token only between stages, so
+// a timeout could not take effect until the stage in flight had drained the
+// whole record set. These tests drive the stages directly -- no between-stage
+// check is involved -- so a cancelled status can only come from a poll inside
+// the stage's own record loop.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Reports "not cancelled" for the first `grace` polls and cancelled after
+// that, which is how a deadline expiring partway through a stage looks.
+class CancelAfterPolls : public cancel::Base {
+ public:
+  explicit CancelAfterPolls(size_t grace) : grace_(grace) {}
+  bool IsCancelled() override {
+    ++polls_;
+    return polls_ > grace_;
+  }
+  void Cancel() override { grace_ = 0; }
+  size_t polls() const { return polls_; }
+
+ private:
+  size_t grace_;
+  size_t polls_{0};
+};
+
+// Larger than kCancellationPollInterval (1024) so a stage has to poll partway
+// through, and not a multiple of it so the loop does not end on a poll.
+constexpr size_t kBigRecordCount = 3000;
+
+RecordSet MakeDataFor(const AggregateParameters *params, size_t m) {
+  RecordSet result(params);
+  for (size_t i = 0; i < m; ++i) {
+    result.emplace_back(RecordNOfM(i, m));
+  }
+  return result;
+}
+
+void ExpectCancelled(const absl::Status &status) {
+  EXPECT_TRUE(absl::IsCancelled(status)) << "status is: " << status;
+  // The same error the between-stage check produces: a caller must not be able
+  // to tell where in the pipeline the cancellation landed.
+  EXPECT_EQ(status.message(), "Aggregate operation cancelled due to timeout");
+}
+
+}  // namespace
+
+struct AggregateCancelTest : public AggregateExecTest {};
+
+TEST_F(AggregateCancelTest, ApplyStopsMidStage) {
+  auto param = MakeStages("APPLY @n1+1 as fred");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  // Stopped inside the loop rather than after draining the input.
+  EXPECT_EQ(token->polls(), 1);
+}
+
+TEST_F(AggregateCancelTest, FilterStopsMidStage) {
+  auto param = MakeStages("FILTER @n1>=0");
+  auto token = std::make_shared<CancelAfterPolls>(1);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 2);
+}
+
+TEST_F(AggregateCancelTest, GroupByStopsMidStage) {
+  auto param = MakeStages("GROUPBY 1 @n1 REDUCE COUNT 0 AS cnt");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 1);
+}
+
+TEST_F(AggregateCancelTest, SortByHeapPathStopsMidStage) {
+  // The default MAX is 10, so this takes the bounded-heap path.
+  auto param = MakeStages("SORTBY 2 @n1 ASC");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 1);
+  // Cancelling must not leak the raw pointers the heap holds: the drain hands
+  // every one of them back under a unique_ptr. The count is below the input
+  // because the heap path deletes the records it has already rejected.
+  EXPECT_GT(records.size(), 0u);
+  EXPECT_LT(records.size(), kBigRecordCount);
+}
+
+TEST_F(AggregateCancelTest, SortByStableSortPathChecksItsBounds) {
+  // A MAX above the input size takes the std::stable_sort path, which cannot
+  // be interrupted. It is only as responsive as its two end points.
+  auto param = MakeStages("SORTBY 2 @n1 ASC MAX 100000");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 1);
+}
+
+// Everything above must cost the uncancelled path -- plain FT.AGGREGATE's, and
+// FT.HYBRID's -- nothing but the poll itself: the same records, in the same
+// order, out of every stage.
+TEST_F(AggregateCancelTest, UncancelledPipelineIsUnchanged) {
+  auto param = MakeStages(
+      "APPLY @n1+1 as fred FILTER @fred>1 SORTBY 2 @n1 DESC MAX 100000");
+  // Never cancels, however often it is polled.
+  auto token = std::make_shared<CancelAfterPolls>(
+      std::numeric_limits<size_t>::max());
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  for (auto &stage : param->stages_) {
+    VMSDK_EXPECT_OK(stage->Execute(records));
+  }
+  // @n1 == 0 fails the filter; the rest come back descending.
+  ASSERT_EQ(records.size(), kBigRecordCount - 1);
+  for (size_t i = 0; i < records.size(); ++i) {
+    ASSERT_TRUE(records[i]->fields_[0].IsDouble());
+    EXPECT_DOUBLE_EQ(*records[i]->fields_[0].AsDouble(),
+                     double(kBigRecordCount - 1 - i));
+  }
+  EXPECT_GT(token->polls(), 0u);
+}
+
+// The stages must stay usable without a token at all: FT.AGGREGATE builds its
+// parameters with no timeout in some paths, and the unit tests above this one
+// pass no parameters at all.
+TEST_F(AggregateCancelTest, NoTokenIsNotCancellable) {
+  auto param = MakeStages("FILTER @n1>=0");
+  EXPECT_EQ(param->cancellation_token, nullptr);
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+  EXPECT_EQ(records.size(), kBigRecordCount);
+
+  auto no_params = MakeData(kBigRecordCount);
+  VMSDK_EXPECT_OK(param->stages_[0]->Execute(no_params));
+  EXPECT_EQ(no_params.size(), kBigRecordCount);
 }
 
 }  // namespace aggregate

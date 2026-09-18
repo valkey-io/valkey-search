@@ -59,6 +59,49 @@ expr::Value Attribute::GetValue(expr::Expression::EvalContext &ctx,
 
 expr::Expression::EvalContext ctx;
 
+TEST_COUNTER(ForceTimeoutAggregateCancels);
+
+// Records a stage evaluates between cancellation-token polls.
+//
+// The token used to be consulted only between stages, so a timeout could not
+// take effect until the stage in flight had drained the whole record set.
+// FT.HYBRID feels that most: its arms run uncapped pre-fusion, so the pipeline
+// can be handed far more records than a LIMITed FT.AGGREGATE would produce.
+//
+// Polling per record would put a virtual call -- and, for the timeout token, a
+// clock read -- beside every expression evaluation on the hot path. 1024
+// amortises that to a thousandth of the per-record cost while bounding the
+// overrun to 1024 records, which is well under a millisecond of work for any
+// expression these stages evaluate.
+inline constexpr size_t kCancellationPollInterval = 1024;
+
+inline constexpr absl::string_view kCancelledMessage =
+    "Aggregate operation cancelled due to timeout";
+
+// Polls the pipeline's cancellation token from inside a stage's record loop.
+//
+// Stages reach the token through the RecordSet's parameters rather than a
+// wider Stage::Execute() signature. A record set built without parameters (the
+// unit tests) or parameters built without a timeout carry no token; both mean
+// "not cancellable".
+//
+// The ForceTimeoutAggregate debug hook is deliberately not re-tested here: it
+// is set before the query runs, so the between-stage check in
+// ExecuteAggregationStages always trips on it before any stage starts.
+//
+// The error text matches the between-stage check exactly, so a caller cannot
+// tell where in the pipeline the cancellation landed, and the same counter is
+// incremented, so a cancellation is counted once wherever it is observed.
+inline absl::Status CheckCancelled(const RecordSet &records) {
+  if (records.agg_params_ == nullptr ||
+      records.agg_params_->cancellation_token == nullptr ||
+      !records.agg_params_->cancellation_token->IsCancelled()) {
+    return absl::OkStatus();
+  }
+  ForceTimeoutAggregateCancels.Increment(1);
+  return absl::CancelledError(kCancelledMessage);
+}
+
 std::ostream &operator<<(std::ostream &os, const RecordSet &rs) {
   os << "<RecordSet> " << rs.size() << "\n";
   for (size_t i = 0; i < rs.size(); ++i) {
@@ -132,7 +175,11 @@ absl::Status Apply::Execute(RecordSet &records) const {
   // *missing* value does this: an expression that ran and produced nothing --
   // abs() of a string, say -- keeps the record and replies nan or nil.
   RecordSet kept(records.agg_params_);
+  size_t polled = 0;
   while (!records.empty()) {
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     auto r = records.pop_front();
     auto value = expr_->Evaluate(ctx, *r);
     if (value.IsMissing() && ApplyDropsMissingField()) {
@@ -150,7 +197,11 @@ absl::Status Filter::Execute(RecordSet &records) const {
   agg_filter_stages.Increment();
   agg_filter_input_records.Increment(records.size());
   RecordSet filtered(records.agg_params_);
+  size_t polled = 0;
   while (!records.empty()) {
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     auto r = records.pop_front();
     auto result = expr_->Evaluate(ctx, *r);
     if (result.IsTrue()) {
@@ -212,23 +263,46 @@ absl::Status SortBy::Execute(RecordSet &records) const {
     SortFunctor<Record *> sorter{&sortkeys_};
     std::priority_queue<Record *, std::vector<Record *>, SortFunctor<Record *>>
         heap(sorter);
-    for (auto i = 0; i < max_; ++i) {
-      heap.push(records.pop_front().release());
+    absl::Status status = absl::OkStatus();
+    size_t polled = 0;
+    for (auto i = 0; i < max_ && status.ok(); ++i) {
+      if (++polled % kCancellationPollInterval == 0) {
+        status = CheckCancelled(records);
+      }
+      if (status.ok()) {
+        heap.push(records.pop_front().release());
+      }
     }
-    while (!records.empty()) {
+    while (status.ok() && !records.empty()) {
+      if (++polled % kCancellationPollInterval == 0) {
+        status = CheckCancelled(records);
+        if (!status.ok()) {
+          break;
+        }
+      }
       heap.push(records.pop_front().release());
       auto top = RecordPtr(heap.top());  // no leak....
       heap.pop();
     }
+    // Drained even when cancelled: the heap holds raw pointers this function
+    // owns, so leaving early without handing them back would leak them. On the
+    // cancelled path the record set is left in whatever order the partial fill
+    // produced, which is fine -- the caller discards it with the error.
     while (!heap.empty()) {
       records.emplace_front(RecordPtr(heap.top()));
       heap.pop();
     }
-  } else {
-    SortFunctor<RecordPtr> sorter{&sortkeys_};
-    std::stable_sort(records.begin(), records.end(), sorter);
+    return status;
   }
-  return absl::OkStatus();
+  // A std::stable_sort cannot be interrupted without replacing the comparator
+  // or chunking the input, neither of which is worth the cost here, so this
+  // branch stays as responsive as its two end points: a cancellation arriving
+  // during the sort is not seen until it finishes. It is bounded by SORTBY's
+  // MAX (this branch only runs when the input is already no larger than it).
+  VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+  SortFunctor<RecordPtr> sorter{&sortkeys_};
+  std::stable_sort(records.begin(), records.end(), sorter);
+  return CheckCancelled(records);
 }
 
 // Redisearch treats an array group key as a multi-value field: the record joins
@@ -280,7 +354,11 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
   size_t record_field_count = 0;
   agg_group_by_stages.Increment();
   agg_group_by_input_records.Increment(records.size());
+  size_t polled = 0;
   while (!records.empty()) {
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     auto record = records.pop_front();
     if (record_field_count == 0) {
       record_field_count = record->fields_.size();
@@ -326,6 +404,11 @@ absl::Status GroupBy::Execute(RecordSet &records) const {
     }
   }
   for (auto &group : groups) {
+    // The output loop is unbounded too: GROUPBY over a high-cardinality key
+    // emits as many records as it consumed.
+    if (++polled % kCancellationPollInterval == 0) {
+      VMSDK_RETURN_IF_ERROR(CheckCancelled(records));
+    }
     DBG << "Making record for group " << group.first << "\n";
     RecordPtr record = std::make_unique<Record>(record_field_count);
     CHECK(groups_.size() == group.first.keys_.size());
@@ -941,7 +1024,6 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
 // ---------------------------------------------------------------------------
 
 CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
-TEST_COUNTER(ForceTimeoutAggregateCancels);
 DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
 DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
@@ -1167,8 +1249,7 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
     if (parameters.cancellation_token->IsCancelled() ||
         ForceTimeoutAggregate.GetValue()) {
       ForceTimeoutAggregateCancels.Increment(1);
-      return absl::CancelledError(
-          "Aggregate operation cancelled due to timeout");
+      return absl::CancelledError(kCancelledMessage);
     }
     VMSDK_RETURN_IF_ERROR(stage->Execute(records));
   }

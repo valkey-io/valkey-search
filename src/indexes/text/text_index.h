@@ -151,7 +151,12 @@ class TextIndexSchema {
   // Takes a borrowed key so neither scoring path (post-filter walk in
   // search.cc, in-iterator hot path in term.cc) incurs ref-count churn; owning
   // callers wrap their key in a BorrowedInternedStringPtr.
-  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key) const {
+  // No locking needed if called from read phase of time-slice mutex.
+  uint32_t GetKeyDocLen(BorrowedInternedStringPtr key, bool lock) const {
+    std::optional<std::lock_guard<std::mutex>> per_key_guard;
+    if (lock) {
+      per_key_guard.emplace(per_key_text_indexes_mutex_);
+    }
     auto itr = per_key_scoring_info_.find(key);
     return itr != per_key_scoring_info_.end() ? itr->second.doc_len : 0;
   }
@@ -234,6 +239,9 @@ class TextIndexSchema {
   // pointer stability, so storing it inline avoids a per-document cache miss on
   // the GetKeyDocLen() scoring hot path.
   // Transparent functors so GetKeyDocLen() can probe with a borrowed key.
+  // TODO: combine with per_key_text_index_ to have a single map (e.g.
+  // per_key_text_data_)
+  //       to save space
   absl::flat_hash_map<Key, KeyScoringInfo, InternedStringPtrHash,
                       InternedStringPtrEq>
       per_key_scoring_info_;
@@ -289,16 +297,13 @@ class TextIndexSchema {
   uint64_t GetTotalTextIndexMemoryUsage() const;
 
   // Total number of keys with text fields indexed in this schema.
-  // No locking needed because only called from read phase.
-  size_t GetTrackedKeyCount() const { return per_key_text_indexes_.size(); }
-
-  // Locking-enabled version of GetTrackedKeyCount.
-  size_t GetTrackedKeyCount(bool lock) {
+  // No locking needed when called from read phase.
+  size_t GetTrackedKeyCount(bool lock = false) const {
     std::optional<std::lock_guard<std::mutex>> per_key_guard;
     if (lock) {
       per_key_guard.emplace(per_key_text_indexes_mutex_);
     }
-    return GetTrackedKeyCount();
+    return per_key_text_indexes_.size();
   }
 
   // Helper function to lookup text index for a key.

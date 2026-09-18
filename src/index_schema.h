@@ -212,7 +212,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     if (!text_index_schema_) {
       return 0;
     }
-    return text_index_schema_->GetKeyDocLen(key);
+    return text_index_schema_->GetKeyDocLen(key, false);
   }
 
   uint32_t GetDocumentNorm(const Key &key) const

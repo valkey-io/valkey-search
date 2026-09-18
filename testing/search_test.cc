@@ -816,12 +816,14 @@ INSTANTIATE_TEST_SUITE_P(
             .fetched_key_ranges = {{0, 4}},
             .expected_keys = {"1", "2", "3", "4"},
         },
-        // Cases that should not happen but would still work.
+        // Cases that should not happen. A solved query skips prefilter
+        // evaluation, so a fetcher disagreeing with the predicate drives the
+        // result: key 0 is returned even though it is outside [1 5].
         {
             .test_name = "base_predicate_mismatch_with_fetched_key_range",
             .filter = "@numeric:[1 5]",
             .fetched_key_ranges = {{0, 4}},
-            .expected_keys = {"1", "2", "3", "4"},
+            .expected_keys = {"0", "1", "2", "3", "4"},
         },
     }),
     [](const TestParamInfo<FetchFilteredKeysTestCase> &info) {

@@ -439,9 +439,19 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
+  // Skip per-key predicate re-evaluation when the query is fully solved by the
+  // entries fetchers and only yields valid keys. The non-vector path only
+  // reaches here for unsolved queries but this check benefits the hybrid
+  // pre-filter path. Note we don't score during this drain on purpose because
+  // the vast majority of keys are expected to be filtered out or miss the
+  // final KNN top-k.
+  const bool requires_prefilter_evaluation =
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                      parameters.filter_parse_results.is_match_all);
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
-                              : nullptr;
+      requires_prefilter_evaluation && parameters.index_schema
+          ? parameters.index_schema->GetTextIndexSchema()
+          : nullptr;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -453,15 +463,20 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
-      const valkey_search::indexes::text::TextIndex *text_index =
-          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
-                            : nullptr;
-      indexes::PrefilterEvaluator key_evaluator(
-          text_index, parameters.filter_parse_results.query_operations);
-      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // 3. Evaluate predicate
-      if (key_evaluator.Evaluate(
-              *parameters.filter_parse_results.root_predicate, key)) {
+      bool matched = true;
+      if (requires_prefilter_evaluation) {
+        const valkey_search::indexes::text::TextIndex *text_index =
+            text_index_schema
+                ? text_index_schema->GetPerKeyTextIndex(key, false)
+                : nullptr;
+        indexes::PrefilterEvaluator key_evaluator(
+            text_index, parameters.filter_parse_results.query_operations);
+        BACKGROUND_PAUSEPOINT("search_prefilter_eval");
+        // 3. Evaluate predicate
+        matched = key_evaluator.Evaluate(
+            *parameters.filter_parse_results.root_predicate, key);
+      }
+      if (matched) {
         bool result = appender(key, result_keys);
         if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
@@ -993,7 +1008,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // one-term invariant. doc_len is co-located in the matched posting entry.
       if (!leaf.expansion_terms.empty()) {
         for (const auto &term : leaf.expansion_terms) {
-          if (auto entry = term.postings->LookupKey(key, leaf.field_mask)) {
+          if (auto entry =
+                  term.postings->GetPostingDocStats(key, leaf.field_mask)) {
             return score_ctx.scorer->ScoreLeaf(
                 {term.idf, entry->tf, entry->doc_len, score_ctx.avg_doc_len,
                  predicate->GetWeight()});
@@ -1020,7 +1036,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         const uint64_t field_mask = (i == 0 && leaf.has_original)
                                         ? leaf.field_mask
                                         : leaf.stem_field_mask;
-        if (auto entry = leaf.postings[i]->LookupKey(key, field_mask)) {
+        if (auto entry =
+                leaf.postings[i]->GetPostingDocStats(key, field_mask)) {
           tf += entry->tf;
           doc_len = entry->doc_len;
         }

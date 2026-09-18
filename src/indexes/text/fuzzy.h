@@ -8,7 +8,9 @@
 #define _VALKEY_SEARCH_INDEXES_TEXT_FUZZY_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
+#include <utility>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
@@ -21,11 +23,14 @@ namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
-  // Result of a fuzzy search: key iterators and the Postings objects that must
-  // stay alive as long as the key iterators are in use.
+  // Result of a fuzzy search: key iterators, the per-matched-term document
+  // counts (dt) needed to compute each expanded term's own BM25 IDF, and the
+  // Postings objects that must stay alive as long as the key iterators are in
+  // use. All three vectors are index-aligned.
   struct Result {
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
         key_iterators;
+    absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
     absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
         postings_lifetime;
   };
@@ -154,6 +159,7 @@ struct FuzzySearch {
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
           auto postings = child_iter.GetPostingsTarget();
           if (postings) {
+            result.per_term_dt.push_back(postings->GetKeyCount());
             result.key_iterators.emplace_back(postings->GetKeyIterator());
             result.postings_lifetime.push_back(std::move(postings));
           }

@@ -55,7 +55,9 @@ class TermIterator : public TextIterator {
       const TextIndexSchema* text_index_schema = nullptr,
       const scoring::Scorer* scorer = nullptr,
       absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
-          postings_lifetime = {});
+          postings_lifetime = {},
+      absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt =
+          {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -121,6 +123,11 @@ class TermIterator : public TextIterator {
   const scoring::Scorer* scorer_{nullptr};
   float idf_{0.0f};
   float avg_doc_len_{0.0f};
+
+  // Per-matched-term IDF for prefix/suffix/fuzzy, index-aligned with
+  // key_iterators_. Non-empty selects expansion mode in GetScore(): a doc is
+  // scored on a single matched term's own IDF + own F, never the doc-wide sum.
+  absl::InlinedVector<float, kWordExpansionInlineCapacity> per_term_idf_;
 
   // Pending queue: heap of valid iterators not currently being processed.
   // Provides O(1) access to the minimum key and O(log K) extraction.

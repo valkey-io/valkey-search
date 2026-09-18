@@ -1955,13 +1955,18 @@ class TestFtHybridInnerProduct(ValkeySearchTestCaseBase):
 # Property the implementation must hold: an FT.HYBRID reply describes one
 # state of the data, and it is the state the reply's own content comes from.
 #
-# Two mechanisms get it there. The arms run in parallel under reader locks on
-# the same time-sliced index mutex, with one outer lock held across all of
-# them, so a writer cannot interleave between arms and every arm sees one
-# snapshot. Then, if a mutation was queued against a key either arm matched,
-# the whole operation parks until it applies, and each arm's own result is
-# revalidated and rescored against what the mutation left behind before the
-# arms are merged.
+# It does not get there from a shared snapshot. The arms run in parallel and
+# each one takes its own reader lock on the index's time-sliced mutex for the
+# duration of its own search; nothing spans the arms, so a writer can and does
+# land between them. Cross-arm correctness comes from the post-search
+# validation, once every arm has reported: ArmGate runs ONE contention check
+# over every (arm, key) probe and parks the whole envelope until the mutation
+# queue is quiescent, then RevalidateArmsBeforeFusion re-checks each
+# neighbor's sequence number against the index and drops, re-verifies or
+# rescores it, and only then does fusion run. An arm's stale entry is
+# corrected, not inherited. (The case this does not cover is a document the
+# mutation made newly-matching between two arms' searches;
+# RevalidateArmsBeforeFusion is deliberately one-directional about that.)
 #
 # So a document appears in an arm exactly when it matches that arm after the
 # mutation, carrying the score it earns there, and the fused ranking follows.
@@ -2210,21 +2215,26 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
     #                   mutations across many trials --------
     def test_concurrent_mutations_never_split_arms(self):
         """The "both arms or neither" guarantee is a *per-query atomicity*
-        property: within a single FT.HYBRID execution both arms must observe
-        the SAME index snapshot, so a key cannot be in one arm's result and
-        absent from the other's because a writer slipped in between them. (A
-        doc that legitimately stopped matching SEARCH after a real content
-        change would land in just the VSIM arm — that's correct semantics,
-        not a split-arm violation.)
+        property: a key cannot be in one arm's result and absent from the
+        other's just because a writer slipped in between the arms' searches.
+        The arms do not share an index snapshot — each takes its own reader
+        lock for its own search — so this property is produced after the fact,
+        by the post-search validation. (A doc that legitimately stopped
+        matching SEARCH after a real content change would land in just the
+        VSIM arm — that's correct semantics, not a split-arm violation.)
 
         To probe atomicity in isolation, the mutator REFRESHES each doc in
         place with the same values it already holds: this exercises the
         mutation pipeline (writer lock + index remove/re-add) without ever
         changing the doc's match status for either arm. Every doc matches
         both arms throughout the run, so any split-arm row is by construction
-        caused by a writer time-slicing between the two arms' inner reader
-        locks — the bug the outer reader lock in PerformMultiSearchLocalAsync
-        is designed to prevent."""
+        caused by a writer time-slicing between the two arms' independent
+        reader locks and the post-search validation failing to repair it:
+        ArmGate's single contention check over every (arm, key) probe should
+        park the envelope until the mutation queue is quiescent, and
+        RevalidateArmsBeforeFusion should then re-check every neighbor's
+        sequence number and drop, re-verify or rescore it before fusion
+        runs."""
         import random
         import threading
         import time

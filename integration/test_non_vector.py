@@ -272,6 +272,63 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_bulk_limit_queries(client)
 
+    def test_content_fetch_specific_and_all_fields(self):
+        """
+            Test that content fetch works correctly for both the HashGet path
+            (RETURN fewer than half the fields) and the scan path (RETURN all or
+            no RETURN clause). Exercises FetchSpecificFields and FetchAllFields.
+        """
+        client: Valkey = self.server.get_new_client()
+        # Create index with 10 NUMERIC fields
+        schema_args = []
+        for i in range(1, 11):
+            schema_args.extend([f"f{i}", "NUMERIC"])
+        assert client.execute_command("FT.CREATE", "content_products", "ON", "HASH",
+                                      "PREFIX", "1", "content_product:",
+                                      "SCHEMA", *schema_args) == b"OK"
+        # Insert docs with all 10 fields populated; doc N has f_i = N*100 + i
+        for doc_id in range(1, 4):
+            args = []
+            for i in range(1, 11):
+                args.extend([f"f{i}", str(doc_id * 100 + i)])
+            assert client.execute_command("HSET", f"content_product:{doc_id}", *args) == 10
+
+        # Path 1: FetchSpecificFields - RETURN 2 fields (2 <= 10/2=5)
+        result = client.execute_command("FT.SEARCH", "content_products", "@f1:[101 101]",
+                                        "RETURN", "2", "f1", "f2")
+        assert result[0] == 1
+        assert result[1] == b"content_product:1"
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        assert doc_fields == {b"f1": b"101", b"f2": b"102"}
+
+        # Path 1b: RETURN 1 field
+        result = client.execute_command("FT.SEARCH", "content_products", "@f1:[101 101]",
+                                        "RETURN", "1", "f5")
+        assert result[0] == 1
+        assert result[2] == [b"f5", b"105"]
+
+        # Path 2: FetchAllFields (scan) - RETURN 8 fields (8 > 10/2=5)
+        ret_fields = [f"f{i}" for i in range(1, 9)]
+        result = client.execute_command("FT.SEARCH", "content_products", "@f1:[101 101]",
+                                        "RETURN", "8", *ret_fields)
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 9):
+            assert doc_fields[f"f{i}".encode()] == str(100 + i).encode()
+
+        # Path 3: FetchAllFields (scan) - no RETURN clause (all fields)
+        result = client.execute_command("FT.SEARCH", "content_products", "@f1:[101 101]")
+        assert result[0] == 1
+        doc_fields = dict(zip(result[2][::2], result[2][1::2]))
+        for i in range(1, 11):
+            assert doc_fields[f"f{i}".encode()] == str(100 + i).encode()
+
+        # Path 1c: RETURN non-existent field (should be empty)
+        result = client.execute_command("FT.SEARCH", "content_products", "@f1:[101 101]",
+                                        "RETURN", "1", "nonexistent")
+        assert result[0] == 1
+        assert result[2] == []
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):

@@ -1908,30 +1908,24 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         absl::StrCat("Query string is too long, max length is ",
                      options::GetQueryStringBytes(), " bytes."));
   }
-  auto filter_expression = absl::string_view(parse_vars.query_string);
+  auto query_expression = absl::string_view(parse_vars.query_string);
   VMSDK_LOG(DEBUG, nullptr)
       << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
       << "'";
-  auto pos = FindVectorDelimiter(filter_expression);
+  auto pos = FindVectorDelimiter(query_expression);
   absl::string_view pre_filter;
   absl::string_view vector_filter;
   // If the delimiter is not found (ie - non vector query), treat the whole
   // string as pre-filter.
   if (pos == absl::string_view::npos) {
-    pre_filter = absl::StripAsciiWhitespace(filter_expression);
+    pre_filter = absl::StripAsciiWhitespace(query_expression);
   } else {
-    pre_filter = absl::StripAsciiWhitespace(filter_expression.substr(0, pos));
+    pre_filter = absl::StripAsciiWhitespace(query_expression.substr(0, pos));
     vector_filter = absl::StripAsciiWhitespace(
-        filter_expression.substr(pos + kVectorFilterDelimiter.size()));
+        query_expression.substr(pos + kVectorFilterDelimiter.size()));
   }
-  // If INORDER OR SLOP, but the index schema does not support offsets, we
-  // reject the query.
-  if ((inorder || slop.has_value()) && !index_schema->HasTextOffsets()) {
-    return absl::InvalidArgumentError("Index does not support offsets");
-  }
-  VMSDK_ASSIGN_OR_RETURN(
-      filter_parse_results, ParsePreFilter(*index_schema, pre_filter, *this),
-      _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
+  filter_expression = std::string(pre_filter);
+  VMSDK_RETURN_IF_ERROR(ParseFilter());
   if (!filter_parse_results.root_predicate && vector_filter.empty() &&
       !filter_parse_results.is_match_all) {
     // Return an error if no valid pre-filter and no vector filter is provided.
@@ -1969,6 +1963,20 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   }
   // Increment operation-type metrics
   IncrementQueryOperationMetrics(filter_parse_results.query_operations);
+  return absl::OkStatus();
+}
+
+absl::Status query::SearchParameters::ParseFilter() {
+  // If INORDER OR SLOP, but the index schema does not support offsets, we
+  // reject the query.
+  if ((inorder || slop.has_value()) && !index_schema->HasTextOffsets()) {
+    return absl::InvalidArgumentError("Index does not support offsets");
+  }
+  VMSDK_ASSIGN_OR_RETURN(
+      filter_parse_results,
+      ParsePreFilter(*index_schema, filter_expression, *this),
+      _.SetPrepend() << "Invalid filter expression: `" << filter_expression
+                     << "`. ");
   return absl::OkStatus();
 }
 

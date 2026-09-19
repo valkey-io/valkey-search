@@ -300,6 +300,14 @@ absl::Status SearchCommand::PostParseQueryString() {
     }
   }
 
+  // Check VR yield-distance aliases against the schema for the same reason.
+  for (const auto& vr_field : query::CollectVrScoreFields(*this)) {
+    if (!vr_field.empty() && index_schema->GetIndex(vr_field).ok()) {
+      return absl::InvalidArgumentError(absl::StrCat(
+          "Property `", vr_field, "` already exists in schema"));
+    }
+  }
+
   if (sortby_parameter.has_value()) {
     // Allow sorting by any vector range distance alias (yield_distance_as)
     // without requiring it to be a real index field.

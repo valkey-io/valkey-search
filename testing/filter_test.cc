@@ -1828,9 +1828,11 @@ INSTANTIATE_TEST_SUITE_P(
         {
             .test_name = "vector_range_ef_runtime_unsupported",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 100]",
-            // EF_RUNTIME is silently accepted for VECTOR_RANGE (no-op) for
-            // client compatibility — it has no effect on flat/range search.
-            .create_success = true,
+            // EF_RUNTIME is not supported for VECTOR_RANGE queries — it is
+            // rejected with a clear error rather than silently ignored.
+            .create_success = false,
+            .create_expected_error_message =
+                "EF_RUNTIME is not supported for VECTOR_RANGE queries",
         },
         {
             .test_name = "vector_range_empty_yield_distance_as",

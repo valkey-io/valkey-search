@@ -473,12 +473,14 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   while (!IsEnd() && Peek() != ']') {
     // Try to match known optional parameter keywords
     if (MatchInsensitive("EF_RUNTIME")) {
-      // EF_RUNTIME is not meaningful for VECTOR_RANGE queries (no graph
-      // traversal limit applies), but accept it silently for compatibility
-      // with clients that always pass it alongside vector filter options.
+      // EF_RUNTIME is not supported for VECTOR_RANGE queries. Reject it
+      // explicitly so clients receive a clear error rather than silently
+      // running with the parameter ignored.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
       (void)ef_value;
+      return absl::InvalidArgumentError(
+          "EF_RUNTIME is not supported for VECTOR_RANGE queries");
     } else if (MatchInsensitive("AS")) {
       VMSDK_ASSIGN_OR_RETURN(auto as_name,
                              ParseToken("]", "AS argument is missing"));

@@ -35,78 +35,6 @@ message LimitParameter {
   uint64 number = 2;
 }
 
-message TagPredicate {
-  string attribute_alias = 1;
-  string raw_tag_string = 2;
-}
-
-message NumericPredicate {
-  string attribute_alias = 1;
-  double start = 2;
-  bool is_inclusive_start = 3;
-  double end = 4;
-  bool is_inclusive_end = 5;
-}
-
-message TermPredicate {
-  uint64 field_mask = 1;
-  string content = 2;
-  bool exact = 3;
-}
-
-message PrefixPredicate {
-  uint64 field_mask = 1;
-  string content = 2;
-}
-
-message SuffixPredicate {
-  uint64 field_mask = 1;
-  string content = 2;
-}
-
-message InfixPredicate {
-  uint64 field_mask = 1;
-  string content = 2;
-}
-
-message FuzzyPredicate {
-  uint64 field_mask = 1;
-  string content = 2;
-  uint32 distance = 3;
-}
-
-message AndPredicate {
-  repeated Predicate children = 1;
-  optional uint32 slop = 2;
-  bool inorder = 3;
-}
-
-message OrPredicate {
-  repeated Predicate children = 1;
-}
-
-message NegatePredicate {
-  Predicate predicate = 1;
-}
-
-message Predicate {
-  oneof predicate {
-    TagPredicate tag = 1;
-    NumericPredicate numeric = 2;
-    AndPredicate and = 3;
-    OrPredicate or = 4;
-    NegatePredicate negate = 5;
-    TermPredicate term = 6;
-    PrefixPredicate prefix = 7;
-    SuffixPredicate suffix = 8;
-    InfixPredicate infix = 9;
-    FuzzyPredicate fuzzy = 10;
-  }
-  // Query-modifier weight ($weight:N). Defaults to 1.0 when unset so scoring on
-  // the shard matches standalone. Applies to leaf and composed predicates.
-  optional float weight = 11;
-}
-
 message ReturnParameter {
   string identifier = 1;
   string alias = 2;
@@ -144,15 +72,20 @@ message SearchIndexPartitionRequest {
   LimitParameter limit = 9;
   uint64 timeout_ms = 10;
   bool no_content = 11;
-  optional Predicate root_filter_predicate = 12;
+  reserved 12;  // was root_filter_predicate
   repeated ReturnParameter return_parameters = 13;
   bool enable_partial_results = 14;
   bool enable_consistency = 15;
   IndexFingerprintVersion index_fingerprint_version = 16;
   uint64 slot_fingerprint = 17;
-  uint64 query_operations = 18;
+  reserved 18;  // was query_operations
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
+  // Filter portion of the query string; each shard re-parses it locally.
+  string filter_expression = 21;
+  bool verbatim = 22;
+  bool inorder = 23;
+  optional uint32 slop = 24;
 }
 
 message NeighborEntry {

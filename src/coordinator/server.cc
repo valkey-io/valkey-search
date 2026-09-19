@@ -216,17 +216,18 @@ grpc::ServerUnaryReactor *Service::SearchIndexPartition(
   auto latency_sample = SAMPLE_EVERY_N(100);
   grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
   auto StatusWrapper = [&]() -> absl::Status {
+    // perform index consistency check (index fingerprint/version), required.
+    // This must precede GRPCSearchRequestToParameters, which parses the filter
+    // against the local schema.
+    VMSDK_ASSIGN_OR_RETURN(
+        auto schema, SchemaManager::Instance().GetIndexSchema(
+                         request->db_num(), request->index_schema_name()));
+    VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
+        request->index_fingerprint_version(), schema)));
+
     auto search_operation = std::make_unique<RemoteResponderSearch>();
     VMSDK_RETURN_IF_ERROR(GRPCSearchRequestToParameters(
         *request, context, search_operation.get()));
-
-    // perform index consistency check (index fingerprint/version), required
-    auto schema = SchemaManager::Instance()
-                      .GetIndexSchema(search_operation->db_num,
-                                      search_operation->index_schema_name)
-                      .value();
-    VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
-        request->index_fingerprint_version(), schema)));
 
     if (request->enable_consistency()) {
       // Perform consistency checks on main thread, then enqueue search

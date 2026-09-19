@@ -95,8 +95,16 @@ TEST_F(MultiSearchClientTest, MockInvokesUserCallback) {
   EXPECT_TRUE(callback_called);
 }
 
-// Per-arm errors are encoded inline in MultiSearchSubResponse so a single arm
-// failure does not kill the whole RPC.
+// Round-trips the per-arm status fields of MultiSearchSubResponse and checks
+// the client's demux of them.
+//
+// This drives a MockClient, so it exercises a response shape the real server
+// does not emit: MultiSearchIndexPartition finishes the reactor with the first
+// non-OK arm status, and a unary RPC that finishes non-OK never delivers its
+// message, so a delivered sub-response always carries grpc_code == 0. A shard
+// answers every arm or none -- see the comment on MultiSearchSubResponse in
+// coordinator.proto for why. This covers the client's defensive demux path,
+// not a failure policy.
 TEST_F(MultiSearchClientTest, PerArmErrorEncodedInline) {
   auto request = std::make_unique<MultiSearchIndexPartitionRequest>();
   request->add_sub_requests();

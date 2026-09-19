@@ -80,10 +80,15 @@ class Service final : public Coordinator::CallbackService {
   // and invokes `on_done`. `on_done` is responsible for finishing whatever
   // wraps the operation (the gRPC reactor for single-arm, the multi-arm
   // completion counter for multi-arm).
+  //
+  // `multi_arm` says this is one arm of a multi-arm (FT.HYBRID) request, which
+  // makes a search failure hard even when the caller allowed partial results:
+  // a shard that answers one arm but not the other would contribute one-sided
+  // documents to the coordinator's fusion. See RemoteResponderSearch.
   void SearchOneArm(grpc::CallbackServerContext* context,
                     const SearchIndexPartitionRequest& request,
                     SearchIndexPartitionResponse* response,
-                    ArmCompletionCallback on_done);
+                    ArmCompletionCallback on_done, bool multi_arm = false);
 
   void EnqueueSearchRequest(
       std::unique_ptr<RemoteResponderSearch> vector_search_parameters,

@@ -191,9 +191,19 @@ message AttributeContentEntry {
   bytes content = 2;
 }
 
-// Per-arm wrapper for the multi-arm response. Carries the arm's
-// SearchIndexPartitionResponse plus a per-arm gRPC status so a single arm's
-// failure (e.g. per-arm execution error) does not kill the whole RPC.
+// Per-arm wrapper for the multi-arm response, carrying the arm's
+// SearchIndexPartitionResponse alongside a record of how that arm fared.
+//
+// The RPC's own gRPC status is authoritative, NOT these fields. A shard must
+// answer every arm or none: a shard that reported one arm's failure while
+// returning the other arm's results would contribute one-sided documents to
+// the coordinator's fusion, and their fused score would be wrong with nothing
+// in the reply to say so. MultiSearchIndexPartition therefore finishes the
+// reactor with the first non-OK arm status, and because the RPC is unary a
+// non-OK finish means this message is never delivered at all. So a delivered
+// MultiSearchSubResponse always carries grpc_code == 0; the fields exist to
+// record WHICH arm failed for diagnostics, not to keep a failed arm's RPC
+// alive. The client's per-arm demux is defensive only.
 message MultiSearchSubResponse {
   SearchIndexPartitionResponse response = 1;
   uint32 grpc_code = 2;       // grpc::StatusCode encoded as int; 0 = OK

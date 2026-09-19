@@ -131,6 +131,13 @@ class RemoteResponderSearch : public query::SearchParameters {
   std::shared_ptr<ArmCompletionCallback> on_done;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   size_t total_count;
+  // True when this operation is one arm of a multi-arm (FT.HYBRID) request.
+  // A multi-arm shard must answer every arm or none: if it reported one arm's
+  // failure as an empty-but-OK result, that shard's documents would enter the
+  // coordinator's fusion from the sibling arm only, and their fused score
+  // would be wrong with no error anywhere to say so. So partial-results
+  // tolerance, which is about losing a whole shard, does not apply per arm.
+  bool multi_arm{false};
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(!vmsdk::IsMainThread());
@@ -147,7 +154,7 @@ class RemoteResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl() {
-    if (!search_result.status.ok() && !enable_partial_results) {
+    if (!search_result.status.ok() && (!enable_partial_results || multi_arm)) {
       (*on_done)(ToGrpcStatus(search_result.status));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
@@ -229,13 +236,14 @@ DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
 void Service::SearchOneArm(grpc::CallbackServerContext *context,
                            const SearchIndexPartitionRequest &request,
                            SearchIndexPartitionResponse *response,
-                           ArmCompletionCallback on_done) {
+                           ArmCompletionCallback on_done, bool multi_arm) {
   search_index_rpc_requests.Increment();
   auto latency_sample = SAMPLE_EVERY_N(100);
   auto StatusWrapper = [&]() -> absl::Status {
     auto search_operation = std::make_unique<RemoteResponderSearch>();
     VMSDK_RETURN_IF_ERROR(GRPCSearchRequestToParameters(
         request, context, search_operation.get()));
+    search_operation->multi_arm = multi_arm;
 
     // perform index consistency check (index fingerprint/version), required
     auto schema = SchemaManager::Instance()
@@ -362,7 +370,8 @@ grpc::ServerUnaryReactor *Service::MultiSearchIndexPartition(
             }
             completion->reactor->Finish(final_status);
           }
-        });
+        },
+        /*multi_arm=*/true);
   }
   return reactor;
 }

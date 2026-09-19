@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <type_traits>
 
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
@@ -39,13 +40,13 @@ namespace valkey_search::indexes {
 // Downstream callers keep talking to VectorBase* -- the type-erased
 // seam is preserved.
 //
-// Note the space is templated on the *distance* dtype, which is always
-// float, never on T. Only the concrete space class chosen by CreateSpace<T>
-// knows the storage layout. Templating the space on T (as upstream's
-// float-only code did) conflates the two and breaks for 2-byte storage.
+// The space is templated on the distance dtype, which is always float, never
+// on T. The concrete space selected by CreateSpace<T> owns the storage layout.
 template <typename T>
 class VectorType : public VectorBase {
  public:
+  using DistanceT =
+      std::conditional_t<std::is_same_v<T, double>, double, float>;
   ~VectorType() override = default;
 
   data_model::VectorDataType GetVectorDataType() const override;
@@ -54,7 +55,7 @@ class VectorType : public VectorBase {
   // sizeof(T) per element, with the format conversion appropriate to T.
   vmsdk::UniqueValkeyString NormalizeStringAttribute(
       vmsdk::UniqueValkeyString attribute) const override;
-  float ComputeReciprocalMagnitude(absl::string_view record) const override;
+  double ComputeReciprocalMagnitude(absl::string_view record) const override;
 
  protected:
   VectorType(IndexerType indexer_type, int dimensions,
@@ -82,7 +83,7 @@ class VectorType : public VectorBase {
   // pointer via space_.get(); since C++ destroys derived-class members
   // before base-class members, algo_ is torn down first -- the
   // destruction order is correct without any extra scaffolding.
-  std::unique_ptr<hnswlib::SpaceInterface<float>> space_;
+  std::unique_ptr<hnswlib::SpaceInterface<DistanceT>> space_;
 };
 
 }  // namespace valkey_search::indexes

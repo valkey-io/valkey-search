@@ -109,6 +109,7 @@ enum VectorDataType {
   VECTOR_DATA_TYPE_FLOAT32 = 1;
   VECTOR_DATA_TYPE_FLOAT16 = 2;
   VECTOR_DATA_TYPE_BFLOAT16 = 3;
+  VECTOR_DATA_TYPE_FLOAT64 = 4;
 }
 
 message HNSWAlgorithm {
@@ -120,4 +121,3 @@ message HNSWAlgorithm {
 message FlatAlgorithm {
   uint32 block_size = 1;
 }
-

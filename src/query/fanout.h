@@ -20,6 +20,13 @@
 
 namespace valkey_search::query::fanout {
 
+// Prefer the FP64 extension emitted by newer shards, while retaining support
+// for responses produced by shards that only know the legacy float fields.
+double GetPreferredNeighborDistance(
+    const coordinator::NeighborEntry& neighbor_entry);
+double GetPreferredNeighborScore(
+    const coordinator::NeighborEntry& neighbor_entry);
+
 absl::Status PerformSearchFanoutAsync(
     ValkeyModuleCtx* ctx,
     std::vector<vmsdk::cluster_map::NodeInfo>& search_targets,

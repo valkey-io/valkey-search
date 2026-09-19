@@ -4,7 +4,7 @@ FT.INFO must report the vector data_type that was used at FT.CREATE time.
 FLOAT16 and BFLOAT16 share a byte width (2), so an info-reporting bug that
 collapses them by size — rather than dispatching on the type enum — would
 silently mislabel BF16 indexes as FP16 (or vice versa) without any other
-visible symptom. This test pins the contract for all three supported
+visible symptom. This test pins the contract for all supported
 storage types across both HNSW and FLAT.
 """
 
@@ -28,7 +28,7 @@ def _make_index(name: str, algo: str, data_type: str) -> Index:
 class TestFTInfoVectorDataType(ValkeySearchTestCaseBase):
 
     @pytest.mark.parametrize("algo", ["HNSW", "FLAT"])
-    @pytest.mark.parametrize("data_type", ["FLOAT32", "FLOAT16", "BFLOAT16"])
+    @pytest.mark.parametrize("data_type", ["FLOAT32", "FLOAT16", "BFLOAT16", "FLOAT64"])
     def test_ft_info_reports_data_type(self, algo: str, data_type: str):
         client: Valkey = self.server.get_new_client()
         index_name = f"idx_{algo}_{data_type}".lower()

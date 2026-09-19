@@ -50,7 +50,7 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, double score);
 
 bool HasTextRelevance(const SearchCommand &parameters) {
   return parameters.IsNonVectorQuery() ||
@@ -83,15 +83,15 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
   // The score_as field carries the vector distance (Redis' __<field>_score).
   // For pure vector queries Neighbor.score == distance; for hybrid text=>[KNN]
   // queries Neighbor.score is the text relevance while distance stays here.
-  auto score_value = absl::StrFormat("%.12g", neighbor.distance);
+  auto score_value = absl::StrFormat("%.17g", neighbor.distance);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
-  auto score_value = absl::StrFormat("%.12g", score);
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, double score) {
+  auto score_value = absl::StrFormat("%.17g", score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
@@ -153,7 +153,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
     }
     if (emit_sort_key) {
       std::string value = sort_by_vec_score
-                              ? absl::StrFormat("%.12g", neighbors[i].distance)
+                              ? absl::StrFormat("%.17g", neighbors[i].distance)
                               : GetSortKeyValue(neighbors[i], parameters);
       std::string prefixed_value = sort_key_prefix + value;
       ValkeyModule_ReplyWithString(

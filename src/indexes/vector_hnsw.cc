@@ -119,7 +119,7 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       if (!is_marked_deleted) {
         return std::shared_ptr<VectorRecord>(nullptr);
       }
-      float reciprocal_magnitude = CalcReciprocalMagnitude(
+      double reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
@@ -342,7 +342,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  float reciprocal_magnitude =
+  double reciprocal_magnitude =
       normalize_ ? CalcReciprocalMagnitude(
                        reinterpret_cast<const T *>(query.data()), dimensions_)
                  : kDefaultMagnitude;
@@ -378,9 +378,9 @@ void VectorHNSW<T>::ToProtoImpl(
 }
 
 template <typename T>
-float VectorHNSW<T>::ComputeDistance(absl::string_view query,
-                                     const VectorRecord *vector_record,
-                                     float query_magnitude) const {
+double VectorHNSW<T>::ComputeDistance(absl::string_view query,
+                                      const VectorRecord *vector_record,
+                                      double query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -401,5 +401,6 @@ size_t VectorHNSW<T>::GetLabelCount() const {
 template class VectorHNSW<float>;
 template class VectorHNSW<float16>;
 template class VectorHNSW<bfloat16>;
+template class VectorHNSW<double>;
 
 }  // namespace valkey_search::indexes

@@ -18,6 +18,7 @@ GENERATORS = [
     {"generator": "generate_sortkey.py", "answers": "sortkey-answers.pickle.gz",      "cluster": False},
     {"generator": "generate_filter.py",  "answers": "filter-answers.pickle.gz",       "cluster": False},
     {"generator": "generate_return.py",  "answers": "return-answers.pickle.gz",       "cluster": False},
+    {"generator": "generate_float64.py",  "answers": "float64-answers.pickle.gz",      "cluster": False},
 ]
 
 

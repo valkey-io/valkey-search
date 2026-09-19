@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "grpcpp/server.h"
 #include "grpcpp/server_context.h"
@@ -26,6 +27,11 @@
 namespace valkey_search::coordinator {
 
 struct RemoteResponderSearch;
+
+// Writes both the legacy float fields and their FP64 extensions so mixed
+// version clusters can exchange vector results without losing precision.
+void SerializeNeighbors(SearchIndexPartitionResponse* response,
+                        const std::vector<indexes::Neighbor>& neighbors);
 
 class Service final : public Coordinator::CallbackService {
  public:

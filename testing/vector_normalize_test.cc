@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <vector>
 
 #include "absl/strings/string_view.h"
@@ -53,10 +54,20 @@ template <>
 constexpr double UnitRoundoff<bfloat16>() {
   return 1.0 / (1 << 8);  // 7 explicit mantissa bits
 }
+template <>
+constexpr double UnitRoundoff<double>() {
+  // Normalization intentionally retains the established float accumulator and
+  // scale, even when the vector elements are FLOAT64.
+  return UnitRoundoff<float>();
+}
 
 template <typename T>
 T Quantize(double v) {
-  return static_cast<T>(static_cast<float>(v));
+  if constexpr (std::is_same_v<T, double>) {
+    return v;
+  } else {
+    return static_cast<T>(static_cast<float>(v));
+  }
 }
 
 template <typename T>
@@ -78,7 +89,12 @@ template <typename T>
 double ExactMagnitude(const std::vector<T>& q) {
   double sum = 0.0;
   for (const T& x : q) {
-    double d = static_cast<double>(static_cast<float>(x));
+    double d;
+    if constexpr (std::is_same_v<T, double>) {
+      d = x;
+    } else {
+      d = static_cast<float>(x);
+    }
     sum += d * d;
   }
   return std::sqrt(sum);
@@ -96,7 +112,7 @@ template <typename T>
 void ExpectMagnitudeMatchesReference(const std::vector<double>& raw) {
   auto q = QuantizeAll<T>(raw);
   const double expected_recip = 1.0 / ExactMagnitude<T>(q);
-  const float got = CalcReciprocalMagnitude(q.data(), q.size());
+  const double got = CalcReciprocalMagnitude(q.data(), q.size());
 
   // The accumulator runs in float, so the achievable bound is float's unit
   // roundoff scaled by the term count -- NOT T's. If the accumulation were
@@ -115,16 +131,30 @@ TEST(VectorNormalizeValidation, ReciprocalMagnitudeFloat16) {
 TEST(VectorNormalizeValidation, ReciprocalMagnitudeBFloat16) {
   ExpectMagnitudeMatchesReference<bfloat16>(Sample());
 }
+TEST(VectorNormalizeValidation, ReciprocalMagnitudeFloat64) {
+  ExpectMagnitudeMatchesReference<double>(Sample());
+}
+
+TEST(VectorNormalizeValidation, Float64ExtremeMagnitudeStaysFinite) {
+  const std::vector<double> q{1e200, -2e200, 1e-300};
+  const double reciprocal = CalcReciprocalMagnitude(q.data(), q.size());
+  EXPECT_TRUE(std::isfinite(reciprocal));
+  EXPECT_GT(reciprocal, 0.0);
+  std::vector<char> out = NormalizeVector<double>(AsBytes(q), reciprocal);
+  std::vector<double> normalized(q.size());
+  std::memcpy(normalized.data(), out.data(), out.size());
+  EXPECT_NEAR(ExactMagnitude<double>(normalized), 1.0, 1e-12);
+}
 
 // The magnitude accumulator must not inherit T's exponent range. Squaring
 // 300.0 gives 90000, which overflows fp16 (max ~65504); accumulating in fp16
 // would yield inf and a reciprocal of 0.
 TEST(VectorNormalizeValidation, Float16MagnitudeDoesNotOverflowInAccumulator) {
   std::vector<float16> q = QuantizeAll<float16>({300.0, 300.0, 300.0, 300.0});
-  const float got = CalcReciprocalMagnitude(q.data(), q.size());
+  const double got = CalcReciprocalMagnitude(q.data(), q.size());
   ASSERT_TRUE(std::isfinite(got)) << "accumulator overflowed to inf";
-  EXPECT_GT(got, 0.0f) << "accumulator overflowed, reciprocal collapsed to 0";
-  EXPECT_NEAR(static_cast<double>(got), 1.0 / 600.0, 1.0 / 600.0 * 1e-5);
+  EXPECT_GT(got, 0.0) << "accumulator overflowed, reciprocal collapsed to 0";
+  EXPECT_NEAR(got, 1.0 / 600.0, 1.0 / 600.0 * 1e-5);
 }
 
 // Every element must be scaled in float and rounded back into T exactly once.
@@ -132,7 +162,7 @@ TEST(VectorNormalizeValidation, Float16MagnitudeDoesNotOverflowInAccumulator) {
 template <typename T>
 void ExpectNormalizeRoundsOnce(const std::vector<double>& raw) {
   auto q = QuantizeAll<T>(raw);
-  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  const double recip = CalcReciprocalMagnitude(q.data(), q.size());
 
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), recip);
   ASSERT_EQ(out.size(), q.size() * sizeof(T));
@@ -141,8 +171,14 @@ void ExpectNormalizeRoundsOnce(const std::vector<double>& raw) {
   std::memcpy(got.data(), out.data(), out.size());
 
   for (size_t i = 0; i < q.size(); ++i) {
-    // Reference: scale in float, then a single rounding into T.
-    const T want = static_cast<T>(recip * static_cast<float>(q[i]));
+    const T want = [&] {
+      if constexpr (std::is_same_v<T, double>) {
+        return recip * q[i];
+      } else {
+        return static_cast<T>(static_cast<float>(recip) *
+                               static_cast<float>(q[i]));
+      }
+    }();
     EXPECT_EQ(std::memcmp(&got[i], &want, sizeof(T)), 0)
         << "element " << i << " was not a single-rounding of the float scale";
   }
@@ -157,6 +193,9 @@ TEST(VectorNormalizeValidation, NormalizeRoundsOnceFloat16) {
 TEST(VectorNormalizeValidation, NormalizeRoundsOnceBFloat16) {
   ExpectNormalizeRoundsOnce<bfloat16>(Sample());
 }
+TEST(VectorNormalizeValidation, NormalizeRoundsOnceFloat64) {
+  ExpectNormalizeRoundsOnce<double>(Sample());
+}
 
 // After normalizing, the vector's magnitude must be 1 to within the
 // quantization of T. This is the property the COSINE save/restore path
@@ -165,7 +204,7 @@ TEST(VectorNormalizeValidation, NormalizeRoundsOnceBFloat16) {
 template <typename T>
 void ExpectUnitMagnitudeAfterNormalize(const std::vector<double>& raw) {
   auto q = QuantizeAll<T>(raw);
-  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  const double recip = CalcReciprocalMagnitude(q.data(), q.size());
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), recip);
 
   std::vector<T> norm(q.size());
@@ -186,6 +225,9 @@ TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeFloat16) {
 TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeBFloat16) {
   ExpectUnitMagnitudeAfterNormalize<bfloat16>(Sample());
 }
+TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeFloat64) {
+  ExpectUnitMagnitudeAfterNormalize<double>(Sample());
+}
 
 // NormalizeVector must interpret the payload with T's element width. Reading
 // a 2-byte vector as 4-byte floats would both halve the element count and
@@ -193,7 +235,7 @@ TEST(VectorNormalizeValidation, UnitMagnitudeAfterNormalizeBFloat16) {
 template <typename T>
 void ExpectElementWidthRespected() {
   auto q = QuantizeAll<T>(Sample());
-  float magnitude = 0.0f;
+  double magnitude = 0.0;
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), &magnitude);
   EXPECT_EQ(out.size(), Sample().size() * sizeof(T));
   EXPECT_NEAR(static_cast<double>(magnitude), ExactMagnitude<T>(q),
@@ -209,12 +251,15 @@ TEST(VectorNormalizeValidation, ElementWidthFloat16) {
 TEST(VectorNormalizeValidation, ElementWidthBFloat16) {
   ExpectElementWidthRespected<bfloat16>();
 }
+TEST(VectorNormalizeValidation, ElementWidthFloat64) {
+  ExpectElementWidthRespected<double>();
+}
 
 // Zero vectors must not produce inf/NaN: the reciprocal is defined as 1.0.
 template <typename T>
 void ExpectZeroVectorSafe() {
   std::vector<T> q(8, Quantize<T>(0.0));
-  const float recip = CalcReciprocalMagnitude(q.data(), q.size());
+  const double recip = CalcReciprocalMagnitude(q.data(), q.size());
   EXPECT_EQ(recip, 1.0f);
   std::vector<char> out = NormalizeVector<T>(AsBytes(q), recip);
   std::vector<T> norm(q.size());
@@ -232,6 +277,9 @@ TEST(VectorNormalizeValidation, ZeroVectorFloat16) {
 }
 TEST(VectorNormalizeValidation, ZeroVectorBFloat16) {
   ExpectZeroVectorSafe<bfloat16>();
+}
+TEST(VectorNormalizeValidation, ZeroVectorFloat64) {
+  ExpectZeroVectorSafe<double>();
 }
 
 }  // namespace

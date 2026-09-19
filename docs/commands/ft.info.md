@@ -76,7 +76,7 @@ An array of key value pairs.
   - `dimensions` (integer) Dimension count
   - `distance_metric` (string) Possible values are `L2`, `IP` or `COSINE`
   - `size` (integer) Number of valid vectors for this attribute
-  - `data_type` (string) Element data type of the vector. Possible values are `FLOAT32`, `FLOAT16` or `BFLOAT16`
+  - `data_type` (string) Element data type of the vector. Possible values are `FLOAT32`, `FLOAT16`, `BFLOAT16` or `FLOAT64`
   - `algorithm` (array of key/value pairs) Extended information about the vector indexing algorithm for this attribute.
 
 #### FLAT VECTOR Field Type Extension.

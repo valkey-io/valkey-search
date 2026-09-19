@@ -38,7 +38,7 @@ Where:
 - `K` (required): The number of nearest neighbor vectors to return.
 - `field` (required): The name of a vector field within the specified index.
 - `parameter` (required): A `PARAM` name whose corresponding value provides the query vector for the KNN algorithm.
-  Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`); see [Supported Data Types](search-data-formats.md#supported-data-types). Its length must therefore be `DIM * 4` bytes for `FLOAT32` and `DIM * 2` bytes for the 16-bit types.
+  Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16`, `BFLOAT16` or `FLOAT64`); see [Supported Data Types](search-data-formats.md#supported-data-types). Its length is `DIM * 4` bytes for `FLOAT32`, `DIM * 2` bytes for the 16-bit types, and `DIM * 8` bytes for `FLOAT64`.
 - `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created.
 - `AS <name>` (optional): Overrides the default naming of the output distance field. By default this field is constructed by appending the string "\_\_score" to the name of the vector field.
 

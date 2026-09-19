@@ -3,7 +3,8 @@
 A document rewritten while a query is running is re-checked against the query's
 filter at content-fetch time. These cover the other half of that: its distance
 is recomputed against the vector it holds now, and the reply is put back in
-order once it has been.
+order once it has been. The last case covers FT.HYBRID, whose VSIM arm does the
+same work in RevalidateArmsBeforeFusion before the arms are fused.
 """
 
 import struct
@@ -30,6 +31,9 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         # A second writer thread so the parked mutation does not starve the
         # rest of the pool.
         args["search.writer-threads"] = "2"
+        # FT.HYBRID dispatches its arms in parallel and needs room for both;
+        # the KNN cases here do not care either way.
+        args["search.reader-threads"] = "4"
         return args
 
     def setup_index(self, client: Valkey) -> None:
@@ -150,6 +154,70 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         self._release(client, thread, err)
 
         assert [k for k, _ in during] == [b"d:2", b"d:3", b"d:4"]
+
+    def _hybrid_rows(self, client: Valkey):
+        """{key: fields} from FT.HYBRID.
+
+        The VSIM arm yields its score under `vdist`, and a per-arm alias is
+        attached only for documents that arm actually contributed. So a key
+        present without `vdist` is one the vector arm dropped -- which the
+        fused reply still carries, because the numeric SEARCH arm matches every
+        document and fusion is a union.
+        """
+        reply = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@price:[0 100]",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "4",
+            "YIELD_SCORE_AS", "vdist",
+            "COMBINE", "RRF", "2", "WINDOW", "100",
+            "LIMIT", "0", "100",
+            "PARAMS", "2", "q", self.Q)
+        rows = {}
+        for rec in reply[1:]:
+            fields = {rec[i]: rec[i + 1] for i in range(0, len(rec), 2)}
+            rows[fields[b"__key"]] = fields
+        return rows
+
+    def test_a_vector_the_mutation_made_unusable_is_dropped(self):
+        """A mutation that leaves the vector field present but the wrong length
+        has no current distance, so the document leaves the reply.
+
+        RecomputeDistance rejects the value on a size check, which is the only
+        way it fails for a well-formed key: the field is there, it just no
+        longer matches the index dimensions. Scoring the document on the
+        distance the search computed against the vector it no longer holds
+        would rank it somewhere it does not belong, so it is dropped -- the
+        same answer the neighbouring branch gives when the field is missing
+        altogether.
+        """
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+        before = self._hybrid_rows(client)
+        assert sorted(before) == [b"d:1", b"d:2", b"d:3", b"d:4"]
+        assert all(b"vdist" in r for r in before.values()), before
+
+        # Three floats where the index wants four.
+        thread, err = self._park_mutation(
+            client, "HSET", "d:1", "price", "1", "vec", _vec(1.0, 0.0, 0.0))
+        # Unlike the FT.SEARCH cases above, the query cannot simply be run
+        # while the mutation is held: FT.HYBRID's ArmGate parks the whole
+        # envelope until the mutation queue is quiescent, so it would block
+        # until the client's deadline (see
+        # test_fused_result_blocks_on_inflight_mutation). Start it, then let
+        # the mutation through, so revalidation runs against the new value.
+        qthread, out, qerr = run_in_thread(
+            lambda: self._hybrid_rows(self.server.get_new_client()))
+        self._release(client, thread, err)
+        qthread.join()
+        assert qerr[0] is None, qerr[0]
+
+        during = out[0]
+        assert b"vdist" not in during.get(b"d:1", {}), (
+            f"the vector arm kept a document it cannot score, with the "
+            f"pre-mutation distance: {during.get(b'd:1')}")
+        for key in (b"d:2", b"d:3", b"d:4"):
+            assert b"vdist" in during[key], (
+                f"{key} was dropped from the vector arm too: {during}")
 
     def test_an_untouched_reply_is_left_alone(self):
         """With nothing in flight the reply is exactly what the search

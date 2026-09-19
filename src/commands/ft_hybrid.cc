@@ -438,11 +438,21 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         }
         auto distance = vector_index->RecomputeDistance(
             vmsdk::ToStringView(record->second.value.get()), arm->query);
-        if (distance.ok()) {
-          n.distance = *distance;
-          n.score = *distance;
-          rescored = true;
+        if (!distance.ok()) {
+          // The field is there but cannot be turned into a distance -- the
+          // mutation wrote a vector of the wrong length, so it no longer
+          // matches the index dimensions. Drop it, exactly as the branch
+          // directly above drops a document whose vector field went missing:
+          // both mean "no current distance for this document", and keeping the
+          // neighbor would rank it on a distance to the vector the search saw
+          // rather than the one the database now holds.
+          drop[j] = 1;
+          ++dropped;
+          continue;
         }
+        n.distance = *distance;
+        n.score = *distance;
+        rescored = true;
       } else if (verification.recomputed_score.has_value()) {
         n.score = *verification.recomputed_score;
         rescored = true;

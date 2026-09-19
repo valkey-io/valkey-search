@@ -629,14 +629,38 @@ absl::Status PerformMultiSearchFanoutAsync(
   // Local shard: run each arm locally, reporting into its per-arm tracker via
   // a LocalResponderSearch (mirrors the single-arm path).
   if (has_local_target) {
+    // Every arm must be accounted for, so nothing in this loop returns early.
+    // Bailing out on arm i would leave arms i+1..N-1 waiting on a local shard
+    // that never reports -- they would merge the remote shards alone and say
+    // nothing about it -- and the error would travel back to CreateCommand,
+    // which replies to a client DispatchFanoutAsync has already blocked and
+    // the meta-tracker will later unblock and reply to again.
+    //
+    // A failure is instead recorded through the same entry point a failed
+    // remote shard uses, so the local shard's loss follows the identical
+    // partial-results policy with no second implementation of it.
+    auto fail_arm = [&](size_t arm, const absl::Status &status) {
+      coordinator::SearchIndexPartitionResponse empty;
+      per_arm_trackers[arm]->HandleResponse(empty, "local",
+                                            ToGrpcStatus(status));
+    };
     for (size_t i = 0; i < num_arms; ++i) {
       auto local_parameters = std::make_unique<LocalResponderSearch>();
-      VMSDK_RETURN_IF_ERROR(coordinator::GRPCSearchRequestToParameters(
-          *arm_requests[i], nullptr, local_parameters.get()));
+      auto convert = coordinator::GRPCSearchRequestToParameters(
+          *arm_requests[i], nullptr, local_parameters.get());
+      if (!convert.ok()) {
+        fail_arm(i, convert);
+        continue;
+      }
       local_parameters->tracker = per_arm_trackers[i];
-      VMSDK_RETURN_IF_ERROR(query::SearchAsync(std::move(local_parameters),
-                                               thread_pool, SearchMode::kLocal))
-          << "Failed to handle FT.HYBRID arm locally during fan-out";
+      auto status = query::SearchAsync(std::move(local_parameters), thread_pool,
+                                       SearchMode::kLocal);
+      if (!status.ok()) {
+        VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
+            << "Failed to handle FT.HYBRID arm locally during fan-out: "
+            << status.message();
+        fail_arm(i, status);
+      }
     }
   }
   return absl::OkStatus();

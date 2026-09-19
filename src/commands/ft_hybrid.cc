@@ -721,10 +721,20 @@ absl::Status MultiSearchParameters::DispatchFanoutAsync(
                            async::FreeMulti, cmd->timeout_ms);
   cmd->blocked_client->MeasureTimeStart();
   // Cluster path: each shard already performed its own content fetch (the
-  // coordinator cannot read keys it does not own). Per-shard atomicity across
-  // arms is handled shard-side. Here we only fuse the per-arm results — which
-  // already carry their database content — and unblock; the reply callback
-  // runs the aggregate transforms.
+  // coordinator cannot read keys it does not own), so nothing is left to
+  // resolve here. We only fuse the per-arm results — which already carry their
+  // database content — and unblock; the reply callback runs the aggregate
+  // transforms.
+  //
+  // Note what this path does NOT do, in contrast to DispatchLocalAsync: there
+  // is no ArmGate and no RevalidateArmsBeforeFusion. Both run only on the
+  // non-cluster path. Shard-side, every arm is dispatched through its own
+  // SearchOneArm -> SearchAsync -> ResolveContent, so each arm is
+  // mutation-checked individually against its own shard and the arms are never
+  // validated as a unit — on any shard, local or remote. That follows from the
+  // decision that the arms need not share an index snapshot; what it costs is
+  // that a shard's two arms can observe different mutation states, and that no
+  // cross-arm validation happens at the coordinator at all.
   cmd->on_all_arms_complete =
       [](std::unique_ptr<MultiSearchParameters> p) mutable {
         p->search_result.neighbors = BuildFusedNeighbors(*p);

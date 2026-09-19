@@ -11,7 +11,7 @@
         "Hybrid search combining text/filter and vector arms"
       ]
     ],
-    "summary": "Performs hybrid search combining a text/filter arm with a vector arm, fuses results via RRF or LINEAR, and feeds the fused list through the FT.AGGREGATE post-pipeline.",
+    "summary": "Performs hybrid search combining a text/filter arm with a vector arm, fuses results via RRF, LINEAR or a user-supplied FUNCTION, and feeds the fused list through the FT.AGGREGATE post-pipeline.",
     "complexity": "O(N+M) where N is the complexity of the SEARCH arm and M is the complexity of the VSIM arm.",
     "arguments": [
       {

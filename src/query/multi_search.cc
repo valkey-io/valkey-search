@@ -119,7 +119,16 @@ void MultiSearchTracker::Finalize() {
     // search_result.status before the partial-results gate.
     params->search_result.status =
         absl::FailedPreconditionError(kFailedPreconditionMsg);
-  } else if (any_arm_failed_.load() && !params->enable_partial_results) {
+  } else if (any_arm_failed_.load()) {
+    // Deliberately NOT gated on enable_partial_results. Partial-results
+    // tolerance is applied one level down, per shard, by
+    // SearchPartitionResultsTracker: it only lets a non-OK status through when
+    // partial results are refused, or when not a single shard answered this
+    // arm. (On the local-only path there is no shard to tolerate the loss of
+    // at all.) So an arm still carrying a non-OK status here is an arm nothing
+    // answered, and fusing it as empty would report a total failure as "no
+    // matches". FT.SEARCH errors in exactly this situation -- see the
+    // !has_successful_node branch in fanout.cc.
     params->search_result.status = first_error;
   }
   // Hand off to the user-supplied completion. Production code (Phase 4) runs

@@ -103,16 +103,23 @@ TEST(MultiSearchTrackerTest, ArmErrorPropagatedAsSearchResultStatus) {
   EXPECT_TRUE(absl::IsCancelled(final_status));
 }
 
-TEST(MultiSearchTrackerTest, PartialResultsModePreservesSurvivingArms) {
+// An arm that reaches the tracker still carrying an error fails the whole
+// query, even when partial results are allowed.
+//
+// Partial-results tolerance is about losing a whole SHARD, and it is applied a
+// level below this one: SearchPartitionResultsTracker only lets a non-OK
+// status through when partial results are refused, or when not one shard
+// answered that arm. So an arm arriving here with an error is an arm nothing
+// answered, and fusing it as empty would report a total failure as "no
+// matches". FT.SEARCH errors in the same situation.
+TEST(MultiSearchTrackerTest, ArmFailureFailsQueryDespitePartialResults) {
   auto params = MakeParams(2);
   params->enable_partial_results = true;
   bool finalize_called = false;
-  size_t arm0_count = 0;
-  size_t arm1_count = 0;
+  absl::Status final_status;
   params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
     finalize_called = true;
-    arm0_count = p->per_arm_results[0].neighbors.size();
-    arm1_count = p->per_arm_results[1].neighbors.size();
+    final_status = p->search_result.status;
   };
   auto arms = std::move(params->arms);
   params->arms.clear();
@@ -125,9 +132,63 @@ TEST(MultiSearchTrackerTest, PartialResultsModePreservesSurvivingArms) {
   tracker->OnArmComplete(1, ResultWithOne("doc:b", 0.5f), nullptr);
 
   EXPECT_TRUE(finalize_called);
-  // Surviving arm's result remains visible.
+  EXPECT_TRUE(absl::IsCancelled(final_status)) << final_status;
+}
+
+// The guard for the test above: an arm that legitimately matched nothing
+// reports OK with zero neighbors, and that is a success, not a failure. Without
+// this, "fail when an arm is empty" is an easy over-correction.
+TEST(MultiSearchTrackerTest, EmptyButSuccessfulArmIsNotAFailure) {
+  auto params = MakeParams(2);
+  params->enable_partial_results = true;
+  bool finalize_called = false;
+  absl::Status final_status;
+  size_t arm0_count = 1;
+  size_t arm1_count = 0;
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_called = true;
+    final_status = p->search_result.status;
+    arm0_count = p->per_arm_results[0].neighbors.size();
+    arm1_count = p->per_arm_results[1].neighbors.size();
+  };
+  auto arms = std::move(params->arms);
+  params->arms.clear();
+  params->arms.resize(arms.size());
+  auto tracker = std::make_shared<MultiSearchTracker>(std::move(params));
+
+  tracker->OnArmComplete(0, SearchResult(), nullptr);  // OK, no matches
+  tracker->OnArmComplete(1, ResultWithOne("doc:b", 0.5f), nullptr);
+
+  EXPECT_TRUE(finalize_called);
+  EXPECT_TRUE(final_status.ok()) << final_status;
   EXPECT_EQ(arm0_count, 0u);
   EXPECT_EQ(arm1_count, 1u);
+}
+
+// Both arms failed: the first error is the one reported.
+TEST(MultiSearchTrackerTest, AllArmsFailedUnderPartialResultsIsAnError) {
+  auto params = MakeParams(2);
+  params->enable_partial_results = true;
+  bool finalize_called = false;
+  absl::Status final_status;
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_called = true;
+    final_status = p->search_result.status;
+  };
+  auto arms = std::move(params->arms);
+  params->arms.clear();
+  params->arms.resize(arms.size());
+  auto tracker = std::make_shared<MultiSearchTracker>(std::move(params));
+
+  SearchResult err0;
+  err0.status = absl::ResourceExhaustedError("arm 0 oom");
+  SearchResult err1;
+  err1.status = absl::CancelledError("arm 1 cancel");
+  tracker->OnArmComplete(0, std::move(err0), nullptr);
+  tracker->OnArmComplete(1, std::move(err1), nullptr);
+
+  EXPECT_TRUE(finalize_called);
+  EXPECT_TRUE(absl::IsResourceExhausted(final_status)) << final_status;
 }
 
 TEST(MultiSearchTrackerTest, ConsistencyFailureFailsDespitePartialResults) {

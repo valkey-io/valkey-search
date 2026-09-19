@@ -589,24 +589,27 @@ TEST_F(FTHybridParserTest, WindowRejectsAboveTheConfiguredMaximum) {
               ::testing::HasSubstr("maximum is 1000000"));
 }
 
-TEST_F(FTHybridParserTest, WindowZeroMeansUnlimited) {
+TEST_F(FTHybridParserTest, WindowZeroResolvesToTheMaximum) {
   // Not a pass-through of the reference, which rejects `WINDOW 0` outright.
-  // Zero is this engine's "do not cap the arms", and COMBINE FUNCTION relies
-  // on it -- see the FunctionDefaultsToAnUnlimitedWindow case below.
+  // Zero is this engine's "do not cap the arms", and it is resolved here
+  // rather than carried: a zero reaching the cluster fanout would be turned
+  // into a per-shard fetch limit of 10 by std::max(window, 10), which is the
+  // opposite of what the user asked for.
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                        "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW", "0"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ((*params)->fusion.window, 0u);
+  EXPECT_EQ((*params)->fusion.window, 1000000u);
 }
 
-TEST_F(FTHybridParserTest, FunctionDefaultsToAnUnlimitedWindow) {
+TEST_F(FTHybridParserTest, FunctionDefaultsToTheWidestWindowAllowed) {
   // A user expression is expected to see every candidate, so FUNCTION with no
-  // WINDOW must not inherit the RRF/LINEAR default of 20.
+  // WINDOW must not inherit the RRF/LINEAR default of 20. It gets the same
+  // resolved ceiling an explicit `WINDOW 0` does, for the same reason.
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                        "2", "K", "5", "COMBINE", "FUNCTION", "2", "EXPR",
                        "@__search_score + @__vector_score"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ((*params)->fusion.window, 0u);
+  EXPECT_EQ((*params)->fusion.window, 1000000u);
 }
 
 TEST_F(FTHybridParserTest, RrfConstantIsAFractionalNumber) {

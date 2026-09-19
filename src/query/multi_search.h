@@ -68,7 +68,10 @@ struct FusionConfig {
   Method method = Method::kRRF;
   // Fractional, to match the reference: see rank_fusion.h.
   double rrf_constant = 60.0;
-  // 0 means unlimited, which is also what COMBINE FUNCTION defaults to.
+  // Number of each arm's results that take part in fusion. The FT.HYBRID
+  // parser never leaves this at 0: an explicit `WINDOW 0`, and COMBINE
+  // FUNCTION's implicit default, both resolve to max-combine-window. 20 is the
+  // RRF/LINEAR default, matching the reference.
   uint32_t window = 20;
   std::optional<double> alpha;  // required when method == kLinear
   std::optional<double> beta;   // required when method == kLinear

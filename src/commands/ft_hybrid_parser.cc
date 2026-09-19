@@ -613,10 +613,6 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       // UINT_MAX. WINDOW decides how many of each arm's results take part in
       // fusion and, in cluster mode, how many each shard is asked to fetch, so
       // an unbounded value is paid for on every shard as well as here.
-      //
-      // `WINDOW 0` means unlimited and deliberately passes: it is the value
-      // COMBINE FUNCTION defaults to, and narrowing that is a separate
-      // behaviour change, not a bounds check.
       const uint64_t max_window = static_cast<uint64_t>(
           options::GetMaxCombineWindow().GetValue());
       if (v > max_window) {
@@ -624,7 +620,14 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
             "COMBINE WINDOW is out of range, got `", v,
             "` (maximum is ", max_window, ")"));
       }
-      env.fusion.window = static_cast<uint32_t>(v);
+      // `WINDOW 0` is accepted and means "as wide as allowed", so it resolves
+      // to the ceiling rather than staying a sentinel. Leaving a zero here
+      // would mean asking for no cap and getting one anyway: the fanout turns
+      // a zero window into a per-shard fetch limit of 10 (see the
+      // std::max(window, 10) in PerformMultiSearchFanoutAsync), which is the
+      // opposite of unlimited. Nothing downstream has to know about 0 now.
+      env.fusion.window =
+          v == 0 ? static_cast<uint32_t>(max_window) : static_cast<uint32_t>(v);
       saw_window = true;
     } else if (absl::EqualsIgnoreCase(kw, kAlphaKw)) {
       if (env.fusion.method != FusionConfig::Method::kLinear) {
@@ -693,11 +696,14 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
   }
   // For COMBINE FUNCTION, the user expression is computed per document and
   // typically expected to see EVERY matching candidate (not the RRF/LINEAR
-  // top-window slice). If the caller did not set WINDOW explicitly, default
-  // to unlimited so the fusion stage does not silently drop docs the user
-  // expected the function to score.
+  // top-window slice). If the caller did not set WINDOW explicitly, default to
+  // the widest window allowed so the fusion stage does not silently drop docs
+  // the user expected the function to score. "As wide as allowed" rather than
+  // literally unlimited: a zero would reach the fanout, which turns it into a
+  // per-shard fetch limit of 10 and truncates far harder than any window.
   if (env.fusion.method == FusionConfig::Method::kFunction && !saw_window) {
-    env.fusion.window = 0;
+    env.fusion.window =
+        static_cast<uint32_t>(options::GetMaxCombineWindow().GetValue());
   }
   return absl::OkStatus();
 }

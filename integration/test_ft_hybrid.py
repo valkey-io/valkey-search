@@ -1248,7 +1248,8 @@ class TestFtHybridScoreShape(ValkeySearchTestCaseBase):
     def test_window_zero_means_unlimited(self):
         """`WINDOW 0` lifts the cap rather than removing every candidate.
 
-        This is where the parser's zero sentinel becomes observable: the
+        The parser resolves zero to max-combine-window, so what is observable
+        here is that it behaves like a window wider than the corpus. The
         reference rejects `WINDOW 0`, so nothing outside this repo pins it,
         and a reading of zero as "take no rows" would return an empty reply
         instead of the whole union.

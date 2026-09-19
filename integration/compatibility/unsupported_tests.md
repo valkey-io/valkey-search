@@ -529,7 +529,7 @@ answer, so none are swept:
 | `CONSTANT -1` | accepted, every score infinity | rejected |
 | `CONSTANT ""` | accepted as 0 | rejected |
 | `WINDOW 1e3`, `WINDOW 0x10` | accepted | rejected |
-| `WINDOW 4294967295` | rejected, above its maximum | accepted |
+| `WINDOW 4294967295` | rejected, above `max-combine-window` | accepted |
 
 `ALPHA` and `BETA` are checked by IEEE bit pattern rather than with
 `std::isfinite`, because this project builds with `-ffast-math`, which implies
@@ -541,21 +541,29 @@ same way.
 The fractional constants and the out-of-range weights the reference does take
 are swept, in `test_rrf_fractional_constants` and `test_linear_weight_range`.
 
-### 5.5d. `WINDOW 0` — unlimited here, rejected by Redis
+### 5.5d. `WINDOW 0` — accepted here, rejected by Redis
 
 **Status:** deliberate extension.
 
 ```
 ... COMBINE RRF 2 WINDOW 0 ...
 Redis:  (error) SEARCH_PARSE_ARGS WINDOW: Value below minimum
-Valkey: the whole union, with no per-arm cap
+Valkey: accepted, and resolved to the widest window allowed
 ```
 
 Zero is this engine's "do not cap the arms", and `COMBINE FUNCTION` depends on
-it: a user expression is expected to see every candidate, so FUNCTION with no
-`WINDOW` defaults to zero rather than inheriting the RRF/LINEAR default of 20.
+the same idea: a user expression is expected to see every candidate, so
+FUNCTION with no `WINDOW` does not inherit the RRF/LINEAR default of 20.
+
+Both resolve at parse time to `max-combine-window` (a Dev configuration,
+default 1,000,000) rather than staying a zero sentinel. That is a ceiling
+rather than true unlimited, and it is the honest form of the promise: a zero
+reaching the cluster fanout would be turned into a per-shard fetch limit of 10
+by `std::max(window, 10)`, truncating far harder than any window the user could
+have asked for.
+
 Not swept, because the reference has no answer to compare against.
-`test_window_zero_means_unlimited` and two parser unit tests pin it instead --
+`test_window_zero_means_unlimited` and three parser unit tests pin it instead --
 worth pinning precisely because nothing outside this repo does, and because
 reading zero as "take no rows" would empty the reply rather than fill it.
 

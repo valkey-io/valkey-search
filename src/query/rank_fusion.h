@@ -45,7 +45,10 @@ struct ArmInput {
   double rrf_constant = 60.0;
   // For both RRF and LINEAR: window cap on this arm's contribution. Only the
   // top `window` neighbors (by the arm's pre-fusion order — vector arms are
-  // sorted ascending by distance) participate in fusion. 0 = unlimited.
+  // sorted ascending by distance) participate in fusion. 0 = unlimited, which
+  // is this struct's own contract; the FT.HYBRID parser resolves both `WINDOW
+  // 0` and COMBINE FUNCTION's default to max-combine-window instead, so in
+  // production this arrives non-zero.
   uint32_t window = 0;
 };
 

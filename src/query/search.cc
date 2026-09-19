@@ -2377,7 +2377,7 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   //
   // We use a forward scan that skips "=>" occurrences that are immediately
   // followed by '{' (query attribute blocks) or preceded by ']' (also a suffix
-  // query attribute). The first "=>" that is followed by '[' or '@' is the KNN
+  // query attribute). The first "=>" that is followed by '[' is the KNN
   // boundary.
   absl::string_view::size_type delimiter_pos = absl::string_view::npos;
   {
@@ -2394,10 +2394,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         ++after_arrow;
       }
       if (after_arrow < filter_expression.size() &&
-          (filter_expression[after_arrow] == '[' ||
-           filter_expression[after_arrow] == '@')) {
-        // "=>[" or "=>@" — this is the KNN delimiter
-        // (e.g. "=>[KNN ...]" or "=>@field[...]").
+          filter_expression[after_arrow] == '[') {
+        // "=>[" — this is the KNN delimiter (e.g. "=>[KNN ...]").
         delimiter_pos = found;
         break;
       }

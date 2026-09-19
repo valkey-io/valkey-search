@@ -867,21 +867,38 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     nonvector_results_fetched_limited_count.Increment();
   }
 
-  // For queries with multiple VR predicates, the main EvaluateFull() only
-  // propagates a single VR score. Re-evaluate all VR predicates individually
-  // to populate every vr_scores slot correctly.
-  if (parameters.num_vr_predicates > 1) {
+  // For queries with a VR predicate, the main EvaluateFull() only propagates a
+  // single VR score into one slot (and for compound AND/OR nodes it may not
+  // land in vr_scores[0] at all). Re-evaluate all VR predicates individually
+  // to populate every vr_scores slot correctly — this is what makes the
+  // $yield_distance_as field emit for compound queries, including the
+  // single-VR case (e.g. `@vec:[VECTOR_RANGE 5 $b]=>{$yield_distance_as: dist}
+  // @category:{A}`).
+  if (parameters.num_vr_predicates >= 1) {
     PopulateVrScoresForNeighbors(neighbors, parameters);
-    // Multi-VR default sort: lexicographic key order (not distance).
-    // When multiple VR predicates are present, there is no single "best"
-    // distance to sort by, so the default is key order — consistent with
-    // Redis behavior for multi-predicate queries. Users can override this
-    // with an explicit SORTBY on a specific VR yield field.
-    std::sort(neighbors.begin(), neighbors.end(),
-              [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
-                return a.external_id->Str() < b.external_id->Str();
-              });
-    return neighbors;
+    if (parameters.num_vr_predicates > 1) {
+      // Multi-VR default sort: lexicographic key order (not distance).
+      // When multiple VR predicates are present, there is no single "best"
+      // distance to sort by, so the default is key order — consistent with
+      // Redis behavior for multi-predicate queries. Users can override this
+      // with an explicit SORTBY on a specific VR yield field.
+      std::sort(neighbors.begin(), neighbors.end(),
+                [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+                  return a.external_id->Str() < b.external_id->Str();
+                });
+      return neighbors;
+    }
+    // Exactly one VR predicate: the repair pass recomputed the true distance
+    // into vr_scores[0]. Sync it back into n.distance (when it matched) so the
+    // ascending-distance sort below orders results nearest-first instead of by
+    // key order.
+    for (auto &n : neighbors) {
+      if (!n.vr_scores.empty() &&
+          n.vr_scores[0] != indexes::Neighbor::kVrScoreNotMatched) {
+        n.distance = n.vr_scores[0];
+      }
+    }
+    // Fall through to the ascending-distance sort below.
   }
 
   // Sort by ascending distance; use key as a stable secondary so that results

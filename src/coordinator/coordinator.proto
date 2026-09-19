@@ -153,6 +153,12 @@ message SearchIndexPartitionRequest {
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
+  // Whether the whole record was asked for, independently of
+  // return_parameters. A sender that predates this field leaves it false, and
+  // the receiver derives it from no_content instead -- see search_converter.cc
+  // -- so a mixed-version fanout does not turn `LOAD *` into a fetch of
+  // nothing.
+  bool all_content = 21;
 }
 
 message NeighborEntry {

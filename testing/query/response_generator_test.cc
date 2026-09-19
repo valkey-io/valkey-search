@@ -108,6 +108,10 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
              vmsdk::MakeUniqueValkeyString(return_attribute.identifier),
          .alias = vmsdk::MakeUniqueValkeyString(return_attribute.alias)});
   }
+  // A case that names no return attributes is a whole-record request. That
+  // used to be inferred from the empty list; it is now stated positively, so
+  // the fixture has to say so too.
+  parameters.all_content = params.return_attributes.empty();
   parameters.filter_parse_results.filter_identifiers =
       params.filter_identifiers;
   int filter_evaluate_cnt = -1;
@@ -738,10 +742,12 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
   MockAttributeDataType data_type;
   EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
 
+  // Nothing is asked for, on either key type. A JSON fetch used to ask for the
+  // `$` root here regardless, because a whole-record request was spelled as an
+  // empty return list and NOCONTENT produced the same empty list. Now that the
+  // whole-record request is its own flag, NOCONTENT no longer reads the
+  // document off the key.
   absl::flat_hash_set<absl::string_view> expected_identifiers;
-  if (type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
-    expected_identifiers.insert(kJsonRootElementQuery);
-  }
 
   {
     testing::InSequence s;

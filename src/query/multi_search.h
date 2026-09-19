@@ -221,8 +221,12 @@ class MultiSearchTracker
   // SearchParameters in arm_owners_ (mirrors local_responder_ retention), and
   // decrements the outstanding count. When the count hits zero, calls
   // Finalize().
+  // `consistency_failed` reports that this arm's result came from a cluster
+  // map the shard no longer trusts; it fails the whole query in Finalize
+  // regardless of enable_partial_results.
   void OnArmComplete(size_t arm_index, SearchResult &&result,
-                     std::unique_ptr<SearchParameters> arm_self);
+                     std::unique_ptr<SearchParameters> arm_self,
+                     bool consistency_failed = false);
 
  private:
   void Finalize();
@@ -233,6 +237,7 @@ class MultiSearchTracker
   std::vector<std::unique_ptr<SearchParameters>> arm_owners_
       ABSL_GUARDED_BY(mu_);
   std::atomic_bool any_arm_failed_{false};
+  std::atomic_bool consistency_failed_{false};
   absl::Status first_error_ ABSL_GUARDED_BY(mu_);
 };
 

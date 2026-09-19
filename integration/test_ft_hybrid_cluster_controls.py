@@ -74,9 +74,19 @@ class TestFtHybridClusterControls(ClusterTestUtils,
             assert self._count(client) == nominal
 
             self.config_set("search.enable-consistent-results", "yes")
-            self.config_set("search.enable-partial-results", "no")
-            with pytest.raises(ResponseError):
-                self._hybrid(client)
+            # A consistency failure fails the command as a consistency
+            # failure whether or not partial results are allowed:
+            # partial-results tolerance covers a shard that dropped out, not a
+            # cluster map the reply can no longer be trusted to have been
+            # assembled from. The message is asserted because with partial
+            # results allowed the query used to fail only indirectly, through
+            # the cancellation the failing shard fires, and so reported itself
+            # as a timeout.
+            for partial in ("no", "yes"):
+                self.config_set("search.enable-partial-results", partial)
+                with pytest.raises(ResponseError,
+                                   match="consistency check failed"):
+                    self._hybrid(client)
         finally:
             self.control_set("ForceInvalidSlotFingerprint", "no")
             self.config_set("search.enable-consistent-results", "no")

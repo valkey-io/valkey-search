@@ -232,12 +232,16 @@ struct SearchPartitionResultsTracker {
     if (meta_tracker_ != nullptr) {
       auto meta = std::move(meta_tracker_);
       size_t arm_index = arm_index_;
+      // Copied out with the rest, before the lock is dropped: the meta-tracker
+      // fails the whole query on it even when partial results are allowed.
+      const bool arm_consistency_failed = consistency_failed.load();
       auto result = std::move(parameters->search_result);
       auto self_params = std::move(parameters);
       // Release the lock before invoking OnArmComplete: it may run Finalize ->
       // FuseAndReply synchronously, which should not happen under our mutex.
       lock_holder.reset();
-      meta->OnArmComplete(arm_index, std::move(result), std::move(self_params));
+      meta->OnArmComplete(arm_index, std::move(result), std::move(self_params),
+                          arm_consistency_failed);
       return;
     }
     // The destructor runs on whichever thread drops the last shared_ptr

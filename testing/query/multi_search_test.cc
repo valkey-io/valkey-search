@@ -130,6 +130,34 @@ TEST(MultiSearchTrackerTest, PartialResultsModePreservesSurvivingArms) {
   EXPECT_EQ(arm1_count, 1u);
 }
 
+TEST(MultiSearchTrackerTest, ConsistencyFailureFailsDespitePartialResults) {
+  // Same shape as PartialResultsModePreservesSurvivingArms, except arm 0's
+  // failure is a consistency failure. Partial-results tolerance does not
+  // extend to it: the surviving arm was fused against a cluster map we no
+  // longer trust, so the whole query fails.
+  auto params = MakeParams(2);
+  params->enable_partial_results = true;
+  bool finalize_called = false;
+  absl::Status final_status = absl::OkStatus();
+  params->on_all_arms_complete = [&](std::unique_ptr<MultiSearchParameters> p) {
+    finalize_called = true;
+    final_status = p->search_result.status;
+  };
+  auto arms = std::move(params->arms);
+  params->arms.clear();
+  params->arms.resize(arms.size());
+  auto tracker = std::make_shared<MultiSearchTracker>(std::move(params));
+
+  SearchResult err;
+  err.status = absl::FailedPreconditionError(kFailedPreconditionMsg);
+  tracker->OnArmComplete(0, std::move(err), nullptr,
+                         /*consistency_failed=*/true);
+  tracker->OnArmComplete(1, ResultWithOne("doc:b", 0.5f), nullptr);
+
+  EXPECT_TRUE(finalize_called);
+  EXPECT_TRUE(absl::IsFailedPrecondition(final_status));
+}
+
 TEST(MultiSearchTrackerTest, ConcurrentCompletions) {
   // Stress: N=8 arms reporting concurrently from N threads. Verify finalize
   // fires exactly once and per_arm_results contains all N entries.

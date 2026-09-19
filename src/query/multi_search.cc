@@ -65,8 +65,11 @@ MultiSearchTracker::MultiSearchTracker(
 
 void MultiSearchTracker::OnArmComplete(
     size_t arm_index, SearchResult&& result,
-    std::unique_ptr<SearchParameters> arm_self) {
+    std::unique_ptr<SearchParameters> arm_self, bool consistency_failed) {
   bool finalize_now = false;
+  if (consistency_failed) {
+    consistency_failed_.store(true);
+  }
   {
     absl::MutexLock lock(&mu_);
     CHECK(arm_index < parameters_->per_arm_results.size());
@@ -109,7 +112,14 @@ void MultiSearchTracker::Finalize() {
     // copy below, after the lock is released.
     first_error = first_error_;
   }
-  if (any_arm_failed_.load() && !params->enable_partial_results) {
+  if (consistency_failed_.load()) {
+    // Not a shard we can pretend didn't exist: the reply would be assembled
+    // from a cluster map we no longer trust. Fails regardless of
+    // enable-partial-results, matching FT.SEARCH, whose reply path checks
+    // search_result.status before the partial-results gate.
+    params->search_result.status =
+        absl::FailedPreconditionError(kFailedPreconditionMsg);
+  } else if (any_arm_failed_.load() && !params->enable_partial_results) {
     params->search_result.status = first_error;
   }
   // Hand off to the user-supplied completion. Production code (Phase 4) runs

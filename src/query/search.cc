@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -839,8 +840,14 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
           fetch_limited = true;
           break;
         }
-        float distance =
-            eval_result.HasVrScore() ? eval_result.vr_distance : 0.0f;
+        // Non-VR OR-branch matches (e.g. a tag-only match in
+        // "@vec:[VECTOR_RANGE ...] | @tag:{B}") have no vector-range distance.
+        // Use +infinity as the sentinel so they sort after all genuine VR
+        // matches in ascending-distance order (0.0f would sort them first,
+        // indistinguishable from an exact vector match).
+        float distance = eval_result.HasVrScore()
+                             ? eval_result.vr_distance
+                             : std::numeric_limits<float>::infinity();
         indexes::Neighbor n(key, distance);
         n.vr_scores.assign(parameters.num_vr_predicates,
                            indexes::Neighbor::kVrScoreNotMatched);

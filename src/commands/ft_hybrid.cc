@@ -757,6 +757,27 @@ absl::Status MultiSearchParameters::DispatchFanoutAsync(
   // cross-arm validation happens at the coordinator at all.
   cmd->on_all_arms_complete =
       [](std::unique_ptr<MultiSearchParameters> p) mutable {
+        // The shards were asked for content this query does not want. They
+        // had to be: a shard that fetches nothing also skips its own content
+        // resolution, and with it the revalidation against concurrent
+        // mutations, so "fetch it, verify against it, then report none of it"
+        // has no spelling on the wire (see ApplyAggregateProjection in
+        // fanout.cc). Drop it here instead, before fusion, or every field of
+        // every key arrives as an extra column in the reply.
+        //
+        // Emptied, NOT reset: a neighbor with no attribute_contents at all is
+        // one the aggregate pipeline believes was never fetched, and
+        // PrepareNeighborRecords -> ProcessNeighborsForReply would then fetch
+        // it here on the coordinator -- which both reintroduces the columns
+        // and, in a cluster, can only reach the keys this node happens to own.
+        // An empty map says "fetched, and it yielded nothing you want".
+        if (p->agg != nullptr && WantsNoDatabaseContent(*p->agg)) {
+          for (auto &result : p->per_arm_results) {
+            for (auto &n : result.neighbors) {
+              n.attribute_contents.emplace();
+            }
+          }
+        }
         p->search_result.neighbors = BuildFusedNeighbors(*p);
         auto *raw = p.release();
         raw->blocked_client->SetReplyPrivateData(raw);

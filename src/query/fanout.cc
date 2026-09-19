@@ -32,6 +32,7 @@
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
 #include "src/indexes/vector_base.h"
+#include "src/commands/ft_aggregate_parser.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
@@ -518,6 +519,39 @@ void PerformRemoteMultiSearchRequestAsync(
       vmsdk::ThreadPool::Priority::kHigh);
 }
 
+// Mirror the aggregate's resolved LOAD clause onto a per-arm shard request.
+//
+// The shard, not the coordinator, performs a hybrid arm's content fetch -- the
+// coordinator cannot read keys it does not own -- so the shard is where the
+// LOAD projection has to be applied. An arm carries none of its own: it is a
+// search, not a pipeline. An empty return_parameters list is the wire's
+// spelling for "every field", so without this a named LOAD came back with the
+// whole record, putting columns the caller never asked for in the reply and
+// the raw vector blob on the network. The local path narrows at its
+// post-fusion resolver instead (see ft_hybrid.cc).
+//
+// AggregateParameters has three states and this maps two of them; the third,
+// "nothing from the database", cannot be spelled here. Setting no_content
+// would say it, but it also turns off the shard's own content resolution, and
+// with it the mutation revalidation every arm depends on. That case is handled
+// at the coordinator instead, by dropping the content after the arms report.
+void ApplyAggregateProjection(const aggregate::AggregateParameters &agg,
+                              coordinator::SearchIndexPartitionRequest *req) {
+  if (agg.loadall_ || agg.return_attributes.empty()) {
+    return;
+  }
+  req->clear_return_parameters();
+  for (const auto &attr : agg.return_attributes) {
+    auto *p = req->add_return_parameters();
+    p->set_identifier(vmsdk::ToStringView(attr.identifier.get()));
+    // The alias the shard reads is the *source* attribute alias, never the
+    // renamed output alias -- same rule as ParametersToGRPCSearchRequest.
+    p->set_alias(vmsdk::ToStringView(attr.attribute_alias
+                                         ? attr.attribute_alias.get()
+                                         : attr.identifier.get()));
+  }
+}
+
 absl::Status PerformMultiSearchFanoutAsync(
     ValkeyModuleCtx *ctx,
     std::vector<vmsdk::cluster_map::NodeInfo> &search_targets,
@@ -546,6 +580,9 @@ absl::Status PerformMultiSearchFanoutAsync(
     arm.enable_partial_results = parameters->enable_partial_results;
     arm.enable_consistency = parameters->enable_consistency;
     auto req = coordinator::ParametersToGRPCSearchRequest(arm);
+    if (parameters->agg != nullptr) {
+      ApplyAggregateProjection(*parameters->agg, req.get());
+    }
     uint64_t per_shard_limit;
     if (arm.IsNonVectorQuery()) {
       per_shard_limit = std::max<uint64_t>(window, 10);

@@ -385,6 +385,18 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
       }
     }
+    // Whether this arm's distances can be refreshed at all. Both operands are
+    // settled above, once for the arm, so this is a property of the arm rather
+    // than a decision to be taken per document -- it is hoisted to say so.
+    //
+    // When it is false, the loop below still drops documents that were deleted
+    // or that stopped matching, but the survivors keep the distance the search
+    // gave them: there is no way to compute a newer one. The arm was built
+    // from this same attribute_alias, so reaching here means the schema
+    // changed underneath the query.
+    const bool can_recompute_distance = arm_score_is_distance &&
+                                        vector_index != nullptr &&
+                                        vector_identifier[i].has_value();
     std::unique_ptr<query::SingleDocumentScorer> document_scorer;
     std::vector<char> drop(neighbors.size(), 0);
     size_t dropped = 0;
@@ -426,10 +438,7 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         ++dropped;
         continue;
       }
-      if (arm_score_is_distance) {
-        if (vector_index == nullptr || !vector_identifier[i].has_value()) {
-          continue;
-        }
+      if (can_recompute_distance) {
         auto record = records.find(*vector_identifier[i]);
         if (record == records.end()) {
           drop[j] = 1;
@@ -453,7 +462,8 @@ void RevalidateArmsBeforeFusion(MultiSearchParameters &params) {
         n.distance = *distance;
         n.score = *distance;
         rescored = true;
-      } else if (verification.recomputed_score.has_value()) {
+      } else if (!arm_score_is_distance &&
+                 verification.recomputed_score.has_value()) {
         n.score = *verification.recomputed_score;
         rescored = true;
       }

@@ -111,6 +111,9 @@ config::Number &GetThreadPoolWaitTimeSamples();
 /// suffix, fuzzy)
 config::Number &GetMaxTermExpansions();
 
+/// Return the maximum value FT.HYBRID accepts for COMBINE ... WINDOW
+config::Number &GetMaxCombineWindow();
+
 /// Return the maximum number of group keys one record may expand to when
 /// GROUPBY is given multi-value fields
 config::Number &GetMaxGroupKeyExpansion();

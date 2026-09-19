@@ -29,6 +29,7 @@
 #include "src/indexes/scoring/scorer.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -607,9 +608,21 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       env.fusion.rrf_constant = v;
     } else if (absl::EqualsIgnoreCase(kw, kWindowKw)) {
       VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeUint(inner_itr, kWindowKw));
-      if (v > std::numeric_limits<uint32_t>::max()) {
-        return absl::InvalidArgumentError(
-            absl::StrCat("COMBINE WINDOW is out of range, got `", v, "`"));
+      // The ceiling is max-combine-window (a Dev config, default 1,000,000),
+      // never wider than uint32_t because that config's own maximum is
+      // UINT_MAX. WINDOW decides how many of each arm's results take part in
+      // fusion and, in cluster mode, how many each shard is asked to fetch, so
+      // an unbounded value is paid for on every shard as well as here.
+      //
+      // `WINDOW 0` means unlimited and deliberately passes: it is the value
+      // COMBINE FUNCTION defaults to, and narrowing that is a separate
+      // behaviour change, not a bounds check.
+      const uint64_t max_window = static_cast<uint64_t>(
+          options::GetMaxCombineWindow().GetValue());
+      if (v > max_window) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "COMBINE WINDOW is out of range, got `", v,
+            "` (maximum is ", max_window, ")"));
       }
       env.fusion.window = static_cast<uint32_t>(v);
       saw_window = true;

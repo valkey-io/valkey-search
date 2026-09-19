@@ -378,6 +378,27 @@ static auto max_term_expansions =
                           kMaximumMaxTermExpansions)  // max limit (100k)
         .Build();
 
+/// Register the "--max-combine-window" flag. Caps COMBINE ... WINDOW on
+/// FT.HYBRID. WINDOW decides how many of each arm's results take part in
+/// fusion, and in cluster mode it also sets each shard's fetch limit, so a
+/// large value costs memory at the coordinator and work on every shard.
+/// Dev-only: the default is far above anything a legitimate query asks for,
+/// and lowering it is a debugging and investigation tool rather than a
+/// deployment knob.
+///
+/// Note that this caps an explicitly supplied WINDOW. `WINDOW 0` means
+/// unlimited and is not bounded by this.
+constexpr absl::string_view kMaxCombineWindowConfig{"max-combine-window"};
+constexpr uint32_t kDefaultMaxCombineWindow{1000000};
+constexpr uint32_t kMinimumMaxCombineWindow{1};
+static auto max_combine_window =
+    config::NumberBuilder(kMaxCombineWindowConfig,   // name
+                          kDefaultMaxCombineWindow,  // default limit (1M)
+                          kMinimumMaxCombineWindow,  // min limit (1)
+                          UINT_MAX)                  // max limit
+        .Dev()                                       // debug mode only
+        .Build();
+
 /// Register the "--max-group-key-expansion" flag. A GROUPBY over a multi-value
 /// field puts the record in one group per element, so a record with several
 /// such key fields expands to the product of their lengths.
@@ -699,6 +720,10 @@ vmsdk::config::Number &GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number &GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number &>(*max_term_expansions);
+}
+
+vmsdk::config::Number &GetMaxCombineWindow() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_combine_window);
 }
 
 vmsdk::config::Number &GetMaxGroupKeyExpansion() {

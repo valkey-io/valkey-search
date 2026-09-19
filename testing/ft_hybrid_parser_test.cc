@@ -567,6 +567,28 @@ TEST_F(FTHybridParserTest, WindowTakesAWholeNumber) {
   EXPECT_EQ((*params)->fusion.window, 7u);
 }
 
+TEST_F(FTHybridParserTest, WindowAcceptsTheConfiguredMaximum) {
+  // max-combine-window defaults to 1,000,000; the boundary itself is legal.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW",
+                       "1000000"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.window, 1000000u);
+}
+
+TEST_F(FTHybridParserTest, WindowRejectsAboveTheConfiguredMaximum) {
+  // One past max-combine-window. WINDOW sizes both the fusion stage and, in
+  // cluster mode, every shard's fetch, so it is bounded rather than trusted.
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW",
+                       "1000001"});
+  EXPECT_FALSE(params.ok());
+  EXPECT_THAT(params.status().message(),
+              ::testing::HasSubstr("COMBINE WINDOW is out of range"));
+  EXPECT_THAT(params.status().message(),
+              ::testing::HasSubstr("maximum is 1000000"));
+}
+
 TEST_F(FTHybridParserTest, WindowZeroMeansUnlimited) {
   // Not a pass-through of the reference, which rejects `WINDOW 0` outright.
   // Zero is this engine's "do not cap the arms", and COMBINE FUNCTION relies

@@ -22,10 +22,13 @@ TermIterator::TermIterator(
     const FieldMaskPredicate stem_field_mask, bool has_original,
     float leaf_weight, uint32_t num_doc_contain_term,
     const TextIndexSchema* text_index_schema, const scoring::Scorer* scorer,
+    absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
+        postings_lifetime,
     absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
+      postings_lifetime_(std::move(postings_lifetime)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
       require_positions_(require_positions),
@@ -41,11 +44,13 @@ TermIterator::TermIterator(
     if (stats.total_docs > 0) {
       scorer_ = scorer;
       avg_doc_len_ = stats.avg_doc_len;
-      // total_docs and the doc counts come from separate, independently-locked
-      // counters and can be transiently out of sync, so clamp to keep
-      // dt <= total_docs (matches ResolveLeaves in search.cc).
+      // total_docs and the per-term doc counts come from separate,
+      // independently-locked counters and can be transiently out of sync, so
+      // clamp to keep dt <= total_docs (matches ResolveLeaves in search.cc).
       if (!per_term_dt.empty()) {
-        // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term.
+        // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term, so a
+        // matched doc is scored on a single term's own IDF rather than the
+        // doc-wide sum.
         per_term_idf_.reserve(per_term_dt.size());
         for (uint32_t dt : per_term_dt) {
           per_term_idf_.push_back(scorer_->PrecomputeIDF(

@@ -90,6 +90,7 @@ class IndexBase {
       const InternedStringPtr &key, AttributeData &&data) = 0;
   virtual int RespondWithInfo(ValkeyModuleCtx *ctx) const = 0;
   IndexerType GetIndexerType() const { return indexer_type_; }
+  virtual bool IsVectorIndex() const { return false; }
   virtual absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const = 0;
 
   virtual std::unique_ptr<data_model::Index> ToProto() const = 0;

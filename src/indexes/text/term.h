@@ -15,6 +15,8 @@
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
+#include "src/indexes/text/invasive_ptr.h"
+#include "src/indexes/text/posting.h"
 #include "src/indexes/text/text_iterator.h"
 #include "src/utils/inlined_priority_queue.h"
 
@@ -52,6 +54,8 @@ class TermIterator : public TextIterator {
       float leaf_weight = 1.0f, uint32_t num_doc_contain_term = 0,
       const TextIndexSchema* text_index_schema = nullptr,
       const scoring::Scorer* scorer = nullptr,
+      absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
+          postings_lifetime = {},
       absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt =
           {});
   /* Implementation of TextIterator APIs */
@@ -89,6 +93,11 @@ class TermIterator : public TextIterator {
       key_iterators_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
+  // Keeps Postings objects alive for the duration of this iterator.
+  // KeyIterator holds raw pointers into Postings::key_to_positions_; the
+  // Postings refcount must not drop to zero while any KeyIterator is live.
+  absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
+      postings_lifetime_;
   // Raw pointer to the current key in the underlying btree_map. Safe to use
   // because the map is immutable while the reader lock is held (no inserts or
   // deletes during search).
@@ -116,7 +125,8 @@ class TermIterator : public TextIterator {
   float avg_doc_len_{0.0f};
 
   // Per-matched-term IDF for prefix/suffix/fuzzy, index-aligned with
-  // key_iterators_. Non-empty selects expansion mode in GetScore().
+  // key_iterators_. Non-empty selects expansion mode in GetScore(): a doc is
+  // scored on a single matched term's own IDF + own F, never the doc-wide sum.
   absl::InlinedVector<float, kWordExpansionInlineCapacity> per_term_idf_;
 
   // Pending queue: heap of valid iterators not currently being processed.

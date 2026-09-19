@@ -1343,26 +1343,31 @@ TEST_F(ValueTest, FormatDoublePreservesLargeIntegers) {
 }
 
 // The integral path renders in fixed notation so Redisearch's "1700000000"
-// is matched rather than shortest-round-trip's "1.7e+09"; above 1e17 the value
-// falls back to to_chars, whose exponent form Redisearch has no counterpart
-// for in any dataset we test.
+// is matched rather than shortest-round-trip's "1.7e+09"; redis:latest uses
+// integer notation for integral values below ~2^63 (≈9.2e18); we match with
+// a threshold of 1e19.
 TEST_F(ValueTest, FormatDoubleIntegralUsesFixedNotation) {
   EXPECT_EQ(FormatDouble(1700000000.0), "1700000000");        // epoch seconds
   EXPECT_EQ(FormatDouble(1700000000123.0), "1700000000123");  // epoch millis
   EXPECT_EQ(FormatDouble(9007199254740992.0), "9007199254740992");  // 2^53
 
-  // Straddle the fixed-vs-scientific switch. 99999999999999999.0 is not
-  // representable and rounds up to 1e17, so the largest double below the
-  // threshold is 99999999999999984.
-  EXPECT_EQ(FormatDouble(99999999999999984.0), "99999999999999984");
+  // 1e17 and 1e18 are now in integer range (below 1e19 threshold).
   EXPECT_EQ(FormatDouble(1e16), "10000000000000000");
-  EXPECT_EQ(FormatDouble(1e17), "1e+17");
+  EXPECT_EQ(FormatDouble(1e17), "100000000000000000");
+  EXPECT_EQ(FormatDouble(1e18), "1000000000000000000");
   EXPECT_EQ(FormatDouble(-1e16), "-10000000000000000");
-  EXPECT_EQ(FormatDouble(-1e17), "-1e+17");
+  EXPECT_EQ(FormatDouble(-1e17), "-100000000000000000");
+  EXPECT_EQ(FormatDouble(-1e18), "-1000000000000000000");
+  // Values at or above 1e19 switch to scientific.
+  EXPECT_EQ(FormatDouble(1e19), "1e+19");
+  EXPECT_EQ(FormatDouble(-1e19), "-1e+19");
+  // exp(40) ≈ 2.35e17 — the key compatibility case.
+  EXPECT_EQ(FormatDouble(std::exp(40.0)), "235385266837020000");
 
   // Non-integral, zero and the infinities keep to_chars' rendering.
   EXPECT_EQ(FormatDouble(1.5), "1.5");
-  EXPECT_EQ(FormatDouble(-0.0), "-0");
+  EXPECT_EQ(FormatDouble(-0.0),
+            "0");  // -0.0 normalizes to "0" per redis:latest
   EXPECT_EQ(FormatDouble(std::numeric_limits<double>::infinity()), "inf");
   EXPECT_EQ(FormatDouble(-std::numeric_limits<double>::infinity()), "-inf");
 }

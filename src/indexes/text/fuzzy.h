@@ -8,6 +8,7 @@
 #define _VALKEY_SEARCH_INDEXES_TEXT_FUZZY_H_
 
 #include <algorithm>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -22,22 +23,23 @@ namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
-  // Matched terms within the edit distance, index-aligned across all three
-  // vectors so scoring can use one matched term's own dt.
-  struct Expansion {
+  // Result of a fuzzy search: key iterators, the per-matched-term document
+  // counts (dt) needed to compute each expanded term's own BM25 IDF, and the
+  // Postings objects that must stay alive as long as the key iterators are in
+  // use. All three vectors are index-aligned.
+  struct Result {
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
         key_iterators;
     absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
-    // Used only by the extra-step scoring path, which does per-key LookupKey
-    // instead of forward iteration.
     absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
-        postings;
+        postings_lifetime;
   };
 
-  // Returns matched terms for all words within edit distance <= max_distance
-  static Expansion Search(const Rax &tree, absl::string_view pattern,
-                          size_t max_distance, uint32_t max_words) {
-    Expansion result;
+  // Returns KeyIterators for all words within edit distance <= max_distance,
+  // along with ownership of the backing Postings objects.
+  static Result Search(const Rax &tree, absl::string_view pattern,
+                       size_t max_distance, uint32_t max_words) {
+    Result result;
 
     // Dynamic Programming matrix rows for Damerau-Levenshtein algorithm
     // Row i-2 (for transposition)
@@ -72,7 +74,7 @@ struct FuzzySearch {
           &prev,  // Row i-1 of DP matrix (previous row)
       absl::InlinedVector<size_t, 32>
           &curr,  // Row i of DP matrix (current row being computed)
-      Expansion &result, uint32_t max_words, uint32_t &word_count) {
+      Result &result, uint32_t max_words, uint32_t &word_count) {
     // Iterate over children at current tree level
     while (!iter.Done() && word_count < max_words) {
       absl::string_view edge = iter.GetChildEdge();
@@ -156,9 +158,11 @@ struct FuzzySearch {
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
           auto postings = child_iter.GetPostingsTarget();
-          result.per_term_dt.push_back(postings->GetKeyCount());
-          result.key_iterators.emplace_back(postings->GetKeyIterator());
-          result.postings.push_back(std::move(postings));
+          if (postings) {
+            result.per_term_dt.push_back(postings->GetKeyCount());
+            result.key_iterators.emplace_back(postings->GetKeyIterator());
+            result.postings_lifetime.push_back(std::move(postings));
+          }
           ++word_count;
           if (word_count >= max_words) {
             return;

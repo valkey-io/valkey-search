@@ -328,6 +328,8 @@ class VectorBase : public IndexBase {
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
 
+  // Public because PrefilterEvaluator and PopulateVrScoresForNeighbors in
+  // search.cc call this directly.
   // Returns the distance and internal label for the given key, or an error if
   // the key is not tracked. Used by AddPrefilteredKey and PrefilterEvaluator.
   // Prefer IsWithinVectorRange for callers that only need a pass/fail check.

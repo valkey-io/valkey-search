@@ -3578,6 +3578,12 @@ TEST(IndexSchemaMinVersionTest, BFloat16VectorRequires13) {
             kRelease13);
 }
 
+TEST(IndexSchemaMinVersionTest, Float64VectorRequires13) {
+  EXPECT_EQ(MinVersionOf(
+                MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT64)),
+            kRelease13);
+}
+
 // A text index moves the floor to 1.2, not 1.3 -- i.e. the 1.3 gate is not
 // entangled with any other feature.
 TEST(IndexSchemaMinVersionTest, TextIndexDoesNotRequire13) {
@@ -3601,6 +3607,16 @@ TEST(IndexSchemaMinVersionTest, DbNumDoesNotRequire13) {
 // floor any of them can demand.
 TEST(IndexSchemaMinVersionTest, LowPrecisionDominatesOtherContributors) {
   auto schema = MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_BFLOAT16);
+  schema.set_db_num(3);
+  auto *attr = schema.add_attributes();
+  attr->set_alias("t");
+  attr->set_identifier("t");
+  attr->mutable_index()->mutable_text_index();
+  EXPECT_EQ(MinVersionOf(schema), kRelease13);
+}
+
+TEST(IndexSchemaMinVersionTest, Float64Requires13WithOtherContributors) {
+  auto schema = MakeSchemaWithVectorType(data_model::VECTOR_DATA_TYPE_FLOAT64);
   schema.set_db_num(3);
   auto *attr = schema.add_attributes();
   attr->set_alias("t");

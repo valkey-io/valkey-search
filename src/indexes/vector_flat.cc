@@ -105,7 +105,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
 
     auto generator = [allocator = index->GetVectorAllocator()](
                          absl::string_view vector_data) {
-      float reciprocal_magnitude = CalcReciprocalMagnitude(
+      double reciprocal_magnitude = CalcReciprocalMagnitude(
           reinterpret_cast<const T *>(vector_data.data()),
           vector_data.size() / sizeof(T));
       return VectorRecord::Construct(
@@ -230,7 +230,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  float reciprocal_magnitude =
+  double reciprocal_magnitude =
       normalize_ ? CalcReciprocalMagnitude(
                        reinterpret_cast<const T *>(query.data()), dimensions_)
                  : 1.0f;
@@ -255,9 +255,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 }
 
 template <typename T>
-float VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                     const VectorRecord *vector_record,
-                                     float query_magnitude) const {
+double VectorFlat<T>::ComputeDistance(absl::string_view query,
+                                      const VectorRecord *vector_record,
+                                      double query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
@@ -322,5 +322,6 @@ std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVector(
 template class VectorFlat<float>;
 template class VectorFlat<float16>;
 template class VectorFlat<bfloat16>;
+template class VectorFlat<double>;
 
 }  // namespace valkey_search::indexes

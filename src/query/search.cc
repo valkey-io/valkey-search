@@ -420,7 +420,7 @@ size_t EvaluateFilterAsPrimary(
 
 struct PrefilteredKey {
   std::string key;
-  float distance;
+  double distance;
 };
 
 void EvaluatePrefilteredKeys(
@@ -479,13 +479,13 @@ void EvaluatePrefilteredKeys(
   }
 }
 
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
+std::priority_queue<std::pair<double, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries) {
-  std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
-  float query_magnitude = indexes::kDefaultMagnitude;
+  std::priority_queue<std::pair<double, hnswlib::labeltype>> results;
+  double query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
     query_magnitude = indexes::CalcReciprocalMagnitude(
         parameters.query, vector_index->GetVectorDataType());
@@ -1472,7 +1472,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
+    std::priority_queue<std::pair<double, hnswlib::labeltype>> results =
         CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
                                         vector_index, qualified_entries);
 

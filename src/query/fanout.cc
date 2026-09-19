@@ -47,6 +47,18 @@ namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
 
+double GetPreferredNeighborDistance(
+    const coordinator::NeighborEntry& neighbor_entry) {
+  return neighbor_entry.has_distance_fp64() ? neighbor_entry.distance_fp64()
+                                            : neighbor_entry.distance();
+}
+
+double GetPreferredNeighborScore(
+    const coordinator::NeighborEntry& neighbor_entry) {
+  return neighbor_entry.has_score_fp64() ? neighbor_entry.score_fp64()
+                                         : neighbor_entry.score();
+}
+
 struct NeighborComparator {
   bool operator()(const indexes::Neighbor &a,
                   const indexes::Neighbor &b) const {
@@ -145,8 +157,9 @@ struct SearchPartitionResultsTracker {
       }
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
-          neighbor_entry->distance(), std::move(attribute_contents)};
-      neighbor.score = neighbor_entry->score();
+          GetPreferredNeighborDistance(*neighbor_entry),
+          std::move(attribute_contents)};
+      neighbor.score = GetPreferredNeighborScore(*neighbor_entry);
       AddResult(neighbor);
     }
   }

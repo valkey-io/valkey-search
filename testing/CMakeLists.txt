@@ -176,7 +176,8 @@ finalize_test_flags(query_test)
 # 1. Coordinator Test Suite - consolidates coordinator related tests
 set(COORDINATOR_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/coordinator/metadata_manager_test.cc
-    ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc)
+    ${CMAKE_CURRENT_LIST_DIR}/coordinator/client_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/coordinator/neighbor_entry_test.cc)
 
 add_executable(coordinator_test ${COORDINATOR_TEST_SOURCES})
 target_include_directories(coordinator_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})
@@ -184,6 +185,8 @@ target_include_directories(coordinator_test
                            PUBLIC ${CMAKE_CURRENT_LIST_DIR}/coordinator)
 target_link_libraries(coordinator_test PRIVATE testing_common_base)
 target_link_libraries(coordinator_test PRIVATE testing_common_coordinator)
+target_link_libraries(coordinator_test PRIVATE server)
+target_link_libraries(coordinator_test PRIVATE fanout)
 finalize_test_flags(coordinator_test)
 
 # Create coordinator_common interface library (used by coordinator tests)

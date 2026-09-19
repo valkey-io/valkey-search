@@ -55,7 +55,7 @@ indexes::VectorRecordWithSize ConstructVectorRecord(
         .vector_record = indexes::VectorRecord::Construct(record, 0, nullptr),
         .size = record.size()};
   }
-  float reciprocal_magnitude = vector_base->ComputeReciprocalMagnitude(record);
+  double reciprocal_magnitude = vector_base->ComputeReciprocalMagnitude(record);
   return {.vector_record = indexes::VectorRecord::Construct(
               record, reciprocal_magnitude, vector_base->GetVectorAllocator()),
           .size = record.size()};

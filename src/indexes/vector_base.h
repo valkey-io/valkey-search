@@ -47,7 +47,7 @@ enum class QueryOperations : uint64_t;
 
 namespace valkey_search::indexes {
 
-constexpr float kDefaultMagnitude = 1.0f;
+constexpr double kDefaultMagnitude = 1.0;
 
 class VectorRecord {
  public:
@@ -62,17 +62,17 @@ class VectorRecord {
   // Static factory method to construct a VectorRecord managed by
   // std::shared_ptr.
   static std::shared_ptr<VectorRecord> Construct(
-      absl::string_view vector, float reciprocal_magnitude,
+      absl::string_view vector, double reciprocal_magnitude,
       Allocator *allocator = nullptr);
 
   inline const char *GetRawVector() const { return data_; }
-  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  inline double GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
 
  private:
   // Constructor is private, called via placement new in Construct.
-  VectorRecord(absl::string_view vector, float reciprocal_magnitude);
+  VectorRecord(absl::string_view vector, double reciprocal_magnitude);
 
-  const float reciprocal_magnitude_;
+  const double reciprocal_magnitude_;
   char data_[0];  // flexible array member
 };
 
@@ -96,12 +96,14 @@ struct VectorRecordWithSize {
 // would both walk off the end of the buffer and produce garbage magnitudes.
 // The accumulation is always done in float regardless of T.
 template <typename T>
-float CalcReciprocalMagnitude(const T *src, size_t size);
+double CalcReciprocalMagnitude(const T *src, size_t size);
 
-extern template float CalcReciprocalMagnitude<float>(const float *, size_t);
-extern template float CalcReciprocalMagnitude<float16>(const float16 *, size_t);
-extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
+extern template double CalcReciprocalMagnitude<float>(const float *, size_t);
+extern template double CalcReciprocalMagnitude<float16>(const float16 *,
                                                         size_t);
+extern template double CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
+                                                         size_t);
+extern template double CalcReciprocalMagnitude<double>(const double *, size_t);
 
 // Verify the running CPU exposes a SIMD-targeted BF16 path required by the
 // current simsimd build. Returns OkStatus when:
@@ -119,52 +121,52 @@ absl::Status CheckSimsimdBf16Capability();
 // storage type T. The scale is applied in float and rounded once back into T.
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
-                                  float reciprocal_magnitude);
+                                  double reciprocal_magnitude);
 
 template <typename T>
 std::vector<char> NormalizeVector(absl::string_view record,
-                                  float *magnitude = nullptr);
+                                  double *magnitude = nullptr);
 
 // Runtime-dispatched variants, for the few call sites that hold only a
 // data-type enum rather than a compile-time T (VectorRegistry, QueryVector).
-float CalcReciprocalMagnitude(absl::string_view record,
-                              data_model::VectorDataType data_type);
+double CalcReciprocalMagnitude(absl::string_view record,
+                               data_model::VectorDataType data_type);
 
 std::vector<char> NormalizeVector(absl::string_view record,
                                   data_model::VectorDataType data_type,
-                                  float reciprocal_magnitude);
+                                  double reciprocal_magnitude);
 
 // Default score value used when no scorer has been applied yet.
-inline constexpr float kDefaultScore = 0.0f;
+inline constexpr double kDefaultScore = 0.0;
 
 // Lightweight result entry used during non-vector search collection.
 // Trivially destructible — destroying a vector of 10K of these is a no-op.
 struct BorrowedNeighbor {
   BorrowedInternedStringPtr key;
-  float distance;
-  float score;
+  double distance;
+  double score;
 };
 static_assert(std::is_trivially_destructible_v<BorrowedNeighbor>,
               "BorrowedNeighbor must be trivially destructible");
 
 struct Neighbor {
   InternedStringPtr external_id;
-  float distance;
-  float score;
+  double distance;
+  double score;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), score(kDefaultScore), sequence_number(0) {}
-  Neighbor(const InternedStringPtr &external_id, float distance)
+  Neighbor() : distance(0.0), score(kDefaultScore), sequence_number(0) {}
+  Neighbor(const InternedStringPtr &external_id, double distance)
       : external_id(external_id),
         distance(distance),
         score(distance),
         sequence_number(0) {}
-  Neighbor(const InternedStringPtr &external_id, float distance, float score)
+  Neighbor(const InternedStringPtr &external_id, double distance, double score)
       : external_id(external_id),
         distance(distance),
         score(score),
         sequence_number(0) {}
-  Neighbor(const InternedStringPtr &external_id, float distance,
+  Neighbor(const InternedStringPtr &external_id, double distance,
            std::optional<RecordsMap> &&attribute_contents)
       : external_id(external_id),
         distance(distance),
@@ -217,7 +219,8 @@ const absl::NoDestructor<
     absl::flat_hash_map<absl::string_view, data_model::VectorDataType>>
     kVectorDataTypeByStr({{"FLOAT32", data_model::VECTOR_DATA_TYPE_FLOAT32},
                           {"FLOAT16", data_model::VECTOR_DATA_TYPE_FLOAT16},
-                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16}});
+                          {"BFLOAT16", data_model::VECTOR_DATA_TYPE_BFLOAT16},
+                          {"FLOAT64", data_model::VECTOR_DATA_TYPE_FLOAT64}});
 
 template <typename V>
 absl::string_view LookupKeyByValue(
@@ -286,9 +289,9 @@ class VectorBase : public IndexBase {
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   bool AddPrefilteredKey(
-      absl::string_view query, float query_magnitude,
+      absl::string_view query, double query_magnitude,
       const InternedStringPtr &key, uint64_t count,
-      std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
+      std::priority_queue<std::pair<double, hnswlib::labeltype>> &results,
       absl::flat_hash_set<const char *> &top_keys) const;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
@@ -341,7 +344,7 @@ class VectorBase : public IndexBase {
   // Computes 1/||record|| interpreting `record` as elements of the concrete
   // storage type. Implemented by VectorType<T>; VectorBase cannot know the
   // element width.
-  virtual float ComputeReciprocalMagnitude(absl::string_view record) const = 0;
+  virtual double ComputeReciprocalMagnitude(absl::string_view record) const = 0;
   ~VectorBase() override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   data_model::AttributeDataType GetAttributeDataType() const {
     return attribute_data_type_;
@@ -405,9 +408,9 @@ class VectorBase : public IndexBase {
   bool normalize_{false};
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
-  virtual float ComputeDistance(absl::string_view query,
-                                const VectorRecord *vector_record,
-                                float query_magnitude) const = 0;
+  virtual double ComputeDistance(absl::string_view query,
+                                 const VectorRecord *vector_record,
+                                 double query_magnitude) const = 0;
   virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const = 0;
   mutable absl::Mutex resize_mutex_;
@@ -436,10 +439,10 @@ class VectorBase : public IndexBase {
       ABSL_GUARDED_BY(key_to_metadata_mutex_);
   uint64_t inc_id_ ABSL_GUARDED_BY(key_to_metadata_mutex_){0};
   mutable absl::Mutex key_to_metadata_mutex_;
-  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+  absl::StatusOr<std::pair<double, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query,
-                            float query_magnitude) const;
+                            double query_magnitude) const;
   UniqueFixedSizeAllocatorPtr vector_allocator_{nullptr, nullptr};
 };
 

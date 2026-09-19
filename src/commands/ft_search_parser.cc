@@ -303,8 +303,8 @@ absl::Status SearchCommand::PostParseQueryString() {
   // Check VR yield-distance aliases against the schema for the same reason.
   for (const auto& vr_field : query::CollectVrScoreFields(*this)) {
     if (!vr_field.empty() && index_schema->GetIndex(vr_field).ok()) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "Property `", vr_field, "` already exists in schema"));
+      return absl::InvalidArgumentError(
+          absl::StrCat("Property `", vr_field, "` already exists in schema"));
     }
   }
 

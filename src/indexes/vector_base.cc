@@ -250,9 +250,8 @@ query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
 absl::StatusOr<std::pair<float, hnswlib::labeltype>>
 VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
                                       absl::string_view query) const {
-  float query_magnitude = normalize_
-                              ? CalcReciprocalMagnitude(query, GetVectorDataType())
-                              : 1.0f;
+  float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(query, GetVectorDataType()) : 1.0f;
   return ComputeDistanceFromRecord(key, query, query_magnitude);
 }
 

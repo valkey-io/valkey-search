@@ -2394,15 +2394,16 @@ absl::Status query::SearchParameters::PreParseQueryString() {
         ++after_arrow;
       }
       if (after_arrow < filter_expression.size() &&
-          filter_expression[after_arrow] == '{') {
-        // "=>{" — query attribute suffix; FilterParser already consumed this,
-        // or it belongs to a tag predicate. Skip.
-        search_pos = found + kVectorFilterDelimiter.size();
-        continue;
+          (filter_expression[after_arrow] == '[' ||
+           filter_expression[after_arrow] == '@')) {
+        // "=>[" or "=>@" — this is the KNN delimiter
+        // (e.g. "=>[KNN ...]" or "=>@field[...]").
+        delimiter_pos = found;
+        break;
       }
-      // This is the KNN delimiter.
-      delimiter_pos = found;
-      break;
+      // Not a KNN delimiter — this "=>" is inside a tag value, quoted string,
+      // or a "=>{...}" query attribute suffix. Skip it and keep searching.
+      search_pos = found + kVectorFilterDelimiter.size();
     }
   }
   absl::string_view pre_filter;

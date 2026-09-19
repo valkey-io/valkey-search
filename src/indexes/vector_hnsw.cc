@@ -410,6 +410,14 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   VMSDK_ASSIGN_OR_RETURN(auto raw_results,
                          perform_search(nq.view, reciprocal_magnitude));
 
+  // If the KNN fetch returned exactly max_candidates results, the search was
+  // capped: there may be additional documents within the radius that were
+  // never enumerated and are silently dropped. Report this the same way the
+  // non-vector prefilter path does (search.cc) so the developer-visible
+  // "nonvector_results_fetched_limited_count" INFO counter reflects HNSW range
+  // searches too.
+  const bool fetch_limited = (raw_results.size() >= max_candidates);
+
   // Filter results to only those within the strict radius, applying cosine
   // clamping so floating-point noise doesn't exclude exact matches.
   std::vector<Neighbor> neighbors;
@@ -429,6 +437,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
       continue;
     }
     neighbors.emplace_back(*key, clamped_dist);
+  }
+  if (fetch_limited) {
+    query::RecordNonVectorResultsFetchedLimited();
   }
   return neighbors;
 }

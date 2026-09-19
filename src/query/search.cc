@@ -1778,6 +1778,10 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
          parameters.limit.number == 0;
 }
 
+void RecordNonVectorResultsFetchedLimited() {
+  nonvector_results_fetched_limited_count.Increment();
+}
+
 SearchResult::SearchResult()
     : total_count(0), is_limited_with_buffer(false), is_offsetted(false) {}
 

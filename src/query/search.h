@@ -395,6 +395,13 @@ std::string GetVrScoreFieldName(const SearchParameters &parameters);
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters &parameters);
 
+// Increments the developer-visible "nonvector_results_fetched_limited_count"
+// INFO counter. The counter object is file-static to search.cc; this accessor
+// lets other translation units (e.g. the HNSW range search) report the same
+// "fetch hit the max-candidates cap" signal against the one shared counter,
+// rather than registering a duplicate field.
+void RecordNonVectorResultsFetchedLimited();
+
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.
 // Exposed for testing.

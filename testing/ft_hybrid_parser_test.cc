@@ -556,7 +556,8 @@ TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
 // as 2. The sub-args were given whole-token parsing for exactly this reason;
 // the count two positions earlier was missed.
 TEST_F(FTHybridParserTest, CombineCountRejectsAnythingButAWholeNumber) {
-  for (absl::string_view bad : {"2abc", "4.5", "1e3", "0x10", "-1", "", "abc"}) {
+  for (absl::string_view bad :
+       {"2abc", "4.5", "1e3", "0x10", "-1", "", "abc"}) {
     auto params =
         Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
                "5", "COMBINE", "RRF", std::string(bad), "CONSTANT", "60"});
@@ -565,7 +566,8 @@ TEST_F(FTHybridParserTest, CombineCountRejectsAnythingButAWholeNumber) {
 }
 
 TEST_F(FTHybridParserTest, VsimBlockCountRejectsAnythingButAWholeNumber) {
-  for (absl::string_view bad : {"2abc", "4.5", "1e3", "0x10", "-1", "", "abc"}) {
+  for (absl::string_view bad :
+       {"2abc", "4.5", "1e3", "0x10", "-1", "", "abc"}) {
     auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                          std::string(bad), "K", "5"});
     EXPECT_FALSE(params.ok()) << "KNN count accepted `" << bad << "`";
@@ -575,9 +577,8 @@ TEST_F(FTHybridParserTest, VsimBlockCountRejectsAnythingButAWholeNumber) {
 // Every other sub-arg rejects an empty token; the alias did not, and an empty
 // name would become the score column's output name.
 TEST_F(FTHybridParserTest, YieldScoreAsRejectsAnEmptyAlias) {
-  auto search_arm =
-      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "", "VSIM", "@vector",
-             "$q", "KNN", "2", "K", "5"});
+  auto search_arm = Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "", "VSIM",
+                           "@vector", "$q", "KNN", "2", "K", "5"});
   EXPECT_FALSE(search_arm.ok());
   auto vsim_arm = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                          "2", "K", "5", "YIELD_SCORE_AS", ""});
@@ -602,8 +603,8 @@ TEST_F(FTHybridParserTest, OmittedCombineSubArgsTakeTheDocumentedDefaults) {
 }
 
 TEST_F(FTHybridParserTest, NoCombineClauseIsRrfWithTheSameDefaults) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5"});
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->fusion.method, query::FusionConfig::Method::kRRF);
   EXPECT_EQ((*params)->fusion.window, 20u);
@@ -635,7 +636,7 @@ TEST_F(FTHybridParserTest, LinearDefaultWeightsSurviveOtherSubArgs) {
       {"LINEAR", "2", "YIELD_SCORE_AS", "fs"},
       {"LINEAR", "4", "WINDOW", "5", "YIELD_SCORE_AS", "fs"},
   };
-  for (const auto& tail : tails) {
+  for (const auto &tail : tails) {
     std::vector<std::string> argv = {"SEARCH", "@n:[0 10]", "VSIM", "@vector",
                                      "$q",     "KNN",       "2",    "K",
                                      "5",      "COMBINE"};
@@ -650,9 +651,9 @@ TEST_F(FTHybridParserTest, LinearDefaultWeightsSurviveOtherSubArgs) {
 }
 
 TEST_F(FTHybridParserTest, LinearWithBothWeightsKeepsWhatWasWritten) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA", "0.25",
-                       "BETA", "1.5"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "LINEAR", "4", "ALPHA", "0.25", "BETA", "1.5"});
   VMSDK_EXPECT_OK(params);
   ASSERT_TRUE((*params)->fusion.alpha.has_value());
   ASSERT_TRUE((*params)->fusion.beta.has_value());
@@ -672,7 +673,7 @@ TEST_F(FTHybridParserTest, LinearWithExactlyOneWeightIsRejected) {
       {"LINEAR", "4", "ALPHA", "0.5", "WINDOW", "5"},
       {"LINEAR", "4", "BETA", "0.5", "YIELD_SCORE_AS", "fs"},
   };
-  for (const auto& tail : tails) {
+  for (const auto &tail : tails) {
     std::vector<std::string> argv = {"SEARCH", "@n:[0 10]", "VSIM", "@vector",
                                      "$q",     "KNN",       "2",    "K",
                                      "5",      "COMBINE"};
@@ -693,14 +694,14 @@ TEST_F(FTHybridParserTest, CrossMethodCombineSubArgsAreRejected) {
       {"LINEAR", "6", "ALPHA", "0.5", "BETA", "0.5", "CONSTANT", "60"},
       {"FUNCTION", "4", "EXPR", "@__search_score", "CONSTANT", "60"},
   };
-  for (const auto& tail : cases) {
+  for (const auto &tail : cases) {
     std::vector<std::string> argv = {"SEARCH", "@n:[0 10]", "VSIM", "@vector",
                                      "$q",     "KNN",       "2",    "K",
                                      "5",      "COMBINE"};
     argv.insert(argv.end(), tail.begin(), tail.end());
     auto params = Parse(argv);
-    EXPECT_FALSE(params.ok())
-        << "COMBINE accepted a cross-method sub-arg: " << absl::StrJoin(tail, " ");
+    EXPECT_FALSE(params.ok()) << "COMBINE accepted a cross-method sub-arg: "
+                              << absl::StrJoin(tail, " ");
   }
 }
 
@@ -723,9 +724,9 @@ TEST_F(FTHybridParserTest, WindowTakesAWholeNumber) {
 
 TEST_F(FTHybridParserTest, WindowAcceptsTheConfiguredMaximum) {
   // max-combine-window defaults to 1,000,000; the boundary itself is legal.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW",
-                       "1000000"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "WINDOW", "1000000"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->fusion.window, 1000000u);
 }
@@ -733,9 +734,9 @@ TEST_F(FTHybridParserTest, WindowAcceptsTheConfiguredMaximum) {
 TEST_F(FTHybridParserTest, WindowRejectsAboveTheConfiguredMaximum) {
   // One past max-combine-window. WINDOW sizes both the fusion stage and, in
   // cluster mode, every shard's fetch, so it is bounded rather than trusted.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "COMBINE", "RRF", "2", "WINDOW",
-                       "1000001"});
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "WINDOW", "1000001"});
   EXPECT_FALSE(params.ok());
   EXPECT_THAT(params.status().message(),
               ::testing::HasSubstr("COMBINE WINDOW is out of range"));
@@ -1244,9 +1245,8 @@ std::string BlobSizeError(size_t got) {
 
 TEST_F(FTHybridParserTest, PureVsimArmRejectsOverLongVectorBlob) {
   constexpr size_t kTooLong = kVectorDimensions * sizeof(float) + 4;
-  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",
-                                "@vector", "$q",       "KNN",
-                                "2",       "K",        "5"};
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                                "KNN",    "2",         "K",    "5"};
   auto extra = ParamsWithBlobOf(kTooLong);
   args.insert(args.end(), extra.begin(), extra.end());
   auto params = ParseExact(args);
@@ -1256,9 +1256,8 @@ TEST_F(FTHybridParserTest, PureVsimArmRejectsOverLongVectorBlob) {
 
 TEST_F(FTHybridParserTest, PureVsimArmRejectsUnderLongVectorBlob) {
   constexpr size_t kTooShort = kVectorDimensions * sizeof(float) - 4;
-  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",
-                                "@vector", "$q",       "KNN",
-                                "2",       "K",        "5"};
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                                "KNN",    "2",         "K",    "5"};
   auto extra = ParamsWithBlobOf(kTooShort);
   args.insert(args.end(), extra.begin(), extra.end());
   auto params = ParseExact(args);
@@ -1268,9 +1267,8 @@ TEST_F(FTHybridParserTest, PureVsimArmRejectsUnderLongVectorBlob) {
 
 TEST_F(FTHybridParserTest, PureVsimArmAcceptsCorrectlySizedVectorBlob) {
   // The control: it is the size that is refused, not the clause.
-  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",
-                                "@vector", "$q",       "KNN",
-                                "2",       "K",        "5"};
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                                "KNN",    "2",         "K",    "5"};
   auto extra = ParamsWithBlobOf(kVectorDimensions * sizeof(float));
   args.insert(args.end(), extra.begin(), extra.end());
   auto params = ParseExact(args);
@@ -1281,8 +1279,8 @@ TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
   // The FILTER rewrites the arm into a query string, so this one reaches the
   // check inside PostParseQueryString. Same message as the pure-VSIM arm.
   constexpr size_t kTooLong = kVectorDimensions * sizeof(float) + 4;
-  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",   "@vector",
-                                "$q",     "KNN",       "2",      "K",
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",    "@vector",
+                                "$q",     "KNN",       "2",       "K",
                                 "5",      "FILTER",    "@n:[0 3]"};
   auto extra = ParamsWithBlobOf(kTooLong);
   args.insert(args.end(), extra.begin(), extra.end());
@@ -1290,7 +1288,6 @@ TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
   ASSERT_FALSE(params.ok());
   EXPECT_EQ(params.status().message(), BlobSizeError(kTooLong));
 }
-
 
 // ---------------------------------------------------------------------
 // SCORER
@@ -1302,16 +1299,16 @@ TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
 // construction. The VSIM arm has no scorer at all -- its score is a distance.
 
 TEST_F(FTHybridParserTest, ScorerNamesTheSearchArmsScorer) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "BM25STD", "VSIM",
-                       "@vector", "$q"});
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "SCORER", "BM25STD", "VSIM", "@vector", "$q"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->arms.at(0)->scorer,
             indexes::scoring::ScorerType::kBm25Std);
 }
 
 TEST_F(FTHybridParserTest, ScorerNameIsCaseInsensitive) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "bm25std", "VSIM",
-                       "@vector", "$q"});
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "SCORER", "bm25std", "VSIM", "@vector", "$q"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ((*params)->arms.at(0)->scorer,
             indexes::scoring::ScorerType::kBm25Std);
@@ -1320,15 +1317,15 @@ TEST_F(FTHybridParserTest, ScorerNameIsCaseInsensitive) {
 TEST_F(FTHybridParserTest, ScorerRejectsTfidf) {
   // TFIDF is in the ScorerType enum but is not registered in kScorerByStr, so
   // it is not selectable -- by FT.SEARCH either.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "TFIDF", "VSIM",
-                       "@vector", "$q"});
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "SCORER", "TFIDF", "VSIM", "@vector", "$q"});
   ASSERT_FALSE(params.ok());
   EXPECT_EQ(params.status().message(), "Unknown argument `TFIDF`");
 }
 
 TEST_F(FTHybridParserTest, ScorerRejectsAnUnknownName) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "SCORER", "banana", "VSIM",
-                       "@vector", "$q"});
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "SCORER", "banana", "VSIM", "@vector", "$q"});
   ASSERT_FALSE(params.ok());
   EXPECT_EQ(params.status().message(), "Unknown argument `banana`");
 }

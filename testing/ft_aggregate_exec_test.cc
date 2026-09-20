@@ -1277,8 +1277,8 @@ TEST_F(AggregateCancelTest, UncancelledPipelineIsUnchanged) {
   auto param = MakeStages(
       "APPLY @n1+1 as fred FILTER @fred>1 SORTBY 2 @n1 DESC MAX 100000");
   // Never cancels, however often it is polled.
-  auto token = std::make_shared<CancelAfterPolls>(
-      std::numeric_limits<size_t>::max());
+  auto token =
+      std::make_shared<CancelAfterPolls>(std::numeric_limits<size_t>::max());
   param->cancellation_token = token;
   auto records = MakeDataFor(param.get(), kBigRecordCount);
   for (auto &stage : param->stages_) {

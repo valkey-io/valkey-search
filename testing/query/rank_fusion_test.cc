@@ -5,7 +5,6 @@
  *
  */
 
-#include "src/indexes/scoring/scorer.h"
 #include "src/query/rank_fusion.h"
 
 #include <algorithm>
@@ -18,6 +17,7 @@
 #include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"

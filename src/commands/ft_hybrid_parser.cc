@@ -169,9 +169,8 @@ absl::StatusOr<uint64_t> ParseWholeUint(vmsdk::ArgsIterator &itr,
   itr.Next();
   uint64_t value = 0;
   if (tok.empty() || !absl::SimpleAtoi(tok, &value)) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(label, " must be a non-negative integer, got `", tok,
-                     "`"));
+    return absl::InvalidArgumentError(absl::StrCat(
+        label, " must be a non-negative integer, got `", tok, "`"));
   }
   return value;
 }
@@ -376,8 +375,7 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
   uint32_t inner_count = 0;
   if (has_mode_block) {
     VMSDK_ASSIGN_OR_RETURN(
-        inner_count,
-        ParseBlockTokenCount(itr, absl::StrCat("VSIM ", mode_sv)));
+        inner_count, ParseBlockTokenCount(itr, absl::StrCat("VSIM ", mode_sv)));
   }
   // With no block there is nothing to read, and the defaults set above stand.
   if (has_mode_block && absl::EqualsIgnoreCase(mode_sv, kKnnKw)) {
@@ -646,18 +644,19 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       env.fusion.rrf_constant = v;
     } else if (absl::EqualsIgnoreCase(kw, kWindowKw)) {
       VMSDK_ASSIGN_OR_RETURN(
-          auto v, ParseWholeUint(inner_itr, absl::StrCat("COMBINE ", kWindowKw)));
+          auto v,
+          ParseWholeUint(inner_itr, absl::StrCat("COMBINE ", kWindowKw)));
       // The ceiling is max-combine-window (a Dev config, default 1,000,000),
       // never wider than uint32_t because that config's own maximum is
       // UINT_MAX. WINDOW decides how many of each arm's results take part in
       // fusion and, in cluster mode, how many each shard is asked to fetch, so
       // an unbounded value is paid for on every shard as well as here.
-      const uint64_t max_window = static_cast<uint64_t>(
-          options::GetMaxCombineWindow().GetValue());
+      const uint64_t max_window =
+          static_cast<uint64_t>(options::GetMaxCombineWindow().GetValue());
       if (v > max_window) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "COMBINE WINDOW is out of range, got `", v,
-            "` (maximum is ", max_window, ")"));
+        return absl::InvalidArgumentError(
+            absl::StrCat("COMBINE WINDOW is out of range, got `", v,
+                         "` (maximum is ", max_window, ")"));
       }
       // `WINDOW 0` is accepted and means "as wide as allowed", so it resolves
       // to the ceiling rather than staying a sentinel. Leaving a zero here

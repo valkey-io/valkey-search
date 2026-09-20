@@ -205,8 +205,8 @@ TEST_F(SearchConverterTest, VectorScoreOnlyRoundTrips) {
     EXPECT_EQ(request->vector_score_only(), value);
 
     UnitTestSearchParameters decoded;
-    VMSDK_EXPECT_OK(GRPCSearchRequestToParameters(*request, /*context=*/nullptr,
-                                                  &decoded));
+    VMSDK_EXPECT_OK(
+        GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
     EXPECT_EQ(decoded.vector_score_only, value);
   }
 }
@@ -232,8 +232,8 @@ TEST_F(SearchConverterTest, IsMatchAllRoundTrips) {
     EXPECT_FALSE(request->has_root_filter_predicate());
 
     UnitTestSearchParameters decoded;
-    VMSDK_EXPECT_OK(GRPCSearchRequestToParameters(*request, /*context=*/nullptr,
-                                                  &decoded));
+    VMSDK_EXPECT_OK(
+        GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
     EXPECT_EQ(decoded.filter_parse_results.is_match_all, value);
   }
 }

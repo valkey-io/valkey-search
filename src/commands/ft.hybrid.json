@@ -524,6 +524,195 @@
             "type": "integer"
           }
         ]
+      },
+      {
+        "name": "DIALECT",
+        "type": "integer",
+        "token": "DIALECT",
+        "optional": true
+      },
+      {
+        "name": "APPLY",
+        "type": "block",
+        "token": "APPLY",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "expression",
+            "type": "string"
+          },
+          {
+            "name": "as_token",
+            "type": "pure-token",
+            "token": "AS"
+          },
+          {
+            "name": "field",
+            "type": "string"
+          }
+        ],
+        "multiple": true,
+        "multiple_token": true
+      },
+      {
+        "name": "FILTER",
+        "type": "string",
+        "token": "FILTER",
+        "optional": true,
+        "multiple": true,
+        "multiple_token": true
+      },
+      {
+        "name": "GROUPBY",
+        "type": "block",
+        "token": "GROUPBY",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "field",
+            "type": "string",
+            "multiple": true
+          },
+          {
+            "name": "REDUCE",
+            "type": "block",
+            "token": "REDUCE",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "function",
+                "type": "oneof",
+                "arguments": [
+                  {
+                    "name": "COUNT",
+                    "type": "pure-token",
+                    "token": "COUNT"
+                  },
+                  {
+                    "name": "COUNT_DISTINCT",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCT"
+                  },
+                  {
+                    "name": "SUM",
+                    "type": "pure-token",
+                    "token": "SUM"
+                  },
+                  {
+                    "name": "MIN",
+                    "type": "pure-token",
+                    "token": "MIN"
+                  },
+                  {
+                    "name": "MAX",
+                    "type": "pure-token",
+                    "token": "MAX"
+                  },
+                  {
+                    "name": "AVG",
+                    "type": "pure-token",
+                    "token": "AVG"
+                  },
+                  {
+                    "name": "STDDEV",
+                    "type": "pure-token",
+                    "token": "STDDEV"
+                  },
+                  {
+                    "name": "TOLIST",
+                    "type": "pure-token",
+                    "token": "TOLIST"
+                  },
+                  {
+                    "name": "FIRST_VALUE",
+                    "type": "pure-token",
+                    "token": "FIRST_VALUE"
+                  },
+                  {
+                    "name": "RANDOM_SAMPLE",
+                    "type": "pure-token",
+                    "token": "RANDOM_SAMPLE"
+                  }
+                ]
+              },
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "expression",
+                "type": "string",
+                "optional": true,
+                "multiple": true
+              },
+              {
+                "name": "alias",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                  {
+                    "name": "as_token",
+                    "type": "pure-token",
+                    "token": "AS"
+                  },
+                  {
+                    "name": "name",
+                    "type": "string"
+                  }
+                ]
+              }
+            ],
+            "multiple": true,
+            "multiple_token": true
+          }
+        ],
+        "multiple": true,
+        "multiple_token": true
+      },
+      {
+        "name": "SORTBY",
+        "type": "block",
+        "token": "SORTBY",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "sort_params",
+            "type": "string",
+            "multiple": true
+          },
+          {
+            "name": "max",
+            "type": "integer",
+            "token": "MAX",
+            "optional": true
+          }
+        ]
+      },
+      {
+        "name": "LIMIT",
+        "type": "block",
+        "token": "LIMIT",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "offset",
+            "type": "integer"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          }
+        ],
+        "multiple": true,
+        "multiple_token": true
       }
     ]
   }

@@ -1,5 +1,7 @@
 import struct
 
+import pytest
+
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
@@ -9,6 +11,12 @@ def _vec(*values) -> bytes:
     return struct.pack(f"<{len(values)}f", *values)
 
 
+@pytest.mark.skip(reason=(
+    "https://github.com/valkey-io/valkey-search/issues/1410"
+    " -- FT.AGGREGATE reports the BM25 relevance in the `AS <alias>` column"
+    " for a hybrid `text=>[KNN ...]` query, where the equivalent FT.SEARCH and"
+    " the pure-vector aggregate both report the KNN distance. The test is"
+    " written to fail against that defect; unskip it when the issue is fixed."))
 class TestAggregateHybridDistance(ValkeySearchTestCaseBase):
     """
     FT.AGGREGATE must report the KNN distance in the `AS <alias>` column.

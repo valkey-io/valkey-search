@@ -478,34 +478,57 @@
         ]
       },
       {
-        "name": "load_block",
-        "type": "block",
+        "name": "LOAD",
+        "type": "oneof",
+        "token": "LOAD",
         "optional": true,
         "arguments": [
           {
-            "name": "load_token",
+            "name": "all",
             "type": "pure-token",
-            "token": "LOAD"
+            "token": "*"
           },
           {
-            "name": "load_count",
-            "type": "string"
+            "name": "fields",
+            "type": "block",
+            "arguments": [
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "field",
+                "type": "string",
+                "multiple": true
+              }
+            ]
           }
         ]
       },
       {
-        "name": "params_block",
+        "name": "PARAMS",
         "type": "block",
+        "token": "PARAMS",
         "optional": true,
         "arguments": [
           {
-            "name": "params_token",
-            "type": "pure-token",
-            "token": "PARAMS"
+            "name": "count",
+            "type": "integer"
           },
           {
-            "name": "params_count",
-            "type": "integer"
+            "name": "parameters",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ]
           }
         ]
       },
@@ -536,6 +559,7 @@
         "type": "block",
         "token": "APPLY",
         "optional": true,
+        "multiple": true,
         "arguments": [
           {
             "name": "expression",
@@ -551,7 +575,6 @@
             "type": "string"
           }
         ],
-        "multiple": true,
         "multiple_token": true
       },
       {
@@ -567,6 +590,7 @@
         "type": "block",
         "token": "GROUPBY",
         "optional": true,
+        "multiple": true,
         "arguments": [
           {
             "name": "count",
@@ -582,6 +606,7 @@
             "type": "block",
             "token": "REDUCE",
             "optional": true,
+            "multiple": true,
             "arguments": [
               {
                 "name": "function",
@@ -666,11 +691,9 @@
                 ]
               }
             ],
-            "multiple": true,
             "multiple_token": true
           }
         ],
-        "multiple": true,
         "multiple_token": true
       },
       {
@@ -701,6 +724,7 @@
         "type": "block",
         "token": "LIMIT",
         "optional": true,
+        "multiple": true,
         "arguments": [
           {
             "name": "offset",
@@ -711,7 +735,6 @@
             "type": "integer"
           }
         ],
-        "multiple": true,
         "multiple_token": true
       }
     ]

@@ -318,6 +318,37 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             for query in ["@title:alpha", "(@title:alpha|@title:gamma)", "@body:canyon"]:
                 self.hybrid(key_type, query, combine=combine)
 
+    def test_linear_default_weights(self, key_type):
+        """LINEAR with neither ALPHA nor BETA written is not an error: the
+        reference fuses with ALPHA 0.3 and BETA 0.7.
+
+        Three spellings, because the weights are defaulted by what was *not*
+        written and the other sub-arguments must not disturb that: the bare
+        block, the bare block carrying a binding WINDOW, and the block carrying
+        only YIELD_SCORE_AS. The last is the one that puts the fused score in
+        the reply, so it pins the weights themselves rather than only the
+        order they produce; the first two pin the order alone, which is what a
+        caller who never named the score sees.
+
+        The explicit `ALPHA 0.3 BETA 0.7` row beside them is the control: it is
+        what makes a future drift in the defaults show up as two answers
+        diverging from each other rather than as one answer simply changing.
+
+        Writing exactly *one* weight is an error on both engines. That is a
+        parse outcome rather than an answer, so it is pinned in
+        testing/ft_hybrid_parser_test.cc instead of here.
+        """
+        self.setup_data(key_type)
+        for query in ["@title:alpha", "(@title:alpha|@title:gamma)", "@body:canyon"]:
+            self.hybrid(key_type, query, combine=("LINEAR", []),
+                        window=None, fused_score_as=None)
+            self.hybrid(key_type, query, combine=("LINEAR", ["WINDOW", "5"]),
+                        window=None, fused_score_as=None)
+            self.hybrid(key_type, query, combine=("LINEAR", []), window=None)
+            self.hybrid(key_type, query,
+                        combine=("LINEAR", ["ALPHA", "0.3", "BETA", "0.7"]),
+                        window=None)
+
     def test_linear_with_a_binding_window(self, key_type):
         """LINEAR was only ever swept with a window too wide to bind, so
         whether WINDOW bounds a LINEAR arm the way it bounds an RRF one was

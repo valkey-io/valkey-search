@@ -13,7 +13,7 @@ FT.HYBRID <index-name>
                           [FILTER <expression>] [YIELD_SCORE_AS <alias>]
     [COMBINE
       ( RRF      <count> [CONSTANT <c>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
-      | LINEAR   <count> ALPHA <a> BETA <b> [WINDOW <w>] [YIELD_SCORE_AS <alias>]
+      | LINEAR   <count> [ALPHA <a> BETA <b>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
       | FUNCTION <count> EXPR <expression> [WINDOW <w>] [YIELD_SCORE_AS <alias>]
       )]
     [DIALECT <dialect>]
@@ -72,16 +72,18 @@ This is the default method: a command with no `COMBINE` clause fuses with `RRF` 
 ## LINEAR
 
 ```
-COMBINE LINEAR <count> ALPHA <a> BETA <b> [WINDOW <w>] [YIELD_SCORE_AS <alias>]
+COMBINE LINEAR <count> [ALPHA <a> BETA <b>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
 ```
 
 A weighted sum of the arms' raw scores: `a * search_score + b * vector_similarity`. A document absent from an arm contributes nothing from it.
 
-- `ALPHA <a>` (required): The weight applied to the `SEARCH` arm.
-- `BETA <b>` (required): The weight applied to the `VSIM` arm.
+- `ALPHA <a>` (optional, default `0.3`): The weight applied to the `SEARCH` arm.
+- `BETA <b>` (optional, default `0.7`): The weight applied to the `VSIM` arm.
 - `WINDOW <w>` (optional, default `20`): As for `RRF`.
 
-Both weights are required; there is no default for either. Any finite value is accepted, including negative values and values greater than 1.
+The two weights are optional together, not individually. Writing neither takes the defaults above, so `COMBINE LINEAR 0` fuses exactly as `COMBINE LINEAR 4 ALPHA 0.3 BETA 0.7` does. Writing exactly one is an error: the other is not defaulted for it, because a half-written pair is much more likely to be a typo than a request for a default.
+
+Any finite value is accepted, including negative values and values greater than 1.
 
 The scores are used as they stand, with no per-arm normalization. Normalizing would make a document's fused score depend on which _other_ documents happened to come back in the same arm, so the same document against the same query would score differently as the corpus around it changed. Use `ALPHA` and `BETA` to balance the arms instead.
 

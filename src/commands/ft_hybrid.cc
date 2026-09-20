@@ -116,10 +116,12 @@ std::vector<indexes::Neighbor> BuildFusedNeighbors(
     in.rrf_constant = params.fusion.rrf_constant;
     in.window = params.fusion.window;
     if (params.fusion.method == FusionConfig::Method::kLinear) {
-      in.weight =
-          (i == 0)
-              ? (params.fusion.alpha.has_value() ? *params.fusion.alpha : 0.5)
-              : (params.fusion.beta.has_value() ? *params.fusion.beta : 0.5);
+      // The parser fills both weights for LINEAR -- either as written or as
+      // the 0.3/0.7 defaults -- so there is no fallback to pick here. The old
+      // one read 0.5, a value neither engine has ever applied.
+      CHECK(params.fusion.alpha.has_value() && params.fusion.beta.has_value())
+          << "kLinear fusion without weights";
+      in.weight = (i == 0) ? *params.fusion.alpha : *params.fusion.beta;
     }
     arm_inputs.push_back(std::move(in));
   }

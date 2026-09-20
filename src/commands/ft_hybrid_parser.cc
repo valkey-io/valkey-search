@@ -51,6 +51,12 @@ constexpr absl::string_view kExprKw{"EXPR"};
 // K when the caller does not say. Matches Redis, which applies the same
 // default when the KNN block is omitted entirely.
 constexpr uint64_t kDefaultKnnK = 10;
+// LINEAR arm weights when the caller writes neither of them. Measured against
+// the reference (Redis 8.10.1, search module 81000): `COMBINE LINEAR 0`,
+// `COMBINE LINEAR 2 WINDOW 5` and `COMBINE LINEAR 2 YIELD_SCORE_AS fs` all
+// reply exactly as `COMBINE LINEAR 4 ALPHA 0.3 BETA 0.7` does.
+constexpr double kDefaultLinearAlpha = 0.3;
+constexpr double kDefaultLinearBeta = 0.7;
 constexpr absl::string_view kKnnKw{"KNN"};
 constexpr absl::string_view kRangeKw{"RANGE"};
 constexpr absl::string_view kKKw{"K"};
@@ -583,13 +589,16 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
 }
 
 // COMBINE RRF      <count> [CONSTANT n] [WINDOW n] [YIELD_SCORE_AS name]
-//       | LINEAR   <count> ALPHA <a> BETA <b> [WINDOW n] [YIELD_SCORE_AS name]
+//       | LINEAR   <count> [ALPHA <a> BETA <b>] [WINDOW n]
+//                         [YIELD_SCORE_AS name]
 //       | FUNCTION <count> EXPR <expr> [WINDOW n] [YIELD_SCORE_AS name]
 //
 // <count> is the number of argv tokens in the block, not a count of
-// sub-arguments. Sub-arguments may appear in any order within it. ALPHA and
-// BETA are required by LINEAR and EXPR by FUNCTION; every other sub-argument
-// is optional, and each is rejected by the methods that do not take it.
+// sub-arguments. Sub-arguments may appear in any order within it. EXPR is
+// required by FUNCTION; LINEAR's two weights are optional but go together,
+// defaulting to ALPHA 0.3 / BETA 0.7 only when neither is written. Every other
+// sub-argument is optional, and each is rejected by the methods that do not
+// take it.
 absl::Status ParseCombineClause(MultiSearchParameters &env,
                                 vmsdk::ArgsIterator &itr) {
   VMSDK_ASSIGN_OR_RETURN(auto method_sv, itr.GetStringView());
@@ -716,9 +725,20 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
     }
   }
   if (env.fusion.method == FusionConfig::Method::kLinear) {
-    if (!saw_alpha || !saw_beta) {
+    // The reference is deliberately asymmetric here and this matches it:
+    // writing neither weight takes the 0.3/0.7 defaults, while writing exactly
+    // one is an error rather than defaulting the other. A half-written pair is
+    // far more likely to be a typo than a request for a default, so refusing
+    // it loses nothing that the bare form does not already offer.
+    if (!saw_alpha && !saw_beta) {
+      env.fusion.alpha = kDefaultLinearAlpha;
+      env.fusion.beta = kDefaultLinearBeta;
+    } else if (!saw_beta) {
       return absl::InvalidArgumentError(
-          "COMBINE LINEAR requires ALPHA and BETA");
+          "COMBINE LINEAR: missing value for BETA");
+    } else if (!saw_alpha) {
+      return absl::InvalidArgumentError(
+          "COMBINE LINEAR: missing value for ALPHA");
     }
   }
   if (env.fusion.method == FusionConfig::Method::kFunction && !saw_expr) {

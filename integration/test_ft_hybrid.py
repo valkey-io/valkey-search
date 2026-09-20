@@ -112,7 +112,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
     def test_combine_linear_missing_alpha_rejected(self):
         client = self.server.get_new_client()
         self.setup_index(client)
-        with pytest.raises(ResponseError, match=r"COMBINE LINEAR requires"):
+        with pytest.raises(ResponseError, match=r"missing value for ALPHA"):
             client.execute_command(
                 "FT.HYBRID", self.INDEX,
                 "SEARCH", "@title:hello",
@@ -120,6 +120,28 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
                 "COMBINE", "LINEAR", "2", "BETA", "0.3",
                 "PARAMS", "2", "q", self.Q,
             )
+
+    def test_combine_linear_with_no_weights_uses_the_defaults(self):
+        """Neither weight written is not the same as one written: it takes
+        ALPHA 0.3 / BETA 0.7, which is what the reference does."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        defaulted = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+            "COMBINE", "LINEAR", "0",
+            "PARAMS", "2", "q", self.Q,
+        )
+        explicit = client.execute_command(
+            "FT.HYBRID", self.INDEX,
+            "SEARCH", "@title:hello",
+            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+            "COMBINE", "LINEAR", "4", "ALPHA", "0.3", "BETA", "0.7",
+            "PARAMS", "2", "q", self.Q,
+        )
+        assert defaulted == explicit
+        assert defaulted[0] == 10
 
     def test_search_no_match_returns_only_vsim(self):
         client = self.server.get_new_client()

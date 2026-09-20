@@ -610,6 +610,78 @@ TEST_F(FTHybridParserTest, NoCombineClauseIsRrfWithTheSameDefaults) {
   EXPECT_DOUBLE_EQ((*params)->fusion.rrf_constant, 60.0);
 }
 
+// LINEAR's weights go together or not at all. The reference is asymmetric
+// about this -- neither weight takes 0.3/0.7, exactly one is
+// `SEARCH_SYNTAX Missing value for BETA` -- and these pin both halves.
+TEST_F(FTHybridParserTest, LinearWithNeitherWeightTakesTheDefaultWeights) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "LINEAR", "0"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.method, query::FusionConfig::Method::kLinear);
+  ASSERT_TRUE((*params)->fusion.alpha.has_value());
+  ASSERT_TRUE((*params)->fusion.beta.has_value());
+  EXPECT_DOUBLE_EQ(*(*params)->fusion.alpha, 0.3);
+  EXPECT_DOUBLE_EQ(*(*params)->fusion.beta, 0.7);
+  // The default weights are not a special case downstream: WINDOW still takes
+  // the shared RRF/LINEAR default rather than FUNCTION's widest-allowed one.
+  EXPECT_EQ((*params)->fusion.window, 20u);
+}
+
+// The other sub-arguments do not make the weights written, so a block that
+// carries only WINDOW or only YIELD_SCORE_AS still defaults them.
+TEST_F(FTHybridParserTest, LinearDefaultWeightsSurviveOtherSubArgs) {
+  const std::vector<std::vector<std::string>> tails = {
+      {"LINEAR", "2", "WINDOW", "5"},
+      {"LINEAR", "2", "YIELD_SCORE_AS", "fs"},
+      {"LINEAR", "4", "WINDOW", "5", "YIELD_SCORE_AS", "fs"},
+  };
+  for (const auto& tail : tails) {
+    std::vector<std::string> argv = {"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                     "$q",     "KNN",       "2",    "K",
+                                     "5",      "COMBINE"};
+    argv.insert(argv.end(), tail.begin(), tail.end());
+    auto params = Parse(argv);
+    VMSDK_EXPECT_OK(params) << "rejected `" << absl::StrJoin(tail, " ") << "`";
+    ASSERT_TRUE((*params)->fusion.alpha.has_value());
+    ASSERT_TRUE((*params)->fusion.beta.has_value());
+    EXPECT_DOUBLE_EQ(*(*params)->fusion.alpha, 0.3);
+    EXPECT_DOUBLE_EQ(*(*params)->fusion.beta, 0.7);
+  }
+}
+
+TEST_F(FTHybridParserTest, LinearWithBothWeightsKeepsWhatWasWritten) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "LINEAR", "4", "ALPHA", "0.25",
+                       "BETA", "1.5"});
+  VMSDK_EXPECT_OK(params);
+  ASSERT_TRUE((*params)->fusion.alpha.has_value());
+  ASSERT_TRUE((*params)->fusion.beta.has_value());
+  EXPECT_DOUBLE_EQ(*(*params)->fusion.alpha, 0.25);
+  EXPECT_DOUBLE_EQ(*(*params)->fusion.beta, 1.5);
+}
+
+// Writing exactly one weight is an error, and stays one even when the written
+// value equals the default it would otherwise have taken -- the rule is about
+// which weights were written, not about what they say.
+TEST_F(FTHybridParserTest, LinearWithExactlyOneWeightIsRejected) {
+  const std::vector<std::vector<std::string>> tails = {
+      {"LINEAR", "2", "ALPHA", "0.5"},
+      {"LINEAR", "2", "BETA", "0.5"},
+      {"LINEAR", "2", "ALPHA", "0.3"},
+      {"LINEAR", "2", "BETA", "0.7"},
+      {"LINEAR", "4", "ALPHA", "0.5", "WINDOW", "5"},
+      {"LINEAR", "4", "BETA", "0.5", "YIELD_SCORE_AS", "fs"},
+  };
+  for (const auto& tail : tails) {
+    std::vector<std::string> argv = {"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                     "$q",     "KNN",       "2",    "K",
+                                     "5",      "COMBINE"};
+    argv.insert(argv.end(), tail.begin(), tail.end());
+    EXPECT_FALSE(Parse(argv).ok())
+        << "accepted `" << absl::StrJoin(tail, " ") << "`";
+  }
+}
+
 // A sub-arg belonging to another method is refused rather than ignored. Worth
 // pinning: a review thread claimed `COMBINE RRF 1 ALPHA 0.5` parsed silently,
 // and nothing in the suite contradicted it.

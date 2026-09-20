@@ -73,8 +73,11 @@ struct FusionConfig {
   // FUNCTION's implicit default, both resolve to max-combine-window. 20 is the
   // RRF/LINEAR default, matching the reference.
   uint32_t window = 20;
-  std::optional<double> alpha;  // required when method == kLinear
-  std::optional<double> beta;   // required when method == kLinear
+  // Set by the FT.HYBRID parser whenever method == kLinear: to what the
+  // caller wrote, or to 0.3/0.7 when the caller wrote neither. Writing only
+  // one is an error, so they are never half-populated.
+  std::optional<double> alpha;
+  std::optional<double> beta;
 };
 
 class MultiSearchTracker;

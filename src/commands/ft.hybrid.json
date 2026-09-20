@@ -350,22 +350,29 @@
                     "type": "integer"
                   },
                   {
-                    "name": "alpha_token",
-                    "type": "pure-token",
-                    "token": "ALPHA"
-                  },
-                  {
-                    "name": "alpha_value",
-                    "type": "double"
-                  },
-                  {
-                    "name": "beta_token",
-                    "type": "pure-token",
-                    "token": "BETA"
-                  },
-                  {
-                    "name": "beta_value",
-                    "type": "double"
+                    "name": "linear_weights",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "alpha_token",
+                        "type": "pure-token",
+                        "token": "ALPHA"
+                      },
+                      {
+                        "name": "alpha_value",
+                        "type": "double"
+                      },
+                      {
+                        "name": "beta_token",
+                        "type": "pure-token",
+                        "token": "BETA"
+                      },
+                      {
+                        "name": "beta_value",
+                        "type": "double"
+                      }
+                    ]
                   },
                   {
                     "name": "window",

@@ -386,8 +386,10 @@ static auto max_term_expansions =
 /// and lowering it is a debugging and investigation tool rather than a
 /// deployment knob.
 ///
-/// Note that this caps an explicitly supplied WINDOW. `WINDOW 0` means
-/// unlimited and is not bounded by this.
+/// It is a ceiling on every window, not only an explicitly supplied one: the
+/// parser resolves `WINDOW 0` -- and COMBINE FUNCTION's implicit default --
+/// to this value rather than leaving a zero sentinel for the fanout to turn
+/// into a per-shard fetch limit of 10.
 constexpr absl::string_view kMaxCombineWindowConfig{"max-combine-window"};
 constexpr uint32_t kDefaultMaxCombineWindow{1000000};
 constexpr uint32_t kMinimumMaxCombineWindow{1};

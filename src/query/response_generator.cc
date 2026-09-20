@@ -236,96 +236,6 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
   return cluster_map->IOwnSlot(static_cast<uint16_t>(slot));
 }
 
-absl::StatusOr<RecordsMap> GetContentNoReturnJson(
-    ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
-    const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor,
-    const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
-    std::optional<float> *out_recomputed_score = nullptr) {
-  auto key = neighbor.external_id->Str();
-  absl::flat_hash_set<absl::string_view> identifiers;
-  identifiers.insert(kJsonRootElementQuery);
-  for (const auto &filter_identifier :
-       parameters.filter_parse_results.filter_identifiers) {
-    identifiers.insert(filter_identifier);
-  }
-  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
-  // Resolve sortby field to actual identifier (e.g., "n1" -> "$.n1" for JSON)
-  std::string sortby_identifier;
-  if (parameters.sortby_parameter.has_value()) {
-    auto schema_identifier = parameters.index_schema->GetIdentifier(
-        parameters.sortby_parameter->field);
-    sortby_identifier = schema_identifier.ok()
-                            ? *schema_identifier
-                            : parameters.sortby_parameter->field;
-    identifiers.insert(sortby_identifier);
-  }
-  auto key_str = vmsdk::MakeUniqueValkeyString(key);
-  // NOEXPIRE prevents lazy expiry deletion which could cause
-  // server.also_propagate.numops == 0 crash. The key handle is reused
-  // by FetchAllAttributes to avoid a redundant second open.
-  auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-      ctx, key_str.get(), VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
-  if (!key_obj) {
-    return absl::NotFoundError("Key not found");
-  }
-  mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
-  if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
-    return absl::NotFoundError("Key expired");
-  }
-  VMSDK_ASSIGN_OR_RETURN(auto content, attribute_data_type.FetchAllAttributes(
-                                           ctx, vector_identifier,
-                                           key_obj.get(), key, identifiers));
-  if (parameters.filter_parse_results.filter_identifiers.empty()) {
-    // When returning early, we need to rename the sortby field from the
-    // resolved identifier (e.g., "$.n1") back to the alias (e.g., "n1")
-    if (parameters.sortby_parameter.has_value() &&
-        sortby_identifier != parameters.sortby_parameter->field) {
-      auto itr = content.find(sortby_identifier);
-      if (itr != content.end()) {
-        auto value = std::move(itr->second);
-        content.erase(itr);
-        content.emplace(parameters.sortby_parameter->field,
-                        RecordsMapValue(vmsdk::MakeUniqueValkeyString(
-                                            parameters.sortby_parameter->field),
-                                        std::move(value.value)));
-      }
-    }
-    return content;
-  }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
-  if (!verification.matches) {
-    return absl::NotFoundError("Verify filter failed");
-  }
-  if (out_recomputed_score != nullptr && verification.recomputed_score) {
-    *out_recomputed_score = verification.recomputed_score;
-  }
-  RecordsMap return_content;
-  static const vmsdk::UniqueValkeyString kJsonRootElementQueryPtr =
-      vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
-  return_content.emplace(
-      kJsonRootElementQuery,
-      RecordsMapValue(
-          kJsonRootElementQueryPtr.get(),
-          std::move(content.find(kJsonRootElementQuery)->second.value)));
-
-  if (parameters.sortby_parameter.has_value()) {
-    auto itr = content.find(sortby_identifier);
-    if (itr != content.end()) {
-      // Use the alias (sortby_parameter->field) as the key in the response,
-      // not the resolved identifier
-      return_content.emplace(
-          parameters.sortby_parameter->field,
-          RecordsMapValue(
-              vmsdk::MakeUniqueValkeyString(parameters.sortby_parameter->field),
-              std::move(itr->second.value)));
-    }
-  }
-  return return_content;
-}
-
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
@@ -334,27 +244,32 @@ absl::StatusOr<RecordsMap> GetContent(
     std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
-  if (attribute_data_type.ToProto() ==
-          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
-      parameters.return_attributes.empty()) {
-    return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier, document_scorer,
-                                  out_recomputed_score);
-  }
+  const bool is_json = attribute_data_type.ToProto() ==
+                       data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON;
+  // A whole-record request is spelled differently per key type. On JSON it is
+  // the root document, which is an identifier like any other (`$`) and so can
+  // be asked for alongside named paths. On HASH it is every field, which the
+  // fetch expresses by asking for no identifier in particular -- so the named
+  // list is dropped there, since fetching everything already covers it.
+  const bool fetch_whole_hash = parameters.all_content && !is_json;
   absl::flat_hash_set<absl::string_view> identifiers;
-  for (const auto &return_attribute : parameters.return_attributes) {
-    identifiers.insert(vmsdk::ToStringView(return_attribute.identifier.get()));
-  }
-  if (!parameters.return_attributes.empty()) {
+  if (!fetch_whole_hash) {
+    if (parameters.all_content) {
+      identifiers.insert(kJsonRootElementQuery);
+    }
+    for (const auto &return_attribute : parameters.return_attributes) {
+      identifiers.insert(
+          vmsdk::ToStringView(return_attribute.identifier.get()));
+    }
     for (const auto &filter_identifier :
          parameters.filter_parse_results.filter_identifiers) {
       identifiers.insert(filter_identifier);
     }
   }
   vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
-  // Resolve sortby field to actual identifier. Only add to identifiers set
-  // when return_attributes is specified, because when return_attributes is
-  // empty, all fields are fetched anyway.
+  // Resolve the sortby field to its identifier so it can be sorted on even
+  // when it is not one of the fields being returned. Skipped for a whole-hash
+  // fetch, which already covers every field.
   std::string sortby_identifier;
   if (parameters.sortby_parameter.has_value()) {
     auto schema_identifier = parameters.index_schema->GetIdentifier(
@@ -362,8 +277,7 @@ absl::StatusOr<RecordsMap> GetContent(
     sortby_identifier = schema_identifier.ok()
                             ? *schema_identifier
                             : parameters.sortby_parameter->field;
-    // Only add sortby to identifiers when return_attributes is not empty
-    if (!parameters.return_attributes.empty()) {
+    if (!fetch_whole_hash) {
       identifiers.insert(sortby_identifier);
     }
   }
@@ -395,10 +309,29 @@ absl::StatusOr<RecordsMap> GetContent(
   if (out_recomputed_score != nullptr && verification.recomputed_score) {
     *out_recomputed_score = verification.recomputed_score;
   }
-  if (parameters.return_attributes.empty()) {
+  if (fetch_whole_hash) {
+    // The whole hash was fetched, and the whole hash is what was asked for.
     return content;
   }
   RecordsMap return_content;
+  if (parameters.all_content) {
+    // JSON: the whole record is the root document, and only that. Anything
+    // else fetched alongside it was fetched to be evaluated, not returned --
+    // a filter identifier, say -- and is dropped here the same way a named
+    // fetch drops what it did not name.
+    auto itr = content.find(kJsonRootElementQuery);
+    if (itr != content.end()) {
+      // The identifier has to outlive `content`, which owns the one the fetch
+      // produced and drops it on the way out of this function. A raw pointer
+      // into it would dangle, so name the column from a string that lives as
+      // long as the module does.
+      static const vmsdk::UniqueValkeyString kJsonRootElementQueryString =
+          vmsdk::MakeUniqueValkeyString(kJsonRootElementQuery);
+      return_content.emplace(kJsonRootElementQuery,
+                             RecordsMapValue(kJsonRootElementQueryString.get(),
+                                             std::move(itr->second.value)));
+    }
+  }
   for (auto &return_attribute : parameters.return_attributes) {
     auto itr =
         content.find(vmsdk::ToStringView(return_attribute.identifier.get()));

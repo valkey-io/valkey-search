@@ -43,6 +43,7 @@ class MockPredicate : public query::Predicate {
   explicit MockPredicate(query::PredicateType type) : query::Predicate(type) {}
   MOCK_METHOD(query::EvaluationResult, Evaluate, (query::Evaluator & evaluator),
               (override, const));
+  std::string Describe() const override { return "MOCK"; }
 };
 
 struct ResponseGeneratorTestCase {

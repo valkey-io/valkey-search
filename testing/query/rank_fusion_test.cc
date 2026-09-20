@@ -5,14 +5,17 @@
  *
  */
 
+#include "src/indexes/scoring/scorer.h"
 #include "src/query/rank_fusion.h"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/strings/str_cat.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
@@ -456,6 +459,72 @@ TEST_F(LinearTest, ScoreAliasPropagates) {
   ASSERT_NE(doc2, nullptr);
   EXPECT_FALSE(AliasScore(*doc2, "s").has_value());
   EXPECT_NEAR(*AliasScore(*doc2, "v"), 0.4, 1e-6);
+}
+
+// A COMBINE FUNCTION that divides by zero yields NaN, which has no order under
+// `<`/`>`. Comparing it directly makes it equivalent to every other score while
+// those stay ordered among themselves, which is not a strict weak ordering:
+// std::sort's unguarded loops then run off the end of the range. NaN ranks last
+// instead, so the order is total and the document still reaches the reply.
+TEST_F(FunctionTest, NanScoreRanksLastAndLeavesTheRestOrdered) {
+  auto arm0 = Vec(N("doc:1", 1.0f), N("doc:2", 0.0f), N("doc:3", 3.0f),
+                  N("doc:4", 2.0f));
+  std::vector<ArmInput> arms;
+  arms.push_back({.neighbors = &arm0, .window = 0});
+  // doc:2 scores NaN. FuncDiv produces it two ways for 0/0: the current path
+  // divides at runtime, and the emulate-release path returns std::nan("")
+  // outright (src/expr/value.cc:559-567). This mirrors the latter, because a
+  // literal `a / a` here is folded to 1.0 under -ffast-math before it can
+  // become a NaN at all.
+  auto fused =
+      Function(std::move(arms),
+               [](const std::vector<std::optional<double>>& s) -> double {
+                 double a = s[0].has_value() ? *s[0] : 0.0;
+                 return a == 0.0 ? std::nan("") : a;
+               });
+  ASSERT_EQ(fused.size(), 4u);
+  EXPECT_TRUE(indexes::scoring::IsNaN(Find(fused, "doc:2")->score));
+  // The real scores keep their descending order (3.0, 2.0, 1.0) and doc:2
+  // sorts last, despite being neither the largest nor the smallest by key.
+  EXPECT_EQ(fused[0].external_id->Str(), "doc:3");
+  EXPECT_EQ(fused[1].external_id->Str(), "doc:4");
+  EXPECT_EQ(fused[2].external_id->Str(), "doc:1");
+  EXPECT_EQ(fused[3].external_id->Str(), "doc:2");
+}
+
+// The comparator has to stay a strict weak ordering when NaN is the majority,
+// and when NaNs tie with each other. Ties among them fall through to the key,
+// so the order is deterministic rather than merely legal.
+TEST_F(FunctionTest, SeveralNanScoresStayOrderedByKey) {
+  // Large enough that std::sort takes its introsort path rather than the
+  // insertion sort used for short ranges, where a broken comparator can still
+  // land on the right answer by luck.
+  std::vector<indexes::Neighbor> arm0;
+  arm0.push_back(N("doc:1", 4.0f));
+  for (int i = 2; i <= 40; ++i) {
+    arm0.push_back(N(absl::StrCat("doc:", i), 0.0f));
+  }
+  std::vector<ArmInput> arms;
+  arms.push_back({.neighbors = &arm0, .window = 0});
+  auto fused =
+      Function(std::move(arms),
+               [](const std::vector<std::optional<double>>& s) -> double {
+                 double a = s[0].has_value() ? *s[0] : 0.0;
+                 return a == 0.0 ? std::nan("") : a;
+               });
+  ASSERT_EQ(fused.size(), 40u);
+  // doc:1 keeps its 4.0 and leads; every other document scores NaN and the
+  // ties fall through to the key, which orders lexically ("doc:10" < "doc:2").
+  EXPECT_EQ(fused[0].external_id->Str(), "doc:1");
+  EXPECT_FALSE(indexes::scoring::IsNaN(fused[0].score));
+  std::vector<std::string> keys;
+  for (size_t i = 1; i < fused.size(); ++i) {
+    EXPECT_TRUE(indexes::scoring::IsNaN(fused[i].score))
+        << fused[i].external_id->Str();
+    keys.push_back(std::string(fused[i].external_id->Str()));
+  }
+  EXPECT_TRUE(std::is_sorted(keys.begin(), keys.end()))
+      << "NaN-scored documents are not in key order";
 }
 
 }  // namespace

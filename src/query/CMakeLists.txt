@@ -65,6 +65,8 @@ set(SRCS_RANK_FUSION ${CMAKE_CURRENT_LIST_DIR}/rank_fusion.cc
 valkey_search_add_static_library(rank_fusion "${SRCS_RANK_FUSION}")
 target_include_directories(rank_fusion PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(rank_fusion PUBLIC vector_base)
+# For indexes::scoring::IsNaN, used by the fused-score comparator.
+target_link_libraries(rank_fusion PUBLIC scoring)
 target_link_libraries(rank_fusion PUBLIC string_interning)
 target_link_libraries(rank_fusion PUBLIC attribute_data_type)
 target_link_libraries(rank_fusion PUBLIC vmsdklib)

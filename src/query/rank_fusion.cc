@@ -18,6 +18,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
 #include "src/attribute_data_type.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -120,11 +121,31 @@ std::vector<indexes::Neighbor> AssembleResult(
     }
     out.push_back(std::move(n));
   }
-  // Stable order: descending fused score, tie-break by external_id for
-  // determinism.
+  // Sort key: (score is NaN, -score, external_id). NaN has no order under
+  // `<`/`>`, so comparing it directly makes it compare equivalent to every
+  // other score while those scores stay ordered among themselves -- an
+  // equivalence that is not transitive, which is not a strict weak ordering.
+  // std::sort's unguarded partition and insertion loops rely on a sentinel
+  // element to stop them, which such a comparator does not provide, and walk
+  // off the end of the range. A COMBINE FUNCTION evaluating 0/0 is enough to
+  // produce one: FuncDiv returns NaN and it reaches Neighbor::score unchanged.
+  //
+  // Ranking NaN last is a containment decision, not a claim that the score is
+  // meaningful. It gives the sort a total order and keeps the document in the
+  // reply, carrying whatever the caller's own expression produced. Ties among
+  // NaN scores fall through to the key, so the order stays deterministic
+  // rather than merely legal.
+  //
+  // IsNaN reads the IEEE bit pattern: this code is built with -ffast-math,
+  // under which std::isnan is unreliable (see scorer.h).
   std::sort(out.begin(), out.end(),
             [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
-              if (a.score != b.score) {
+              const bool a_nan = indexes::scoring::IsNaN(a.score);
+              const bool b_nan = indexes::scoring::IsNaN(b.score);
+              if (a_nan != b_nan) {
+                return !a_nan;
+              }
+              if (!a_nan && a.score != b.score) {
                 return a.score > b.score;
               }
               return a.external_id->Str() < b.external_id->Str();

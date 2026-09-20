@@ -466,6 +466,7 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         assert result[0] == 10
         # Both per-arm score aliases must be present on every record, and the
         # fused score must equal the user expression evaluated over them.
+        saw_nonzero_s = False
         saw_nonzero_v = False
         for rec in result[1:]:
             d = self._rec_to_dict(rec)
@@ -474,11 +475,15 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             s = float(d[b"s"])
             v = float(d[b"v"])
             h = float(d[b"h"])
+            saw_nonzero_s = saw_nonzero_s or s > 0.0
             saw_nonzero_v = saw_nonzero_v or v > 0.0
             assert abs(h - (s * 10.0 + v)) < 1e-2, f"h={h} s={s} v={v}"
-        # The vector arm contributes a genuinely non-trivial score, so the
-        # arithmetic above is not comparing zeroes.
-        assert saw_nonzero_v
+        # Both arms must contribute a non-trivial score. Without the @s half
+        # the arithmetic proves nothing about the text arm: if BM25 returned 0
+        # for every row, h == v would still satisfy the check above, and the
+        # test would pass while the function never saw the SEARCH arm at all.
+        assert saw_nonzero_s, "the text arm contributed 0 to every row"
+        assert saw_nonzero_v, "the vector arm contributed 0 to every row"
 
     def test_combine_function_default_arm_aliases(self):
         """Arm scores are reachable via positional default aliases even when

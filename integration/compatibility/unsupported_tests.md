@@ -637,16 +637,17 @@ document an unimplemented feature rather than a behavioural difference.
 `testing/ft_hybrid_parser_test.cc` pins the parse-then-refuse behaviour. When
 RANGE is implemented it should be swept like KNN and this section removed.
 
-### 5.8. Reference engine image — TODO
+### 5.8. Reference engine image — resolved
 
-**Status:** temporary.
+**Status:** resolved.
 
-`generate_hybrid.py` overrides `BaseCompatibilityTest.DOCKER_IMAGE` to
+`generate_hybrid.py` used to override `BaseCompatibilityTest.DOCKER_IMAGE` to
 `redis:8`, because FT.HYBRID does not exist in `redis/redis-stack-server`
-(RediSearch 2.x) and was added in the Redis 8.4 query engine. A separate PR
-moves the shared image to `redis:latest` for every generator; once that lands,
-the `DOCKER_IMAGE` override marked `TODO(reference-image)` can be dropped and
-this generator can inherit the shared image again.
+(RediSearch 2.x) and was added in the Redis 8.4 query engine. The shared image
+moved to `redis:latest` for every generator (#1366), so the override and its
+`TODO(reference-image)` are gone and this generator inherits the shared image
+like the others. Whether that shared reference should be pinned to an immutable
+digest is a question for the suite as a whole, not for FT.HYBRID.
 
 ### 5.9. Cluster replay — blocked on shard-local text scoring
 

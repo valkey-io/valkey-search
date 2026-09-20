@@ -1,10 +1,11 @@
 """Capture FT.HYBRID reference answers from the Redis query engine.
 
 FT.HYBRID does not exist in the `redis/redis-stack-server` image the other
-generators use (its RediSearch is 2.x); the command was added in the Redis 8.4
-query engine. This generator therefore runs against the `redis:8` image, which
-carries a query engine new enough to answer FT.HYBRID. That override is
-temporary -- see TODO(reference-image) on the class below.
+generators once used (its RediSearch is 2.x); the command was added in the
+Redis 8.4 query engine. This generator needed its own `redis:8` override until
+the shared reference image moved to `redis:latest` (#1366). The override is
+gone: it now inherits DOCKER_IMAGE from BaseCompatibilityTest like every other
+generator.
 
 The LOAD clause is swept separately, in test_load_clause. One form is still
 recorded `xfail` -- loading a field the index does not have; see

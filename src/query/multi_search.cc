@@ -196,10 +196,16 @@ absl::Status PerformMultiSearchLocalAsync(
     // GetContentProcessing() returns kNoContent and the arm completes on the
     // background thread without a per-arm ResolveContent.
     arms[i]->no_content = true;
-    // Uncap each arm pre-fusion: fusion needs the full per-arm match set so
-    // a doc matched by both arms is contributed by both (the "both arms or
-    // neither" guarantee — see TestFtHybridParallelArmConsistency). The
-    // aggregate-pipeline LIMIT (post-fusion) bounds the final reply size.
+    // Uncap each arm pre-fusion. Not because fusion needs the whole match set:
+    // it reads only each arm's top `window` entries (see the `cap` in
+    // rank_fusion.cc), and the "both arms or neither" guarantee comes from
+    // ArmGate and RevalidateArmsBeforeFusion re-checking every arm together
+    // after they report, not from the size of an arm. The cap is simply not
+    // applied here yet. Capping to `window` is a pending optimization and
+    // needs some care, because revalidation can drop entries, so a cap of
+    // exactly `window` could leave an arm short of the candidates fusion is
+    // entitled to. The aggregate-pipeline LIMIT (post-fusion) bounds the final
+    // reply size either way.
     arms[i]->limit.first_index = 0;
     arms[i]->limit.number = std::numeric_limits<uint64_t>::max();
     auto status =

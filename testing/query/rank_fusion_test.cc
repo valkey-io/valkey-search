@@ -495,6 +495,16 @@ TEST_F(FunctionTest, NanScoreRanksLastAndLeavesTheRestOrdered) {
 // The comparator has to stay a strict weak ordering when NaN is the majority,
 // and when NaNs tie with each other. Ties among them fall through to the key,
 // so the order is deterministic rather than merely legal.
+//
+// CAVEAT: this pins that behaviour, it does not guard the fix. It passes
+// against the previous comparator too, even at this size, which was chosen to
+// push std::sort off its short-run insertion path. That comparator opened with
+// `a.score != b.score`, which for two NaNs should be true and leave them
+// arbitrarily ordered -- but -ffast-math implies -ffinite-math-only, under
+// which the compiler may fold `x != x` to false, so it fell through to the
+// same key tie-break and produced the same order. The regression guard is
+// NanScoreRanksLastAndLeavesTheRestOrdered above, which does fail without the
+// fix.
 TEST_F(FunctionTest, SeveralNanScoresStayOrderedByKey) {
   // Large enough that std::sort takes its introsort path rather than the
   // insertion sort used for short ranges, where a broken comparator can still

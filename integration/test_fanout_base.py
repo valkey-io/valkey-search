@@ -151,6 +151,9 @@ def index_on_node(client, name:str) -> bool:
 def sum_of_remote_searches(nodes: list[Node]) -> int:
     return sum([n.client.info("search")["search_coordinator_server_search_index_partition_success_count"] for n in nodes])
 
+def sum_of_remote_search_cpu_time_usec(nodes: list[Node]) -> int:
+    return sum([n.client.info("search")["search_coordinator_server_search_index_partition_cpu_time_usec"] for n in nodes])
+
 class TestFanout(ValkeySearchClusterTestCase):
     @pytest.mark.parametrize(
         "setup_test", [{"replica_count": 2}], indirect=True
@@ -180,6 +183,8 @@ class TestFanout(ValkeySearchClusterTestCase):
         result = primary.execute_command("CONFIG", "GET", "search.local-fanout-queue-wait-threshold")
         assert result[1].decode() == str(threshold)
 
+        cpu_time_before = sum_of_remote_search_cpu_time_usec(rg.replicas)
+
         # Execute searches
         for i in range(number_of_searches_to_run):
             result = primary.execute_command(*search_command(index.name))
@@ -193,6 +198,8 @@ class TestFanout(ValkeySearchClusterTestCase):
             # threshold == 0 means we are always "too busy"
             # Assert replicas of the primary run some of the search queries 
             assert(sum_of_remote_searches(rg.replicas) > 0)
+            #Remote shard CPU metric should accumulate after handling fanout RPCs.
+            assert(sum_of_remote_search_cpu_time_usec(rg.replicas) > cpu_time_before)
 
     def test_sample_queue_size_config(self):
         """Test thread-pool-wait-time-samples configuration parameter"""

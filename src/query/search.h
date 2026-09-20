@@ -207,6 +207,9 @@ struct SearchParameters {
   std::string attribute_alias;
   vmsdk::UniqueValkeyString score_as;
   std::string query;
+  // The filter (non-vector) portion of the query string. Fanout sends this
+  // text to the other shards, which re-parse it with ParseFilter().
+  std::string filter_expression;
   uint32_t dialect{kDialect};
   uint32_t db_num_{0};
   bool local_only{false};
@@ -273,6 +276,8 @@ struct SearchParameters {
   }
 
   virtual absl::Status PreParseQueryString();
+  // Parses filter_expression into filter_parse_results.
+  absl::Status ParseFilter();
   virtual absl::Status PostParseQueryString();
   ContentProcessing GetContentProcessing() const;
 

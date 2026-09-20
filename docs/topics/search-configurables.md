@@ -7,6 +7,8 @@ description: Valkey Search Module Configurable Settings
 
 The search module uses the Valkey configuration mechanism. Thus each of the named configuration below can be set on the module load command OR via the `CONFIG SET` command.
 
+In cluster mode, each shard re-parses the query string of a fanned-out query. The query parsing limits (`search.query-string-depth`, `search.query-string-terms-count` and `search.fuzzy-max-distance`) should therefore be set to the same values on every node; otherwise a shard may reject, or interpret differently, a query that the coordinating node accepted.
+
 | Name                                          |  Type   | Default Value | Description                                                                                                                       |
 | :-------------------------------------------- | :-----: | :-----------: | :-------------------------------------------------------------------------------------------------------------------------------- |
 | search.query-string-bytes                     | Number  |               | Controls the length of the query string for FT.SEARCH command                                                                     |

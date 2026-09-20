@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -572,6 +573,45 @@ TEST_F(ValkeySearchTest, OnForkChildBornCallback) {
   EXPECT_EQ(
       Metrics::GetStats().writer_worker_thread_pool_suspension_expired_cnt, 0);
   EXPECT_EQ(Metrics::GetStats().writer_worker_thread_pool_resumed_cnt, 1);
+}
+
+// An INFO field lazily constructed on a non-main thread after startup (e.g.
+// the counter inside VALKEY_SEARCH_COMPATIBILITY_FIX, first reached from a
+// gRPC thread) must not touch the section map there; registration is handed
+// to the main thread via RunByMain.
+class InfoFieldRegistrationTest : public vmsdk::ValkeyTest {};
+
+TEST_F(InfoFieldRegistrationTest, NonMainThreadRegistrationIsDeferred) {
+  vmsdk::info_field::Validate(nullptr);  // End of startup, as in OnLoad.
+  ValkeyModuleEventLoopOneShotFunc callback = nullptr;
+  void* callback_data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, EventLoopAddOneShot(testing::_, testing::_))
+      .WillOnce([&](ValkeyModuleEventLoopOneShotFunc cb, void* data) {
+        callback = cb;
+        callback_data = data;
+        return 0;
+      });
+  auto dump = [] {
+    ValkeyModuleInfoCtx info_ctx;
+    vmsdk::info_field::DoSection(&info_ctx, "deferred_test",
+                                 /*for_crash_report=*/0);
+    return info_ctx.info_capture.GetInfo();
+  };
+
+  std::unique_ptr<vmsdk::info_field::Integer> field;
+  std::thread([&] {
+    EXPECT_FALSE(vmsdk::IsMainThread());
+    field = std::make_unique<vmsdk::info_field::Integer>(
+        "deferred_test", "deferred_field",
+        vmsdk::info_field::IntegerBuilder().App());
+    field->Increment(7);
+  }).join();
+
+  ASSERT_NE(callback, nullptr);
+  EXPECT_THAT(dump(), testing::Not(testing::HasSubstr("deferred_field")));
+  callback(callback_data);  // The event loop runs it on the main thread.
+  EXPECT_THAT(dump(), testing::HasSubstr("deferred_field: 7"));
+  field.reset();  // Unregisters on the main thread.
 }
 
 // Tests for VALKEY_SEARCH_COMPATIBILITY_FIX (see src/valkey_search_options.h

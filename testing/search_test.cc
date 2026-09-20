@@ -7,6 +7,7 @@
 
 #include "src/query/search.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -28,6 +29,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -1925,6 +1927,174 @@ TEST(ScorerFanoutTest, ScorerRoundTripsThroughGRPCRequest) {
   coordinator::SearchIndexPartitionRequest request;
   EXPECT_EQ(coordinator::ScorerFromGRPC(request.scorer()),
             indexes::scoring::ScorerType::kBm25Std);
+}
+
+// Renders every field of a predicate tree that affects evaluation or scoring,
+// so two independently parsed trees can be compared for equality.
+std::string DescribePredicate(const query::Predicate *predicate) {
+  if (!predicate) {
+    return "null";
+  }
+  std::string out = absl::StrCat("w=", predicate->GetWeight(), " ");
+  switch (predicate->GetType()) {
+    case query::PredicateType::kComposedAnd:
+    case query::PredicateType::kComposedOr: {
+      auto composed = dynamic_cast<const query::ComposedPredicate *>(predicate);
+      absl::StrAppend(
+          &out,
+          predicate->GetType() == query::PredicateType::kComposedAnd ? "AND"
+                                                                     : "OR",
+          "(slop=",
+          composed->GetSlop().has_value() ? std::to_string(*composed->GetSlop())
+                                          : "none",
+          ",inorder=", composed->GetInorder(), "){");
+      for (const auto &child : composed->GetChildren()) {
+        absl::StrAppend(&out, DescribePredicate(child.get()), ";");
+      }
+      absl::StrAppend(&out, "}");
+      return out;
+    }
+    case query::PredicateType::kNegate:
+      return absl::StrCat(
+          out, "NOT{",
+          DescribePredicate(
+              dynamic_cast<const query::NegatePredicate *>(predicate)
+                  ->GetPredicate()),
+          "}");
+    case query::PredicateType::kNumeric: {
+      auto numeric = dynamic_cast<const query::NumericPredicate *>(predicate);
+      return absl::StrCat(out, "NUMERIC(", numeric->GetAlias(), ",",
+                          numeric->GetStart(), ",", numeric->IsStartInclusive(),
+                          ",", numeric->GetEnd(), ",",
+                          numeric->IsEndInclusive(), ")");
+    }
+    case query::PredicateType::kTag: {
+      auto tag = dynamic_cast<const query::TagPredicate *>(predicate);
+      std::vector<std::string> tags(tag->GetTags().begin(),
+                                    tag->GetTags().end());
+      std::sort(tags.begin(), tags.end());
+      return absl::StrCat(out, "TAG(", tag->GetAlias(), ",",
+                          absl::StrJoin(tags, "|"), ")");
+    }
+    case query::PredicateType::kText: {
+      std::string exact;
+      if (auto term = dynamic_cast<const query::TermPredicate *>(predicate)) {
+        exact = absl::StrCat(",exact=", term->IsExact());
+      }
+      return absl::StrCat(out, PrintPredicateTree(predicate, 0), exact);
+    }
+    case query::PredicateType::kNone:
+      return out + "NONE";
+  }
+  return out + "UNKNOWN";
+}
+
+// A fanned-out query is parsed on the coordinator, then re-parsed by every
+// shard from the request's filter text. Both parses must produce the same
+// predicate tree and filter metadata.
+class FanoutFilterReparseTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    index_schema_ = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*index_schema_, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber())
+        .WillRepeatedly([schema = index_schema_.get()](absl::string_view f) {
+          return schema->IndexSchema::GetIdentifier(f);
+        });
+    data_model::NumericIndex numeric_proto;
+    VMSDK_EXPECT_OK(index_schema_->AddIndex(
+        "price", "price", std::make_shared<indexes::Numeric>(numeric_proto)));
+    data_model::TagIndex tag_proto;
+    tag_proto.set_separator(",");
+    VMSDK_EXPECT_OK(index_schema_->AddIndex(
+        "color", "color", std::make_shared<indexes::Tag>(tag_proto)));
+    index_schema_->CreateTextIndexSchema();
+    auto text_schema = index_schema_->GetTextIndexSchema();
+    VMSDK_EXPECT_OK(index_schema_->AddIndex(
+        "title", "title",
+        std::make_shared<indexes::Text>(CreateTextIndexProto(true, false, 1.0),
+                                        text_schema)));
+    VMSDK_EXPECT_OK(index_schema_->AddIndex(
+        "body", "body_id",
+        std::make_shared<indexes::Text>(CreateTextIndexProto(true, false, 1.0),
+                                        text_schema)));
+    auto vector_proto =
+        CreateFlatVectorIndexProto(3, data_model::DISTANCE_METRIC_L2, 100, 100);
+    VMSDK_EXPECT_OK(index_schema_->AddIndex(
+        "vec", "vec",
+        indexes::VectorFlat<float>::Create(
+            vector_proto, "vec",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value()));
+  }
+  void TearDown() override {
+    index_schema_.reset();
+    ValkeySearchTest::TearDown();
+  }
+  std::shared_ptr<MockIndexSchema> index_schema_;
+};
+
+TEST_F(FanoutFilterReparseTest, ShardParseMatchesCoordinatorParse) {
+  struct Case {
+    std::string query;
+    bool verbatim{false};
+    bool inorder{false};
+    std::optional<uint32_t> slop;
+  };
+  std::vector<Case> cases = {
+      {"*"},
+      {"@price:[10 (20]"},
+      {"@price:[-inf +inf]"},
+      {"@color:{red|blue}"},
+      {"hello"},
+      {"hello world"},
+      {"hello", true},
+      {"hello world", false, true, 2},
+      {"hello world", false, false, 0},
+      {"@title:hel*"},
+      {"@title:*llo"},
+      {"@title:%helo%"},
+      {"@body:%%helo%%"},
+      {"@title:(hello|world)"},
+      {"@title:hello @body:world"},
+      {"-@color:{red} @price:[1 2]"},
+      {"(@price:[1 2] | @color:{red}) -(hello world)"},
+      {"(@color:{red}) => { $weight: 2.5; }"},
+      {"@title:hello => { $weight: 0.5; } @price:[1 2]"},
+      {"@price:[1 2] =>[KNN 5 @vec $BLOB]"},
+      {"*=>[KNN 5 @vec $BLOB]"},
+  };
+  for (const auto &c : cases) {
+    SCOPED_TRACE(c.query);
+    UnitTestSearchParameters coord;
+    coord.index_schema = index_schema_;
+    coord.index_schema_name = kIndexSchemaName;
+    coord.verbatim = c.verbatim;
+    coord.inorder = c.inorder;
+    coord.slop = c.slop;
+    coord.parse_vars.query_string = c.query;
+    auto status = coord.PreParseQueryString();
+    ASSERT_TRUE(status.ok()) << status;
+
+    auto request = coordinator::ParametersToGRPCSearchRequest(coord);
+    UnitTestSearchParameters shard;
+    status =
+        coordinator::GRPCSearchRequestToParameters(*request, nullptr, &shard);
+    ASSERT_TRUE(status.ok()) << status;
+
+    const auto &expected = coord.filter_parse_results;
+    const auto &actual = shard.filter_parse_results;
+    EXPECT_EQ(DescribePredicate(actual.root_predicate.get()),
+              DescribePredicate(expected.root_predicate.get()));
+    EXPECT_EQ(actual.filter_identifiers, expected.filter_identifiers);
+    EXPECT_EQ(static_cast<uint64_t>(actual.query_operations),
+              static_cast<uint64_t>(expected.query_operations));
+    EXPECT_EQ(actual.is_match_all, expected.is_match_all);
+    EXPECT_EQ(shard.verbatim, c.verbatim);
+    EXPECT_EQ(shard.inorder, c.inorder);
+    EXPECT_EQ(shard.slop, c.slop);
+  }
 }
 
 // --- Prefix / suffix / fuzzy expansion scoring (in-iterator path) ------------

@@ -8,6 +8,7 @@
 
 #include "vmsdk/src/info.h"
 
+#include <atomic>
 #include <string>
 
 #include "absl/container/btree_map.h"
@@ -49,21 +50,32 @@ static bool IsValidName(const std::string& str) {
   return true;
 }
 
-static bool doing_startup = true;
+static std::atomic<bool> doing_startup{true};
 
-Base::Base(absl::string_view section, absl::string_view name, Flags flags,
-           Units units)
-    : section_(section), name_(name), flags_(flags), units_(units) {
-  CHECK(doing_startup || IsMainThread());
-
+static void RegisterField(const Base* field) {
   SectionMap& section_map = GetSectionMap();
-  FieldMap& field_map = section_map[section_].fields_;
-  if (field_map.contains(name_)) {
+  FieldMap& field_map = section_map[field->GetSection()].fields_;
+  if (field_map.contains(field->GetName())) {
     bad_field_reason =
         "Created Duplicate Field";  // We're toast ;-) but we'll fail later with
                                     // a nice error message
   } else {
-    field_map[name_] = this;
+    field_map[field->GetName()] = field;
+  }
+}
+
+Base::Base(absl::string_view section, absl::string_view name, Flags flags,
+           Units units)
+    : section_(section), name_(name), flags_(flags), units_(units) {
+  if (doing_startup || IsMainThread()) {
+    RegisterField(this);
+  } else {
+    // A field lazily constructed on another thread (e.g. a function-local
+    // static) is registered by the main thread, which owns the section map.
+    // The field is usable immediately but appears in INFO only once the main
+    // thread has run this. Such a field must outlive that callback, which
+    // holds for fields of static storage duration.
+    RunByMain([this] { RegisterField(this); });
   }
 }
 

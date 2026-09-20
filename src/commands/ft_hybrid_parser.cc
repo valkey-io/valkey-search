@@ -78,8 +78,15 @@ constexpr absl::string_view kDialectKw{"DIALECT"};
 // of its own, as the rest of the column machinery is also case-sensitive.
 constexpr absl::string_view kKeyColumnName{"__key"};
 
-// Refuses a YIELD_SCORE_AS alias that names the reserved key column.
+// Refuses a YIELD_SCORE_AS alias that cannot name a column: the empty string,
+// or the reserved key column.
 absl::Status RejectReservedScoreAlias(absl::string_view alias) {
+  if (alias.empty()) {
+    // Every other COMBINE sub-arg rejects an empty token; an empty alias would
+    // otherwise become the score column's output name and be unreferencable by
+    // any later pipeline stage.
+    return absl::InvalidArgumentError("YIELD_SCORE_AS requires a name");
+  }
   if (alias == kKeyColumnName) {
     return absl::InvalidArgumentError(absl::StrCat(
         "YIELD_SCORE_AS `", kKeyColumnName,
@@ -151,18 +158,32 @@ absl::Status VerifyEfRuntime(unsigned ef) {
 // Silently acting on a number the caller did not write is worse than either
 // engine's answer, so these insist the token is entirely the number.
 absl::StatusOr<uint64_t> ParseWholeUint(vmsdk::ArgsIterator &itr,
-                                        absl::string_view keyword) {
+                                        absl::string_view label) {
   VMSDK_ASSIGN_OR_RETURN(auto tok, itr.GetStringView());
   itr.Next();
   uint64_t value = 0;
   if (tok.empty() || !absl::SimpleAtoi(tok, &value)) {
     return absl::InvalidArgumentError(
-        absl::StrCat("COMBINE ", keyword,
-                     " must be a non-negative integer, "
-                     "got `",
-                     tok, "`"));
+        absl::StrCat(label, " must be a non-negative integer, got `", tok,
+                     "`"));
   }
   return value;
+}
+
+// Reads a block's leading token count -- the `<n>` in `KNN <n> ...`,
+// `RANGE <n> ...` and `COMBINE RRF <n> ...`, which says how many argv tokens
+// the block spans. Whole-token for the same reason the sub-args are: the
+// shared ParseParamValue accepted a numeric prefix, so `KNN 2abc` and
+// `COMBINE RRF 4.5` silently read 2 and 4. Bounded to uint32_t because that is
+// what ArgsIterator::SubIterator takes.
+absl::StatusOr<uint32_t> ParseBlockTokenCount(vmsdk::ArgsIterator &itr,
+                                              absl::string_view label) {
+  VMSDK_ASSIGN_OR_RETURN(auto value, ParseWholeUint(itr, label));
+  if (value > std::numeric_limits<uint32_t>::max()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat(label, " is out of range, got `", value, "`"));
+  }
+  return static_cast<uint32_t>(value);
 }
 
 // True for everything except NaN and +/-infinity, whose IEEE-754 form is the
@@ -348,7 +369,9 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
   }
   uint32_t inner_count = 0;
   if (has_mode_block) {
-    VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, inner_count));
+    VMSDK_ASSIGN_OR_RETURN(
+        inner_count,
+        ParseBlockTokenCount(itr, absl::StrCat("VSIM ", mode_sv)));
   }
   // With no block there is nothing to read, and the defaults set above stand.
   if (has_mode_block && absl::EqualsIgnoreCase(mode_sv, kKnnKw)) {
@@ -559,14 +582,20 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
   return absl::OkStatus();
 }
 
-// COMBINE [RRF <count> [CONSTANT n] [WINDOW n] [YIELD_SCORE_AS name]]
-//        | [LINEAR <count> ALPHA <a> BETA <b> [WINDOW n] [YIELD_SCORE_AS name]]
+// COMBINE RRF      <count> [CONSTANT n] [WINDOW n] [YIELD_SCORE_AS name]
+//       | LINEAR   <count> ALPHA <a> BETA <b> [WINDOW n] [YIELD_SCORE_AS name]
+//       | FUNCTION <count> EXPR <expr> [WINDOW n] [YIELD_SCORE_AS name]
+//
+// <count> is the number of argv tokens in the block, not a count of
+// sub-arguments. Sub-arguments may appear in any order within it. ALPHA and
+// BETA are required by LINEAR and EXPR by FUNCTION; every other sub-argument
+// is optional, and each is rejected by the methods that do not take it.
 absl::Status ParseCombineClause(MultiSearchParameters &env,
                                 vmsdk::ArgsIterator &itr) {
   VMSDK_ASSIGN_OR_RETURN(auto method_sv, itr.GetStringView());
   itr.Next();
   uint32_t inner_count = 0;
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, inner_count));
+  VMSDK_ASSIGN_OR_RETURN(inner_count, ParseBlockTokenCount(itr, "COMBINE"));
   auto inner_itr_or = itr.SubIterator(inner_count);
   if (!inner_itr_or.ok() && inner_count > 0) {
     return inner_itr_or.status();
@@ -607,7 +636,8 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       }
       env.fusion.rrf_constant = v;
     } else if (absl::EqualsIgnoreCase(kw, kWindowKw)) {
-      VMSDK_ASSIGN_OR_RETURN(auto v, ParseWholeUint(inner_itr, kWindowKw));
+      VMSDK_ASSIGN_OR_RETURN(
+          auto v, ParseWholeUint(inner_itr, absl::StrCat("COMBINE ", kWindowKw)));
       // The ceiling is max-combine-window (a Dev config, default 1,000,000),
       // never wider than uint32_t because that config's own maximum is
       // UINT_MAX. WINDOW decides how many of each arm's results take part in

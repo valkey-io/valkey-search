@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
@@ -549,6 +550,87 @@ TEST_F(FTHybridParserTest, CombineFunctionWithNoAliasKeepsTheDefaultName) {
 // previously accepted and silently acted on as a different number than the
 // caller wrote. The reference rejects them.
 // ---------------------------------------------------------------------
+
+// The `<count>` after the method is a token span, and it used to reach
+// std::from_chars, which reports success on a numeric prefix: `RRF 2abc` read
+// as 2. The sub-args were given whole-token parsing for exactly this reason;
+// the count two positions earlier was missed.
+TEST_F(FTHybridParserTest, CombineCountRejectsAnythingButAWholeNumber) {
+  for (absl::string_view bad : {"2abc", "4.5", "1e3", "0x10", "-1", "", "abc"}) {
+    auto params =
+        Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+               "5", "COMBINE", "RRF", std::string(bad), "CONSTANT", "60"});
+    EXPECT_FALSE(params.ok()) << "COMBINE count accepted `" << bad << "`";
+  }
+}
+
+TEST_F(FTHybridParserTest, VsimBlockCountRejectsAnythingButAWholeNumber) {
+  for (absl::string_view bad : {"2abc", "4.5", "1e3", "0x10", "-1", "", "abc"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         std::string(bad), "K", "5"});
+    EXPECT_FALSE(params.ok()) << "KNN count accepted `" << bad << "`";
+  }
+}
+
+// Every other sub-arg rejects an empty token; the alias did not, and an empty
+// name would become the score column's output name.
+TEST_F(FTHybridParserTest, YieldScoreAsRejectsAnEmptyAlias) {
+  auto search_arm =
+      Parse({"SEARCH", "@n:[0 10]", "YIELD_SCORE_AS", "", "VSIM", "@vector",
+             "$q", "KNN", "2", "K", "5"});
+  EXPECT_FALSE(search_arm.ok());
+  auto vsim_arm = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "2", "K", "5", "YIELD_SCORE_AS", ""});
+  EXPECT_FALSE(vsim_arm.ok());
+  auto combine =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "COMBINE", "RRF", "2", "YIELD_SCORE_AS", ""});
+  EXPECT_FALSE(combine.ok());
+}
+
+// The defaults a command-schema entry has to state. Nothing pinned these
+// before: they lived only in FusionConfig's member initialisers.
+TEST_F(FTHybridParserTest, OmittedCombineSubArgsTakeTheDocumentedDefaults) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "COMBINE", "RRF", "0"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.method, query::FusionConfig::Method::kRRF);
+  EXPECT_EQ((*params)->fusion.window, 20u);
+  EXPECT_DOUBLE_EQ((*params)->fusion.rrf_constant, 60.0);
+  EXPECT_FALSE((*params)->fusion.alpha.has_value());
+  EXPECT_FALSE((*params)->fusion.beta.has_value());
+}
+
+TEST_F(FTHybridParserTest, NoCombineClauseIsRrfWithTheSameDefaults) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ((*params)->fusion.method, query::FusionConfig::Method::kRRF);
+  EXPECT_EQ((*params)->fusion.window, 20u);
+  EXPECT_DOUBLE_EQ((*params)->fusion.rrf_constant, 60.0);
+}
+
+// A sub-arg belonging to another method is refused rather than ignored. Worth
+// pinning: a review thread claimed `COMBINE RRF 1 ALPHA 0.5` parsed silently,
+// and nothing in the suite contradicted it.
+TEST_F(FTHybridParserTest, CrossMethodCombineSubArgsAreRejected) {
+  const std::vector<std::vector<std::string>> cases = {
+      {"RRF", "2", "ALPHA", "0.5"},
+      {"RRF", "2", "BETA", "0.5"},
+      {"RRF", "2", "EXPR", "@__search_score"},
+      {"LINEAR", "6", "ALPHA", "0.5", "BETA", "0.5", "CONSTANT", "60"},
+      {"FUNCTION", "4", "EXPR", "@__search_score", "CONSTANT", "60"},
+  };
+  for (const auto& tail : cases) {
+    std::vector<std::string> argv = {"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                     "$q",     "KNN",       "2",    "K",
+                                     "5",      "COMBINE"};
+    argv.insert(argv.end(), tail.begin(), tail.end());
+    auto params = Parse(argv);
+    EXPECT_FALSE(params.ok())
+        << "COMBINE accepted a cross-method sub-arg: " << absl::StrJoin(tail, " ");
+  }
+}
 
 TEST_F(FTHybridParserTest, WindowRejectsAnythingButAWholeNumber) {
   for (absl::string_view bad :

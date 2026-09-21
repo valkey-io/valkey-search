@@ -12,6 +12,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ios>
 #include <optional>
@@ -1242,20 +1243,23 @@ inline void TestValkeyModule_FreeCrossClusterReplicasList(
   return kMockValkeyModule->FreeCrossClusterReplicasList(list);
 }
 
-inline void *TestValkeyModule_Alloc(size_t size) {
-  return kMockValkeyModule->Alloc(size);
-}
+// The allocator entry points deliberately bypass kMockValkeyModule, and must
+// keep doing so. It is created per test and deleted in TearDown, while the
+// memory these serve outlives any one test: ShardedAtomic's registry is a
+// process-lifetime singleton and its nodes are thread_local, so a thread
+// exiting after TearDown frees through whatever these point at. Routed through
+// the mock, that is a deleted object -- verified to segfault inside gmock's own
+// bookkeeping in commands_test and vector_index_test.
+inline void *TestValkeyModule_Alloc(size_t size) { return std::malloc(size); }
 
-inline void TestValkeyModule_Free(void *ptr) {
-  return kMockValkeyModule->Free(ptr);
-}
+inline void TestValkeyModule_Free(void *ptr) { std::free(ptr); }
 
 inline void *TestValkeyModule_Realloc(void *ptr, size_t size) {
-  return kMockValkeyModule->Realloc(ptr, size);
+  return std::realloc(ptr, size);
 }
 
 inline void *TestValkeyModule_Calloc(size_t nmemb, size_t size) {
-  return kMockValkeyModule->Calloc(nmemb, size);
+  return std::calloc(nmemb, size);
 }
 
 inline size_t TestValkeyModule_MallocUsableSize(void *ptr) {
@@ -1574,6 +1578,24 @@ inline long long TestValkeyModule_Milliseconds() {
 // TestValkeyModule_Init initializes the module API function table with mock
 // implementations of functions to prevent segmentation faults when
 // executing tests and to allow validation of Valkey module API calls.
+// Installs the allocator before main, so that it is live for tests that never
+// call TestValkeyModule_Init() -- allocator_test's ShardedAtomicTest is a bare
+// TEST() with no Valkey fixture, and allocates as soon as it touches a counter.
+//
+// Running during static initialization is enough because nothing allocates
+// before main: ShardedAtomic's containers have inline capacity for exactly that
+// reason. This must not be weakened into a lazy install without revisiting
+// that.
+struct TestValkeyModuleAllocatorInstaller {
+  TestValkeyModuleAllocatorInstaller() {
+    ValkeyModule_Alloc = &TestValkeyModule_Alloc;
+    ValkeyModule_Free = &TestValkeyModule_Free;
+    ValkeyModule_Realloc = &TestValkeyModule_Realloc;
+    ValkeyModule_Calloc = &TestValkeyModule_Calloc;
+  }
+};
+inline TestValkeyModuleAllocatorInstaller kTestValkeyModuleAllocatorInstaller;
+
 inline void TestValkeyModule_Init() {
   ValkeyModule_Log = &TestValkeyModule_Log;
   ValkeyModule_LogIOError = &TestValkeyModule_LogIOError;

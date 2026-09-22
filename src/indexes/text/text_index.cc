@@ -267,10 +267,12 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     // for this token, so it also seeds the posting entry below.
     metadata_.total_positions += pos_map.size();
     uint32_t token_freq = 0;
-    for (const auto &[_, field_mask] : pos_map) {
-      token_freq += field_mask.CountSetFields();
+    if (!scoring_disabled) {
+      for (const auto &[_, field_mask] : pos_map) {
+        token_freq += field_mask.CountSetFields();
+      }
+      norm = std::max(norm, token_freq);
     }
-    norm = std::max(norm, token_freq);
 
     // Create FlatPositionMap from PositionMap
     FlatPositionMap *flat_map =

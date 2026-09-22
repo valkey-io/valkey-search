@@ -262,7 +262,7 @@ else()
   update_cmake_prefix("protobuf" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("utf8_range" __CMAKE_PREFIX_PATH)
   
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     update_cmake_prefix("benchmark" __CMAKE_PREFIX_PATH)
   endif()
   

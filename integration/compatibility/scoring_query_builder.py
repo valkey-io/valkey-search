@@ -61,7 +61,7 @@ def _field_incidence(docs, terms):
 
 
 def build_scoring_queries(seed=SCORING_QUERY_SEED):
-    """{shape: [{shape, query, hits, params, gate}]} over the recorded corpus."""
+    """{shape: [{shape, query, hits, params}]} over the recorded corpus."""
     rng = random.Random(seed)
     docs, terms = compute_scoring_corpus()
     tiers = _tiers(terms)
@@ -80,10 +80,10 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
 
     shapes = {}
 
-    def emit(shape, query, hits, params=(), gate=True):
+    def emit(shape, query, hits, params=()):
         shapes.setdefault(shape, []).append(
             {"shape": shape, "query": query, "hits": set(hits),
-             "params": tuple(params), "gate": gate})
+             "params": tuple(params)})
 
     def draw_from_doc(count):
         """`count` distinct terms sharing a document, plus that document."""
@@ -157,10 +157,9 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
     for value in sorted(SCORING_TAG_FREQS):
         emit("tag_only", f"@t1:{{{value}}}", tag_docs[value])
 
-    # n1 == doc id, so the hit set is the range; gate-exempt as a numeric leaf scores 0.
+    # n1 == doc id, so the hit set is the range; a numeric leaf scores 0 on every row.
     for low, high in ((0, 9), (10, 19), (45, 55), (50, 50), (90, 99), (0, 99)):
-        emit("numeric_only", f"@n1:[{low} {high}]",
-             range(low, high + 1), gate=False)
+        emit("numeric_only", f"@n1:[{low} {high}]", range(low, high + 1))
 
     for _ in range(SHAPE_COUNTS["text_numeric_tag"]):
         doc, (term,) = draw_from_doc(1)

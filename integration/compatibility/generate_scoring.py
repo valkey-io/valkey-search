@@ -12,9 +12,6 @@ from .scoring_query_builder import build_scoring_queries, search_args
 Capture RediSearch answers for BM25STD relevance scores.
 '''
 
-# How far apart two scores must be for the replay to tell them apart.
-SCORE_DISTINCT_TOL = 1e-5
-
 
 @pytest.mark.parametrize("schema_type", ["nostem", "docscore"])
 @pytest.mark.parametrize("key_type", ["hash", "json"])
@@ -74,25 +71,18 @@ class TestScoringCompatibility(BaseCompatibilityTest):
     def _run_shape(self, shape, key_type, schema_type):
         self.setup_data(key_type, schema_type)
         queries = self.QUERIES[shape]
-        kept, dropped = 0, 0
         for descriptor in queries:
+            # A query matching nothing asserts nothing, so it is a builder bug.
+            assert descriptor["hits"], \
+                f"{shape} query {descriptor['query']!r} predicts no hits"
             answer = self.capture(search_args(f"{key_type}_idx1", descriptor))
             scores = self._scores_by_doc(answer["result"])
             # The replay trusts the captured answer, so only this catches a bad prediction.
             assert set(scores) == descriptor["hits"], (
                 f"{shape} query {descriptor['query']!r} matched {sorted(scores)}, "
                 f"predicted {sorted(descriptor['hits'])}")
-            spread = max(scores.values()) - min(scores.values()) if scores else 0
-            # A query whose rows all tie would pass against any scorer at all.
-            if descriptor["gate"] and (len(scores) < 2
-                                       or spread <= SCORE_DISTINCT_TOL):
-                dropped += 1
-                continue
             self.answers.append(answer)
-            kept += 1
-        print(f"{shape}[{key_type}-{schema_type}]: kept {kept}, "
-              f"dropped {dropped} of {len(queries)} as non-discriminating")
-        assert kept, f"{shape} kept no queries"
+        print(f"{shape}[{key_type}-{schema_type}]: {len(queries)} queries")
 
     def test_scoring_single_term(self, key_type, schema_type):
         self._run_shape("single_term", key_type, schema_type)

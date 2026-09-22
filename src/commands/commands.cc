@@ -345,6 +345,13 @@ void QueryCommand::QueryCompleteBackground(
   CHECK(!vmsdk::IsMainThread());
   auto *command = static_cast<QueryCommand *>(parameters.get());
   CHECK(command == this);
+  // kNoContent normally skips ResolveContent(), which performs this check on
+  // the main thread. Preserve its dropped-index behavior before a background
+  // thread materializes a reply.
+  if (command->index_schema->IsMarkedDestructing()) {
+    command->search_result.status = GenerateIndexNotFoundError(
+        command->index_schema->GetDBNum(), command->index_schema->GetName());
+  }
   if (command->CanGenerateReplyInBackground()) {
     // A context associated with a blocked client can accumulate ReplyWith*
     // output from a background thread without taking the server lock. Valkey

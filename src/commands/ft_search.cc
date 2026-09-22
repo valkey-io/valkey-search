@@ -465,7 +465,8 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 bool SearchCommand::CanGenerateReplyInBackground() const {
   // LIMIT 0 (and a vector offset past K) returns only the count. NOCONTENT
   // avoids database access unless SORTBY requires loading values to order the
-  // result set.
+  // result set. QueryCompleteBackground preserves dropped-index validation
+  // before generating these replies.
   return query::ShouldReturnNoResults(*this) || NoProcessingRequired();
 }
 

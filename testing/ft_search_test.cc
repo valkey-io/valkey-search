@@ -626,6 +626,23 @@ TEST_F(ValkeySearchTest, WithCursorNoResultsReply) {
             ParseRespReply("*3\r\n:3\r\n*0\r\n:0\r\n"));
 }
 
+TEST_F(ValkeySearchTest, BackgroundReplyEligibility) {
+  SearchCommand parameters(0);
+  parameters.attribute_alias = "vec";
+  parameters.k = 10;
+
+  parameters.no_content = true;
+  EXPECT_TRUE(parameters.CanGenerateReplyInBackground());
+
+  parameters.sortby_parameter = query::SortByParameter{.field = "sort_field"};
+  EXPECT_FALSE(parameters.CanGenerateReplyInBackground());
+
+  parameters.limit.number = 0;
+  EXPECT_TRUE(parameters.CanGenerateReplyInBackground());
+  EXPECT_EQ(parameters.GetContentProcessing(),
+            query::ContentProcessing::kNoContent);
+}
+
 using ::testing::TestParamInfo;
 using ::testing::ValuesIn;
 

@@ -102,7 +102,7 @@ target_link_libraries(latency_sampler_test PUBLIC vmsdk_testing_infra)
 finalize_test_flags(latency_sampler_test)
 
 string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
-if("${SAN_BUILD_LOWER}" STREQUAL "no")
+if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     set(SRCS_SHARDED_ATOMIC_BENCH ${CMAKE_CURRENT_LIST_DIR}/sharded_atomic_benchmark.cc)
     add_executable(sharded_atomic_benchmark ${SRCS_SHARDED_ATOMIC_BENCH})
     target_include_directories(sharded_atomic_benchmark PUBLIC ${CMAKE_CURRENT_LIST_DIR})

@@ -170,7 +170,7 @@ if(WITH_SUBMODULES_SYSTEM)
   message(STATUS "libhighwayhash.a found: ${LIBHIGHWAYHASH}")
   message(STATUS "highwayhash include path: ${LIBHIGHWAYHASH_INCLUDE}")
 
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     find_package(benchmark REQUIRED)
     message(STATUS "Found system google benchmark")
   endif()
@@ -200,7 +200,7 @@ else()
     ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
     "${MODULES_DIR}/googletest/build-release")
 
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
   
     checkout_submodule_branch(
       ${MODULE_BENCHMARK} "https://github.com/google/benchmark.git" "v1.8.3"
@@ -238,7 +238,7 @@ else()
   build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
   
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     build_submodule(${MODULE_BENCHMARK} "${BENCHMARK_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/lib/cmake/benchmark/benchmarkConfig.cmake")
   endif()

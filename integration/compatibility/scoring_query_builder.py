@@ -15,24 +15,35 @@ from .data_sets import (
 SCORING_QUERY_SEED = 7331
 
 # Single term is exhaustive over the pool; the combinatorial shapes are sampled.
+# Unions sampled least: a one-leg match repeats what single_term already compares.
 SHAPE_COUNTS = {
-    "and2": 30,
-    "and3": 30,
-    "or2": 30,
-    "or3": 30,
-    "mixed": 30,
-    "cross_field": 10,       # x3 spellings
-    "leaf_weight": 25,
-    "nested_weight": 25,
-    "text_numeric_tag": 25,
+    "and2": 80,
+    "and3": 100,
+    "or2": 50,
+    "or3": 50,
+    "mixed": 50,
+    "cross_field": 50,       # x3 spellings
+    "leaf_weight": 60,
+    "nested_weight": 40,
+    "text_numeric_tag": 120,
 }
 
 # Positive (valkey-search rejects <= 0) and float32-exact, so rounding cannot differ.
-WEIGHTS = [0.25, 0.5, 2.0, 3.0, 4.0]
+WEIGHTS = [0.125, 0.25, 0.5, 1.5, 2.0, 3.0, 4.0, 6.0]
 
-# A k this large cannot truncate a filter set drawn from a single cluster.
+# ceiling on a union leg's dt: a dt 450 leg is ~450 rows for a few overlap rows
+OR_LEG_MAX_DT = 250
+
+# half-width of the text + numeric + tag @n1 window; always holds the drawn doc
+NUMERIC_WINDOW = 20
+
+# named by dt, not tier index: the tier table's length is a tuning knob
+VECTOR_FULL_DT = 15         # <= VECTOR_K_FULL, so no text match is evicted
+VECTOR_TRUNCATED_DT = 125   # well past the truncating k values
+
+# A k this large cannot truncate a filter set of VECTOR_FULL_DT documents.
 VECTOR_K_FULL = SCORING_NUM_DOCS // SCORING_VECTOR_CLUSTERS
-VECTOR_K_TRUNCATED = 5
+VECTOR_K_TRUNCATED = (5, 1)
 
 # The default LIMIT 0 10 would cut inside a score tie, exposing each engine's tie-break.
 SEARCH_LIMIT = SCORING_NUM_DOCS
@@ -47,6 +58,13 @@ def _tiers(terms):
     """Pool terms bucketed by document frequency, richest tier first."""
     return [sorted(t for t, posting in terms.items() if len(posting) == dt)
             for _, dt in SCORING_DT_TIERS]
+
+
+def _tier_with_dt(terms, dt):
+    """The pool terms whose document frequency is exactly `dt`."""
+    tier = sorted(t for t, posting in terms.items() if len(posting) == dt)
+    assert tier, f"no tier at dt {dt}; check SCORING_DT_TIERS"
+    return tier
 
 
 def _field_incidence(docs, terms):
@@ -65,6 +83,8 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
     rng = random.Random(seed)
     docs, terms = compute_scoring_corpus()
     tiers = _tiers(terms)
+    or_tiers = [tier for tier, (_, dt) in zip(tiers, SCORING_DT_TIERS)
+                if dt <= OR_LEG_MAX_DT]
     incidence = _field_incidence(docs, terms)
 
     # Terms per doc, so an AND leg drawn from one doc always matches that doc.
@@ -94,7 +114,7 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
 
     def draw_across_tiers(count):
         """One term from each of `count` distinct document-frequency tiers."""
-        return [rng.choice(tier) for tier in rng.sample(tiers, count)]
+        return [rng.choice(tier) for tier in rng.sample(or_tiers, count)]
 
     def hits_of(*drawn):
         return set.intersection(*(set(terms[t]) for t in drawn))
@@ -120,7 +140,7 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
         if i % 2:
             # AND leg from one doc, OR leg free.
             _, (a, b) = draw_from_doc(2)
-            c = rng.choice(rng.choice(tiers))
+            c = rng.choice(rng.choice(or_tiers))
             emit("mixed", f"({a} {b}) | {c}", hits_of(a, b) | set(terms[c]))
         else:
             # All three legs from one doc, so the AND cannot be empty.
@@ -158,12 +178,15 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
         emit("tag_only", f"@t1:{{{value}}}", tag_docs[value])
 
     # n1 == doc id, so the hit set is the range; a numeric leaf scores 0 on every row.
-    for low, high in ((0, 9), (10, 19), (45, 55), (50, 50), (90, 99), (0, 99)):
+    for low, high in ((0, 9), (10, 19), (0, 49), (100, 149), (245, 255),
+                      (250, 250), (300, 399), (400, 499), (0, 249),
+                      (250, 499), (499, 499), (0, SCORING_NUM_DOCS - 1)):
         emit("numeric_only", f"@n1:[{low} {high}]", range(low, high + 1))
 
     for _ in range(SHAPE_COUNTS["text_numeric_tag"]):
         doc, (term,) = draw_from_doc(1)
-        low, high = max(0, doc - 5), min(SCORING_NUM_DOCS - 1, doc + 5)
+        low = max(0, doc - NUMERIC_WINDOW)
+        high = min(SCORING_NUM_DOCS - 1, doc + NUMERIC_WINDOW)
         value = docs[doc]["t1"]
         emit("text_numeric_tag",
              f"{term} @n1:[{low} {high}] @t1:{{{value}}}",
@@ -172,7 +195,8 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
     emit("match_all", "*", docs)
 
     # Hybrid scores are the text score alone, so this shape covers KNN eviction only.
-    rare, common = tiers[3], tiers[1]
+    rare = _tier_with_dt(terms, VECTOR_FULL_DT)
+    common = _tier_with_dt(terms, VECTOR_TRUNCATED_DT)
     for cluster in range(SCORING_VECTOR_CLUSTERS):
         blob = struct.pack(f"<{VECTOR_DIM}f", *([float(cluster)] * VECTOR_DIM))
         params = ("PARAMS", "2", "q", blob)
@@ -184,8 +208,8 @@ def build_scoring_queries(seed=SCORING_QUERY_SEED):
         term = common[cluster % len(common)]
         nearest = sorted(terms[term],
                          key=lambda d: abs(docs[d]["v1"][0] - cluster))
-        emit("text_vector", f"{term}=>[KNN {VECTOR_K_TRUNCATED} @v1 $q]",
-             nearest[:VECTOR_K_TRUNCATED], params)
+        for k in VECTOR_K_TRUNCATED:
+            emit("text_vector", f"{term}=>[KNN {k} @v1 $q]", nearest[:k], params)
 
     return shapes
 

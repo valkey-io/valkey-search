@@ -1,4 +1,4 @@
-import itertools, valkey, json, struct, random
+import itertools, math, valkey, json, struct, random
 
 ### Reusable Data ###
 #
@@ -30,16 +30,27 @@ SCORING_DATASETS = {
     'scoring': {'schema': SCORING_SCHEMA},
 }
 
-SCORING_NUM_DOCS = 100
+SCORING_NUM_DOCS = 500
+
+# dt as a share of N so it tracks N; rounded dt values must stay distinct
+SCORING_DT_SHARES = [(6, 0.90), (10, 0.50), (14, 0.25), (18, 0.12),
+                     (22, 0.06), (26, 0.03), (30, 0.014), (34, 0.006)]
 # (term count, exact dt) per tier; must sum to the pool size
-SCORING_DT_TIERS = [(2, 90), (6, 50), (12, 20), (20, 5), (20, 1)]
-SCORING_TF_CHOICES = [1, 1, 1, 2, 3]
-# floor only: planted terms may already exceed it
-SCORING_DOC_LEN_RANGE = (3, 25)
+SCORING_DT_TIERS = [(count, round(share * SCORING_NUM_DOCS))
+                    for count, share in SCORING_DT_SHARES] + [(40, 1)]
+
+# weighted low, since the BM25 TF term saturates and the high end buys little
+SCORING_TF_CHOICES = [1, 1, 1, 2, 2, 3, 4, 6]
+# doc_len floor, skewed so short docs exist; planted terms may already exceed it
+SCORING_DOC_LEN_CHOICES = [10, 10, 16, 16, 25, 40, 70, 140]
+# per-doc sampling bias: spreads pool terms per doc, and so doc_len and the norm
+SCORING_DOC_WEIGHTS = [0.2, 0.4, 0.7, 1.0, 1.5, 2.5, 4.0]
+SCORING_FILLER_TERMS = 60
 SCORING_CROSS_FIELD_RATE = 0.2
-# the text suite's first five colors; "orange" is skipped as it is also a pool word
-SCORING_TAG_FREQS = {"red": 40, "yellow": 25, "green": 20, "purple": 10, "blue": 5}
-SCORING_VECTOR_CLUSTERS = 5
+# planted frequencies, summing to N
+SCORING_TAG_FREQS = {"amber": 180, "azure": 105, "cerise": 80, "cobalt": 55,
+                     "indigo": 40, "ochre": 25, "sepia": 12, "teal": 3}
+SCORING_VECTOR_CLUSTERS = 8
 # cycled per doc; None omits the field, "abc" is unparseable as a score
 SCORING_BOOSTS = [2.0, 0.25, -1.0, None, "abc"]
 
@@ -1359,15 +1370,18 @@ def compute_return_data_sets():
     }
 
 
+def _make_scoring_terms(count, lead):
+    """`count` distinct alpha terms under `lead`; the text suite has only 75."""
+    combos = (f"{lead}{c}{v}{d}" for c in "bcdfgklmnprstvz"
+              for v in "aeiou" for d in "bcdfgklmnprstvz")
+    terms = list(itertools.islice(combos, count))
+    assert len(terms) == count, f"only {len(terms)} terms available under {lead!r}"
+    return terms
+
 def _scoring_vocab():
-    """Pool and filler terms, both reused from the text suite's vocabulary."""
-    pure = TEXT_DATASETS["pure text"]["field_values"]
-    pool = sorted(set(pure["title"]) | set(pure["body"]))
-    numeric = TEXT_DATASETS["numeric text"]["field_values"]
-    # alpha-only keeps that suite's number-like tokens out; disjoint from the pool
-    filler = sorted({w for w in numeric["title"] + numeric["body"] if w.isalpha()}
-                    - set(pool))
-    return pool, filler
+    """Pool terms, sized by the dt tiers, and the filler that pads doc_len."""
+    pool = _make_scoring_terms(sum(n for n, _ in SCORING_DT_TIERS), "z")
+    return pool, _make_scoring_terms(SCORING_FILLER_TERMS, "w")
 
 def compute_scoring_corpus(seed=123):
     """Build the scoring corpus from a term -> doc incidence matrix.
@@ -1382,12 +1396,19 @@ def compute_scoring_corpus(seed=123):
         "SCORING_DT_TIERS must cover every pool word exactly once"
     pool = iter(words)
     docs = {i: {"title": [], "body": []} for i in range(SCORING_NUM_DOCS)}
+    weights = [SCORING_DOC_WEIGHTS[i % len(SCORING_DOC_WEIGHTS)]
+               for i in range(SCORING_NUM_DOCS)]
+
+    def sample_docs(dt):
+        """`dt` distinct docs, biased by SCORING_DOC_WEIGHTS; dt stays exact."""
+        return sorted(docs,
+                      key=lambda d: -math.log(rng.random()) / weights[d])[:dt]
 
     terms = {}
     for count, dt in SCORING_DT_TIERS:
         for term in itertools.islice(pool, count):
             terms[term] = {}
-            for doc in rng.sample(range(SCORING_NUM_DOCS), dt):
+            for doc in sample_docs(dt):
                 tf = rng.choice(SCORING_TF_CHOICES)
                 # cross-field pairs sit in both fields, doubling doc-wide TF
                 fields = (["title", "body"]
@@ -1404,7 +1425,7 @@ def compute_scoring_corpus(seed=123):
         planted = len(fields["title"]) + len(fields["body"])
         # filler repeats freely: only the queried term's dt feeds IDF, so filler
         # dt is never read - filler moves doc_len and avg_doc_len, nothing else
-        for _ in range(max(0, rng.randint(*SCORING_DOC_LEN_RANGE) - planted)):
+        for _ in range(max(0, rng.choice(SCORING_DOC_LEN_CHOICES) - planted)):
             fields[rng.choice(["title", "body"])].append(rng.choice(fillers))
         rng.shuffle(fields["title"])
         rng.shuffle(fields["body"])

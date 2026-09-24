@@ -104,11 +104,29 @@ target_link_libraries(tag PUBLIC vmsdklib)
 target_link_libraries(tag PUBLIC ${INDEX_SCHEMA_PROTO_LIB})
 target_link_libraries(tag PUBLIC rax_lib)
 
-# vector_svs wiring (the SVS static library, its dependencies, and the SVS
-# runtime find_package call) is intentionally omitted here. Phase 3 (C API
-# migration) reintroduces vector_svs against the current VectorBase interface
-# and the SVS C API surface; wiring this in the pre-C-API form would produce
-# code that has to be rewritten in the same phase.
+if(UNIX AND NOT APPLE
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(SRCS_VECTOR_SVS ${CMAKE_CURRENT_LIST_DIR}/vector_svs.cc)
+
+    valkey_search_add_static_library(vector_svs "${SRCS_VECTOR_SVS}")
+    target_include_directories(vector_svs PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+    target_include_directories(vector_svs PRIVATE
+        ${CMAKE_SOURCE_DIR}/third_party/svs/bindings/c/include
+        ${CMAKE_BINARY_DIR}/third_party/svs-c-api-build/include)
+    target_link_libraries(vector_svs PUBLIC index_base)
+    target_link_libraries(vector_svs PUBLIC vector_base)
+    target_link_libraries(vector_svs PUBLIC vector_type)
+    target_link_libraries(vector_svs PUBLIC attribute_data_type)
+    target_link_libraries(vector_svs PUBLIC metrics)
+    target_link_libraries(vector_svs PUBLIC rdb_serialization)
+    target_link_libraries(vector_svs PUBLIC string_interning)
+    target_link_libraries(vector_svs PUBLIC hnswlib_vmsdk)
+    target_link_libraries(vector_svs PUBLIC vmsdklib)
+    target_link_libraries(vector_svs PUBLIC valkey_module)
+
+    # Enable the "SVS" entry in kVectorAlgoByStr for consumers of vector_base.
+    target_compile_definitions(vector_base PUBLIC ENABLE_SVS=1)
+endif()
 
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc
                      ${CMAKE_CURRENT_LIST_DIR}/vector_flat.h)

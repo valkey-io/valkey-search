@@ -80,6 +80,29 @@ indexes::scoring::ScorerType ScorerFromGRPC(Scorer scorer) {
   }
 }
 
+HybridPolicy HybridPolicyToGRPC(query::HybridPolicy hybrid_policy) {
+  switch (hybrid_policy) {
+    case query::HybridPolicy::kBatches:
+      return coordinator::HYBRID_POLICY_BATCHES;
+    case query::HybridPolicy::kAdHocBruteForce:
+      return coordinator::HYBRID_POLICY_ADHOC_BF;
+    case query::HybridPolicy::kAuto:
+      return coordinator::HYBRID_POLICY_AUTO;
+  }
+  return coordinator::HYBRID_POLICY_AUTO;
+}
+
+query::HybridPolicy HybridPolicyFromGRPC(HybridPolicy hybrid_policy) {
+  switch (hybrid_policy) {
+    case coordinator::HYBRID_POLICY_BATCHES:
+      return query::HybridPolicy::kBatches;
+    case coordinator::HYBRID_POLICY_ADHOC_BF:
+      return query::HybridPolicy::kAdHocBruteForce;
+    default:
+      return query::HybridPolicy::kAuto;
+  }
+}
+
 static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
     absl::flat_hash_set<std::string>& attribute_identifiers);
@@ -272,7 +295,9 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->query = request.query();
   parameters->dialect = request.dialect();
   parameters->k = request.k();
-  parameters->ef = request.ef();
+  if (request.has_ef()) {
+    parameters->ef = request.ef();
+  }
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
@@ -305,6 +330,7 @@ absl::Status GRPCSearchRequestToParameters(
       dest.insert(key);
     }
   }
+  parameters->hybrid_policy = HybridPolicyFromGRPC(request.hybrid_policy());
   return absl::OkStatus();
 }
 
@@ -492,6 +518,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
       inkeys_filter->add_keys(key);
     }
   }
+  request->set_hybrid_policy(HybridPolicyToGRPC(parameters.hybrid_policy));
   return request;
 }
 

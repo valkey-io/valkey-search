@@ -238,6 +238,55 @@ TEST_F(SearchConverterTest, IsMatchAllRoundTrips) {
   }
 }
 
+TEST_F(SearchConverterTest, EfRuntimePresenceRoundTrips) {
+  UnitTestSearchParameters omitted;
+  omitted.index_schema_name = "index_schema_name";
+  omitted.score_as = vmsdk::MakeUniqueValkeyString("__score");
+
+  auto omitted_request = ParametersToGRPCSearchRequest(omitted);
+  ASSERT_NE(omitted_request, nullptr);
+  EXPECT_FALSE(omitted_request->has_ef());
+
+  UnitTestSearchParameters decoded_omitted;
+  VMSDK_EXPECT_OK(GRPCSearchRequestToParameters(
+      *omitted_request, /*context=*/nullptr, &decoded_omitted));
+  EXPECT_FALSE(decoded_omitted.ef.has_value());
+
+  UnitTestSearchParameters explicit_value;
+  explicit_value.index_schema_name = "index_schema_name";
+  explicit_value.score_as = vmsdk::MakeUniqueValkeyString("__score");
+  explicit_value.ef = 200;
+
+  auto explicit_request = ParametersToGRPCSearchRequest(explicit_value);
+  ASSERT_NE(explicit_request, nullptr);
+  ASSERT_TRUE(explicit_request->has_ef());
+  EXPECT_EQ(explicit_request->ef(), 200u);
+
+  UnitTestSearchParameters decoded_explicit;
+  VMSDK_EXPECT_OK(GRPCSearchRequestToParameters(
+      *explicit_request, /*context=*/nullptr, &decoded_explicit));
+  EXPECT_EQ(decoded_explicit.ef, 200u);
+}
+
+TEST_F(SearchConverterTest, HybridPolicyRoundTrips) {
+  for (query::HybridPolicy value :
+       {query::HybridPolicy::kAuto, query::HybridPolicy::kBatches,
+        query::HybridPolicy::kAdHocBruteForce}) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema_name = "index_schema_name";
+    parameters.score_as = vmsdk::MakeUniqueValkeyString("__score");
+    parameters.hybrid_policy = value;
+
+    auto request = ParametersToGRPCSearchRequest(parameters);
+    ASSERT_NE(request, nullptr);
+
+    UnitTestSearchParameters decoded;
+    VMSDK_EXPECT_OK(
+        GRPCSearchRequestToParameters(*request, /*context=*/nullptr, &decoded));
+    EXPECT_EQ(decoded.hybrid_policy, value);
+  }
+}
+
 }  // namespace
 
 }  // namespace valkey_search::coordinator

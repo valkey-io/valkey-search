@@ -367,6 +367,10 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
              "cannot "
              "exceed "
           << max_ef_runtime_value << ".";
+      if (parameters.hybrid_policy == query::HybridPolicy::kAdHocBruteForce) {
+        return absl::InvalidArgumentError(
+            "EF_RUNTIME is irrelevant for the ADHOC_BF hybrid policy");
+      }
     }
     auto max_knn_value = options::GetMaxKnn().GetValue();
     VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))

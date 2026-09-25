@@ -1,7 +1,13 @@
-"""Query construction for the scoring compatibility suite."""
+"""Query construction for the scoring compatibility suite.
+
+Every query is built together with its predicted hit set, so generate_scoring.py
+can check the capture against it. Most shapes first pick an "anchor" document
+and build the query around it, which guarantees at least one hit.
+"""
 
 import random
 import struct
+from dataclasses import dataclass, field
 
 from .data_sets import (
     SCORING_DT_TIERS,
@@ -11,207 +17,60 @@ from .data_sets import (
     VECTOR_DIM,
     compute_scoring_corpus,
 )
+from .text_query_builder import sample_shape
 
 SCORING_QUERY_SEED = 7331
 
-# Single term is exhaustive over the pool; the combinatorial shapes are sampled.
-# Unions sampled least: a one-leg match repeats what single_term already compares.
+# Queries per sampled shape. single_term (every pool term), numeric_only and
+# match_all are fixed lists instead.
 SHAPE_COUNTS = {
-    "and2": 80,
-    "and3": 100,
-    "or2": 50,
-    "or3": 50,
-    "mixed": 50,
-    "cross_field": 50,       # x3 spellings
-    "leaf_weight": 60,
-    "nested_weight": 40,
-    "text_numeric_tag": 120,
+    "and": 200,
+    "or": 200,
+    "mixed": 200,
+    "weight": 200,
+    "text_numeric_tag": 200,
+    "tag_only": 200,
+    "text_vector": 200,
+    "text_numeric_tag_vector": 200,
 }
 
-# Positive (valkey-search rejects <= 0) and float32-exact, so rounding cannot differ.
-WEIGHTS = [0.125, 0.25, 0.5, 1.5, 2.0, 3.0, 4.0, 6.0]
-
+# --- text ---
+# terms per flat and/or query
+FLAT_TERM_COUNTS = [2, 3, 4]
+# sample_shape depths for mixed; depth 1 is and/or
+MIXED_DEPTHS = [2, 3]
+# text shapes the combined (text + numeric/tag/vector) shapes draw from
+TEXT_KINDS = ["single_term", "and", "or", "mixed", "weight"]
 # ceiling on a union leg's dt: a dt 450 leg is ~450 rows for a few overlap rows
 OR_LEG_MAX_DT = 250
 
-# half-width of the text + numeric + tag @n1 window; always holds the drawn doc
+# --- weights ---
+# Positive (valkey-search rejects <= 0) and float32-exact, so rounding cannot differ.
+WEIGHTS = [0.125, 0.25, 0.5, 1.5, 2.0, 3.0, 4.0, 6.0]
+# chance a group in a weighted tree also takes a weight
+GROUP_WEIGHT_RATE = 0.3
+
+# --- tag / numeric ---
+# values per tag union; 1 is a single tag
+TAG_VALUE_COUNTS = [1, 2, 3, 4]
+# half-width of the @n1 window around the anchor doc
 NUMERIC_WINDOW = 20
+# n1 == doc id, so each range's hit set is the range itself
+NUMERIC_RANGES = [(0, 9), (10, 19), (0, 49), (100, 149), (245, 255),
+                  (250, 250), (300, 399), (400, 499), (0, 249),
+                  (250, 499), (499, 499), (0, SCORING_NUM_DOCS - 1)]
 
-# named by dt, not tier index: the tier table's length is a tuning knob
-VECTOR_FULL_DT = 15         # <= VECTOR_K_FULL, so no text match is evicted
-VECTOR_TRUNCATED_DT = 125   # well past the truncating k values
-
-# A k this large cannot truncate a filter set of VECTOR_FULL_DT documents.
-VECTOR_K_FULL = SCORING_NUM_DOCS // SCORING_VECTOR_CLUSTERS
-VECTOR_K_TRUNCATED = (5, 1)
+# --- vector ---
+# KNN k, drawn uniformly; the top end is just past one cluster's worth (62 docs)
+VECTOR_K_RANGE = (1, 65)
 
 # The default LIMIT 0 10 would cut inside a score tie, exposing each engine's tie-break.
 SEARCH_LIMIT = SCORING_NUM_DOCS
 
 
-def _weight(query, w):
-    """Attach a QMA weight block; the group must already be parenthesized."""
-    return f"{query} => {{ $weight: {w} }}"
-
-
-def _tiers(terms):
-    """Pool terms bucketed by document frequency, richest tier first."""
-    return [sorted(t for t, posting in terms.items() if len(posting) == dt)
-            for _, dt in SCORING_DT_TIERS]
-
-
-def _tier_with_dt(terms, dt):
-    """The pool terms whose document frequency is exactly `dt`."""
-    tier = sorted(t for t, posting in terms.items() if len(posting) == dt)
-    assert tier, f"no tier at dt {dt}; check SCORING_DT_TIERS"
-    return tier
-
-
-def _field_incidence(docs, terms):
-    """{field: {term: {doc ids}}}, which the doc-wide TF in `terms` cannot say."""
-    incidence = {"title": {t: set() for t in terms}, "body": {t: set() for t in terms}}
-    for doc, fields in docs.items():
-        for field in ("title", "body"):
-            for word in set(fields[field]):
-                if word in terms:          # skip filler, which has no recorded dt
-                    incidence[field][word].add(doc)
-    return incidence
-
-
 def build_scoring_queries(seed=SCORING_QUERY_SEED):
     """{shape: [{shape, query, hits, params}]} over the recorded corpus."""
-    rng = random.Random(seed)
-    docs, terms = compute_scoring_corpus()
-    tiers = _tiers(terms)
-    or_tiers = [tier for tier, (_, dt) in zip(tiers, SCORING_DT_TIERS)
-                if dt <= OR_LEG_MAX_DT]
-    incidence = _field_incidence(docs, terms)
-
-    # Terms per doc, so an AND leg drawn from one doc always matches that doc.
-    doc_terms = {doc: [] for doc in docs}
-    for term, posting in terms.items():
-        for doc in posting:
-            doc_terms[doc].append(term)
-    for terms_in_doc in doc_terms.values():
-        terms_in_doc.sort()
-
-    tag_docs = {value: {doc for doc, f in docs.items() if f["t1"] == value}
-                for value in SCORING_TAG_FREQS}
-
-    shapes = {}
-
-    def emit(shape, query, hits, params=()):
-        shapes.setdefault(shape, []).append(
-            {"shape": shape, "query": query, "hits": set(hits),
-             "params": tuple(params)})
-
-    def draw_from_doc(count):
-        """`count` distinct terms sharing a document, plus that document."""
-        while True:
-            doc = rng.randrange(SCORING_NUM_DOCS)
-            if len(doc_terms[doc]) >= count:
-                return doc, rng.sample(doc_terms[doc], count)
-
-    def draw_across_tiers(count):
-        """One term from each of `count` distinct document-frequency tiers."""
-        return [rng.choice(tier) for tier in rng.sample(or_tiers, count)]
-
-    def hits_of(*drawn):
-        return set.intersection(*(set(terms[t]) for t in drawn))
-
-    def union_of(*drawn):
-        return set.union(*(set(terms[t]) for t in drawn))
-
-    # Single term, every tier. `dt` is the hit count by construction.
-    for term in sorted(terms):
-        emit("single_term", term, terms[term])
-
-    for count, shape in ((2, "and2"), (3, "and3")):
-        for _ in range(SHAPE_COUNTS[shape]):
-            _, drawn = draw_from_doc(count)
-            emit(shape, " ".join(drawn), hits_of(*drawn))
-
-    for count, shape in ((2, "or2"), (3, "or3")):
-        for _ in range(SHAPE_COUNTS[shape]):
-            drawn = draw_across_tiers(count)
-            emit(shape, " | ".join(drawn), union_of(*drawn))
-
-    for i in range(SHAPE_COUNTS["mixed"]):
-        if i % 2:
-            # AND leg from one doc, OR leg free.
-            _, (a, b) = draw_from_doc(2)
-            c = rng.choice(rng.choice(or_tiers))
-            emit("mixed", f"({a} {b}) | {c}", hits_of(a, b) | set(terms[c]))
-        else:
-            # All three legs from one doc, so the AND cannot be empty.
-            _, (a, c, d) = draw_from_doc(3)
-            emit("mixed", f"{a} ({c} | {d})",
-                 set(terms[a]) & union_of(c, d))
-
-    # A term in both fields of some doc, so each field spelling subsets the bare one.
-    both_fields = sorted(t for t in terms
-                         if incidence["title"][t] & incidence["body"][t])
-    for term in rng.sample(both_fields, SHAPE_COUNTS["cross_field"]):
-        emit("cross_field", f"@title:{term}", incidence["title"][term])
-        emit("cross_field", f"@body:{term}", incidence["body"][term])
-        emit("cross_field", f"(@title:{term} | @body:{term})", terms[term])
-
-    for i in range(SHAPE_COUNTS["leaf_weight"]):
-        w = WEIGHTS[i % len(WEIGHTS)]
-        if i % 5 == 4:
-            value = sorted(SCORING_TAG_FREQS)[i % len(SCORING_TAG_FREQS)]
-            emit("leaf_weight", _weight(f"(@t1:{{{value}}})", w), tag_docs[value])
-        else:
-            term = rng.choice(rng.choice(tiers))
-            emit("leaf_weight", _weight(f"({term})", w), terms[term])
-
-    for i in range(SHAPE_COUNTS["nested_weight"]):
-        inner_a, inner_b, outer = (WEIGHTS[i % len(WEIGHTS)],
-                                   WEIGHTS[(i + 1) % len(WEIGHTS)],
-                                   WEIGHTS[(i + 2) % len(WEIGHTS)])
-        _, (a, b) = draw_from_doc(2)
-        joiner, hits = (" ", hits_of(a, b)) if i % 2 else (" | ", union_of(a, b))
-        legs = joiner.join([_weight(f"({a})", inner_a), _weight(f"({b})", inner_b)])
-        emit("nested_weight", _weight(f"({legs})", outer), hits)
-
-    for value in sorted(SCORING_TAG_FREQS):
-        emit("tag_only", f"@t1:{{{value}}}", tag_docs[value])
-
-    # n1 == doc id, so the hit set is the range; a numeric leaf scores 0 on every row.
-    for low, high in ((0, 9), (10, 19), (0, 49), (100, 149), (245, 255),
-                      (250, 250), (300, 399), (400, 499), (0, 249),
-                      (250, 499), (499, 499), (0, SCORING_NUM_DOCS - 1)):
-        emit("numeric_only", f"@n1:[{low} {high}]", range(low, high + 1))
-
-    for _ in range(SHAPE_COUNTS["text_numeric_tag"]):
-        doc, (term,) = draw_from_doc(1)
-        low = max(0, doc - NUMERIC_WINDOW)
-        high = min(SCORING_NUM_DOCS - 1, doc + NUMERIC_WINDOW)
-        value = docs[doc]["t1"]
-        emit("text_numeric_tag",
-             f"{term} @n1:[{low} {high}] @t1:{{{value}}}",
-             set(terms[term]) & set(range(low, high + 1)) & tag_docs[value])
-
-    emit("match_all", "*", docs)
-
-    # Hybrid scores are the text score alone, so this shape covers KNN eviction only.
-    rare = _tier_with_dt(terms, VECTOR_FULL_DT)
-    common = _tier_with_dt(terms, VECTOR_TRUNCATED_DT)
-    for cluster in range(SCORING_VECTOR_CLUSTERS):
-        blob = struct.pack(f"<{VECTOR_DIM}f", *([float(cluster)] * VECTOR_DIM))
-        params = ("PARAMS", "2", "q", blob)
-        # k past the filter set: every text match survives, so hits == dt.
-        term = rare[cluster % len(rare)]
-        emit("text_vector", f"{term}=>[KNN {VECTOR_K_FULL} @v1 $q]",
-             terms[term], params)
-        # k inside the filter set: only the k nearest survive.
-        term = common[cluster % len(common)]
-        nearest = sorted(terms[term],
-                         key=lambda d: abs(docs[d]["v1"][0] - cluster))
-        for k in VECTOR_K_TRUNCATED:
-            emit("text_vector", f"{term}=>[KNN {k} @v1 $q]", nearest[:k], params)
-
-    return shapes
+    return _QueryBuilder(random.Random(seed)).build()
 
 
 def search_args(index, descriptor):
@@ -221,3 +80,250 @@ def search_args(index, descriptor):
             "SCORER", "BM25STD", "WITHSCORES", "NOCONTENT",
             "LIMIT", "0", str(SEARCH_LIMIT),
             *descriptor["params"], "DIALECT", "2"]
+
+
+def _weight(query, w):
+    """Attach a weight block; the group must already be parenthesized."""
+    return f"{query} => {{ $weight: {w} }}"
+
+
+def _root_op(shape):
+    """A sample_shape tree's operator under any group wrappers."""
+    while shape != "A" and shape[0] == "G":
+        shape = shape[1]
+    return shape if shape == "A" else shape[0]
+
+
+def _ops_of(shape):
+    return set() if shape == "A" else {shape[0]}.union(*map(_ops_of, shape[1:]))
+
+
+@dataclass
+class _Tree:
+    """Per-tree state while rendering one sample_shape tree."""
+    anchor_terms: list          # terms of the anchor doc
+    weighted: set               # leaf indexes (render order) that get a weight
+    used: set = field(default_factory=set)
+
+
+class _QueryBuilder:
+    # Call order matters: every draw comes from one seeded rng, so reordering
+    # anything changes every later query.
+
+    def __init__(self, rng):
+        self.rng = rng
+        self.docs, self.terms = compute_scoring_corpus()   # terms: {term: {doc: tf}}
+
+        tiers = [sorted(t for t, posting in self.terms.items() if len(posting) == dt)
+                 for _, dt in SCORING_DT_TIERS]
+        self.or_tiers = [tier for tier, (_, dt) in zip(tiers, SCORING_DT_TIERS)
+                         if dt <= OR_LEG_MAX_DT]
+        # terms a non-anchored leaf may use
+        self.free_terms = sorted(t for tier in self.or_tiers for t in tier)
+
+        self.doc_terms = {doc: [] for doc in self.docs}
+        for term, posting in self.terms.items():
+            for doc in posting:
+                self.doc_terms[doc].append(term)
+        for terms_in_doc in self.doc_terms.values():
+            terms_in_doc.sort()
+
+        self.tag_docs = {value: {d for d, f in self.docs.items() if f["t1"] == value}
+                         for value in SCORING_TAG_FREQS}
+
+    def build(self):
+        self.shapes = {}
+        emit, rng = self._emit, self.rng
+
+        for term in sorted(self.terms):
+            emit("single_term", term, self.terms[term])
+
+        for _ in range(SHAPE_COUNTS["and"]):
+            _, drawn = self._terms_from_doc(rng.choice(FLAT_TERM_COUNTS))
+            emit("and", " ".join(drawn), self._all_of(drawn))
+
+        for _ in range(SHAPE_COUNTS["or"]):
+            drawn = self._terms_across_tiers(rng.choice(FLAT_TERM_COUNTS))
+            emit("or", " | ".join(drawn), self._any_of(drawn))
+
+        for _ in range(SHAPE_COUNTS["mixed"]):
+            emit("mixed", *self._tree()[1:])
+
+        for i in range(SHAPE_COUNTS["weight"]):
+            # every 5th is a weighted tag leaf; the rest weighted text trees
+            if i % 5 == 4:
+                value = sorted(SCORING_TAG_FREQS)[i % len(SCORING_TAG_FREQS)]
+                emit("weight", _weight(f"(@t1:{{{value}}})", WEIGHTS[i % len(WEIGHTS)]),
+                     self.tag_docs[value])
+            else:
+                emit("weight", *self._tree(weight_leaves=True)[1:])
+
+        # t1 is single-valued, so a tag AND never matches; unions only
+        for _ in range(SHAPE_COUNTS["tag_only"]):
+            values = rng.sample(sorted(SCORING_TAG_FREQS), rng.choice(TAG_VALUE_COUNTS))
+            emit("tag_only", self._tag_query(values), self._tag_hits(values))
+
+        # a numeric leaf scores 0 on every row
+        for low, high in NUMERIC_RANGES:
+            emit("numeric_only", f"@n1:[{low} {high}]", range(low, high + 1))
+
+        for _ in range(SHAPE_COUNTS["text_numeric_tag"]):
+            emit("text_numeric_tag", *self._text_numeric_tag())
+
+        emit("match_all", "*", self.docs)
+
+        # Hybrid scores are the text score alone, so these cover KNN eviction only.
+        for _ in range(SHAPE_COUNTS["text_vector"]):
+            _, text, hits = self._text(rng.choice(TEXT_KINDS))
+            emit("text_vector", *self._with_knn(text, hits))
+
+        for _ in range(SHAPE_COUNTS["text_numeric_tag_vector"]):
+            emit("text_numeric_tag_vector", *self._with_knn(*self._text_numeric_tag()))
+
+        return self.shapes
+
+    def _emit(self, shape, query, hits, params=()):
+        self.shapes.setdefault(shape, []).append(
+            {"shape": shape, "query": query, "hits": set(hits), "params": tuple(params)})
+
+    # --- terms ---
+
+    def _terms_from_doc(self, count):
+        """(doc, `count` distinct terms of that doc)."""
+        while True:
+            doc = self.rng.randrange(SCORING_NUM_DOCS)
+            if len(self.doc_terms[doc]) >= count:
+                return doc, self.rng.sample(self.doc_terms[doc], count)
+
+    def _terms_across_tiers(self, count):
+        """One term from each of `count` distinct document-frequency tiers."""
+        return [self.rng.choice(tier) for tier in self.rng.sample(self.or_tiers, count)]
+
+    def _all_of(self, drawn):
+        return set.intersection(*(set(self.terms[t]) for t in drawn))
+
+    def _any_of(self, drawn):
+        return set.union(*(set(self.terms[t]) for t in drawn))
+
+    # --- text ---
+
+    def _text(self, kind, parent_op=None):
+        """(anchor doc, query, hits) for one TEXT_KINDS shape, parenthesized so it
+        can be embedded in a larger query."""
+        rng = self.rng
+        if kind in ("mixed", "weight"):
+            return self._tree(weight_leaves=(kind == "weight"), parent_op=parent_op)
+        if kind == "single_term":
+            doc, (term,) = self._terms_from_doc(1)
+            return doc, term, set(self.terms[term])
+        count = rng.choice(FLAT_TERM_COUNTS)
+        if kind == "or":
+            # one leg from the anchor doc, the rest free
+            doc, (term,) = self._terms_from_doc(1)
+            drawn = [term] + rng.sample([t for t in self.free_terms if t != term],
+                                        count - 1)
+            return doc, f"({' | '.join(drawn)})", self._any_of(drawn)
+        doc, drawn = self._terms_from_doc(count)
+        return doc, f"({' '.join(drawn)})", self._all_of(drawn)
+
+    def _tree(self, weight_leaves=False, parent_op=None):
+        """(anchor doc, query, hits) for a random tree mixing AND and OR.
+
+        weight_leaves weights 1+ leaves (and some groups). parent_op is the
+        operator the tree will be embedded in, if any.
+        """
+        rng = self.rng
+        shape = sample_shape(rng.choice(MIXED_DEPTHS), rng)
+        while not {"AND", "OR"} <= _ops_of(shape):
+            shape = sample_shape(rng.choice(MIXED_DEPTHS), rng)
+        leaves = str(shape).count("'A'")
+        doc, _ = self._terms_from_doc(leaves)
+        weighted = (set(rng.sample(range(leaves), rng.randint(1, leaves)))
+                    if weight_leaves else set())
+        tree = _Tree(self.doc_terms[doc], weighted)
+        return (doc, *self._render(shape, tree, True, parent_op))
+
+    def _render(self, shape, tree, anchored, parent_op):
+        """(query, hits) for a subtree. An anchored subtree matches the anchor doc:
+        AND anchors both sides, OR one random side."""
+        rng = self.rng
+        if shape == "A":
+            pool = tree.anchor_terms if anchored else self.free_terms
+            term = rng.choice([t for t in pool if t not in tree.used])
+            index = len(tree.used)
+            tree.used.add(term)
+            # a weight never changes the hit set
+            if index in tree.weighted:
+                return _weight(f"({term})", rng.choice(WEIGHTS)), set(self.terms[term])
+            return term, set(self.terms[term])
+
+        if shape[0] == "G":
+            query, hits = self._render(shape[1], tree, anchored, parent_op)
+            return self._maybe_weight_group(f"({query})", shape, tree, parent_op), hits
+
+        op, left, right = shape
+        left_anchored = anchored and (op == "AND" or rng.random() < 0.5)
+        right_anchored = anchored and (op == "AND" or not left_anchored)
+        lq, lh = self._render(left, tree, left_anchored, op)
+        rq, rh = self._render(right, tree, right_anchored, op)
+        if op == "AND":
+            query, hits = f"({lq} {rq})", lh & rh
+        else:
+            query, hits = f"({lq} | {rq})", lh | rh
+        return self._maybe_weight_group(query, shape, tree, parent_op), hits
+
+    def _maybe_weight_group(self, query, shape, tree, parent_op):
+        """Sometimes weight a group, but only in a tree with weighted leaves."""
+        # Redis flattens an OR in an OR (AND in an AND) and spreads the inner
+        # weight over the whole parent; see known_differences.md.
+        if _root_op(shape) == parent_op:
+            return query
+        if tree.weighted and self.rng.random() < GROUP_WEIGHT_RATE:
+            return _weight(query, self.rng.choice(WEIGHTS))
+        return query
+
+    # --- tag / numeric ---
+
+    def _tag_query(self, values):
+        """A tag union, spelled either as one braces group or as separate clauses."""
+        if self.rng.random() < 0.5 or len(values) == 1:
+            return f"@t1:{{{' | '.join(values)}}}"
+        return " | ".join(f"@t1:{{{v}}}" for v in values)
+
+    def _tag_hits(self, values):
+        return set().union(*(self.tag_docs[v] for v in values))
+
+    def _text_numeric_tag(self):
+        """(query, hits) ANDing a text shape, an @n1 window and a tag union, all
+        around one anchor doc."""
+        rng = self.rng
+        # the text sits in the top-level AND, so it must not weight an AND root
+        doc, text, text_hits = self._text(rng.choice(TEXT_KINDS), parent_op="AND")
+        low = max(0, doc - NUMERIC_WINDOW)
+        high = min(SCORING_NUM_DOCS - 1, doc + NUMERIC_WINDOW)
+        # the doc's own tag plus others, so the doc matches the union
+        own = self.docs[doc]["t1"]
+        others = rng.sample(sorted(v for v in SCORING_TAG_FREQS if v != own),
+                            rng.choice(TAG_VALUE_COUNTS) - 1)
+        values = [own] + others
+        rng.shuffle(values)
+        tag = self._tag_query(values)
+        if " | @" in tag:
+            tag = f"({tag})"
+        return (f"{text} @n1:[{low} {high}] {tag}",
+                text_hits & set(range(low, high + 1)) & self._tag_hits(values))
+
+    # --- vector ---
+
+    def _with_knn(self, query, hits):
+        """(query, hits, params) using `query` as the filter of a random KNN."""
+        rng = self.rng
+        cluster = rng.randrange(SCORING_VECTOR_CLUSTERS)
+        k = rng.randint(*VECTOR_K_RANGE)
+        blob = struct.pack(f"<{VECTOR_DIM}f", *([float(cluster)] * VECTOR_DIM))
+        # v1 distances to the probe are all distinct, so the k nearest are exact
+        nearest = sorted(hits, key=lambda d: abs(self.docs[d]["v1"][0] - cluster))
+        # a trailing $weight must not run into the KNN arrow
+        if " " in query:
+            query = f"({query})"
+        return f"{query}=>[KNN {k} @v1 $q]", nearest[:k], ("PARAMS", "2", "q", blob)

@@ -168,6 +168,38 @@ Measured against Redis 8:
   `search.cursor-max-count` / `search.cursor-max-idle-ms` configs; out of range
   values are an error rather than being clamped.
 
+### 1.7 Weight on a group nested in a group of the same operator
+
+The OR and AND cases below are the same known underlying issue: Redis's parser
+flattens a nested OR inside an OR, or a nested AND inside an AND, into one flat
+OR or AND. The inner group's `$weight` then lands on the whole flattened node --
+including legs outside the weighted group. valkey-search keeps the nesting and
+applies the weight only to the group it is written on. Measured on
+`redis:latest`, `SCORER BM25STD`:
+
+```
+OR in OR, a document containing library but neither lamp nor kiwi:
+query                                             Redis    valkey-search
+library                                           7.18     7.18
+((lamp | kiwi) | library)                         9.75     9.75
+((lamp | kiwi) => { $weight: 2.0 } | library)     19.49    12.31
+
+AND in AND, a document containing all three terms:
+lemon                                             0.89     0.89
+(smooth plum)                                     4.02     4.02
+(lemon (smooth plum))                             4.91     4.91
+(lemon (smooth plum) => { $weight: 0.5 })         2.45     2.90
+```
+
+Redis's 19.49 is 2 x 9.75 and its 2.45 is 0.5 x 4.91: the weight scaled
+`library` and `lemon`, which are outside the weighted group. Group wrappers do
+not stop it: `(((lamp | kiwi)) => { $weight: 2.0 } | library)` diverges the same
+way. A weighted group whose parent has the other operator (OR in AND, AND in
+OR), a weighted group on its own, and `$weight: 1.0` all agree.
+
+`scoring_query_builder.py` never weights a group whose operator matches its
+parent's, so the `weight` shape does not compare this case.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

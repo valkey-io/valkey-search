@@ -582,7 +582,7 @@ void ProcessNeighborsForReply(
   // per_arm_score_is_distance in ft_hybrid_parser.cc.
   const bool ranks_on_distance =
       !parameters.IsNonVectorQuery() &&
-      (parameters.vector_score_only || !QueryHasTextPredicate(parameters));
+      (parameters.vector_score_only || !QueryHasScoredPredicate(parameters));
   indexes::VectorBase *vector_index = nullptr;
   if (!parameters.IsNonVectorQuery() && vector_identifier.has_value() &&
       parameters.index_schema != nullptr) {

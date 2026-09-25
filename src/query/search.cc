@@ -1546,7 +1546,7 @@ static void ApplyRelevanceScore(const SearchParameters &parameters,
 // distance as their score.
 void ApplyHybridTextScore(const SearchParameters &parameters,
                           std::vector<indexes::Neighbor> &neighbors) {
-  if (parameters.vector_score_only || !QueryHasTextPredicate(parameters) ||
+  if (parameters.vector_score_only || !QueryHasScoredPredicate(parameters) ||
       neighbors.empty()) {
     return;
   }
@@ -1941,7 +1941,7 @@ void SearchResult::TrimResults(std::vector<T> &vec,
       std::sort(vec.begin(), vec.end(), cmp);
     }
   } else if (parameters.IsNonVectorQuery() ||
-             (QueryHasTextPredicate(parameters) &&
+             (QueryHasScoredPredicate(parameters) &&
               !parameters.vector_score_only)) {
     // Three cases sort by score descending here:
     //   - Cluster-merge non-vector path: the merged Neighbor vector is drained
@@ -2133,9 +2133,10 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   return absl::OkStatus();
 }
 
-bool QueryHasTextPredicate(const SearchParameters &parameters) {
+bool QueryHasScoredPredicate(const SearchParameters &parameters) {
+  // Tag leaves are relevance-scored too, so tag=>[KNN] must rank by them.
   return parameters.filter_parse_results.query_operations &
-         QueryOperations::kContainsText;
+         (QueryOperations::kContainsText | QueryOperations::kContainsTag);
 }
 
 // Increment query operation metrics based on query operations flags.
@@ -2626,7 +2627,7 @@ ContentProcessing SearchParameters::GetContentProcessing() const {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.
-  if (query::QueryHasTextPredicate(*this)) {
+  if (filter_parse_results.query_operations & QueryOperations::kContainsText) {
     return kContentionCheckRequired;
   }
   return kContentRequired;

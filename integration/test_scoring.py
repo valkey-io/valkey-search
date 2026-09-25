@@ -874,12 +874,6 @@ class TestScoring(ValkeySearchTestCaseBase):
     # Group 15: a hybrid tag=>[KNN] query ranks by tag score, not by distance.
     # The reference (Redis 8.10.1 / search 81000) scores a tag-only prefilter
     # exactly as it scores the same tag query without the KNN clause.
-    @pytest.mark.skip(reason=(
-        "https://github.com/valkey-io/valkey-search/issues/1414"
-        " -- a tag=>[KNN] prefilter returns score 0 for every document and"
-        " keeps distance order, where the reference scores the tag predicate"
-        " exactly as it does without the KNN clause. The test is written to"
-        " fail against that defect; unskip it when the issue is fixed."))
     def test_hybrid_tag_vector(self):
         client = self.server.get_new_client()
         load(client, IDX_MAIN, TAG_VEC_DOCS)

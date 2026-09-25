@@ -401,7 +401,7 @@ CalcBestMatchingPrefilteredKeys(
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries);
 
-bool QueryHasTextPredicate(const SearchParameters &parameters);
+bool QueryHasScoredPredicate(const SearchParameters &parameters);
 
 // Returns the distance score field name for the single VR predicate in the
 // query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).

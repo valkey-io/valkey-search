@@ -24,7 +24,7 @@
 #include "ft_search_parser.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/query/search.h"
-#include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -334,7 +334,6 @@ absl::Status SearchCommand::PostParseQueryString() {
         score_as &&
         sortby_parameter->field == vmsdk::ToStringView(score_as.get());
     if (!is_vr_score_field && !is_vector_score) {
-      // Validate sortby field exists in the index schema
       VMSDK_RETURN_IF_ERROR(
           index_schema->GetIdentifier(sortby_parameter->field).status());
     }
@@ -399,7 +398,8 @@ absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
 
   // last "RETURN 0" will also behave like NOCONTENT.
   // notice return_no_fields can be overwritten within a command
-  // by a later RETURN clause (last-one-wins when emulate-release >= 1.3.0).
+  // when there are multiple RETURN's, hence it's merged at the end
+  // instead of on the fly
   no_content = no_content || return_no_fields;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());

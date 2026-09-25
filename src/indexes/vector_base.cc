@@ -142,38 +142,6 @@ std::vector<char> NormalizeVector(absl::string_view record,
   }
 }
 
-// NormalizeEmbedding: normalize a float32 vector, optionally returning the
-// pre-normalization magnitude. Used by ComputeDistanceFromRecord and
-// NormalizeQueryIfNeeded for cosine-distance indexes.
-template <typename T>
-T CopyAndNormalizeEmbedding(T *dst, T *src, size_t size) {
-  T magnitude = 0.0f;
-  for (size_t i = 0; i < size; i++) {
-    magnitude += src[i] * src[i];
-  }
-  magnitude = std::sqrt(magnitude);
-  T norm = (magnitude == 0.0f) ? 1.0f : (1.0f / magnitude);
-  for (size_t i = 0; i < size; i++) {
-    dst[i] = norm * src[i];
-  }
-  return magnitude;
-}
-
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float *magnitude) {
-  std::vector<char> ret(record.size());
-  if (type_size == sizeof(float)) {
-    float result = CopyAndNormalizeEmbedding(
-        (float *)&ret[0], (float *)record.data(), ret.size() / sizeof(float));
-    if (magnitude) {
-      *magnitude = result;
-    }
-    return ret;
-  }
-  CHECK(false) << "unsupported type size";
-  return ret;
-}
-
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
   key_ = &key;
@@ -255,41 +223,6 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
   return ComputeDistanceFromRecord(key, query, query_magnitude);
 }
 
-// AddPrefilteredKey (query, count, key) — used by VR search path.
-bool VectorBase::AddPrefilteredKey(
-    absl::string_view query, uint64_t count, const InternedStringPtr &key,
-    std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-    absl::flat_hash_set<const char *> &top_keys) const {
-  auto result = ComputeDistanceFromRecord(key, query);
-  if (!result.ok()) {
-    return false;
-  }
-  if (results.size() < count) {
-    results.emplace(result.value());
-    return true;
-  }
-  if (result.value().first < results.top().first) {
-    auto top = results.top();
-    auto vector_key = GetKeyDuringSearch(top.second);
-    top_keys.erase(vector_key.value()->Str().data());
-    results.pop();
-    results.emplace(result.value());
-    return true;
-  }
-  return false;
-}
-
-template <typename T>
-void VectorBase::Init(int dimensions,
-                      valkey_search::data_model::DistanceMetric distance_metric,
-                      std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
-  space = CreateSpace<T>(dimensions, distance_metric);
-  distance_metric_ = distance_metric;
-  if (distance_metric ==
-      valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE) {
-    normalize_ = true;
-  }
-}
 VectorBase::~VectorBase() {
   vmsdk::VerifyMainThread();
   VectorRegistry::Instance().RemoveIndexKeys(

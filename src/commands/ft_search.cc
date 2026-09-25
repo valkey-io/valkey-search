@@ -161,10 +161,13 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
       ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
     }
     if (emit_sort_key) {
-      std::optional<std::string> value =
-          sort_by_vec_score ? std::make_optional(absl::StrFormat(
-                                  "%.12g", neighbors[i].distance))
-                            : GetSortKeyValue(neighbors[i], parameters);
+      std::optional<std::string> value;
+      if (sort_by_vec_score) {
+        value =
+            std::make_optional(absl::StrFormat("%.12g", neighbors[i].distance));
+      } else {
+        value = GetSortKeyValue(neighbors[i], parameters);
+      }
       if (!value.has_value() && nil_absent_sort_key) {
         ValkeyModule_ReplyWithNull(ctx);
       } else {

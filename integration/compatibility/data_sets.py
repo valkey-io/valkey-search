@@ -1378,9 +1378,28 @@ def _make_scoring_terms(count, lead):
     assert len(terms) == count, f"only {len(terms)} terms available under {lead!r}"
     return terms
 
+# real words topping the text suite's 60 up to the pool size; none may be filler
+SCORING_EXTRA_WORDS = [
+    'wolf', 'bear', 'fox', 'rabbit', 'deer', 'owl', 'whale', 'dolphin', 'snake', 'frog',
+    'lion', 'zebra', 'camel', 'goat', 'sheep', 'mouse', 'duck', 'goose', 'parrot', 'turtle',
+    'mountain', 'valley', 'island', 'beach', 'harbor', 'castle', 'bridge', 'garden', 'market', 'school',
+    'library', 'museum', 'temple', 'tower', 'canyon', 'meadow', 'lake', 'cave', 'farm', 'station',
+    'hammer', 'needle', 'bottle', 'basket', 'candle', 'mirror', 'ladder', 'pillow', 'blanket', 'bucket',
+    'kettle', 'wallet', 'pencil', 'rocket', 'anchor', 'compass', 'helmet', 'lantern', 'jacket', 'violin',
+    'bread', 'butter', 'cheese', 'honey', 'pepper', 'garlic', 'ginger', 'rice', 'bean', 'corn',
+    'pumpkin', 'walnut', 'almond', 'cookie', 'pasta', 'soup', 'salad', 'coffee', 'sugar', 'olive',
+    'cloud', 'storm', 'thunder', 'rain', 'snow', 'wind', 'sunrise', 'shadow', 'stone', 'pebble',
+    'crystal', 'flame', 'frost', 'breeze', 'leaf', 'branch', 'root', 'seed', 'blossom', 'petal',
+    'climb', 'dance', 'sing', 'read', 'write', 'paint', 'cook', 'carry', 'throw', 'catch',
+    'push', 'pull', 'dig', 'sail', 'hunt', 'shine', 'wander', 'whisper', 'gather', 'travel',
+    'gentle', 'brave', 'calm', 'clever', 'fierce', 'humble', 'narrow', 'wide', 'ancient', 'modern',
+    'hollow', 'golden', 'rusty', 'fragile', 'sturdy', 'bitter', 'sweet', 'rough', 'tiny', 'giant',
+]
+
 def _scoring_vocab():
     """Pool terms, sized by the dt tiers, and the filler that pads doc_len."""
-    pool = _make_scoring_terms(sum(n for n, _ in SCORING_DT_TIERS), "z")
+    text = TEXT_DATASETS['pure text']['field_values']
+    pool = text['title'] + text['body'] + SCORING_EXTRA_WORDS
     return pool, _make_scoring_terms(SCORING_FILLER_TERMS, "w")
 
 def compute_scoring_corpus(seed=123):

@@ -273,11 +273,6 @@ struct SearchParameters {
   // be able to return correct results. An example of this is when sorting on a
   // particular field is needed on the results. This should be overridden in
   // derived classes if needed. The default implementation returns false.
-  //
-  // Single-VR note: a standalone VR query is sorted by ascending distance, but
-  // that sort is applied on the shard before results are returned/merged, and
-  // cluster merge simply concatenates per-shard in-radius neighbors. No global
-  // repair pass is required, so VR alone no longer forces complete results.
   virtual bool RequiresCompleteResults() const {
     return sortby_parameter.has_value();
   }
@@ -380,7 +375,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters);
 
 // Standalone Vector Range query: scans all keys, evaluates distance against
-// radius, collects matching keys with distances, sorts by ascending distance.
+// radius, collects matching keys with distances.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     const SearchParameters &parameters);
 
@@ -391,13 +386,6 @@ CalcBestMatchingPrefilteredKeys(
     indexes::VectorBase *vector_index, size_t qualified_entries);
 
 bool QueryHasTextPredicate(const SearchParameters &parameters);
-
-// True for a standalone VECTOR_RANGE query: the filter carries a VR predicate
-// and has no text predicate. Such a query is ordered ascending by distance in
-// SearchVectorRangeQuery and its Neighbor::score equals the distance, so it
-// must be excluded from the score-descending re-sort in TrimResults (which
-// would otherwise reverse it to farthest-first and break LIMIT windowing).
-bool IsStandaloneVectorRange(const SearchParameters &parameters);
 
 // Returns the distance score field name for the single VR predicate in the
 // query: the explicit $yield_distance_as alias if set, otherwise "" (empty).

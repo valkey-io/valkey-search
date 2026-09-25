@@ -217,13 +217,9 @@ FilterVerification VerifyFilter(
   // (never TextIterator::GetScore) and numeric/tag leaves via 1.0 * weight,
   // identical to ScoreNode. A query whose Neighbor.score is a KNN distance
   // rather than a relevance score is skipped: by default that means any vector
-  // query, and FT.HYBRID overrides the choice per arm. VR queries are also
-  // excluded from the default: their distance is computed by the index at
-  // search time and stored in Neighbor.score, so overwriting it with
-  // value_or(0.0f) would corrupt WITHSCORES results for a document that mutates
-  // between search and content fetch.
-  const bool recompute_score = recompute_score_override.value_or(
-      parameters.IsNonVectorQuery() && !parameters.has_vector_range);
+  // query, and FT.HYBRID overrides the choice per arm.
+  const bool recompute_score =
+      recompute_score_override.value_or(parameters.IsNonVectorQuery());
   auto recompute = [&](EvaluationResult &result) -> FilterVerification {
     if (!result.matches || !recompute_score) {
       return {result.matches, std::nullopt};

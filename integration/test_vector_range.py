@@ -541,19 +541,25 @@ class TestVectorRange(ValkeySearchTestCaseBase):
 
 
     # =================================================================
-    # 15. Results sorted by ascending distance (default)
+    # 15. Default order (no SORTBY) is key order, not distance order
     # =================================================================
 
-    def test_results_ascending_distance_order(self):
+    def test_results_default_key_order(self):
         """
-        A plain Vector Range query is NOT ordered by distance (Redisearch
-        parity): results come back in document (key) order. Nearest-first
-        ordering is available via an explicit SORTBY on the yielded distance.
+        Without SORTBY, Vector Range results use the default non-vector order
+        (key order, as Redis returns doc-id order), not ascending distance.
         Req: 5.1, 5.2
         """
         client = self.server.get_new_client()
         self._create_flat_index(client)
-        self._load_vector_data(client)
+        # Distances from the origin are deliberately not in key order.
+        self._load_vector_data(client, vectors={
+            "doc:0": [3.0, 0.0, 0.0],
+            "doc:1": [0.0, 0.0, 0.0],
+            "doc:2": [2.0, 0.0, 0.0],
+            "doc:3": [1.0, 0.0, 0.0],
+            "doc:4": [10.0, 0.0, 0.0],
+        })
 
         query_blob = float_to_bytes(QUERY_VEC)
         # Default order (no SORTBY): document/key order, not distance order.
@@ -563,35 +569,85 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             "PARAMS", "2", "blob", query_blob,
         )
         assert result[0] == 5
-        returned_keys = [result[i].decode("utf-8") for i in range(1, len(result), 2)]
-        # Document order == insertion order. Compare against keys sorted by their
-        # numeric suffix rather than lexicographically, so this stays correct if
-        # the dataset ever grows past single-digit keys (doc:2 < doc:10).
-        expected_keys = sorted(returned_keys, key=lambda k: int(k.split(":")[1]))
-        assert returned_keys == expected_keys, (
-            f"Default order should be document order, got: {returned_keys}"
-        )
+        keys = [result[i].decode("utf-8") for i in range(1, len(result), 2)]
+        assert keys == ["doc:0", "doc:1", "doc:2", "doc:3", "doc:4"]
 
-        # With an explicit SORTBY on the distance alias, results are
-        # nearest-first (non-decreasing distance).
-        sorted_result = self._search(
-            client, "idx",
-            "@vec:[VECTOR_RANGE 100 $blob]=>{$yield_distance_as: dist}",
-            "PARAMS", "2", "blob", query_blob,
-            "SORTBY", "dist", "ASC",
-        )
-        distances = []
-        for i in range(1, len(sorted_result), 2):
-            fields = sorted_result[i + 1]
-            field_dict = {
-                fields[j].decode("utf-8"): fields[j + 1]
-                for j in range(0, len(fields), 2)
-            }
-            distances.append(float(field_dict["dist"]))
-        for i in range(len(distances) - 1):
-            assert distances[i] <= distances[i + 1], (
-                f"SORTBY dist ASC not in ascending order: {distances}"
-            )
+    def test_limit_page_and_withscores_match_redis(self):
+        """
+        Without SORTBY, LIMIT pages and WITHSCORES follow the non-vector
+        defaults, as in Redis 8.10.2 (expected replies observed there): a
+        standalone Vector Range scores 0 and returns key order; with a tag
+        predicate the tag relevance orders the results and the VR predicate
+        adds 0. The distance stays in the yielded field, and SORTBY on it
+        still orders by distance.
+        """
+        client = self.server.get_new_client()
+        self._create_flat_index(
+            client, extra_fields=["category", "TAG", "body", "TEXT"])
+        # L2 distances from the origin: doc:0=9, doc:1=0, doc:2=4, doc:3=1,
+        # doc:4=100 (outside radius 10). Body lengths differ so the tag
+        # relevance score differs per document.
+        vectors = {
+            "doc:0": [3.0, 0.0, 0.0],
+            "doc:1": [0.0, 0.0, 0.0],
+            "doc:2": [2.0, 0.0, 0.0],
+            "doc:3": [1.0, 0.0, 0.0],
+            "doc:4": [10.0, 0.0, 0.0],
+        }
+        extra = {
+            "doc:0": {"category": "A", "body": "alpha beta"},
+            "doc:1": {"category": "A", "body": "alpha beta gamma delta"},
+            "doc:2": {"category": "B", "body": "alpha beta gamma"},
+            "doc:3": {"category": "A", "body": "alpha"},
+            "doc:4": {"category": "B",
+                      "body": "alpha beta gamma delta epsilon"},
+        }
+        self._load_vector_data(client, vectors=vectors, extra_data=extra)
+        params = ["PARAMS", "2", "blob", float_to_bytes(QUERY_VEC)]
+        vr = "@vec:[VECTOR_RANGE 10 $blob]=>{$yield_distance_as: dist}"
+
+        def keys_and_scores(result):
+            keys = [result[i].decode("utf-8") for i in range(1, len(result), 2)]
+            return keys, [float(result[i]) for i in range(2, len(result), 2)]
+
+        # Standalone VR: key order and a score of 0 for every document.
+        result = self._search(client, "idx", vr, *params,
+                              "WITHSCORES", "NOCONTENT")
+        assert keys_and_scores(result) == (
+            ["doc:0", "doc:1", "doc:2", "doc:3"], [0.0] * 4)
+        result = self._search(client, "idx", vr, *params,
+                              "NOCONTENT", "LIMIT", "0", "2")
+        assert result == [4, b"doc:0", b"doc:1"]
+
+        # VR AND tag: ordered and scored like the tag-only query, not by
+        # distance (which would be doc:1, doc:3, doc:0).
+        vr_and_tag = f"{vr} @category:{{A}}"
+        result = self._search(client, "idx", vr_and_tag, *params,
+                              "WITHSCORES", "NOCONTENT")
+        keys, scores = keys_and_scores(result)
+        assert keys == ["doc:3", "doc:0", "doc:1"]
+        assert scores == pytest.approx([0.741120, 0.624101, 0.474317],
+                                       abs=1e-5)
+        tag_only = self._search(client, "idx", "@category:{A}",
+                                "WITHSCORES", "NOCONTENT")
+        assert keys_and_scores(tag_only) == (keys, scores)
+        result = self._search(client, "idx", vr_and_tag, *params,
+                              "NOCONTENT", "LIMIT", "0", "2")
+        assert result == [3, b"doc:3", b"doc:0"]
+        result = self._search(client, "idx", vr_and_tag, *params,
+                              "WITHSCORES", "RETURN", "1", "dist",
+                              "LIMIT", "1", "2")
+        assert result[0] == 3
+        assert (result[1], result[3]) == (b"doc:0", [b"dist", b"9"])
+        assert (result[4], result[6]) == (b"doc:1", [b"dist", b"0"])
+
+        # SORTBY on the yielded distance still orders by distance.
+        for order, expected in (
+                ("ASC", [b"doc:1", b"doc:3", b"doc:2", b"doc:0"]),
+                ("DESC", [b"doc:0", b"doc:2", b"doc:3", b"doc:1"])):
+            result = self._search(client, "idx", vr, *params,
+                                  "SORTBY", "dist", order, "NOCONTENT")
+            assert result == [4] + expected, order
 
     # =================================================================
     # 16. Distance scores are correct
@@ -621,12 +677,12 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             )
 
     # =================================================================
-    # 17. SORTBY overrides default distance ordering
+    # 17. SORTBY overrides the default ordering
     # =================================================================
 
     def test_sortby_overrides_distance_order(self):
         """
-        SORTBY on a non-distance field overrides default ascending distance.
+        SORTBY on a non-distance field overrides the default order.
         Req: 5.3
         """
         client = self.server.get_new_client()
@@ -1273,7 +1329,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
 
     def test_sortby_desc(self):
         """
-        SORTBY field DESC overrides default ascending distance order.
+        SORTBY field DESC overrides the default order.
         Req: 5.3
         """
         client = self.server.get_new_client()

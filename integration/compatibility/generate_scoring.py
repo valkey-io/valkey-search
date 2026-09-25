@@ -87,29 +87,17 @@ class TestScoringCompatibility(BaseCompatibilityTest):
     def test_scoring_single_term(self, key_type, schema_type):
         self._run_shape("single_term", key_type, schema_type)
 
-    def test_scoring_and2(self, key_type, schema_type):
-        self._run_shape("and2", key_type, schema_type)
+    def test_scoring_and(self, key_type, schema_type):
+        self._run_shape("and", key_type, schema_type)
 
-    def test_scoring_and3(self, key_type, schema_type):
-        self._run_shape("and3", key_type, schema_type)
-
-    def test_scoring_or2(self, key_type, schema_type):
-        self._run_shape("or2", key_type, schema_type)
-
-    def test_scoring_or3(self, key_type, schema_type):
-        self._run_shape("or3", key_type, schema_type)
+    def test_scoring_or(self, key_type, schema_type):
+        self._run_shape("or", key_type, schema_type)
 
     def test_scoring_mixed(self, key_type, schema_type):
         self._run_shape("mixed", key_type, schema_type)
 
-    def test_scoring_cross_field(self, key_type, schema_type):
-        self._run_shape("cross_field", key_type, schema_type)
-
-    def test_scoring_leaf_weight(self, key_type, schema_type):
-        self._run_shape("leaf_weight", key_type, schema_type)
-
-    def test_scoring_nested_weight(self, key_type, schema_type):
-        self._run_shape("nested_weight", key_type, schema_type)
+    def test_scoring_weight(self, key_type, schema_type):
+        self._run_shape("weight", key_type, schema_type)
 
     def test_scoring_tag_only(self, key_type, schema_type):
         self._run_shape("tag_only", key_type, schema_type)
@@ -125,3 +113,6 @@ class TestScoringCompatibility(BaseCompatibilityTest):
 
     def test_scoring_text_vector(self, key_type, schema_type):
         self._run_shape("text_vector", key_type, schema_type)
+
+    def test_scoring_text_numeric_tag_vector(self, key_type, schema_type):
+        self._run_shape("text_numeric_tag_vector", key_type, schema_type)

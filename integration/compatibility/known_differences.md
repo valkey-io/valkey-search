@@ -118,6 +118,41 @@ because the `array inputs` dataset gives `@n1` and `@n2` disjoint values in
 every group. The first elements can never coincide there, so both rules answer
 "not equal" under any order.
 
+## 4. Non-ASCII punctuation in multi-language text search
+
+Verified against `redis:latest` (Redis 8) with `LANGUAGE french`.  The same
+divergence applies to all non-English languages — Redis uses only ASCII
+punctuation regardless of the `LANGUAGE` setting, while Valkey uses
+language-specific punctuation lists.
+
+### 4.1 Unescaped non-ASCII punctuation — different tokenization
+
+Redis treats Unicode punctuation characters such as `'` (U+2019 RIGHT SINGLE
+QUOTATION MARK), `—` (U+2014 EM DASH), `«` (U+00AB LEFT GUILLEMET), etc. as
+regular characters.  A title like `professeur'étudiant` is indexed as a single
+token.  Searching for just `professeur` does **not** match that document.
+
+Valkey Search recognises these characters as language-specific punctuation and
+splits on them during both indexing and query parsing.  The same title produces
+two tokens (`professeur`, `étudiant`), and a search for `professeur` matches.
+
+This is an intentional improvement: these characters are real punctuation in
+French (and other languages) by Unicode General Category.  The divergence
+affects every query in `test_multilang_unescaped`, so those queries are
+excluded from comparison (`exclude_all=True`) and run only as crash-safety
+checks against Valkey.
+
+### 4.2 Backslash-escaped non-ASCII punctuation — unsupported by Redis
+
+Redis does not support backslash-escaping of non-ASCII punctuation.  A query
+like `professeur\'étudiant` (where `\` precedes U+2019) returns 0 results on
+Redis, whereas Valkey correctly resolves the escape, treats the `'` as part
+of the token, and finds matching documents.
+
+This mirrors the existing English divergence where `test_text_search_escaped`
+is excluded for JSON keys.  All queries in `test_multilang_escaped` are
+excluded from comparison for the same reason.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

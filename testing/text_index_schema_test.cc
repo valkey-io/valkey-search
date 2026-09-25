@@ -11,6 +11,7 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/language_registry.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -27,9 +28,10 @@ class TextIndexSchemaTest : public vmsdk::ValkeyTest {
   std::shared_ptr<TextIndexSchema> CreateSchema() {
     std::vector<std::string> empty_stop_words;
     return std::make_shared<TextIndexSchema>(
-        data_model::LANGUAGE_ENGLISH,
-        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", false, empty_stop_words,
-        4);
+        CreateLanguage(data_model::LANGUAGE_ENGLISH,
+                       " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+                       empty_stop_words),
+        false, 4);
   }
 };
 
@@ -159,8 +161,10 @@ TEST_F(TextIndexSchemaTest, NormReflectsMaxTermFrequency) {
   // with_offsets=true so duplicate tokens get distinct positions
   std::vector<std::string> empty_stop_words;
   auto schema = std::make_shared<TextIndexSchema>(
-      data_model::LANGUAGE_ENGLISH, " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-      true, empty_stop_words, 4);
+      CreateLanguage(data_model::LANGUAGE_ENGLISH,
+                     " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+                     empty_stop_words),
+      true, 4);
   data_model::TextIndex proto;
   auto text = std::make_shared<Text>(proto, schema);
 

@@ -26,12 +26,8 @@
 #include "absl/synchronization/mutex.h"
 #include "flat_position_map.h"
 #include "invasive_ptr.h"
-#include "lexer.h"
-#include "libstemmer.h"
 #include "posting.h"
 #include "rax/rax.h"
-#include "rax_wrapper.h"
-#include "src/index_schema.pb.h"
 #include "src/valkey_search_options.h"
 #include "string_interning.h"
 namespace valkey_search::indexes::text {
@@ -156,13 +152,10 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 
 /*** TextIndexSchema ***/
 
-TextIndexSchema::TextIndexSchema(data_model::Language language,
-                                 const std::string &punctuation,
-                                 bool with_offsets,
-                                 const std::vector<std::string> &stop_words,
-                                 uint32_t min_stem_size)
+TextIndexSchema::TextIndexSchema(std::shared_ptr<const Language> language,
+                                 bool with_offsets, uint32_t min_stem_size)
     : with_offsets_(with_offsets),
-      lexer_(language, punctuation, stop_words),
+      language_(std::move(language)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -170,15 +163,21 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  // Get or create stem mappings for this key if stemming is enabled
-  InProgressStemMap *stem_mappings_ptr = nullptr;
-  if (stem) {
-    std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-    stem_mappings_ptr = &in_progress_stem_mappings_[key];
-  }
+  absl::StatusOr<std::vector<std::string>> tokens;
 
-  // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  if (stem) {
+    // Lock briefly to obtain a stable pointer — node_hash_map guarantees
+    // pointer stability, so we can write to it after releasing the mutex.
+    InProgressStemMap *stem_mappings_ptr;
+    {
+      std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
+      stem_mappings_ptr = &in_progress_stem_mappings_[key];
+    }
+    tokens = language_->TokenizeWithStemMap(data, min_stem_size_,
+                                            *stem_mappings_ptr);
+  } else {
+    tokens = language_->Tokenize(data);
+  }
 
   if (!tokens.ok()) {
     if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
@@ -380,31 +379,31 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
     iter.Next();
   }
 
-  if (!empty_words.empty() && (stem_text_field_mask_ != 0u)) {
-    absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
-    for (const auto &word : empty_words) {
-      std::string stem(word);
-      lexer_.StemWordInPlace(stem, lexer_.GetStemmer(), min_stem_size_);
-      if (stem != word) {
-        auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
-            [&word](InvasivePtr<StemParents> existing) {
-              // The term may not exist in the stem tree if it was only present
-              // in NOSTEM fields.
-              if (existing) {
-                CHECK(!existing->empty())
-                    << "Stem tree entry should not be empty";
-                auto it = std::find(existing->begin(), existing->end(), word);
-                if (it != existing->end()) {
-                  *it = std::move(existing->back());
-                  existing->pop_back();
+  if (!empty_words.empty() && stem_text_field_mask_) {
+    auto *stem_filter = language_->GetStemmer();
+    if (stem_filter) {
+      absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
+      for (const auto &word : empty_words) {
+        std::string stem = stem_filter->GetStemRoot(word, min_stem_size_);
+        if (stem != word) {
+          auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
+              [&word](InvasivePtr<StemParents> existing) {
+                // The term may not exist in the stem tree if it was only
+                // present in NOSTEM fields.
+                if (existing) {
+                  CHECK(!existing->empty())
+                      << "Stem tree entry should not be empty";
+                  auto it = std::find(existing->begin(), existing->end(), word);
+                  if (it != existing->end()) {
+                    *it = std::move(existing->back());
+                    existing->pop_back();
+                  }
+                  if (existing->empty()) existing.Clear();
                 }
-                if (existing->empty()) {
-                  existing.Clear();
-                }
-              }
-              return existing;
-            });
-        stem_tree_.MutateTarget(stem, stem_remove_fn);
+                return existing;
+              });
+          stem_tree_.MutateTarget(stem, stem_remove_fn);
+        }
       }
     }
   }
@@ -429,7 +428,9 @@ std::string TextIndexSchema::GetAllStemVariants(
     uint64_t stem_enabled_mask, bool lock_needed) {
   // Stem the search term
   std::string stemmed(search_term);
-  lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
+  if (auto *stem_filter = language_->GetStemmer()) {
+    stemmed = stem_filter->GetStemRoot(search_term);
+  }
 
   std::optional<absl::ReaderMutexLock> stem_guard;
   if (lock_needed) {

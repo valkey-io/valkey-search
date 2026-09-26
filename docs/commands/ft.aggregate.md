@@ -2,7 +2,7 @@ The `FT.AGGREGATE` command extends the query capabilities of the `FT.SEARCH` com
 
 The first step of the command is to use the index name and query string to locate a list of Valkey keys. This process is identical to the `FT.SEARCH` command.
 
-The second step is executed once for each key found in the first step. The contents of the key are extracted as directed by the `LOAD` clause, resulting in a set of name/value pairs which are collected into a record. Thus the output of this step is the working set of records, one record for each key found in the first step. If the query is a pure vector or hybrid vector then the initial working set will be sorted by distance, otherwise the working set will be in no particular order.
+The second step is executed once for each key found in the first step. The contents of the key are extracted as directed by the `LOAD` clause, resulting in a set of name/value pairs which are collected into a record. Thus the output of this step is the working set of records, one record for each key found in the first step. If the query is a pure vector or hybrid vector then the initial working set will be sorted by distance, otherwise the working set will be in no particular order. A vector range query is a non-vector query; the distance it names with `$YIELD_DISTANCE_AS` can be referenced as `@<name>` by the stages, for example `SORTBY 2 @<name> ASC`. See [Vector Range Match](../topics/search-query.md#vector-range-match).
 
 The next steps are to execute the list of stages provided on the command, sequentially one at a time. Each step takes as input the working set of records and performs some transformation on it, i.e., the output of one stage is fed into the input of the next stage.
 

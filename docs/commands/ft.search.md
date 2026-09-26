@@ -33,7 +33,7 @@ FT.SEARCH <index> <query>
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of text terms in the query.
 - `VERBATIM` (Optional): If specified, stemming is not applied to text terms in the query.
 - `SOMESHARDS` (Optional): If specified, the command will generate a best-effort reply if all shards have not responded within the timeout interval.
-- `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. Sorting is applied before the `LIMIT` clause is applied.
+- `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. A vector range query is a non-vector query: to sort it by distance, name the distance with `$YIELD_DISTANCE_AS` and sort on that name, see [Vector Range Match](../topics/search-query.md#vector-range-match). Sorting is applied before the `LIMIT` clause is applied.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `SCORER <scorer>` (Optional): Selects the relevance scoring function used to rank text results.
 - `WITHSCORES` (Optional): Augments the output with the relevance score computed for each returned key.
@@ -57,6 +57,7 @@ The remainder of the response array is two entries per returned key. The first e
 the second entry is an array of name/value pairs. The array of name/value pairs is driven by the `RETURN` clause.
 Each of the named fields in the `RETURN` clause is returned along with the value of that field for this particular key. If the named field isn't present in this key then it won't be included.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
+For a vector range query, the distance is included only if the query names it with `$YIELD_DISTANCE_AS` and the `RETURN` clause lists that name.
 
 ### Neither `NOCONTENT` nor `RETURN` was specified.
 
@@ -64,6 +65,7 @@ If the index is on `HASH` keys, then the result is the same as if a `RETURN` cla
 
 If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as a string.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
+For a vector range query, the distance is included only if the query names it with `$YIELD_DISTANCE_AS`.
 
 # Examples
 

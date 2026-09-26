@@ -595,7 +595,7 @@ absl::Status PerformMultiSearchFanoutAsync(
         // Only the first `window` of the arm's results take part in fusion,
         // so the ratio applies to min(k, window), as the reference engine
         // does. The coordinator still merges to arm.k.
-        req->set_k(ShardKForRatio(std::min<uint64_t>(arm.k, window), num_shards,
+        req->set_k(ShardKForRatio(std::min<uint32_t>(arm.k, window), num_shards,
                                   *arm.shard_k_ratio));
       }
     }
@@ -712,12 +712,13 @@ absl::Status PerformMultiSearchFanoutAsync(
   return absl::OkStatus();
 }
 
-uint64_t ShardKForRatio(uint64_t k, size_t num_shards, double ratio) {
+uint32_t ShardKForRatio(uint32_t k, size_t num_shards, double ratio) {
   CHECK_GT(num_shards, 0u);
-  const uint64_t fair_share = (k + num_shards - 1) / num_shards;
+  const uint64_t fair_share = (uint64_t{k} + num_shards - 1) / num_shards;
+  // Exact in double for any uint32_t k, and at most k while ratio <= 1.
   const auto by_ratio =
       static_cast<uint64_t>(std::ceil(static_cast<double>(k) * ratio));
-  return std::max(fair_share, by_ratio);
+  return static_cast<uint32_t>(std::max(fair_share, by_ratio));
 }
 
 bool IsSystemUnderLowUtilization() {

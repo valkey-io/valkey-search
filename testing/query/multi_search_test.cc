@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -257,9 +258,9 @@ TEST(MultiSearchTrackerTest, ConcurrentCompletions) {
 // every document on one shard, so the reply size is the per-shard k.
 TEST(ShardKForRatioTest, MatchesTheReferenceEngine) {
   struct Case {
-    uint64_t k;
+    uint32_t k;
     double ratio;
-    uint64_t expected;
+    uint32_t expected;
   };
   for (const auto& c : std::vector<Case>{
            {10, 1.0, 10},
@@ -281,6 +282,13 @@ TEST(ShardKForRatioTest, MatchesTheReferenceEngine) {
 
 TEST(ShardKForRatioTest, OneShardIsAskedForAllOfK) {
   EXPECT_EQ(fanout::ShardKForRatio(10, 1, 0.1), 10u);
+}
+
+TEST(ShardKForRatioTest, LargestKDoesNotOverflow) {
+  constexpr uint32_t kMax = std::numeric_limits<uint32_t>::max();
+  EXPECT_EQ(fanout::ShardKForRatio(kMax, 3, 1.0), kMax);
+  EXPECT_EQ(fanout::ShardKForRatio(kMax, 3, 0.5), 2147483648u);
+  EXPECT_EQ(fanout::ShardKForRatio(kMax, 1, 0.5), kMax);
 }
 
 }  // namespace

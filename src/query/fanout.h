@@ -45,8 +45,8 @@ absl::Status PerformMultiSearchFanoutAsync(
 // The k each of `num_shards` shards is asked for under SHARD_K_RATIO:
 // max(ceil(k / num_shards), ceil(k * ratio)). The ratio is applied in double
 // precision, as the reference engine does, so a product such as 50 * 0.56
-// rounds up to 29.
-uint64_t ShardKForRatio(uint64_t k, size_t num_shards, double ratio);
+// rounds up to 29. `ratio` must be in (0, 1]; k is 32-bit to match the RPC.
+uint32_t ShardKForRatio(uint32_t k, size_t num_shards, double ratio);
 
 // Utility function to check if system is under low utilization
 bool IsSystemUnderLowUtilization();

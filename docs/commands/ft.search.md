@@ -21,8 +21,8 @@ FT.SEARCH <index> <query>
 
 - `<index>` (required): This index name you want to query.
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
-- `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default.
-- `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default.
+- `ALLSHARDS` (Optional): If specified, the command is terminated with a timeout error if a valid response from all shards is not received within the timeout interval. This is the default when `search.enable-partial-results` is `no`; otherwise `SOMESHARDS` is the default.
+- `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default when `search.enable-consistent-results` is `yes`; otherwise `INCONSISTENT` is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.

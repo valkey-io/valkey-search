@@ -6,6 +6,7 @@
  */
 
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -2058,6 +2059,10 @@ TEST_F(VectorIndexTest, ValidationDisabledBypassesChecks) {
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/false));
 }
 
+// A vector's cosine distance to itself is 0 only up to rounding, and it is
+// reported as computed, bounded below at 0. So, as on Redis, radius 0 keeps
+// the self-match only when rounding does not make its distance positive; a
+// match it does keep is at exactly 0.
 TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
   const int kDim = 8;
   const int kVecCount = 5;
@@ -2088,29 +2093,170 @@ TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
 
   for (int i = 0; i < kVecCount; ++i) {
     absl::string_view query = VectorToStr(vectors[i]);
-
-    auto hnsw_result =
-        (*hnsw_index)->SearchRange(query, /*radius=*/0.0f, CancelNever());
-    ASSERT_TRUE(hnsw_result.ok()) << hnsw_result.status();
-
-    auto flat_result =
-        (*flat_index)->SearchRange(query, /*radius=*/0.0f, CancelNever());
-    ASSERT_TRUE(flat_result.ok()) << flat_result.status();
-
-    EXPECT_GE(hnsw_result->size(), 1u)
-        << "HNSW radius=0 missed self-vector at index " << i;
-    EXPECT_GE(flat_result->size(), 1u)
-        << "Flat radius=0 missed self-vector at index " << i;
-    EXPECT_EQ(hnsw_result->size(), flat_result->size())
-        << "HNSW and Flat disagree on radius=0 result count for vector " << i;
-
-    for (const auto &n : *hnsw_result) {
-      EXPECT_FLOAT_EQ(n.distance, 0.0f)
-          << "HNSW returned non-zero distance for radius=0 query";
+    for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                              static_cast<VectorBase *>(flat_index->get())}) {
+      auto zero = index->SearchRange(query, /*radius=*/0.0f, CancelNever());
+      ASSERT_TRUE(zero.ok()) << zero.status();
+      auto near = index->SearchRange(query, /*radius=*/1e-6f, CancelNever());
+      ASSERT_TRUE(near.ok()) << near.status();
+      ASSERT_EQ(near->size(), 1u) << "missed the self-match of vector " << i;
+      EXPECT_EQ((*near)[0].external_id->Str(), IndexToKey(i)->Str());
+      const float self_distance = (*near)[0].distance;
+      EXPECT_GE(self_distance, 0.0f);
+      EXPECT_EQ(zero->size(), self_distance == 0.0f ? 1u : 0u)
+          << "vector " << i << " self distance " << self_distance;
     }
-    for (const auto &n : *flat_result) {
-      EXPECT_FLOAT_EQ(n.distance, 0.0f)
-          << "Flat returned non-zero distance for radius=0 query";
+  }
+}
+
+// COSINE VECTOR_RANGE reports distances as computed. A tolerance window of
+// dims * FLT_EPSILON around 0 (1.8e-4 at 1536 dims) reported both
+// near-duplicates below as 0, leaving which one ranks first to the key, and
+// kept the farther one at radius 5e-5.
+TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
+  const int kDim = 1536;
+  auto dot = [](const auto &a, const auto &b) {
+    double sum = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+      sum += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+    }
+    return sum;
+  };
+  // A unit vector q, and a unit vector w orthogonal to it.
+  std::vector<double> q(kDim);
+  std::vector<double> w(kDim);
+  for (int i = 0; i < kDim; ++i) {
+    q[i] = std::sin(0.37 * i + 1.0);
+    w[i] = std::cos(1.13 * i + 0.5);
+  }
+  const double q_norm = std::sqrt(dot(q, q));
+  for (auto &x : q) {
+    x /= q_norm;
+  }
+  const double w_on_q = dot(w, q);
+  for (int i = 0; i < kDim; ++i) {
+    w[i] -= w_on_q * q[i];
+  }
+  const double w_norm = std::sqrt(dot(w, w));
+  for (auto &x : w) {
+    x /= w_norm;
+  }
+  // (1 - d) q + sqrt(1 - (1 - d)^2) w is at cosine distance d from q.
+  auto at_distance = [&](double d) {
+    const double c = 1.0 - d;
+    const double s = std::sqrt(1.0 - c * c);
+    std::vector<float> v(kDim);
+    for (int i = 0; i < kDim; ++i) {
+      v[i] = static_cast<float>(c * q[i] + s * w[i]);
+    }
+    return v;
+  };
+  const std::vector<float> query_vec = at_distance(0.0);
+  absl::string_view query = VectorToStr(query_vec);
+  // Key 0 is the nearer near-duplicate, key 1 the farther one.
+  const std::vector<std::vector<float>> docs = {at_distance(2e-5),
+                                                at_distance(1.4e-4)};
+  auto true_distance = [&](int i) {
+    return 1.0 - dot(docs[i], query_vec) / std::sqrt(dot(docs[i], docs[i]) *
+                                                     dot(query_vec, query_vec));
+  };
+
+  auto hnsw_index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 /*initial_cap=*/16, /*m=*/16,
+                                 /*ef_construction=*/200, /*ef_runtime=*/200),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(hnsw_index.ok());
+  auto flat_index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 /*initial_cap=*/16, /*block_size=*/16),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(flat_index.ok());
+
+  for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                            static_cast<VectorBase *>(flat_index->get())}) {
+    for (int i = 0; i < 2; ++i) {
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                     VectorToStr(docs[i])));
+    }
+    auto both = index->SearchRange(query, /*radius=*/0.01f, CancelNever());
+    ASSERT_TRUE(both.ok()) << both.status();
+    ASSERT_EQ(both->size(), 2u);
+    for (const auto &n : *both) {
+      const int i = n.external_id->Str() == IndexToKey(0)->Str() ? 0 : 1;
+      EXPECT_NEAR(n.distance, true_distance(i), 1e-5) << "key " << i;
+    }
+    for (int i = 0; i < 2; ++i) {
+      auto within = index->IsWithinVectorRange(IndexToKey(i), query, 0.01f);
+      ASSERT_TRUE(within.ok()) << within.status();
+      ASSERT_TRUE(within->has_value()) << "key " << i;
+      EXPECT_NEAR(**within, true_distance(i), 1e-5) << "key " << i;
+    }
+
+    auto nearer = index->SearchRange(query, /*radius=*/5e-5f, CancelNever());
+    ASSERT_TRUE(nearer.ok()) << nearer.status();
+    ASSERT_EQ(nearer->size(), 1u);
+    EXPECT_EQ((*nearer)[0].external_id->Str(), IndexToKey(0)->Str());
+    for (int i = 0; i < 2; ++i) {
+      auto within = index->IsWithinVectorRange(IndexToKey(i), query, 5e-5f);
+      ASSERT_TRUE(within.ok()) << within.status();
+      EXPECT_EQ(within->has_value(), i == 0) << "key " << i;
+    }
+  }
+}
+
+// An exact antipode, -s * v, is at cosine distance 2, which rounding can
+// compute as just above 2. The distance is bounded to [0, 2], so radius 2
+// covers every vector, as it does on Redis.
+TEST_F(VectorIndexTest, SearchRangeCosineRadiusTwoKeepsAntipodes) {
+  const int kVecCount = 20;
+  for (int dim : {2, 3, 8, 16, 128, 384, 1536}) {
+    auto hnsw_index = VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dim, data_model::DISTANCE_METRIC_COSINE,
+                                   kVecCount, /*m=*/16,
+                                   /*ef_construction=*/200,
+                                   /*ef_runtime=*/200),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(hnsw_index.ok());
+    auto flat_index = VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(dim, data_model::DISTANCE_METRIC_COSINE,
+                                   kVecCount, /*block_size=*/kVecCount),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(flat_index.ok());
+
+    std::vector<std::vector<float>> vectors(kVecCount, std::vector<float>(dim));
+    for (int i = 0; i < kVecCount; ++i) {
+      for (int j = 0; j < dim; ++j) {
+        vectors[i][j] = static_cast<float>(std::sin(0.7 * j + 1.3 * i + 0.1));
+      }
+    }
+    for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                              static_cast<VectorBase *>(flat_index->get())}) {
+      for (int i = 0; i < kVecCount; ++i) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+            *index, IndexToKey(i), VectorToStr(vectors[i])));
+      }
+      for (int i = 0; i < kVecCount; ++i) {
+        const float scale = 0.25f + 0.5f * static_cast<float>(i);
+        std::vector<float> antipode(dim);
+        for (int j = 0; j < dim; ++j) {
+          antipode[j] = -scale * vectors[i][j];
+        }
+        absl::string_view query = VectorToStr(antipode);
+        auto result = index->SearchRange(query, /*radius=*/2.0f, CancelNever());
+        ASSERT_TRUE(result.ok()) << result.status();
+        EXPECT_EQ(result->size(), static_cast<size_t>(kVecCount))
+            << "dim " << dim << " vector " << i;
+        auto within = index->IsWithinVectorRange(IndexToKey(i), query, 2.0f);
+        ASSERT_TRUE(within.ok()) << within.status();
+        ASSERT_TRUE(within->has_value()) << "dim " << dim << " vector " << i;
+        EXPECT_LE(**within, 2.0f);
+        EXPECT_NEAR(**within, 2.0f, 1e-6f);
+      }
     }
   }
 }

@@ -6,6 +6,7 @@ covering standalone queries, filter composition, hybrid KNN pre-filtering,
 query attributes, FT.SEARCH options, error handling, and dialect compatibility.
 """
 
+import math
 import struct
 import pytest
 from valkey import ResponseError
@@ -114,6 +115,31 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         """Execute FT.SEARCH and return raw result."""
         cmd = ["FT.SEARCH", index, query] + list(args)
         return client.execute_command(*cmd)
+
+    def _cosine_indexes(self, client, dim):
+        """Create a COSINE FLAT and a COSINE HNSW index with a tag field.
+        Returns the (index name, key prefix) of each."""
+        indexes = []
+        for algo, create in (("FLAT", self._create_flat_index),
+                             ("HNSW", self._create_hnsw_index)):
+            name = f"{algo}{dim}"
+            create(client, index_name=name, prefix=f"{name}:", dim=dim,
+                   distance="COSINE", extra_fields=["tag", "TAG"])
+            indexes.append((name, f"{name}:"))
+        return indexes
+
+    def _yielded_distances(self, client, index, query, blob, radius, *args):
+        """Run a VECTOR_RANGE query yielding `dist`, sorted by it. `query` has
+        a {} placeholder for the range clause. Returns [(key, dist)] in reply
+        order."""
+        clause = "@vec:[VECTOR_RANGE $r $blob]=>{$yield_distance_as: dist}"
+        result = self._search(
+            client, index, query.format(clause),
+            "PARAMS", "4", "blob", blob, "r", str(radius),
+            "SORTBY", "dist", "RETURN", "1", "dist", *args,
+        )
+        return [(key, float(fields["dist"])) for key, fields
+                in parse_result_with_fields(result).items()]
 
 
     # =================================================================
@@ -1266,6 +1292,86 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         )
         assert result[0] >= 0  # completed without crashing
         assert client.ping()
+
+    def test_cosine_near_duplicates_report_true_distance(self):
+        """
+        COSINE VECTOR_RANGE yields the distance as computed. At 1536 dims two
+        near-duplicates of the query, at true distances 2e-5 and 1.4e-4, rank
+        nearest first on the yielded distance and radius 5e-5 keeps only the
+        nearer one, in plain and compound (VR AND tag) queries. A window of
+        dims * FLT_EPSILON around 0 (1.8e-4 here) reported both as 0, so the
+        farther one, with the smaller key, ranked first. Req: 2.1
+        """
+        client = self.server.get_new_client()
+        dim = 1536
+        # A unit query q, a unit w orthogonal to it, and unit vectors at
+        # cosine distance d from q: (1 - d) q + sqrt(1 - (1 - d)^2) w.
+        q = [math.sin(0.37 * i + 1.0) for i in range(dim)]
+        q_norm = math.sqrt(sum(x * x for x in q))
+        q = [x / q_norm for x in q]
+        w = [math.cos(1.13 * i + 0.5) for i in range(dim)]
+        w_on_q = sum(a * b for a, b in zip(w, q))
+        w = [a - w_on_q * b for a, b in zip(w, q)]
+        w_norm = math.sqrt(sum(x * x for x in w))
+        w = [x / w_norm for x in w]
+
+        def at_distance(d):
+            c = 1.0 - d
+            s = math.sqrt(1.0 - c * c)
+            return struct.unpack(f"<{dim}f", float_to_bytes(
+                [c * a + s * b for a, b in zip(q, w)]))
+
+        def true_distance(v):
+            query = struct.unpack(f"<{dim}f", float_to_bytes(q))
+            dot = sum(a * b for a, b in zip(v, query))
+            return 1.0 - dot / math.sqrt(
+                sum(a * a for a in v) * sum(b * b for b in query))
+
+        # The farther one gets the key that sorts first.
+        docs = {"a": at_distance(1.4e-4), "b": at_distance(2e-5)}
+        blob = float_to_bytes(q)
+        for index, prefix in self._cosine_indexes(client, dim):
+            for key, vec in docs.items():
+                client.hset(prefix + key, mapping={
+                    "vec": float_to_bytes(vec), "tag": "x"})
+            for query in ("{}", "{} @tag:{{x}}"):
+                got = self._yielded_distances(client, index, query, blob,
+                                              0.01)
+                assert [key for key, _ in got] == [prefix + "b", prefix + "a"]
+                for key, dist in got:
+                    expected = true_distance(docs[key[len(prefix):]])
+                    assert abs(dist - expected) < 1e-5, (index, query, key)
+                got = self._yielded_distances(client, index, query, blob,
+                                              0.01, "LIMIT", "0", "1")
+                assert [key for key, _ in got] == [prefix + "b"]
+                got = self._yielded_distances(client, index, query, blob,
+                                              5e-5)
+                assert [key for key, _ in got] == [prefix + "b"]
+
+    def test_cosine_radius_two_keeps_exact_antipodes(self):
+        """
+        COSINE distance is bounded to [0, 2], so radius 2 keeps an exact
+        antipode (-s * v) however rounding computes its distance, in plain
+        and compound (VR AND tag) queries. Pushing a computed distance near 2
+        just above 2 excluded nearly all of them. Req: 2.1
+        """
+        client = self.server.get_new_client()
+        for dim in (2, 384):
+            vectors = [[math.sin(0.7 * j + 1.3 * i + 0.1) for j in range(dim)]
+                       for i in range(8)]
+            for index, prefix in self._cosine_indexes(client, dim):
+                for i, vec in enumerate(vectors):
+                    client.hset(f"{prefix}{i}", mapping={
+                        "vec": float_to_bytes(vec), "tag": "x"})
+                for i, vec in enumerate(vectors):
+                    scale = 0.25 + 0.5 * i
+                    blob = float_to_bytes([-scale * x for x in vec])
+                    for query in ("{}", "{} @tag:{{x}}"):
+                        got = dict(self._yielded_distances(
+                            client, index, query, blob, 2))
+                        assert len(got) == len(vectors), (index, i, query)
+                        dist = got[f"{prefix}{i}"]
+                        assert 2 - 1e-6 < dist <= 2, (index, i, query, dist)
 
     # =================================================================
     # 41. SORTBY DESC with Vector Range

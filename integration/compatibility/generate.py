@@ -1141,6 +1141,15 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.setup_data(f"vector data {metric} {algo}", key_type)
         vector_points = [-.75, .75]
         radii = [0, 0.5, 2.0, 100.0]
+        if metric == "cosine":
+            # Every query has one document in its direction (cosine distance 0)
+            # and one opposite it (distance 2). At radius 0 or 2 the result is
+            # decided by rounding noise, which differs between engines: Valkey
+            # computes these distances as about 1e-7 and 1.99999988, Redis as
+            # -2.4e-7 and 2.00000024. Radii just inside the metric's [0, 2]
+            # range keep the coverage without that noise; 100 still covers
+            # "everything".
+            radii = [0.001, 0.5, 1.999, 100.0]
         epsilons = [None, 0.0, 0.1]
         for x in vector_points:
             for y in vector_points:

@@ -8,11 +8,10 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
-#include <cmath>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -355,9 +354,6 @@ class VectorBase : public IndexBase {
     if (!result.ok()) {
       return result.status();
     }
-    // Apply the cosine lower-bound clamp (self-match to 0.0) exactly as the
-    // standalone SearchRange path does, so plain and compound VR queries agree
-    // at the radius boundary. The antipodal (~2) upper bound is left raw.
     float distance = ClampCosineDistance(result->first);
     if (distance > radius) {
       return std::nullopt;
@@ -476,24 +472,17 @@ class VectorBase : public IndexBase {
     return {{}, query};
   }
 
+  // Bounds a VECTOR_RANGE cosine distance to the metric's range, [0, 2], and
+  // otherwise reports it as computed, like KNN. Deliberately no tolerance
+  // window around 0 or 2: the rounding error grows with the dimension count
+  // (dims * FLT_EPSILON is 1.8e-4 at 1536 dims), so a window wide enough to
+  // absorb it also collapses real near-duplicates to 0 and pushes real
+  // near-antipodes past 2.
   float ClampCosineDistance(float dist) const {
-    if (!normalize_) return dist;
-    // FP accumulation error for a dot product of N terms is bounded by
-    // N * (epsilon/2) * |result|.  For a unit vector against itself the result
-    // is 1, so the self-distance 1 - dot(v,v) can land anywhere in the range
-    // [-N*eps/2, N*eps/2].  Scale the clamp threshold accordingly so that
-    // genuine self-matches (and near-self-matches) are not falsely excluded.
-    const float kClampEpsilon =
-        static_cast<float>(dimensions_) * std::numeric_limits<float>::epsilon();
-    if (dist <= kClampEpsilon) return 0.0f;
-    // Do NOT clamp the upper (antipodal) bound. For compatibility the raw
-    // cosine distance is compared against the radius, so whether an ~2.0
-    // antipodal match falls inside radius 2 is decided by the raw value's FP
-    // noise. Forcing it to exactly 2.0 (or to nextafter(2,3)) would make the
-    // inclusive `<= radius` test disagree at the boundary in one direction or
-    // the other. Returning the raw distance keeps the just-below-2 and
-    // just-above-2 cases correct.
-    return dist;
+    if (!normalize_) {
+      return dist;
+    }
+    return std::clamp(dist, 0.0f, 2.0f);
   }
 
   template <typename T>

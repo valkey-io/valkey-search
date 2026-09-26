@@ -419,8 +419,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   // searches too.
   const bool fetch_limited = (raw_results.size() >= max_candidates);
 
-  // Filter results to only those within the strict radius, applying cosine
-  // clamping so floating-point noise doesn't exclude exact matches.
+  // Keep only the results within the radius.
   std::vector<Neighbor> neighbors;
   neighbors.reserve(raw_results.size());
   while (!raw_results.empty()) {

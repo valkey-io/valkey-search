@@ -68,6 +68,10 @@ struct SendReplyTestInput {
   query::LimitParameter limit;
   std::vector<TestReturnAttribute> return_attributes;
   bool with_scores{false};
+  bool with_sort_keys{false};
+  // SORTBY the vector distance (the score_as field).
+  bool sort_by_score{false};
+  std::optional<vmsdk::ValkeyVersion> emulate_release;
 };
 
 struct SendReplyTestCase {
@@ -175,6 +179,9 @@ void SendReplyTest::DoSendReplyTest(
   auto test_index_schema = CreateVectorHNSWSchema("index_schema_key", &fake_ctx,
                                                   mutations_thread_pool)
                                .value();
+  // SORTBY looks up the sort field's identifier.
+  EXPECT_CALL(*test_index_schema, GetIdentifier(testing::_))
+      .Times(testing::AnyNumber());
   EXPECT_CALL(*test_index_schema, GetIdentifier(input.attribute_alias))
       .WillRepeatedly(testing::Return(attribute_id));
   std::vector<indexes::Neighbor> neighbors;
@@ -191,6 +198,11 @@ void SendReplyTest::DoSendReplyTest(
   parameters->limit = input.limit;
   parameters->no_content = no_content;
   parameters->with_scores = input.with_scores;
+  parameters->with_sort_keys = input.with_sort_keys;
+  if (input.sort_by_score) {
+    parameters->sortby_parameter =
+        query::SortByParameter{.field = input.score_as};
+  }
   for (const auto &return_attribute : input.return_attributes) {
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
@@ -198,7 +210,13 @@ void SendReplyTest::DoSendReplyTest(
   auto neighbor_count = neighbors.size();
   query::SearchResult wrapper(neighbor_count, std::move(neighbors),
                               *parameters);
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+  if (input.emulate_release.has_value()) {
+    VMSDK_EXPECT_OK(
+        options::GetEmulateRelease().SetValue(*input.emulate_release));
+  }
   parameters->SendReply(&fake_ctx, wrapper);
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
   EXPECT_EQ(ParseRespReply(fake_ctx.reply_capture.GetReply()), expected_output);
 }
 
@@ -268,6 +286,62 @@ INSTANTIATE_TEST_SUITE_P(
                 "6\r\nvalue1\r\n",
             .expected_output_no_content =
                 "*5\r\n:2\r\n$3\r\nabc\r\n$1\r\n0\r\n$3\r\ndef\r\n$1\r\n0\r\n",
+        },
+        {
+            // Pre-1.3.0: the vector distance sort key keeps 12 digits.
+            .test_name = "sort_by_vector_score_with_sort_keys_legacy",
+            .input =
+                {
+                    .neighbors = {{.external_id = "abc", .score = 0.1f},
+                                  {.external_id = "def", .score = 0.2f}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 0, .number = 10},
+                    .with_sort_keys = true,
+                    .sort_by_score = true,
+                },
+            .expected_output =
+                "*7\r\n:2\r\n$3\r\nabc\r\n$14\r\n#0.10000000149\r\n*6\r\n$"
+                "10\r\nscore_as_1\r\n$13\r\n0.10000000149\r\n$"
+                "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$3\r\ndef\r\n$14\r\n#0.20000000298\r\n*6\r\n$"
+                "10\r\nscore_as_1\r\n$13\r\n0.20000000298\r\n$"
+                "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
+        },
+        {
+            // 1.3.0+: the vector distance sort key uses "%.17g", matching
+            // RediSearch. The score_as attribute value keeps "%.12g".
+            .test_name = "sort_by_vector_score_with_sort_keys_fixed",
+            .input =
+                {
+                    .neighbors = {{.external_id = "abc", .score = 0.1f},
+                                  {.external_id = "def", .score = 0.2f}},
+                    .attribute_alias = "attribute_alias_1",
+                    .score_as = "score_as_1",
+                    .limit = {.first_index = 0, .number = 10},
+                    .with_sort_keys = true,
+                    .sort_by_score = true,
+                    .emulate_release = vmsdk::ValkeyVersion(1, 3, 0),
+                },
+            .expected_output =
+                "*7\r\n:2\r\n$3\r\nabc\r\n$20\r\n#0.10000000149011612\r\n*"
+                "6\r\n$"
+                "10\r\nscore_as_1\r\n$13\r\n0.10000000149\r\n$"
+                "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n$3\r\ndef\r\n$20\r\n#0.20000000298023224\r\n*"
+                "6\r\n$"
+                "10\r\nscore_as_1\r\n$13\r\n0.20000000298\r\n$"
+                "17\r\nattribute_alias_1\r\n$"
+                "28\r\nattribute_alias_1_hash_value\r\n$6\r\nfield1\r\n$"
+                "6\r\nvalue1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:2\r\n$3\r\nabc\r\n$3\r\ndef\r\n",
         },
         {
             .test_name = "external_id_not_found",
@@ -515,6 +589,37 @@ TEST_F(ValkeySearchTest, NoContentWithScoresEmitsScore) {
   EXPECT_EQ(ParseRespReply(fake_ctx_.reply_capture.GetReply()),
             ParseRespReply("*5\r\n:2\r\n$3\r\nabc\r\n$3\r\n0.5\r\n$3\r\ndef\r\n"
                            "$4\r\n0.25\r\n"));
+}
+
+// 1.3.0+: the WITHSCORES score is replied as a double, matching RediSearch.
+TEST_F(ValkeySearchTest, WithScoresRepliesDouble) {
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->attribute_alias = "vec";
+  parameters->score_as = vmsdk::MakeUniqueValkeyString("score_as");
+  parameters->k = 20;
+  parameters->limit = {.first_index = 0, .number = 10};
+  parameters->no_content = true;
+  parameters->with_scores = true;
+  parameters->filter_parse_results.query_operations =
+      QueryOperations::kContainsText;
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(ToIndexesNeighbor({.external_id = "abc", .score = 0.5f}));
+  neighbors.push_back(
+      ToIndexesNeighbor({.external_id = "def", .score = 0.25f}));
+  auto neighbor_count = neighbors.size();
+  query::SearchResult wrapper(neighbor_count, std::move(neighbors),
+                              *parameters);
+  const auto saved_emulate_release = options::GetEmulateRelease().GetValue();
+  VMSDK_EXPECT_OK(
+      options::GetEmulateRelease().SetValue(vmsdk::ValkeyVersion(1, 3, 0)));
+  parameters->SendReply(&fake_ctx_, wrapper);
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved_emulate_release));
+
+  // The test reply capture renders a double reply as "%g\r\n".
+  EXPECT_EQ(fake_ctx_.reply_capture.GetReply(),
+            "*5\r\n:2\r\n$3\r\nabc\r\n0.5\r\n$3\r\ndef\r\n0.25\r\n");
 }
 
 using ::testing::TestParamInfo;

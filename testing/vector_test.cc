@@ -447,6 +447,53 @@ TEST_P(NormalizeStringAttributeTest, NormalizeStringAttribute) {
   }
 }
 
+TEST(NormalizeStringAttributeFp64Test, RejectsNonFiniteValues) {
+  auto index = VectorHNSW<double>::Create(
+      CreateHNSWVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                 kInitialCap, kM, kEFConstruction, kEFRuntime),
+      "attribute_identifier", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(index.ok());
+
+  for (const char *value : {"[NaN]", "[inf]", "[-inf]", "[1e999]"}) {
+    auto attribute = vmsdk::MakeUniqueValkeyString(value);
+    EXPECT_EQ(index.value()->NormalizeStringAttribute(std::move(attribute)),
+              nullptr)
+        << value;
+  }
+}
+
+// A FLOAT64 magnitude outside the float range is preserved in magnitude_fp64.
+TEST_F(VectorIndexTest, SaveTrackedKeysPreservesFp64Magnitude) {
+  auto index = VectorFlat<double>::Create(
+      CreateFlatVectorIndexProto(kDimensions,
+                                 data_model::DISTANCE_METRIC_COSINE,
+                                 kInitialCap, kBlockSize),
+      "attribute_identifier", data_model::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(index.ok());
+  ASSERT_TRUE(index.value()->GetNormalize());
+
+  constexpr double kMagnitude = 1e100;
+  std::vector<double> vector(kDimensions, 0.0);
+  vector[0] = kMagnitude;
+  absl::string_view vector_bytes(reinterpret_cast<const char *>(vector.data()),
+                                 vector.size() * sizeof(double));
+  VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+      *index.value(), StringInternStore::Intern("fp64_key"), vector_bytes));
+
+  FakeSafeRDB rdb;
+  VMSDK_EXPECT_OK(index.value()->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+  SupplementalContentChunkIter iter(&rdb);
+  ASSERT_TRUE(iter.HasNext());
+  auto chunk = iter.Next();
+  VMSDK_EXPECT_OK(chunk);
+  data_model::TrackedKeyMetadata metadata;
+  ASSERT_TRUE(metadata.ParseFromString((*chunk)->binary_content()));
+  EXPECT_FALSE(iter.HasNext());
+
+  ASSERT_TRUE(metadata.has_magnitude_fp64());
+  EXPECT_NEAR(metadata.magnitude_fp64() / kMagnitude, 1.0, 1e-12);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     NormalizeStringAttributeTests, NormalizeStringAttributeTest,
 
@@ -628,7 +675,9 @@ class RecomputeDistanceTest : public VectorIndexTest {
 
   // The 2-byte types carry about three decimal digits, so they are compared
   // the way space_distance_test.cc compares them.
-  static float Tolerance() { return std::is_same_v<T, float> ? 1e-5f : 1e-2f; }
+  static double Tolerance() {
+    return std::is_same_v<T, float> || std::is_same_v<T, double> ? 1e-5 : 1e-2;
+  }
 
   static std::vector<data_model::DistanceMetric> Metrics() {
     return {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
@@ -724,7 +773,7 @@ class RecomputeDistanceTest : public VectorIndexTest {
         index_order.push_back(std::string(n.external_id->Str()));
       }
 
-      std::vector<std::pair<float, std::string>> recomputed;
+      std::vector<std::pair<double, std::string>> recomputed;
       for (size_t i = 0; i < vectors.size(); ++i) {
         auto d = index.value()->RecomputeDistance(vectors[i], query);
         ASSERT_TRUE(d.ok()) << metric;
@@ -744,6 +793,7 @@ class RecomputeDistanceTest : public VectorIndexTest {
 using RecomputeDistanceFp32 = RecomputeDistanceTest<float>;
 using RecomputeDistanceFp16 = RecomputeDistanceTest<float16>;
 using RecomputeDistanceBf16 = RecomputeDistanceTest<bfloat16>;
+using RecomputeDistanceFp64 = RecomputeDistanceTest<double>;
 
 TEST_F(RecomputeDistanceFp32, AgreesWithTheIndexForTheStoredVector) {
   AgreesWithTheIndexForTheStoredVector();
@@ -773,6 +823,37 @@ TEST_F(RecomputeDistanceBf16, AnswersForBytesTheIndexHasNeverSeen) {
 }
 TEST_F(RecomputeDistanceBf16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
   RecomputedDistancesRankTheSameWayTheIndexDoes();
+}
+
+TEST_F(RecomputeDistanceFp64, AgreesWithTheIndexForTheStoredVector) {
+  AgreesWithTheIndexForTheStoredVector();
+}
+TEST_F(RecomputeDistanceFp64, AnswersForBytesTheIndexHasNeverSeen) {
+  AnswersForBytesTheIndexHasNeverSeen();
+}
+TEST_F(RecomputeDistanceFp64, RecomputedDistancesRankTheSameWayTheIndexDoes) {
+  RecomputedDistancesRankTheSameWayTheIndexDoes();
+}
+
+// A FLOAT64 distance must not be narrowed to float on the refresh path.
+TEST_F(RecomputeDistanceFp64, KeepsFp64Precision)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto index = MakeIndex(data_model::DISTANCE_METRIC_L2);
+  ASSERT_TRUE(index.ok());
+  const std::string stored = Bytes({0.0f, 0.0f, 0.0f, 0.0f});
+  const std::string query = Bytes({1.0f, 1e-6f, 0.0f, 0.0f});
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(*index.value(), IndexToKey(1), stored));
+
+  auto search = index.value()->Search(query, 1, CancelNever());
+  ASSERT_TRUE(search.ok());
+  ASSERT_EQ(search.value().size(), 1u);
+  auto recomputed = index.value()->RecomputeDistance(stored, query);
+  ASSERT_TRUE(recomputed.ok());
+
+  // The distance is 1 + ~1e-12, which float would round to exactly 1.
+  EXPECT_NE(*recomputed, static_cast<double>(static_cast<float>(*recomputed)));
+  EXPECT_EQ(*recomputed, search.value()[0].distance);
 }
 
 // RecomputeDistance answers the question the search answers, but from bytes

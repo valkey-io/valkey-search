@@ -370,7 +370,7 @@ size_t EvaluateFilterAsPrimary(
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters);
 
-std::priority_queue<std::pair<float, hnswlib::labeltype>>
+std::priority_queue<std::pair<double, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,

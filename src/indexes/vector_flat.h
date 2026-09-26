@@ -52,7 +52,8 @@ class VectorFlat : public VectorType<T> {
 
  public:
   using FlatIndex =
-      hnswlib::BruteforceSearch<float, std::shared_ptr<const VectorRecord>>;
+      hnswlib::BruteforceSearch<typename VectorType<T>::DistanceT,
+                                std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -67,7 +68,8 @@ class VectorFlat : public VectorType<T> {
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
 
-  const hnswlib::SpaceInterface<float> *GetSpace() const {
+  const hnswlib::SpaceInterface<typename VectorType<T>::DistanceT> *GetSpace()
+      const {
     return space_.get();
   }
   int GetBlockSize() const { return block_size_; }
@@ -108,9 +110,9 @@ class VectorFlat : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  float ComputeDistance(
+  double ComputeDistance(
       absl::string_view query, const VectorRecord *vector_record,
-      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      double query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVector(

@@ -7,6 +7,8 @@
 
 #include "src/indexes/vector_type.h"
 
+#include <bit>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -25,9 +27,11 @@
 #include "third_party/hnswlib/space_ip.h"
 #include "third_party/hnswlib/space_ip_bfloat16.h"
 #include "third_party/hnswlib/space_ip_fp16.h"
+#include "third_party/hnswlib/space_ip_fp64.h"
 #include "third_party/hnswlib/space_l2.h"
 #include "third_party/hnswlib/space_l2_bfloat16.h"
 #include "third_party/hnswlib/space_l2_fp16.h"
+#include "third_party/hnswlib/space_l2_fp64.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -36,13 +40,19 @@ namespace valkey_search::indexes {
 
 namespace {
 
+bool IsFiniteDouble(double value) {
+  constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
+  return (std::bit_cast<uint64_t>(value) & kExponentMask) != kExponentMask;
+}
+
 // Constructs the right hnswlib space for T + metric. Kept private to
 // this TU -- callers reach it via VectorType<T>::Init below. Note that
-// SpaceInterface is templated on the distance dtype (float); the storage
-// element type is baked into the concrete space class chosen here.
+// SpaceInterface is templated on the distance dtype; the storage element type
+// is baked into the concrete space class chosen here.
 template <typename StorageT>
-std::unique_ptr<hnswlib::SpaceInterface<float>> CreateSpace(
-    int dimensions, data_model::DistanceMetric distance_metric) {
+std::unique_ptr<
+    hnswlib::SpaceInterface<typename VectorType<StorageT>::DistanceT>>
+CreateSpace(int dimensions, data_model::DistanceMetric distance_metric) {
   const bool is_ip =
       distance_metric == data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
       distance_metric == data_model::DistanceMetric::DISTANCE_METRIC_IP;
@@ -61,6 +71,11 @@ std::unique_ptr<hnswlib::SpaceInterface<float>> CreateSpace(
       return std::make_unique<hnswlib::InnerProductSpaceBF16>(dimensions);
     }
     return std::make_unique<hnswlib::L2SpaceBF16>(dimensions);
+  } else if constexpr (std::is_same_v<StorageT, double>) {
+    if (is_ip) {
+      return std::make_unique<hnswlib::InnerProductSpaceFP64>(dimensions);
+    }
+    return std::make_unique<hnswlib::L2SpaceFP64>(dimensions);
   } else {
     // Compile error rather than a runtime fallthrough. The previous fallback
     // DCHECK'd and returned a FLOAT32 space, but DCHECK is a no-op in release
@@ -83,6 +98,8 @@ constexpr data_model::VectorDataType VectorDataTypeEnumFor() {
     return data_model::VECTOR_DATA_TYPE_FLOAT16;
   } else if constexpr (std::is_same_v<T, bfloat16>) {
     return data_model::VECTOR_DATA_TYPE_BFLOAT16;
+  } else if constexpr (std::is_same_v<T, double>) {
+    return data_model::VECTOR_DATA_TYPE_FLOAT64;
   } else {
     // Force a compile error rather than a silent runtime UNSPECIFIED --
     // adding a new T without adding an arm here is a bug we want caught
@@ -108,7 +125,7 @@ void VectorType<T>::Init(data_model::DistanceMetric distance_metric) {
 }
 
 template <typename T>
-float VectorType<T>::ComputeReciprocalMagnitude(
+double VectorType<T>::ComputeReciprocalMagnitude(
     absl::string_view record) const {
   return CalcReciprocalMagnitude(reinterpret_cast<const T *>(record.data()),
                                  record.size() / sizeof(T));
@@ -155,27 +172,37 @@ vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringAttribute(
   // record, so no per-element buffer is allocated.
   for (absl::string_view element :
        absl::StrSplit(attribute_str, ',', absl::SkipWhitespace())) {
-    float value;
-    if (!absl::SimpleAtof(element, &value)) {
-      return nullptr;
-    }
     // Append the storage-typed bytes in place. Building a temporary
     // std::string per element allocated once per dimension, which for a
     // 1536-dimension vector was 1536 allocations per ingested record.
-    if constexpr (std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<T, double>) {
+      double value;
+      if (!absl::SimpleAtod(element, &value) || !IsFiniteDouble(value)) {
+        return nullptr;
+      }
       binary_string.append(reinterpret_cast<const char *>(&value),
-                           sizeof(float));
-    } else if constexpr (std::is_same_v<T, float16>) {
-      const float16 fp16_value = static_cast<float16>(value);
-      binary_string.append(reinterpret_cast<const char *>(&fp16_value),
-                           sizeof(float16));
-    } else if constexpr (std::is_same_v<T, bfloat16>) {
-      const bfloat16 bf16_value = float_to_bfloat16(value);
-      binary_string.append(reinterpret_cast<const char *>(&bf16_value),
-                           sizeof(bfloat16));
+                           sizeof(double));
     } else {
-      static_assert(sizeof(T) == 0,
-                    "NormalizeStringRecord not yet wired for this T");
+      float value;
+      if (!absl::SimpleAtof(element, &value)) {
+        return nullptr;
+      }
+      if constexpr (std::is_same_v<T, float>) {
+        binary_string.append(reinterpret_cast<const char *>(&value),
+                             sizeof(float));
+      } else if constexpr (std::is_same_v<T, float16>) {
+        const float16 fp16_value = static_cast<float16>(value);
+        binary_string.append(reinterpret_cast<const char *>(&fp16_value),
+                             sizeof(float16));
+      } else if constexpr (std::is_same_v<T, bfloat16>) {
+        const bfloat16 bf16_value =
+            float_to_bfloat16(static_cast<float>(value));
+        binary_string.append(reinterpret_cast<const char *>(&bf16_value),
+                             sizeof(bfloat16));
+      } else {
+        static_assert(sizeof(T) == 0,
+                      "NormalizeStringRecord not yet wired for this T");
+      }
     }
   }
   return vmsdk::MakeUniqueValkeyString(binary_string);
@@ -184,5 +211,6 @@ vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringAttribute(
 template class VectorType<float>;
 template class VectorType<float16>;
 template class VectorType<bfloat16>;
+template class VectorType<double>;
 
 }  // namespace valkey_search::indexes

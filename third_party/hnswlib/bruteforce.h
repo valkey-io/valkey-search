@@ -76,9 +76,10 @@ class BruteforceSearch
   // by the product of the reciprocal magnitudes of the vectors.
   inline dist_t EvaluateDistance(const VectorRecordT &a,
                                  const VectorRecordT &b) const {
-    float reciprocal_mag_product =
-        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
-                    : 1.0f;
+    dist_t reciprocal_mag_product =
+        normalized_ ? static_cast<dist_t>(a->GetReciprocalMagnitude()) *
+                          static_cast<dist_t>(b->GetReciprocalMagnitude())
+                    : dist_t{1};
     return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }

@@ -191,6 +191,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> CreateVectorIndexForType(
       VMSDK_RETURN_IF_ERROR(indexes::CheckSimsimdBf16Capability());
       return CreateVectorIndex<AlgoT, bfloat16>(ctx, index_schema, attribute,
                                                 vector_index_proto, iter);
+    case data_model::VECTOR_DATA_TYPE_FLOAT64:
+      return CreateVectorIndex<AlgoT, double>(ctx, index_schema, attribute,
+                                              vector_index_proto, iter);
     default:
       return absl::InvalidArgumentError("Unsupported vector data type.");
   }
@@ -2351,7 +2354,7 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
         "calculation");
   }
   bool has_text_index = false;
-  bool has_low_precision_vector = false;
+  bool has_non_float32_vector = false;
   for (const auto &attr : unpacked->attributes()) {
     if (attr.index().has_text_index()) {
       has_text_index = true;
@@ -2359,8 +2362,9 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
     if (attr.index().has_vector_index()) {
       const auto dt = attr.index().vector_index().vector_data_type();
       if (dt == data_model::VECTOR_DATA_TYPE_FLOAT16 ||
-          dt == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
-        has_low_precision_vector = true;
+          dt == data_model::VECTOR_DATA_TYPE_BFLOAT16 ||
+          dt == data_model::VECTOR_DATA_TYPE_FLOAT64) {
+        has_non_float32_vector = true;
       }
     }
   }
@@ -2368,7 +2372,7 @@ absl::StatusOr<vmsdk::ValkeyVersion> IndexSchema::GetMinVersion(
   // proto field, so it would load the index, silently ignore the filter, and
   // index every key the filter exists to exclude -- a wrong index rather than
   // a failed load. Recording 1.3.0 makes that RDB refuse to load instead.
-  if (has_low_precision_vector || unpacked->has_filter()) {
+  if (has_non_float32_vector || unpacked->has_filter()) {
     return kRelease13;
   } else if (has_text_index) {
     return kRelease12;

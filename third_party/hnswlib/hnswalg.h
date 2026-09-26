@@ -263,9 +263,10 @@ class HierarchicalNSW
 
   inline dist_t EvaluateDistance(const StoredVectorT &a,
                                  const StoredVectorT &b) const {
-    float reciprocal_mag_product =
-        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
-                    : 1.0f;
+    dist_t reciprocal_mag_product =
+        normalized_ ? static_cast<dist_t>(a->GetReciprocalMagnitude()) *
+                          static_cast<dist_t>(b->GetReciprocalMagnitude())
+                    : dist_t{1};
     return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
@@ -277,9 +278,10 @@ class HierarchicalNSW
           normalized_ ? a.GetNormalizedVector() : a.GetRawVector();
       return fstdistfunc_(query_vec, b->GetRawVector(), dist_func_param_, 1);
     }
-    float reciprocal_mag_product =
-        normalized_ ? a.GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
-                    : 1.0f;
+    dist_t reciprocal_mag_product =
+        normalized_ ? static_cast<dist_t>(a.GetReciprocalMagnitude()) *
+                          static_cast<dist_t>(b->GetReciprocalMagnitude())
+                    : dist_t{1};
     return fstdistfunc_(a.GetRawVector(), b->GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }

@@ -238,6 +238,8 @@ class ClientSystem:
     
 def array_encode(key_type, array, data_type="FLOAT32"):
     if key_type == "hash":
+        if data_type == "FLOAT64":
+            return struct.pack(f"<{len(array)}d", *array)
         if data_type == "FLOAT16":
             return struct.pack(f"<{len(array)}e", *array)
         if data_type == "BFLOAT16":

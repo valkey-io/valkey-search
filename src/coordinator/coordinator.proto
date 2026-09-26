@@ -176,9 +176,11 @@ message SearchIndexPartitionRequest {
 
 message NeighborEntry {
   string key = 1;
-  float distance = 2;
+  float distance = 2;  // Legacy float representation.
   repeated AttributeContentEntry attribute_contents = 3;
-  float score = 4;
+  float score = 4;  // Legacy float representation.
+  optional double distance_fp64 = 5;
+  optional double score_fp64 = 6;
 }
 
 message SearchIndexPartitionResponse {

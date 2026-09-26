@@ -256,8 +256,8 @@ class MockIndex : public indexes::VectorBase {
     static std::shared_ptr<const indexes::VectorRecord> p;
     return p;
   }
-  float ComputeDistance(absl::string_view, const indexes::VectorRecord *,
-                        float) const override {
+  double ComputeDistance(absl::string_view, const indexes::VectorRecord *,
+                         double) const override {
     return 0.0f;
   }
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(uint64_t) const override {
@@ -266,7 +266,7 @@ class MockIndex : public indexes::VectorBase {
   data_model::VectorDataType GetVectorDataType() const override {
     return data_model::VECTOR_DATA_TYPE_FLOAT32;
   }
-  float ComputeReciprocalMagnitude(absl::string_view) const override {
+  double ComputeReciprocalMagnitude(absl::string_view) const override {
     return 1.0f;
   }
   vmsdk::UniqueValkeyString NormalizeStringAttribute(

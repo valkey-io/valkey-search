@@ -41,6 +41,7 @@ add_answer_generator(filter    generate_filter.py)
 add_answer_generator(aggregate generate.py)
 add_answer_generator(text-search generate_text.py
     ${COMPAT_DIR}/text_query_builder.py)
+add_answer_generator(float64 generate_float64.py)
 
 # --- umbrella target for all answer generation ---
 
@@ -48,7 +49,8 @@ add_custom_target(generate_all_answers
     DEPENDS
         generate_filter_answers
         generate_aggregate_answers
-        generate_text-search_answers)
+        generate_text-search_answers
+        generate_float64_answers)
 
 # --- compatibility test target ---
 # compatibility_test.py depends on all three answer files
@@ -58,5 +60,6 @@ add_custom_target(compatibility_test
         ${filter_ANSWERS}
         ${aggregate_ANSWERS}
         ${text-search_ANSWERS}
+        ${float64_ANSWERS}
     SOURCES
         ${INTEG_DIR}/compatibility_test.py)

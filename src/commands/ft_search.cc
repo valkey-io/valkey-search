@@ -50,7 +50,7 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, double score);
 
 bool HasTextRelevance(const SearchCommand &parameters) {
   return parameters.IsNonVectorQuery() ||
@@ -90,10 +90,17 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
-void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
-  auto score_value = absl::StrFormat("%.12g", score);
-  ValkeyModule_ReplyWithString(
-      ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+// RediSearch replies with a double: the shortest round-trip string under RESP2
+// and a native double under RESP3.
+void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, double score) {
+  VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_search_withscores_double",
+      [&]() { ValkeyModule_ReplyWithDouble(ctx, score); },
+      [&]() {
+        auto score_value = absl::StrFormat("%.12g", score);
+        ValkeyModule_ReplyWithString(
+            ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
+      });
 }
 
 std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
@@ -152,9 +159,15 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
       ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
     }
     if (emit_sort_key) {
-      std::string value = sort_by_vec_score
-                              ? absl::StrFormat("%.12g", neighbors[i].distance)
-                              : GetSortKeyValue(neighbors[i], parameters);
+      // RediSearch serializes numeric sort keys with "%.17g".
+      const double distance = neighbors[i].distance;
+      std::string value =
+          sort_by_vec_score
+              ? VALKEY_SEARCH_COMPATIBILITY_FIX(
+                    1, 3, 0, "ft_search_sortkey_vec_score_precision",
+                    [&]() { return absl::StrFormat("%.17g", distance); },
+                    [&]() { return absl::StrFormat("%.12g", distance); })
+              : GetSortKeyValue(neighbors[i], parameters);
       std::string prefixed_value = sort_key_prefix + value;
       ValkeyModule_ReplyWithString(
           ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());

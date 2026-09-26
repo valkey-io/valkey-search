@@ -24,6 +24,7 @@ GENERATORS = [
     # two mechanical blockers are fixed, so this is a one-word change once
     # distributed text scoring lands.
     {"generator": "generate_hybrid.py",  "answers": "hybrid-answers.pickle.gz",       "cluster": False},
+    {"generator": "generate_float64.py",  "answers": "float64-answers.pickle.gz",      "cluster": False},
 ]
 
 

@@ -41,7 +41,7 @@ class QueryVector {
               data_model::VectorDataType data_type =
                   data_model::VECTOR_DATA_TYPE_FLOAT32);
   const char *GetRawVector() const { return vector_record_->GetRawVector(); }
-  float GetReciprocalMagnitude() const {
+  double GetReciprocalMagnitude() const {
     return vector_record_->GetReciprocalMagnitude();
   }
   const char *GetNormalizedVector() const { return normalized_vector_.data(); }
@@ -78,7 +78,7 @@ class VectorHNSW : public VectorType<T> {
 
  public:
   using HNSWIndex =
-      hnswlib::HierarchicalNSW<float, QueryVector,
+      hnswlib::HierarchicalNSW<typename VectorType<T>::DistanceT, QueryVector,
                                std::shared_ptr<const VectorRecord>>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
@@ -94,7 +94,8 @@ class VectorHNSW : public VectorType<T> {
       int db_num) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorHNSW() override = default;
 
-  const hnswlib::SpaceInterface<float> *GetSpace() const {
+  const hnswlib::SpaceInterface<typename VectorType<T>::DistanceT> *GetSpace()
+      const {
     return space_.get();
   }
 
@@ -144,9 +145,9 @@ class VectorHNSW : public VectorType<T> {
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
-  float ComputeDistance(
+  double ComputeDistance(
       absl::string_view query, const VectorRecord *vector_record,
-      float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+      double query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVectorLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPointLockFree(internal_id);

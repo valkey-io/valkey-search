@@ -285,6 +285,21 @@
                                 "name": "float32",
                                 "type": "pure-token",
                                 "token": "FLOAT32"
+                              },
+                              {
+                                "name": "float16",
+                                "type": "pure-token",
+                                "token": "FLOAT16"
+                              },
+                              {
+                                "name": "bfloat16",
+                                "type": "pure-token",
+                                "token": "BFLOAT16"
+                              },
+                              {
+                                "name": "float64",
+                                "type": "pure-token",
+                                "token": "FLOAT64"
                               }
                             ]
                           },

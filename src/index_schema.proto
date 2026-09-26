@@ -82,7 +82,10 @@ message TagIndex {
 message TrackedKeyMetadata {
   string key = 1;
   uint64 internal_id = 2;
+  // Legacy float representation, still written for older readers. It can
+  // overflow or underflow for FLOAT64 vectors.
   float magnitude = 3;
+  optional double magnitude_fp64 = 4;
 }
 
 message VectorIndex {
@@ -109,6 +112,7 @@ enum VectorDataType {
   VECTOR_DATA_TYPE_FLOAT32 = 1;
   VECTOR_DATA_TYPE_FLOAT16 = 2;
   VECTOR_DATA_TYPE_BFLOAT16 = 3;
+  VECTOR_DATA_TYPE_FLOAT64 = 4;
 }
 
 message HNSWAlgorithm {
@@ -120,4 +124,3 @@ message HNSWAlgorithm {
 message FlatAlgorithm {
   uint32 block_size = 1;
 }
-

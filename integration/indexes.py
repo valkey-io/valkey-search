@@ -19,6 +19,9 @@ class KeyDataType(Enum):
 def float_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}f", *flt)
 
+def float64_to_bytes(flt: list[float]) -> bytes:
+    return struct.pack(f"<{len(flt)}d", *flt)
+
 def float16_to_bytes(flt: list[float]) -> bytes:
     return struct.pack(f"<{len(flt)}e", *flt)
 
@@ -43,6 +46,9 @@ def bfloat16_to_bytes(flt: list[float]) -> bytes:
 def bytes_to_float(raw: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(raw) // 4}f", raw))
 
+def bytes_to_float64(raw: bytes) -> list[float]:
+    return list(struct.unpack(f"<{len(raw) // 8}d", raw))
+
 def bytes_to_float16(raw: bytes) -> list[float]:
     return list(struct.unpack(f"<{len(raw) // 2}e", raw))
 
@@ -57,6 +63,8 @@ def bytes_to_bfloat16(raw: bytes) -> list[float]:
 # Quantize a Python float list through a storage type and back, giving the
 # exact values the engine holds after ingest.
 def quantize_to(values: list[float], data_type: str) -> list[float]:
+    if data_type == "FLOAT64":
+        return bytes_to_float64(float64_to_bytes(values))
     if data_type == "FLOAT16":
         return bytes_to_float16(float16_to_bytes(values))
     if data_type == "BFLOAT16":
@@ -140,6 +148,8 @@ class Vector(Field):
     def make_value(self, row: int, column: int, type: KeyDataType) -> Union[str, bytes, float, list[float]]:
         data = [float(i + row + column) for i in range(self.dim)]
         if type == KeyDataType.HASH:
+            if self.data_type == "FLOAT64":
+                return float64_to_bytes(data)
             if self.data_type == "FLOAT16":
                 return float16_to_bytes(data)
             if self.data_type == "BFLOAT16":

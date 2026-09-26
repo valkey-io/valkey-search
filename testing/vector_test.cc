@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -25,6 +26,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/synchronization/notification.h"
+#include "absl/time/time.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -773,6 +775,322 @@ TEST_F(RecomputeDistanceBf16, AnswersForBytesTheIndexHasNeverSeen) {
 }
 TEST_F(RecomputeDistanceBf16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
   RecomputedDistancesRankTheSameWayTheIndexDoes();
+}
+
+// Range search over every storage type and metric. The expected neighbors
+// come from scoring each tracked key with IsWithinVectorRange against the
+// normalized query, the per-key evaluation the compound VR path uses; keys and
+// distances must match it bit for bit. A double-precision brute force checks
+// the same results away from the radius boundary. Named instantiations rather
+// than a TYPED_TEST, for the reason given at RecomputeDistanceTest.
+template <typename T>
+class SearchRangeTest : public VectorIndexTest {
+ protected:
+  static constexpr int kDims = 16;
+  static constexpr int kVectors = 300;
+
+  static float Tolerance() {
+    if (std::is_same_v<T, float>) {
+      return 1e-4f;
+    }
+    return std::is_same_v<T, float16> ? 1e-2f : 5e-2f;
+  }
+
+  // Portable, seeded values in [-1, 1).
+  static std::vector<float> RandomVector(uint64_t &state) {
+    std::vector<float> v(kDims);
+    for (auto &x : v) {
+      state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+      x = static_cast<float>(state >> 40) / static_cast<float>(1 << 23) - 1.0f;
+    }
+    return v;
+  }
+
+  // The vector as stored (rounded to T), and its bytes.
+  static std::vector<float> Round(const std::vector<float> &v) {
+    std::vector<float> out;
+    out.reserve(v.size());
+    for (float x : v) {
+      out.push_back(static_cast<float>(static_cast<T>(x)));
+    }
+    return out;
+  }
+  static std::string Bytes(const std::vector<float> &v) {
+    std::vector<T> converted;
+    converted.reserve(v.size());
+    for (float x : v) {
+      converted.push_back(static_cast<T>(x));
+    }
+    return std::string(reinterpret_cast<const char *>(converted.data()),
+                       converted.size() * sizeof(T));
+  }
+
+  static double BruteDistance(data_model::DistanceMetric metric,
+                              const std::vector<float> &q,
+                              const std::vector<float> &v) {
+    double dot = 0, qq = 0, vv = 0, l2 = 0;
+    for (int i = 0; i < kDims; ++i) {
+      dot += double(q[i]) * v[i];
+      qq += double(q[i]) * q[i];
+      vv += double(v[i]) * v[i];
+      l2 += (double(q[i]) - v[i]) * (double(q[i]) - v[i]);
+    }
+    switch (metric) {
+      case data_model::DISTANCE_METRIC_L2:
+        return l2;
+      case data_model::DISTANCE_METRIC_IP:
+        return 1.0 - dot;
+      default:
+        return 1.0 - dot / std::sqrt(qq * vv);
+    }
+  }
+
+  std::shared_ptr<VectorBase> MakeIndex(data_model::DistanceMetric metric) {
+    // A small initial capacity so the FLAT store is resized while loading.
+    auto index = VectorFlat<T>::Create(
+        CreateFlatVectorIndexProto(kDims, metric, kVectors / 4, 50),
+        this->attribute_identifier, this->attribute_data_type, 0);
+    EXPECT_TRUE(index.ok()) << index.status();
+    return index.ok() ? *index : nullptr;
+  }
+
+  // Per-key reference: IsWithinVectorRange over the tracked keys.
+  static std::map<std::string, float> PerKeyReference(const VectorBase &index,
+                                                      absl::string_view query,
+                                                      float radius) {
+    std::string nq(query);
+    if (index.GetNormalize()) {
+      auto normalized = NormalizeVector(
+          query, index.GetVectorDataType(),
+          CalcReciprocalMagnitude(query, index.GetVectorDataType()));
+      nq.assign(normalized.data(), normalized.size());
+    }
+    std::map<std::string, float> out;
+    VMSDK_EXPECT_OK(index.ForEachTrackedKey(
+        [&](const InternedStringPtr &key) -> absl::Status {
+          auto within = index.IsWithinVectorRange(key, nq, radius);
+          EXPECT_TRUE(within.ok()) << within.status();
+          if (within.ok() && within->has_value()) {
+            out[std::string(key->Str())] = **within;
+          }
+          return absl::OkStatus();
+        }));
+    return out;
+  }
+
+  static std::map<std::string, float> ToMap(
+      const std::vector<Neighbor> &neighbors) {
+    std::map<std::string, float> out;
+    for (const auto &n : neighbors) {
+      EXPECT_TRUE(
+          out.emplace(std::string(n.external_id->Str()), n.distance).second)
+          << "duplicate " << n.external_id->Str();
+    }
+    return out;
+  }
+
+  void MatchesPerKeyReferenceAndBruteForce() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    for (auto metric :
+         {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
+          data_model::DISTANCE_METRIC_COSINE}) {
+      SCOPED_TRACE(absl::StrCat("metric ", static_cast<int>(metric)));
+      auto index = MakeIndex(metric);
+      ASSERT_NE(index, nullptr);
+      uint64_t seed = 42;
+      std::map<std::string, std::vector<float>> live;
+      for (int i = 0; i < kVectors; ++i) {
+        auto v = RandomVector(seed);
+        VMSDK_EXPECT_OK(
+            testing_infra::AddVectorRecord(*index, IndexToKey(i), Bytes(v)));
+        live[std::string(IndexToKey(i)->Str())] = Round(v);
+      }
+      // Deletes move FLAT slots around; updates replace stored records in
+      // place.
+      for (int i = 0; i < kVectors; i += 7) {
+        VMSDK_EXPECT_OK(
+            index->RemoveRecord(IndexToKey(i), DeletionType::kRecord));
+        live.erase(std::string(IndexToKey(i)->Str()));
+      }
+      for (int i = 3; i < kVectors; i += 11) {
+        if (i % 7 == 0) {
+          continue;
+        }
+        auto v = RandomVector(seed);
+        VMSDK_EXPECT_OK(
+            testing_infra::ModifyVectorRecord(*index, IndexToKey(i), Bytes(v)));
+        live[std::string(IndexToKey(i)->Str())] = Round(v);
+      }
+
+      // Random queries, a stored vector (a cosine self-match) and a scaled
+      // copy of it (distance 0 under COSINE only after normalization).
+      std::vector<std::vector<float>> queries;
+      queries.reserve(6);
+      for (int i = 0; i < 4; ++i) {
+        queries.push_back(RandomVector(seed));
+      }
+      queries.push_back(live.begin()->second);
+      queries.push_back(live.begin()->second);
+      for (auto &x : queries.back()) {
+        x *= 3.0f;
+      }
+
+      for (const auto &raw_query : queries) {
+        const std::string query = Bytes(raw_query);
+        const auto q = Round(raw_query);
+        std::vector<double> sorted;
+        sorted.reserve(live.size());
+        for (const auto &[_, v] : live) {
+          sorted.push_back(BruteDistance(metric, q, v));
+        }
+        std::sort(sorted.begin(), sorted.end());
+        for (float radius :
+             {0.0f,
+              std::max(0.0f, static_cast<float>(sorted[19] + sorted[20]) / 2),
+              static_cast<float>(sorted.back()) + 1.0f}) {
+          SCOPED_TRACE(absl::StrCat("radius ", radius));
+          auto expected = PerKeyReference(*index, query, radius);
+          auto searched = index->SearchRange(query, radius, CancelNever());
+          ASSERT_TRUE(searched.ok()) << searched.status();
+          const auto found = ToMap(*searched);
+          EXPECT_EQ(found, expected);
+          const double tol = Tolerance();
+          for (const auto &[key, v] : live) {
+            const double d = BruteDistance(metric, q, v);
+            const double slack = tol * std::max(1.0, std::abs(d));
+            auto it = found.find(key);
+            if (std::abs(d - radius) > slack) {
+              EXPECT_EQ(it != found.end(), d <= radius)
+                  << key << " brute distance " << d;
+            }
+            if (it != found.end()) {
+              EXPECT_NEAR(it->second, d, slack) << key;
+            }
+          }
+          for (const auto &[key, _] : found) {
+            EXPECT_TRUE(live.contains(key)) << "untracked key " << key;
+          }
+        }
+      }
+    }
+  }
+};
+
+using SearchRangeFp32 = SearchRangeTest<float>;
+using SearchRangeFp16 = SearchRangeTest<float16>;
+using SearchRangeBf16 = SearchRangeTest<bfloat16>;
+
+TEST_F(SearchRangeFp32, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce();
+}
+TEST_F(SearchRangeFp16, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce();
+}
+TEST_F(SearchRangeBf16, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce();
+}
+
+// A token that reports cancelled once it has been polled `polls` times.
+class CancelAfter : public cancel::Base {
+ public:
+  explicit CancelAfter(int polls) : polls_(polls) {}
+  bool IsCancelled() override { return polls_-- <= 0; }
+  void Cancel() override { polls_ = 0; }
+
+ private:
+  int polls_;
+};
+
+// Parks the scan at its first poll until released.
+class ParkingToken : public cancel::Base {
+ public:
+  bool IsCancelled() override {
+    if (!parked.HasBeenNotified()) {
+      parked.Notify();
+      release.WaitForNotification();
+    }
+    return false;
+  }
+  void Cancel() override {}
+  absl::Notification parked;
+  absl::Notification release;
+};
+
+// A cancelled range search stops early and returns what it found so far, not
+// an error: nothing when the token is already cancelled, everything when it
+// never fires, and a partial result in between.
+TEST_F(VectorIndexTest, SearchRangeStopsWhenCancelled)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kDim = 4;
+  constexpr int kCount = 200;
+  auto flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2, kCount,
+                                 kBlockSize),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(flat.ok());
+  const std::vector<float> zero(kDim, 0.0f);
+  for (int i = 0; i < kCount; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat, IndexToKey(i),
+                                                   VectorToStr(zero)));
+  }
+  const absl::string_view query = VectorToStr(zero);
+  for (int polls : {0, 1, 50, kCount}) {
+    SCOPED_TRACE(absl::StrCat("polls ", polls));
+    cancel::Token token = std::make_shared<CancelAfter>(polls);
+    auto res = (*flat)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    if (polls == 0 || polls == kCount) {
+      EXPECT_EQ(res->size(), static_cast<size_t>(polls));
+    } else {
+      EXPECT_GT(res->size(), 0u);
+      EXPECT_LT(res->size(), static_cast<size_t>(kCount));
+    }
+  }
+}
+
+// A FLAT range search in progress must not block another range search on the
+// same index, nor the tracked-key readers the main thread uses (IsTracked,
+// GetTrackedKeyCount). Searches already exclude index mutations through the
+// index schema's time-sliced mutex, so the scan takes no index lock.
+TEST_F(VectorIndexTest, FlatRangeSearchDoesNotBlockOtherReaders)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kDim = 4;
+  constexpr int kCount = 50;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2, kCount,
+                                 kBlockSize),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  const std::vector<float> zero(kDim, 0.0f);
+  for (int i = 0; i < kCount; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(zero)));
+  }
+  const absl::string_view query = VectorToStr(zero);
+
+  auto parking = std::make_shared<ParkingToken>();
+  std::thread parked_scan([&]() {
+    cancel::Token token = parking;
+    auto res = (*index)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    EXPECT_EQ(res->size(), static_cast<size_t>(kCount));
+  });
+  parking->parked.WaitForNotification();
+
+  absl::Notification done;
+  std::thread other_reader([&]() {
+    cancel::Token token = std::make_shared<CancelAfter>(kCount + 1);
+    auto res = (*index)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    EXPECT_EQ(res->size(), static_cast<size_t>(kCount));
+    EXPECT_TRUE((*index)->IsTracked(IndexToKey(0)));
+    EXPECT_EQ((*index)->GetTrackedKeyCount(), static_cast<size_t>(kCount));
+    done.Notify();
+  });
+  EXPECT_TRUE(done.WaitForNotificationWithTimeout(absl::Seconds(10)))
+      << "blocked behind the parked range search";
+  parking->release.Notify();
+  parked_scan.join();
+  other_reader.join();
 }
 
 // RecomputeDistance answers the question the search answers, but from bytes

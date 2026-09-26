@@ -67,6 +67,48 @@ class TestFTSearchInkeys(ValkeySearchTestCaseBase):
         keys = [result[i].decode() for i in range(1, len(result), 2)]
         assert keys == ["doc:4", "doc:3"]
 
+    def test_inkeys_key_outside_index_excluded(self):
+        """A listed key that exists but is not covered by the index (wrong
+        prefix) is ignored even though it would satisfy the predicate."""
+        client: Valkey = self.server.get_new_client()
+        self._setup_hash_index(client)
+        client.execute_command("HSET", "other:0", "score", "10")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@score:[-inf +inf]",
+            "INKEYS", "2", "doc:1", "other:0",
+            "NOCONTENT", "DIALECT", "2",
+        )
+        assert result == [1, b"doc:1"]
+
+    def test_inkeys_sees_current_document(self):
+        """Keys are evaluated against the document as it is now, not against
+        a search snapshot: a modified field changes the answer at once."""
+        client: Valkey = self.server.get_new_client()
+        self._setup_hash_index(client)
+        query = ["FT.SEARCH", "idx", "@score:[0 15]",
+                 "INKEYS", "2", "doc:1", "doc:3", "NOCONTENT", "DIALECT", "2"]
+        assert client.execute_command(*query) == [1, b"doc:1"]
+        client.execute_command("HSET", "doc:3", "score", "12")
+        client.execute_command("HSET", "doc:1", "score", "99")
+        assert client.execute_command(*query) == [1, b"doc:3"]
+        client.execute_command("DEL", "doc:3")
+        assert client.execute_command(*query) == [0]
+
+    def test_inkeys_in_multi_exec(self):
+        """Inside MULTI/EXEC the search runs synchronously on the main thread;
+        INKEYS must give the same answer there."""
+        client: Valkey = self.server.get_new_client()
+        self._setup_hash_index(client)
+        query = ["FT.SEARCH", "idx", "@category:{cat1}",
+                 "INKEYS", "3", "doc:0", "doc:1", "doc:3",
+                 "NOCONTENT", "SORTBY", "score", "DESC", "DIALECT", "2"]
+        expected = [2, b"doc:3", b"doc:1"]
+        assert client.execute_command(*query) == expected
+        pipe = client.pipeline(transaction=True)
+        pipe.execute_command(*query)
+        assert pipe.execute() == [expected]
+
     def test_inkeys_invalid_count_errors(self):
         """Malformed INKEYS counts reject at parse time."""
         client: Valkey = self.server.get_new_client()

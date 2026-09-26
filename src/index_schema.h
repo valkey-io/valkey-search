@@ -63,6 +63,10 @@ inline absl::Status GenerateIndexNotFoundError(int db_num,
 
 using Key = InternedStringPtr;
 using MutationSequenceNumber = uint64_t;
+// Never assigned to a document: UpdateDbInfoKey pre-increments the counter,
+// so real sequence numbers start at 1. A neighbor carrying it always fails the
+// sequence-number fast path and is fully revalidated.
+constexpr MutationSequenceNumber kUnverifiedSequenceNumber = 0;
 using RDBLoadFunc = void *(*)(ValkeyModuleIO *, int);
 using FreeFunc = void (*)(void *);
 using FieldMaskPredicate = uint64_t;

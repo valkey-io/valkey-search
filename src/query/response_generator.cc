@@ -183,10 +183,13 @@ FilterVerification VerifyFilter(
   // Scorer::ComposeDocumentScore). Text leaves are scored via Scorer::ScoreLeaf
   // (never TextIterator::GetScore) and numeric/tag leaves via 1.0 * weight,
   // identical to ScoreNode. A query whose Neighbor.score is a KNN distance
-  // rather than a relevance score is skipped: by default that means any vector
-  // query, and FT.HYBRID overrides the choice per arm.
-  const bool recompute_score =
-      recompute_score_override.value_or(parameters.IsNonVectorQuery());
+  // rather than a relevance score is skipped: by default that means a vector
+  // query without a text predicate (a `text=>[KNN ...]` query carries the text
+  // relevance ApplyHybridTextScore gave it), and FT.HYBRID overrides the choice
+  // per arm.
+  const bool recompute_score = recompute_score_override.value_or(
+      parameters.IsNonVectorQuery() ||
+      (QueryHasTextPredicate(parameters) && !parameters.vector_score_only));
   auto recompute = [&](EvaluationResult &result) -> FilterVerification {
     if (!result.matches || !recompute_score) {
       return {result.matches, std::nullopt};
@@ -566,8 +569,8 @@ void ProcessNeighborsForReply(
     if (!content.ok()) {
       continue;
     }
-    // Apply the fresh, scale-consistent score (non-vector only; VerifyFilter
-    // never recomputes for vector queries, whose score is a KNN distance).
+    // Apply the fresh, scale-consistent score (never for a query ranked on
+    // distance; VerifyFilter does not recompute a score that is a distance).
     if (recomputed_score.has_value()) {
       neighbor.score = *recomputed_score;
       any_score_recomputed = true;
@@ -591,6 +594,17 @@ void ProcessNeighborsForReply(
         auto bytes = CurrentVectorBytes(
             ctx, attribute_data_type, parameters, neighbor.external_id->Str(),
             *vector_identifier, content.value(), scratch);
+        // JSON hands the vector over as text; convert it to the index's
+        // binary form the way ingestion does (ProcessKeyspaceNotification).
+        vmsdk::UniqueValkeyString normalized;
+        if (bytes.has_value() &&
+            attribute_data_type.AttributesProvidedAsString()) {
+          normalized = vector_index->NormalizeStringAttribute(
+              vmsdk::MakeUniqueValkeyString(*bytes));
+          bytes = normalized
+                      ? std::optional(vmsdk::ToStringView(normalized.get()))
+                      : std::nullopt;
+        }
         if (bytes.has_value()) {
           auto distance =
               vector_index->RecomputeDistance(*bytes, parameters.query);
@@ -656,13 +670,11 @@ void ProcessNeighborsForReply(
   // relative to the stale ones. The general ordering of merged cluster results
   // is handled earlier in SearchResult::TrimResults; this block only handles
   // post-recompute reordering, which happens after that sort.
-  // Only for non-vector queries: for KNN, Neighbor.score holds the distance
+  // Not for a query ranked on distance: there Neighbor.score holds the distance
   // (lower is better) and results already arrive ascending, so a descending
   // re-sort would reverse the correct order, and VerifyFilter never recomputes
-  // for vector queries. Skipped when SORTBY is present (explicit ordering
-  // wins).
-  if (any_score_recomputed && !neighbors.empty() &&
-      parameters.IsNonVectorQuery() &&
+  // it. Skipped when SORTBY is present (explicit ordering wins).
+  if (any_score_recomputed && !neighbors.empty() && !ranks_on_distance &&
       !parameters.sortby_parameter.has_value()) {
     std::stable_sort(
         neighbors.begin(), neighbors.end(),

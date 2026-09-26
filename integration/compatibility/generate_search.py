@@ -1,6 +1,13 @@
 import pytest, struct
 from .generate import BaseCompatibilityTest
-from .data_sets import VECTOR_DIM
+from .data_sets import HYBRID_VECTOR_DIM, VECTOR_DIM
+
+# Text relevance and hybrid KNN need the `hybrid text` corpus (TEXT fields plus
+# a vector ramp; see data_sets.py). Its keys are <key_type>:00 .. :23; `alpha`
+# is in the title of every document whose index is not a multiple of 4, and the
+# L2 distance from HYBRID_NEAR grows with the index.
+HYBRID_NEAR = [1.0, 0.0, 0.0, 0.0]
+HYBRID_FAR = [9.0, 15.0, 0.0, 0.0]
 
 
 @pytest.mark.parametrize("dialect", [2])
@@ -64,3 +71,46 @@ class TestSearchCompatibility(BaseCompatibilityTest):
         self.check_knn(f"{key_type}_idx1", 3, far_keys, dialect)
         self.check_knn(f"{key_type}_idx1", len(keys), far_keys, dialect)
         self.check_knn(f"{key_type}_idx1", 3, near_keys, dialect)
+
+    def test_inkeys_nocontent(self, key_type, dialect):
+        # NOCONTENT skips content loading for an ordinary search; INKEYS must
+        # still apply the predicate. keys[:5] hold n1 -5..-1, so @n1:[-3 5]
+        # keeps only some of them.
+        keys = [entry[0] for entry in self.setup_data("sortable numbers", key_type)]
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[-3 5]", "INKEYS", "6", *keys[:5], "nonexistent:99", "NOCONTENT", "DIALECT", str(dialect))
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[-3 5]", "INKEYS", "6", *keys[:5], "nonexistent:99", "NOCONTENT", "SORTBY", "n1", "DESC", "DIALECT", str(dialect))
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[-3 5]", "INKEYS", "6", *keys[:5], "nonexistent:99", "NOCONTENT", "LIMIT", "0", "2", "SORTBY", "n1", "ASC", "DIALECT", str(dialect))
+
+
+    def inkeys(self, key_type, *ids):
+        keys = [f"{key_type}:{i:02d}" for i in ids]
+        return ["INKEYS", str(len(keys)), *keys]
+
+    def check_standalone(self, *cmd):
+        """Text scores are computed from shard-local corpus statistics in a
+        cluster, so they match the reference only on a standalone server
+        (unsupported_tests.md 5.9)."""
+        self.check(*cmd)
+        self.answers[-1]["cluster_excluded"] = True
+
+    def test_inkeys_withscores(self, key_type, dialect):
+        self.setup_data("hybrid text", key_type)
+        # 04 and 08 lack `alpha`; the rest have it with differing frequency
+        # and document length, so their BM25 scores differ.
+        inkeys = self.inkeys(key_type, 1, 2, 3, 4, 8, 13, 22)
+        for query in ["@title:alpha", "@title:beta", "@title:alpha @body:stone"]:
+            self.check_standalone("ft.search", f"{key_type}_idx1", query, *inkeys, "WITHSCORES", "SCORER", "BM25STD", "DIALECT", str(dialect))
+        self.check_standalone("ft.search", f"{key_type}_idx1", "@title:alpha", *inkeys, "WITHSCORES", "NOCONTENT", "SCORER", "BM25STD", "DIALECT", str(dialect))
+        self.check_standalone("ft.search", f"{key_type}_idx1", "@title:alpha", *inkeys, "WITHSCORES", "SCORER", "BM25STD", "LIMIT", "0", "2", "DIALECT", str(dialect))
+
+    def test_inkeys_text_knn(self, key_type, dialect):
+        self.setup_data("hybrid text", key_type)
+        # Near and far `alpha` documents plus 04/12, which lack `alpha`, and
+        # 00, which is nearest to HYBRID_NEAR overall but also lacks it.
+        inkeys = self.inkeys(key_type, 0, 1, 2, 4, 12, 13, 14, 21)
+        for vector in [HYBRID_NEAR, HYBRID_FAR]:
+            blob = struct.pack(f"<{HYBRID_VECTOR_DIM}f", *vector)
+            for knn in ["3", "10"]:
+                self.check("ft.search", f"{key_type}_idx1", f"@title:alpha=>[KNN {knn} @vec $q]", *inkeys, "PARAMS", "2", "q", blob, "DIALECT", str(dialect))
+            self.check("ft.search", f"{key_type}_idx1", "@title:alpha=>[KNN 3 @vec $q AS dist]", *inkeys, "SORTBY", "dist", "RETURN", "1", "dist", "PARAMS", "2", "q", blob, "DIALECT", str(dialect))
+            self.check("ft.search", f"{key_type}_idx1", "@title:alpha=>[KNN 3 @vec $q]", *inkeys, "NOCONTENT", "PARAMS", "2", "q", blob, "DIALECT", str(dialect))

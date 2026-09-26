@@ -754,6 +754,33 @@ TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
   EXPECT_GT(neighbors[0].distance, neighbors[1].distance);
 }
 
+// INKEYS does not search the index: every listed key the index tracks becomes
+// an unverified neighbor for content resolution to evaluate, and a key the
+// index does not track is dropped.
+TEST_F(ValkeySearchTest, InkeysSkipsIndexSearch) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  schema->SetDbMutationSequenceNumber(StringInternStore::Intern("a"), 5);
+  schema->SetDbMutationSequenceNumber(StringInternStore::Intern("b"), 7);
+
+  UnitTestSearchParameters params;
+  params.index_schema_name = kIndexSchemaName;
+  params.index_schema = schema;
+  params.dialect = kDialect;
+  params.inkeys = absl::flat_hash_set<std::string>{"a", "b", "untracked"};
+  const auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
+
+  VMSDK_EXPECT_OK(Search(params, valkey_search::query::SearchMode::kLocal));
+
+  EXPECT_EQ(Metrics::GetStats().time_slice_queries.load(), time_slice_queries);
+  EXPECT_EQ(params.search_result.total_count, 2u);
+  std::vector<std::string> keys;
+  for (const auto &n : params.search_result.neighbors) {
+    keys.emplace_back(n.external_id->Str());
+    EXPECT_EQ(n.sequence_number, kUnverifiedSequenceNumber);
+  }
+  EXPECT_THAT(keys, ::testing::UnorderedElementsAre("a", "b"));
+}
+
 struct FetchFilteredKeysTestCase {
   std::string test_name;
   std::string filter;

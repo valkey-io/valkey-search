@@ -8,6 +8,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -15,6 +16,7 @@
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_flat.h"
+#include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
 #include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
@@ -634,6 +636,62 @@ TEST_F(ParseCommandRegistrationTest, KnnWithNoVrPredicate) {
 
   EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "knn_dist");
   EXPECT_TRUE(params.vr_score_field_name_.empty());
+}
+
+// A NaN radius given as a $param is rejected like any other non-number, as
+// the literal form already is. SimpleAtod accepts "nan", and a NaN radius
+// matched every document. A -inf radius stays rejected as negative.
+TEST_F(ParseCommandRegistrationTest, VectorRangeNanRadiusParamRejected) {
+  auto schema = MakeSchemaWithVec("vec");
+  std::string blob = MakeBlob3();
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"nan", "VECTOR_RANGE radius 'nan' is not a valid number"},
+      {"-nan", "VECTOR_RANGE radius '-nan' is not a valid number"},
+      {"NaN", "VECTOR_RANGE radius 'NaN' is not a valid number"},
+      {"-inf", "VECTOR_RANGE radius must be non-negative"},
+      {"-1e400", "VECTOR_RANGE radius must be non-negative"}};
+  for (const auto &[radius, error] : cases) {
+    AggregateParameters params(0);
+    params.index_schema = schema;
+    params.parse_vars.query_string = "@vec:[VECTOR_RANGE $r $blob]";
+    params.parse_vars.params["r"] = {1, absl::string_view(radius)};
+    params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
+    auto status = RunParseCommandStatus(params);
+    EXPECT_FALSE(status.ok()) << radius;
+    EXPECT_THAT(std::string(status.message()), testing::HasSubstr(error))
+        << radius;
+  }
+}
+
+// An infinite radius, or one too large for a float, is stored as the largest
+// float, given as a literal or as a $param. It matches every finite distance
+// but not the +inf that stands for a non-finite one.
+TEST_F(ParseCommandRegistrationTest, VectorRangeInfiniteRadiusIsLargestFloat) {
+  auto schema = MakeSchemaWithVec("vec");
+  std::string blob = MakeBlob3();
+  const double kMaxFloat = std::numeric_limits<float>::max();
+  const std::vector<std::pair<std::string, double>> cases = {
+      {"inf", kMaxFloat}, {"1e400", kMaxFloat}, {"3.4e38", 3.4e38}};
+  for (const auto &[radius, expected] : cases) {
+    for (bool literal : {true, false}) {
+      const std::string query = literal
+                                    ? "@vec:[VECTOR_RANGE " + radius + " $blob]"
+                                    : "@vec:[VECTOR_RANGE $r $blob]";
+      AggregateParameters params(0);
+      params.index_schema = schema;
+      params.parse_vars.query_string = query;
+      if (!literal) {
+        params.parse_vars.params["r"] = {1, absl::string_view(radius)};
+      }
+      params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
+      ASSERT_TRUE(RunParseCommand(params)) << radius;
+      auto *vr = dynamic_cast<const query::VectorRangePredicate *>(
+          params.filter_parse_results.root_predicate.get());
+      ASSERT_NE(vr, nullptr) << radius;
+      EXPECT_EQ(vr->GetRadius(), expected)
+          << radius << (literal ? " literal" : " $param");
+    }
+  }
 }
 
 }  // namespace aggregate

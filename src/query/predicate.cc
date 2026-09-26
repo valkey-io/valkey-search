@@ -369,10 +369,11 @@ VectorRangePredicate::VectorRangePredicate(absl::string_view attribute_alias,
     : Predicate(PredicateType::kVectorRange),
       alias_(attribute_alias),
       identifier_(vmsdk::MakeUniqueValkeyString(identifier)),
-      radius_(radius),
       vector_param_name_(vector_param_name),
       score_as_(std::move(score_as)),
-      epsilon_(epsilon) {}
+      epsilon_(epsilon) {
+  SetRadius(radius);
+}
 
 EvaluationResult VectorRangePredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateVectorRange(*this);

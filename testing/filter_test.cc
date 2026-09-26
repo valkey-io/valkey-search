@@ -1927,6 +1927,19 @@ INSTANTIATE_TEST_SUITE_P(
                 "VECTOR_RANGE radius must be non-negative",
         },
         {
+            .test_name = "vector_range_nan_radius",
+            .filter = "@vec:[VECTOR_RANGE nan $blob]",
+            .create_success = false,
+            .create_expected_error_message = "Invalid number: ",
+        },
+        {
+            .test_name = "vector_range_negative_inf_radius",
+            .filter = "@vec:[VECTOR_RANGE -inf $blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE radius must be non-negative",
+        },
+        {
             .test_name = "vector_range_unknown_optional_param",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob UNKNOWN_PARAM]",
             .create_success = false,

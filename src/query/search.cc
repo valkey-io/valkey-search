@@ -2562,7 +2562,11 @@ absl::Status PostParseVectorRangeParameters(
               _.SetPrepend()
                   << "Error resolving vector range radius parameter: ");
           double radius;
-          if (!absl::SimpleAtod(std::string(radius_string), &radius)) {
+          // SimpleAtod accepts "nan", which no distance is within and which
+          // the filter parser already rejects as a literal radius. IsNaN
+          // reads the bits, since the build uses -ffast-math.
+          if (!absl::SimpleAtod(std::string(radius_string), &radius) ||
+              indexes::scoring::IsNaN(static_cast<float>(radius))) {
             return absl::InvalidArgumentError(
                 absl::StrCat("VECTOR_RANGE radius '", radius_string,
                              "' is not a valid number"));

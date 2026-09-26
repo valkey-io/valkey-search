@@ -27,8 +27,7 @@ bool IsNaN(float f);
 // Produces a +inf whose bit pattern survives -ffast-math. A source-level
 // std::numeric_limits<float>::infinity() may be folded to a finite value under
 // -ffinite-math-only; assembling the bits by memcpy is immune to that. Used as
-// the on-the-wire "no VR distance" marker so IsInf() still detects it on the
-// receiving shard/coordinator.
+// the on-the-wire "no VR distance" marker; the coordinator compares its bits.
 float PositiveInf();
 
 enum class ScorerType {

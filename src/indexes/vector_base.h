@@ -9,6 +9,7 @@
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -478,7 +479,22 @@ class VectorBase : public IndexBase {
   // (dims * FLT_EPSILON is 1.8e-4 at 1536 dims), so a window wide enough to
   // absorb it also collapses real near-duplicates to 0 and pushes real
   // near-antipodes past 2.
+  //
+  // A non-finite distance (a NaN or infinite component in either vector) is
+  // classified from its bits: -ffast-math lets the compiler fold isfinite
+  // and NaN comparisons. NaN, +inf and any non-finite cosine distance are
+  // reported as +inf, which no radius includes since SetRadius caps the
+  // radius at FLT_MAX. An IP -inf is kept: it is within every radius, as
+  // on Redis.
   float ClampCosineDistance(float dist) const {
+    constexpr uint32_t kExponentMask = 0x7f800000u;
+    constexpr uint32_t kNegativeInfinity = 0xff800000u;
+    const auto bits = std::bit_cast<uint32_t>(dist);
+    if ((bits & kExponentMask) == kExponentMask) {
+      return !normalize_ && bits == kNegativeInfinity
+                 ? dist
+                 : std::bit_cast<float>(kExponentMask);
+    }
     if (!normalize_) {
       return dist;
     }

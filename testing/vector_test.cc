@@ -5,6 +5,7 @@
  *
  */
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstddef>
@@ -2203,6 +2204,111 @@ TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
       auto within = index->IsWithinVectorRange(IndexToKey(i), query, 5e-5f);
       ASSERT_TRUE(within.ok()) << within.status();
       EXPECT_EQ(within->has_value(), i == 0) << "key " << i;
+    }
+  }
+}
+
+// A NaN or infinite component in the stored or the query vector makes the
+// distance non-finite. As on Redis, a NaN or +inf distance is within no
+// radius, and neither is any non-finite COSINE distance, while an IP distance
+// of -inf is within every radius and reported as -inf. An infinite radius
+// reaches VectorBase as the largest float. Under -ffast-math the radius
+// comparison admitted NaN distances at every radius, and std::clamp turned a
+// non-finite COSINE distance into 0 or 2.
+TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
+  const int kDim = 4;
+  auto from_bits = [](uint32_t bits) {
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+  };
+  auto is_neg_inf = [](float f) {
+    uint32_t bits;
+    std::memcpy(&bits, &f, sizeof(bits));
+    return bits == 0xff800000u;
+  };
+  const float kNaN = from_bits(0x7fc00000u);
+  const float kNegNaN = from_bits(0xffc00000u);
+  const float kInf = from_bits(0x7f800000u);
+  const float kMaxFloat = from_bits(0x7f7fffffu);
+  // Keys 0 and 1 are at distance 0 and 1 (2 for L2) from {1, 0, 0, 0}. Every
+  // distance of keys 2 to 5 to it is non-finite; for IP, key 4 is at -inf and
+  // key 5 at +inf.
+  const std::vector<std::vector<float>> docs = {
+      {1, 0, 0, 0},       {0, 1, 0, 0},    {kNaN, 0, 0, 0},
+      {0, 1, 0, kNegNaN}, {kInf, 0, 0, 0}, {-kInf, 0, 0, 0}};
+  struct Case {
+    const char *name;
+    std::vector<float> query;
+    // Keys within the radius at a finite distance: key 0 always, key 1 when
+    // the radius exceeds 1.
+    bool finite_matches;
+    // Keys at an IP distance of -inf.
+    std::vector<int> ip_neg_inf;
+  };
+  // Every distance to the NaN query is NaN. To the infinite one, the IP
+  // distance of keys 0 and 4 is -inf, and every other distance is NaN or +inf.
+  const std::vector<Case> cases = {{"finite", {1, 0, 0, 0}, true, {4}},
+                                   {"nan", {1, 0, kNaN, 0}, false, {}},
+                                   {"inf", {kInf, 0, 0, 0}, false, {0, 4}}};
+  for (auto metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
+        data_model::DISTANCE_METRIC_COSINE}) {
+    auto hnsw_index = VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(kDim, metric, /*initial_cap=*/16, /*m=*/16,
+                                   /*ef_construction=*/200,
+                                   /*ef_runtime=*/200),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(hnsw_index.ok());
+    auto flat_index = VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(kDim, metric, /*initial_cap=*/16,
+                                   /*block_size=*/16),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(flat_index.ok());
+    for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                              static_cast<VectorBase *>(flat_index->get())}) {
+      for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                       VectorToStr(docs[i])));
+      }
+      for (const auto &c : cases) {
+        absl::string_view query = VectorToStr(c.query);
+        for (float radius : {0.5f, 2.0f, kMaxFloat}) {
+          auto result = index->SearchRange(query, radius, CancelNever());
+          ASSERT_TRUE(result.ok()) << result.status();
+          absl::flat_hash_map<std::string, float> found;
+          for (const auto &n : *result) {
+            found[n.external_id->Str()] = n.distance;
+          }
+          for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
+            const bool neg_inf =
+                metric == data_model::DISTANCE_METRIC_IP &&
+                std::find(c.ip_neg_inf.begin(), c.ip_neg_inf.end(), i) !=
+                    c.ip_neg_inf.end();
+            const bool expected =
+                neg_inf ||
+                (c.finite_matches && (i == 0 || (i == 1 && radius > 1.0f)));
+            const std::string key(IndexToKey(i)->Str());
+            EXPECT_EQ(found.contains(key), expected)
+                << "metric " << metric << " query " << c.name << " radius "
+                << radius << " key " << i;
+            if (neg_inf && found.contains(key)) {
+              EXPECT_TRUE(is_neg_inf(found[key])) << found[key];
+            }
+            auto within =
+                index->IsWithinVectorRange(IndexToKey(i), query, radius);
+            ASSERT_TRUE(within.ok()) << within.status();
+            EXPECT_EQ(within->has_value(), expected)
+                << "metric " << metric << " query " << c.name << " radius "
+                << radius << " key " << i;
+            if (neg_inf && within->has_value()) {
+              EXPECT_TRUE(is_neg_inf(**within)) << **within;
+            }
+          }
+        }
+      }
     }
   }
 }

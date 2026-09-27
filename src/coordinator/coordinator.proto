@@ -176,7 +176,7 @@ message SearchIndexPartitionRequest {
 }
 
 message InkeysFilter {
-  repeated string keys = 1;
+  repeated bytes keys = 1;
 }
 
 message NeighborEntry {

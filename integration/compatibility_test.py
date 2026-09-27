@@ -173,8 +173,24 @@ def result_has_sortkeys(rs):
         return second_elem.startswith('#') or second_elem.startswith('$')
     return False
 
-def unpack_search_result(rs, key_type, has_sortkeys=False):
+def unpack_search_result(rs, key_type, has_sortkeys=False, nocontent=False,
+                         withscores=False):
     rows = []
+    if nocontent or withscores:
+        # NOCONTENT drops each row's field list and WITHSCORES adds a score
+        # after each key: [count, key1, [score1], [fields1], key2, ...]. The
+        # score is kept as `__score`, which compare_row compares numerically.
+        stride = 1 + int(withscores) + int(not nocontent)
+        for i in range(1, len(rs), stride):
+            row = {"__key": rs[i]}
+            if withscores:
+                row["__score"] = rs[i + 1]
+            if not nocontent:
+                value = rs[i + stride - 1]
+                for j in range(0, len(value), 2):
+                    row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
+            rows += [row]
+        return rows
     if has_sortkeys:
         # Format: [count, key1, sortkey1, [fields1], key2, sortkey2, [fields2], ...]
         # Step by 3 elements at a time
@@ -299,7 +315,10 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
         # where the expected result (from pickle) may not have sort keys even
         # if the command requested them.
         has_sortkeys = result_has_sortkeys(rs)
-        out = unpack_search_result(rs, key_type, has_sortkeys)
+        tokens = [str(c).lower() for c in cmd]
+        out = unpack_search_result(rs, key_type, has_sortkeys,
+                                   nocontent="nocontent" in tokens,
+                                   withscores="withscores" in tokens)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -787,8 +806,10 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         data_set = next_data_set
 
     # for the excluded queries with known difference
-    # just run in valkey to make sure they do not crash
-    if expected.get("excluded"):
+    # just run in valkey to make sure they do not crash. `cluster_excluded`
+    # answers differ only in cluster mode (e.g. text scores, which a cluster
+    # computes from shard-local corpus statistics; unsupported_tests.md 5.9).
+    if expected.get("excluded") or expected.get("cluster_excluded"):
         try:
             print(f"Running excluded CLUSTER query (no-crash check): {expected['cmd']}")
             cluster_client.execute_command(*expected["cmd"])
@@ -992,7 +1013,8 @@ class TestAnswersCME(ValkeySearchClusterTestCaseDebugMode):
                 test_case=self,
             )
 
-        expected_count = sum(1 for a in answers if not a.get('excluded'))
+        expected_count = sum(1 for a in answers
+                             if not (a.get('excluded') or a.get('cluster_excluded')))
         if correct_answers != expected_count:
             print(f"Correct answers: {correct_answers} out of {len(answers)}")
             if failed_tests:

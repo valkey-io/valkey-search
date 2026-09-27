@@ -25,6 +25,8 @@ TEST_F(ValkeySearchTest, InkeysProtoSerializationRoundTrip) {
   const std::vector<absl::flat_hash_set<std::string>> key_sets = {
       {"key1"},
       {"k1", "k2", "k3"},
+      // Keys are binary-safe: not valid UTF-8, and with an embedded NUL.
+      {std::string("\xff\xfe", 2), std::string("k\0ey", 4)},
   };
 
   for (const auto &original_inkeys : key_sets) {

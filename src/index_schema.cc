@@ -448,7 +448,13 @@ absl::flat_hash_set<std::string> IndexSchema::GetTextIdentifiersByFieldMask(
     FieldMaskPredicate field_mask) const {
   absl::flat_hash_set<std::string> matches;
   for (const auto &identifier : all_text_identifiers_) {
-    auto index_result = GetIndex(identifier);
+    // GetIndex takes an alias, which differs from the identifier for JSON
+    // (`title` vs `$.title`).
+    auto alias = GetAlias(identifier);
+    if (!alias.ok()) {
+      continue;
+    }
+    auto index_result = GetIndex(*alias);
     if (index_result.ok() &&
         index_result.value()->GetIndexerType() == indexes::IndexerType::kText) {
       const auto *text_index =

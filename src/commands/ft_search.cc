@@ -5,8 +5,6 @@
  *
  */
 
-#include "src/commands/ft_search.h"
-
 #include <strings.h>
 
 #include <algorithm>
@@ -285,8 +283,44 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
-}  // namespace
+// INKEYS results bypass SearchResult::TrimResults (RequiresCompleteResults),
+// and in cluster mode arrive as an unranked merge of every shard's matches, so
+// rank them here the way a search would have. A KNN query keeps the k nearest
+// of the listed keys, nearest first, unless its score is a text relevance
+// (`text=>[KNN ...]`), which then orders those k. Any other query orders by
+// score. SORTBY, applied afterwards, overrides the order but not the k cut.
+void RankInkeysNeighbors(std::vector<indexes::Neighbor> &neighbors,
+                         const SearchCommand &parameters) {
+  auto key_less = [](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+    return a.external_id->Str() < b.external_id->Str();
+  };
+  if (!parameters.IsNonVectorQuery()) {
+    std::sort(neighbors.begin(), neighbors.end(),
+              [&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+                if (a.distance != b.distance) {
+                  return a.distance < b.distance;
+                }
+                return key_less(a, b);
+              });
+    size_t k = static_cast<size_t>(parameters.k);
+    if (neighbors.size() > k) {
+      neighbors.erase(neighbors.begin() + k, neighbors.end());
+    }
+    if (parameters.vector_score_only ||
+        !query::QueryHasTextPredicate(parameters)) {
+      return;
+    }
+  }
+  std::stable_sort(neighbors.begin(), neighbors.end(),
+                   [&](const indexes::Neighbor &a, const indexes::Neighbor &b) {
+                     if (a.score != b.score) {
+                       return a.score > b.score;
+                     }
+                     return key_less(a, b);
+                   });
+}
 
+}  // namespace
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
@@ -433,18 +467,7 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 2. NOCONTENT without SORTBY: skip content resolution entirely. A SORTBY
-  // still needs the sort field resolved to order the reply (regression #1215),
-  // so fall through to content resolution when sortby is present.
-  if (no_content && !sortby_parameter.has_value()) {
-    if (inkeys.has_value()) {
-      ApplyInkeysFilter(search_result, *inkeys);
-    }
-    SendReplyNoContent(ctx, search_result, *this);
-    return;
-  }
-
-  // 3. Content resolution
+  // 2. Process neighbors for the query
   auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
@@ -452,13 +475,12 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 4. INKEYS post-filter + sort
   if (inkeys.has_value()) {
-    ApplyInkeysFilter(search_result, *inkeys);
+    RankInkeysNeighbors(search_result.neighbors, *this);
   }
   ApplySorting(search_result.neighbors, *this);
 
-  // 5. Serialize
+  // 3. Serialize neighbors based on query type
   if (no_content) {
     SendReplyNoContent(ctx, search_result, *this);
   } else if (IsNonVectorQuery()) {

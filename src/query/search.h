@@ -279,9 +279,10 @@ struct SearchParameters {
   // True when the search needs no post-search processing: a NOCONTENT reply
   // where nothing (e.g. SORTBY) requires loading and reordering the full result
   // set first. When true, the query can complete on the background thread and
-  // skip content loading.
+  // skip content loading. INKEYS always needs it: its candidates are verified
+  // against the predicate only during content resolution.
   virtual bool NoProcessingRequired() const {
-    return no_content && !sortby_parameter.has_value();
+    return no_content && !sortby_parameter.has_value() && !inkeys.has_value();
   }
 
   virtual absl::Status PreParseQueryString();

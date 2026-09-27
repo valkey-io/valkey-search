@@ -5,6 +5,8 @@
  *
  */
 
+#include "src/commands/ft_search.h"
+
 #include <strings.h>
 
 #include <algorithm>
@@ -114,6 +116,7 @@ std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
 }
 
 }  // namespace
+
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
@@ -390,13 +393,24 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  if (!NoProcessingRequired()) {
+  // NOCONTENT without SORTBY: skip content resolution entirely. A SORTBY
+  // still needs the sort field resolved to order the reply (regression #1215),
+  // so fall through to content resolution when sortby is present.
+  const bool skip_content = no_content && !sortby_parameter.has_value();
+  if (!skip_content) {
     auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
     if (!status.ok()) {
       ++Metrics::GetStats().query_failed_requests_cnt;
       ValkeyModule_ReplyWithError(ctx, status.message().data());
       return;
     }
+  }
+
+  // INKEYS post-filter + sort
+  if (inkeys.has_value()) {
+    ApplyInkeysFilter(search_result, *inkeys);
+  }
+  if (!skip_content) {
     ApplySorting(search_result.neighbors, *this);
   }
 

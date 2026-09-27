@@ -16,14 +16,17 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/ascii.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/text/unicode_normalizer.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
@@ -285,6 +288,44 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
+// Normalizes a sort value the same way the text pipeline normalizes for
+// matching, so sorting and matching agree on when two strings are the same.
+// Single point of truth: when the Language strategy lands this becomes
+// language.NormalizeInPlace(), which also makes folding locale-aware.
+void NormalizeForSortInPlace(std::string &value) {
+  indexes::text::UnicodeNormalizer::CaseFoldInPlace(value);
+}
+
+// Compares as if both sides had been normalized, without allocating when both
+// are ASCII -- the common case. The ASCII branch must agree with
+// NormalizeForSortInPlace above.
+expr::Ordering CaseFoldedCompare(absl::string_view a, absl::string_view b) {
+  if (absl::c_all_of(a, absl::ascii_isascii) &&
+      absl::c_all_of(b, absl::ascii_isascii)) {
+    size_t common = std::min(a.size(), b.size());
+    for (size_t i = 0; i < common; ++i) {
+      auto lhs = absl::ascii_tolower(static_cast<unsigned char>(a[i]));
+      auto rhs = absl::ascii_tolower(static_cast<unsigned char>(b[i]));
+      if (lhs != rhs) {
+        return lhs < rhs ? expr::Ordering::kLESS : expr::Ordering::kGREATER;
+      }
+    }
+    if (a.size() == b.size()) {
+      return expr::Ordering::kEQUAL;
+    }
+    return a.size() < b.size() ? expr::Ordering::kLESS
+                               : expr::Ordering::kGREATER;
+  }
+  std::string folded_a(a);
+  std::string folded_b(b);
+  NormalizeForSortInPlace(folded_a);
+  NormalizeForSortInPlace(folded_b);
+  if (folded_a == folded_b) {
+    return expr::Ordering::kEQUAL;
+  }
+  return folded_a < folded_b ? expr::Ordering::kLESS : expr::Ordering::kGREATER;
+}
+
 }  // namespace
 
 // Apply sorting to neighbors based on attribute values in attribute_contents
@@ -309,6 +350,21 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
+
+  // Only a field declared SORTABLE without UNF is folded; UNF and undeclared
+  // fields keep the raw-byte order valkey-search has always used.
+  // Folding reorders results a client may already depend on, so it is gated.
+  bool case_fold = false;
+  if (!is_numeric && !is_vector_score) {
+    const auto &attributes = parameters.index_schema->GetAttributes();
+    auto attribute = attributes.find(sortby.field);
+    if (attribute != attributes.end() && attribute->second.IsSortable() &&
+        !attribute->second.IsUnf()) {
+      case_fold = VALKEY_SEARCH_COMPATIBILITY_FIX(
+          1, 3, 0, "ft_search_sortable_casefold", [] { return true; },
+          [] { return false; });
+    }
+  }
   auto compare = [&](const indexes::Neighbor &a,
                      const indexes::Neighbor &b) -> bool {
     if (is_vector_score) {
@@ -338,18 +394,16 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
     auto str_a = vmsdk::ToStringView(it_a->second.value.get());
     auto str_b = vmsdk::ToStringView(it_b->second.value.get());
 
-    expr::Value val_a, val_b;
+    expr::Ordering cmp;
     if (is_numeric) {
       auto num_a = vmsdk::To<double>(str_a).value_or(0.0);
       auto num_b = vmsdk::To<double>(str_b).value_or(0.0);
-      val_a = expr::Value(num_a);
-      val_b = expr::Value(num_b);
+      cmp = expr::Compare(expr::Value(num_a), expr::Value(num_b));
+    } else if (case_fold) {
+      cmp = CaseFoldedCompare(str_a, str_b);
     } else {
-      val_a = expr::Value(str_a);
-      val_b = expr::Value(str_b);
+      cmp = expr::Compare(expr::Value(str_a), expr::Value(str_b));
     }
-
-    auto cmp = expr::Compare(val_a, val_b);
     if (cmp == expr::Ordering::kLESS) {
       return sortby.order == query::SortOrder::kAscending;
     }

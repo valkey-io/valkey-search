@@ -474,6 +474,17 @@ class VectorBase : public IndexBase {
         ComputeDistance(query, &record, query_magnitude));
   }
 
+  // Every tracked key within `radius` of `query`, in no particular order, for
+  // FLAT and HNSW alike.
+  // Lock-free search optimization: Phase-based locking guarantees that queries
+  // and resizes/mutations are strictly mutually exclusive. Every writer of the
+  // tracked-key maps (TrackKey, UnTrackKey, IsVectorUnchanged) runs from a
+  // mutation in its write phase, so key_to_metadata_mutex_ is not taken.
+  std::vector<Neighbor> SearchRangeExhaustive(
+      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      hnswlib::BaseFilterFunctor *filter = nullptr) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
   // Holds an optionally-normalized query vector. `view` is always valid and
   // points either into `storage` (if normalization was applied) or into the
   // original caller-owned buffer.

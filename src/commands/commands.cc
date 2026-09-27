@@ -250,12 +250,6 @@ absl::Status QueryCommand::ParseAfterIndex(QueryCommand &cmd,
       vmsdk::ParseParamValue(itr, cmd.parse_vars.query_string));
   VMSDK_RETURN_IF_ERROR(cmd.ParseCommand(itr));
   cmd.parse_vars.ClearAtEndOfParse();
-  if (cmd.cursor_options.has_value()) {
-    // A cursor holds whatever the query found: a timeout hands back the rows
-    // gathered so far rather than an error, whatever the partial results
-    // setting says.
-    cmd.enable_partial_results = true;
-  }
   return absl::OkStatus();
 }
 

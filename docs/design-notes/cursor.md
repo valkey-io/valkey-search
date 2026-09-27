@@ -20,7 +20,7 @@ A cursor is a snapshot of the query output: changes to the data made after the q
 
 A cursor holds only the rows it has still to return. An FT.AGGREGATE or FT.HYBRID cursor pops each row from the front of its RecordSet as it is replied; an FT.SEARCH cursor releases the key and the fetched content of each row as it is replied, and releases the rows LIMIT skipped and the rows beyond the LIMIT window as soon as the cursor is created.
 
-The partial results setting has no effect on a query that requests a cursor: such a query always hands back the rows it gathered, so a timeout yields a cursor over a partial result rather than an error. For FT.AGGREGATE the pipeline stages still run to completion over those rows.
+WITHCURSOR is no exception to the cancellation rules. A cancelled FT.AGGREGATE or FT.HYBRID is an error, as it is without a cursor; a cancelled FT.SEARCH follows the partial results setting, and when that setting allows it the cursor holds the rows the query gathered before the deadline.
 
 The syntax of the WITHCURSOR is the same for all three commands and it is accepted anywhere within these commands. The WITHCURSOR (case invariant) keywords is followed by two optional clauses COUNT and MAXIDLE both of which take integer values that have a minimum value of 1 and a configurable maximum value. If the COUNT clause is not specified, then it defaults to 1000. The default MAXIDLE is 300000. Default maximum count is 100000. Default maximum MAXIDLE is unlimited (max-pos)
 
@@ -31,7 +31,7 @@ is checked against the existing global table to ensure no accidental reuse. A cu
 
 FT.HYBRID runs its fused results through the FT.AGGREGATE pipeline (aggregate::RunAggregatePipeline, driven by the AggregateParameters embedded in its MultiSearchParameters), so it shares the FT.AGGREGATE cursor machinery unchanged. The only new syntax is that WITHCURSOR, which the aggregate suffix parser already accepts, also ends the SEARCH, VSIM and COMBINE clauses, like LOAD or LIMIT. The output is the same two element array as FT.AGGREGATE.
 
-Because the cursor takes ownership of the AggregateParameters and its records point into the fused neighbors, a WITHCURSOR FT.HYBRID moves the fused neighbors into the embedded AggregateParameters before running the pipeline, and releases the embedded AggregateParameters from the MultiSearchParameters once a cursor has adopted it. As for FT.AGGREGATE, the partial results setting of the envelope and of every arm is overridden, so a timeout hands back the records gathered so far.
+Because the cursor takes ownership of the AggregateParameters and its records point into the fused neighbors, a WITHCURSOR FT.HYBRID moves the fused neighbors into the embedded AggregateParameters before running the pipeline, and releases the embedded AggregateParameters from the MultiSearchParameters once a cursor has adopted it.
 
 # FT.SEARCH Modifications
 

@@ -1445,17 +1445,23 @@ TEST_F(FTHybridParserTest, WithCursorRejectsBadValues) {
   }
 }
 
-TEST_F(FTHybridParserTest, WithCursorMakesPartialResultsIrrelevant) {
-  // As for FT.AGGREGATE, a query that asks for a cursor hands back whatever
-  // it gathered on a timeout, so the envelope and every arm allow partial
-  // results whatever the configured setting.
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
-                       "WITHCURSOR", "COUNT", "2"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_TRUE((*params)->enable_partial_results);
-  for (const auto &arm : (*params)->arms) {
-    EXPECT_TRUE(arm->enable_partial_results);
+TEST_F(FTHybridParserTest, WithCursorLeavesPartialResultsAlone) {
+  // WITHCURSOR is no exception to the cancellation rules: it does not touch
+  // the partial results setting of the envelope or of any arm.
+  auto &prefer_partial =
+      const_cast<vmsdk::config::Boolean &>(options::GetPreferPartialResults());
+  const bool saved = prefer_partial.GetValue();
+  for (bool partial : {false, true}) {
+    VMSDK_EXPECT_OK(prefer_partial.SetValue(partial));
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                         "WITHCURSOR", "COUNT", "2"});
+    VMSDK_EXPECT_OK(params);
+    EXPECT_EQ((*params)->enable_partial_results, partial);
+    for (const auto &arm : (*params)->arms) {
+      EXPECT_EQ(arm->enable_partial_results, partial);
+    }
   }
+  VMSDK_EXPECT_OK(prefer_partial.SetValue(saved));
 }
 
 }  // namespace

@@ -982,17 +982,6 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // reference's 24.
   aggregate::ResolveSortByBounds(*env.agg);
 
-  // WITHCURSOR is parsed by the aggregate suffix parser, like any other
-  // suffix clause. As for FT.AGGREGATE, the partial results setting does not
-  // apply to a query that asks for a cursor: a timeout hands back the rows
-  // gathered so far. The arms copied the setting when they were parsed.
-  if (env.agg->cursor_options.has_value()) {
-    env.enable_partial_results = true;
-    for (auto &arm : env.arms) {
-      arm->enable_partial_results = true;
-    }
-  }
-
   const bool no_load_clause = env.agg->loads_.empty() && !env.agg->loadall_;
 
   // A LOAD clause may name the score column back into the projection it

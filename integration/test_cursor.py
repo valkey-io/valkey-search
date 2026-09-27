@@ -546,6 +546,52 @@ def force_timeout(clients, enabled: bool):
 class CursorContentsMixin:
     """Runs one power-set case: the cursor's rows must match the plain reply."""
 
+    def run_timeout_case(self, client: Valkey, command: str, cursor_args,
+                         expected, in_multi: bool, nodes):
+        """WITHCURSOR is no exception to the cancellation rules.
+
+        A cancelled FT.AGGREGATE is an error whatever the partial results
+        setting says; a cancelled FT.SEARCH follows that setting, returning
+        what it found or the timeout error.
+        """
+        for partial in ("no", "yes"):
+            for node in nodes:
+                node.execute_command("CONFIG", "SET",
+                                     "search.enable-partial-results", partial)
+            force_timeout(nodes, True)
+            error = None
+            reply = None
+            try:
+                if in_multi:
+                    pipe = client.pipeline(transaction=True)
+                    pipe.execute_command(*cursor_args)
+                    reply, = pipe.execute()
+                else:
+                    reply = client.execute_command(*cursor_args)
+            except ResponseError as exc:
+                error = str(exc)
+            finally:
+                force_timeout(nodes, False)
+                for node in nodes:
+                    node.execute_command("CONFIG", "SET",
+                                         "search.enable-partial-results",
+                                         "yes")
+
+            expect_error = command == "AGGREGATE" or partial == "no"
+            if expect_error:
+                assert error is not None, (command, partial, reply)
+                assert "cancelled due to timeout" in error, error
+            else:
+                assert error is None, error
+                rows, cursor = cursor_rows(command, reply)
+                read_rows(client, cursor, rows)
+                # A partial vector search can surface documents the complete
+                # query would have ranked out, so only the keys are checked.
+                corpus = {f"c:{i:02d}".encode() for i in range(CORPUS_SIZE)}
+                assert {row_key(command, row) for row in rows} <= corpus
+                assert len(rows) <= len(expected)
+            waiters.wait_for_equal(lambda: num_cursors(client), 0)
+
     def run_case(self, client: Valkey, command: str, query_type: str,
                  in_multi: bool, timeout: bool, nodes=None):
         nodes = nodes or [client]
@@ -556,37 +602,21 @@ class CursorContentsMixin:
 
         cursor_args = args + ["WITHCURSOR", "COUNT", "3"]
         if timeout:
-            # The partial results setting must not matter for a cursor.
-            for node in nodes:
-                node.execute_command("CONFIG", "SET",
-                                     "search.enable-partial-results", "no")
-            force_timeout(nodes, True)
-        try:
-            if in_multi:
-                pipe = client.pipeline(transaction=True)
-                pipe.execute_command(*cursor_args)
-                reply, = pipe.execute()
-            else:
-                reply = client.execute_command(*cursor_args)
-        finally:
-            if timeout:
-                force_timeout(nodes, False)
-                for node in nodes:
-                    node.execute_command("CONFIG", "SET",
-                                         "search.enable-partial-results", "yes")
+            self.run_timeout_case(client, command, cursor_args, expected,
+                                  in_multi, nodes)
+            return
+
+        if in_multi:
+            pipe = client.pipeline(transaction=True)
+            pipe.execute_command(*cursor_args)
+            reply, = pipe.execute()
+        else:
+            reply = client.execute_command(*cursor_args)
 
         rows, cursor = cursor_rows(command, reply)
         assert len(rows) <= 3
         read_rows(client, cursor, rows)
-        if timeout:
-            # A timed-out query returns what it found, never an error. A
-            # partial vector search can surface documents the complete query
-            # would have ranked out, so only the keys are checked.
-            corpus = {f"c:{i:02d}".encode() for i in range(CORPUS_SIZE)}
-            assert {row_key(command, row) for row in rows} <= corpus
-            assert len(rows) <= len(expected)
-        else:
-            assert sorted(rows) == sorted(expected)
+        assert sorted(rows) == sorted(expected)
         waiters.wait_for_equal(lambda: num_cursors(client), 0)
 
 

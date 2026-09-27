@@ -94,12 +94,8 @@ inline constexpr absl::string_view kCancelledMessage =
 // The error text matches the between-stage check exactly, so a caller cannot
 // tell where in the pipeline the cancellation landed, and the same counter is
 // incremented, so a cancellation is counted once wherever it is observed.
-//
-// A WITHCURSOR query is never cancelled here: like the between-stage check, it
-// runs its pipeline to completion over whatever the query phase found.
 inline absl::Status CheckCancelled(const RecordSet &records) {
   if (records.agg_params_ == nullptr ||
-      records.agg_params_->cursor_options.has_value() ||
       records.agg_params_->cancellation_token == nullptr ||
       !records.agg_params_->cancellation_token->IsCancelled()) {
     return absl::OkStatus();
@@ -1261,12 +1257,8 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
                                       RecordSet &records) {
   agg_input_records.Increment(records.size());
   for (auto &stage : parameters.stages_) {
-    // A WITHCURSOR query instead runs its pipeline over whatever the query
-    // phase found, so that the cursor holds a complete pipeline result of a
-    // partial input rather than an error.
-    if (!parameters.cursor_options.has_value() &&
-        (parameters.cancellation_token->IsCancelled() ||
-         ForceTimeoutAggregate.GetValue())) {
+    if (parameters.cancellation_token->IsCancelled() ||
+        ForceTimeoutAggregate.GetValue()) {
       ForceTimeoutAggregateCancels.Increment(1);
       return absl::CancelledError(kCancelledMessage);
     }

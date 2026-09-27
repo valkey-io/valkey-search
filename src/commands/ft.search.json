@@ -63,6 +63,27 @@
         "optional": true
       },
       {
+        "name": "INKEYS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "inkeys_token",
+            "type": "pure-token",
+            "token": "INKEYS"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "keys",
+            "type": "string",
+            "multiple": true
+          }
+        ]
+      },
+      {
         "name": "INORDER",
         "type": "pure-token",
         "optional": true,

@@ -5,6 +5,8 @@
  *
  */
 
+#include "src/commands/ft_search.h"
+
 #include <strings.h>
 
 #include <algorithm>
@@ -284,6 +286,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 }
 
 }  // namespace
+
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
@@ -430,7 +433,18 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 2. Process neighbors for the query
+  // 2. NOCONTENT without SORTBY: skip content resolution entirely. A SORTBY
+  // still needs the sort field resolved to order the reply (regression #1215),
+  // so fall through to content resolution when sortby is present.
+  if (no_content && !sortby_parameter.has_value()) {
+    if (inkeys.has_value()) {
+      ApplyInkeysFilter(search_result, *inkeys);
+    }
+    SendReplyNoContent(ctx, search_result, *this);
+    return;
+  }
+
+  // 3. Content resolution
   auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
@@ -438,9 +452,13 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
+  // 4. INKEYS post-filter + sort
+  if (inkeys.has_value()) {
+    ApplyInkeysFilter(search_result, *inkeys);
+  }
   ApplySorting(search_result.neighbors, *this);
 
-  // 3. Serialize neighbors based on query type
+  // 5. Serialize
   if (no_content) {
     SendReplyNoContent(ctx, search_result, *this);
   } else if (IsNonVectorQuery()) {

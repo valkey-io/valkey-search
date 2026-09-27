@@ -129,8 +129,8 @@ function configure() {
     cd $_
     local BUILD_TYPE=$(echo ${BUILD_CONFIG^})
     rm -f CMakeCache.txt
-    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
-    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
+    printf "Running: cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}\n"
+    cmake .. -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTS=ON -Wno-dev -GNinja ${CMAKE_EXTRA_ARGS}
     cd ${ROOT_DIR}
 }
 

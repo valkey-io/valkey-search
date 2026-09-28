@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -85,6 +86,7 @@ constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kInkeysParam{"INKEYS"};
 
 struct LimitParameter {
   uint64_t first_index{0};
@@ -199,6 +201,13 @@ class SearchParametersInFlightGuard {
   SearchParametersInFlightGuard &operator=(
       SearchParametersInFlightGuard &&) noexcept = default;
   ~SearchParametersInFlightGuard();
+  // Drops this object out of the count early, for an operation whose query is
+  // over while the object itself lives on (a cursor holding its output). The
+  // flag keeps the destructor from decrementing the count a second time.
+  void Terminate();
+
+ private:
+  bool terminated_{false};
 };
 }  // namespace detail
 
@@ -219,6 +228,7 @@ struct SearchParameters {
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
@@ -270,7 +280,7 @@ struct SearchParameters {
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || inkeys.has_value();
   }
 
   // True when the search needs no post-search processing: a NOCONTENT reply
@@ -319,6 +329,10 @@ struct SearchParameters {
       : timeout_ms(timeout_ms), cancellation_token(token), db_num_(db_num) {}
 
   SearchParameters(SearchParameters &&) = default;
+
+  // Declares the query operation finished, so that it no longer counts in
+  // GetSearchParametersInFlight() even though this object is still alive.
+  void DeclareOperationTerminated() { in_flight_guard_.Terminate(); }
 
  private:
   // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.

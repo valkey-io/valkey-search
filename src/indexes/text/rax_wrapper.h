@@ -51,7 +51,13 @@ namespace valkey_search::indexes::text {
 
 // Stem tree target: maps stem root to list of parent words that stem to it.
 // Example: "happi" → {"happy", "happiness", "happily"}
-using StemParents = std::vector<std::string>;
+struct StemParents {
+  std::vector<std::string> parents;
+  // Stem-inflection leaf's df: documents holding a parent in a stem-enabled
+  // field, counted once each. Maintained by Commit/DeleteKeyData for O(1)
+  // reads.
+  uint32_t distinct_docs{0};
+};
 
 class Rax {
  public:

@@ -90,6 +90,8 @@ size_t Postings::GetTotalTermFrequency() const {
 namespace {
 
 // Does any position for this key fall in a field in `field_mask`?
+// Maintain an overall field mask per position map on ingestion to skip this
+// iteration if perf regression is large
 bool PositionsContainFields(const FlatPositionMap& flat_map,
                             uint64_t field_mask) {
   PositionIterator iter(flat_map);

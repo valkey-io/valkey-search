@@ -9,6 +9,8 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -60,6 +62,9 @@ struct SearchCommand : public QueryCommand {
     bool has_relevance{false};
     bool sort_by_vec_score{false};
     std::string sort_key_prefix;
+    // NUMERIC sort key / RETURN values re-serialized from the parsed double.
+    bool numeric_sort_key{false};
+    std::vector<bool> numeric_return_attrs;
   };
   RowFormat GetRowFormat() const;
   // Replies a document's elements: key, [score], [sort key], fields. Returns

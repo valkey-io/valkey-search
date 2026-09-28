@@ -190,9 +190,6 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
       ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
     }
     if (emit_sort_key) {
-      // KNN queries never carry a VR predicate (KNN+VR is rejected at parse
-      // time in the single-VR model), so the sort key is either the vector
-      // distance or a stored attribute.
       std::string value = sort_by_vec_score
                               ? absl::StrFormat("%.12g", neighbors[i].distance)
                               : GetSortKeyValue(neighbors[i], parameters);
@@ -213,14 +210,14 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
       size_t cnt = 0;
       for (const auto &return_attribute : parameters.return_attributes) {
-        absl::string_view ret_id =
-            vmsdk::ToStringView(return_attribute.identifier.get());
-        if (vmsdk::ToStringView(parameters.score_as.get()) == ret_id) {
+        if (vmsdk::ToStringView(parameters.score_as.get()) ==
+            vmsdk::ToStringView(return_attribute.identifier.get())) {
           ReplyScore(ctx, *parameters.score_as, neighbors[i]);
           ++cnt;
           continue;
         }
-        auto it = neighbors[i].attribute_contents.value().find(ret_id);
+        auto it = neighbors[i].attribute_contents.value().find(
+            vmsdk::ToStringView(return_attribute.identifier.get()));
         if (it != neighbors[i].attribute_contents.value().end()) {
           ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
           ValkeyModule_ReplyWithString(ctx, it->second.value.get());
@@ -265,8 +262,6 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
     vr_field = query::GetVrScoreFieldName(command);
   }
 
-  // When with_sort_keys is true, we add an extra element per result (the sort
-  // key)
   // Each result has: doc_id [+ score if WITHSCORES] [+ sort_key if
   // WITHSORTKEYS] + attributes array
   size_t elements_per_result = 2;
@@ -551,16 +546,12 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
 
-  // 1. Handle early reply scenarios.
-  // These paths do not need pre-sorted neighbors: ShouldReturnNoResults emits
-  // only the count, and the NoProcessingRequired NOCONTENT path is only taken
-  // when RequiresCompleteResults() is false — the exact case where ApplySorting
-  // is a no-op. So sorting can safely run after this check.
+  // 1. Handle early reply scenarios
   if (HandleEarlyReplyScenarios(ctx, search_result, *this)) {
     return;
   }
 
-  // 2. Process neighbors for the query, removing filtered/invalid neighbors.
+  // 2. Process neighbors for the query
   auto status = ProcessNeighborsForQuery(ctx, search_result, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
@@ -568,12 +559,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 3. Sort the final, filtered neighbor set. Sorting after
-  // ProcessNeighborsForQuery ensures the order reflects the neighbors that
-  // will actually be serialized, rather than a superset that is then trimmed.
   ApplySorting(search_result.neighbors, *this);
 
-  // 4. Serialize neighbors based on query type
+  // 3. Serialize neighbors based on query type
   if (no_content) {
     SendReplyNoContent(ctx, search_result, *this);
   } else if (IsNonVectorQuery()) {

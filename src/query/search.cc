@@ -13,9 +13,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <functional>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -1909,6 +1906,7 @@ void SearchResult::TrimResults(std::vector<T> &vec,
           if (a.score != b.score) {
             return a.score > b.score;
           }
+          // Tie-break on key ascending for a deterministic order.
           return a.external_id->Str() < b.external_id->Str();
         });
   }
@@ -2014,8 +2012,6 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   } else {
     VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                            DoSearchVector(parameters, search_mode, lock));
-    // KNN queries reject VR predicates in their pre-filter at parse time
-    // (single-VR model), so no VR score population is needed here.
     VMSDK_ASSIGN_OR_RETURN(
         auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
     size_t total_count = result.size();
@@ -2350,31 +2346,17 @@ absl::Status query::SearchParameters::PreParseQueryString() {
   VMSDK_LOG(DEBUG, nullptr)
       << "Query: '" << vmsdk::config::RedactIfNeeded(parse_vars.query_string)
       << "'";
-  // Split the query string into a pre-filter expression and a KNN vector
-  // filter at the "=>" delimiter.
-  //
-  // Strategy: parse the pre-filter portion of the expression to find where it
-  // ends, then check whether a "=>" KNN delimiter follows. This is safer than
-  // scanning the raw string for "=>" because "=>" also appears as a suffix
-  // query-attribute delimiter (e.g. "]=>{$yield_distance_as: ...}"), which is
-  // now consumed inside ParseVectorRangePredicate and will not be present in
-  // the top-level expression we receive here.
-  //
-  // FindVectorDelimiter() skips "=>" occurrences followed by '{' and finds the
-  // first "=>" followed by '[', which is the KNN boundary.
-  const absl::string_view::size_type delimiter_pos =
-      FindVectorDelimiter(filter_expression);
+  auto pos = FindVectorDelimiter(filter_expression);
   absl::string_view pre_filter;
   absl::string_view vector_filter;
   // If the delimiter is not found (ie - non vector query), treat the whole
   // string as pre-filter.
-  if (delimiter_pos == absl::string_view::npos) {
+  if (pos == absl::string_view::npos) {
     pre_filter = absl::StripAsciiWhitespace(filter_expression);
   } else {
-    pre_filter =
-        absl::StripAsciiWhitespace(filter_expression.substr(0, delimiter_pos));
-    vector_filter = absl::StripAsciiWhitespace(filter_expression.substr(
-        delimiter_pos + kVectorFilterDelimiter.size()));
+    pre_filter = absl::StripAsciiWhitespace(filter_expression.substr(0, pos));
+    vector_filter = absl::StripAsciiWhitespace(
+        filter_expression.substr(pos + kVectorFilterDelimiter.size()));
   }
   // If INORDER OR SLOP, but the index schema does not support offsets, we
   // reject the query.
@@ -2501,10 +2483,9 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
 
   if (!parameters.parse_vars.score_as_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
-        parameters.parse_vars.score_as_string,
+        auto score_as_string,
         SubstituteParam(parameters, parameters.parse_vars.score_as_string));
-    parameters.score_as =
-        vmsdk::MakeUniqueValkeyString(parameters.parse_vars.score_as_string);
+    parameters.score_as = vmsdk::MakeUniqueValkeyString(score_as_string);
   }
   return absl::OkStatus();
 }

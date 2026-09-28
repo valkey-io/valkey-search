@@ -54,9 +54,6 @@ constexpr float kDefaultMagnitude = 1.0f;
 // Initial capacity of a range search's result vector.
 constexpr size_t kRangeReserve = 128;
 
-std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
-                                     float *magnitude = nullptr);
-
 class VectorRecord {
  public:
   // Disallow copy and move because it is variable-sized and should only be
@@ -167,7 +164,6 @@ struct Neighbor {
   // than inspecting the float, which is unreliable under -ffast-math.
   bool has_vr_distance;
   std::optional<RecordsMap> attribute_contents;
-
   Neighbor()
       : distance(0.0f),
         score(kDefaultScore),
@@ -323,10 +319,6 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key, uint64_t count,
       std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
       absl::flat_hash_set<const char *> &top_keys) const;
-  bool AddPrefilteredKey(
-      absl::string_view query, uint64_t count, const InternedStringPtr &key,
-      std::priority_queue<std::pair<float, hnswlib::labeltype>> &results,
-      absl::flat_hash_set<const char *> &top_keys) const;
   template <typename T>
   absl::StatusOr<std::vector<Neighbor>> CreateReply(
       std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res);
@@ -347,7 +339,7 @@ class VectorBase : public IndexBase {
   // Public because PrefilterEvaluator in search.cc / vector_base.cc calls this
   // directly to compute a VR match distance.
   // Returns the distance and internal label for the given key, or an error if
-  // the key is not tracked. Used by AddPrefilteredKey and PrefilterEvaluator.
+  // the key is not tracked.
   // Prefer IsWithinVectorRange for callers that only need a pass/fail check.
   // Search phase only: reads the tracked-key maps lock-free, like
   // GetVectorDuringSearch.
@@ -543,10 +535,6 @@ class VectorBase : public IndexBase {
     }
     return std::clamp(dist, 0.0f, 2.0f);
   }
-
-  template <typename T>
-  void Init(int dimensions, data_model::DistanceMetric distance_metric,
-            std::unique_ptr<hnswlib::SpaceInterface<T>> &space);
 
   virtual absl::Status AddRecordImpl(
       uint64_t internal_id,

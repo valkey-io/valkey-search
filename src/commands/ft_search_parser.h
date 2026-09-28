@@ -9,7 +9,6 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
 #include <optional>
-#include <string>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -45,10 +44,10 @@ struct SearchCommand : public QueryCommand {
   bool with_scores{false};
 
   // True when the last RETURN clause was `RETURN 0`; folded into no_content
-  // after the full command is parsed (ParseCommand), so it cannot cancel a
-  // sticky NOCONTENT keyword set by the NOCONTENT keyword itself.
+  // after parsing (ParseCommand).
   // This is separate from SearchParameters.no_content during parsing
-  // to allow a later RETURN to override an earlier `RETURN 0`.
+  // as there can be many or none return clause, and only the last RETURN is
+  // effective
   bool return_no_fields{false};
 
   // Returns true if this is a standalone vector range query (no KNN).

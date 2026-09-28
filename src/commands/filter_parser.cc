@@ -1344,7 +1344,7 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (result.prev_predicate) {
         node_count_++;
       } else {
-        return absl::InvalidArgumentError("Missing OR term");
+        return absl::InvalidArgumentError(("Missing OR term"));
       }
       // We use sub_result.not_rightmost_bracket since sub_result comes from the
       // right side so its bracket will be more towards the right than prev Pred

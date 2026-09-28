@@ -128,5 +128,29 @@ struct FlatParameters : public FTCreateVectorParameters {
 
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc);
+
+// Validates an IndexSchema proto against the same configurable limits that
+// FT.CREATE enforces while parsing its arguments: PREFIX count, attribute
+// count, TAG / NUMERIC identifier length, and the vector limits (DIM, M,
+// EF_CONSTRUCTION, EF_RUNTIME, BLOCK_SIZE).
+//
+// FT.CREATE only reaches those checks through the text-argument parser. Any
+// path that builds a schema directly from a proto -- coordinator metadata
+// gossip and FT.INTERNAL_UPDATE -- bypasses them, so a definition that
+// FT.CREATE would reject can be materialized. SchemaManager runs this on every
+// proto it creates a schema from so all paths agree.
+//
+// INITIAL_CAP is only checked for a malformed (< 1) value: a serialized proto
+// carries the index's grown capacity (VectorBase::ToProto emits GetCapacity()),
+// not the value the user passed to FT.CREATE, so an upper bound would reject
+// valid indexes that grew past it. Text-field count is not repeated here; it is
+// already enforced in IndexSchema::Create on every path.
+//
+// Returns kOutOfRange on the first out-of-limit parameter, naming the offending
+// attribute, matching the code FT.CREATE returns. A vector attribute with no
+// algorithm set is malformed rather than out of range and yields
+// kInvalidArgument.
+absl::Status ValidateIndexSchemaLimits(
+    const data_model::IndexSchema& index_schema_proto);
 }  // namespace valkey_search
 #endif  // VALKEYSEARCH_SRC_COMMANDS_FT_CREATE_PARSER_H_

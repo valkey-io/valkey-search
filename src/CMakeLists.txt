@@ -242,6 +242,7 @@ set(SRCS_SCHEMA_MANAGER ${CMAKE_CURRENT_LIST_DIR}/schema_manager.cc
 valkey_search_add_static_library(schema_manager "${SRCS_SCHEMA_MANAGER}")
 target_include_directories(schema_manager PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(schema_manager PUBLIC vmsdklib)
+target_link_libraries(schema_manager PUBLIC ft_create_parser)
 target_link_libraries(schema_manager PUBLIC index_schema)
 target_link_libraries(schema_manager PUBLIC index_schema_cc_proto)
 target_link_libraries(schema_manager PUBLIC metrics)

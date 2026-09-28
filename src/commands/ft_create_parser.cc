@@ -895,6 +895,117 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
   return vector_index_proto;
 }
 
+namespace {
+// Mirrors FTCreateVectorParameters::Verify() and HNSWParameters::Verify() /
+// FlatParameters::Verify(), reading straight from the proto. Only the numeric
+// range limits are checked; required-field presence (TYPE, DISTANCE_METRIC) is
+// not re-verified because a serialized schema always carries them.
+absl::Status ValidateVectorIndexLimits(
+    const data_model::VectorIndex &vector_index_proto,
+    absl::string_view attribute_alias) {
+  const auto max_dimensions_value = options::GetMaxDimensions().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(vector_index_proto.dimension_count(),
+                                           1, max_dimensions_value))
+      << "Attribute `" << attribute_alias
+      << "`: the dimensions value must be a positive integer greater than 0 "
+         "and less than or equal to "
+      << max_dimensions_value << ".";
+
+  // No upper bound: initial_cap holds the grown capacity when the proto was
+  // produced by ToProto(), which legitimately exceeds kMaxInitialCap.
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(vector_index_proto.initial_cap(), 1, std::nullopt))
+      << "Attribute `" << attribute_alias << "`: " << kInitialCapParam
+      << " must be a positive integer greater than 0.";
+
+  switch (vector_index_proto.algorithm_case()) {
+    case data_model::VectorIndex::kHnswAlgorithm: {
+      const auto &hnsw = vector_index_proto.hnsw_algorithm();
+      const auto max_m_value = options::GetMaxM().GetValue();
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(hnsw.m(), 2, max_m_value))
+          << "Attribute `" << attribute_alias << "`: " << kMParam
+          << " must be a positive integer greater than 2 and cannot exceed "
+          << max_m_value << ".";
+
+      const auto max_ef_construction_value =
+          options::GetMaxEfConstruction().GetValue();
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(hnsw.ef_construction(), 1,
+                                               max_ef_construction_value))
+          << "Attribute `" << attribute_alias << "`: " << kEfConstructionParam
+          << " must be a positive integer greater than 0 and cannot exceed "
+          << max_ef_construction_value << ".";
+
+      const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+      VMSDK_RETURN_IF_ERROR(
+          vmsdk::VerifyRange(hnsw.ef_runtime(), 1, max_ef_runtime_value))
+          << "Attribute `" << attribute_alias << "`: " << kEfRuntimeParam
+          << " must be a positive integer greater than 0 and cannot exceed "
+          << max_ef_runtime_value << ".";
+      break;
+    }
+    case data_model::VectorIndex::kFlatAlgorithm:
+      VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+          vector_index_proto.flat_algorithm().block_size(), 1, kMaxBlockSize))
+          << "Attribute `" << attribute_alias << "`: " << kBlockSizeParam
+          << " must be a positive integer greater than 0 and cannot exceed "
+          << kMaxBlockSize << ".";
+      break;
+    case data_model::VectorIndex::ALGORITHM_NOT_SET:
+      return absl::InvalidArgumentError(
+          absl::StrCat("Attribute `", attribute_alias,
+                       "`: vector index has no algorithm set."));
+  }
+  return absl::OkStatus();
+}
+}  // namespace
+
+absl::Status ValidateIndexSchemaLimits(
+    const data_model::IndexSchema &index_schema_proto) {
+  const auto max_prefixes = options::GetMaxPrefixes().GetValue();
+  const auto prefixes_cnt = index_schema_proto.subscribed_key_prefixes_size();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(prefixes_cnt, std::nullopt, max_prefixes))
+      << "Number of prefixes (" << prefixes_cnt
+      << ") exceeds the maximum allowed (" << max_prefixes << ")";
+
+  // The incorrectly named max_vector_attributes is kept for backward
+  // compatibility, as in ParseFTCreateArgs.
+  const auto max_attributes = options::GetMaxVectorAttributes().WasSet()
+                                  ? options::GetMaxVectorAttributes().GetValue()
+                                  : options::GetMaxAttributes().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(index_schema_proto.attributes_size(),
+                                           std::nullopt, max_attributes))
+      << "The maximum number of attributes cannot exceed " << max_attributes
+      << ".";
+
+  for (const auto &attribute : index_schema_proto.attributes()) {
+    switch (attribute.index().index_type_case()) {
+      case data_model::Index::kVectorIndex:
+        VMSDK_RETURN_IF_ERROR(ValidateVectorIndexLimits(
+            attribute.index().vector_index(), attribute.alias()));
+        break;
+      case data_model::Index::kTagIndex: {
+        const auto max_len = options::GetMaxTagFieldLen().GetValue();
+        VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+            attribute.identifier().length(), std::nullopt, max_len))
+            << "A tag field can have a maximum length of " << max_len << ".";
+        break;
+      }
+      case data_model::Index::kNumericIndex: {
+        const auto max_len = options::GetMaxNumericFieldLen().GetValue();
+        VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+            attribute.identifier().length(), std::nullopt, max_len))
+            << "A numeric field can have a maximum length of " << max_len
+            << ".";
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  return absl::OkStatus();
+}
+
 namespace options {
 
 vmsdk::config::Number &GetMaxPrefixes() {

@@ -1167,6 +1167,33 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                             )
 
     @pytest.mark.parametrize("algo", ["flat", "hnsw"])
+    def test_vector_range_cosine_clamp_boundary(self, key_type, dialect, algo, vector_data_type):
+        """COSINE VECTOR_RANGE at and around the metric's [0, 2] clamp bounds.
+
+        1e-6, 0.001, 1.999 and 2-1e-6 sit just inside/outside each bound and
+        are diffed exactly against Redisearch. Radius 0 and 2 are also run,
+        but excluded=True: the raw pre-clamp cosine distance for a self-match
+        or exact antipode rounds to a different side of the bound on each
+        engine (Valkey ~1e-7 / ~1.99999988, Redis ~-2.4e-7 / ~2.00000024), so
+        only a no-crash check is meaningful there, not a result diff.
+        """
+        self.setup_data("vector data cosine " + algo, key_type)
+        vector_points = [-.75, .75]
+        radii = [(0.0, True), (1e-6, False), (0.001, False),
+                 (1.999, False), (2.0 - 1e-6, False), (2.0, True)]
+        for x in vector_points:
+            for y in vector_points:
+                for z in vector_points:
+                    for r, excluded in radii:
+                        self.checkrange(
+                            dialect,
+                            f"ft.search {key_type}_idx1 *",
+                            radius=r, query_vector=[x, y, z],
+                            query_attrs="{$yield_distance_as: dist}",
+                            excluded=excluded,
+                        )
+
+    @pytest.mark.parametrize("algo", ["flat", "hnsw"])
     @pytest.mark.parametrize("metric", ["l2", "ip", "cosine"])
     def test_vector_range_nocontent(self, key_type, dialect, algo, metric, vector_data_type):
         """VECTOR_RANGE with NOCONTENT returns only keys."""

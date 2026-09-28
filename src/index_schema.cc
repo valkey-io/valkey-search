@@ -44,6 +44,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
+#include "src/indexes/vector_svs.h"
 #include "src/keyspace_event_manager.h"
 #include "src/metrics.h"
 #include "src/query/search.h"
@@ -229,6 +230,9 @@ absl::StatusOr<std::shared_ptr<indexes::IndexBase>> IndexFactory(
               ctx, index_schema, attribute, vector_index_proto, iter);
         case data_model::VectorIndex::kFlatAlgorithm:
           return CreateVectorIndexForType<indexes::VectorFlat>(
+              ctx, index_schema, attribute, vector_index_proto, iter);
+        case data_model::VectorIndex::kSvsVamanaAlgorithm:
+          return CreateVectorIndexForType<indexes::VectorSVS>(
               ctx, index_schema, attribute, vector_index_proto, iter);
         default:
           return absl::InvalidArgumentError("Unsupported algorithm.");

@@ -811,12 +811,12 @@ std::optional<float> ScoreNode(const Predicate *predicate,
                                        predicate->GetWeight());
           }
         }
-        // The document passed the filter, so it carries some rarer matched
-        // term: find it in the document's own tree rather than scoring 0.
+        // The document passed the filter, so it carries some other matched
+        // term: find one in the document's own tree rather than scoring 0.
         const auto *per_key_index = score_ctx.PerKeyTextIndex(key);
         if (per_key_index == nullptr) return std::nullopt;
         const auto &text_pred = *static_cast<const TextPredicate *>(predicate);
-        auto match = FindMostCommonExpansionMatch(
+        auto match = FindExpansionMatch(
             text_pred, expansion->kind, *per_key_index, score_ctx.per_key.key,
             score_ctx.cache.WalkLocks(*text_pred.GetTextIndexSchema()));
         if (!match) return std::nullopt;
@@ -943,8 +943,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
 }
 
 // kBackground callers hold the time-sliced mutex; see ScoreContext::DocLen.
-CorpusStats ReadCorpusStats(const IndexSchema &index_schema, LockMode mode)
-    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+CorpusStats ReadCorpusStats(const IndexSchema &index_schema,
+                            LockMode mode) ABSL_NO_THREAD_SAFETY_ANALYSIS {
   return {
       .total_docs =
           static_cast<uint32_t>(mode == LockMode::kBackground

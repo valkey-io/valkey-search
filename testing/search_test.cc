@@ -2355,10 +2355,11 @@ TEST_F(ScoreTextQueryTestBase, ExpansionFieldScopePicksTermInQueriedField) {
 
 // --- Expansion representative (ResolvedLeafCache) ----------------------------
 //
-// An expansion leaf caches one representative term: the most common match any
-// scored document has carried so far. A document carrying it is scored by one
-// probe; one that does not walks its own tree and may promote a more common
-// term. Either route scores the document's own term, never 0.
+// An expansion leaf caches one representative term: the most common match a
+// scored document has offered so far. A document carrying it is scored by one
+// probe; one that does not walks its own tree for a match and offers that,
+// promoting it if more common. Either route scores the document's own term,
+// never 0.
 
 // Parses `filter` once and scores `keys` in order through one shared cache, as
 // a query does. Returns the per-key scores (nullopt = filter did not match)
@@ -2431,6 +2432,25 @@ TEST_F(ScoreTextQueryTestBase, ExpansionRepresentativePromotesMostCommonTerm) {
   EXPECT_FLOAT_EQ(*cat1,
                   *Score(*schema, "@text:cat @rating:[0 100]", "d_cat1"));
   EXPECT_FLOAT_EQ(*cat1, *cat2);
+}
+
+// A document carrying several matches is scored on the first its tree yields
+// and the walk stops there; the cache still keeps the more common term if a
+// later document offers it.
+TEST_F(ScoreTextQueryTestBase, ExpansionFallbackTakesFirstMatch) {
+  auto schema = BuildTextTagSchema({
+      {"d_both", "cab cat", ""},
+      {"d_cat1", "cat", ""},
+      {"d_cat2", "cat", ""},
+  });
+  SharedCacheScorer prefix(*schema, "@text:ca* @rating:[0 100]");
+  auto both = prefix.Score("d_both");
+  EXPECT_EQ(prefix.Representative(), "cab");
+  ASSERT_TRUE(both);
+  EXPECT_FLOAT_EQ(*both,
+                  *Score(*schema, "@text:cab @rating:[0 100]", "d_both"));
+  prefix.Score("d_cat1");
+  EXPECT_EQ(prefix.Representative(), "cat");
 }
 
 // The representative probe is field-gated: a document carrying the

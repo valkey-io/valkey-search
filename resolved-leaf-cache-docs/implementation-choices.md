@@ -16,13 +16,8 @@ follows directly from the amendments is not repeated.
   `Evaluate(text_index, key, require_positions)` overrides and every caller; the
   saving is one extra per-key walk per query (the first scored candidate, before
   any representative exists). Not worth the plumbing.
-- **The fallback scores the document's most common matched term, not its first
-  in rax order**, and offers that same term as the representative. The walk
-  visits every match of the document anyway, so picking the max costs one
-  `GetKeyCount()` per match. Scoring the max also makes two identical documents
-  score identically regardless of candidate order in every case except one: a
-  document whose own max is rarer than a representative it also carries scores
-  the representative. The plan's "unspecified by contract" covers that.
+- The fallback returns the first matching word and stops (`FindExpansionMatch`);
+  see amendment 19.
 - `FuzzySearch::Search` gained an opt-in `collect_words` so the fallback can name
   the matched word (needed to store `WordPostings` and, in Phase 4, to pick the
   bucket lock). Off by default: 200 inline `std::string`s would have been ~6KB
@@ -99,7 +94,7 @@ follows directly from the amendments is not repeated.
   re-hash the word. `KeyCount()` / `ProbeDocStats()` are the only two places
   that take it.
 - **Per-key walks receive a nullable `RaxTargetMutexPool*`** threaded through
-  `TextPredicate::Evaluate` and `FindMostCommonExpansionMatch`; one shared
+  `TextPredicate::Evaluate` and `FindExpansionMatch`; one shared
   `ProbePostings` helper in predicate.cc does the probe and the lock. Retaining
   an iterator under a per-word lock is a `CHECK` failure: positional queries
   must use `kMainThreadWordLocksHeld`, where no per-probe lock is passed.

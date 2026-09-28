@@ -109,43 +109,38 @@ float ResolvedLeafCache::OfferExpansionTerm(ExpansionLeaf &leaf,
   return leaf.representative->idf;
 }
 
-std::optional<WordPostings> FindMostCommonExpansionMatch(
+std::optional<WordPostings> FindExpansionMatch(
     const TextPredicate &predicate, ExpansionLeaf::Kind kind,
     const indexes::text::TextIndex &per_key_index, const InternedStringPtr &key,
     indexes::text::RaxTargetMutexPool *word_locks) {
   const uint64_t field_mask = predicate.GetFieldMask();
   const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  std::optional<WordPostings> best;
-  size_t best_count = 0;
-  auto offer =
+  std::optional<WordPostings> found;
+  // True once `found` is set, so the walks stop at the first match.
+  auto probe =
       [&](absl::string_view word,
           indexes::text::InvasivePtr<indexes::text::Postings> postings) {
-        if (!postings) return;
+        if (!postings) return false;
         absl::Mutex *bucket = word_locks ? &word_locks->Get(word) : nullptr;
         std::optional<absl::MutexLock> lock;
         if (bucket != nullptr) lock.emplace(bucket);
         auto key_iter = postings->GetKeyIterator();
         if (!key_iter.SkipForwardKey(key) ||
             !key_iter.ContainsFields(field_mask)) {
-          return;
+          return false;
         }
-        const size_t count = postings->GetKeyCount();
-        if (!best || best_count < count) {
-          best = WordPostings{std::string(word), std::move(postings), bucket};
-          best_count = count;
-        }
+        found = WordPostings{std::string(word), std::move(postings), bucket};
+        return true;
       };
-  auto walk = [&](const indexes::text::Rax &tree, absl::string_view pattern) {
-    auto it = tree.GetWordIterator(pattern);
-    for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
-      offer(it.GetWord(), it.GetPostingsTarget());
-    }
-  };
   const absl::string_view term = predicate.GetTextString();
   switch (kind) {
-    case ExpansionLeaf::Kind::kPrefix:
-      walk(per_key_index.GetPrefix(), term);
+    case ExpansionLeaf::Kind::kPrefix: {
+      auto it = per_key_index.GetPrefix().GetWordIterator(term);
+      for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
+        if (probe(it.GetWord(), it.GetPostingsTarget())) break;
+      }
       break;
+    }
     case ExpansionLeaf::Kind::kSuffix: {
       // The suffix trie stores reversed words; without WITHSUFFIXTRIE there
       // are no matched terms.
@@ -155,8 +150,10 @@ std::optional<WordPostings> FindMostCommonExpansionMatch(
           std::string(term.rbegin(), term.rend()));
       for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
         const absl::string_view reversed = it.GetWord();
-        offer(std::string(reversed.rbegin(), reversed.rend()),
-              it.GetPostingsTarget());
+        if (probe(std::string(reversed.rbegin(), reversed.rend()),
+                  it.GetPostingsTarget())) {
+          break;
+        }
       }
       break;
     }
@@ -166,12 +163,12 @@ std::optional<WordPostings> FindMostCommonExpansionMatch(
           static_cast<const FuzzyPredicate &>(predicate).GetDistance(),
           max_words, /*words_only=*/true);
       for (size_t i = 0; i < expansion.postings.size(); ++i) {
-        offer(expansion.words[i], std::move(expansion.postings[i]));
+        if (probe(expansion.words[i], std::move(expansion.postings[i]))) break;
       }
       break;
     }
   }
-  return best;
+  return found;
 }
 
 ResolvedLeaf ResolvedLeafCache::ResolveText(

@@ -66,9 +66,9 @@ struct TermLeaf {
 
 // Prefix/suffix/fuzzy leaf: scores ONE matched term per doc, never the sum.
 // Nothing is walked globally for it. Scoring probes `representative` first and
-// on a miss walks the document's own tree, whose most common match may then
-// replace the representative; every candidate that carries it is answered by
-// one btree probe.
+// on a miss walks the document's own tree for a match, which replaces the
+// representative if it is more common; every candidate that carries it is
+// answered by one btree probe.
 struct ExpansionLeaf {
   enum class Kind { kPrefix, kSuffix, kFuzzy };
   Kind kind = Kind::kPrefix;
@@ -187,12 +187,12 @@ std::optional<indexes::text::PostingDocStats> ProbeDocStats(
     const WordPostings &word, BorrowedInternedStringPtr key,
     uint64_t field_mask);
 
-// Walks `per_key_index` for the expansion's matching words that `key` carries
-// in the predicate's fields and returns the most common one. `per_key_index`
-// must be the document's own tree: the walk visits every match, which is only
-// bounded there. `word_locks` are taken per probe when given, and the result
-// carries its bucket so later probes take it too.
-std::optional<WordPostings> FindMostCommonExpansionMatch(
+// Walks `per_key_index` for the first of the expansion's matching words that
+// `key` carries in the predicate's fields. Which match is unspecified (tree
+// order). `per_key_index` must be the document's own tree, where the walk is
+// bounded. `word_locks` are taken per probe when given, and the result carries
+// its bucket so later probes take it too.
+std::optional<WordPostings> FindExpansionMatch(
     const TextPredicate &predicate, ExpansionLeaf::Kind kind,
     const indexes::text::TextIndex &per_key_index, const InternedStringPtr &key,
     indexes::text::RaxTargetMutexPool *word_locks);

@@ -103,6 +103,11 @@ written. [top-level-read-first.txt](top-level-read-first.txt) wins over everythi
     superseded.
 18. **Fine-grained implementation choices are the implementer's** and are recorded in
     `implementation-choices.md`, not here.
+19. **The expansion fallback walk stops at the first matching word** (reaffirming decision 6
+    after an implementation had it take the most common). Expansion scoring's guarantees are
+    deliberately vague about which matched term scores, so be as lazy as they allow: one match,
+    early exit, offered to the cache as-is. `OfferExpansionTerm` still only promotes a more common
+    term. Hardening the guarantees is a separate, later decision.
 
 ## Stemming — after PR #1354
 

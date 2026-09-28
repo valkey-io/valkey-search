@@ -424,9 +424,8 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       !format.vr_field.empty() && HasVrDistance(neighbor);
   const auto &contents = neighbor.attribute_contents.value();
   if (return_attributes.empty()) {
-    ValkeyModule_ReplyWithArray(
-        ctx, 2 * contents.size() + (is_vector ? 2 : 0) +
-                (emit_vr_field ? 2 : 0));
+    ValkeyModule_ReplyWithArray(ctx, 2 * contents.size() + (is_vector ? 2 : 0) +
+                                         (emit_vr_field ? 2 : 0));
     if (is_vector) {
       ReplyScore(ctx, *score_as, neighbor);
     }

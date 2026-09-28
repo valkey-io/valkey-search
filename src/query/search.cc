@@ -2224,8 +2224,8 @@ size_t CountVectorRangePredicates(const Predicate *predicate) {
 // Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
 // $yield_distance_as alias. Without it there is no default "__<alias>_score"
 // field — Redisearch emits none (not by default, and not even when the client
-// explicitly RETURNs "__<alias>_score"). Returning "" here suppresses the field
-// everywhere it is gated on a non-empty name (ft_search reply/SORTBY,
+// explicitly passes RETURN "__<alias>_score"). Returning "" here suppresses the
+// field everywhere it is gated on a non-empty name (ft_search reply/SORTBY,
 // ft_aggregate registration/write), keeping the distance a pure filter unless
 // yielded via an alias.
 std::string GetVrScoreFieldName(const SearchParameters &parameters) {

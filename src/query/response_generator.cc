@@ -167,10 +167,9 @@ class PredicateEvaluator : public query::Evaluator {
     if (!vector_index) {
       return EvaluationResult(false);
     }
-    // Judge the vector the document holds now, as fetched into records_, like
-    // the tag and numeric checks above. Asking the index instead is not only
-    // stale: this runs on the main thread after the search released its reader
-    // lock, so the index's lock-free accessors would race the writer threads.
+    // Judges the vector as fetched into records_ (like the tag/numeric checks
+    // above), not via the index: this runs post-lock on the main thread, so
+    // the lock-free index accessors would race writer threads.
     auto it = records_.find(predicate.GetIdentifier());
     if (it == records_.end()) {
       return EvaluationResult(false);

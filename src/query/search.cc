@@ -1997,8 +1997,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
     if (parameters.has_vector_range) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                              SearchVectorRangeQuery(parameters));
-      // The VR leaf scores 0 (ScoreNode), so a plain VR query scores 0 and a
-      // compound one takes the relevance of its other leaves, as Redis reports.
+      // The VR leaf scores 0 (ScoreNode), a plain VR query scores 0, a
+      // compound one takes its other leaves' relevance, as Redis reports.
       ApplyRelevanceScore(parameters, neighbors);
       size_t total_count = neighbors.size();
       parameters.search_result =

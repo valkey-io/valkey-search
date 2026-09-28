@@ -336,13 +336,9 @@ class VectorBase : public IndexBase {
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
 
-  // Public because PrefilterEvaluator in search.cc / vector_base.cc calls this
-  // directly to compute a VR match distance.
-  // Returns the distance and internal label for the given key, or an error if
-  // the key is not tracked.
-  // Prefer IsWithinVectorRange for callers that only need a pass/fail check.
-  // Search phase only: reads the tracked-key maps lock-free, like
-  // GetVectorDuringSearch.
+  // Distance and internal label for `key`, or an error if untracked. Public
+  // for PrefilterEvaluator's direct VR-distance use; prefer IsWithinVectorRange
+  // for a pass/fail check. Search-phase only: lock-free, like GetVectorDuringSearch.
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query) const;
@@ -462,9 +458,8 @@ class VectorBase : public IndexBase {
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
 
-  // Distance as range searches report it: `query` prepared by
-  // NormalizeQueryIfNeeded, `query_magnitude` its reciprocal magnitude (1
-  // unless normalize_), with the cosine clamp applied.
+  // Clamped distance for a range search; `query` from NormalizeQueryIfNeeded,
+  // `query_magnitude` its reciprocal magnitude (1 unless normalize_).
   float RangeDistance(absl::string_view query, float query_magnitude,
                       const VectorRecord &record) const {
     if (normalize_) {
@@ -474,12 +469,9 @@ class VectorBase : public IndexBase {
         ComputeDistance(query, &record, query_magnitude));
   }
 
-  // Every tracked key within `radius` of `query`, in no particular order, for
-  // FLAT and HNSW alike.
-  // Lock-free search optimization: Phase-based locking guarantees that queries
-  // and resizes/mutations are strictly mutually exclusive. Every writer of the
-  // tracked-key maps (TrackKey, UnTrackKey, IsVectorUnchanged) runs from a
-  // mutation in its write phase, so key_to_metadata_mutex_ is not taken.
+  // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW
+  // alike. Lock-free: phase-based locking keeps queries and mutations
+  // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
   std::vector<Neighbor> SearchRangeExhaustive(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       hnswlib::BaseFilterFunctor *filter = nullptr) const
@@ -508,19 +500,11 @@ class VectorBase : public IndexBase {
     return {{}, query};
   }
 
-  // Bounds a VECTOR_RANGE cosine distance to the metric's range, [0, 2], and
-  // otherwise reports it as computed, like KNN. Deliberately no tolerance
-  // window around 0 or 2: the rounding error grows with the dimension count
-  // (dims * FLT_EPSILON is 1.8e-4 at 1536 dims), so a window wide enough to
-  // absorb it also collapses real near-duplicates to 0 and pushes real
-  // near-antipodes past 2.
-  //
-  // A non-finite distance (a NaN or infinite component in either vector) is
-  // classified from its bits: -ffast-math lets the compiler fold isfinite
-  // and NaN comparisons. NaN, +inf and any non-finite cosine distance are
-  // reported as +inf, which no radius includes since SetRadius caps the
-  // radius at FLT_MAX. An IP -inf is kept: it is within every radius, as
-  // on Redis.
+  // Clamps a cosine distance to [0, 2]; no tolerance window, since one wide
+  // enough to absorb FP noise also swallows real near-duplicates/antipodes.
+  // Non-finite values are classified from their bits (-ffast-math breaks
+  // isnan/isfinite) and reported as +inf, outside every radius; an IP -inf
+  // is kept as-is, within every radius, matching Redis.
   float ClampCosineDistance(float dist) const {
     constexpr uint32_t kExponentMask = 0x7f800000u;
     constexpr uint32_t kNegativeInfinity = 0xff800000u;

@@ -412,12 +412,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   VMSDK_ASSIGN_OR_RETURN(auto raw_results,
                          perform_search(nq.view, reciprocal_magnitude));
 
-  // The fetch was capped only if it filled the cap and even its farthest
-  // candidate (top of the max-heap) is in range; then in-range documents may
-  // have gone unenumerated, so the query is answered from an exhaustive scan
-  // of the tracked keys, as FLAT does. A cap of 0 fetches nothing and always
-  // counts and scans. Reported on the same developer-visible counter as the
-  // non-vector prefilter cap (search.cc).
+  // Capped only if the fetch filled the cap AND its farthest candidate is
+  // still in range; then in-range docs may be unenumerated, so fall back to
+  // an exhaustive scan, as FLAT does (cap 0 always scans). Reported on the
+  // same counter as the non-vector prefilter cap (search.cc).
   const bool fetch_full = raw_results.size() >= max_candidates;
   const bool fetch_limited =
       fetch_full &&
@@ -438,14 +436,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     if (cancellation_token->IsCancelled()) {
       break;
     }
-    // A full fetch that holds a NaN or infinite distance takes the scan as
-    // well. NaN breaks the order of the candidate heap, so such a fetch cannot
-    // be trusted to have kept the closest candidates. An infinite distance
-    // signals an infinite stored vector, which a zero reciprocal magnitude
-    // leaves unnormalized: it sorts at an end of the heap, so a small fetch can
-    // fill with such vectors before any finite in-range one, and a cosine
-    // clamp that maps it out of range hides the saturation. IsNaN and IsInf
-    // read the bits, which -ffast-math does not affect.
+    // NaN breaks heap order, so a full fetch can't be trusted to hold the
+    // closest candidates; an infinite distance can mean an unnormalized
+    // infinite stored vector sorting at a heap end. Rescan exhaustively.
+    // IsNaN/IsInf read the bits, unaffected by -ffast-math.
     if (fetch_full && (scoring::IsNaN(dist) || scoring::IsInf(dist))) {
       query::RecordNonVectorResultsFetchedLimited();
       return this->SearchRangeExhaustive(query, radius, cancellation_token,

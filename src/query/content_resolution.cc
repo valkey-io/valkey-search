@@ -15,6 +15,7 @@
 #include "src/index_schema.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
+#include "src/valkey_search.h"
 #include "vmsdk/src/managed_pointers.h"
 
 namespace valkey_search::query {
@@ -64,7 +65,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     return;
   }
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
-  const auto& attribute_data_type =
+  const auto &attribute_data_type =
       params->index_schema->GetAttributeDataType();
   size_t original_size = params->search_result.neighbors.size();
 
@@ -88,12 +89,29 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     params->search_result.total_count = 0;
   }
 
-  // 6. Apply INKEYS post-filter (shard-local in cluster mode)
+  // 6. A SORTBY trimmed in the background keeps only the page plus a buffer.
+  // If loading dropped enough of those to leave the page short, resolve the
+  // full candidate set instead, as an untrimmed SORTBY does.
+  auto &result = params->search_result;
+  if (result.FallBackToSortByCandidates(*params, removed)) {
+    result.total_count += removed;  // Recounted over the full set.
+    ResolveContent(std::move(params));
+    return;
+  }
+  // The fallback is not needed. Free the candidates off the main thread, which
+  // would otherwise pay for them when this operation is destroyed.
+  if (!result.sortby_candidates.empty()) {
+    ValkeySearch::Instance().ScheduleUtilityTask(
+        [candidates = std::move(result.sortby_candidates)]() {});
+    result.sortby_candidates.clear();
+  }
+
+  // 7. Apply INKEYS post-filter (shard-local in cluster mode)
   if (params->inkeys.has_value()) {
     ApplyInkeysFilter(params->search_result, *params->inkeys);
   }
 
-  // 7. Call QueryCompleteMainThread
+  // 8. Call QueryCompleteMainThread
   params->QueryCompleteMainThread(std::move(params));
 }
 

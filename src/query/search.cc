@@ -705,7 +705,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
         case indexes::IndexerType::kNumeric: {
           auto *numeric_index =
               dynamic_cast<indexes::Numeric *>(attribute_info.index);
-          const auto *numeric = numeric_index->GetValue(neighbor.external_id);
+          const auto *numeric = numeric_index->GetValue(
+              BorrowedInternedStringPtr(neighbor.external_id));
           if (numeric != nullptr) {
             attribute_value =
                 vmsdk::MakeUniqueValkeyString(expr::FormatDouble(*numeric));
@@ -1878,6 +1879,85 @@ void RecordNonVectorResultsFetchedLimited() {
   nonvector_results_fetched_limited_count.Increment();
 }
 
+namespace {
+// The index of the SORTBY field when its per-key values can order candidates
+// without their content, so the main thread fetches content for the survivors
+// only; nullptr otherwise. NUMERIC only for now: TAG can follow once its sort
+// comparison (case folding, #1454) is settled, by admitting kTag here and
+// adding its case to SortBySortIndex.
+const indexes::IndexBase *SortByIndex(const SearchParameters &parameters) {
+  if (!parameters.sortby_parameter.has_value()) {
+    return nullptr;
+  }
+  auto index =
+      parameters.index_schema->GetIndex(parameters.sortby_parameter->field);
+  if (!index.ok() ||
+      index.value()->GetIndexerType() != indexes::IndexerType::kNumeric) {
+    return nullptr;
+  }
+  return index.value().get();
+}
+
+// Whether `sort_index` holds a value for `key` that SortBySortIndex can order.
+// A key it does not track (a missing field, or a value that does not parse) or
+// a NaN cannot be ordered here: ApplySorting orders those by rules the index
+// cannot reproduce, so they reach it untrimmed.
+bool HasSortValue(const indexes::IndexBase &sort_index,
+                  BorrowedInternedStringPtr key) {
+  switch (sort_index.GetIndexerType()) {
+    case indexes::IndexerType::kNumeric: {
+      const double *value =
+          static_cast<const indexes::Numeric &>(sort_index).GetValue(key);
+      // scoring::IsNaN reads the bit pattern, since std::isnan is unreliable
+      // under -ffast-math; a double NaN stays a NaN as a float.
+      return value != nullptr &&
+             !indexes::scoring::IsNaN(static_cast<float>(*value));
+    }
+    default:
+      CHECK(false) << "SortByIndex admitted an index HasSortValue cannot read";
+      return false;
+  }
+}
+
+// Orders `vec`, whose keys all have a sort value (see HasSortValue), by the
+// per-key values of `sort_index`, keeping only the first `sort_limit` in order.
+// ApplySorting re-sorts the survivors on their fetched content, so this order
+// only has to match it, including the tie-break.
+void SortBySortIndex(std::vector<indexes::BorrowedNeighbor> &vec,
+                     size_t sort_limit, const indexes::IndexBase &sort_index,
+                     const SearchParameters &parameters) {
+  const bool ascending =
+      parameters.sortby_parameter->order == SortOrder::kAscending;
+  switch (sort_index.GetIndexerType()) {
+    case indexes::IndexerType::kNumeric: {
+      const auto &numeric = static_cast<const indexes::Numeric &>(sort_index);
+      auto cmp = [&numeric, ascending](const indexes::BorrowedNeighbor &a,
+                                       const indexes::BorrowedNeighbor &b) {
+        const double value_a = *numeric.GetValue(a.key);
+        const double value_b = *numeric.GetValue(b.key);
+        if (value_a != value_b) {
+          return ascending ? value_a < value_b : value_a > value_b;
+        }
+        // Tie-break on the key in the sort direction, as ApplySorting does
+        // (#1397), so the ties kept here are the ones it ranks first.
+        return ascending ? a.key->Str() < b.key->Str()
+                         : a.key->Str() > b.key->Str();
+      };
+      if (sort_limit < vec.size()) {
+        std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(),
+                          cmp);
+      } else {
+        std::sort(vec.begin(), vec.end(), cmp);
+      }
+      return;
+    }
+    default:
+      CHECK(false) << "SortByIndex admitted an index SortBySortIndex cannot "
+                      "order by";
+  }
+}
+}  // namespace
+
 SearchResult::SearchResult()
     : total_count(0), is_limited_with_buffer(false), is_offsetted(false) {}
 
@@ -1908,9 +1988,29 @@ SearchResult::SearchResult(size_t total_count,
   if (ShouldReturnNoResults(parameters)) {
     return;
   }
-  if (!parameters.RequiresCompleteResults()) {
-    TrimResults(borrowed, parameters, trim_offset_in_background);
+  // A SORTBY the index can order is trimmed here like a score-ordered query;
+  // any other SORTBY keeps every candidate.
+  const indexes::IndexBase *sort_index = SortByIndex(parameters);
+  std::vector<indexes::BorrowedNeighbor> unsortable;
+  if (sort_index != nullptr) {
+    sortby_candidates.reserve(borrowed.size());
+    for (const auto &b : borrowed) {
+      sortby_candidates.emplace_back(b.key.Materialize(), b.distance, b.score);
+    }
+    // Candidates the index cannot order go through untrimmed.
+    auto sortable_end =
+        std::stable_partition(borrowed.begin(), borrowed.end(),
+                              [sort_index](const indexes::BorrowedNeighbor &b) {
+                                return HasSortValue(*sort_index, b.key);
+                              });
+    unsortable.assign(sortable_end, borrowed.end());
+    borrowed.erase(sortable_end, borrowed.end());
   }
+  if (!parameters.RequiresCompleteResults() || sort_index != nullptr) {
+    TrimResults(borrowed, parameters, trim_offset_in_background, sort_index);
+  }
+  sortby_kept = borrowed.size();
+  borrowed.insert(borrowed.end(), unsortable.begin(), unsortable.end());
   // Materialize only the survivors into owning Neighbor vector.
   neighbors.reserve(borrowed.size());
   for (auto &b : borrowed) {
@@ -1918,10 +2018,27 @@ SearchResult::SearchResult(size_t total_count,
   }
 }
 
+bool SearchResult::FallBackToSortByCandidates(
+    const SearchParameters &parameters, size_t removed) {
+  const uint64_t needed = parameters.limit.number +
+                          (is_offsetted ? 0 : parameters.limit.first_index);
+  // Only the sorted neighbors can stand in for the ones the trim dropped, and
+  // any removed one may have been among them.
+  if (removed == 0 || sortby_candidates.empty() ||
+      sortby_kept >= needed + removed) {
+    return false;
+  }
+  neighbors = std::move(sortby_candidates);
+  sortby_candidates.clear();
+  is_offsetted = false;
+  return true;
+}
+
 template <typename T>
 void SearchResult::TrimResults(std::vector<T> &vec,
                                const SearchParameters &parameters,
-                               bool trim_offset_in_background) {
+                               bool trim_offset_in_background,
+                               const indexes::IndexBase *sort_index) {
   SerializationRange range = GetSerializationRange(parameters, vec.size());
   size_t max_needed = static_cast<size_t>(
       range.end_index * options::GetSearchResultBufferMultiplier());
@@ -1937,7 +2054,9 @@ void SearchResult::TrimResults(std::vector<T> &vec,
       return a.key->Str() < b.key->Str();
     };
     size_t sort_limit = std::min(max_needed, vec.size());
-    if (sort_limit < vec.size()) {
+    if (sort_index != nullptr) {
+      SortBySortIndex(vec, sort_limit, *sort_index, parameters);
+    } else if (sort_limit < vec.size()) {
       std::partial_sort(vec.begin(), vec.begin() + sort_limit, vec.end(), cmp);
     } else {
       std::sort(vec.begin(), vec.end(), cmp);
@@ -1976,7 +2095,10 @@ void SearchResult::TrimResults(std::vector<T> &vec,
   // coordinator (after merging) WILL trim from the front and back in the
   // background thread to avoid memory bloat with large offsets / limit counts
   // before returning to the main thread.
-  if (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background) {
+  // A SORTBY keeps its offset: content loading can drop documents before it,
+  // and the offset has to skip only the ones that survive.
+  if (sort_index == nullptr &&
+      (!ValkeySearch::Instance().IsCluster() || trim_offset_in_background)) {
     this->is_offsetted = true;
     // Trim from front (apply offset)
     if (range.start_index > 0 && range.start_index < vec.size()) {
@@ -2087,6 +2209,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   }
   parameters.index_schema->PopulateIndexMutationSequenceNumbers(
       parameters.search_result.neighbors);
+  parameters.index_schema->PopulateIndexMutationSequenceNumbers(
+      parameters.search_result.sortby_candidates);
   return absl::OkStatus();
 }
 

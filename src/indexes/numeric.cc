@@ -125,7 +125,7 @@ uint32_t Numeric::GetMutationWeight() const {
   return options::GetMutationWeightNumeric().GetValue();
 }
 
-const double *Numeric::GetValue(const InternedStringPtr &key) const {
+const double *Numeric::GetValue(BorrowedInternedStringPtr key) const {
   if (auto it = tracked_keys_.find(key); it != tracked_keys_.end()) {
     return &it->second;
   }

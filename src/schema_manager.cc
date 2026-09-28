@@ -30,6 +30,7 @@
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/coordinator/metadata_manager.h"
 #include "src/cursor.h"
 #include "src/index_schema.h"
@@ -325,6 +326,12 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   if (existing_entry.ok()) {
     return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
+
+  // FT.CREATE enforces the configurable limits (M, EF_*, DIM, prefix and
+  // attribute counts, ...) while parsing its text arguments. Protos arriving
+  // via coordinator gossip or FT.INTERNAL_UPDATE never went through that
+  // parser, so re-check here to keep every creation path consistent.
+  VMSDK_RETURN_IF_ERROR(ValidateIndexSchemaLimits(index_schema_proto));
 
   // Run unconditionally: the schema is also checked against itself, and a
   // self-conflicting schema can be the first index in the database, where

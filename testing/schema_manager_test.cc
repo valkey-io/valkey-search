@@ -12,11 +12,14 @@
 #include <string>
 #include <utility>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
+#include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/coordinator/metadata_manager.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
@@ -604,6 +607,55 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   EXPECT_EQ(test_index_schema->db_num_, expected_dbnum != -1
                                             ? expected_dbnum
                                             : test_case.index_schema_db_num);
+}
+
+// Coordinator metadata (gossip / FT.INTERNAL_UPDATE) reaches
+// CreateIndexSchemaInternal through the MetadataManager update callback
+// without ever passing through the FT.CREATE argument parser. The configurable
+// limits must still be enforced on that path, so a definition FT.CREATE would
+// reject is not materialized just because it arrived as a proto.
+TEST_F(SchemaManagerTest, MetadataUpdateRejectsOverLimitSchema) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  // Lower the M limit below the fixture's m=240 to exercise the check without
+  // depending on the hard-cap default.
+  const auto saved_max_m = options::GetMaxM().GetValue();
+  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
+  absl::Cleanup restore = [saved_max_m] {
+    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
+  };
+
+  auto metadata = std::make_unique<google::protobuf::Any>();
+  metadata->PackFrom(test_index_schema_proto_);
+  auto status = coordinator::MetadataManager::Instance()
+                    .CreateEntry(kSchemaManagerMetadataTypeName,
+                                 coordinator::ObjName(db_num_, index_name_),
+                                 std::move(metadata))
+                    .status();
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  EXPECT_FALSE(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_).ok());
+}
+
+// The same proto within limits is created normally on the metadata path.
+TEST_F(SchemaManagerTest, MetadataUpdateAcceptsWithinLimitSchema) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto metadata = std::make_unique<google::protobuf::Any>();
+  metadata->PackFrom(test_index_schema_proto_);
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance()
+                      .CreateEntry(kSchemaManagerMetadataTypeName,
+                                   coordinator::ObjName(db_num_, index_name_),
+                                   std::move(metadata))
+                      .status());
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
 }
 
 }  // namespace valkey_search

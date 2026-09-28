@@ -110,6 +110,10 @@ jobs:
           script: |
             const {owner, repo} = context.repo;
             const noMerge = "The PR has no mergeable commit (likely conflicts with the base branch, or merge not yet computed - try again in a moment).";
+            const benchmarkLabels = new Set([
+              'run-search-benchmark',
+              'run-search-benchmark-skip-profiling',
+            ]);
 
             if (context.eventName === 'workflow_dispatch') {
               const prNumber = Number('${{ github.event.inputs.pr_number }}');
@@ -129,9 +133,10 @@ jobs:
               core.setOutput('pr_number', String(prNumber));
               const clusterInput = '${{ github.event.inputs.cluster_mode }}';
               const triggerLabel = process.env.TRIGGER_LABEL_INPUT || '';
+              const normalizedTriggerLabel = benchmarkLabels.has(triggerLabel) ? triggerLabel : '';
               core.setOutput('cluster_filter', clusterInput || '');
               core.setOutput('skip_profiling', '${{ github.event.inputs.skip_profiling }}' === 'true' ? 'true' : 'false');
-              core.setOutput('label', triggerLabel);
+              core.setOutput('label', normalizedTriggerLabel);
             } else {
               // pull_request_target: the PR context is already in the payload.
               const pr = context.payload.pull_request;
@@ -513,14 +518,24 @@ jobs:
       - name: Remove benchmark label
         if: always() && needs.resolve.outputs.label != ''
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TARGET_LABEL: ${{ needs.resolve.outputs.label }}
+          TARGET_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const benchmarkLabels = new Set([
+              'run-search-benchmark',
+              'run-search-benchmark-skip-profiling',
+            ]);
+            const label = process.env.TARGET_LABEL || '';
+            const prNumber = Number(process.env.TARGET_PR_NUMBER);
+            if (!benchmarkLabels.has(label) || !Number.isInteger(prNumber) || prNumber <= 0) return;
             await github.rest.issues.removeLabel({
-              issue_number: Number('${{ needs.resolve.outputs.pr_number }}'),
+              issue_number: prNumber,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              name: '${{ needs.resolve.outputs.label }}'
+              name: label
             }).catch(err => console.log('label not present', err.message));
 
   cleanup-label-on-resolve-failure:
@@ -539,8 +554,13 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const benchmarkLabels = new Set([
+              'run-search-benchmark',
+              'run-search-benchmark-skip-profiling',
+            ]);
             const prNumber = Number(process.env.TARGET_PR_NUMBER);
             const label = process.env.TARGET_LABEL || '';
+            if (!benchmarkLabels.has(label) || !Number.isInteger(prNumber) || prNumber <= 0) return;
             await github.rest.issues.removeLabel({
               issue_number: prNumber,
               owner: context.repo.owner,

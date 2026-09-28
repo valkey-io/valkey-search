@@ -103,6 +103,8 @@ jobs:
       - name: Resolve PR details
         id: pr
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TRIGGER_LABEL_INPUT: ${{ github.event.inputs.trigger_label }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -126,9 +128,10 @@ jobs:
               core.setOutput('base_sha', pr.data.base.sha);
               core.setOutput('pr_number', String(prNumber));
               const clusterInput = '${{ github.event.inputs.cluster_mode }}';
+              const triggerLabel = process.env.TRIGGER_LABEL_INPUT || '';
               core.setOutput('cluster_filter', clusterInput || '');
               core.setOutput('skip_profiling', '${{ github.event.inputs.skip_profiling }}' === 'true' ? 'true' : 'false');
-              core.setOutput('label', '${{ github.event.inputs.trigger_label }}');
+              core.setOutput('label', triggerLabel);
             } else {
               // pull_request_target: the PR context is already in the payload.
               const pr = context.payload.pull_request;

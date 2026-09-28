@@ -51,7 +51,7 @@ SCORING_CROSS_FIELD_RATE = 0.2
 SCORING_TAG_FREQS = {"amber": 180, "azure": 105, "cerise": 80, "cobalt": 55,
                      "indigo": 40, "ochre": 25, "sepia": 12, "teal": 3}
 SCORING_VECTOR_CLUSTERS = 8
-# cycled per doc; None omits the field, "abc" is unparseable as a score
+# cycled per doc; None omits the field, "abc" is unparsable as a score
 SCORING_BOOSTS = [2.0, 0.25, -1.0, None, "abc"]
 
 TEXT_DATASETS = {
@@ -231,11 +231,9 @@ SCHEMA_FLAGS = {
 # while scoring has no use for it: the trie is perf-only and the
 # prefix/suffix/fuzzy shapes are out of scope.
 #
-# NOSTEM on every text field: stem-expansion scoring diverges from the reference
-# engine, so stemming stays out of scope until that lands. Flags are therefore
-# variant-independent; only SCHEMA_INDEX_ATTRS varies.
+# "default" stems both text fields; mixing in NOSTEM diverges from the reference
 SCORING_SCHEMA_FLAGS = {
-    "text": "NOSTEM",
+    "text": {"nostem": "NOSTEM", "docscore": "NOSTEM", "default": ""},
     "tag": "",
     "numeric": "",
     "vector": f"FLAT 6 TYPE FLOAT32 DIM {VECTOR_DIM} DISTANCE_METRIC L2",
@@ -248,6 +246,7 @@ SCHEMA_INDEX_ATTRS = {
     "nostem": {"hash": "", "json": ""},
     "docscore": {"hash": "SCORE 0.5 SCORE_FIELD boost",
                  "json": "SCORE 0.5 SCORE_FIELD $.boost"},
+    "default": {"hash": "", "json": ""},
 }
 
 def _build_field_schema(field: str, field_type: str, schema_type: str, for_json: bool = False) -> str:
@@ -266,15 +265,18 @@ def _build_field_schema(field: str, field_type: str, schema_type: str, for_json:
         return f"$.{field} AS {field_def}"
     return field_def
 
-def _build_scoring_field(field: str, field_type: str, for_json: bool) -> str:
+def _build_scoring_field(field: str, field_type: str, schema_type: str, for_json: bool) -> str:
     """One field's schema string, using the scoring suite's own flag table."""
-    field_def = f"{field} {field_type.upper()} {SCORING_SCHEMA_FLAGS[field_type]}".strip()
+    flags = SCORING_SCHEMA_FLAGS[field_type]
+    if isinstance(flags, dict):
+        flags = flags[schema_type]
+    field_def = f"{field} {field_type.upper()} {flags}".strip()
     return f"$.{field} AS {field_def}" if for_json else field_def
 
 def _build_scoring_create(key_type: str, schema_type: str) -> str:
     """Build the FT.CREATE for one scoring schema variant."""
     parts = [
-        _build_scoring_field(field, field_type, for_json=(key_type == "json"))
+        _build_scoring_field(field, field_type, schema_type, for_json=(key_type == "json"))
         for field_type in ("text", "tag", "numeric", "vector")
         for field in SCORING_SCHEMA[field_type]
     ]
@@ -1412,13 +1414,111 @@ SCORING_EXTRA_WORDS = [
     'hollow', 'golden', 'rusty', 'fragile', 'sturdy', 'bitter', 'sweet', 'rough', 'tiny', 'giant',
 ]
 
-def _scoring_vocab():
+# Extra words for "default": each stems the same in both engines; order sets dt tier
+STEMMING_SCORING_EXTRA_WORDS = [
+    # plurals
+    'apples', 'bananas', 'oranges', 'grapes', 'cherries', 'mangoes', 'mangos', 'pears', 'peaches', 'plums',
+    'melons', 'kiwis', 'lemons', 'tables', 'chairs', 'desks', 'lamps', 'windows', 'doors', 'movies',
+    'books', 'stories', 'games', 'puzzles', 'potatoes', 'tomatoes', 'lettuces', 'onions', 'carrots', 'dogs',
+    'cats', 'horses', 'tigers', 'eagles', 'sharks', 'cities', 'villages', 'forests', 'deserts', 'oceans',
+    'rivers', 'bookings', 'buildings', 'paintings', 'heavies', 'colds',
+    # third person
+    'runs', 'jumps', 'swims', 'drives', 'flies', 'builds', 'fasts', 'slows', 'warms', 'quiets',
+    'smooths', 'dances', 'creates', 'arrives', 'paints', 'travels', 'listens',
+    # -ing
+    'running', 'jumping', 'swimming', 'driving', 'flying', 'building', 'fasting', 'slowing', 'warming', 'booking',
+    'gaming', 'puzzling', 'tabling', 'chairing', 'smoothing', 'quieting', 'deserting', 'windowing', 'dogging', 'horsing',
+    'dancing', 'creating', 'arriving', 'painting', 'traveling', 'travelling', 'listening',
+    # -ed
+    'jumped', 'booked', 'gamed', 'puzzled', 'tabled', 'chaired', 'smoothed', 'quieted', 'slowed', 'warmed',
+    'fasted', 'deserted', 'storied', 'forested', 'dogged', 'windowed', 'danced', 'created', 'arrived', 'painted',
+    'traveled', 'travelled', 'listened',
+    # -ly, -ness
+    'quickly', 'brightly', 'silently', 'smoothly', 'loudly', 'quietly', 'warmly', 'coldly', 'musically',
+    'quickness', 'brightness', 'heaviness', 'smoothness', 'sharpness', 'slowness', 'loudness', 'quietness', 'coldness', 'warmness',
+    # other derivations, and base forms that stem
+    'musical', 'oceanic', 'villager', 'listener', 'arrival', 'dance', 'create', 'arrive',
+]
+
+# Stem -> "default" pool words sharing it; the query builder predicts hits from it
+STEMMING_SCORING_STEMS = {
+    'appl': ['apple', 'apples'],
+    'arriv': ['arrives', 'arriving', 'arrived', 'arrival', 'arrive'],
+    'banana': ['banana', 'bananas'],
+    'book': ['book', 'books', 'bookings', 'booking', 'booked'],
+    'bright': ['bright', 'brightly', 'brightness'],
+    'build': ['build', 'buildings', 'builds', 'building'],
+    'carrot': ['carrot', 'carrots'],
+    'cat': ['cat', 'cats'],
+    'chair': ['chair', 'chairs', 'chairing', 'chaired'],
+    'cherri': ['cherry', 'cherries'],
+    'citi': ['city', 'cities'],
+    'cold': ['cold', 'colds', 'coldly', 'coldness'],
+    'creat': ['creates', 'creating', 'created', 'create'],
+    'danc': ['dances', 'dancing', 'danced', 'dance'],
+    'desert': ['desert', 'deserts', 'deserting', 'deserted'],
+    'desk': ['desk', 'desks'],
+    'dog': ['dog', 'dogs', 'dogging', 'dogged'],
+    'door': ['door', 'doors'],
+    'drive': ['drive', 'drives', 'driving'],
+    'eagl': ['eagle', 'eagles'],
+    'fast': ['fast', 'fasts', 'fasting', 'fasted'],
+    'fli': ['fly', 'flies', 'flying'],
+    'forest': ['forest', 'forests', 'forested'],
+    'game': ['game', 'games', 'gaming', 'gamed'],
+    'grape': ['grape', 'grapes'],
+    'heavi': ['heavy', 'heavies', 'heaviness'],
+    'hors': ['horse', 'horses', 'horsing'],
+    'jump': ['jump', 'jumps', 'jumping', 'jumped'],
+    'kiwi': ['kiwi', 'kiwis'],
+    'lamp': ['lamp', 'lamps'],
+    'lemon': ['lemon', 'lemons'],
+    'lettuc': ['lettuce', 'lettuces'],
+    'listen': ['listens', 'listening', 'listened', 'listener'],
+    'loud': ['loud', 'loudly', 'loudness'],
+    'mango': ['mango', 'mangoes', 'mangos'],
+    'melon': ['melon', 'melons'],
+    'movi': ['movie', 'movies'],
+    'music': ['music', 'musically', 'musical'],
+    'ocean': ['ocean', 'oceans', 'oceanic'],
+    'onion': ['onion', 'onions'],
+    'orang': ['orange', 'oranges'],
+    'paint': ['paintings', 'paints', 'painting', 'painted'],
+    'peach': ['peach', 'peaches'],
+    'pear': ['pear', 'pears'],
+    'plum': ['plum', 'plums'],
+    'potato': ['potato', 'potatoes'],
+    'puzzl': ['puzzle', 'puzzles', 'puzzling', 'puzzled'],
+    'quick': ['quick', 'quickly', 'quickness'],
+    'quiet': ['quiet', 'quiets', 'quieting', 'quieted', 'quietly', 'quietness'],
+    'river': ['river', 'rivers'],
+    'run': ['run', 'runs', 'running'],
+    'shark': ['shark', 'sharks'],
+    'sharp': ['sharp', 'sharpness'],
+    'silent': ['silent', 'silently'],
+    'slow': ['slow', 'slows', 'slowing', 'slowed', 'slowness'],
+    'smooth': ['smooth', 'smooths', 'smoothing', 'smoothed', 'smoothly', 'smoothness'],
+    'stori': ['story', 'stories', 'storied'],
+    'swim': ['swim', 'swims', 'swimming'],
+    'tabl': ['table', 'tables', 'tabling', 'tabled'],
+    'tiger': ['tiger', 'tigers'],
+    'tomato': ['tomato', 'tomatoes'],
+    'travel': ['travels', 'traveling', 'travelling', 'traveled', 'travelled'],
+    'villag': ['village', 'villages', 'villager'],
+    'warm': ['warm', 'warms', 'warming', 'warmed', 'warmly', 'warmness'],
+    'window': ['window', 'windows', 'windowing', 'windowed'],
+}
+# Shorter words are indexed unstemmed; query words always stem
+SCORING_MIN_STEM_LEN = 4
+
+def _scoring_vocab(schema_type):
     """Pool terms, sized by the dt tiers, and the filler that pads doc_len."""
     text = TEXT_DATASETS['pure text']['field_values']
-    pool = text['title'] + text['body'] + SCORING_EXTRA_WORDS
+    extra = STEMMING_SCORING_EXTRA_WORDS if schema_type == "default" else SCORING_EXTRA_WORDS
+    pool = text['title'] + text['body'] + extra
     return pool, _make_scoring_terms(SCORING_FILLER_TERMS, "w")
 
-def compute_scoring_corpus(seed=123):
+def compute_scoring_corpus(seed=123, schema_type="nostem"):
     """Build the scoring corpus from a term -> doc incidence matrix.
 
     Returns (docs, terms). docs maps doc id to field values, text fields as word
@@ -1426,7 +1526,7 @@ def compute_scoring_corpus(seed=123):
     exact expected hits: len(terms[t]) is that term's dt.
     """
     rng = random.Random(seed)
-    words, fillers = _scoring_vocab()
+    words, fillers = _scoring_vocab(schema_type)
     assert len(words) == sum(n for n, _ in SCORING_DT_TIERS), \
         "SCORING_DT_TIERS must cover every pool word exactly once"
     pool = iter(words)
@@ -1479,12 +1579,11 @@ def compute_scoring_data_sets(dataset_name, schema_type="nostem"):
     if dataset_name not in SCORING_DATASETS:
         raise ValueError(f"Unknown dataset: {dataset_name}. "
                          f"Available: {list(SCORING_DATASETS.keys())}")
-    # load_data defaults schema_type to "default", which this suite does not have
     if schema_type not in SCHEMA_INDEX_ATTRS:
         raise ValueError(f"Unknown scoring schema type: {schema_type}. "
                          f"Available: {list(SCHEMA_INDEX_ATTRS.keys())}")
 
-    corpus, _ = compute_scoring_corpus()
+    corpus, _ = compute_scoring_corpus(schema_type=schema_type)
     data = {dataset_name: {}}
     for key_type in ["hash", "json"]:
         sets = []

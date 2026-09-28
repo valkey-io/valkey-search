@@ -349,18 +349,12 @@ class TestKnnSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
 
 class TestKnnSortKeyNil(ValkeySearchTestCaseBase):
     """
-        KNN-path regression test for issue #1353, item 5: the WITHSORTKEYS
-        sort-key slot must be nil when no sort key exists -- with
-        WITHSORTKEYS but no SORTBY, and for a document lacking the SORTBY
-        field. The filter-path test lives in test_non_vector.py.
+        KNN path: absent WITHSORTKEYS sort keys reply nil (issue #1353 item 5).
     """
 
     def test_knn_withsortkeys_absent_sortkey_is_nil(self):
         client: Valkey = self.server.get_new_client()
-        # The nil reply is a gated compatibility fix (see
-        # TestKnnSortKeyNilGate for the legacy arm); pin emulate-release at
-        # the fix version so this test exercises the fixed path regardless
-        # of the default.
+        # Pin the fix version; the default emulate-release runs the legacy arm.
         assert client.execute_command(
             "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
         # NUL-free 8-byte blobs are valid FLOAT32 DIM-2 vectors.
@@ -374,9 +368,7 @@ class TestKnnSortKeyNil(ValkeySearchTestCaseBase):
         assert client.execute_command(
             "HSET", "knn_nil:2", "m", "all", "vec", "BBBBBBBB") == 2
 
-        # SORTBY on a field one document lacks: that row's slot is nil and
-        # the document sorts last; the row that has the field keeps the
-        # prefixed value.
+        # A document lacking the SORTBY field gets a nil sort key and sorts last.
         result = client.execute_command(
             "FT.SEARCH", "knn_nil_idx", "(*)=>[KNN 2 @vec $B]",
             "SORTBY", "p", "ASC", "WITHSORTKEYS", "RETURN", "2", "m", "p",
@@ -387,9 +379,7 @@ class TestKnnSortKeyNil(ValkeySearchTestCaseBase):
             b"knn_nil:2", None,   [b"m", b"all"],
         ]
 
-        # WITHSORTKEYS without SORTBY: every row's sort-key slot is nil,
-        # including in a KNN query -- the distance does not implicitly
-        # become the sort key. Rows come back in KNN distance order.
+        # Without SORTBY the KNN distance does not become the sort key.
         result = client.execute_command(
             "FT.SEARCH", "knn_nil_idx", "(*)=>[KNN 2 @vec $B]",
             "WITHSORTKEYS", "RETURN", "1", "m",
@@ -403,9 +393,8 @@ class TestKnnSortKeyNil(ValkeySearchTestCaseBase):
 
 class TestKnnSortKeyNilGate(ValkeySearchTestCaseDebugMode):
     """
-        KNN-path gate check for the absent-sort-key nil reply (issue #1353
-        item 5); the filter-path check lives in test_non_vector.py.
-        Pre-1.3.0 replied the bare prefix string.
+        KNN path: the absent-sort-key nil reply (issue #1353 item 5) is gated
+        on search.emulate-release; below 1.3.0 the slot is the bare prefix.
     """
 
     def test_knn_sortkey_nil_gate(self):
@@ -432,8 +421,7 @@ class TestKnnSortKeyNilGate(ValkeySearchTestCaseDebugMode):
                 b"knsg:1", b"#10",  [b"m", b"all,solo", b"p", b"10"],
                 b"knsg:2", absent,  [b"m", b"all"],
             ], f"emulate-release {release}"
-            # KNN + WITHSORTKEYS without SORTBY: the distance does not
-            # implicitly become the sort key on either side of the gate.
+            # Without SORTBY the KNN distance is not a sort key on either arm.
             result = client.execute_command(
                 "FT.SEARCH", "knsg_idx", "(@m:{solo})=>[KNN 1 @vec $B]",
                 "WITHSORTKEYS", "RETURN", "1", "m",

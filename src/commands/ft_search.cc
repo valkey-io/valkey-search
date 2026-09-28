@@ -79,8 +79,8 @@ void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command);
+std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
+                                           const SearchCommand &command);
 
 // WITHSORTKEYS prefixes each sort key by the SORTBY field's declared type:
 // '#' for NUMERIC fields, '$' for everything else (RediSearch-compatible).
@@ -99,17 +99,18 @@ bool IsSortByFieldNumeric(const SearchCommand &command,
          idx.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
 }
 
-// Helper function to get the sort key value for a neighbor
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command) {
+// Returns std::nullopt when the query has no SORTBY or the document lacks the
+// sort field.
+std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
+                                           const SearchCommand &command) {
   if (!command.sortby_parameter.has_value() ||
       !neighbor.attribute_contents.has_value()) {
-    return "";
+    return std::nullopt;
   }
 
   auto it = neighbor.attribute_contents->find(command.sortby_parameter->field);
   if (it == neighbor.attribute_contents->end()) {
-    return "";
+    return std::nullopt;
   }
 
   return std::string(vmsdk::ToStringView(it->second.value.get()));
@@ -294,6 +295,10 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
                                                                        : "$";
         },
         [&]() -> std::string { return "#"; });
+    // Issue #1353 item 5.
+    format.nil_absent_sort_key = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_search_sortkey_nil", [&]() { return true; },
+        [&]() { return false; });
   }
   return format;
 }
@@ -318,12 +323,17 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
   // Prefix the sort key: '#' for NUMERIC fields, '$' for string fields
   // (RediSearch-compatible).
   if (with_sort_keys) {
-    std::string value = format.sort_by_vec_score
-                            ? absl::StrFormat("%.12g", neighbor.distance)
-                            : GetSortKeyValue(neighbor, *this);
-    ValkeyModule_ReplyWithString(
-        ctx,
-        vmsdk::MakeUniqueValkeyString(format.sort_key_prefix + value).get());
+    std::optional<std::string> value =
+        format.sort_by_vec_score
+            ? std::make_optional(absl::StrFormat("%.12g", neighbor.distance))
+            : GetSortKeyValue(neighbor, *this);
+    if (!value.has_value() && format.nil_absent_sort_key) {
+      ValkeyModule_ReplyWithNull(ctx);
+    } else {
+      std::string prefixed_value = format.sort_key_prefix + value.value_or("");
+      ValkeyModule_ReplyWithString(
+          ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
+    }
     ++elements;
   }
 

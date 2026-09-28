@@ -1089,22 +1089,15 @@ class TestNonVector(ValkeySearchTestCaseBase):
 
     def test_withsortkeys_absent_sortkey_is_nil(self):
         """
-            Regression test for issue #1353, item 5: the WITHSORTKEYS
-            sort-key slot must be nil when no sort key exists -- with
-            WITHSORTKEYS but no SORTBY, and for a document lacking the
-            SORTBY field. Only ABSENT keys are nil; a present-but-empty
-            value is a real value and keeps its prefix.
+            Absent WITHSORTKEYS sort keys reply nil (issue #1353 item 5).
         """
         client: Valkey = self.server.get_new_client()
 
-        # The nil reply is a gated compatibility fix (see TestSortKeyNilGate
-        # for the legacy arm); pin emulate-release at the fix version so this
-        # test exercises the fixed path regardless of the default.
+        # Pin the fix version; the default emulate-release runs the legacy arm.
         assert client.execute_command(
             "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
 
-        # WITHSORTKEYS without SORTBY: every row's sort-key slot is nil.
-        # Single document, so ordering cannot enter the comparison.
+        # WITHSORTKEYS without SORTBY: the sort-key slot is nil.
         assert client.execute_command(
             "FT.CREATE", "nil_sortkey_idx", "ON", "HASH", "PREFIX", "1", "nsk:",
             "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE", "title", "TEXT") == b"OK"
@@ -1115,9 +1108,7 @@ class TestNonVector(ValkeySearchTestCaseBase):
             "RETURN", "1", "title", "DIALECT", "2")
         assert result == [1, b"nsk:1", None, [b"title", b"hello world"]]
 
-        # SORTBY on a field one document lacks: that row's slot is nil and the
-        # document sorts last; rows that have the field keep the prefixed
-        # value.
+        # A document lacking the SORTBY field gets a nil sort key and sorts last.
         assert client.execute_command(
             "FT.CREATE", "nil_sortkey_sparse_idx", "ON", "HASH", "PREFIX", "1", "nss:",
             "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE") == b"OK"
@@ -1223,10 +1214,8 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
 
 class TestSortKeyNilGate(ValkeySearchTestCaseDebugMode):
     """
-        The nil reply for an absent WITHSORTKEYS sort key (issue #1353
-        item 5) is gated on search.emulate-release: pre-1.3.0 replied the
-        bare prefix string. debug-mode is required to set emulate-release
-        at the module version.
+        The absent-sort-key nil reply (issue #1353 item 5) is gated on
+        search.emulate-release; below 1.3.0 the slot is the bare prefix.
     """
 
     def test_sortkey_nil_gate(self):
@@ -1240,8 +1229,7 @@ class TestSortKeyNilGate(ValkeySearchTestCaseDebugMode):
         for release, absent in (("1.2.1", b"#"), ("1.3.0", None)):
             assert client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release) == b"OK"
-            # SORTBY on a field nsg:2 lacks; the present row's '#10' is
-            # byte-identical on both sides of the gate (NUMERIC).
+            # SORTBY on a field nsg:2 lacks.
             result = client.execute_command(
                 "FT.SEARCH", "nsg_idx", "@m:{all}", "SORTBY", "p", "ASC",
                 "WITHSORTKEYS", "RETURN", "1", "m", "DIALECT", "2")
@@ -1250,7 +1238,7 @@ class TestSortKeyNilGate(ValkeySearchTestCaseDebugMode):
                 b"nsg:1", b"#10",  [b"m", b"all,solo"],
                 b"nsg:2", absent,  [b"m", b"all"],
             ], f"emulate-release {release}"
-            # WITHSORTKEYS without SORTBY: no sort key exists at all.
+            # WITHSORTKEYS without SORTBY.
             result = client.execute_command(
                 "FT.SEARCH", "nsg_idx", "@m:{solo}", "WITHSORTKEYS",
                 "RETURN", "1", "m", "DIALECT", "2")

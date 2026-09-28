@@ -567,10 +567,8 @@ def compare_results(expected, results):
         print(TEST_MARKER)
         return False
 
-    # The sortkey-prefix and absent-sort-key-nil cases assert the sort-key
-    # bytes, which the generic unpack path below discards
-    # (unpack_search_result drops the sort-key element). Their replies are
-    # fully deterministic, so compare them raw.
+    # These data sets are order-deterministic and assert bytes the generic
+    # unpack path below discards, so compare them raw.
     if expected.get("data_set_name") in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET, RETURN_CLAUSE_DATA_SET):
         if expected["result"] == results["result"]:
             return True

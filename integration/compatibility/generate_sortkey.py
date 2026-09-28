@@ -49,9 +49,7 @@ class TestSortKeyPrefixCompatibility(BaseCompatibilityTest):
                    "RETURN", "1", "dist", "DIALECT", "2")
 
     def test_withsortkeys_absent_is_nil(self, key_type):
-        # Absent sort keys (issue #1353 item 5): a document lacking the
-        # SORTBY field, and WITHSORTKEYS without SORTBY (single-document
-        # match keeps the reply order-deterministic for the raw compare).
+        # Absent sort key (issue #1353 item 5): missing SORTBY field, and no SORTBY.
         self.setup_data(SORTKEY_NIL_DATA_SET, key_type)
         time.sleep(0.5)
         self.check("FT.SEARCH", f"{key_type}_idx1", "@m:{all}",
@@ -61,7 +59,7 @@ class TestSortKeyPrefixCompatibility(BaseCompatibilityTest):
                    "WITHSORTKEYS", "RETURN", "1", "m", "DIALECT", "2")
 
     def test_knn_withsortkeys_absent_is_nil(self, key_type):
-        # KNN-path variants of the absent-sort-key cases.
+        # KNN variants of the absent-sort-key cases.
         self.setup_data(SORTKEY_NIL_DATA_SET, key_type)
         time.sleep(0.5)
         self.check("FT.SEARCH", f"{key_type}_idx1",

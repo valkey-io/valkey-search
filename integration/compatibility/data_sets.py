@@ -1248,9 +1248,7 @@ def compute_filter_data_sets(dataset_name):
 # future JSON variant: add SETS/CREATES "json" entries here.
 SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 
-# Fixture for the absent-sort-key nil cases (generate_sortkey.py): one
-# document lacks the sort field p, and the 'solo' tag selects a single
-# document for the no-SORTBY cases so replies stay order-deterministic.
+# Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
 SORTKEY_NIL_DATA_SET = "sortkey nil"
 
 
@@ -1277,7 +1275,6 @@ def compute_sortkey_data_sets():
                 ("hash:nsk1", {"m": "all,solo", "p": "10",
                                "vec": b"AAAAAAAA"}),
                 ("hash:nsk2", {"m": "all", "p": "20", "vec": b"BBBBBBBB"}),
-                # No sort field p: its sort key is absent.
                 ("hash:nsk3", {"m": "all", "vec": b"CCCCCCCC"}),
             ],
             CREATES_KEY("hash"): [

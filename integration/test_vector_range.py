@@ -242,6 +242,74 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         assert result[0] == 5
 
     # =================================================================
+    # HNSW candidate cap and the fetch-limited counter
+    # =================================================================
+
+    def test_hnsw_fetch_limited_counter(self):
+        """
+        An HNSW range query counts toward
+        search_nonvector_results_fetched_limited_count only when the
+        max-nonvector-search-results-fetched cap may have dropped in-radius
+        docs: the cap was hit and even the farthest candidate is in range.
+        Each index holds fewer than M (16) vectors, so the HNSW graph is
+        complete and the fetch returns exactly the `cap` nearest.
+        """
+        client = self.server.get_new_client()
+        # L2 distances from QUERY_VEC: 0, 1, 4, 4, 9, 100 (doc:5 ties doc:2).
+        self._create_hnsw_index(client)
+        self._load_vector_data(
+            client, vectors={**VECTORS, "doc:5": [-2.0, 0.0, 0.0]})
+        # COSINE: c:0 is the query of the clamping case below; the nearest
+        # doc to the opposite query [-1, -2, -3] is at distance ~1.08.
+        self._create_hnsw_index(
+            client, index_name="cidx", prefix="c:", distance="COSINE")
+        self._load_vector_data(client, vectors={
+            "c:0": [1.0, 2.0, 3.0],
+            "c:1": [3.0, -1.0, 0.0],
+            "c:2": [0.0, 0.0, 1.0],
+        })
+        client.execute_command(
+            "CONFIG", "SET", "search.info-developer-visible", "yes")
+        cap_config = "search.max-nonvector-search-results-fetched"
+
+        def search_and_count(index, radius, query_vec, cap):
+            """Return (result count, fetch-limited counter increment)."""
+            client.execute_command("CONFIG", "SET", cap_config, str(cap))
+            counter = "search_nonvector_results_fetched_limited_count"
+            before = client.info("search").get(counter, 0)
+            result = self._search(
+                client, index,
+                f"@vec:[VECTOR_RANGE {radius} $blob]",
+                "PARAMS", "2", "blob", float_to_bytes(query_vec),
+                "NOCONTENT",
+            )
+            return result[0], client.info("search").get(counter, 0) - before
+
+        # A cap of 3 fetches doc:0, doc:1 and one of doc:2 / doc:5.
+        # doc:3 (distance 9) and the other distance-4 doc are in range
+        # but the cap cut them off.
+        assert search_and_count("idx", 10, QUERY_VEC, 3) == (3, 1)
+        # A distance equal to the radius is in range, as in the result
+        # filter, so the cut-off distance-4 doc counts.
+        assert search_and_count("idx", 4, QUERY_VEC, 3) == (3, 1)
+        # The farthest fetched candidate (distance 4) is out of range, so
+        # nothing in range was dropped.
+        assert search_and_count("idx", 3.9, QUERY_VEC, 3) == (2, 0)
+        assert search_and_count("idx", 0, QUERY_VEC, 3) == (1, 0)
+        # The cap is above the index size.
+        assert search_and_count("idx", 1000, QUERY_VEC, 100) == (6, 0)
+        # A cap of 0 fetches nothing, so every query counts.
+        assert search_and_count("idx", 1000, QUERY_VEC, 0) == (0, 1)
+        # The only candidate is out of range.
+        assert search_and_count(
+            "cidx", 0.5, [-1.0, -2.0, -3.0], 1) == (0, 0)
+        # The self-distance of c:0 is usually not exactly 0 in float
+        # arithmetic, so whether it is within radius 0 depends on the
+        # cosine clamping. The counter must clamp like the result filter.
+        count, delta = search_and_count("cidx", 0, [1.0, 2.0, 3.0], 1)
+        assert delta == count
+
+    # =================================================================
     # 5. Vector Range AND tag filter
     # =================================================================
 

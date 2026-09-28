@@ -51,6 +51,11 @@ on:
         required: false
         default: "1440"
         type: string
+      trigger_label:
+        description: "Benchmark label that triggered this run"
+        required: false
+        default: ""
+        type: string
   pull_request_target:
     types: [labeled]
 
@@ -123,7 +128,7 @@ jobs:
               const clusterInput = '${{ github.event.inputs.cluster_mode }}';
               core.setOutput('cluster_filter', clusterInput || '');
               core.setOutput('skip_profiling', '${{ github.event.inputs.skip_profiling }}' === 'true' ? 'true' : 'false');
-              core.setOutput('label', '');
+              core.setOutput('label', '${{ github.event.inputs.trigger_label }}');
             } else {
               // pull_request_target: the PR context is already in the payload.
               const pr = context.payload.pull_request;
@@ -499,8 +504,9 @@ jobs:
                  "$MODULE_BASELINE_PATH" \
                  "$PERF_BENCHMARK_PATH"
 
-      # Only meaningful for the label path; resolve.outputs.label is empty for
-      # manual dispatch, so this step no-ops there.
+      # Only meaningful when the run knows which benchmark label to clean up:
+      # either the native label trigger or a workflow_dispatch forwarded from
+      # the /label slash command.
       - name: Remove benchmark label
         if: always() && needs.resolve.outputs.label != ''
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8

@@ -289,6 +289,26 @@
             "optional": true
           }
         ]
+      },
+      {
+        "name": "WITHCURSOR",
+        "token": "WITHCURSOR",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "token": "COUNT",
+            "type": "integer",
+            "optional": true
+          },
+          {
+            "name": "maxidle",
+            "token": "MAXIDLE",
+            "type": "integer",
+            "optional": true
+          }
+        ]
       }
     ],
     "arity": -3,

@@ -59,6 +59,9 @@ const absl::string_view kCaseSensitiveParam{"CASESENSITIVE"};
 const absl::string_view kScoreParam{"SCORE"};
 constexpr absl::string_view kSchemaParam{"SCHEMA"};
 constexpr absl::string_view kSkipInitialScan("SKIPINITIALSCAN");
+constexpr absl::string_view kNoHlParam{"NOHL"};
+constexpr absl::string_view kSortableParam{"SORTABLE"};
+constexpr absl::string_view kUnfParam{"UNF"};
 constexpr size_t kDefaultAttributesCountLimit{1000};
 constexpr int kDefaultDimensionsCountLimit{32768};
 constexpr int kDefaultPrefixesCountLimit{8};
@@ -620,14 +623,11 @@ absl::StatusOr<data_model::Attribute *> ParseAttributeArgs(
       break;
   }
 
-  // Check for SORTABLE option and ignore it
-  if (itr.DistanceEnd() > 0) {
-    auto next_arg = itr.Get();
-    if (next_arg.ok()) {
-      absl::string_view order_str = vmsdk::ToStringView(next_arg.value());
-      if (absl::EqualsIgnoreCase(order_str, "SORTABLE")) {
-        itr.Next();
-      }
+  // UNF is only recognized directly after SORTABLE, as in Redis
+  if (vmsdk::IsParamNext(kSortableParam, itr)) {
+    attribute_proto->set_sortable(true);
+    if (vmsdk::IsParamNext(kUnfParam, itr)) {
+      attribute_proto->set_unf(true);
     }
   }
 
@@ -720,6 +720,10 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     if (res) {
       index_schema_proto.set_skip_initial_scan(true);
     }
+
+    // Highlighting is not supported, so NOHL is accepted and the match
+    // result deliberately discarded
+    VMSDK_ASSIGN_OR_RETURN(res, vmsdk::IsParamKeyMatch(kNoHlParam, false, itr));
 
     // Try unsupported field parameters
     VMSDK_ASSIGN_OR_RETURN(

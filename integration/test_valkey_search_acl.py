@@ -261,6 +261,11 @@ class TestCommandsACLs(ValkeySearchTestCaseBase):
                 [b"@read", b"@slow", b"@search"],
             ),
             (
+                "FT.CURSOR",
+                [b"readonly", b"module"],
+                [b"@read", b"@slow", b"@search"],
+            ),
+            (
                 "FT.DROPINDEX",
                 [b"write", b"module", b"fast"],
                 [b"@write", b"@fast", b"@search"],

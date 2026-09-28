@@ -13,14 +13,16 @@ Capture RediSearch answers for BM25STD relevance scores.
 '''
 
 
-@pytest.mark.parametrize("schema_type", ["nostem", "docscore"])
+SCHEMA_TYPES = ["nostem", "docscore", "default"]
+
+
+@pytest.mark.parametrize("schema_type", SCHEMA_TYPES)
 @pytest.mark.parametrize("key_type", ["hash", "json"])
 class TestScoringCompatibility(BaseCompatibilityTest):
     ANSWER_FILE_NAME = "scoring-answers.pickle.gz"
     DATA_SET_NAME = "scoring"
-    # Built once: the whole set is seeded and read-only, and every test case wants
-    # one shape out of the 14.
-    QUERIES = build_scoring_queries()
+    # Built once per schema type, which picks the corpus
+    QUERIES = {s: build_scoring_queries(schema_type=s) for s in SCHEMA_TYPES}
 
     def setup_method(self):
         # Drops the base class' 1s sleep: setup_data waits on FT.INFO instead, which
@@ -70,7 +72,7 @@ class TestScoringCompatibility(BaseCompatibilityTest):
 
     def _run_shape(self, shape, key_type, schema_type):
         self.setup_data(key_type, schema_type)
-        queries = self.QUERIES[shape]
+        queries = self.QUERIES[schema_type][shape]
         for descriptor in queries:
             # A query matching nothing asserts nothing, so it is a builder bug.
             assert descriptor["hits"], \

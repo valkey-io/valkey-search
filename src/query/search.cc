@@ -1078,11 +1078,10 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         }
         if (tf == 0) continue;
         matched = true;
-        total += score_ctx.query_ctx.ScoreLeaf(
-            {.idf = group.idf,
-             .term_frequency = tf,
-             .doc_len = doc_len,
-             .leaf_weight = predicate->GetWeight()});
+        total += score_ctx.query_ctx.ScoreLeaf({.idf = group.idf,
+                                                .term_frequency = tf,
+                                                .doc_len = doc_len,
+                                                .leaf_weight = group.weight});
       }
       return matched ? std::optional<float>(total) : std::nullopt;
     }

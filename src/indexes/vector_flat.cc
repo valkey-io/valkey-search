@@ -273,41 +273,35 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
                              algo_->dist_func_param_, query_magnitude);
 }
 
-// Linear scan over all tracked keys. This is O(N) but correct for flat
-// indexes which have no graph structure to exploit.
+// Linear scan of the contiguous FLAT store: the loop and distance kernel of
+// FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,
     std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
   auto nq = this->NormalizeQueryIfNeeded(query);
+  const float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
+                 : kDefaultMagnitude;
 
   std::vector<Neighbor> neighbors;
-  // Pre-allocate to reduce re-allocations during the linear scan.
-  // The actual match count is unknown ahead of time, so use a modest initial
-  // capacity that covers typical result sets without over-allocating.
-  neighbors.reserve(128);
-  auto status = this->ForEachTrackedKey(
-      [&](const InternedStringPtr &key) -> absl::Status {
-        if (cancellation_token->IsCancelled()) {
-          return absl::CancelledError("SearchRange cancelled");
-        }
-        auto dist_result = this->ComputeDistanceFromRecord(key, nq.view);
-        if (!dist_result.ok()) {
-          return absl::OkStatus();
-        }
-        if (filter && !(*filter)(dist_result->second)) {
-          return absl::OkStatus();
-        }
-        float clamped_dist = this->ClampCosineDistance(dist_result->first);
-        if (clamped_dist <= radius) {
-          neighbors.emplace_back(key, clamped_dist);
-        }
-        return absl::OkStatus();
-      });
-  // Cancellation is expected (the inner lambda returns CancelledError to
-  // exit the iteration loop early); only propagate real errors.
-  if (!status.ok() && !absl::IsCancelled(status)) {
-    return status;
+  neighbors.reserve(kRangeReserve);
+  for (size_t i = 0; i < algo_->cur_element_count_; ++i) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    const auto *stored_vector = algo_->GetDataPtrByInternalId(i);
+    const hnswlib::labeltype label = algo_->GetLabel(stored_vector);
+    if (!*stored_vector || (filter && !(*filter)(label))) {
+      continue;
+    }
+    float distance =
+        this->RangeDistance(nq.view, query_magnitude, **stored_vector);
+    if (distance <= radius) {
+      if (const auto *key = this->FindKeyDuringSearch(label)) {
+        neighbors.emplace_back(*key, distance);
+      }
+    }
   }
   return neighbors;
 }

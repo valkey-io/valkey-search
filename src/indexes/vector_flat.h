@@ -90,10 +90,12 @@ class VectorFlat : public VectorType<T> {
       bool enable_partial_results = false) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // Lock-free search optimization, as for Search: reads the FLAT store and the
+  // tracked-key maps under the phase lock only.
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
-      ABSL_LOCKS_EXCLUDED(resize_mutex_) override;
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

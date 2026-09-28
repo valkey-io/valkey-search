@@ -51,6 +51,8 @@ class IndexSchema;
 namespace valkey_search::indexes {
 
 constexpr float kDefaultMagnitude = 1.0f;
+// Initial capacity of a range search's result vector.
+constexpr size_t kRangeReserve = 128;
 
 std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
                                      float *magnitude = nullptr);
@@ -310,6 +312,12 @@ class VectorBase : public IndexBase {
   // races can occur during the search phase.
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Non-owning form of GetKeyDuringSearch: nullptr if the id is not tracked.
+  const InternedStringPtr *FindKeyDuringSearch(uint64_t internal_id) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    auto it = key_by_internal_id_.find(internal_id);
+    return it == key_by_internal_id_.end() ? nullptr : &it->second;
+  }
   bool AddPrefilteredKey(
       absl::string_view query, float query_magnitude,
       const InternedStringPtr &key, uint64_t count,
@@ -453,6 +461,19 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
+
+  // Distance as range searches report it: `query` prepared by
+  // NormalizeQueryIfNeeded, `query_magnitude` its reciprocal magnitude (1
+  // unless normalize_), with the cosine clamp applied.
+  float RangeDistance(absl::string_view query, float query_magnitude,
+                      const VectorRecord &record) const {
+    if (normalize_) {
+      query_magnitude *= record.GetReciprocalMagnitude();
+    }
+    return ClampCosineDistance(
+        ComputeDistance(query, &record, query_magnitude));
+  }
+
   // Holds an optionally-normalized query vector. `view` is always valid and
   // points either into `storage` (if normalization was applied) or into the
   // original caller-owned buffer.

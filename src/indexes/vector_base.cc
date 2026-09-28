@@ -335,11 +335,10 @@ absl::StatusOr<uint64_t> VectorBase::GetInternalIdDuringSearch(
 
 absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
     uint64_t internal_id) const {
-  auto it = key_by_internal_id_.find(internal_id);
-  if (it == key_by_internal_id_.end()) {
-    return absl::InvalidArgumentError("Record was not found");
+  if (const auto *key = FindKeyDuringSearch(internal_id)) {
+    return *key;
   }
-  return it->second;
+  return absl::InvalidArgumentError("Record was not found");
 }
 
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(

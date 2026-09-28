@@ -694,6 +694,34 @@ absl::Status VectorBase::ForEachUnTrackedKey(
   return absl::OkStatus();
 }
 
+std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    hnswlib::BaseFilterFunctor *filter) const {
+  auto nq = NormalizeQueryIfNeeded(query);
+  const float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
+                 : kDefaultMagnitude;
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(kRangeReserve);
+  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    if (filter && !(*filter)(metadata.internal_id)) {
+      continue;
+    }
+    const auto &vector_record = GetVectorLockFree(metadata.internal_id);
+    if (!vector_record) {
+      continue;
+    }
+    float distance = RangeDistance(nq.view, query_magnitude, *vector_record);
+    if (distance <= radius) {
+      neighbors.emplace_back(key, distance);
+    }
+  }
+  return neighbors;
+}
+
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 

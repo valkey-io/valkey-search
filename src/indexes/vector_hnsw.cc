@@ -30,6 +30,7 @@
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/metrics.h"
@@ -413,13 +414,20 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
 
   // The fetch was capped only if it filled the cap and even its farthest
   // candidate (top of the max-heap) is in range; then in-range documents may
-  // have gone unenumerated. A cap of 0 fetches nothing and always counts.
-  // Reported on the same developer-visible counter as the non-vector
-  // prefilter cap (search.cc).
+  // have gone unenumerated, so the query is answered from an exhaustive scan
+  // of the tracked keys, as FLAT does. A cap of 0 fetches nothing and always
+  // counts and scans. Reported on the same developer-visible counter as the
+  // non-vector prefilter cap (search.cc).
+  const bool fetch_full = raw_results.size() >= max_candidates;
   const bool fetch_limited =
-      raw_results.size() >= max_candidates &&
+      fetch_full &&
       (raw_results.empty() ||
        this->ClampCosineDistance(raw_results.top().first) <= radius);
+  if (fetch_limited) {
+    query::RecordNonVectorResultsFetchedLimited();
+    return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                       filter.get());
+  }
 
   // Keep only the results within the radius.
   std::vector<Neighbor> neighbors;
@@ -430,6 +438,19 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
     if (cancellation_token->IsCancelled()) {
       break;
     }
+    // A full fetch that holds a NaN or infinite distance takes the scan as
+    // well. NaN breaks the order of the candidate heap, so such a fetch cannot
+    // be trusted to have kept the closest candidates. An infinite distance
+    // signals an infinite stored vector, which a zero reciprocal magnitude
+    // leaves unnormalized: it sorts at an end of the heap, so a small fetch can
+    // fill with such vectors before any finite in-range one, and a cosine
+    // clamp that maps it out of range hides the saturation. IsNaN and IsInf
+    // read the bits, which -ffast-math does not affect.
+    if (fetch_full && (scoring::IsNaN(dist) || scoring::IsInf(dist))) {
+      query::RecordNonVectorResultsFetchedLimited();
+      return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                         filter.get());
+    }
     float clamped_dist = this->ClampCosineDistance(static_cast<float>(dist));
     if (clamped_dist > radius) {
       continue;
@@ -439,9 +460,6 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
       continue;
     }
     neighbors.emplace_back(*key, clamped_dist);
-  }
-  if (fetch_limited) {
-    query::RecordNonVectorResultsFetchedLimited();
   }
   return neighbors;
 }

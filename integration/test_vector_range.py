@@ -13,6 +13,7 @@ from valkey import ResponseError
 from valkey.client import Valkey
 from valkey_search_test_case import ValkeySearchTestCaseBase
 from valkeytestframework.conftest import resource_port_tracker
+from utils import IndexingTestHelper
 
 
 def float_to_bytes(floats):
@@ -251,6 +252,8 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         search_nonvector_results_fetched_limited_count only when the
         max-nonvector-search-results-fetched cap may have dropped in-radius
         docs: the cap was hit and even the farthest candidate is in range.
+        Such a query falls back to an exhaustive scan and returns every doc
+        in range.
         Each index holds fewer than M (16) vectors, so the HNSW graph is
         complete and the fetch returns exactly the `cap` nearest.
         """
@@ -287,19 +290,19 @@ class TestVectorRange(ValkeySearchTestCaseBase):
 
         # A cap of 3 fetches doc:0, doc:1 and one of doc:2 / doc:5.
         # doc:3 (distance 9) and the other distance-4 doc are in range
-        # but the cap cut them off.
-        assert search_and_count("idx", 10, QUERY_VEC, 3) == (3, 1)
+        # but the cap cut them off, so the exhaustive scan returns them.
+        assert search_and_count("idx", 10, QUERY_VEC, 3) == (5, 1)
         # A distance equal to the radius is in range, as in the result
         # filter, so the cut-off distance-4 doc counts.
-        assert search_and_count("idx", 4, QUERY_VEC, 3) == (3, 1)
+        assert search_and_count("idx", 4, QUERY_VEC, 3) == (4, 1)
         # The farthest fetched candidate (distance 4) is out of range, so
         # nothing in range was dropped.
         assert search_and_count("idx", 3.9, QUERY_VEC, 3) == (2, 0)
         assert search_and_count("idx", 0, QUERY_VEC, 3) == (1, 0)
         # The cap is above the index size.
         assert search_and_count("idx", 1000, QUERY_VEC, 100) == (6, 0)
-        # A cap of 0 fetches nothing, so every query counts.
-        assert search_and_count("idx", 1000, QUERY_VEC, 0) == (0, 1)
+        # A cap of 0 fetches nothing, so every query counts and scans.
+        assert search_and_count("idx", 1000, QUERY_VEC, 0) == (6, 1)
         # The only candidate is out of range.
         assert search_and_count(
             "cidx", 0.5, [-1.0, -2.0, -3.0], 1) == (0, 0)
@@ -308,6 +311,69 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         # cosine clamping. The counter must clamp like the result filter.
         count, delta = search_and_count("cidx", 0, [1.0, 2.0, 3.0], 1)
         assert delta == count
+
+    def test_hnsw_vector_range_complete_past_fetch_cap(self):
+        """
+        With more docs in range than max-nonvector-search-results-fetched,
+        HNSW range search returns all of them, as FLAT does, alone and
+        combined with a tag by AND and by OR. The cap is lowered to 1000 at
+        runtime over 3000 docs, and restored afterwards.
+        """
+        client = self.server.get_new_client()
+        schema = ["t", "TAG", "z", "TAG"]
+        self._create_hnsw_index(client, "hidx", extra_fields=schema, dim=2)
+        self._create_flat_index(client, "fidx", extra_fields=schema, dim=2)
+        # A 60 x 50 grid of integer points, so the squared L2 distances from
+        # the origin are exact in float32 and in the brute force below. Tag z
+        # marks 250 docs outside the radius.
+        docs = {}
+        pipe = client.pipeline(transaction=False)
+        for i in range(3000):
+            vec = [float(i % 60), float(i // 60)]
+            mapping = {"vec": float_to_bytes(vec), "t": "x" if i % 2 else "y"}
+            if i % 60 >= 55:
+                mapping["z"] = "z"
+            docs[f"doc:{i}"] = (vec, mapping)
+            pipe.hset(f"doc:{i}", mapping=mapping)
+        pipe.execute()
+        for index in ("hidx", "fidx"):
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, index)
+
+        radius = 2500.5
+        query = [0.0, 0.0]
+
+        def matching(pred):
+            return {k for k, (vec, fields) in docs.items() if pred(vec, fields)}
+
+        def in_range(vec):
+            return l2_distance(vec, query) <= radius
+
+        vr = f"@vec:[VECTOR_RANGE {radius} $blob]"
+        cases = [
+            (vr, matching(lambda v, f: in_range(v))),
+            ("@vec:[VECTOR_RANGE 10000 $blob]", set(docs)),
+            (vr + " @t:{x}", matching(
+                lambda v, f: in_range(v) and f["t"] == "x")),
+            ("@z:{z} | " + vr, matching(
+                lambda v, f: in_range(v) or "z" in f)),
+        ]
+        assert [len(expected) for _, expected in cases] == [
+            2011, 3000, 995, 2261]
+        cap_config = "search.max-nonvector-search-results-fetched"
+        original_cap = client.execute_command("CONFIG", "GET", cap_config)[1]
+        client.execute_command("CONFIG", "SET", cap_config, "1000")
+        try:
+            for query_string, expected in cases:
+                for index in ("hidx", "fidx"):
+                    result = self._search(
+                        client, index, query_string,
+                        "PARAMS", "2", "blob", float_to_bytes(query),
+                        "NOCONTENT", "LIMIT", "0", "3000",
+                    )
+                    assert result[0] == len(expected), (index, query_string)
+                    assert parse_result_keys(result) == expected
+        finally:
+            client.execute_command("CONFIG", "SET", cap_config, original_cap)
 
     # =================================================================
     # 5. Vector Range AND tag filter

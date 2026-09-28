@@ -36,7 +36,9 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/text_index.h"
 #include "src/query/predicate.h"
+#include "src/query/resolved_leaves.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
@@ -144,13 +146,32 @@ std::vector<char> NormalizeVector(absl::string_view record,
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
                                   const InternedStringPtr &key) {
   key_ = &key;
+  per_key_index_fetched_ = false;
   auto res = predicate.Evaluate(*this);
   key_ = nullptr;
   return res.matches;
 }
 
+const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
+  if (!per_key_index_fetched_) {
+    per_key_index_fetched_ = true;
+    // lock=false: the caller holds the time-sliced mutex in read mode, which
+    // excludes the writers of the per-key map.
+    per_key_index_ = text_index_schema_
+                         ? text_index_schema_->GetPerKeyTextIndex(*key_, false)
+                         : nullptr;
+  }
+  return per_key_index_;
+}
+
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
+  if (cache_ != nullptr) {
+    if (const auto *leaf =
+            std::get_if<query::TagLeaf>(&cache_->GetOrResolve(&predicate))) {
+      return query::EvaluateTagLeaf(predicate, *leaf, *key_);
+    }
+  }
   bool case_sensitive = true;
   auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
   return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
@@ -166,10 +187,14 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  if (!text_index_) {
-    return query::EvaluationResult(false);
+  auto per_key_index = [this] { return PerKeyTextIndex(); };
+  if (cache_ == nullptr) {
+    const auto *index = per_key_index();
+    if (index == nullptr) return query::EvaluationResult(false);
+    return predicate.Evaluate(*index, *key_, require_positions);
   }
-  return predicate.Evaluate(*text_index_, *key_, require_positions);
+  return query::EvaluateTextLeaf(*cache_, predicate, *key_, require_positions,
+                                 per_key_index);
 }
 
 VectorBase::~VectorBase() {

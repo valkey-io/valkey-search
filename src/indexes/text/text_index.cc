@@ -499,7 +499,7 @@ std::string TextIndexSchema::GetAllStemVariants(
 }
 
 const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
-                                                     bool lock) {
+                                                     bool lock) const {
   if (!key) {
     CHECK(false) << "Invalid null key passed to GetPerKeyTextIndex";
   }

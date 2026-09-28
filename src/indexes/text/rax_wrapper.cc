@@ -84,7 +84,11 @@ void *Rax::FindTarget(absl::string_view word) const {
   return result;
 }
 
+vmsdk::info_field::Integer rax_walks("text", "rax_walks",
+                                     vmsdk::info_field::IntegerBuilder().Dev());
+
 InvasivePtr<Postings> Rax::FindPostingsTarget(absl::string_view word) const {
+  rax_walks.Increment();
   return InvasivePtr<Postings>::CopyRaw(
       static_cast<InvasivePtrRaw<Postings>>(FindTarget(word)));
 }
@@ -109,6 +113,7 @@ size_t Rax::GetAllocSize() const { return raxAllocSize(rax_); }
 bool Rax::IsValid() const { return rax_ != nullptr && raxSize(rax_) > 0; }
 
 Rax::WordIterator Rax::GetWordIterator(absl::string_view prefix) const {
+  rax_walks.Increment();
   return WordIterator(rax_, prefix);
 }
 

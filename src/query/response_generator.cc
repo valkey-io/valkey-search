@@ -20,10 +20,12 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/predicate.h"
+#include "src/query/resolved_leaves.h"
 #include "src/query/search.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/info.h"
@@ -31,7 +33,6 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
-#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -82,41 +83,30 @@ vmsdk::config::Number &GetMaxSearchResultFieldsCount() {
 
 namespace valkey_search::query {
 
+// Revalidates a mutated document against the fetched record (tags, numerics)
+// and the text index (text). Runs on the main thread, so text goes through a
+// main-thread ResolvedLeafCache and never the time-sliced mutex.
 class PredicateEvaluator : public query::Evaluator {
  public:
-  PredicateEvaluator(const RecordsMap &records,
-                     QueryOperations query_operations)
-      : Evaluator(query_operations), records_(records) {}
-
-  PredicateEvaluator(const RecordsMap &records,
-                     const valkey_search::indexes::text::TextIndex *text_index,
+  PredicateEvaluator(const RecordsMap &records, RecordTags &tags,
                      InternedStringPtr target_key,
-                     QueryOperations query_operations)
+                     const indexes::text::TextIndexSchema *text_index_schema,
+                     ResolvedLeafCache *cache, QueryOperations query_operations)
       : Evaluator(query_operations),
         records_(records),
-        text_index_(text_index),
-        target_key_(target_key) {}
+        tags_(tags),
+        target_key_(std::move(target_key)),
+        text_index_schema_(text_index_schema),
+        cache_(cache) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
   EvaluationResult EvaluateTags(const query::TagPredicate &predicate) override {
-    auto identifier = predicate.GetRetainedIdentifier();
-    auto it = records_.find(vmsdk::ToStringView(identifier.get()));
-    if (it == records_.end()) {
-      return EvaluationResult(false);
-      ;
-    }
     auto index = predicate.GetIndex();
-    // Parsing RECORD DATA: Field value from database key for post-query
-    // verification. Uses schema-defined separator since this is record data,
-    // not query syntax.
-    auto tags = indexes::Tag::ParseSearchTags(
-        vmsdk::ToStringView(it->second.value.get()), index->GetSeparator());
-    if (!tags.ok()) {
-      return EvaluationResult(false);
-      ;
-    }
-    return predicate.Evaluate(&tags.value(), index->IsCaseSensitive());
+    const auto *tags =
+        tags_.Get(vmsdk::ToStringView(predicate.GetRetainedIdentifier().get()),
+                  index->GetSeparator());
+    return predicate.Evaluate(tags, index->IsCaseSensitive());
   }
 
   EvaluationResult EvaluateNumeric(
@@ -136,26 +126,34 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    CHECK(target_key_);
-    if (!text_index_) {
+    if (cache_ == nullptr) {
       return EvaluationResult(false);
     }
-    return predicate.Evaluate(*text_index_, target_key_, require_positions);
+    return EvaluateTextLeaf(*cache_, predicate, target_key_, require_positions,
+                            [this] {
+                              // The map lock guards the find; the tree itself
+                              // is stable because a revalidated key has no
+                              // in-flight mutation.
+                              return text_index_schema_->GetPerKeyTextIndex(
+                                  target_key_, /*lock=*/true);
+                            });
   }
 
  private:
   const RecordsMap &records_;
-  const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
+  RecordTags &tags_;
   InternedStringPtr target_key_;
+  const indexes::text::TextIndexSchema *text_index_schema_;
+  ResolvedLeafCache *cache_;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
 
-FilterVerification VerifyFilter(
-    const query::SearchParameters &parameters, const RecordsMap &records,
-    const indexes::Neighbor &n,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
-    std::optional<bool> recompute_score_override) {
+FilterVerification VerifyFilter(const query::SearchParameters &parameters,
+                                const RecordsMap &records,
+                                const indexes::Neighbor &n,
+                                std::unique_ptr<ResolvedLeafCache> &cache,
+                                std::optional<bool> recompute_score_override) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return {true, std::nullopt};
@@ -176,80 +174,49 @@ FilterVerification VerifyFilter(
   }
   predicate_revalidation.Increment();
 
+  const IndexSchema &index_schema = *parameters.index_schema;
+  const auto text_index_schema = index_schema.GetTextIndexSchema();
+  const auto query_operations =
+      parameters.filter_parse_results.query_operations;
+  // One cache per reply: leaves resolve on the first mutated document and are
+  // reused for the rest. A positional query keeps probes open across several
+  // words at once, so it holds every word bucket for the whole evaluation
+  // instead of locking per probe.
+  const bool positional =
+      query_operations & QueryOperations::kContainsProximity;
+  if (!cache) {
+    cache = std::make_unique<ResolvedLeafCache>(
+        ReadCorpusStats(index_schema, LockMode::kMainThread),
+        indexes::scoring::GetScorer(parameters.scorer),
+        positional ? LockMode::kMainThreadWordLocksHeld
+                   : LockMode::kMainThread);
+  }
+  std::optional<indexes::text::RaxTargetMutexPool::LockAll> word_locks;
+  if (positional && text_index_schema) {
+    word_locks.emplace(text_index_schema->GetWordLocks());
+  }
+  RecordTags record_tags(records);
+  PredicateEvaluator evaluator(
+      records, record_tags, n.external_id, text_index_schema.get(),
+      text_index_schema ? cache.get() : nullptr, query_operations);
+  EvaluationResult result = predicate->Evaluate(evaluator);
+
   // The document changed between shard-side scoring and this content fetch, so
-  // its carried Neighbor.score is stale. Besides re-checking membership, for a
-  // non-vector query recompute the relevance score through the SAME Scorer seam
-  // ScoreTextQuery uses (search.cc: ResolveLeaves -> ScoreNode ->
-  // Scorer::ComposeDocumentScore). Text leaves are scored via Scorer::ScoreLeaf
-  // (never TextIterator::GetScore) and numeric/tag leaves via 1.0 * weight,
-  // identical to ScoreNode. A query whose Neighbor.score is a KNN distance
+  // its carried Neighbor.score is stale; recompute it through the same Scorer
+  // seam ScoreTextQuery uses. A query whose Neighbor.score is a KNN distance
   // rather than a relevance score is skipped: by default that means any vector
   // query, and FT.HYBRID overrides the choice per arm.
   const bool recompute_score =
       recompute_score_override.value_or(parameters.IsNonVectorQuery());
-  auto recompute = [&](EvaluationResult &result) -> FilterVerification {
-    if (!result.matches || !recompute_score) {
-      return {result.matches, std::nullopt};
-    }
-    // The document-independent scoring inputs (posting lists, IDF, corpus
-    // stats) are resolved once per reply: construct the scorer lazily on the
-    // first mutated document and reuse it for every later one.
-    if (!document_scorer) {
-      document_scorer = std::make_unique<query::SingleDocumentScorer>(
-          *parameters.index_schema, predicate,
-          indexes::scoring::GetScorer(parameters.scorer));
-    }
-    // nullopt (empty corpus / ScoreNode non-match) degrades to 0 rather than
-    // dropping the already-admitted document. Carry the value on the
-    // EvaluationResult (meaningful when matches == true) and hand it back.
-    result.score = document_scorer->Score(n.external_id).value_or(0.0f);
-    return {true, result.score};
-  };
-
-  // For text predicates, evaluate using the text index instead of raw data.
-  if (parameters.index_schema &&
-      parameters.index_schema->GetTextIndexSchema()) {
-    // We run on the main thread, outside the background search's reader lock,
-    // while ingestion workers mutate the index. A key's per-key TextIndex does
-    // NOT own private postings: CommitKeyData installs the very same
-    // InvasivePtr<Postings> that the per-index tree holds (see the sharing
-    // invariant in text_index.h and the "Per-key tree became unaligned" CHECK
-    // in text_index.cc), so walking this key's tree reaches Postings shared
-    // with every other key containing the token. The reader there
-    // (Postings::KeyIterator over key_to_positions_) races the writer's
-    // emplace/extract, which holds only the per-word bucket mutex we do not
-    // take. So hold the reader lock across BOTH the index lookup and the
-    // evaluation -- spanning the lookup also closes the returned-pointer
-    // lifetime hazard, since DeleteKeyData runs under the writer lock.
-    //
-    // The lock MUST be released before recompute(): it builds and calls
-    // SingleDocumentScorer, which acquires this same mutex internally, and
-    // TimeSlicedMRMWMutex is non-reentrant -- a nested acquire can deadlock in
-    // SwitchWithWait() (see the SingleDocumentScorer contract in search.h).
-    // Do not widen this scope. Cost is bounded: the sequence-number fast path
-    // above returns for any unmutated key, so we only lock for revalidated
-    // documents.
-    EvaluationResult result(false);
-    {
-      vmsdk::ReaderMutexLock lock(
-          &parameters.index_schema->GetTimeSlicedMutex());
-      // lock=false: the per-key map mutex is redundant under the reader lock,
-      // matching the in-query prefilter callers in search.cc.
-      const indexes::text::TextIndex *text_index =
-          parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
-              n.external_id, false);
-
-      PredicateEvaluator evaluator(
-          records, text_index, n.external_id,
-          parameters.filter_parse_results.query_operations);
-      result = predicate->Evaluate(evaluator);
-    }
-    return recompute(result);
+  if (!result.matches || !recompute_score) {
+    return {result.matches, std::nullopt};
   }
-  PredicateEvaluator evaluator(
-      records, parameters.filter_parse_results.query_operations);
-  EvaluationResult result = predicate->Evaluate(evaluator);
-  return recompute(result);
+  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
+  // already-admitted document.
+  result.score = RecomputeDocumentScore(index_schema, predicate, n.external_id,
+                                        *cache, record_tags)
+                     .value_or(0.0f);
+  return {true, result.score};
 }
 
 // Check if this node owns the slot for the given key in cluster mode
@@ -269,7 +236,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::unique_ptr<query::ResolvedLeafCache> &leaf_cache,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -322,8 +289,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     }
     return content;
   }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
+  auto verification = VerifyFilter(parameters, content, neighbor, leaf_cache);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -359,14 +325,14 @@ absl::StatusOr<RecordsMap> GetContent(
     const query::SearchParameters &parameters,
     const indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier,
-    std::unique_ptr<query::SingleDocumentScorer> &document_scorer,
+    std::unique_ptr<query::ResolvedLeafCache> &leaf_cache,
     std::optional<float> *out_recomputed_score = nullptr) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
           data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON &&
       parameters.return_attributes.empty()) {
     return GetContentNoReturnJson(ctx, attribute_data_type, parameters,
-                                  neighbor, vector_identifier, document_scorer,
+                                  neighbor, vector_identifier, leaf_cache,
                                   out_recomputed_score);
   }
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -415,8 +381,7 @@ absl::StatusOr<RecordsMap> GetContent(
   if (parameters.filter_parse_results.filter_identifiers.empty()) {
     return content;
   }
-  auto verification =
-      VerifyFilter(parameters, content, neighbor, document_scorer);
+  auto verification = VerifyFilter(parameters, content, neighbor, leaf_cache);
   if (!verification.matches) {
     return absl::NotFoundError("Verify filter failed");
   }
@@ -545,7 +510,7 @@ void ProcessNeighborsForReply(
   // Lazily built by VerifyFilter on the first mutated document and reused for
   // the rest of the reply, so leaf resolution runs once instead of once per
   // recomputed document.
-  std::unique_ptr<query::SingleDocumentScorer> document_scorer;
+  std::unique_ptr<query::ResolvedLeafCache> leaf_cache;
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -560,9 +525,8 @@ void ProcessNeighborsForReply(
       continue;
     }
     std::optional<float> recomputed_score;
-    auto content =
-        GetContent(ctx, attribute_data_type, parameters, neighbor,
-                   vector_identifier, document_scorer, &recomputed_score);
+    auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
+                              vector_identifier, leaf_cache, &recomputed_score);
     if (!content.ok()) {
       continue;
     }
@@ -651,7 +615,7 @@ void ProcessNeighborsForReply(
 
   // Re-rank survivors when any score was recomputed: a document mutated
   // between shard-side scoring and this content fetch, so VerifyFilter
-  // recomputed its score through the same Scorer seam (SingleDocumentScorer)
+  // recomputed its score through the same Scorer seam (RecomputeDocumentScore)
   // and wrote it to Neighbor.score. That fresh score can reorder the survivors
   // relative to the stale ones. The general ordering of merged cluster results
   // is handled earlier in SearchResult::TrimResults; this block only handles

@@ -13,6 +13,17 @@ add_library(predicate_header INTERFACE ${SRCS_PREDICATE_HEADER})
 target_include_directories(predicate_header INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate_header INTERFACE vmsdklib)
 
+set(SRCS_RESOLVED_LEAVES ${CMAKE_CURRENT_LIST_DIR}/resolved_leaves.cc
+                         ${CMAKE_CURRENT_LIST_DIR}/resolved_leaves.h)
+
+valkey_search_add_static_library(resolved_leaves "${SRCS_RESOLVED_LEAVES}")
+target_include_directories(resolved_leaves PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(resolved_leaves PUBLIC predicate)
+target_link_libraries(resolved_leaves PUBLIC tag)
+target_link_libraries(resolved_leaves PUBLIC text)
+target_link_libraries(resolved_leaves PUBLIC scoring)
+target_link_libraries(resolved_leaves PUBLIC vmsdklib)
+
 set(SRCS_SEARCH ${CMAKE_CURRENT_LIST_DIR}/search.cc
                 ${CMAKE_CURRENT_LIST_DIR}/search.h)
 
@@ -20,6 +31,7 @@ valkey_search_add_static_library(search "${SRCS_SEARCH}")
 target_include_directories(search PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(search PUBLIC planner)
 target_link_libraries(search PUBLIC predicate)
+target_link_libraries(search PUBLIC resolved_leaves)
 target_link_libraries(search PUBLIC attribute_data_type)
 target_link_libraries(search PUBLIC index_schema)
 target_link_libraries(search PUBLIC metrics)

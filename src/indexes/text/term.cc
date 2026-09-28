@@ -42,7 +42,7 @@ TermIterator::TermIterator(
       avg_doc_len_ = stats.avg_doc_len;
       // total_docs and the doc counts come from separate, independently-locked
       // counters and can be transiently out of sync, so clamp to keep
-      // dt <= total_docs (matches ResolveLeaves in search.cc).
+      // dt <= total_docs (matches ResolvedLeafCache).
       if (!scoring.per_term_dt.empty()) {
         // Expansion mode (prefix/suffix/fuzzy): one IDF per matched term.
         per_term_idf_.reserve(scoring.per_term_dt.size());

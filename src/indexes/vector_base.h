@@ -45,7 +45,15 @@ namespace valkey_search {
 enum class QueryOperations : uint64_t;
 }
 
+namespace valkey_search::query {
+class ResolvedLeafCache;
+}
+
 namespace valkey_search::indexes {
+namespace text {
+class TextIndex;
+class TextIndexSchema;
+}  // namespace text
 
 constexpr float kDefaultMagnitude = 1.0f;
 
@@ -459,10 +467,14 @@ class VectorBase : public IndexBase {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
-  explicit PrefilterEvaluator(
-      const valkey_search::indexes::text::TextIndex *text_index,
-      QueryOperations query_operations)
-      : query::Evaluator(query_operations), text_index_(text_index) {}
+  // Built once per query and reused across candidates. `cache` may be null,
+  // in which case every text leaf walks the candidate's own tree.
+  PrefilterEvaluator(const text::TextIndexSchema *text_index_schema,
+                     query::ResolvedLeafCache *cache,
+                     QueryOperations query_operations)
+      : query::Evaluator(query_operations),
+        text_index_schema_(text_index_schema),
+        cache_(cache) {}
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
   const InternedStringPtr &GetTargetKey() const override {
@@ -478,8 +490,15 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate &predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                        bool require_positions) override;
-  const valkey_search::indexes::text::TextIndex *text_index_;
+  // The candidate's own tree, fetched on the first leaf that needs it. Many
+  // predicates never do (tag/numeric, or text served from the cache).
+  const text::TextIndex *PerKeyTextIndex();
+
+  const text::TextIndexSchema *text_index_schema_;
+  query::ResolvedLeafCache *cache_;
   const InternedStringPtr *key_{nullptr};
+  const text::TextIndex *per_key_index_{nullptr};
+  bool per_key_index_fetched_{false};
 };
 
 }  // namespace valkey_search::indexes

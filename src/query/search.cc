@@ -21,6 +21,7 @@
 #include <variant>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
@@ -115,12 +116,12 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
       const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      QueryOperations query_operations,
+      query::ResolvedLeafCache *cache, QueryOperations query_operations,
       const std::optional<absl::flat_hash_set<std::string>> &inkeys)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
         text_index_schema_(text_index_schema),
-        query_operations_(query_operations),
+        evaluator_(text_index_schema.get(), cache, query_operations),
         inkeys_(inkeys) {}
   ~InlineVectorFilter() override = default;
 
@@ -138,23 +139,19 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
     if (filter_predicate_ == nullptr) {
       return true;
     }
-    const valkey_search::indexes::text::TextIndex *text_index = nullptr;
-    if (text_index_schema_) {
-      text_index = text_index_schema_->GetPerKeyTextIndex(*key, false);
-    }
-    indexes::PrefilterEvaluator evaluator(text_index, query_operations_);
-    return evaluator.Evaluate(*filter_predicate_, *key);
+    return evaluator_.Evaluate(*filter_predicate_, *key);
   }
 
  private:
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema_;
-  QueryOperations query_operations_;
+  indexes::PrefilterEvaluator evaluator_;
   const std::optional<absl::flat_hash_set<std::string>> &inkeys_;
 };
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase *vector_index, const SearchParameters &parameters) {
+    indexes::VectorBase *vector_index, const SearchParameters &parameters,
+    query::ResolvedLeafCache *cache) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   // Fold INKEYS into candidate selection so in-set docs outside global top-K
   // aren't silently dropped by post-filtering.
@@ -164,8 +161,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
         parameters.index_schema->GetTextIndexSchema();
     inline_filter = std::make_unique<InlineVectorFilter>(
         parameters.filter_parse_results.root_predicate.get(), vector_index,
-        text_index_schema, parameters.filter_parse_results.query_operations,
-        parameters.inkeys);
+        text_index_schema, cache,
+        parameters.filter_parse_results.query_operations, parameters.inkeys);
     VMSDK_LOG(DEBUG, nullptr) << "Performing vector search with inline filter";
   }
   // Search dispatches virtually on VectorBase, so neither the storage type
@@ -449,7 +446,8 @@ void EvaluatePrefilteredKeys(
     absl::AnyInvocable<bool(const InternedStringPtr &,
                             absl::flat_hash_set<const char *> &)>
         appender,
-    size_t max_keys, bool stop_on_fetch_limit) {
+    size_t max_keys, bool stop_on_fetch_limit,
+    query::ResolvedLeafCache *cache) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -472,6 +470,9 @@ void EvaluatePrefilteredKeys(
       requires_prefilter_evaluation && parameters.index_schema
           ? parameters.index_schema->GetTextIndexSchema()
           : nullptr;
+  indexes::PrefilterEvaluator key_evaluator(
+      text_index_schema.get(), cache,
+      parameters.filter_parse_results.query_operations);
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -491,12 +492,6 @@ void EvaluatePrefilteredKeys(
       }
       bool matched = true;
       if (requires_prefilter_evaluation) {
-        const valkey_search::indexes::text::TextIndex *text_index =
-            text_index_schema
-                ? text_index_schema->GetPerKeyTextIndex(key, false)
-                : nullptr;
-        indexes::PrefilterEvaluator key_evaluator(
-            text_index, parameters.filter_parse_results.query_operations);
         BACKGROUND_PAUSEPOINT("search_prefilter_eval");
         // 3. Evaluate predicate
         matched = key_evaluator.Evaluate(
@@ -524,7 +519,8 @@ std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index, size_t qualified_entries) {
+    indexes::VectorBase *vector_index, size_t qualified_entries,
+    query::ResolvedLeafCache *cache) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
@@ -541,7 +537,7 @@ CalcBestMatchingPrefilteredKeys(
   };
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
                           std::move(results_appender), qualified_entries,
-                          /*stop_on_fetch_limit=*/false);
+                          /*stop_on_fetch_limit=*/false, cache);
   return results;
 }
 
@@ -707,304 +703,64 @@ float SanitizeScore(float score) {
   return indexes::scoring::IsNaN(score) ? 0.0f : score;
 }
 
-// One BM25 term: tf is summed across its postings, scored with one IDF.
-struct TermGroup {
-  absl::InlinedVector<indexes::text::InvasivePtr<indexes::text::Postings>,
-                      indexes::text::kStemVariantsInlineCapacity + 1>
-      postings;
-  float idf = 0.0f;  // Precomputed once per query.
-  // Only occurrences in these fields count; all TEXT fields share one tree.
-  uint64_t field_mask = ~0ULL;
-};
-
-// Term leaf: sums up to 3 groups (exact word, stem root, stem inflections).
-struct TermLeaf {
-  absl::InlinedVector<TermGroup, 3> groups;
-};
-
-// Prefix/suffix/fuzzy leaf: scores ONE matched term per doc, never the sum.
-struct ExpansionLeaf {
-  uint64_t field_mask = ~0ULL;  // Shared by all terms; expansions never stem.
-  struct ExpansionTerm {
-    indexes::text::InvasivePtr<indexes::text::Postings> postings;
-    float idf = 0.0f;
-  };
-  // Small inline capacity: leaves are stored by value in the hash map.
-  absl::InlinedVector<ExpansionTerm, 8> expansion_terms;
-};
-
-// Tag leaf: each matched tag value is a BM25 term with tf = 1.
-struct TagLeaf {
-  const indexes::Tag *tag_index = nullptr;
-  // (value, idf) for query values present in the index.
-  absl::InlinedVector<std::pair<std::string, float>, 4> tag_values;
-  // `foo*` values; dt depends on the doc's matching tag, so resolved per doc.
-  absl::InlinedVector<absl::string_view, 2> tag_prefixes;
-};
-
-// A leaf holds exactly one kind, so the variant is sized by the largest.
-using ResolvedLeaf = std::variant<TermLeaf, ExpansionLeaf, TagLeaf>;
-
-// Keyed on base Predicate* to avoid a per-doc dynamic_cast; miss = unscored.
-using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
-
-// Collapses an all-fields mask (what the parser builds for an unscoped query)
-// to the `~0ULL` sentinel, so LookupKey skips the per-position scan. Field
-// numbers are dense from 0 (TextIndexSchema::AllocateTextFieldNumber).
-uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields) {
-  if (num_fields == 0 || num_fields >= 64) return field_mask;
-  const uint64_t all_fields = (1ULL << num_fields) - 1;
-  return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
-}
-
-// Appends one matched expansion term -- its posting list plus that term's own
-// precomputed IDF -- to `leaf`. Used when resolving a prefix/suffix/fuzzy leaf,
-// which contributes a single matched term per document (never the sum).
-void AddExpansionTerm(
-    indexes::text::InvasivePtr<indexes::text::Postings> postings,
-    uint32_t total_docs, const indexes::scoring::Scorer *scorer,
-    ExpansionLeaf &leaf) {
-  const uint32_t dt = static_cast<uint32_t>(
-      std::min<size_t>(postings->GetKeyCount(), total_docs));
-  leaf.expansion_terms.push_back(
-      {std::move(postings), scorer->PrecomputeIDF({total_docs, dt})});
-}
-
-// Runs once per query to hoist all document-independent scoring work out of the
-// per-candidate loop. Walks the predicate tree and, for each TermPredicate
-// leaf, precomputes the parts that are identical for every matching document:
-//   - the posting lists (the expensive radix-tree lookup + stem expansion),
-//   - the document frequency (dt), and
-//   - the per-term BM25 weight (IDF).
-// It also performs the dynamic_casts needed to tell the concrete text predicate
-// types apart here, so the per-document walk can distinguish them with a cheap
-// map lookup instead.
-// Results go into `resolved`, keyed on the base Predicate*; the per-document
-// walk then only does the cheap per-key term-frequency lookup. A leaf whose
-// term (and all its variants) is absent from the index resolves to empty
-// postings.
-
-void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
-                   const indexes::scoring::Scorer *scorer,
-                   ResolvedLeaves &resolved) {
-  CHECK(predicate != nullptr);
-  switch (predicate->GetType()) {
-    case PredicateType::kComposedAnd:
-    case PredicateType::kComposedOr: {
-      auto composed = static_cast<const ComposedPredicate *>(predicate);
-      for (const auto &child : composed->GetChildren()) {
-        ResolveLeaves(child.get(), total_docs, scorer, resolved);
-      }
-      break;
-    }
-    case PredicateType::kText: {
-      // kText covers Term/Prefix/Suffix/Fuzzy predicates; each concrete type is
-      // dynamic_cast exactly once here (once per query -- not in the
-      // per-document ScoreNode path). Prefix/suffix/fuzzy resolve to their
-      // expansion terms (scored one-term-not-sum); ScoreNode picks a single
-      // matched term per document. Infix is unimplemented
-      // (InfixPredicate::BuildTextIterator and ::Evaluate both CHECK(false)),
-      // so an infix query aborts before scoring and never reaches this point.
-      // The three expansion kinds differ only in which words the pattern
-      // expands to, so they share one collector and one `max_words` bound.
-      const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-      const uint8_t num_text_fields =
-          static_cast<const TextPredicate *>(predicate)
-              ->GetTextIndexSchema()
-              ->GetNumTextFields();
-      ExpansionLeaf expansion_leaf;
-      auto add_expansion = [&](const indexes::text::Rax &tree,
-                               absl::string_view pattern) {
-        auto it = tree.GetWordIterator(pattern);
-        for (uint32_t n = 0; !it.Done() && n < max_words; ++n, it.Next()) {
-          AddExpansionTerm(it.GetPostingsTarget(), total_docs, scorer,
-                           expansion_leaf);
-        }
-      };
-      bool is_expansion = true;
-      if (auto *p = dynamic_cast<const PrefixPredicate *>(predicate)) {
-        expansion_leaf.field_mask =
-            ScoringFieldMask(p->GetFieldMask(), num_text_fields);
-        add_expansion(p->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
-                      p->GetTextString());
-      } else if (auto *s = dynamic_cast<const SuffixPredicate *>(predicate)) {
-        // The suffix trie stores reversed words, so a suffix is a prefix query
-        // over it; no trie (no WITHSUFFIXTRIE) means no matched terms.
-        expansion_leaf.field_mask =
-            ScoringFieldMask(s->GetFieldMask(), num_text_fields);
-        auto suffix = s->GetTextIndexSchema()->GetTextIndex()->GetSuffix();
-        if (suffix.has_value()) {
-          const absl::string_view term = s->GetTextString();
-          add_expansion(suffix->get(), std::string(term.rbegin(), term.rend()));
-        }
-      } else if (auto *f = dynamic_cast<const FuzzyPredicate *>(predicate)) {
-        expansion_leaf.field_mask =
-            ScoringFieldMask(f->GetFieldMask(), num_text_fields);
-        auto expansion = indexes::text::FuzzySearch::Search(
-            f->GetTextIndexSchema()->GetTextIndex()->GetPrefix(),
-            f->GetTextString(), f->GetDistance(), max_words);
-        for (auto &postings : expansion.postings) {
-          AddExpansionTerm(std::move(postings), total_docs, scorer,
-                           expansion_leaf);
-        }
-      } else {
-        is_expansion = false;
-      }
-      if (is_expansion) {
-        // Matching nothing stays unresolved, so ScoreNode returns nullopt.
-        if (!expansion_leaf.expansion_terms.empty()) {
-          resolved.emplace(predicate, std::move(expansion_leaf));
-        }
-        break;
-      }
-
-      // Otherwise a plain TermPredicate: its own (+ stem-variant) posting
-      // lists. Infix is the only other kText subclass and the parser rejects it
-      // (ParseUnquotedTextToken), so this cast cannot fail; assert rather
-      // than break, which would silently score the leaf 0.
-      auto term_pred = dynamic_cast<const TermPredicate *>(predicate);
-      CHECK(term_pred != nullptr);
-      auto text_index_schema = term_pred->GetTextIndexSchema();
-      CHECK(text_index_schema != nullptr);
-      auto text_index = text_index_schema->GetTextIndex();
-      CHECK(text_index != nullptr);
-      const auto &prefix = text_index->GetPrefix();
-
-      TermLeaf leaf;
-
-      // A single-word BM25 term (the exact surface term or the stem root
-      // literal): one posting list, IDF from that word's own df. Ingestion
-      // stores original words in the posting tree, resolved via
-      // FindPostingsTarget; an absent word adds no group.
-      auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
-        auto postings = prefix.FindPostingsTarget(word);
-        if (!postings) return;
-        const uint32_t dt =
-            std::min<uint32_t>(postings->GetKeyCount(), total_docs);
-        TermGroup group;
-        group.postings.push_back(std::move(postings));
-        group.idf = scorer->PrecomputeIDF({total_docs, dt});
-        group.field_mask = field_mask;
-        leaf.groups.push_back(std::move(group));
-      };
-
-      const absl::string_view word = term_pred->GetTextString();
-      // Leaf 1: the exact surface term. For a stemmed term this same word is
-      // scored again in the inflection group below (it is one of its parents) —
-      // the deliberate exact-match boost.
-      add_word_group(
-          word, ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields));
-
-      const uint64_t stem_field_mask =
-          term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
-      if (!term_pred->IsExact() && stem_field_mask != 0) {
-        // Parents of the stem root: every surface word that stems to it with
-        // surface != root (a self-stemming word is never added to the stem
-        // tree, so the root literal is not among them). Includes the query
-        // word.
-        absl::InlinedVector<absl::string_view,
-                            indexes::text::kStemVariantsInlineCapacity>
-            stem_variants;
-        uint32_t stem_distinct_docs = 0;
-        const std::string stemmed = text_index_schema->GetAllStemVariants(
-            word, stem_variants, stem_field_mask, /*lock_needed=*/true,
-            &stem_distinct_docs);
-
-        // Leaf 2: the stem root literal, its own posting/IDF — only when it
-        // differs from the query word (else it is Leaf 1) and is itself
-        // indexed.
-        if (stemmed != word) {
-          add_word_group(stemmed,
-                         ScoringFieldMask(stem_field_mask, num_text_fields));
-        }
-
-        // Leaf 3: the stem inflection group. F sums the per-doc frequencies of
-        // every inflection; dt is the distinct doc count counted at ingestion.
-        TermGroup stem;
-        for (const auto &variant : stem_variants) {
-          if (auto postings = prefix.FindPostingsTarget(variant)) {
-            stem.postings.push_back(std::move(postings));
-          }
-        }
-        if (!stem.postings.empty()) {
-          const uint32_t dt =
-              std::min<uint32_t>(stem_distinct_docs, total_docs);
-          stem.idf = scorer->PrecomputeIDF({total_docs, dt});
-          stem.field_mask = ScoringFieldMask(stem_field_mask, num_text_fields);
-          leaf.groups.push_back(std::move(stem));
-        }
-      }
-      resolved.emplace(term_pred, std::move(leaf));
-      break;
-    }
-    case PredicateType::kTag: {
-      // Only a real TagPredicate carries the index + values needed to score;
-      // dynamic_cast guards against a non-TagPredicate kTag leaf (e.g. a test
-      // mock), which resolves to an empty leaf and contributes 0.
-      auto tag_pred = dynamic_cast<const TagPredicate *>(predicate);
-      if (!tag_pred || resolved.contains(tag_pred)) break;
-      const indexes::Tag *tag_index = tag_pred->GetIndex();
-      if (tag_index == nullptr) break;
-
-      // A tag value is scored as a BM25 term with F ≡ 1: IDF over the number of
-      // documents carrying that value (dt). Resolve dt + IDF once per value
-      // here; the per-document walk sums the values a document actually
-      // carries. A union (`{red|blue}`) resolves several values, each
-      // contributing its own term.
-      TagLeaf leaf;
-      leaf.tag_index = tag_index;
-      // Dedupe query values that collapse to the same tag under the index's
-      // case rules (e.g. `{red|Red}` on a case-insensitive index)
-      const bool case_sensitive = tag_index->IsCaseSensitive();
-      absl::flat_hash_set<std::string> seen;
-      for (const auto &value : tag_pred->GetTags()) {
-        std::string norm =
-            case_sensitive ? value : absl::AsciiStrToLower(value);
-        if (!seen.insert(norm).second) continue;
-        // A prefix value (`foo*`) is scored as an expansion: ScoreNode credits
-        // a single representative matched value per document (never the sum).
-        // Which value that is depends on the document, so only the prefix is
-        // recorded here; the dt/IDF resolve per candidate.
-        if (!value.empty() && value.back() == '*') {
-          leaf.tag_prefixes.push_back(value);
-          continue;
-        }
-        uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
-            tag_index->GetTagValueDocCount(value), total_docs));
-        // A value absent from the index (dt == 0) has no matching document and
-        // never contributes a term; skip it so the per-document walk stays a
-        // simple sum over present values.
-        if (dt == 0) continue;
-        leaf.tag_values.emplace_back(value,
-                                     scorer->PrecomputeIDF({total_docs, dt}));
-      }
-      resolved.emplace(tag_pred, std::move(leaf));
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-// Query-invariant scoring inputs, captured once per query so the per-document
-// walk only does per-key lookups.
+// Per-document scoring state around the query-scoped cache.
 struct ScoreContext {
   const IndexSchema &index_schema;
-  const indexes::scoring::Scorer *scorer;
-  const ResolvedLeaves &resolved;
-  uint32_t total_docs = 0;
-  uint64_t total_doc_len = 0;
-  float avg_doc_len = 0.0f;
-  bool needs_doc_len = false;
-  // When the index has no SCORE field, every document carries the same constant
-  // document score, so the per-candidate GetDocumentScore lookup is skipped.
-  bool has_score_field = false;
-  float default_document_score = 1.0f;
+  ResolvedLeafCache &cache;
+  // Main thread only: the document's tags from the fetched record.
+  RecordTags *record_tags = nullptr;
+
+  // The current document's own tree, fetched on the first expansion leaf that
+  // misses its representative and reused by the rest of that document's walk.
+  struct PerKeyIndex {
+    InternedStringPtr key;
+    const indexes::text::TextIndex *index = nullptr;
+    bool fetched = false;
+  };
+  PerKeyIndex per_key;
+
+  void BeginDocument() { per_key = {}; }
+  const indexes::text::TextIndex *PerKeyTextIndex(
+      BorrowedInternedStringPtr key) {
+    if (!per_key.fetched) {
+      per_key.fetched = true;
+      per_key.key = key.Materialize();
+      if (auto schema = index_schema.GetTextIndexSchema()) {
+        // On the main thread the map lock guards the find; the tree itself is
+        // stable because the revalidated key has no in-flight mutation.
+        per_key.index =
+            schema->GetPerKeyTextIndex(per_key.key, cache.MainThread());
+      }
+    }
+    return per_key.index;
+  }
+  // The cache's LockMode records what the caller holds: a background caller
+  // holds the time-sliced mutex, which the analyzer cannot see through the
+  // runtime branch.
+  uint32_t DocLen(BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    if (!cache.NeedsDocLen()) return 0;
+    return cache.MainThread() ? index_schema.GetDocumentLengthLocked(key)
+                              : index_schema.GetDocumentLength(key);
+  }
+  float DocScore(BorrowedInternedStringPtr key) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    if (!cache.Stats().has_score_field) {
+      return cache.Stats().default_document_score;
+    }
+    return cache.MainThread() ? index_schema.GetDocumentScoreLocked(key)
+                              : index_schema.GetDocumentScore(key);
+  }
+  float ScoreLeaf(float idf, uint32_t tf, uint32_t doc_len,
+                  float weight) const {
+    return cache.Scorer()->ScoreLeaf(
+        {idf, tf, doc_len, cache.AvgDocLen(), weight});
+  }
 };
 
 std::optional<float> ScoreNode(const Predicate *predicate,
                                BorrowedInternedStringPtr key,
-                               const ScoreContext &score_ctx) {
+                               ScoreContext &score_ctx) {
   CHECK(predicate != nullptr);
 
   switch (predicate->GetType()) {
@@ -1037,35 +793,42 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       return predicate->GetWeight() * sum;
     }
     case PredicateType::kText: {
-      // kText is shared by Term/Prefix/Suffix/Fuzzy/Infix predicates. Term and
-      // expansion (prefix/suffix/fuzzy) predicates are present in the resolved
-      // map (see ResolveLeaves); a miss is an unresolved text predicate (e.g.
-      // infix): not scored, but the document still matched, so treat as a zero
-      // contribution rather than a non-match. This avoids a per-candidate
-      // dynamic_cast.
-      auto it = score_ctx.resolved.find(predicate);
-      if (it == score_ctx.resolved.end()) return 0.0f;
+      // A leaf that resolves to nothing scoreable (e.g. infix) still matched
+      // the filter, so it contributes 0 rather than a non-match.
+      ResolvedLeaf &resolved = score_ctx.cache.GetOrResolve(predicate);
+      if (std::holds_alternative<std::monostate>(resolved)) return 0.0f;
 
       // Expansion leaf: contribute exactly ONE matched term's BM25 (its own IDF
-      // + own F), never the sum. Pick the first expansion term whose posting
-      // contains this key in a requested field -- without the field gate a term
-      // the doc carries only elsewhere would supply the IDF and F. The
-      // representative is unspecified per the oracle, so this may differ from
-      // the in-iterator heap-order pick on multi-match docs; both honor the
-      // one-term invariant. doc_len is co-located in the matched posting entry.
-      if (const auto *expansion = std::get_if<ExpansionLeaf>(&it->second)) {
-        for (const auto &term : expansion->expansion_terms) {
-          if (auto entry = term.postings->GetPostingDocStats(
-                  key, expansion->field_mask)) {
-            return score_ctx.scorer->ScoreLeaf(
-                {term.idf, entry->tf, entry->doc_len, score_ctx.avg_doc_len,
-                 predicate->GetWeight()});
+      // + own F), never the sum. The field gate matters on both routes: without
+      // it a term the doc carries only in another field would supply the IDF
+      // and F. doc_len is co-located in the matched posting entry.
+      if (auto *expansion = std::get_if<ExpansionLeaf>(&resolved)) {
+        if (expansion->representative) {
+          if (auto entry = ProbeDocStats(expansion->representative->term, key,
+                                         expansion->field_mask)) {
+            return score_ctx.ScoreLeaf(expansion->representative->idf,
+                                       entry->tf, entry->doc_len,
+                                       predicate->GetWeight());
           }
         }
-        return std::nullopt;  // doc carries no expansion term in those fields
+        // The document passed the filter, so it carries some rarer matched
+        // term: find it in the document's own tree rather than scoring 0.
+        const auto *per_key_index = score_ctx.PerKeyTextIndex(key);
+        if (per_key_index == nullptr) return std::nullopt;
+        const auto &text_pred = *static_cast<const TextPredicate *>(predicate);
+        auto match = FindMostCommonExpansionMatch(
+            text_pred, expansion->kind, *per_key_index, score_ctx.per_key.key,
+            score_ctx.cache.WalkLocks(*text_pred.GetTextIndexSchema()));
+        if (!match) return std::nullopt;
+        const float idf =
+            score_ctx.cache.OfferExpansionTerm(*expansion, *match);
+        auto entry = ProbeDocStats(*match, key, expansion->field_mask);
+        if (!entry) return std::nullopt;
+        return score_ctx.ScoreLeaf(idf, entry->tf, entry->doc_len,
+                                   predicate->GetWeight());
       }
 
-      const auto &leaf = std::get<TermLeaf>(it->second);
+      const auto &leaf = std::get<TermLeaf>(resolved);
       if (leaf.groups.empty()) return std::nullopt;
 
       // A stemmed term sums several independent BM25 leaves, each with its own
@@ -1084,18 +847,16 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       uint32_t doc_len = 0;
       for (const TermGroup &group : leaf.groups) {
         uint32_t tf = 0;
-        for (const auto &postings : group.postings) {
-          if (auto entry =
-                  postings->GetPostingDocStats(key, group.field_mask)) {
+        for (const auto &word : group.words) {
+          if (auto entry = ProbeDocStats(word, key, group.field_mask)) {
             tf += entry->tf;
             doc_len = entry->doc_len;
           }
         }
         if (tf == 0) continue;
         matched = true;
-        total += score_ctx.scorer->ScoreLeaf({group.idf, tf, doc_len,
-                                              score_ctx.avg_doc_len,
-                                              predicate->GetWeight()});
+        total +=
+            score_ctx.ScoreLeaf(group.idf, tf, doc_len, predicate->GetWeight());
       }
       return matched ? std::optional<float>(total) : std::nullopt;
     }
@@ -1114,46 +875,61 @@ std::optional<float> ScoreNode(const Predicate *predicate,
     // come from the index's TEXT field; on a text-less index avg_doc_len is 0
     // and ScoreLeaf returns 0 (a well-defined score, not Redis's nan).
     case PredicateType::kTag: {
-      auto it = score_ctx.resolved.find(predicate);
-      // A tag leaf is always resolved (unlike non-scored text predicates), but
-      // guard defensively: an unresolved or index-less leaf contributes 0
-      // without rejecting the already-admitted candidate.
-      if (it == score_ctx.resolved.end()) return 0.0f;
-      const auto &leaf = std::get<TagLeaf>(it->second);
-      if (leaf.tag_index == nullptr ||
-          (leaf.tag_values.empty() && leaf.tag_prefixes.empty())) {
+      const auto *leaf =
+          std::get_if<TagLeaf>(&score_ctx.cache.GetOrResolve(predicate));
+      // An index-less leaf contributes 0 without rejecting the already-admitted
+      // candidate.
+      if (leaf == nullptr || leaf->tag_index == nullptr ||
+          (leaf->tag_values.empty() && leaf->tag_prefixes.empty())) {
         return 0.0f;
       }
 
-      uint32_t doc_len = 0;
-      if (score_ctx.needs_doc_len && score_ctx.total_docs > 0) {
-        doc_len = score_ctx.index_schema.GetDocumentLength(key);
+      const uint32_t doc_len = score_ctx.DocLen(key);
+      const uint32_t total_docs = score_ctx.cache.Stats().total_docs;
+
+      // Membership: the value's bag on the background path; on the main thread
+      // the record's own tags, since the index may not reflect the mutation.
+      const absl::flat_hash_set<absl::string_view> *doc_tags = nullptr;
+      if (score_ctx.record_tags != nullptr) {
+        doc_tags = score_ctx.record_tags->Get(
+            vmsdk::ToStringView(static_cast<const TagPredicate *>(predicate)
+                                    ->GetRetainedIdentifier()
+                                    .get()),
+            leaf->tag_index->GetSeparator());
+        if (doc_tags == nullptr) return 0.0f;
       }
+      const bool case_sensitive = leaf->tag_index->IsCaseSensitive();
+      auto carries = [&](const TagLeaf::Value &value) {
+        if (doc_tags == nullptr) return value.handle->Contains(key);
+        for (absl::string_view tag : *doc_tags) {
+          if (case_sensitive ? tag == value.value
+                             : absl::EqualsIgnoreCase(tag, value.value)) {
+            return true;
+          }
+        }
+        return false;
+      };
 
       // Sum the BM25 term (F ≡ 1) for each resolved value the document carries.
-      // ContainsKey normalizes per the index's case rules and tests membership
-      // via the value's posting bag, avoiding a per-candidate parse of the
-      // document's full tag set. An untracked key matches no value and scores
-      // 0.
+      // An untracked key is in no bag and scores 0.
       float sum = 0.0f;
-      for (const auto &[value, idf] : leaf.tag_values) {
-        if (!leaf.tag_index->ContainsKey(value, key)) continue;
-        sum += score_ctx.scorer->ScoreLeaf({idf, /*term_frequency=*/1, doc_len,
-                                            score_ctx.avg_doc_len,
-                                            predicate->GetWeight()});
+      for (const auto &value : leaf->tag_values) {
+        if (!carries(value)) continue;
+        sum += score_ctx.ScoreLeaf(value.idf, /*tf=*/1, doc_len,
+                                   predicate->GetWeight());
       }
       // Each prefix contributes ONE matched value (the doc's first), never the
-      // sum; a union still sums. Clamp as ResolveLeaves does -- dt and
-      // total_docs come from independently-locked counters.
-      for (absl::string_view prefix : leaf.tag_prefixes) {
+      // sum; a union still sums. Clamp dt: it and total_docs come from
+      // independently-locked counters.
+      for (absl::string_view prefix : leaf->tag_prefixes) {
         const uint32_t dt = static_cast<uint32_t>(std::min<size_t>(
-            leaf.tag_index->GetPrefixMatchDocCount(prefix, key),
-            score_ctx.total_docs));
+            leaf->tag_index->GetPrefixMatchDocCount(
+                prefix, key, /*lock=*/score_ctx.cache.MainThread()),
+            total_docs));
         if (dt == 0) continue;
-        sum += score_ctx.scorer->ScoreLeaf(
-            {score_ctx.scorer->PrecomputeIDF({score_ctx.total_docs, dt}),
-             /*term_frequency=*/1, doc_len, score_ctx.avg_doc_len,
-             predicate->GetWeight()});
+        sum += score_ctx.ScoreLeaf(
+            score_ctx.cache.Scorer()->PrecomputeIDF({total_docs, dt}),
+            /*tf=*/1, doc_len, predicate->GetWeight());
       }
       return sum;
     }
@@ -1166,45 +942,53 @@ std::optional<float> ScoreNode(const Predicate *predicate,
   return 0.0f;
 }
 
+// kBackground callers hold the time-sliced mutex; see ScoreContext::DocLen.
+CorpusStats ReadCorpusStats(const IndexSchema &index_schema, LockMode mode)
+    ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  return {
+      .total_docs =
+          static_cast<uint32_t>(mode == LockMode::kBackground
+                                    ? index_schema.GetIndexKeyInfoSize()
+                                    : index_schema.GetIndexKeyInfoSizeLocked()),
+      .total_doc_len = index_schema.GetTotalDocumentLength(),
+      .has_score_field = index_schema.HasScoreField(),
+      .default_document_score = index_schema.GetScore(),
+  };
+}
+
+// Scores one admitted document: the ScoreNode walk composed with the document
+// score, sanitized. nullopt when ScoreNode re-derives a non-match; callers
+// score 0 rather than drop the document.
+std::optional<float> ScoreDocument(const Predicate *root_predicate,
+                                   BorrowedInternedStringPtr key,
+                                   ScoreContext &score_ctx) {
+  score_ctx.BeginDocument();
+  auto sum = ScoreNode(root_predicate, key, score_ctx);
+  if (!sum) return std::nullopt;
+  return SanitizeScore(score_ctx.cache.Scorer()->ComposeDocumentScore(
+      *sum, score_ctx.DocScore(key)));
+}
+
 void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
-                    std::vector<indexes::BorrowedNeighbor> &candidates) {
+                    std::vector<indexes::BorrowedNeighbor> &candidates,
+                    ResolvedLeafCache *cache) {
   CHECK(scorer != nullptr);
   if (candidates.empty() || options::IsScoringDisabled()) return;
 
-  const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
-  // Candidates came from this index, so total_docs should be > 0; degrade to
-  // "no scores" rather than aborting if the invariant ever breaks (mirrors
-  // SingleDocumentScorer). Candidates keep their initial 0.0 score.
-  if (total_docs == 0) return;
-
-  // Resolve each term leaf's posting list and per-term weight once; the
-  // per-document walk below then only does the cheap per-key lookup. A
-  // match-all
-  // (`*`) query has no predicate: there are no leaves to resolve and the loop
-  // below scores every document with the constant wildcard leaf instead.
-  ResolvedLeaves resolved;
-  if (root_predicate != nullptr) {
-    ResolveLeaves(root_predicate, total_docs, scorer, resolved);
+  // Leaves resolve lazily on first visit, so a match-all (`*`) query, which
+  // has no predicate, never touches the cache.
+  std::optional<ResolvedLeafCache> own_cache;
+  if (cache == nullptr) {
+    cache = &own_cache.emplace(
+        ReadCorpusStats(index_schema, LockMode::kBackground), scorer);
   }
-
-  const bool needs_doc_len = scorer->NeedsDocumentLength();
-  const uint64_t total_doc_len =
-      needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
-  const float avg_doc_len =
-      (needs_doc_len && total_docs > 0)
-          ? static_cast<float>(total_doc_len) / static_cast<float>(total_docs)
-          : 0.0f;
-  ScoreContext score_ctx{index_schema,
-                         scorer,
-                         resolved,
-                         total_docs,
-                         total_doc_len,
-                         avg_doc_len,
-                         needs_doc_len,
-                         index_schema.HasScoreField(),
-                         index_schema.GetScore()};
+  // Candidates came from this index, so total_docs should be > 0; degrade to
+  // "no scores" rather than aborting if the invariant ever breaks. Candidates
+  // keep their initial 0.0 score.
+  if (cache->Stats().total_docs == 0) return;
+  ScoreContext score_ctx{index_schema, *cache};
 
   std::vector<indexes::BorrowedNeighbor> scored;
   scored.reserve(candidates.size());
@@ -1212,27 +996,20 @@ void ScoreTextQuery(const IndexSchema &index_schema,
     // Non-owning view: scoring runs under the shared index lock, so the
     // InternedString outlives the loop and no ref-count churn is needed.
     const BorrowedInternedStringPtr &key = candidate.key;
-    std::optional<float> score;
+    float score;
     if (root_predicate != nullptr) {
-      score = ScoreNode(root_predicate, key, score_ctx);
+      score = ScoreDocument(root_predicate, key, score_ctx).value_or(0.0f);
     } else {
       // Match-all (`*`): Redis scores the wildcard as a single BM25 leaf with a
       // constant IDF (1.0) and term frequency (1), normalized by the document's
       // text length. On a text-less index avg_doc_len is 0 and ScoreLeaf
       // returns a well-defined 0.
-      const uint32_t doc_len =
-          score_ctx.needs_doc_len ? index_schema.GetDocumentLength(key) : 0;
-      score = scorer->ScoreLeaf({/*idf=*/1.0f, /*term_frequency=*/1, doc_len,
-                                 score_ctx.avg_doc_len, /*leaf_weight=*/1.0f});
+      score = SanitizeScore(scorer->ComposeDocumentScore(
+          score_ctx.ScoreLeaf(/*idf=*/1.0f, /*tf=*/1, score_ctx.DocLen(key),
+                              /*weight=*/1.0f),
+          score_ctx.DocScore(key)));
     }
-    // no term contribute to score; return 0 rather than drop the doc
-    const float resolved_score = score.value_or(0.0f);
-    const float document_score = score_ctx.has_score_field
-                                     ? index_schema.GetDocumentScore(key)
-                                     : score_ctx.default_document_score;
-    const float final_score = SanitizeScore(
-        scorer->ComposeDocumentScore(resolved_score, document_score));
-    scored.push_back({candidate.key, 0.0f, final_score});
+    scored.push_back({candidate.key, 0.0f, score});
   }
 
   candidates = std::move(scored);
@@ -1247,7 +1024,8 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 // queries filtered only by numeric/tag predicates keep the KNN distance as
 // their score.
 void ApplyHybridTextScore(const SearchParameters &parameters,
-                          std::vector<indexes::Neighbor> &neighbors) {
+                          std::vector<indexes::Neighbor> &neighbors,
+                          ResolvedLeafCache *cache) {
   if (parameters.vector_score_only || !QueryHasTextPredicate(parameters) ||
       neighbors.empty()) {
     return;
@@ -1260,108 +1038,40 @@ void ApplyHybridTextScore(const SearchParameters &parameters,
   }
   ScoreTextQuery(*parameters.index_schema,
                  parameters.filter_parse_results.root_predicate.get(),
-                 indexes::scoring::GetScorer(parameters.scorer), borrowed);
+                 indexes::scoring::GetScorer(parameters.scorer), borrowed,
+                 cache);
   for (size_t i = 0; i < neighbors.size(); ++i) {
     neighbors[i].score = borrowed[i].score;
   }
 }
 
-// State captured once at construction: everything ScoreTextQuery derives
-// before its per-candidate loop. ResolvedLeaf holds ref-counted Postings
-// pointers, so the resolved snapshot stays valid across lock releases.
-struct SingleDocumentScorer::State {
-  const IndexSchema &index_schema;
-  const Predicate *root_predicate;
-  const indexes::scoring::Scorer *scorer;
-  ResolvedLeaves resolved;
-  uint32_t total_docs = 0;
-  uint64_t total_doc_len = 0;
-  float avg_doc_len = 0.0f;
-  bool needs_doc_len = false;
-  bool has_score_field = false;
-  float default_document_score = 1.0f;
-};
-
-SingleDocumentScorer::SingleDocumentScorer(
-    const IndexSchema &index_schema, const Predicate *root_predicate,
-    const indexes::scoring::Scorer *scorer)
-    : state_(new State{index_schema, root_predicate, scorer}) {
-  CHECK(root_predicate != nullptr);
-  CHECK(scorer != nullptr);
-
-  // Kill switch: leave total_docs at 0 so Score() returns nullopt (callers
-  // score 0) and none of the resolve work below runs.
-  if (options::IsScoringDisabled()) return;
-
-  // Runs on the main thread during content fetch, outside the background
-  // search's reader lock, so acquire our own to read index_key_info_ /
-  // text-index metadata safely against background mutations.
-  vmsdk::ReaderMutexLock lock(
-      &const_cast<IndexSchema &>(index_schema).GetTimeSlicedMutex());
-
-  // Source EVERY scoring input exactly as ScoreTextQuery does so a recomputed
-  // score is on the same scale as the shard-side score:
-  //   - total_docs          : GetIndexKeyInfoSize()
-  //   - dt + per-term IDF   : ResolveLeaves() over the GLOBAL posting lists
-  //                           (FindPostingsTarget/GetKeyCount) - NOT the
-  //                           per-key text index used for membership
-  //                           revalidation.
-  //   - avg_doc_len         : GetTotalDocumentLength()
-  //   - document score      : HasScoreField()/GetScore().
-  // All of it is document-independent, so it is resolved ONCE here; Score()
-  // only does the cheap per-key work (tf lookup, doc_len, document score).
-  state_->total_docs = index_schema.GetIndexKeyInfoSize();
-  // ScoreTextQuery CHECK()s total_docs > 0 (it only runs when candidates
-  // exist). This path can be reached for a pure numeric/tag query on an empty
-  // corpus, so degrade to "Score() returns nullopt" instead of aborting.
-  if (state_->total_docs == 0) return;
-  ResolveLeaves(root_predicate, state_->total_docs, scorer, state_->resolved);
-  state_->needs_doc_len = scorer->NeedsDocumentLength();
-  state_->total_doc_len =
-      state_->needs_doc_len ? index_schema.GetTotalDocumentLength() : 0;
-  state_->avg_doc_len = (state_->needs_doc_len && state_->total_docs > 0)
-                            ? static_cast<float>(state_->total_doc_len) /
-                                  static_cast<float>(state_->total_docs)
-                            : 0.0f;
-  state_->has_score_field = index_schema.HasScoreField();
-  state_->default_document_score = index_schema.GetScore();
+const absl::flat_hash_set<absl::string_view> *RecordTags::Get(
+    absl::string_view identifier, char separator) {
+  auto [it, inserted] = parsed_.try_emplace(identifier);
+  if (inserted) {
+    if (auto record = records_.find(identifier); record != records_.end()) {
+      // Record data, so the schema's separator applies rather than query
+      // syntax.
+      auto tags = indexes::Tag::ParseSearchTags(
+          vmsdk::ToStringView(record->second.value.get()), separator);
+      if (tags.ok()) it->second = std::move(tags).value();
+    }
+  }
+  return it->second ? &*it->second : nullptr;
 }
 
-SingleDocumentScorer::~SingleDocumentScorer() = default;
-
-std::optional<float> SingleDocumentScorer::Score(
-    const InternedStringPtr &key) const {
-  if (state_->total_docs == 0) return std::nullopt;
-  // Contract: the caller must NOT already hold the time-sliced mutex (see
-  // class comment in search.h); the reader lock is acquired below.
-  // Per-key reads (LookupTermFrequency, GetDocumentLength, GetDocumentScore)
-  // touch index structures, so take the reader lock for the walk. The
-  // document-independent inputs were captured at construction.
-  vmsdk::ReaderMutexLock lock(
-      &const_cast<IndexSchema &>(state_->index_schema).GetTimeSlicedMutex());
-
-  ScoreContext score_ctx{state_->index_schema,
-                         state_->scorer,
-                         state_->resolved,
-                         state_->total_docs,
-                         state_->total_doc_len,
-                         state_->avg_doc_len,
-                         state_->needs_doc_len,
-                         state_->has_score_field,
-                         state_->default_document_score};
-  const BorrowedInternedStringPtr borrowed_key(key);
-  // Single source of scoring math: the same ScoreNode walk ScoreTextQuery runs
-  // per candidate. nullopt means ScoreNode re-derived a non-match (e.g. a term
-  // absent from the global postings for this key); the caller scores 0 rather
-  // than dropping the already-admitted document.
-  auto sum = ScoreNode(state_->root_predicate, borrowed_key, score_ctx);
-  if (!sum) return std::nullopt;
-  const float document_score =
-      score_ctx.has_score_field
-          ? state_->index_schema.GetDocumentScore(borrowed_key)
-          : score_ctx.default_document_score;
-  return SanitizeScore(
-      state_->scorer->ComposeDocumentScore(*sum, document_score));
+std::optional<float> RecomputeDocumentScore(const IndexSchema &index_schema,
+                                            const Predicate *root_predicate,
+                                            const InternedStringPtr &key,
+                                            ResolvedLeafCache &cache,
+                                            RecordTags &record_tags) {
+  CHECK(cache.MainThread());
+  if (options::IsScoringDisabled() || cache.Stats().total_docs == 0) {
+    return std::nullopt;
+  }
+  ScoreContext score_ctx{index_schema, cache, &record_tags};
+  return ScoreDocument(root_predicate, BorrowedInternedStringPtr(key),
+                       score_ctx);
 }
 
 absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
@@ -1371,6 +1081,12 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       index_schema ? index_schema->GetTextIndexSchema() : nullptr;
 
   const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
+  // Shared by the prefilter walk and the extra-step scoring below, so a leaf
+  // either phase resolves is a hash hit for the other.
+  ResolvedLeafCache cache(
+      index_schema ? ReadCorpusStats(*index_schema, LockMode::kBackground)
+                   : CorpusStats{},
+      scorer);
 
   // In-iterator scoring captures only the text iterator's score/weight, so it
   // is valid solely for genuinely pure-text queries. Any query that also
@@ -1507,7 +1223,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     // for pure text queries.
     EvaluatePrefilteredKeys(parameters, entries_fetchers,
                             std::move(results_appender), qualified_entries,
-                            /*stop_on_fetch_limit=*/true);
+                            /*stop_on_fetch_limit=*/true, &cache);
   }
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
@@ -1518,7 +1234,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   if (!borrowed.empty() && !score_in_drain) {
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
-                   borrowed);
+                   borrowed, &cache);
   }
   return borrowed;
 }
@@ -1542,12 +1258,15 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
           CalcBestMatchingInkeys(parameters, vector_index);
       return vector_index->CreateReply(results);
     }
-    return PerformVectorSearch(vector_index, parameters);
+    return PerformVectorSearch(vector_index, parameters, nullptr);
   }
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters, parameters.filter_parse_results.root_predicate.get(),
       entries_fetchers, false);
+  ResolvedLeafCache cache(
+      ReadCorpusStats(*parameters.index_schema, LockMode::kBackground),
+      indexes::scoring::GetScorer(parameters.scorer));
 
   // With INKEYS, prefer pre-filtering to ensure exact K nearest within the
   // restricted set (inline filter with HNSW approximation might miss them).
@@ -1560,17 +1279,18 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
     std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
         CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                        vector_index, qualified_entries);
+                                        vector_index, qualified_entries,
+                                        &cache);
 
     VMSDK_ASSIGN_OR_RETURN(auto neighbors, vector_index->CreateReply(results));
-    ApplyHybridTextScore(parameters, neighbors);
+    ApplyHybridTextScore(parameters, neighbors, &cache);
     return neighbors;
   }
   ++Metrics::GetStats().query_inline_filtering_requests_cnt;
   lock.SetMayProlong();
   VMSDK_ASSIGN_OR_RETURN(auto neighbors,
-                         PerformVectorSearch(vector_index, parameters));
-  ApplyHybridTextScore(parameters, neighbors);
+                         PerformVectorSearch(vector_index, parameters, &cache));
+  ApplyHybridTextScore(parameters, neighbors, &cache);
   return neighbors;
 }
 

@@ -1,0 +1,24 @@
+This is the top level file for the task and the only one I totally wrote by myself. If anything here isn't correct or you want to push back on, please stop and raise the issue.
+
+The overall goal of this task is to get faster (use caching in more places where it's applicable) AND come up with a better scheme that doesn't require the main thread hanging waiting for the time slice mutex so it can do a walk of the whole tree.
+
+ Predicate leaf node caching breakdown across filtering and extra-step scoring:
+    // Numeric: nothing to do
+    // Text:
+    //   For exact term matching we cache postings for the term and cache will always be used after that
+    //   For stem variants we don't use the cache until all stem variants have been found because we can't check for existance otherwise.
+    //     - Also note that on main thread we may never find all stem variants sometimes if there are variants not included in the key set being evaluated if we use the per-key tree. Instead we can acquire the read lock on the main tree to guarantee one lookup fully populating the cache.
+    //     - Also note that proper stemming isn't implemented yet and we need to be prepared for it to come in from https://github.com/valkey-io/valkey-search/pull/1354
+    //   For expansion we don't use the cache in filtering but do populate the cache with the expanded term that was naturally found that has the most keys. This will be checked during scoring as the fast path.
+    // Tag: Use a similar approach to Text for pre-filter. Traverse the rax tree for exact term and save the bag of string pointers. For prefix fall back to TagInfo like is done today. On main thread always use the data from the doc since it may not be reflected in the tag rax tree that could be concurrently mutated by background ingestion.
+    //     - Note tag revalidation already has a bug that will be addressed separately: https://github.com/valkey-io/valkey-search/issues/1439. After this the tag index w/ a text field and scoring enabled will ensure the background Tag index reflects the data; however, for basic Tag revalidation without text scoring and the fact the Rax tree target isn't a shared pointer means the above approach still holds.
+
+
+I brainstormed with opus and gave lots of corrections in the chat, which led to the general cache plan. I then had it better organize it with the walkthough. I left many notes on it (bullet points) and stopped reading after section 4, so take the rest with a grain of salt. Hold everything I have explicitly added (this file and the bullet notes) as the utmost importance. If anything looks incorrect, please raise it and get my signoff before diverging.
+- UPDATE: Amendments to the plan have been made in a separate amendments doc which may keep being edited as things change
+
+General development philosphy: Keep things concise and simple. Convolution is bad. Comments should be minimal and kept to the "why" rather than "what" or "how". When there are iterations on your own code, don't leave comments relecting the change from the old state which never existed as a merged commit.
+
+After the initial implementation is done and a PR is opened, myself and coworkers are going to leave comments on it for agents to address. Any design changes that appear during this stage should be documented in a new review amendments doc. All past docs are considered immutable and all docs should be preserved until I give the final approval and we're ready to merge the PR.
+
+Along the way, notable implementation decisions made by AI should be added to the AI choices doc.

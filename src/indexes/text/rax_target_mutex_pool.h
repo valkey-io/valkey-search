@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "absl/base/thread_annotations.h"
 #include "absl/hash/hash.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -47,6 +48,25 @@ class RaxTargetMutexPool {
 
   // Returns the number of mutexes in the pool.
   size_t Size() const { return mutexes_.size(); }
+
+  // Holds every bucket, always in index order so two holders cannot deadlock.
+  // For a reader that keeps probes open across many words at once (positional
+  // evaluation) and cannot lock per word: two words may share a bucket.
+  class LockAll {
+   public:
+    explicit LockAll(RaxTargetMutexPool& pool) ABSL_NO_THREAD_SAFETY_ANALYSIS
+        : pool_(pool) {
+      for (auto& mutex : pool_.mutexes_) mutex.Lock();
+    }
+    ~LockAll() ABSL_NO_THREAD_SAFETY_ANALYSIS {
+      for (auto& mutex : pool_.mutexes_) mutex.Unlock();
+    }
+    LockAll(const LockAll&) = delete;
+    LockAll& operator=(const LockAll&) = delete;
+
+   private:
+    RaxTargetMutexPool& pool_;
+  };
 
  private:
   std::vector<absl::Mutex> mutexes_;

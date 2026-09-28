@@ -169,6 +169,18 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
+  // Main-thread reads, which cannot wait on the time-sliced mutex and instead
+  // take the same short locks the writers take. The lookup holds the tree lock
+  // only for the find; the returned Postings is then probed under its word's
+  // bucket from GetWordLocks(), never with the tree lock still held (writers
+  // take bucket first, tree second).
+  InvasivePtr<Postings> LookupGlobalPostings(absl::string_view word) const
+      ABSL_LOCKS_EXCLUDED(text_index_mutex_) {
+    absl::ReaderMutexLock lock(&text_index_mutex_);
+    return text_index_->GetPrefix().FindPostingsTarget(word);
+  }
+  RaxTargetMutexPool &GetWordLocks() const { return rax_target_mutex_pool_; }
+
   // Get stem root and all stem parents for a search term. out_distinct_docs, if
   // set, receives StemParents::distinct_docs (untouched if the root is absent).
   std::string GetAllStemVariants(
@@ -218,7 +230,7 @@ class TextIndexSchema {
   mutable absl::Mutex stem_tree_mutex_;
 
   // Per-word bucket locks for concurrent Rax target updates.
-  RaxTargetMutexPool rax_target_mutex_pool_;
+  mutable RaxTargetMutexPool rax_target_mutex_pool_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -311,7 +323,7 @@ class TextIndexSchema {
   // Helper function to lookup text index for a key.
   // Locking needs to be true if called outside of read phase of time sliced
   // mutex.
-  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
+  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock) const;
 };
 
 }  // namespace valkey_search::indexes::text

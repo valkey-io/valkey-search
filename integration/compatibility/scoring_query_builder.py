@@ -11,13 +11,17 @@ from dataclasses import dataclass, field
 
 from .data_sets import (
     SCORING_DT_TIERS,
+    SCORING_MIN_STEM_LEN,
     SCORING_NUM_DOCS,
     SCORING_TAG_FREQS,
     SCORING_VECTOR_CLUSTERS,
+    STEMMING_SCORING_STEMS,
     VECTOR_DIM,
     compute_scoring_corpus,
 )
 from .text_query_builder import sample_shape
+
+_STEM_OF = {word: stem for stem, words in STEMMING_SCORING_STEMS.items() for word in words}
 
 SCORING_QUERY_SEED = 7331
 
@@ -68,9 +72,9 @@ VECTOR_K_RANGE = (1, 65)
 SEARCH_LIMIT = SCORING_NUM_DOCS
 
 
-def build_scoring_queries(seed=SCORING_QUERY_SEED):
+def build_scoring_queries(seed=SCORING_QUERY_SEED, schema_type="nostem"):
     """{shape: [{shape, query, hits, params}]} over the recorded corpus."""
-    return _QueryBuilder(random.Random(seed)).build()
+    return _QueryBuilder(random.Random(seed), schema_type).build()
 
 
 def search_args(index, descriptor):
@@ -110,9 +114,14 @@ class _QueryBuilder:
     # Call order matters: every draw comes from one seeded rng, so reordering
     # anything changes every later query.
 
-    def __init__(self, rng):
+    def __init__(self, rng, schema_type):
         self.rng = rng
-        self.docs, self.terms = compute_scoring_corpus()   # terms: {term: {doc: tf}}
+        # terms: {term: {doc: tf}}
+        self.docs, self.terms = compute_scoring_corpus(schema_type=schema_type)
+        # docs each term matches as a query; the "default" index stems its text
+        self.hits = ({t: self._stemmed_hits(t) for t in self.terms}
+                     if schema_type == "default"
+                     else {t: set(posting) for t, posting in self.terms.items()})
 
         tiers = [sorted(t for t, posting in self.terms.items() if len(posting) == dt)
                  for _, dt in SCORING_DT_TIERS]
@@ -136,7 +145,7 @@ class _QueryBuilder:
         emit, rng = self._emit, self.rng
 
         for term in sorted(self.terms):
-            emit("single_term", term, self.terms[term])
+            emit("single_term", term, self.hits[term])
 
         for _ in range(SHAPE_COUNTS["and"]):
             _, drawn = self._terms_from_doc(rng.choice(FLAT_TERM_COUNTS))
@@ -188,6 +197,15 @@ class _QueryBuilder:
 
     # --- terms ---
 
+    def _stemmed_hits(self, query):
+        """Docs holding `query`, its stem as a word, or any word under that stem."""
+        stem = _STEM_OF.get(query, query)
+        # a word shorter than SCORING_MIN_STEM_LEN is indexed unstemmed
+        return set().union(*(posting for word, posting in self.terms.items()
+                             if word in (query, stem)
+                             or (len(word) >= SCORING_MIN_STEM_LEN
+                                 and _STEM_OF.get(word, word) == stem)))
+
     def _terms_from_doc(self, count):
         """(doc, `count` distinct terms of that doc)."""
         while True:
@@ -200,10 +218,10 @@ class _QueryBuilder:
         return [self.rng.choice(tier) for tier in self.rng.sample(self.or_tiers, count)]
 
     def _all_of(self, drawn):
-        return set.intersection(*(set(self.terms[t]) for t in drawn))
+        return set.intersection(*(self.hits[t] for t in drawn))
 
     def _any_of(self, drawn):
-        return set.union(*(set(self.terms[t]) for t in drawn))
+        return set.union(*(self.hits[t] for t in drawn))
 
     # --- text ---
 
@@ -215,7 +233,7 @@ class _QueryBuilder:
             return self._tree(weight_leaves=(kind == "weight"), parent_op=parent_op)
         if kind == "single_term":
             doc, (term,) = self._terms_from_doc(1)
-            return doc, term, set(self.terms[term])
+            return doc, term, set(self.hits[term])
         count = rng.choice(FLAT_TERM_COUNTS)
         if kind == "or":
             # one leg from the anchor doc, the rest free
@@ -254,8 +272,8 @@ class _QueryBuilder:
             tree.used.add(term)
             # a weight never changes the hit set
             if index in tree.weighted:
-                return _weight(f"({term})", rng.choice(WEIGHTS)), set(self.terms[term])
-            return term, set(self.terms[term])
+                return _weight(f"({term})", rng.choice(WEIGHTS)), set(self.hits[term])
+            return term, set(self.hits[term])
 
         if shape[0] == "G":
             query, hits = self._render(shape[1], tree, anchored, parent_op)

@@ -22,11 +22,23 @@ namespace valkey_search {
 
 using AttributePosition = uint16_t;
 class IndexSchema;
+
+// Per-attribute FT.CREATE declarations, reported by FT.INFO.
+struct AttributeOptions {
+  bool sortable{false};
+  bool unf{false};
+};
+
 class Attribute {
  public:
   Attribute(absl::string_view alias, absl::string_view identifier,
-            std::shared_ptr<indexes::IndexBase> index, uint16_t pos)
-      : alias_(alias), identifier_(identifier), index_(index), position_(pos) {}
+            std::shared_ptr<indexes::IndexBase> index, uint16_t pos,
+            AttributeOptions options = {})
+      : alias_(alias),
+        identifier_(identifier),
+        index_(index),
+        position_(pos),
+        options_(options) {}
   inline const std::string& GetAlias() const { return alias_; }
   inline const std::string& GetIdentifier() const { return identifier_; }
   std::shared_ptr<indexes::IndexBase> GetIndex() const { return index_; }
@@ -35,6 +47,8 @@ class Attribute {
     attribute_proto->set_alias(alias_);
     attribute_proto->set_identifier(identifier_);
     attribute_proto->set_allocated_index(index_->ToProto().release());
+    attribute_proto->set_sortable(options_.sortable);
+    attribute_proto->set_unf(options_.unf);
     return attribute_proto;
   }
 
@@ -58,6 +72,7 @@ class Attribute {
   std::shared_ptr<indexes::IndexBase> index_;
   AttributePosition position_{
       UINT16_MAX};  // The attribute position during creation.
+  AttributeOptions options_;
 };
 
 }  // namespace valkey_search

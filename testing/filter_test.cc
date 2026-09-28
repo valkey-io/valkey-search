@@ -1775,6 +1775,15 @@ TEST_P(InfieldsFilterTest, ParseParams) {
   const InfieldsFilterTestCase &test_case = GetParam();
   auto index_schema = CreateIndexSchema("index_schema_name").value();
   InitIndexSchema(index_schema.get());
+  // key1 has identical text in both fields; add a key whose text is only in
+  // text_field2 so that INFIELDS scoping is observable.
+  {
+    auto key = StringInternStore::Intern("key_field2_only");
+    auto field2 = index_schema->GetIndex("text_field2").value();
+    VMSDK_EXPECT_OK(
+        static_cast<indexes::Text *>(field2.get())->AddRecord(key, "hello"));
+    index_schema->GetTextIndexSchema()->CommitKeyData(key);
+  }
   TextParsingOptions options{
       .infields = test_case.infields.empty() ? nullptr : &test_case.infields};
   auto precompute_status = options.PrecomputeInfieldsMasks(*index_schema);
@@ -1952,6 +1961,31 @@ INSTANTIATE_TEST_SUITE_P(
             .infields = {"text_field1"},
             .create_success = true,
             .evaluate_success = true,
+        },
+        // INFIELDS must exclude a field that holds the only occurrence.
+        {
+            .test_name = "infields_excludes_term_only_in_other_field",
+            .filter = "hello",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key_field2_only",
+        },
+        {
+            .test_name = "infields_includes_term_in_listed_field",
+            .filter = "hello",
+            .infields = {"text_field2"},
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_field2_only",
+        },
+        {
+            .test_name = "infields_prefix_excludes_other_field",
+            .filter = "hel*",
+            .infields = {"text_field1"},
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key_field2_only",
         },
         // Case-sensitive field name: uppercase field name doesn't exist.
         {

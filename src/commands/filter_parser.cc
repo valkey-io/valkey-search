@@ -52,16 +52,17 @@ absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
   }
   FieldMaskPredicate mask = 0ULL;
   FieldMaskPredicate suffix_mask = 0ULL;
+  const auto& attributes = index_schema.GetAttributes();
   for (const auto& field : *infields) {
-    // GetIndex validates the field exists and is a TEXT index (type check).
-    auto index = index_schema.GetIndex(field);
-    if (!index.ok()) {
+    auto itr = attributes.find(field);
+    if (itr == attributes.end()) {
       // Divergence from RediSearch: RediSearch silently ignores non-existent
       // fields in INFIELDS. We error to catch user mistakes early.
       return absl::InvalidArgumentError(absl::StrCat(
           "INFIELDS field '", field, "' does not exist in the index"));
     }
-    if (index.value()->GetIndexerType() != indexes::IndexerType::kText) {
+    const auto& index = itr->second.GetIndex();
+    if (index->GetIndexerType() != indexes::IndexerType::kText) {
       // Divergence from RediSearch: RediSearch silently ignores non-TEXT
       // fields in INFIELDS (they simply have no effect). We error because
       // INFIELDS only applies to full-text matching and a non-TEXT field
@@ -69,19 +70,13 @@ absl::Status TextParsingOptions::PrecomputeInfieldsMasks(
       return absl::InvalidArgumentError(
           absl::StrCat("INFIELDS field '", field, "' is not a TEXT field"));
     }
-    auto* text_index = static_cast<const indexes::Text*>(index.value().get());
-    // GetIdentifier resolves the alias to the canonical storage identifier,
-    // which is a separate mapping from the index lookup above.
-    auto identifier = index_schema.GetIdentifier(field);
-    if (!identifier.ok()) {
-      return absl::InvalidArgumentError(absl::StrCat(
-          "INFIELDS field '", field, "' could not resolve to an identifier"));
-    }
+    auto* text_index = static_cast<const indexes::Text*>(index.get());
+    const auto& identifier = itr->second.GetIdentifier();
     mask |= 1ULL << text_index->GetTextFieldNumber();
-    infields_identifiers.insert(identifier.value());
+    infields_identifiers.insert(identifier);
     if (text_index->WithSuffixTrie()) {
       suffix_mask |= 1ULL << text_index->GetTextFieldNumber();
-      infields_suffix_identifiers.insert(identifier.value());
+      infields_suffix_identifiers.insert(identifier);
     }
   }
   infields_field_mask = mask;

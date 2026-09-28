@@ -84,6 +84,17 @@ std::optional<hnswlib::tableint> VectorFlat<T>::GetAlgoIdLockFree(
   return search->second;
 }
 
+// A FLAT delete frees its label (no tombstones), so the labels still present
+// are the only ones a key added after the load could collide with.
+template <typename T>
+uint64_t VectorFlat<T>::GetMaxLoadedLabel() const {
+  uint64_t max_label = 0;
+  for (const auto &[label, _] : algo_->dict_external_to_internal) {
+    max_label = std::max(max_label, static_cast<uint64_t>(label));
+  }
+  return max_label;
+}
+
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,

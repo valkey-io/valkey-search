@@ -582,7 +582,6 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = std::move(vector_record_with_size.vector_record);
   }
-  // Use max label from label_lookup_
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }

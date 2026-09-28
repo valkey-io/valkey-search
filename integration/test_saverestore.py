@@ -293,6 +293,71 @@ class TestZeroLengthKeySaveRestore(ValkeySearchTestCaseDebugMode):
         assert result[1] == b""
 
 
+class TestFlatLabelsAfterLoad(ValkeySearchTestCaseDebugMode):
+    """
+    A key added to a FLAT index after an RDB load must not take the internal
+    label of a loaded key. Otherwise the new vector replaces the loaded one,
+    and deleting the new key crashes the next query or update that reads the
+    loaded key's vector.
+    """
+
+    def search(self, query: str) -> dict[bytes, float]:
+        res = self.client.execute_command(
+            "FT.SEARCH", "idx", query, "RETURN", "1", "d",
+            "PARAMS", "2", "B", float_to_bytes([1.0, 0.0]), "DIALECT", "2",
+        )
+        return {res[i]: float(res[i + 1][1]) for i in range(1, len(res), 2)}
+
+    def index_idle(self) -> bool:
+        info = FTInfoParser(self.client.execute_command("FT.INFO", "idx"))
+        return info.is_backfill_complete() and info.mutation_queue_size == 0
+
+    def wait_for_index_idle(self):
+        waiters.wait_for_true(self.index_idle)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            pytest.param(
+                "@v:[VECTOR_RANGE 1000000 $B]=>{$yield_distance_as: d}",
+                id="vector_range"),
+            pytest.param("*=>[KNN 10 @v $B AS d]", id="knn"),
+            pytest.param("(@t:{x})=>[KNN 10 @v $B AS d]", id="filtered_knn"),
+        ],
+    )
+    def test_new_key_after_debug_reload(self, query):
+        self.client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "k:",
+            "SCHEMA", "t", "TAG",
+            "v", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
+            "DISTANCE_METRIC", "L2",
+        )
+        for i in range(4):
+            self.client.hset(
+                f"k:{i}", mapping={"v": float_to_bytes([float(i), 0.0]), "t": "x"})
+        self.wait_for_index_idle()
+        loaded = {b"k:0": 1.0, b"k:1": 0.0, b"k:2": 1.0, b"k:3": 4.0}
+        assert self.search(query) == loaded
+
+        self.client.execute_command("DEBUG", "RELOAD")
+        self.wait_for_index_idle()
+        assert self.search(query) == loaded
+
+        self.client.hset(
+            "k:new", mapping={"v": float_to_bytes([100.0, 100.0]), "t": "x"})
+        self.wait_for_index_idle()
+        assert self.search(query) == {**loaded, b"k:new": 19801.0}
+
+        self.client.delete("k:new")
+        self.wait_for_index_idle()
+        assert self.search(query) == loaded
+
+        # An update compares against the stored vector of the loaded key.
+        self.client.hset("k:1", mapping={"v": float_to_bytes([1.0, 1.0])})
+        self.wait_for_index_idle()
+        assert self.search(query) == {**loaded, b"k:1": 1.0}
+
+
 class TestMutationQueue(ValkeySearchTestCaseDebugMode):
     def append_startup_args(self, args):
         args["search.rdb_write_v2"] = "yes"

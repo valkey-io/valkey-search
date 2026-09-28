@@ -167,12 +167,27 @@ class PredicateEvaluator : public query::Evaluator {
     if (!vector_index) {
       return EvaluationResult(false);
     }
-    auto distance_result = vector_index->IsWithinVectorRange(
-        target_key_, query_vector, predicate.GetRadius());
-    if (!distance_result.ok()) {
+    // Judge the vector the document holds now, as fetched into records_, like
+    // the tag and numeric checks above. Asking the index instead is not only
+    // stale: this runs on the main thread after the search released its reader
+    // lock, so the index's lock-free accessors would race the writer threads.
+    auto it = records_.find(predicate.GetIdentifier());
+    if (it == records_.end()) {
       return EvaluationResult(false);
     }
-    return EvaluationResult(distance_result->has_value());
+    ValkeyModuleString *record = it->second.value.get();
+    // A JSON vector is fetched as text; convert it the way ingestion does.
+    vmsdk::UniqueValkeyString converted;
+    if (index_schema_->GetAttributeDataType().AttributesProvidedAsString()) {
+      converted = vector_index->NormalizeStringAttribute(
+          vmsdk::RetainUniqueValkeyString(record));
+      if (!converted) {
+        return EvaluationResult(false);
+      }
+      record = converted.get();
+    }
+    return EvaluationResult(vector_index->IsRecordWithinVectorRange(
+        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
   }
 
  private:

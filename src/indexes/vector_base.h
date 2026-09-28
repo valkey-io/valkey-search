@@ -349,6 +349,8 @@ class VectorBase : public IndexBase {
   // Returns the distance and internal label for the given key, or an error if
   // the key is not tracked. Used by AddPrefilteredKey and PrefilterEvaluator.
   // Prefer IsWithinVectorRange for callers that only need a pass/fail check.
+  // Search phase only: reads the tracked-key maps lock-free, like
+  // GetVectorDuringSearch.
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query) const;
@@ -368,6 +370,15 @@ class VectorBase : public IndexBase {
       return std::nullopt;
     }
     return distance;
+  }
+  // Range test for `record`, the raw vector bytes just read back from the
+  // database. Like RecomputeDistance it touches no index structure, so it is
+  // safe on the main thread outside the search phase, where
+  // IsWithinVectorRange is not.
+  bool IsRecordWithinVectorRange(absl::string_view record,
+                                 absl::string_view query, float radius) const {
+    auto distance = RecomputeDistance(record, query);
+    return distance.ok() && ClampCosineDistance(*distance) <= radius;
   }
   bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }

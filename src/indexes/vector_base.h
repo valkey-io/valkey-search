@@ -338,7 +338,8 @@ class VectorBase : public IndexBase {
 
   // Distance and internal label for `key`, or an error if untracked. Public
   // for PrefilterEvaluator's direct VR-distance use; prefer IsWithinVectorRange
-  // for a pass/fail check. Search-phase only: lock-free, like GetVectorDuringSearch.
+  // for a pass/fail check. Search-phase only: lock-free, like
+  // GetVectorDuringSearch.
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,
                             absl::string_view query) const;

@@ -1085,7 +1085,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 // range search is an accepted RC1 stop-gap being replaced before GA (PR #985
 // issue 3); re-enable once the new algorithm's insert path is audited.
 TEST_F(SearchRangeFp32,
-      DISABLED_HnswMatchesFlatWithNonFiniteDistancesPastTheFetchCap)
+       DISABLED_HnswMatchesFlatWithNonFiniteDistancesPastTheFetchCap)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto from_bits = [](uint32_t bits) {
     float f;

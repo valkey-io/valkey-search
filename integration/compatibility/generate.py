@@ -172,7 +172,7 @@ class BaseCompatibilityTest:
         self.data_set_name = data_set_name
         self.key_type = key_type
         self.vector_data_type = vector_data_type
-        load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
+        return load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
 
     def execute_command(self, cmd, excluded=False):
         answer = {"cmd": cmd,
@@ -1215,4 +1215,5 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"groupby 1 @n2 "
             f"reduce first_value 4 @n1 BY @n2 INVALID as first_error_invalid"
         )
+
 

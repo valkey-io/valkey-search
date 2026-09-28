@@ -1904,14 +1904,14 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = true,
             .evaluate_success = true,
         },
-        // Suffix query restricted to a field without suffix trie — no
-        // valid fields, field_mask stays 0, returns OK but matches nothing.
+        // Suffix query restricted to a field without suffix trie.
         {
             .test_name = "infields_suffix_query_unsupported_field",
             .filter = "*ello",
             .infields = {"text_field2"},  // no suffix trie
-            .create_success = true,
-            .evaluate_success = false,
+            .create_success = false,
+            .create_expected_error_message =
+                "No INFIELDS field supports suffix search",
         },
         // Fuzzy query restricted by INFIELDS.
         {

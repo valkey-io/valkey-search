@@ -878,9 +878,11 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
                                            ? options_.infields_suffix_field_mask
                                            : options_.infields_field_mask;
     field_mask &= infields_mask;
+    // INFIELDS only lists valid TEXT fields, so an empty intersection means
+    // none of them supports suffix search.
     if (field_mask == 0ULL) {
-      // INFIELDS excludes all text fields — match nothing.
-      return absl::OkStatus();
+      return absl::InvalidArgumentError(
+          "No INFIELDS field supports suffix search");
     }
     // Use precomputed INFIELDS identifiers if available, otherwise all.
     if (options_.infields && !options_.infields->empty()) {

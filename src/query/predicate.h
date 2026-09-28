@@ -243,7 +243,14 @@ class VectorRangePredicate : public Predicate {
     score_as_ = std::move(score_as);
   }
   void SetEpsilon(std::optional<double> epsilon) { epsilon_ = epsilon; }
-  void SetRadius(double radius) { radius_ = radius; }
+  // An infinite radius, or one too large for a float, is stored as the
+  // largest float. It matches every finite distance, while the +inf that
+  // VectorBase::ClampCosineDistance reports for a NaN or +inf distance stays
+  // outside it.
+  void SetRadius(double radius) {
+    constexpr double kMaxRadius = std::numeric_limits<float>::max();
+    radius_ = radius > kMaxRadius ? kMaxRadius : radius;
+  }
 
   // Returns the PARAMS key for the radius, if the radius was specified as
   // $param. Empty if the radius was a literal.

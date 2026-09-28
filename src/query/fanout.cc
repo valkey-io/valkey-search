@@ -9,6 +9,7 @@
 
 #include <netinet/in.h>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -163,10 +164,13 @@ struct SearchPartitionResultsTracker {
       // caller re-sorts by ascending distance. No score-slot side channel.
       // The wire format is unchanged; a compound-OR match with no VR distance
       // is transmitted as a +inf distance, so reconstruct has_vr_distance from
-      // the bit pattern (IsInf is -ffast-math-safe) rather than adding a proto
-      // field.
+      // the bit pattern rather than adding a proto field. Only +inf is the
+      // marker, since no radius includes a +inf distance; an IP distance of
+      // -inf is a VR distance and is kept. Compare the bits: -ffast-math makes
+      // float comparisons with infinity unreliable.
       neighbor.has_vr_distance =
-          !indexes::scoring::IsInf(neighbor_entry->distance());
+          std::bit_cast<uint32_t>(neighbor_entry->distance()) !=
+          std::bit_cast<uint32_t>(indexes::scoring::PositiveInf());
       neighbor.score = neighbor_entry->score();
       AddResult(neighbor);
     }

@@ -130,7 +130,8 @@ bool IsTopLevelKeyword(absl::string_view tok) {
          absl::EqualsIgnoreCase(tok, "PARAMS") ||
          absl::EqualsIgnoreCase(tok, "TIMEOUT") ||
          absl::EqualsIgnoreCase(tok, "FILTER") ||
-         absl::EqualsIgnoreCase(tok, "DIALECT");
+         absl::EqualsIgnoreCase(tok, "DIALECT") ||
+         absl::EqualsIgnoreCase(tok, kWithCursorParam);
 }
 
 namespace {

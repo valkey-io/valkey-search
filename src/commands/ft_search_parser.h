@@ -40,6 +40,10 @@ struct SearchCommand : public QueryCommand {
 
   query::SerializationRange GetSerializationRange() const;
 
+  // Replies one array per document in search_result.neighbors[start, end).
+  void ReplyRows(ValkeyModuleCtx *ctx, const query::SearchResult &search_result,
+                 size_t start, size_t end) const;
+
   bool with_sort_keys{false};
   bool with_scores{false};
 
@@ -49,6 +53,20 @@ struct SearchCommand : public QueryCommand {
   // as there can be many or none return clause, and only the last RETURN is
   // effective
   bool return_no_fields{false};
+
+ private:
+  // Settings shared by every row of a reply.
+  struct RowFormat {
+    bool has_relevance{false};
+    bool sort_by_vec_score{false};
+    std::string sort_key_prefix;
+  };
+  RowFormat GetRowFormat() const;
+  // Replies a document's elements: key, [score], [sort key], fields. Returns
+  // the number of elements replied.
+  size_t ReplyRowElements(ValkeyModuleCtx *ctx,
+                          const indexes::Neighbor &neighbor,
+                          const RowFormat &format) const;
 };
 
 }  // namespace valkey_search

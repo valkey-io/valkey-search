@@ -7,6 +7,7 @@
 #include "src/commands/ft_aggregate_exec.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <queue>
@@ -19,6 +20,7 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
 #include "absl/time/clock.h"
@@ -1222,8 +1224,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
   uint32_t cnt{0};
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
   if (cnt != 2) {
-    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
-                                              cnt, ") to reducer ", name));
+    return absl::OutOfRangeError(absl::StrFormat(
+        "incorrect number of arguments (%d) to reducer %s", cnt, name));
   }
 
   // arg 0: the field to compute quantile over.
@@ -1261,7 +1263,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> QuantileReducerParser(
     // "__generated_alias" + reducer + comma-joined args with the leading '@'
     // stripped, lowercasing the whole thing; the legacy form is
     // "REDUCER(args)". See COMPATIBILITY.md.
-    const std::vector<absl::string_view> arg_texts{
+    const std::array<absl::string_view, 2> arg_texts{
         vmsdk::ToStringView(field_tok), vmsdk::ToStringView(quantile_tok)};
     std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "aggregate_reducer_default_alias",

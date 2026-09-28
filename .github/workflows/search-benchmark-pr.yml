@@ -522,3 +522,28 @@ jobs:
               repo: context.repo.repo,
               name: '${{ needs.resolve.outputs.label }}'
             }).catch(err => console.log('label not present', err.message));
+
+  cleanup-label-on-resolve-failure:
+    needs: resolve
+    if: always() && needs.resolve.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    env:
+      TARGET_LABEL: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.trigger_label || github.event.label.name || '' }}
+      TARGET_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.pull_request.number || '' }}
+    steps:
+      - name: Remove benchmark label after resolve failure
+        if: env.TARGET_LABEL != '' && env.TARGET_PR_NUMBER != ''
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = Number(process.env.TARGET_PR_NUMBER);
+            const label = process.env.TARGET_LABEL || '';
+            await github.rest.issues.removeLabel({
+              issue_number: prNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: label,
+            }).catch(err => console.log('label not present', err.message));

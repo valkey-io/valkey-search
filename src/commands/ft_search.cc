@@ -63,14 +63,6 @@ void ReplyAvailNeighbors(ValkeyModuleCtx *ctx,
 void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score);
 
 bool HasTextRelevance(const SearchCommand &parameters) {
-  // A plain VECTOR_RANGE query is a non-vector query but carries no text
-  // relevance: for compatibility a WITHSCORES score of 0 is reported (the
-  // distance is surfaced via $yield_distance_as / __<field>_score, not the
-  // score slot). Only treat it as having relevance when it also has a text
-  // predicate.
-  if (parameters.has_vector_range) {
-    return query::QueryHasTextPredicate(parameters);
-  }
   return parameters.IsNonVectorQuery() ||
          query::QueryHasTextPredicate(parameters);
 }
@@ -288,12 +280,6 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithArray(ctx, elements_per_result * range.count() + 1);
   ReplyAvailNeighbors(ctx, search_result, command);
 
-  // WITHSCORES relevance score. A plain VECTOR_RANGE query carries no text
-  // relevance, so for compatibility 0 is reported (the distance is a separate
-  // yielded field, not the score); only emit Neighbor::score when the query
-  // actually has relevance.
-  const bool has_relevance = HasTextRelevance(command);
-
   std::string prefix_str;
   if (command.with_sort_keys) {
     prefix_str = VALKEY_SEARCH_COMPATIBILITY_FIX(
@@ -311,7 +297,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 
     // Score as top-level element when WITHSCORES is specified
     if (command.with_scores) {
-      ReplyScoreTopLevel(ctx, has_relevance ? neighbors[i].score : 0.0f);
+      ReplyScoreTopLevel(ctx, neighbors[i].score);
     }
 
     // Prefix the sort key: '#' for NUMERIC fields, '$' for string fields
@@ -406,22 +392,7 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
 // Apply sorting to neighbors based on attribute values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
-  if (neighbors.empty()) {
-    return;
-  }
-
-  // Default sort for a standalone VR query: ascending distance, then key.
-  // Guarded on IsStandaloneVectorRange so VR+text keeps the BM-25 order set by
-  // TrimResults (which the NOCONTENT early path also preserves).
-  if (!parameters.sortby_parameter.has_value()) {
-    if (query::IsStandaloneVectorRange(parameters)) {
-      auto default_compare = [](const indexes::Neighbor &a,
-                                const indexes::Neighbor &b) -> bool {
-        if (a.distance != b.distance) return a.distance < b.distance;
-        return a.external_id->Str() < b.external_id->Str();
-      };
-      PerformSortingOnRelevantPortion(neighbors, parameters, default_compare);
-    }
+  if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
     return;
   }
 
@@ -448,7 +419,8 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
       if (a.distance > b.distance) {
         return sortby.order == query::SortOrder::kDescending;
       }
-      return false;
+      // Tie-break on key ascending for a deterministic order.
+      return a.external_id->Str() < b.external_id->Str();
     };
     PerformSortingOnRelevantPortion(neighbors, parameters, distance_compare);
     return;

@@ -576,6 +576,10 @@ void VectorRangeSendReplyTest::DoTest(
   std::vector<indexes::Neighbor> neighbors;
   for (const auto &neighbor : input.neighbors) {
     neighbors.push_back(ToIndexesNeighbor(neighbor));
+    // NeighborTest::score is the VR distance here. Search() scores a VR query
+    // like any non-vector query, so without a text/tag predicate its relevance
+    // score is 0.
+    neighbors.back().score = 0.0f;
   }
 
   // Create a VectorRangePredicate for test setup so GetVrScoreFieldName can
@@ -696,6 +700,50 @@ INSTANTIATE_TEST_SUITE_P(
             .expected_output =
                 "*3\r\n:3\r\n$2\r\nk2\r\n*2\r\n$4\r\ntag1\r\n$4\r\nval1\r\n",
             .expected_output_no_content = "*2\r\n:3\r\n$2\r\nk2\r\n",
+        },
+        {
+            // Without SORTBY the LIMIT page comes from the default non-vector
+            // order (score, then key), not distance order, matching Redis's
+            // doc-id order. The distances are deliberately not in key order.
+            .test_name = "default_order_is_key_order_not_distance",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k2", .score = 0.25f},
+                                  {.external_id = "k3", .score = 0.5f},
+                                  {.external_id = "k1", .score = 0.75f}},
+                    .vector_field_alias = "vec",
+                    .score_as = "d",
+                    .limit = {.first_index = 0, .number = 2},
+                },
+            .expected_output =
+                "*5\r\n:3\r\n$2\r\nk1\r\n*4\r\n$1\r\nd\r\n$4\r\n0.75\r\n"
+                "$4\r\ntag1\r\n$4\r\nval1\r\n"
+                "$2\r\nk2\r\n*4\r\n$1\r\nd\r\n$4\r\n0.25\r\n"
+                "$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:3\r\n$2\r\nk1\r\n$2\r\nk2\r\n",
+        },
+        {
+            // SORTBY on the yielded distance breaks distance ties by key, so
+            // the LIMIT page is deterministic (partial_sort is not stable).
+            .test_name = "sortby_distance_ties_break_by_key",
+            .input =
+                {
+                    .neighbors = {{.external_id = "k2", .score = 0.5f},
+                                  {.external_id = "k1", .score = 0.5f},
+                                  {.external_id = "k3", .score = 0.25f}},
+                    .vector_field_alias = "vec",
+                    .score_as = "d",
+                    .limit = {.first_index = 0, .number = 2},
+                    .sortby = query::SortByParameter{.field = "d"},
+                },
+            .expected_output =
+                "*5\r\n:3\r\n$2\r\nk3\r\n*4\r\n$1\r\nd\r\n$4\r\n0.25\r\n"
+                "$4\r\ntag1\r\n$4\r\nval1\r\n"
+                "$2\r\nk1\r\n*4\r\n$1\r\nd\r\n$3\r\n0.5\r\n"
+                "$4\r\ntag1\r\n$4\r\nval1\r\n",
+            .expected_output_no_content =
+                "*3\r\n:3\r\n$2\r\nk3\r\n$2\r\nk1\r\n",
         },
         {
             // Test LIMIT number=0 returns only count

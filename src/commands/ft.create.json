@@ -356,6 +356,7 @@
         ]
       }
     ],
+    "arity": -5,
     "complexity": "Construction time O(N log N), where N is the number of indexed items",
     "group": "search",
     "module_since": "1.0.0",

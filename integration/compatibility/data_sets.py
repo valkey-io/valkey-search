@@ -1443,7 +1443,7 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
         for s in range(0, len(load_list)):
             k = client.execute_command(*["JSON.GET", load_list[s][0], "$"])
             print(f"{s}:{load_list[s][0]}:  ", k)
-    return len(load_list)
+    return load_list
 
 def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name (mirrors load_data). Without

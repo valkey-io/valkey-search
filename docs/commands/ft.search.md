@@ -5,6 +5,7 @@ FT.SEARCH <index> <query>
   [ALLSHARDS | SOMESHARDS]
   [CONSISTENT | INCONSISTENT]
   [DIALECT <dialect>]
+  [INKEYS <count> <key> [<key> ...]]
   [INORDER]
   [LIMIT <offset> <num>]
   [NOCONTENT]
@@ -15,6 +16,7 @@ FT.SEARCH <index> <query>
   [SORTBY <field> [ ASC | DESC]]
   [TIMEOUT <timeout>]
   [VERBATIM]
+  [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
   [WITHSCORES]
   [WITHSORTKEYS]
 ```
@@ -25,6 +27,7 @@ FT.SEARCH <index> <query>
 - `CONSISTENT` (Optional): If specified, the command is terminated with an error if the cluster is in an inconsistent state. This is the default when `search.enable-consistent-results` is `yes`; otherwise `INCONSISTENT` is the default.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INCONSISTENT` (Optional): If specified, the command will generate a best-effort reply if the cluster remains inconsistent within the timeout interval.
+- `INKEYS <count> <key> [<key> ...]` (optional): Restricts results to the specified set of document keys. `<count>` is the number of keys that follow and must be a non-negative integer. Duplicate keys are deduplicated. If `<count>` is 0, no results are returned. The filter is applied as a post-filter after the search, so `total_count` in the response reflects only the keys that matched both the query and the INKEYS set.
 - `LIMIT <offset> <count>` (optional): Lets you choose a portion of the result. The first `<offset>` keys are skipped and only a maximum of `<count>` keys are included. The default is LIMIT 0 10, which returns at most 10 keys.
 - `NOCONTENT` (optional): When present, only the resulting key names are returned, no key values are included.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of value/name pairs. [Search - query language](../topics/search-query.md) for details.
@@ -36,6 +39,7 @@ FT.SEARCH <index> <query>
 - `SORTBY <field> [ASC | DESC]` (Optional): If present, results are sorted according the value of the specified field and the optional sort-direction instruction. By default, vector results are sorted in distance order and non-vector results are not sorted in any particular order. A vector range query is a non-vector query: to sort it by distance, name the distance with `$YIELD_DISTANCE_AS` and sort on that name, see [Vector Range Match](../topics/search-query.md#vector-range-match). Sorting is applied before the `LIMIT` clause is applied.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `SCORER <scorer>` (Optional): Selects the relevance scoring function used to rank text results.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (Optional): Returns at most `<count>` of the keys selected by the `LIMIT` clause and saves the remaining keys in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. If it is given more than once, the last one is used. This option is a Valkey extension.
 - `WITHSCORES` (Optional): Augments the output with the relevance score computed for each returned key.
 - `WITHSORTKEYS` (Optional): If `SORTBY` is specified then enabling this option augments the output with the value of the field used for sorting.
 
@@ -66,6 +70,14 @@ If the index is on `HASH` keys, then the result is the same as if a `RETURN` cla
 If the index is on `JSON` keys, then one name/value pair is inserted with name `$` and the value being the entire JSON key as a string.
 In addition, if this is a vector search, then one additional name/value pair will be included which is the computed vector distance for this returned key -- see [Search - query language](../topics/search-query.md) for details on how to control the name of that field.
 For a vector range query, the distance is included only if the query names it with `$YIELD_DISTANCE_AS`.
+
+### `WITHCURSOR` was specified.
+
+The response is a three element array:
+
+1. The count of the number of keys which match the query, as above.
+2. An array with one element per returned key. Each element is an array holding the entries for that key described above, e.g. the key name and its array of name/value pairs.
+3. The cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all keys were returned, in which case no cursor is created.
 
 # Examples
 

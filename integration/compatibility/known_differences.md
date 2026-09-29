@@ -222,3 +222,21 @@ redis-stack.
 * **Intra-group ordering of `FIRST_VALUE` and `TOLIST` differs** between the
   engines. Without a `BY` clause the order is unspecified, so this is probably
   noise rather than a defect.
+
+## 4. Intentional divergences
+
+### 4.1 INFIELDS strict validation
+
+Redis silently ignores non-existent and non-TEXT fields in `INFIELDS` — they
+simply have no effect on the query. An explicit `@field:term` where the field
+is not in `INFIELDS` silently matches nothing (empty intersection).
+valkey-search errors on all three cases to surface likely user mistakes early:
+
+```
+INFIELDS 1 nosuchfield     -> INFIELDS field 'nosuchfield' does not exist in the index
+INFIELDS 1 price           -> INFIELDS field 'price' is not a TEXT field
+INFIELDS 1 title @body:foo -> Field 'body' is not in INFIELDS list
+```
+
+This falls under the "stricter input validation" clause in `COMPATIBILITY.md`
+(intentionally ungated).

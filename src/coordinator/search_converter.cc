@@ -219,7 +219,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.prefix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::PrefixPredicate>(
           text_index_schema, predicate.prefix().field_mask(),
@@ -231,7 +231,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.suffix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::SuffixPredicate>(
           text_index_schema, predicate.suffix().field_mask(),
@@ -243,7 +243,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.infix().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::InfixPredicate>(
           text_index_schema, predicate.infix().field_mask(),
@@ -255,7 +255,7 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
         return absl::InvalidArgumentError("Index does not have any text field");
       }
       auto identifiers = index_schema->GetTextIdentifiersByFieldMask(
-          predicate.term().field_mask());
+          predicate.fuzzy().field_mask());
       attribute_identifiers.insert(identifiers.begin(), identifiers.end());
       return std::make_unique<query::FuzzyPredicate>(
           text_index_schema, predicate.fuzzy().field_mask(),
@@ -310,9 +310,18 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->slot_fingerprint = request.slot_fingerprint();
   parameters->filter_parse_results.query_operations =
       static_cast<QueryOperations>(request.query_operations());
+  parameters->filter_parse_results.is_match_all = request.is_match_all();
   parameters->sortby_parameter = SortByFromGRPC(request);
-  VMSDK_ASSIGN_OR_RETURN(parameters->infields, InfieldsFromGRPC(request));
   parameters->scorer = ScorerFromGRPC(request.scorer());
+  parameters->vector_score_only = request.vector_score_only();
+  if (request.has_inkeys()) {
+    auto& dest = parameters->inkeys.emplace();
+    dest.reserve(request.inkeys().keys().size());
+    for (const auto& key : request.inkeys().keys()) {
+      dest.insert(key);
+    }
+  }
+  VMSDK_ASSIGN_OR_RETURN(parameters->infields, InfieldsFromGRPC(request));
   return absl::OkStatus();
 }
 
@@ -474,21 +483,37 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     auto return_parameter = request->add_return_parameters();
     return_parameter->set_identifier(
         vmsdk::ToStringView(return_attribute.identifier.get()));
+    // The receiving node consumes this as `attribute_alias` and uses it to look
+    // up the index to fetch from. It must therefore be the *source* attribute
+    // alias, never the (possibly renamed) output alias -- otherwise a rename
+    // onto the name of another declared field would fetch that other field.
+    // The output alias never crosses the wire: the requesting node labels the
+    // reply from its own copy of `return_attributes`.
     return_parameter->set_alias(
-        vmsdk::ToStringView(return_attribute.alias.get()));
+        vmsdk::ToStringView(return_attribute.attribute_alias
+                                ? return_attribute.attribute_alias.get()
+                                : return_attribute.identifier.get()));
   }
   *request->mutable_index_fingerprint_version() =
       parameters.index_fingerprint_version;
   request->set_slot_fingerprint(parameters.slot_fingerprint);
   request->set_query_operations(
       static_cast<uint64_t>(parameters.filter_parse_results.query_operations));
+  request->set_is_match_all(parameters.filter_parse_results.is_match_all);
   SortByToGRPC(parameters.sortby_parameter, request.get());
+  request->set_scorer(ScorerToGRPC(parameters.scorer));
+  request->set_vector_score_only(parameters.vector_score_only);
+  if (parameters.inkeys.has_value()) {
+    auto* inkeys_filter = request->mutable_inkeys();
+    for (const auto& key : *parameters.inkeys) {
+      inkeys_filter->add_keys(key);
+    }
+  }
   if (parameters.infields.has_value()) {
     for (const auto& field : *parameters.infields) {
       request->add_infields(field);
     }
   }
-  request->set_scorer(ScorerToGRPC(parameters.scorer));
   return request;
 }
 

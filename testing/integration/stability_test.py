@@ -657,19 +657,25 @@ class StabilityTests(parameterized.TestCase):
         ),
     )
     def test_valkeyquery_stability(self, config):
-        valkey_server_stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
+        valkey_server_stdout_dir = utils.get_worker_stdoutdir()
         valkey_server_path = os.environ["VALKEY_SERVER_PATH"]
         valkey_cli_path = os.environ["VALKEY_CLI_PATH"]
         memtier_path = os.environ["MEMTIER_PATH"]
         valkey_search_path = os.environ["VALKEY_SEARCH_PATH"]
 
-        config = config._replace(memtier_path=memtier_path)
+        worker_ports = utils.get_worker_cluster_ports(
+            len(config.ports), default_ports=config.ports
+        )
+        config = config._replace(
+            memtier_path=memtier_path,
+            ports=tuple(worker_ports),
+        )
 
         self.valkey_cluster_under_test = utils.start_valkey_cluster(
             valkey_server_path,
             valkey_cli_path,
             config.ports,
-            os.environ["TEST_TMPDIR"],
+            utils.get_worker_tmpdir(),
             valkey_server_stdout_dir,
             {
                 "loglevel": "debug",

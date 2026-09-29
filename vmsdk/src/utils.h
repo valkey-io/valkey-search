@@ -9,6 +9,7 @@
 #define VMSDK_SRC_UTILS_H_
 #include <absl/strings/str_format.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -59,11 +60,11 @@ inline void VerifyMainThread() { CHECK(IsMainThread()); }
 void MarkAsShuttingDown();
 bool IsShuttingDown();
 
-// Free any RunByMain() callbacks that were enqueued to the event loop but
-// never invoked (e.g., because shutdown began after a worker thread had
-// already passed the IsShuttingDown() check in RunByMain). Must be called on
-// the main thread after MarkAsShuttingDown() and after every thread that can
-// call RunByMain() has been joined, so no new callbacks can race in.
+// Execute and free any RunByMain() callbacks that were enqueued to the event
+// loop but never invoked (e.g., because shutdown began and the event loop is
+// no longer running). Must be called on the main thread after
+// MarkAsShuttingDown() and after every thread that can call RunByMain() has
+// been joined, so no new callbacks can race in.
 void DrainPendingMainCallbacks();
 
 // MainThreadAccessGuard ensures that all access to the underlying data
@@ -117,6 +118,20 @@ size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 
 std::string PrintableBytes(absl::string_view sv);
 std::string StringToHex(std::string_view s);
+
+// IEEE 802.3 CRC-32, bit-compatible with zlib's crc32(): reflected polynomial
+// 0xEDB88320, init and final xor 0xFFFFFFFF. Not CRC-32C (absl::crc32c_t).
+// Pass a previous result as `crc` to extend it over more data.
+uint32_t Crc32(absl::string_view data, uint32_t crc = 0);
+
+#ifdef __linux__
+// realpath(3), without calling libc's realpath: the module defines realpath
+// itself (vmsdk/src/memory_allocation_c_api.cc) and delegates here, since its
+// own name binds to that definition and would recurse. With a buffer, the
+// result is written there, which must hold PATH_MAX bytes. With nullptr, the
+// result is allocated with strdup and must be released with free().
+char *RealPath(const char *path, char *resolved_path);
+#endif
 
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=

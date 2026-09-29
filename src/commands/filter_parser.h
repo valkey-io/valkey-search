@@ -106,7 +106,7 @@ class FilterParser {
   };
   absl::StatusOr<TokenResult> ParseQuotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      const std::optional<std::string>& field_or_default);
+      const std::optional<std::string>& field_or_default, char delim = '"');
 
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
@@ -128,7 +128,9 @@ class FilterParser {
         : prev_predicate(std::move(pred)), not_rightmost_bracket(joined) {}
   };
 
-  absl::StatusOr<ParseResult> ParseExpression(uint32_t level);
+  absl::StatusOr<ParseResult> ParseExpression(
+      uint32_t level,
+      const std::optional<std::string>& default_field = std::nullopt);
   absl::StatusOr<std::unique_ptr<query::NumericPredicate>>
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(

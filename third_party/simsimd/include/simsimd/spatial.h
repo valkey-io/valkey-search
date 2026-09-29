@@ -72,6 +72,7 @@ SIMSIMD_PUBLIC void simsimd_cos_i8_accurate(simsimd_i8_t const* a, simsimd_i8_t 
 SIMSIMD_PUBLIC void simsimd_l2sq_f32_neon(simsimd_f32_t const* a, simsimd_f32_t const* b, simsimd_size_t n, simsimd_distance_t* d);
 SIMSIMD_PUBLIC void simsimd_cos_f32_neon(simsimd_f32_t const* a, simsimd_f32_t const* b, simsimd_size_t n, simsimd_distance_t* d);
 SIMSIMD_PUBLIC void simsimd_l2sq_f16_neon(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n, simsimd_distance_t* d);
+SIMSIMD_PUBLIC void simsimd_l2sq_f16_fhm(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n, simsimd_distance_t* d); // VALKEYSEARCH
 SIMSIMD_PUBLIC void simsimd_cos_f16_neon(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n, simsimd_distance_t* d);
 SIMSIMD_PUBLIC void simsimd_l2sq_i8_neon(simsimd_i8_t const* a, simsimd_i8_t const* b, simsimd_size_t n, simsimd_distance_t* d);
 SIMSIMD_PUBLIC void simsimd_cos_i8_neon(simsimd_i8_t const* a, simsimd_i8_t const* b, simsimd_size_t n, simsimd_distance_t* d);
@@ -234,14 +235,54 @@ SIMSIMD_PUBLIC void simsimd_cos_f32_neon(simsimd_f32_t const* a, simsimd_f32_t c
 
 SIMSIMD_PUBLIC void simsimd_l2sq_f16_neon(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n,
                                           simsimd_distance_t* result) {
-    float32x4_t sum_vec = vdupq_n_f32(0);
+    // VALKEYSEARCH BEGIN
+    // Widen to f32 before subtracting, so the difference is exact: an f16
+    // minus an f16 is always representable in f32, where computing it in f16
+    // rounds. That is why l2sq cannot use the FHM kernel that dot uses --
+    // FMLAL widens during the multiply, but no widening instruction produces
+    // a difference, so an FHM l2sq has to subtract in f16 first.
+    //
+    // Eight accumulator chains and 8-element loads. The original loop read
+    // vld1_f16, four lanes, half a register, into a single accumulator, so it
+    // was both narrow and bound by the latency of the closing FMA.
+    float32x4_t d0 = vdupq_n_f32(0), d1 = vdupq_n_f32(0), d2 = vdupq_n_f32(0), d3 = vdupq_n_f32(0);
+    float32x4_t d4 = vdupq_n_f32(0), d5 = vdupq_n_f32(0), d6 = vdupq_n_f32(0), d7 = vdupq_n_f32(0);
+    float32x4_t t;
     simsimd_size_t i = 0;
+    for (; i + 32 <= n; i += 32) {
+        float16x8_t a0 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i);
+        float16x8_t b0 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i);
+        float16x8_t a1 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 8);
+        float16x8_t b1 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 8);
+        float16x8_t a2 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 16);
+        float16x8_t b2 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 16);
+        float16x8_t a3 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 24);
+        float16x8_t b3 = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 24);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a0)), vcvt_f32_f16(vget_low_f16(b0))), d0 = vfmaq_f32(d0, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a0), vcvt_high_f32_f16(b0)), d1 = vfmaq_f32(d1, t, t);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a1)), vcvt_f32_f16(vget_low_f16(b1))), d2 = vfmaq_f32(d2, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a1), vcvt_high_f32_f16(b1)), d3 = vfmaq_f32(d3, t, t);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a2)), vcvt_f32_f16(vget_low_f16(b2))), d4 = vfmaq_f32(d4, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a2), vcvt_high_f32_f16(b2)), d5 = vfmaq_f32(d5, t, t);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a3)), vcvt_f32_f16(vget_low_f16(b3))), d6 = vfmaq_f32(d6, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a3), vcvt_high_f32_f16(b3)), d7 = vfmaq_f32(d7, t, t);
+    }
+    for (; i + 8 <= n; i += 8) {
+        float16x8_t a_vec = vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i);
+        float16x8_t b_vec = vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i);
+        t = vsubq_f32(vcvt_f32_f16(vget_low_f16(a_vec)), vcvt_f32_f16(vget_low_f16(b_vec))),
+        d0 = vfmaq_f32(d0, t, t);
+        t = vsubq_f32(vcvt_high_f32_f16(a_vec), vcvt_high_f32_f16(b_vec)), d1 = vfmaq_f32(d1, t, t);
+    }
+    float32x4_t sum_vec = vaddq_f32(vaddq_f32(vaddq_f32(d0, d1), vaddq_f32(d2, d3)),
+                                    vaddq_f32(vaddq_f32(d4, d5), vaddq_f32(d6, d7)));
     for (; i + 4 <= n; i += 4) {
         float32x4_t a_vec = vcvt_f32_f16(vld1_f16((simsimd_f16_for_arm_simd_t const*)a + i));
         float32x4_t b_vec = vcvt_f32_f16(vld1_f16((simsimd_f16_for_arm_simd_t const*)b + i));
         float32x4_t diff_vec = vsubq_f32(a_vec, b_vec);
         sum_vec = vfmaq_f32(sum_vec, diff_vec, diff_vec);
     }
+    // VALKEYSEARCH END
 
     // In case the software emulation for `f16` scalars is enabled, the `simsimd_uncompress_f16`
     // function will run. It is extremely slow, so even for the tail, let's combine serial
@@ -397,6 +438,34 @@ SIMSIMD_PUBLIC void simsimd_l2sq_bf16_neon(simsimd_bf16_t const* a, simsimd_bf16
     float32x4_t diff_high_vec = vdupq_n_f32(0), diff_low_vec = vdupq_n_f32(0);
     float32x4_t sum_high_vec = vdupq_n_f32(0), sum_low_vec = vdupq_n_f32(0);
     simsimd_size_t i = 0;
+    // VALKEYSEARCH BEGIN
+    // Same change as simsimd_dot_bf16_neon: upstream's single accumulator pair
+    // makes the loop latency-bound on the FMA that closes the cycle. Four
+    // independent accumulator pairs let the widen/subtract/FMA chains overlap.
+    // The widening (vcvt_f32_bf16 is a SHLL, i.e. exact) and the accumulation
+    // are f32 here and stay f32; only the summation order changes.
+#define SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high, sum_low, offset)                                                         \
+    do {                                                                                                               \
+        bfloat16x8_t a_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i + (offset));                          \
+        bfloat16x8_t b_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i + (offset));                          \
+        float32x4_t dh = vsubq_f32(vcvt_f32_bf16(vget_high_bf16(a_vec)), vcvt_f32_bf16(vget_high_bf16(b_vec)));         \
+        float32x4_t dl = vsubq_f32(vcvt_f32_bf16(vget_low_bf16(a_vec)), vcvt_f32_bf16(vget_low_bf16(b_vec)));           \
+        sum_high = vfmaq_f32(sum_high, dh, dh);                                                                        \
+        sum_low = vfmaq_f32(sum_low, dl, dl);                                                                          \
+    } while (0)
+    float32x4_t sum_high_vec1 = vdupq_n_f32(0), sum_low_vec1 = vdupq_n_f32(0);
+    float32x4_t sum_high_vec2 = vdupq_n_f32(0), sum_low_vec2 = vdupq_n_f32(0);
+    float32x4_t sum_high_vec3 = vdupq_n_f32(0), sum_low_vec3 = vdupq_n_f32(0);
+    for (; i + 32 <= n; i += 32) {
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec, sum_low_vec, 0);
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec1, sum_low_vec1, 8);
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec2, sum_low_vec2, 16);
+        SIMSIMD_L2SQ_BF16_NEON_STEP(sum_high_vec3, sum_low_vec3, 24);
+    }
+    sum_high_vec = vaddq_f32(vaddq_f32(sum_high_vec, sum_high_vec1), vaddq_f32(sum_high_vec2, sum_high_vec3));
+    sum_low_vec = vaddq_f32(vaddq_f32(sum_low_vec, sum_low_vec1), vaddq_f32(sum_low_vec2, sum_low_vec3));
+#undef SIMSIMD_L2SQ_BF16_NEON_STEP
+    // VALKEYSEARCH END
     for (; i + 8 <= n; i += 8) {
         bfloat16x8_t a_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)a + i);
         bfloat16x8_t b_vec = vld1q_bf16((simsimd_bf16_for_arm_simd_t const*)b + i);
@@ -436,6 +505,81 @@ SIMSIMD_PUBLIC void simsimd_l2sq_bf16_neon(simsimd_bf16_t const* a, simsimd_bf16
 #pragma clang attribute pop
 #pragma GCC pop_options
 #endif // SIMSIMD_TARGET_NEON_BF16
+
+// VALKEYSEARCH BEGIN
+#if SIMSIMD_TARGET_NEON_FHM
+#pragma GCC push_options
+#pragma GCC target("arch=armv8.4-a+simd+fp16+fp16fml")
+#pragma clang attribute push(__attribute__((target("arch=armv8.4-a+simd+fp16+fp16fml"))), apply_to = function)
+
+/**
+ *  @brief  Squared L2 over `f16` inputs that accumulates in @b f32.
+ *
+ *  Companion to simsimd_dot_f16_fhm, and the reason this file needs its own
+ *  kernel rather than reusing that one: L2 needs the difference before it can
+ *  square, and no widening instruction computes a difference. So the subtract
+ *  happens in f16 and only the square-accumulate widens.
+ *
+ *  That is a deliberate trade. Against simsimd_l2sq_f16_sve, which accumulates
+ *  the whole sum in f16, this removes the failure that motivated the kernel:
+ *  the running total can no longer saturate, because it lives in f32. What
+ *  remains is a 2^-11 rounding on each individual difference, and an overflow
+ *  that would need a single |a_i - b_i| above 65504 -- data already at the edge
+ *  of what f16 represents, rather than a 1536-term sum that reaches it easily.
+ *
+ *  Widening both operands with FCVTL instead would make every intermediate f32,
+ *  but measures 4x slower: the conversions, not the accumulator chain, become
+ *  the bottleneck, and unrolling does not recover it.
+ */
+SIMSIMD_PUBLIC void simsimd_l2sq_f16_fhm(simsimd_f16_t const* a, simsimd_f16_t const* b, simsimd_size_t n,
+                                         simsimd_distance_t* result) {
+    float32x4_t d0 = vdupq_n_f32(0), d1 = vdupq_n_f32(0), d2 = vdupq_n_f32(0), d3 = vdupq_n_f32(0);
+    float32x4_t d4 = vdupq_n_f32(0), d5 = vdupq_n_f32(0), d6 = vdupq_n_f32(0), d7 = vdupq_n_f32(0);
+    simsimd_size_t i = 0;
+    for (; i + 32 <= n; i += 32) {
+        float16x8_t t0 = vsubq_f16(vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i),
+                                   vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i));
+        float16x8_t t1 = vsubq_f16(vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 8),
+                                   vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 8));
+        float16x8_t t2 = vsubq_f16(vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 16),
+                                   vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 16));
+        float16x8_t t3 = vsubq_f16(vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i + 24),
+                                   vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i + 24));
+        d0 = vfmlalq_low_f16(d0, t0, t0), d1 = vfmlalq_high_f16(d1, t0, t0);
+        d2 = vfmlalq_low_f16(d2, t1, t1), d3 = vfmlalq_high_f16(d3, t1, t1);
+        d4 = vfmlalq_low_f16(d4, t2, t2), d5 = vfmlalq_high_f16(d5, t2, t2);
+        d6 = vfmlalq_low_f16(d6, t3, t3), d7 = vfmlalq_high_f16(d7, t3, t3);
+    }
+    for (; i + 8 <= n; i += 8) {
+        float16x8_t t = vsubq_f16(vld1q_f16((simsimd_f16_for_arm_simd_t const*)a + i),
+                                  vld1q_f16((simsimd_f16_for_arm_simd_t const*)b + i));
+        d0 = vfmlalq_low_f16(d0, t, t), d1 = vfmlalq_high_f16(d1, t, t);
+    }
+
+    // Zero-padded tail: a zero difference squares to zero and adds nothing.
+    if (i < n) {
+        union {
+            float16x8_t f16_vec;
+            simsimd_f16_t f16[8];
+        } a_padded_tail, b_padded_tail;
+        simsimd_size_t j = 0;
+        for (; i < n; ++i, ++j)
+            a_padded_tail.f16[j] = a[i], b_padded_tail.f16[j] = b[i];
+        for (; j < 8; ++j)
+            a_padded_tail.f16[j] = 0, b_padded_tail.f16[j] = 0;
+        float16x8_t t = vsubq_f16(a_padded_tail.f16_vec, b_padded_tail.f16_vec);
+        d0 = vfmlalq_low_f16(d0, t, t), d1 = vfmlalq_high_f16(d1, t, t);
+    }
+
+    float32x4_t sum_vec = vaddq_f32(vaddq_f32(vaddq_f32(d0, d1), vaddq_f32(d2, d3)),
+                                    vaddq_f32(vaddq_f32(d4, d5), vaddq_f32(d6, d7)));
+    *result = vaddvq_f32(sum_vec);
+}
+
+#pragma clang attribute pop
+#pragma GCC pop_options
+#endif // SIMSIMD_TARGET_NEON_FHM
+// VALKEYSEARCH END
 
 #if SIMSIMD_TARGET_NEON_I8
 #pragma GCC push_options
@@ -591,6 +735,51 @@ SIMSIMD_PUBLIC void simsimd_cos_i8_neon(simsimd_i8_t const* a, simsimd_i8_t cons
 #pragma clang attribute pop
 #pragma GCC pop_options
 #endif // SIMSIMD_TARGET_NEON_I8
+
+
+// VALKEYSEARCH BEGIN
+#if SIMSIMD_TARGET_NEON
+#pragma GCC push_options
+#pragma GCC target("arch=armv8.2-a+simd")
+#pragma clang attribute push(__attribute__((target("arch=armv8.2-a+simd"))), apply_to = function)
+
+/*  Widening a bf16 to an f32 is a 16-bit left shift: a bf16 is the high half of
+ *  the f32 encoding. Only BFMLAL needs FEAT_BF16; the widening itself does not,
+ *  so this runs on any NEON core. Cores without the feature -- Neoverse N1, and
+ *  so AWS Graviton 2 -- otherwise fall all the way to the scalar kernels, which
+ *  measured 1.25 G elem/s against 13.8 on a core that has it.
+ *
+ *  Accumulation is f32 throughout, arithmetically identical to the BFMLAL
+ *  kernels; only the widening instruction differs.
+ */
+
+SIMSIMD_PUBLIC void simsimd_l2sq_bf16_neon_shift(simsimd_bf16_t const* a, simsimd_bf16_t const* b, simsimd_size_t n,
+                                                 simsimd_distance_t* result) {
+    float32x4_t s0 = vdupq_n_f32(0), s1 = vdupq_n_f32(0), s2 = vdupq_n_f32(0), s3 = vdupq_n_f32(0);
+    float32x4_t d;
+    simsimd_size_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        uint16x8_t a0 = vld1q_u16((unsigned short const*)a + i), b0 = vld1q_u16((unsigned short const*)b + i);
+        uint16x8_t a1 = vld1q_u16((unsigned short const*)a + i + 8), b1 = vld1q_u16((unsigned short const*)b + i + 8);
+        d = vsubq_f32(simsimd_bf16_lo_f32_neon_(a0), simsimd_bf16_lo_f32_neon_(b0)), s0 = vfmaq_f32(s0, d, d);
+        d = vsubq_f32(simsimd_bf16_hi_f32_neon_(a0), simsimd_bf16_hi_f32_neon_(b0)), s1 = vfmaq_f32(s1, d, d);
+        d = vsubq_f32(simsimd_bf16_lo_f32_neon_(a1), simsimd_bf16_lo_f32_neon_(b1)), s2 = vfmaq_f32(s2, d, d);
+        d = vsubq_f32(simsimd_bf16_hi_f32_neon_(a1), simsimd_bf16_hi_f32_neon_(b1)), s3 = vfmaq_f32(s3, d, d);
+    }
+    float32x4_t acc = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
+    simsimd_f32_t tail = 0;
+    for (; i < n; ++i) {
+        simsimd_f32_t x = simsimd_uncompress_bf16(((unsigned short const*)a)[i]);
+        simsimd_f32_t y = simsimd_uncompress_bf16(((unsigned short const*)b)[i]);
+        tail += (x - y) * (x - y);
+    }
+    *result = vaddvq_f32(acc) + tail;
+}
+
+#pragma clang attribute pop
+#pragma GCC pop_options
+#endif // SIMSIMD_TARGET_NEON
+// VALKEYSEARCH END
 
 #if SIMSIMD_TARGET_SVE
 #pragma GCC push_options

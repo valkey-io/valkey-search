@@ -23,6 +23,7 @@
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -42,8 +43,9 @@ Numeric::Numeric(const data_model::NumericIndex &numeric_index_proto)
 }
 
 absl::StatusOr<RecordResult> Numeric::AddRecord(const InternedStringPtr &key,
-                                                absl::string_view data) {
-  auto value = ParseNumber(data);
+                                                AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto value = ParseNumber(vmsdk::ToStringView(str.get()));
   absl::MutexLock lock(&index_mutex_);
   if (!value.has_value()) {
     // A NUMERIC field whose value does not parse as a number is invalid data,
@@ -63,8 +65,9 @@ absl::StatusOr<RecordResult> Numeric::AddRecord(const InternedStringPtr &key,
 }
 
 absl::StatusOr<RecordResult> Numeric::ModifyRecord(const InternedStringPtr &key,
-                                                   absl::string_view data) {
-  auto value = ParseNumber(data);
+                                                   AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto value = ParseNumber(vmsdk::ToStringView(str.get()));
   if (!value.has_value()) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);

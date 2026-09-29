@@ -12,11 +12,12 @@ Once all stages have been executed, the working set of records output from the l
 FT.AGGREGATE <index-name> <query>
     [DIALECT <dialect>]
     [INORDER]
-    [LOAD * | LOAD <count> <field> [<field> ...]]
+    [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
     [SLOP <slop>]
     [TIMEOUT <timeout>]
     [VERBATIM]
+    [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
@@ -30,11 +31,20 @@ FT.AGGREGATE <index-name> <query>
 - `<query>` (required): The query string, see [Search - query language](../topics/search-query.md) for details.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `INORDER` (optional): Indicates that proximity matching of terms must be in order.
-- `LOAD * | LOAD <count> <field> [<field> ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
-  keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
+- `LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]` (optional): This controls which fields of those keys are loaded into the working set. A star (\*) indicates that all of the fields of the keys are loaded. The key itself can be loaded by specifying `@__key`. For vector queries, the distance can also be loaded by using the name of that field.
+
+  `<count>` is a count of the arguments that follow, not a count of fields. An `AS` keyword and its alias each count against `<count>`, so `LOAD 4 @a @b AS c` loads two fields using four arguments.
+
+  Each `<field>` may be a declared attribute name (`@price`), or, for a JSON index, a JSON path (`$.price`). A JSON path that resolves to a declared attribute is loaded as that attribute.
+
+  `AS <alias>` renames the loaded field: it is emitted under `<alias>` in the result and is referenced as `@<alias>` by later stages. Without an `AS` clause the field is emitted under the name given in the `LOAD` clause. An alias may reuse the name of a declared attribute, in which case it hides that attribute for the remainder of the pipeline. A single `LOAD` clause must not produce the same output name twice; doing so is an error.
+
+  Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
+- `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used.
 
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
@@ -47,6 +57,8 @@ FT.AGGREGATE <index-name> <query>
 The output is an array. The first element of this array is a scalar number with no particular meaning and should be ignored. The remainder of the array is one element for each record output by the final processing stage.
 
 Each record is represented by an array which contains the field/value pairs of each record.
+
+If `WITHCURSOR` is specified the output is a two element array. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
 
 # Processing Stages
 
@@ -95,3 +107,4 @@ The following reducer functions are available. The reducer functions that take a
 | FIRST_VALUE 1 <expression>    | The first value of the expression encountered in the group. Order depends on record retrieval order. Use only when order does not matter. |
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognised direction) produce a parse-time error. |
+| RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |

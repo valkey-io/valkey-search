@@ -26,11 +26,6 @@ thread_local static int64_t memory_delta = 0;
 
 ShardedAtomic<uint64_t> used_memory_bytes;
 
-void ResetValkeyAllocStats() {
-  used_memory_bytes.Reset();
-  memory_delta = 0;
-}
-
 uint64_t GetUsedMemoryCnt() { return used_memory_bytes.GetTotal(); }
 
 void ReportAllocMemorySize(uint64_t size) {

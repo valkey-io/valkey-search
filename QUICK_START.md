@@ -46,7 +46,7 @@ FT.CREATE myIndex SCHEMA embedding VECTOR HNSW 6 TYPE FLOAT32 DIM 3 DISTANCE_MET
 
 ### Insert Some Vectors
 
-Vectors must be encoded as 32-bit IEEE 754 floats in little-endian byte order. Each vector must have exactly `DIM` elements.
+Vectors must be encoded in little-endian byte order using the element type the index declares -- `FLOAT32` here, as set by `TYPE FLOAT32` above. Each vector must have exactly `DIM` elements. The index can instead be created with `TYPE FLOAT16` or `TYPE BFLOAT16` to halve the memory each vector occupies, in which case vectors are encoded as 2-byte elements; see [Supported Data Types](docs/topics/search-data-formats.md#supported-data-types).
 
 ```bash
 # [0.0, 0.0, 1.0]

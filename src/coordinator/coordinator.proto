@@ -25,6 +25,13 @@ service Coordinator {
   // Search the index partition for documents.
   rpc SearchIndexPartition(SearchIndexPartitionRequest)
       returns (SearchIndexPartitionResponse) {}
+  // Multi-arm search: dispatch N independent searches in one round-trip.
+  // Used by FT.HYBRID. The server-side handler validates that all sub_requests
+  // agree on db_num, index_schema_name, index_fingerprint_version,
+  // slot_fingerprint, and timeout_ms; treats sub_requests[0] as authoritative
+  // for the shared consistency check.
+  rpc MultiSearchIndexPartition(MultiSearchIndexPartitionRequest)
+      returns (MultiSearchIndexPartitionResponse) {}
   // Get index info across cluster
   rpc InfoIndexPartition(InfoIndexPartitionRequest)
       returns (InfoIndexPartitionResponse) {}
@@ -153,8 +160,24 @@ message SearchIndexPartitionRequest {
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
-  // Field 21 is reserved for INKEYS (feature/INKEYS-support).
-  repeated string infields = 22;
+  // Set for a VSIM arm carrying a FILTER: the filter decides membership, never
+  // the score, so the shard must keep the KNN distance as Neighbor.score even
+  // when the filter holds a text predicate. Not derivable from the rewritten
+  // query string -- `(<filter>)=>[KNN ...]` is indistinguishable from a
+  // `text=>[KNN ...]` hybrid query -- so it has to cross the wire.
+  bool vector_score_only = 21;
+  // Set when the query was the bare match-all (`*`). The match-all form leaves
+  // root_filter_predicate unset and query_operations at kNone, so without this
+  // flag the shard cannot tell match-all from an absent filter and would
+  // evaluate a null predicate. The shard never re-parses the query string, so
+  // it has to cross the wire.
+  bool is_match_all = 22;
+  optional InkeysFilter inkeys = 23;
+  repeated string infields = 24;
+}
+
+message InkeysFilter {
+  repeated string keys = 1;
 }
 
 message NeighborEntry {
@@ -172,6 +195,39 @@ message SearchIndexPartitionResponse {
 message AttributeContentEntry {
   string identifier = 1;
   bytes content = 2;
+}
+
+// Per-arm wrapper for the multi-arm response, carrying the arm's
+// SearchIndexPartitionResponse alongside a record of how that arm fared.
+//
+// The RPC's own gRPC status is authoritative, NOT these fields. A shard must
+// answer every arm or none: a shard that reported one arm's failure while
+// returning the other arm's results would contribute one-sided documents to
+// the coordinator's fusion, and their fused score would be wrong with nothing
+// in the reply to say so. MultiSearchIndexPartition therefore finishes the
+// reactor with the first non-OK arm status, and because the RPC is unary a
+// non-OK finish means this message is never delivered at all. So a delivered
+// MultiSearchSubResponse always carries grpc_code == 0; the fields exist to
+// record WHICH arm failed for diagnostics, not to keep a failed arm's RPC
+// alive. The client's per-arm demux is defensive only.
+message MultiSearchSubResponse {
+  SearchIndexPartitionResponse response = 1;
+  uint32 grpc_code = 2;       // grpc::StatusCode encoded as int; 0 = OK
+  string error_message = 3;
+}
+
+message MultiSearchIndexPartitionRequest {
+  // Each sub_request is a complete, stand-alone single-arm request. Shared
+  // fields (db_num, index_schema_name, index_fingerprint_version,
+  // slot_fingerprint, timeout_ms) are duplicated across arms. The handler
+  // validates that sub_requests[1..N-1] match sub_requests[0] on these
+  // fields; sub_requests[0] is then treated as authoritative for the shared
+  // consistency check.
+  repeated SearchIndexPartitionRequest sub_requests = 1;
+}
+
+message MultiSearchIndexPartitionResponse {
+  repeated MultiSearchSubResponse sub_responses = 1;
 }
 
 message GlobalMetadataVersionHeader {

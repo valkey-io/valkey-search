@@ -59,6 +59,10 @@ constexpr absl::string_view kFailedPreconditionMsg{
 constexpr absl::string_view kTimeoutMsg{
     "Search operation cancelled due to timeout"};
 constexpr absl::string_view kQueueDepthMsg{"Search query queue depth exceeded"};
+// Reported when the reader thread pool refuses to schedule a search because it
+// has entered stop mode (this node is shutting down).
+constexpr absl::string_view kShuttingDownMsg{
+    "Search request rejected: the reader thread pool is shutting down"};
 constexpr uint32_t kDialect{2};
 
 // Parser keywords
@@ -82,6 +86,7 @@ constexpr absl::string_view kSlop{"SLOP"};
 constexpr absl::string_view kScorer{"SCORER"};
 constexpr absl::string_view kInorder{"INORDER"};
 constexpr absl::string_view kVerbatim{"VERBATIM"};
+constexpr absl::string_view kInkeysParam{"INKEYS"};
 constexpr absl::string_view kInfieldsParam{"INFIELDS"};
 
 struct LimitParameter {
@@ -197,6 +202,13 @@ class SearchParametersInFlightGuard {
   SearchParametersInFlightGuard &operator=(
       SearchParametersInFlightGuard &&) noexcept = default;
   ~SearchParametersInFlightGuard();
+  // Drops this object out of the count early, for an operation whose query is
+  // over while the object itself lives on (a cursor holding its output). The
+  // flag keeps the destructor from decrementing the count a second time.
+  void Terminate();
+
+ private:
+  bool terminated_{false};
 };
 }  // namespace detail
 
@@ -217,6 +229,7 @@ struct SearchParameters {
   int k{0};
   std::optional<unsigned> ef;
   LimitParameter limit;
+  std::optional<absl::flat_hash_set<std::string>> inkeys;
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
@@ -224,10 +237,10 @@ struct SearchParameters {
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
-  std::optional<absl::flat_hash_set<std::string>> infields;
   // Seeded from the `default-scorer` config; an explicit SCORER overrides it.
   indexes::scoring::ScorerType scorer{static_cast<indexes::scoring::ScorerType>(
       options::GetDefaultScorer().GetValue())};
+  std::optional<absl::flat_hash_set<std::string>> infields;
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   SearchResult search_result;
@@ -257,6 +270,11 @@ struct SearchParameters {
       params.clear();
     }
   } parse_vars;
+  // Set for a VSIM arm carrying a FILTER: the filter decides which documents
+  // the vector search considers and must not touch the score, so the hybrid
+  // text score is suppressed even when the filter holds a text predicate. See
+  // ApplyHybridTextScore.
+  bool vector_score_only{false};
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
   // Indicates whether the search requires complete results (neighbors/keys) to
@@ -264,12 +282,22 @@ struct SearchParameters {
   // particular is needed on the results. This should be overridden in derived
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const {
-    return sortby_parameter.has_value();
+    return sortby_parameter.has_value() || inkeys.has_value();
+  }
+
+  // True when the search needs no post-search processing: a NOCONTENT reply
+  // where nothing (e.g. SORTBY) requires loading and reordering the full result
+  // set first. When true, the query can complete on the background thread and
+  // skip content loading.
+  virtual bool NoProcessingRequired() const {
+    return no_content && !sortby_parameter.has_value();
   }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
-  ContentProcessing GetContentProcessing() const;
+  // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result
+  // resolver) can force a particular content-processing mode.
+  virtual ContentProcessing GetContentProcessing() const;
 
   // The sortby parameter, populated by FT.SEARCH SORTBY clause or
   // deserialized from gRPC requests. Available to all query operations.
@@ -304,6 +332,10 @@ struct SearchParameters {
 
   SearchParameters(SearchParameters &&) = default;
 
+  // Declares the query operation finished, so that it no longer counts in
+  // GetSearchParametersInFlight() even though this object is still alive.
+  void DeclareOperationTerminated() { in_flight_guard_.Terminate(); }
+
  private:
   // Keeps GetSearchParametersInFlight() in sync with this object's lifetime.
   // Declared last so it is destroyed first; its position does not otherwise
@@ -329,6 +361,12 @@ using SearchResponseCallback =
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode);
 
+// Schedules `parameters` on `thread_pool`; the search and its completion run
+// on a pool worker. Returns UnavailableError (kShuttingDownMsg) if the pool
+// refuses the task because it is in stop mode: in that case the search will
+// never run and nothing will call the parameters' completion path, so the
+// caller owns terminating whatever is waiting on the query. `parameters` is
+// consumed either way.
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);
@@ -342,7 +380,7 @@ class Predicate;
 size_t EvaluateFilterAsPrimary(
     const SearchParameters &parameters, const Predicate *predicate,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    bool negate);
+    bool negate, float or_weight_multiplier = 1.0f);
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(

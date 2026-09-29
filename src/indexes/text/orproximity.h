@@ -51,17 +51,15 @@ class OrProximityIterator : public TextIterator {
   bool IsIteratorValid() const override;
 
   // OR semantics: every term present in the document is scored; sum the
-  // weighted scores of active children on the current key.
+  // already-weighted scores of active children on the current key, scaled by
+  // this group's own weight.
   float GetScore() const override {
     float total = 0.0f;
     for (size_t idx : current_key_indices_) {
-      total += iters_[idx]->GetScore() * iters_[idx]->GetWeight();
+      total += iters_[idx]->GetScore();
     }
-    return total;
+    return total * weight_;
   }
-
-  // Group weight applied by the parent (or read at the root) to this composite.
-  float GetWeight() const override { return weight_; }
 
  private:
   absl::InlinedVector<std::unique_ptr<TextIterator>,

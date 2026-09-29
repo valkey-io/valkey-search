@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <set>
 #include <string>
@@ -988,6 +989,60 @@ absl::Status SVSVamanaParameters::Verify() const {
         "ALGORITHM HNSW for BFLOAT16 storage, or COMPRESSION FP16 for "
         "compressed FP16 storage inside SVS.");
   }
+  // SQ8 calibrates its int8 range from the dataset it is built from. The
+  // first-add bootstrap builds from one vector, so later components outside
+  // that one's range saturate. Fenced until the calibration path lands.
+  if (compression == data_model::SVS_COMPRESSION_SQ8) {
+    return absl::InvalidArgumentError(
+        "COMPRESSION SQ8 is not supported for SVS_VAMANA in v1 pending "
+        "range calibration; use COMPRESSION NONE or FP16.");
+  }
+  // SVS reports inner-product and cosine as *similarities* (larger is
+  // closer). The valkey-search reply layer treats __v_score as a
+  // distance (smaller is closer), which inverts order and score on the
+  // native search path. Fenced until the per-metric transform + tests
+  // land in a follow-up.
+  if (distance_metric == data_model::DISTANCE_METRIC_IP ||
+      distance_metric == data_model::DISTANCE_METRIC_COSINE) {
+    return absl::InvalidArgumentError(
+        "DISTANCE_METRIC IP and COSINE are not supported for SVS_VAMANA "
+        "in v1; use ALGORITHM HNSW for IP or COSINE, or DISTANCE_METRIC "
+        "L2 for SVS_VAMANA.");
+  }
+  // ALPHA sentinel (-1.0) means "use SVS's metric-specific default".
+  // Any user-supplied value must be finite and respect SVS's L2
+  // invariant (alpha >= 1.0). IP/COSINE's 0 < alpha <= 1.0 range is
+  // unreachable while those metrics are fenced above; the check will
+  // widen when the fence lifts. Bit-pattern test avoids -ffast-math
+  // folding isnan/isfinite to constants.
+  if (alpha != kDefaultSVSAlphaSentinel) {
+    uint32_t alpha_bits;
+    std::memcpy(&alpha_bits, &alpha, sizeof(alpha_bits));
+    const bool is_non_finite = (alpha_bits & 0x7F800000u) == 0x7F800000u;
+    if (is_non_finite || alpha < 1.0f) {
+      return absl::InvalidArgumentError(
+          absl::StrCat(kAlphaParam, " must be >= 1.0 for DISTANCE_METRIC L2."));
+    }
+  }
+  const auto max_m_value = options::GetMaxM().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(graph_max_degree, 2, max_m_value))
+      << kGraphMaxDegreeParam
+      << " must be a positive integer greater than 2 and cannot exceed "
+      << max_m_value << ".";
+  const auto max_ef_construction_value =
+      options::GetMaxEfConstruction().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+      construction_window_size, 1, max_ef_construction_value))
+      << kConstructionWindowSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_construction_value << ".";
+  const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(search_window_size, 1, max_ef_runtime_value))
+      << kSearchWindowSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_runtime_value << ".";
   if (construction_window_size < graph_max_degree) {
     return absl::InvalidArgumentError(absl::StrCat(
         kConstructionWindowSizeParam, " (", construction_window_size,

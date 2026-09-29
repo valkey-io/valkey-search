@@ -521,6 +521,19 @@ TEST_F(AggregateExecTest, CountDistinctishEmptyGroup) {
   EXPECT_EQ(records.size(), 0);
 }
 
+TEST_F(AggregateExecTest, CountDistinctishAllNilGroup) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  RecordSet records(nullptr);
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  records.emplace_back(RecordWithValue(expr::Value(), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  // All values are nil, so no register is set.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 0);
+}
+
 TEST_F(AggregateExecTest, CountDistinctishSingleValue) {
   auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
   auto records = MakeData(1);

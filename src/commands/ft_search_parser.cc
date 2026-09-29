@@ -22,6 +22,7 @@
 #include "absl/strings/string_view.h"
 #include "ft_create_parser.h"
 #include "ft_search_parser.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/query/search.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
@@ -236,6 +237,29 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       });
 }
 
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructWithCursorParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        VMSDK_ASSIGN_OR_RETURN(parameters.cursor_options,
+                               ParseCursorOptions(itr));
+        return absl::OkStatus();
+      });
+}
+
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInkeysParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        uint32_t count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        parameters.inkeys.emplace();
+        for (uint32_t i = 0; i < count; ++i) {
+          VMSDK_ASSIGN_OR_RETURN(auto key, itr.PopNext());
+          parameters.inkeys->insert(std::string(vmsdk::ToStringView(key)));
+        }
+        return absl::OkStatus();
+      });
+}
+
 vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   vmsdk::KeyValueParser<SearchCommand> parser;
   parser.AddParamParser(query::kDialectParam,
@@ -272,9 +296,22 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, verbatim));
   parser.AddParamParser(query::kSlop,
                         GENERATE_VALUE_PARSER(SearchCommand, slop));
-  parser.AddParamParser(query::kScorer,
-                        GENERATE_ENUM_PARSER(SearchCommand, scorer,
-                                             *indexes::scoring::kScorerByStr));
+  // Not GENERATE_ENUM_PARSER: the token goes through the shared
+  // indexes::scoring::ParseScorerType so FT.SEARCH and FT.HYBRID accept and
+  // reject exactly the same scorer names. The value-parse step, and so the
+  // error text, is what the macro does.
+  parser.AddParamParser(
+      query::kScorer,
+      std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+          [](SearchCommand &value, vmsdk::ArgsIterator &itr) -> absl::Status {
+            absl::string_view str;
+            VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, str));
+            VMSDK_ASSIGN_OR_RETURN(value.scorer,
+                                   indexes::scoring::ParseScorerType(str));
+            return absl::OkStatus();
+          }));
+  parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
+  parser.AddParamParser(query::kInkeysParam, ConstructInkeysParser());
 
   return parser;
 }

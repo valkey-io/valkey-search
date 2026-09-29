@@ -16,6 +16,7 @@
 
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/synchronization/mutex.h"
 #include "grpc/grpc.h"
 #include "grpcpp/completion_queue.h"
 #include "grpcpp/health_check_service_interface.h"
@@ -115,14 +116,28 @@ void SerializeNeighbors(SearchIndexPartitionResponse *response,
 }
 
 // SearchParameters subclass for remote responder (remote shard in fanout).
-// Handles in-flight retry completion by processing neighbors and sending gRPC
-// response.
+// Handles in-flight retry completion by processing neighbors and invoking the
+// on_done callback supplied by the wrapping handler. on_done is responsible
+// for finishing the gRPC reactor (single-arm) or decrementing the multi-arm
+// completion counter and finishing when the last arm reports.
+//
+// on_done is held through a shared_ptr, not by value: the callback is
+// move-only, and EnqueueSearchRequest must keep a handle on it so it can
+// still finish the call when the operation is never scheduled (see there).
+// It is invoked exactly once -- here, or by EnqueueSearchRequest, never both.
 class RemoteResponderSearch : public query::SearchParameters {
  public:
   SearchIndexPartitionResponse *response;
-  grpc::ServerUnaryReactor *reactor;
+  std::shared_ptr<ArmCompletionCallback> on_done;
   std::unique_ptr<vmsdk::StopWatch> latency_sample;
   size_t total_count;
+  // True when this operation is one arm of a multi-arm (FT.HYBRID) request.
+  // A multi-arm shard must answer every arm or none: if it reported one arm's
+  // failure as an empty-but-OK result, that shard's documents would enter the
+  // coordinator's fusion from the sibling arm only, and their fused score
+  // would be wrong with no error anywhere to say so. So partial-results
+  // tolerance, which is about losing a whole shard, does not apply per arm.
+  bool multi_arm{false};
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(!vmsdk::IsMainThread());
@@ -139,20 +154,20 @@ class RemoteResponderSearch : public query::SearchParameters {
 
  private:
   void QueryCompleteImpl() {
-    if (!search_result.status.ok() && !enable_partial_results) {
-      reactor->Finish(ToGrpcStatus(search_result.status));
+    if (!search_result.status.ok() && (!enable_partial_results || multi_arm)) {
+      (*on_done)(ToGrpcStatus(search_result.status));
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
     if (cancellation_token->IsCancelled()) {
-      reactor->Finish({grpc::StatusCode::DEADLINE_EXCEEDED,
-                       std::string(query::kTimeoutMsg)});
+      (*on_done)({grpc::StatusCode::DEADLINE_EXCEEDED,
+                  std::string(query::kTimeoutMsg)});
       RecordSearchMetrics(true, std::move(latency_sample));
       return;
     }
     SerializeNeighbors(response, search_result.neighbors);
     response->set_total_count(search_result.total_count);
-    reactor->Finish(grpc::Status::OK);
+    (*on_done)(grpc::Status::OK);
     RecordSearchMetrics(false, std::move(latency_sample));
   }
 };
@@ -187,38 +202,48 @@ grpc::Status Service::PerformIndexConsistencyCheck(
 void Service::EnqueueSearchRequest(
     std::unique_ptr<RemoteResponderSearch> search_operation,
     vmsdk::ThreadPool *reader_thread_pool, ValkeyModuleCtx *detached_ctx,
-    SearchIndexPartitionResponse *response, grpc::ServerUnaryReactor *reactor,
-    std::unique_ptr<vmsdk::StopWatch> latency_sample) {
+    SearchIndexPartitionResponse *response,
+    std::unique_ptr<vmsdk::StopWatch> latency_sample,
+    ArmCompletionCallback on_done) {
   search_operation->response = response;
   search_operation->latency_sample = std::move(latency_sample);
-  search_operation->reactor = reactor;
-
+  // Keep a handle on the (move-only) completion callback. The operation is
+  // about to be moved into SearchAsync, so on failure it is gone and cannot be
+  // asked for its callback back; sharing it is what lets this frame finish the
+  // call itself.
+  auto shared_on_done =
+      std::make_shared<ArmCompletionCallback>(std::move(on_done));
+  search_operation->on_done = shared_on_done;
   auto status =
       query::SearchAsync(std::move(search_operation), reader_thread_pool,
                          query::SearchMode::kRemote);
-
   if (!status.ok()) {
+    // The reader thread pool refused the task (it is in stop mode), so the
+    // operation was destroyed without running and nothing else will ever
+    // complete this arm. Terminate it here instead of leaving the caller's
+    // reactor -- or, for multi-arm, the completion counter -- unfinished until
+    // the client's deadline expires. Never touch `search_operation` here: it
+    // was moved from.
     VMSDK_LOG(WARNING, detached_ctx)
         << "Failed to enqueue search request: " << status.message();
     RecordSearchMetrics(true, nullptr);
-    reactor->Finish(ToGrpcStatus(status));
+    (*shared_on_done)(ToGrpcStatus(status));
   }
 }
 
 DEV_INTEGER_COUNTER(grpc, search_index_rpc_requests);
 
-grpc::ServerUnaryReactor *Service::SearchIndexPartition(
-    grpc::CallbackServerContext *context,
-    const SearchIndexPartitionRequest *request,
-    SearchIndexPartitionResponse *response) {
+void Service::SearchOneArm(grpc::CallbackServerContext *context,
+                           const SearchIndexPartitionRequest &request,
+                           SearchIndexPartitionResponse *response,
+                           ArmCompletionCallback on_done, bool multi_arm) {
   search_index_rpc_requests.Increment();
-  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
   auto latency_sample = SAMPLE_EVERY_N(100);
-  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
   auto StatusWrapper = [&]() -> absl::Status {
     auto search_operation = std::make_unique<RemoteResponderSearch>();
     VMSDK_RETURN_IF_ERROR(GRPCSearchRequestToParameters(
-        *request, context, search_operation.get()));
+        request, context, search_operation.get()));
+    search_operation->multi_arm = multi_arm;
 
     // perform index consistency check (index fingerprint/version), required
     auto schema = SchemaManager::Instance()
@@ -226,12 +251,12 @@ grpc::ServerUnaryReactor *Service::SearchIndexPartition(
                                       search_operation->index_schema_name)
                       .value();
     VMSDK_RETURN_IF_ERROR(ToAbslStatus(PerformIndexConsistencyCheck(
-        request->index_fingerprint_version(), schema)));
+        request.index_fingerprint_version(), schema)));
 
-    if (request->enable_consistency()) {
-      // Perform consistency checks on main thread, then enqueue search
+    if (request.enable_consistency()) {
+      // Perform slot consistency check
       VMSDK_RETURN_IF_ERROR(ToAbslStatus(
-          PerformSlotConsistencyCheck(request->slot_fingerprint())));
+          PerformSlotConsistencyCheck(request.slot_fingerprint())));
     }
     // Consistency checks passed, now enqueue the search
     // Server-side queue depth check: reject partition requests when the reader
@@ -244,14 +269,109 @@ grpc::ServerUnaryReactor *Service::SearchIndexPartition(
       return absl::ResourceExhaustedError(query::kQueueDepthMsg);
     }
     EnqueueSearchRequest(std::move(search_operation), reader_thread_pool_,
-                         detached_ctx_.get(), response, reactor,
-                         std::move(latency_sample));
+                         detached_ctx_.get(), response,
+                         std::move(latency_sample), std::move(on_done));
     return absl::OkStatus();
   };
   auto status = StatusWrapper();
   if (!status.ok()) {
-    reactor->Finish(ToGrpcStatus(status));
     RecordSearchMetrics(true, std::move(latency_sample));
+    if (on_done) {
+      on_done(ToGrpcStatus(status));
+    }
+  }
+}
+
+grpc::ServerUnaryReactor *Service::SearchIndexPartition(
+    grpc::CallbackServerContext *context,
+    const SearchIndexPartitionRequest *request,
+    SearchIndexPartitionResponse *response) {
+  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
+  SearchOneArm(context, *request, response,
+               [reactor](grpc::Status s) { reactor->Finish(s); });
+  return reactor;
+}
+
+grpc::ServerUnaryReactor *Service::MultiSearchIndexPartition(
+    grpc::CallbackServerContext *context,
+    const MultiSearchIndexPartitionRequest *request,
+    MultiSearchIndexPartitionResponse *response) {
+  GRPCSuspensionGuard guard(GRPCSuspender::Instance());
+  grpc::ServerUnaryReactor *reactor = context->DefaultReactor();
+  const int n = request->sub_requests_size();
+
+  if (n == 0) {
+    reactor->Finish(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                                 "MultiSearch with no arms"));
+    return reactor;
+  }
+
+  // 1. Validate cross-arm field equality against sub_requests[0].
+  const auto &head = request->sub_requests(0);
+  for (int i = 1; i < n; ++i) {
+    const auto &sub = request->sub_requests(i);
+    if (sub.db_num() != head.db_num() ||
+        sub.index_schema_name() != head.index_schema_name() ||
+        sub.index_fingerprint_version().fingerprint() !=
+            head.index_fingerprint_version().fingerprint() ||
+        sub.index_fingerprint_version().version() !=
+            head.index_fingerprint_version().version() ||
+        sub.slot_fingerprint() != head.slot_fingerprint() ||
+        sub.timeout_ms() != head.timeout_ms()) {
+      reactor->Finish(grpc::Status(
+          grpc::StatusCode::INVALID_ARGUMENT,
+          "MultiSearch sub-requests must share db_num, index_schema_name, "
+          "index_fingerprint_version, slot_fingerprint, and timeout_ms"));
+      return reactor;
+    }
+  }
+
+  // 2. Pre-allocate per-arm response slots so they can be filled concurrently.
+  for (int i = 0; i < n; ++i) {
+    response->add_sub_responses();
+  }
+
+  // 3. Shared completion bookkeeping: held alive by each per-arm callback's
+  //    shared_ptr capture; the reactor finishes when the last arm completes.
+  struct Completion {
+    grpc::ServerUnaryReactor *reactor;
+    std::atomic<int> remaining;
+    absl::Mutex mu;
+    // First arm error, if any. A per-arm internal failure is a transport-level
+    // error and must be reported as the reactor's gRPC status (not swallowed as
+    // OK), so gRPC interceptors and node failure counters observe it.
+    grpc::Status first_error ABSL_GUARDED_BY(mu);
+  };
+  auto completion = std::make_shared<Completion>();
+  completion->reactor = reactor;
+  completion->remaining.store(n, std::memory_order_relaxed);
+
+  // 4. Dispatch each arm in parallel via SearchOneArm.
+  for (int i = 0; i < n; ++i) {
+    auto *sub_resp = response->mutable_sub_responses(i);
+    SearchOneArm(
+        context, request->sub_requests(i), sub_resp->mutable_response(),
+        [sub_resp, completion](grpc::Status s) {
+          sub_resp->set_grpc_code(static_cast<uint32_t>(s.error_code()));
+          if (!s.ok()) {
+            sub_resp->set_error_message(s.error_message());
+            absl::MutexLock lock(&completion->mu);
+            if (completion->first_error.ok()) {
+              completion->first_error = s;
+            }
+          }
+          if (completion->remaining.fetch_sub(1, std::memory_order_acq_rel) ==
+              1) {
+            grpc::Status final_status;
+            {
+              absl::MutexLock lock(&completion->mu);
+              final_status = completion->first_error;
+            }
+            completion->reactor->Finish(final_status);
+          }
+        },
+        /*multi_arm=*/true);
   }
   return reactor;
 }

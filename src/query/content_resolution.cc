@@ -11,6 +11,7 @@
 #include <string>
 #include <utility>
 
+#include "src/commands/ft_search.h"
 #include "src/index_schema.h"
 #include "src/query/response_generator.h"
 #include "src/query/search.h"
@@ -47,7 +48,21 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     // moved). Fall through to content fetch.
   }
 
-  // 4. Content fetch + filter via ProcessNeighborsForReply
+  // 4. Content fetch + filter via ProcessNeighborsForReply.
+  //
+  // A caller that wants no content still comes through here for the checks
+  // above -- FT.HYBRID runs the contention check whatever its LOAD clause
+  // asked for -- but there is nothing to fetch for it.
+  //
+  // NOCONTENT alone is not enough to skip the fetch: a SORTBY has to read the
+  // sort field off each document even when the reply carries only keys, which
+  // is what NoProcessingRequired() adds. Testing `no_content` here instead
+  // left the sort nothing to compare, so a sorted NOCONTENT search came back
+  // in arbitrary order -- the defect #1217 fixed, reintroduced from this side.
+  if (params->NoProcessingRequired()) {
+    params->QueryCompleteMainThread(std::move(params));
+    return;
+  }
   auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
   const auto& attribute_data_type =
       params->index_schema->GetAttributeDataType();
@@ -73,7 +88,12 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
     params->search_result.total_count = 0;
   }
 
-  // 6. Call QueryCompleteMainThread
+  // 6. Apply INKEYS post-filter (shard-local in cluster mode)
+  if (params->inkeys.has_value()) {
+    ApplyInkeysFilter(params->search_result, *params->inkeys);
+  }
+
+  // 7. Call QueryCompleteMainThread
   params->QueryCompleteMainThread(std::move(params));
 }
 

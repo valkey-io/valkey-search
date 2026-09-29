@@ -8,11 +8,20 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <memory>
 
 #include "gtest/gtest.h"
+#include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/indexes/vector_base.h"
+#include "src/utils/cancel.h"
+#include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "testing/common.h"
+#include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace {
 bool IsVerbose() {
@@ -1075,6 +1084,229 @@ TEST_F(AggregateExecTest, RandomSampleParseErrorsTest) {
     EXPECT_FALSE(status.ok());
     EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
   }
+}
+
+// ---------------------------------------------------------------------
+// The score column beats a stored field of the same name
+// ---------------------------------------------------------------------
+
+// Defined in src/commands/ft_aggregate_exec.cc.
+absl::Status CreateRecordsFromNeighbors(
+    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
+    size_t key_index, size_t scores_index, RecordSet &records);
+
+// StringInternStore::Intern and IndexSchema construction both need the
+// main-thread context this fixture establishes.
+class NeighborRecordTest : public ValkeySearchTest {
+ protected:
+  // A neighbor whose stored content carries a field literally named
+  // `__score`, which is what `LOAD *` fetches and what the score column would
+  // otherwise be overwritten by.
+  static indexes::Neighbor NeighborWithFields(
+      absl::string_view key, float score,
+      const std::vector<std::pair<absl::string_view, absl::string_view>>
+          &fields) {
+    RecordsMap contents;
+    for (const auto &[name, value] : fields) {
+      auto identifier = vmsdk::MakeUniqueValkeyString(name);
+      auto identifier_view = vmsdk::ToStringView(identifier.get());
+      contents.emplace(identifier_view,
+                       RecordsMapValue(std::move(identifier),
+                                       vmsdk::MakeUniqueValkeyString(value)));
+    }
+    return indexes::Neighbor(StringInternStore::Intern(key), score,
+                             std::move(contents));
+  }
+};
+
+TEST_F(NeighborRecordTest, LoadAllDoesNotOverwriteTheScoreColumn) {
+  auto index_schema = CreateVectorHNSWSchema("index_schema_key", &fake_ctx_);
+  ASSERT_TRUE(index_schema.ok()) << index_schema.status();
+
+  AggregateParameters params(0);
+  params.index_schema = *index_schema;
+  // IsVectorQuery() is `!attribute_alias.empty()`, so this is what makes the
+  // score column exist at all.
+  params.attribute_alias = "vector";
+  params.load_key = true;
+  params.loadall_ = true;
+  params.no_content = false;
+  ASSERT_EQ(params.AddRecordAttribute("__key", "__key", "__key",
+                                      indexes::IndexerType::kNone),
+            AggregateParameters::kKeyColumn);
+  ASSERT_EQ(params.AddRecordAttribute("__score", "__score", "__score",
+                                      indexes::IndexerType::kNone),
+            AggregateParameters::kScoreColumn);
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(NeighborWithFields(
+      "doc:1", 0.25f, {{"__score", "stored"}, {"price", "42"}}));
+
+  RecordSet records(&params);
+  VMSDK_EXPECT_OK(CreateRecordsFromNeighbors(
+      neighbors, params, AggregateParameters::kKeyColumn,
+      AggregateParameters::kScoreColumn, records));
+
+  ASSERT_EQ(records.size(), 1);
+  const Record &rec = *records[0];
+  // The distance survives: the fetched `__score` field did not land in the
+  // column.
+  const expr::Value &score = rec.fields_[AggregateParameters::kScoreColumn];
+  ASSERT_TRUE(score.IsDouble()) << "score column holds " << score;
+  EXPECT_DOUBLE_EQ(*score.AsDouble(), 0.25);
+
+  // And the losing value is dropped rather than emitted a second time:
+  // `record_identifiers_` holds `__score`, so step 2 of the conversion skips
+  // it. `price` is not a column, so it does pass through.
+  for (const auto &extra : rec.extra_fields_) {
+    EXPECT_NE(extra.first, "__score");
+  }
+  EXPECT_EQ(rec.extra_fields_.size(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// In-stage cancellation
+//
+// The pipeline used to consult the cancellation token only between stages, so
+// a timeout could not take effect until the stage in flight had drained the
+// whole record set. These tests drive the stages directly -- no between-stage
+// check is involved -- so a cancelled status can only come from a poll inside
+// the stage's own record loop.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Reports "not cancelled" for the first `grace` polls and cancelled after
+// that, which is how a deadline expiring partway through a stage looks.
+class CancelAfterPolls : public cancel::Base {
+ public:
+  explicit CancelAfterPolls(size_t grace) : grace_(grace) {}
+  bool IsCancelled() override {
+    ++polls_;
+    return polls_ > grace_;
+  }
+  void Cancel() override { grace_ = 0; }
+  size_t polls() const { return polls_; }
+
+ private:
+  size_t grace_;
+  size_t polls_{0};
+};
+
+// Larger than kCancellationPollInterval (1024) so a stage has to poll partway
+// through, and not a multiple of it so the loop does not end on a poll.
+constexpr size_t kBigRecordCount = 3000;
+
+RecordSet MakeDataFor(const AggregateParameters *params, size_t m) {
+  RecordSet result(params);
+  for (size_t i = 0; i < m; ++i) {
+    result.emplace_back(RecordNOfM(i, m));
+  }
+  return result;
+}
+
+void ExpectCancelled(const absl::Status &status) {
+  EXPECT_TRUE(absl::IsCancelled(status)) << "status is: " << status;
+  // The same error the between-stage check produces: a caller must not be able
+  // to tell where in the pipeline the cancellation landed.
+  EXPECT_EQ(status.message(), "Aggregate operation cancelled due to timeout");
+}
+
+}  // namespace
+
+struct AggregateCancelTest : public AggregateExecTest {};
+
+TEST_F(AggregateCancelTest, ApplyStopsMidStage) {
+  auto param = MakeStages("APPLY @n1+1 as fred");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  // Stopped inside the loop rather than after draining the input.
+  EXPECT_EQ(token->polls(), 1);
+}
+
+TEST_F(AggregateCancelTest, FilterStopsMidStage) {
+  auto param = MakeStages("FILTER @n1>=0");
+  auto token = std::make_shared<CancelAfterPolls>(1);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 2);
+}
+
+TEST_F(AggregateCancelTest, GroupByStopsMidStage) {
+  auto param = MakeStages("GROUPBY 1 @n1 REDUCE COUNT 0 AS cnt");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 1);
+}
+
+TEST_F(AggregateCancelTest, SortByHeapPathStopsMidStage) {
+  // The default MAX is 10, so this takes the bounded-heap path.
+  auto param = MakeStages("SORTBY 2 @n1 ASC");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 1);
+  // Cancelling must not leak the raw pointers the heap holds: the drain hands
+  // every one of them back under a unique_ptr. The count is below the input
+  // because the heap path deletes the records it has already rejected.
+  EXPECT_GT(records.size(), 0u);
+  EXPECT_LT(records.size(), kBigRecordCount);
+}
+
+TEST_F(AggregateCancelTest, SortByStableSortPathChecksItsBounds) {
+  // A MAX above the input size takes the std::stable_sort path, which cannot
+  // be interrupted. It is only as responsive as its two end points.
+  auto param = MakeStages("SORTBY 2 @n1 ASC MAX 100000");
+  auto token = std::make_shared<CancelAfterPolls>(0);
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  ExpectCancelled(param->stages_[0]->Execute(records));
+  EXPECT_EQ(token->polls(), 1);
+}
+
+// Everything above must cost the uncancelled path -- plain FT.AGGREGATE's, and
+// FT.HYBRID's -- nothing but the poll itself: the same records, in the same
+// order, out of every stage.
+TEST_F(AggregateCancelTest, UncancelledPipelineIsUnchanged) {
+  auto param = MakeStages(
+      "APPLY @n1+1 as fred FILTER @fred>1 SORTBY 2 @n1 DESC MAX 100000");
+  // Never cancels, however often it is polled.
+  auto token =
+      std::make_shared<CancelAfterPolls>(std::numeric_limits<size_t>::max());
+  param->cancellation_token = token;
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  for (auto &stage : param->stages_) {
+    VMSDK_EXPECT_OK(stage->Execute(records));
+  }
+  // @n1 == 0 fails the filter; the rest come back descending.
+  ASSERT_EQ(records.size(), kBigRecordCount - 1);
+  for (size_t i = 0; i < records.size(); ++i) {
+    ASSERT_TRUE(records[i]->fields_[0].IsDouble());
+    EXPECT_DOUBLE_EQ(*records[i]->fields_[0].AsDouble(),
+                     double(kBigRecordCount - 1 - i));
+  }
+  EXPECT_GT(token->polls(), 0u);
+}
+
+// The stages must stay usable without a token at all: FT.AGGREGATE builds its
+// parameters with no timeout in some paths, and the unit tests above this one
+// pass no parameters at all.
+TEST_F(AggregateCancelTest, NoTokenIsNotCancellable) {
+  auto param = MakeStages("FILTER @n1>=0");
+  EXPECT_EQ(param->cancellation_token, nullptr);
+  auto records = MakeDataFor(param.get(), kBigRecordCount);
+  VMSDK_EXPECT_OK(param->stages_[0]->Execute(records));
+  EXPECT_EQ(records.size(), kBigRecordCount);
+
+  auto no_params = MakeData(kBigRecordCount);
+  VMSDK_EXPECT_OK(param->stages_[0]->Execute(no_params));
+  EXPECT_EQ(no_params.size(), kBigRecordCount);
 }
 
 }  // namespace aggregate

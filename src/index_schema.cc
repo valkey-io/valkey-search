@@ -279,8 +279,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       VMSDK_ASSIGN_OR_RETURN(
           std::shared_ptr<indexes::IndexBase> index,
           IndexFactory(ctx, res.get(), attribute, std::nullopt));
-      VMSDK_RETURN_IF_ERROR(
-          res->AddIndex(attribute.alias(), attribute.identifier(), index));
+      VMSDK_RETURN_IF_ERROR(res->AddIndex(
+          attribute.alias(), attribute.identifier(), index,
+          {.sortable = attribute.sortable(), .unf = attribute.unf()}));
     }
   }
   // Compiling the FILTER resolves every @reference against the attributes, so
@@ -335,6 +336,8 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
       filter_expression_str_(
           index_schema_proto.has_filter() ? index_schema_proto.filter() : ""),
+      aliases_(index_schema_proto.aliases().begin(),
+               index_schema_proto.aliases().end()),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -510,12 +513,14 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
-                                   std::shared_ptr<indexes::IndexBase> index) {
+                                   std::shared_ptr<indexes::IndexBase> index,
+                                   AttributeOptions options) {
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
-       Attribute{attribute_alias, identifier, index,
-                 static_cast<AttributePosition>(
-                     attributes_indexed_data_size_.size())}});
+       Attribute{
+           attribute_alias, identifier, index,
+           static_cast<AttributePosition>(attributes_indexed_data_size_.size()),
+           options}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
@@ -1299,10 +1304,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx,
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  // Base of 28 covers the 14 always-present top-level key/value pairs; the
-  // extra 4 account for the "aliases" pair and the "filter_rejected_keys"
-  // counter pair emitted below.
-  int arrSize = 32;
+  int arrSize = 30;  // includes the filter_rejected_keys counter
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1881,7 +1883,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               IndexFactory(ctx, index_schema.get(), attribute,
                            supplemental_iter.IterateChunks()));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
-              attribute.alias(), attribute.identifier(), index));
+              attribute.alias(), attribute.identifier(), index,
+              {.sortable = attribute.sortable(), .unf = attribute.unf()}));
           break;
         }
         case data_model::SupplementalContentType::
@@ -2229,8 +2232,7 @@ void IndexSchema::MarkAsDestructing() {
       if (params) {
         params->search_result.status =
             GenerateIndexNotFoundError(db_num_, name_);
-        auto *raw_params = params.get();
-        raw_params->QueryCompleteMainThread(std::move(params));
+        params->QueryCompleteMainThread(std::move(params));
       }
     }
   }
@@ -2456,6 +2458,11 @@ bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
   // expression that evaluated to nothing for any other reason -- lower() of a
   // number, say -- is not true either, so both land here as a rejection.
   return result.IsTrue();
+}
+
+void IndexSchema::SetAliases(std::vector<std::string> aliases) {
+  aliases_ = std::move(aliases);
+}
 }
 
 }  // namespace valkey_search

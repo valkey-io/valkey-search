@@ -111,6 +111,15 @@ config::Number &GetThreadPoolWaitTimeSamples();
 /// suffix, fuzzy)
 config::Number &GetMaxTermExpansions();
 
+/// Return the largest COUNT accepted by WITHCURSOR and FT.CURSOR READ
+config::Number &GetCursorMaxCount();
+
+/// Return the largest MAXIDLE (milliseconds) accepted by WITHCURSOR
+config::Number &GetCursorMaxIdleMs();
+
+/// Return the maximum value FT.HYBRID accepts for COMBINE ... WINDOW
+config::Number &GetMaxCombineWindow();
+
 /// Return the maximum number of group keys one record may expand to when
 /// GROUPBY is given multi-value fields
 config::Number &GetMaxGroupKeyExpansion();

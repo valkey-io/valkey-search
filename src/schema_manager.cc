@@ -32,6 +32,7 @@
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/cursor.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
@@ -192,32 +193,6 @@ absl::Status SchemaManager::ImportIndexSchema(
   return absl::OkStatus();
 }
 
-// static
-void SchemaManager::NormalizeIndexSchemaProtoDefaults(
-    data_model::IndexSchema &proto) {
-  // Apply the same defaults that the IndexSchema constructor applies, so
-  // that the stored proto matches what ToProto() will produce later. This
-  // prevents MessageDifferencer from seeing spurious differences when
-  // comparing a fetched proto against a live index's ToProto() output.
-  if (proto.min_stem_size() == 0) {
-    proto.set_min_stem_size(4);
-  }
-  if (!proto.has_score()) {
-    proto.set_score(IndexSchema::kDefaultDocumentScore);
-  }
-  // Insert the default empty prefix when none are specified, matching the
-  // IndexSchema constructor behavior.
-  if (proto.subscribed_key_prefixes().empty()) {
-    proto.add_subscribed_key_prefixes("");
-  }
-  // Sort attributes by alias to match ToProto() output order.
-  std::sort(proto.mutable_attributes()->begin(),
-            proto.mutable_attributes()->end(),
-            [](const data_model::Attribute &a, const data_model::Attribute &b) {
-              return a.alias() < b.alias();
-            });
-}
-
 absl::Status SchemaManager::MutateIndexProtoInMetadata(
     uint32_t db_num, absl::string_view index_name,
     absl::FunctionRef<void(data_model::IndexSchema &)> mutate) {
@@ -375,6 +350,32 @@ absl::Status ValidateNoConflictingVectorFieldTypes(
 
 }  // namespace
 
+// static
+void SchemaManager::NormalizeIndexSchemaProtoDefaults(
+    data_model::IndexSchema &proto) {
+  // Apply the same defaults that the IndexSchema constructor applies, so
+  // that the stored proto matches what ToProto() will produce later. This
+  // prevents MessageDifferencer from seeing spurious differences when
+  // comparing a fetched proto against a live index's ToProto() output.
+  if (proto.min_stem_size() == 0) {
+    proto.set_min_stem_size(4);
+  }
+  if (!proto.has_score()) {
+    proto.set_score(IndexSchema::kDefaultDocumentScore);
+  }
+  // Insert the default empty prefix when none are specified, matching the
+  // IndexSchema constructor behavior.
+  if (proto.subscribed_key_prefixes().empty()) {
+    proto.add_subscribed_key_prefixes("");
+  }
+  // Sort attributes by alias to match ToProto() output order.
+  std::sort(proto.mutable_attributes()->begin(),
+            proto.mutable_attributes()->end(),
+            [](const data_model::Attribute &a, const data_model::Attribute &b) {
+              return a.alias() < b.alias();
+            });
+}
+
 absl::Status SchemaManager::CreateIndexSchemaInternal(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   int db_num = static_cast<int>(index_schema_proto.db_num());
@@ -527,6 +528,12 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   // backlog of mutations, they can keep the index schema alive and cause
   // unnecessary CPU and memory usage.
   result->MarkAsDestructing();
+  // Cursors hold this index's saved query output, which is of no use once the
+  // index is gone. This is the single choke point for every removal path
+  // (FT.DROPINDEX, FLUSHDB, replica full sync, RDB load, metadata updates).
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().EraseIndex(db_num, name);
+  }
   return result;
 }
 
@@ -964,6 +971,11 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
        absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>()});
   std::swap(db_to_index_schemas_[swap_db_info->dbnum_first],
             db_to_index_schemas_[swap_db_info->dbnum_second]);
+  // Cursors follow their index schema to its new database.
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().SwapDb(swap_db_info->dbnum_first,
+                                   swap_db_info->dbnum_second);
+  }
   // Swap the forward alias map between the two databases.
   db_to_aliases_.insert({static_cast<uint32_t>(swap_db_info->dbnum_first), {}});
   db_to_aliases_.insert(

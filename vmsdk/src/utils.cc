@@ -12,8 +12,10 @@
 #include <unistd.h>
 #endif
 
+#include <array>
 #include <cerrno>
 #include <climits>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <iomanip>
@@ -446,6 +448,25 @@ std::string StringToHex(std::string_view s) {
     result += hex_chars[c & 0xF];
   }
   return result;
+}
+
+uint32_t Crc32(absl::string_view data, uint32_t crc) {
+  static constexpr auto kTable = [] {
+    std::array<uint32_t, 256> table;
+    for (uint32_t i = 0; i < 256; ++i) {
+      uint32_t c = i;
+      for (int k = 0; k < 8; ++k) {
+        c = (c >> 1) ^ ((c & 1) ? 0xEDB88320 : 0);
+      }
+      table[i] = c;
+    }
+    return table;
+  }();
+  crc = ~crc;
+  for (unsigned char b : data) {
+    crc = kTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
+  }
+  return ~crc;
 }
 
 #ifdef __linux__

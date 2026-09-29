@@ -1359,6 +1359,111 @@ TEST_F(FTHybridParserTest, ExecuteSyncLocalIsRefused) {
                                ::testing::HasSubstr("reader thread pool")));
 }
 
+// ---------------------------------------------------------------------
+// WITHCURSOR
+// ---------------------------------------------------------------------
+
+TEST_F(FTHybridParserTest, NoWithCursorLeavesTheCursorOptionsUnset) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_FALSE((*params)->agg->cursor_options.has_value());
+}
+
+TEST_F(FTHybridParserTest, WithCursorIsParsedLikeFtAggregate) {
+  struct {
+    std::vector<std::string> suffix;
+    int64_t count;
+    int64_t max_idle_ms;
+  } test_cases[] = {
+      {{"WITHCURSOR"}, 1000, 300000},
+      {{"withcursor", "count", "5"}, 5, 300000},
+      {{"WITHCURSOR", "MAXIDLE", "10", "COUNT", "7"}, 7, 10},
+      // A later WITHCURSOR replaces an earlier one.
+      {{"WITHCURSOR", "COUNT", "1", "WITHCURSOR", "COUNT", "3"}, 3, 300000},
+      // Anywhere among the other suffix clauses.
+      {{"WITHCURSOR", "COUNT", "2", "LOAD", "1", "@n"}, 2, 300000},
+      {{"LOAD", "1", "@n", "WITHCURSOR", "COUNT", "2", "SORTBY", "2", "@n",
+        "ASC"},
+       2,
+       300000},
+      {{"SORTBY", "2", "@n", "ASC", "LIMIT", "0", "5", "WITHCURSOR", "COUNT",
+        "4"},
+       4,
+       300000},
+  };
+  for (auto &tc : test_cases) {
+    std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                  "$q"};
+    args.insert(args.end(), tc.suffix.begin(), tc.suffix.end());
+    auto params = Parse(args);
+    VMSDK_EXPECT_OK(params) << absl::StrJoin(tc.suffix, " ");
+    if (!params.ok()) {
+      continue;
+    }
+    const auto &options = (*params)->agg->cursor_options;
+    ASSERT_TRUE(options.has_value()) << absl::StrJoin(tc.suffix, " ");
+    EXPECT_EQ(options->count, tc.count) << absl::StrJoin(tc.suffix, " ");
+    EXPECT_EQ(options->max_idle, absl::Milliseconds(tc.max_idle_ms))
+        << absl::StrJoin(tc.suffix, " ");
+  }
+}
+
+TEST_F(FTHybridParserTest, WithCursorEndsTheVsimAndCombineClauses) {
+  // Like LOAD or LIMIT, WITHCURSOR is where a SEARCH, VSIM or COMBINE clause
+  // stops.
+  for (auto args : std::vector<std::vector<std::string>>{
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "WITHCURSOR",
+            "COUNT", "2"},
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+            "5", "WITHCURSOR", "COUNT", "2"},
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "COMBINE", "RRF",
+            "2", "YIELD_SCORE_AS", "hs", "WITHCURSOR", "COUNT", "2"},
+       }) {
+    auto params = Parse(args);
+    VMSDK_EXPECT_OK(params) << absl::StrJoin(args, " ");
+    if (params.ok()) {
+      ASSERT_TRUE((*params)->agg->cursor_options.has_value());
+      EXPECT_EQ((*params)->agg->cursor_options->count, 2);
+    }
+  }
+}
+
+TEST_F(FTHybridParserTest, WithCursorRejectsBadValues) {
+  for (auto suffix : std::vector<std::vector<std::string>>{
+           {"WITHCURSOR", "COUNT"},
+           {"WITHCURSOR", "COUNT", "x"},
+           {"WITHCURSOR", "COUNT", "0"},
+           {"WITHCURSOR", "COUNT", "-1"},
+           {"WITHCURSOR", "COUNT", "100001"},
+           {"WITHCURSOR", "MAXIDLE"},
+           {"WITHCURSOR", "MAXIDLE", "0"},
+       }) {
+    std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector",
+                                  "$q"};
+    args.insert(args.end(), suffix.begin(), suffix.end());
+    EXPECT_FALSE(Parse(args).ok()) << absl::StrJoin(suffix, " ");
+  }
+}
+
+TEST_F(FTHybridParserTest, WithCursorLeavesPartialResultsAlone) {
+  // WITHCURSOR is no exception to the cancellation rules: it does not touch
+  // the partial results setting of the envelope or of any arm.
+  auto &prefer_partial =
+      const_cast<vmsdk::config::Boolean &>(options::GetPreferPartialResults());
+  const bool saved = prefer_partial.GetValue();
+  for (bool partial : {false, true}) {
+    VMSDK_EXPECT_OK(prefer_partial.SetValue(partial));
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                         "WITHCURSOR", "COUNT", "2"});
+    VMSDK_EXPECT_OK(params);
+    EXPECT_EQ((*params)->enable_partial_results, partial);
+    for (const auto &arm : (*params)->arms) {
+      EXPECT_EQ(arm->enable_partial_results, partial);
+    }
+  }
+  VMSDK_EXPECT_OK(prefer_partial.SetValue(saved));
+}
+
 }  // namespace
 }  // namespace query
 }  // namespace valkey_search

@@ -49,6 +49,8 @@ The search module uses the Valkey configuration mechanism. Thus each of the name
 | search.max-search-result-record-size          | Number  |               | Controls the max content size for a record in the search response                                                                 |
 | search.max-search-result-fields-count         | Number  |               | Controls the max number of fields in the content of the search response                                                           |
 | search.backfill-batch-size                    | Number  |               | Controls the batch size for backfilling indexes                                                                                   |
+| search.cursor-max-count                       | Number  | 100000        | Maximum `COUNT` accepted by `WITHCURSOR` and `FT.CURSOR READ`                                                                     |
+| search.cursor-max-idle-ms                     | Number  | INT64_MAX     | Maximum `MAXIDLE` (milliseconds) accepted by `WITHCURSOR`                                                                         |
 | search.coordinator-query-timeout-secs         | Number  |               | Controls the gRPC deadline timeout (in seconds) for distributed coordinator query operations.                                     |
 | search.max-indexes                            | Number  |               | Controls the maximum number of search indexes that can be created in the system                                                   |
 | search.cluster-map-expiration-ms              | Number  |               | Controls how long (in milliseconds) the coordinator caches the cluster topology map before refreshing it from the Valkey cluster. |

@@ -17,6 +17,7 @@ FT.AGGREGATE <index-name> <query>
     [SLOP <slop>]
     [TIMEOUT <timeout>]
     [VERBATIM]
+    [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
@@ -43,6 +44,7 @@ FT.AGGREGATE <index-name> <query>
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used.
 
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
@@ -55,6 +57,8 @@ FT.AGGREGATE <index-name> <query>
 The output is an array. The first element of this array is a scalar number with no particular meaning and should be ignored. The remainder of the array is one element for each record output by the final processing stage.
 
 Each record is represented by an array which contains the field/value pairs of each record.
+
+If `WITHCURSOR` is specified the output is a two element array. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
 
 # Processing Stages
 
@@ -103,5 +107,5 @@ The following reducer functions are available. The reducer functions that take a
 | FIRST_VALUE 1 <expression>    | The first value of the expression encountered in the group. Order depends on record retrieval order. Use only when order does not matter. |
 | FIRST_VALUE 3 <expression> BY <expression> | The value of the first expression from the record with the smallest comparison expression (ascending). Ties broken by first-encountered order. |
 | FIRST_VALUE 4 <expression> BY <expression> ASC\|DESC | The value of the first expression from the record with the minimum (ASC) or maximum (DESC) comparison expression. Ties broken by first-encountered order. Invalid keyword arguments (e.g., wrong BY token or unrecognised direction) produce a parse-time error. |
-| QUANTILE 2 <expression> <quantile> | The value at the specified quantile (0 to 1) of the expression. Uses Greenwald-Khanna streaming algorithm with 1% error bound for memory-efficient approximate quantile estimation. |
 | RANDOM_SAMPLE 2 <expression> <sample_size> | A random sample of values from the expression using reservoir sampling. Returns an array of up to sample_size elements (maximum 1000). Nil values are excluded. Output is non-deterministic. |
+| QUANTILE 2 <expression> <quantile> | The value at the specified quantile (0 to 1) of the expression. Uses Greenwald-Khanna streaming algorithm with 1% error bound for memory-efficient approximate quantile estimation. |

@@ -21,8 +21,10 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/strip.h"
+#include "absl/time/clock.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/cursor.h"
 #include "src/expr/value.h"
 #include "src/indexes/index_base.h"
 #include "src/query/response_generator.h"
@@ -745,6 +747,98 @@ class ToList : public GroupBy::ReducerInstance {
   }
 };
 
+struct RandomSampleReducer : GroupBy::Reducer {
+  size_t sample_size_ = 0;
+  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
+    return std::make_unique<RandomSample>(sample_size_);
+  }
+};
+
+// Custom parser for RANDOM_SAMPLE: compiles both args as expressions (so the
+// base Reducer::operator<< produces a correct auto-alias), then evaluates the
+// sample-size arg at parse time to validate it.
+absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
+    std::string_view name, AggregateParameters &parameters,
+    vmsdk::ArgsIterator &itr) {
+  auto r = std::make_unique<RandomSampleReducer>();
+  r->name_ = name;
+
+  uint32_t cnt{0};
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+  if (cnt != 2) {
+    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
+                                              cnt, ") to reducer ", name));
+  }
+  std::string field_text;
+  std::string size_text;
+  for (uint32_t i = 0; i < cnt; ++i) {
+    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
+                           _ << "Missing Reducer argument " << i);
+    auto arg_sv = vmsdk::ToStringView(arg);
+    if (i == 0) {
+      field_text = arg_sv;
+    } else {
+      size_text = arg_sv;
+    }
+    VMSDK_ASSIGN_OR_RETURN(auto expr,
+                           expr::Expression::Compile(parameters, arg_sv),
+                           _ << " in GROUPBY stage");
+    r->args_.emplace_back(std::move(expr));
+  }
+
+  // Evaluate the sample-size expression (arg 1) at parse time.
+  expr::Expression::EvalContext ctx;
+  Record record(parameters.record_info_by_index_.size());
+  auto size_opt = r->args_[1]->Evaluate(ctx, record).AsDouble();
+  if (!size_opt.has_value() || !std::isfinite(*size_opt) || *size_opt < 0 ||
+      *size_opt != std::floor(*size_opt)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        name, " sample size must be a non-negative integer constant"));
+  }
+  if (*size_opt > static_cast<double>(RandomSample::kMaxSampleSize)) {
+    return absl::OutOfRangeError(absl::StrCat(
+        name, " sample size must be <= ", RandomSample::kMaxSampleSize));
+  }
+  r->sample_size_ = static_cast<size_t>(*size_opt);
+
+  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
+    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
+                           _ << "Missing Reducer alias");
+    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
+                                            vmsdk::ToStringView(alias), true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  } else {
+    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
+    // "__generated_alias" + reducer + comma-joined args with the leading '@'
+    // stripped, lowercasing the whole thing; the legacy form is
+    // "REDUCER(args)". See COMPATIBILITY.md.
+    const std::vector<absl::string_view> alias_args{field_text, size_text};
+    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "aggregate_reducer_default_alias",
+        [&] {
+          auto name = absl::StrCat(
+              "__generated_alias", r->name_,
+              absl::StrJoin(alias_args, ",",
+                            [](std::string *out, absl::string_view arg) {
+                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
+                            }));
+          absl::AsciiStrToLower(&name);
+          return name;
+        },
+        [&] {
+          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
+                              ")");
+        });
+    VMSDK_ASSIGN_OR_RETURN(auto output,
+                           parameters.MakeReference(default_name, true));
+    r->output_ =
+        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
+  }
+
+  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
+}
+
 class Quantile : public GroupBy::ReducerInstance {
   struct Sample {
     double value;
@@ -934,98 +1028,6 @@ class Quantile : public GroupBy::ReducerInstance {
     return expr::Value(result);
   }
 };
-
-struct RandomSampleReducer : GroupBy::Reducer {
-  size_t sample_size_ = 0;
-  std::unique_ptr<GroupBy::ReducerInstance> MakeInstance() override {
-    return std::make_unique<RandomSample>(sample_size_);
-  }
-};
-
-// Custom parser for RANDOM_SAMPLE: compiles both args as expressions (so the
-// base Reducer::operator<< produces a correct auto-alias), then evaluates the
-// sample-size arg at parse time to validate it.
-absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
-    std::string_view name, AggregateParameters &parameters,
-    vmsdk::ArgsIterator &itr) {
-  auto r = std::make_unique<RandomSampleReducer>();
-  r->name_ = name;
-
-  uint32_t cnt{0};
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-  if (cnt != 2) {
-    return absl::OutOfRangeError(absl::StrCat("incorrect number of arguments (",
-                                              cnt, ") to reducer ", name));
-  }
-  std::string field_text;
-  std::string size_text;
-  for (uint32_t i = 0; i < cnt; ++i) {
-    VMSDK_ASSIGN_OR_RETURN(auto arg, itr.PopNext(),
-                           _ << "Missing Reducer argument " << i);
-    auto arg_sv = vmsdk::ToStringView(arg);
-    if (i == 0) {
-      field_text = arg_sv;
-    } else {
-      size_text = arg_sv;
-    }
-    VMSDK_ASSIGN_OR_RETURN(auto expr,
-                           expr::Expression::Compile(parameters, arg_sv),
-                           _ << " in GROUPBY stage");
-    r->args_.emplace_back(std::move(expr));
-  }
-
-  // Evaluate the sample-size expression (arg 1) at parse time.
-  expr::Expression::EvalContext ctx;
-  Record record(parameters.record_info_by_index_.size());
-  auto size_opt = r->args_[1]->Evaluate(ctx, record).AsDouble();
-  if (!size_opt.has_value() || !std::isfinite(*size_opt) || *size_opt < 0 ||
-      *size_opt != std::floor(*size_opt)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        name, " sample size must be a non-negative integer constant"));
-  }
-  if (*size_opt > static_cast<double>(RandomSample::kMaxSampleSize)) {
-    return absl::OutOfRangeError(absl::StrCat(
-        name, " sample size must be <= ", RandomSample::kMaxSampleSize));
-  }
-  r->sample_size_ = static_cast<size_t>(*size_opt);
-
-  if (itr.PopIfNextIgnoreCase(valkey_search::aggregate::kAsParam)) {
-    VMSDK_ASSIGN_OR_RETURN(auto alias, itr.PopNext(),
-                           _ << "Missing Reducer alias");
-    VMSDK_ASSIGN_OR_RETURN(auto output, parameters.MakeReference(
-                                            vmsdk::ToStringView(alias), true));
-    r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
-  } else {
-    // Name of a REDUCE with no AS clause. New release 1.3.0 builds it as
-    // "__generated_alias" + reducer + comma-joined args with the leading '@'
-    // stripped, lowercasing the whole thing; the legacy form is
-    // "REDUCER(args)". See COMPATIBILITY.md.
-    const std::vector<absl::string_view> alias_args{field_text, size_text};
-    std::string default_name = VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "aggregate_reducer_default_alias",
-        [&] {
-          auto name = absl::StrCat(
-              "__generated_alias", r->name_,
-              absl::StrJoin(alias_args, ",",
-                            [](std::string *out, absl::string_view arg) {
-                              absl::StrAppend(out, absl::StripPrefix(arg, "@"));
-                            }));
-          absl::AsciiStrToLower(&name);
-          return name;
-        },
-        [&] {
-          return absl::StrCat(r->name_, "(", absl::StrJoin(alias_args, ","),
-                              ")");
-        });
-    VMSDK_ASSIGN_OR_RETURN(auto output,
-                           parameters.MakeReference(default_name, true));
-    r->output_ =
-        std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
-  }
-
-  return std::unique_ptr<GroupBy::Reducer>(std::move(r));
-}
 
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
@@ -1300,14 +1302,6 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"TOLIST", &BasicReducerParser<ToList, 1, 1>},
 };
 
-std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
-    double quantile, QuantileStats *&stats_out) {
-  auto r = std::make_unique<QuantileReducer>();
-  r->quantile_ = quantile;
-  stats_out = &r->stats_;
-  return r;
-}
-
 // ---------------------------------------------------------------------------
 // Reply-pipeline helpers (moved here from ft_aggregate.cc so FT.HYBRID can
 // reuse them once it has fused the per-arm results into a single neighbor
@@ -1413,11 +1407,19 @@ absl::StatusOr<std::pair<size_t, size_t>> PrepareNeighborRecords(
         parameters.index_schema->GetIdentifier(parameters.attribute_alias));
 
     scores_index = AggregateParameters::kScoreColumn;
+  } else if (parameters.addscores_) {
+    // ADDSCORES: expose the relevance score (__score) to the pipeline.
+    scores_index = AggregateParameters::kScoreColumn;
   }
 
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
+  // If no content needs to be fetched from the keys to be used in the
+  // aggregation pipeline, there is no need to revalidate keys and recompute
+  // scores.
+  if (!parameters.NoProcessingRequired()) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
 
   return std::make_pair(key_index, scores_index);
 }
@@ -1462,7 +1464,7 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
 
-    if (parameters.IsVectorQuery()) {
+    if (parameters.IsVectorQuery() || parameters.addscores_) {
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
@@ -1486,9 +1488,10 @@ absl::Status CreateRecordsFromNeighbors(
         // YIELD_SCORE_AS named the column) must not overwrite the score with
         // it. Step 2 below drops the losing value rather than emitting it as
         // a second column, because `record_identifiers_` holds the score's
-        // name. Only a vector query has a score column at `scores_index`;
-        // otherwise `scores_index` is 0, which is the key's slot.
-        if (parameters.IsVectorQuery() && i == scores_index) {
+        // name. A vector query always has a score column at `scores_index`,
+        // and ADDSCORES adds one for non-vector queries as well.
+        if ((parameters.IsVectorQuery() || parameters.addscores_) &&
+            i == scores_index) {
           continue;
         }
         const auto &info = parameters.record_info_by_index_[i];
@@ -1548,14 +1551,51 @@ absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
   return absl::OkStatus();
 }
 
-// Generate the final response from processed records
-absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
-                              AggregateParameters &parameters,
-                              RecordSet &records) {
-  ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
+namespace {
 
-  while (!records.empty()) {
+// The rows of an FT.AGGREGATE / FT.HYBRID ... WITHCURSOR not yet read by the
+// client.
+class CursorAggregateResult : public Cursor {
+ public:
+  CursorAggregateResult(std::unique_ptr<AggregateParameters> parameters,
+                        RecordSet records)
+      : Cursor(parameters->index_schema_name, parameters->index_schema,
+               *parameters->cursor_options),
+        parameters_(std::move(parameters)),
+        records_(std::move(records)) {
+    parameters_->adopted_by_cursor = true;
+    // Don't keep a dropped index alive; READ supplies the live schema.
+    parameters_->index_schema = nullptr;
+    // The query itself is over; only its saved output is still held.
+    parameters_->DeclareOperationTerminated();
+  }
+  size_t RemainingRows() const override { return records_.size(); }
+  void ReplyRows(ValkeyModuleCtx *ctx,
+                 const std::shared_ptr<IndexSchema> &index_schema,
+                 size_t count) override {
+    parameters_->index_schema = index_schema;
+    parameters_->ReplyRecords(ctx, records_, std::min(count, records_.size()));
+    parameters_->index_schema = nullptr;
+  }
+  void ReleaseMainThreadState() override {
+    parameters_->ReleaseMainThreadState();
+  }
+
+ private:
+  std::unique_ptr<AggregateParameters> parameters_;
+  RecordSet records_;
+};
+
+}  // namespace
+
+// Replies [count, row...] with the first `count` records, removing them.
+void AggregateParameters::ReplyRecords(ValkeyModuleCtx *ctx, RecordSet &records,
+                                       size_t count) {
+  auto &parameters = *this;
+  ValkeyModule_ReplyWithArray(ctx, 1 + count);
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(count));
+
+  for (size_t n = 0; n < count; ++n) {
     auto rec = records.pop_front();
     ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
 
@@ -1585,8 +1625,6 @@ absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
 
     ValkeyModule_ReplySetArrayLength(ctx, array_count);
   }
-
-  return absl::OkStatus();
 }
 
 absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
@@ -1606,9 +1644,35 @@ absl::Status RunAggregatePipeline(ValkeyModuleCtx *ctx,
   VMSDK_RETURN_IF_ERROR(ExecuteAggregationStages(parameters, records));
 
   // 4. Generate the response
-  VMSDK_RETURN_IF_ERROR(GenerateResponse(ctx, parameters, records));
-
+  if (!parameters.cursor_options.has_value()) {
+    parameters.ReplyRecords(ctx, records, records.size());
+    return absl::OkStatus();
+  }
+  // WITHCURSOR: [[count, row...], cursor_id]
+  ValkeyModule_ReplyWithArray(ctx, 2);
+  parameters.ReplyRecords(
+      ctx, records,
+      std::min(static_cast<size_t>(parameters.cursor_options->count),
+               records.size()));
+  if (records.empty()) {
+    ValkeyModule_ReplyWithLongLong(ctx, 0);
+    return absl::OkStatus();
+  }
+  const int db_num = parameters.db_num;
+  auto cursor = std::make_unique<CursorAggregateResult>(
+      std::unique_ptr<AggregateParameters>(&parameters), std::move(records));
+  auto id =
+      CursorTable::Instance().Insert(std::move(cursor), db_num, absl::Now());
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(id));
   return absl::OkStatus();
+}
+
+std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
+    double quantile, QuantileStats *&stats_out) {
+  auto r = std::make_unique<QuantileReducer>();
+  r->quantile_ = quantile;
+  stats_out = &r->stats_;
+  return r;
 }
 
 }  // namespace aggregate

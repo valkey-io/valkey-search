@@ -172,7 +172,7 @@ class BaseCompatibilityTest:
         self.data_set_name = data_set_name
         self.key_type = key_type
         self.vector_data_type = vector_data_type
-        load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
+        return load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
 
     def execute_command(self, cmd, excluded=False):
         answer = {"cmd": cmd,
@@ -1217,7 +1217,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
 
 
-    def test_aggregate_quantile_basic(self, key_type, dialect, vector_data_type):
+    def test_aggregate_quantile_basic(self, key_type, dialect):
         """Test basic QUANTILE functionality with common quantile values."""
         self.setup_data("sortable numbers", key_type)
         
@@ -1239,7 +1239,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 3 @__key @n2 @t3 groupby 1 @t3 reduce quantile 2 @n2 0.5 as median"
         )
 
-    def test_aggregate_quantile_multiple(self, key_type, dialect, vector_data_type):
+    def test_aggregate_quantile_multiple(self, key_type, dialect):
         """Test multiple QUANTILE reducers in same query."""
         self.setup_data("sortable numbers", key_type)
         
@@ -1263,7 +1263,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t1 groupby 1 @t1 reduce quantile 2 @n1 0.5 as p50 reduce quantile 2 @n1 0.95 as p95 reduce quantile 2 @n1 0.99 as p99"
         )
 
-    def test_aggregate_quantile_edge_cases(self, key_type, dialect, vector_data_type):
+    def test_aggregate_quantile_edge_cases(self, key_type, dialect):
         """Test QUANTILE with edge cases: nil values, duplicates, negatives."""
         self.setup_data("hard numbers", key_type)
         
@@ -1289,7 +1289,7 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @t3 groupby 1 @t3 reduce quantile 2 @n1 0.5 as median"
         )
 
-    def test_aggregate_quantile_errors(self, key_type, dialect, vector_data_type):
+    def test_aggregate_quantile_errors(self, key_type, dialect):
         """Test QUANTILE error conditions: invalid quantile range, wrong arg count."""
         self.setup_data("sortable numbers", key_type)
         
@@ -1325,3 +1325,4 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, 
             f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce quantile 3 @n1 0.5 extra as q"
         )
+

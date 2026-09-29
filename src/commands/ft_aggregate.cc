@@ -166,6 +166,12 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
+  // Non-vector queries have no KNN AS clause to name the score field, so
+  // default to Redis' ADDSCORES name. This also makes @__score resolvable by
+  // LOAD and by stages (SORTBY/APPLY/GROUPBY) via record_indexes_by_alias_.
+  if (score_as == nullptr) {
+    score_as = vmsdk::MakeUniqueValkeyString("__score");
+  }
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", "__key",
                            indexes::IndexerType::kNone) == kKeyColumn);

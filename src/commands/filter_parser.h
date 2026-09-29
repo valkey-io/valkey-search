@@ -128,8 +128,7 @@ class FilterParser {
     std::optional<double> epsilon;
   };
 
-  absl::StatusOr<VectorRangeQueryAttributes> ParseVectorRangeQueryAttributes(
-      bool expect_arrow_after = true);
+  absl::StatusOr<VectorRangeQueryAttributes> ParseVectorRangeQueryAttributes();
   absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
   ParseVectorRangePredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(

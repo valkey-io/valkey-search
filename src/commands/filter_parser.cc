@@ -350,11 +350,9 @@ FilterParser::ParseNumericPredicate(const std::string& attribute_alias) {
 }
 
 absl::StatusOr<FilterParser::VectorRangeQueryAttributes>
-FilterParser::ParseVectorRangeQueryAttributes(bool expect_arrow_after) {
+FilterParser::ParseVectorRangeQueryAttributes() {
   // Parse {$yield_distance_as: <name>; $epsilon: <value>} query attributes.
-  // The opening '{' has already been matched by the caller.
-  // When expect_arrow_after is true (prefix mode), expects '=>' after '}'.
-  // When false (suffix mode), '=>' was already consumed before '{'.
+  // The '=>' and the opening '{' have already been consumed by the caller.
   VectorRangeQueryAttributes attrs;
   SkipWhitespace();
   while (!IsEnd() && Peek() != '}') {
@@ -403,12 +401,6 @@ FilterParser::ParseVectorRangeQueryAttributes(bool expect_arrow_after) {
   }
   if (!Match('}')) {
     return absl::InvalidArgumentError("Expected '}' to close query attributes");
-  }
-  // In prefix mode, expect '=>' after the closing '}'
-  if (expect_arrow_after) {
-    if (!Match('=') || !Match('>', false)) {
-      return absl::InvalidArgumentError("Expected '=>' after query attributes");
-    }
   }
   return attrs;
 }
@@ -511,8 +503,7 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
     SkipWhitespace();
     if (!IsEnd() && Peek() == '{') {
       ++pos_;  // consume '{'
-      VMSDK_ASSIGN_OR_RETURN(auto attrs,
-                             ParseVectorRangeQueryAttributes(false));
+      VMSDK_ASSIGN_OR_RETURN(auto attrs, ParseVectorRangeQueryAttributes());
       if (attrs.yield_distance_as.has_value()) {
         score_as = std::move(attrs.yield_distance_as);
       }

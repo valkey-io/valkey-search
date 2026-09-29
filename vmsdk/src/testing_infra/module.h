@@ -87,6 +87,8 @@ class MockValkeyModule {
               (ValkeyModuleKey * key, ValkeyModuleString *field,
                const char *buf, size_t len));
   MOCK_METHOD(int, GetApi, (const char *name, void *func));
+  MOCK_METHOD(int, IncrExternalMemory, (size_t bytes));
+  MOCK_METHOD(int, DecrExternalMemory, (size_t bytes));
   MOCK_METHOD(mstime_t, GetExpire, (ValkeyModuleKey * key));
   MOCK_METHOD(int, HashGet,
               (ValkeyModuleKey * key, int flags, const char *field,
@@ -1252,6 +1254,14 @@ inline void TestValkeyModule_FreeCrossClusterReplicasList(
 // bookkeeping in commands_test and vector_index_test.
 inline void *TestValkeyModule_Alloc(size_t size) { return std::malloc(size); }
 
+inline int TestValkeyModule_IncrExternalMemory(size_t bytes) {
+  return kMockValkeyModule->IncrExternalMemory(bytes);
+}
+
+inline int TestValkeyModule_DecrExternalMemory(size_t bytes) {
+  return kMockValkeyModule->DecrExternalMemory(bytes);
+}
+
 inline void TestValkeyModule_Free(void *ptr) { std::free(ptr); }
 
 inline void *TestValkeyModule_Realloc(void *ptr, size_t size) {
@@ -1709,6 +1719,8 @@ inline void TestValkeyModule_Init() {
   ValkeyModule_FreeCrossClusterReplicasList =
       &TestValkeyModule_FreeCrossClusterReplicasList;
   ValkeyModule_Alloc = &TestValkeyModule_Alloc;
+  ValkeyModule_IncrExternalMemory = &TestValkeyModule_IncrExternalMemory;
+  ValkeyModule_DecrExternalMemory = &TestValkeyModule_DecrExternalMemory;
   ValkeyModule_Free = &TestValkeyModule_Free;
   ValkeyModule_Realloc = &TestValkeyModule_Realloc;
   ValkeyModule_Calloc = &TestValkeyModule_Calloc;

@@ -31,7 +31,8 @@ constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 3, 0);
 //
 // Set the minimum acceptable server version
 //
-constexpr auto kMinimumServerVersion = vmsdk::ValkeyVersion(9, 0, 1);
+// External-memory accounting APIs were introduced in Valkey 9.2.0.
+constexpr auto kMinimumServerVersion = vmsdk::ValkeyVersion(9, 2, 0);
 
 namespace valkey_search {
 

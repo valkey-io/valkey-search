@@ -41,7 +41,7 @@ void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
             reinterpret_cast<void *>(&ValkeyModule_HashHasStringRef)) ==
             VALKEYMODULE_OK)
       << "Failed to resolve required ValkeyModule StringRef APIs "
-         "(HashSetStringRef/HashHasStringRef). Valkey version should be 9.1.0 "
+         "(HashSetStringRef/HashHasStringRef). Valkey version should be 9.2.0 "
          "and above";
 }
 

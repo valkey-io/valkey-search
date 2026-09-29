@@ -1885,7 +1885,20 @@ IndexSchema::MutatedAttributes CreateMutatedAttributes(
   return mutated_attributes;
 }
 
-TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
+TEST_F(IndexSchemaFriendTest, WeightedMemoryAccounting) {
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(520));
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(1100)).Times(2);
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(34));
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(330));
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(1650));
+  EXPECT_CALL(*kMockValkeyModule, IncrExternalMemory(800));
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(520));
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(1100)).Times(2);
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(34));
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(330));
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(1650));
+  EXPECT_CALL(*kMockValkeyModule, DecrExternalMemory(800));
+
   // The IndexSchemaFriendTest fixture already has an HNSW index with alias
   // "hnsw_id". Add additional index types for testing.
   auto numeric_index =
@@ -1918,7 +1931,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     auto itr = index_schema->tracked_mutated_records_.find(key1);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
     // 400 * 130 / 100 = 520
-    EXPECT_EQ(itr->second.weighted_buffer.size(), 520);
+    EXPECT_EQ(itr->second.weighted_memory, 520);
   }
 
   // Test 2: New entry with text data
@@ -1932,7 +1945,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     auto itr = index_schema->tracked_mutated_records_.find(key2);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
     // 200 * 550 / 100 = 1100
-    EXPECT_EQ(itr->second.weighted_buffer.size(), 1100);
+    EXPECT_EQ(itr->second.weighted_memory, 1100);
   }
 
   // Test 3: New entry with numeric data
@@ -1946,7 +1959,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     auto itr = index_schema->tracked_mutated_records_.find(key3);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
     // 8 * 430 / 100 = 34
-    EXPECT_EQ(itr->second.weighted_buffer.size(), 34);
+    EXPECT_EQ(itr->second.weighted_memory, 34);
   }
 
   // Test 4: New entry with tag data
@@ -1960,7 +1973,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     auto itr = index_schema->tracked_mutated_records_.find(key4);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
     // 100 * 330 / 100 = 330
-    EXPECT_EQ(itr->second.weighted_buffer.size(), 330);
+    EXPECT_EQ(itr->second.weighted_memory, 330);
   }
 
   // Test 5: Null data contributes 0 to size
@@ -1974,10 +1987,10 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     absl::MutexLock lock(&index_schema->mutated_records_mutex_);
     auto itr = index_schema->tracked_mutated_records_.find(key5);
     ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
-    EXPECT_EQ(itr->second.weighted_buffer.size(), 0);
+    EXPECT_EQ(itr->second.weighted_memory, 0);
   }
 
-  // Test 6: Buffer resize on attribute merge (update path)
+  // Test 6: Memory accounting update on attribute merge.
   {
     std::string initial_data(200, 'a');  // 200 bytes
     auto mutated_attrs = CreateMutatedAttributes("text_id", initial_data);
@@ -1989,10 +2002,10 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
       auto itr = index_schema->tracked_mutated_records_.find(key6);
       ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
       // 200 * 550 / 100 = 1100
-      EXPECT_EQ(itr->second.weighted_buffer.size(), 1100);
+      EXPECT_EQ(itr->second.weighted_memory, 1100);
     }
 
-    // Update with larger data — buffer should resize
+    // Update with larger data.
     std::string larger_data(500, 'b');  // 500 bytes
     auto mutated_attrs2 = CreateMutatedAttributes("text_id", larger_data);
     EXPECT_FALSE(index_schema->TrackMutatedRecord(
@@ -2002,7 +2015,19 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
       auto itr = index_schema->tracked_mutated_records_.find(key6);
       ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
       // 500 * 550 / 100 = 2750
-      EXPECT_EQ(itr->second.weighted_buffer.size(), 2750);
+      EXPECT_EQ(itr->second.weighted_memory, 2750);
+    }
+
+    // Update with smaller data: decrement the difference in external memory.
+    auto mutated_attrs3 = CreateMutatedAttributes("text_id", initial_data);
+    EXPECT_FALSE(index_schema->TrackMutatedRecord(
+        nullptr, key6, std::move(mutated_attrs3), 0, false, false, false));
+    {
+      absl::MutexLock lock(&index_schema->mutated_records_mutex_);
+      auto itr = index_schema->tracked_mutated_records_.find(key6);
+      ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
+      // 200 * 550 / 100 = 1100
+      EXPECT_EQ(itr->second.weighted_memory, 1100);
     }
   }
 
@@ -2020,11 +2045,14 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
       auto itr = index_schema->tracked_mutated_records_.find(key7);
       ASSERT_NE(itr, index_schema->tracked_mutated_records_.end());
       // 400 * 200 / 100 = 800
-      EXPECT_EQ(itr->second.weighted_buffer.size(), 800);
+      EXPECT_EQ(itr->second.weighted_memory, 800);
     }
     // Restore default
     VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(130));
   }
+
+  // Verify every outstanding charge is released when the schema is dropped.
+  index_schema->MarkAsDestructing();
 }
 
 TEST_F(IndexSchemaFriendTest, MutatedAttributesSanity) {

@@ -1024,6 +1024,10 @@ typedef struct ValkeyModuleTypeMethods {
 #endif
 
 VALKEYMODULE_API void *(*ValkeyModule_Alloc)(size_t bytes)VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_IncrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DecrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_TryAlloc)(size_t bytes)VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_Realloc)(void *ptr,
                                                size_t bytes)VALKEYMODULE_ATTR;
@@ -2235,6 +2239,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(HashExternalize);
   VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
   VALKEYMODULE_GET_API(ClusterKeySlot);
+  VALKEYMODULE_GET_API(IncrExternalMemory);
+  VALKEYMODULE_GET_API(DecrExternalMemory);
 
   if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name))
     return VALKEYMODULE_ERR;

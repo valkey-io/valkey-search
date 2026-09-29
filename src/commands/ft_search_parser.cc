@@ -166,10 +166,8 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInfieldsParser() {
               absl::StrCat("INFIELDS count exceeds maximum supported (",
                            kMaxTextFieldsCount, ")"));
         }
-        if (!parameters.infields.has_value()) {
-          parameters.infields.emplace();
-        }
-        parameters.infields->reserve(parameters.infields->size() + count);
+        parameters.infields.emplace();
+        parameters.infields->reserve(count);
         for (uint32_t i = 0; i < count; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto field, itr.PopNext());
           parameters.infields->insert(std::string(vmsdk::ToStringView(field)));

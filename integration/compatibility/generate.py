@@ -109,6 +109,9 @@ class BaseCompatibilityTest:
     # exists in the Redis 8.4+ query engine. The container name carries the
     # class name and a random suffix, so two generators never collide on it.
     
+    # Capture from a 3-primary Redis cluster instead of a single server.
+    CLUSTER = False
+
     @classmethod
     def setup_class(cls):
         if cls.ANSWER_FILE_NAME is None:
@@ -118,9 +121,11 @@ class BaseCompatibilityTest:
         # --search-workers 0 makes every write search-visible before the next
         # command, so no sleep is needed between loading data and querying it:
         # https://redis.io/docs/latest/develop/ai/redisvl/concepts/search-and-indexing/#search-visibility-after-writes
+        server_args = " redis-server --search-workers 0"
+        if cls.CLUSTER:
+            server_args += " --cluster-enabled yes"
         if os.system(f"docker run --rm -d --name {cls.container_name} "
-                     f"-p 0:6379 redis:latest "
-                     f"redis-server --search-workers 0") != 0:
+                     f"-p 0:6379 redis:latest{server_args}") != 0:
             print("Failed to start Redis server, please check your Docker setup.")
             sys.exit(1)
         port = cls._published_port()
@@ -145,6 +150,24 @@ class BaseCompatibilityTest:
             except ConnectionError:
                 print("Waiting for R system to be ready...")
                 time.sleep(.25)
+        if cls.CLUSTER:
+            nodes = [cls.container_name] + [f"{cls.container_name}-{i}" for i in (1, 2)]
+            for node in nodes[1:]:
+                os.system(f"docker run --rm -d --name {node} redis:latest{server_args}")
+            # teardown's `docker stop` then stops every node.
+            cls.container_name = " ".join(nodes)
+            ips = [os.popen("docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "
+                            + node).read().strip() for node in nodes]
+            # Retried until every node is up; the default slot split matches the valkey test cluster's.
+            while os.system(f"docker exec {nodes[0]} redis-cli --cluster create "
+                            f"{' '.join(ip + ':6379' for ip in ips)} "
+                            f"--cluster-replicas 0 --cluster-yes") != 0:
+                time.sleep(.25)
+            # create returns before every node sees the cluster up.
+            while any(os.system(f"docker exec {node} redis-cli cluster info | grep -q cluster_state:ok")
+                      for node in nodes):
+                time.sleep(.25)
+            cls.client.client = valkey.ValkeyCluster(host=ips[0], port=6379)
         print("Done initializing")
 
     @classmethod

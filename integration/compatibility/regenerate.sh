@@ -54,10 +54,15 @@ done < <(PYTHONPATH=integration "${PYTHON}" -c \
 for g in GENERATORS: print(g['answers'])")
 
 cd "${COMPAT_DIR}"
-for gen in "${GENERATOR_FILES[@]}"; do
-    echo "==> Running ${gen}"
-    "${PYTHON}" -m pytest "${gen}" "$@"
-done
+# Each generator collects its answers in one class and writes them in
+# teardown_class, so loadscope keeps a generator on a single worker; one
+# worker per generator is the most parallelism that stays correct.
+XDIST_ARGS=()
+if "${PYTHON}" -c "import xdist" 2>/dev/null; then
+    XDIST_ARGS=(-n "${#GENERATOR_FILES[@]}" --dist=loadscope)
+fi
+echo "==> Running ${GENERATOR_FILES[*]}"
+"${PYTHON}" -m pytest "${XDIST_ARGS[@]}" "${GENERATOR_FILES[@]}" "$@"
 
 echo
 echo "Done. Updated files:"

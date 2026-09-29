@@ -37,6 +37,7 @@
 #if defined(__linux__) && defined(__x86_64__)
 #include <svs/c/svs_c.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "absl/strings/str_cat.h"
 #include "src/index_schema.pb.h"
@@ -75,12 +76,14 @@ svs_threadpool_ops_t kSvsThreadpoolOps =
     SVS_INIT_THREADPOOL_OPS(SvsThreadpoolSize, SvsThreadpoolParallelFor);
 svs_threadpool_t kSvsThreadpoolIface{&kSvsThreadpoolOps, nullptr};
 
-// Huge-page-aware custom allocator vtable. Every allocation tries three
-// tiers in order: 2 MiB huge pages via MAP_HUGETLB, opportunistic THP
-// promotion via madvise(MADV_HUGEPAGE), then bare mmap. Each successful
-// allocation reports its actual size to ValkeyModule_IncrExternalMemory
-// so it counts against used_memory / maxmemory just like the module's
-// own malloc arena.
+// Huge-page-aware custom allocator vtable. Requests at least one huge
+// page in size try three tiers in order: 2 MiB huge pages via
+// MAP_HUGETLB, opportunistic THP promotion via madvise(MADV_HUGEPAGE),
+// then bare mmap. Smaller requests skip the huge-page routes and use
+// small-page mmap so we do not round every metadata block up to 2 MiB.
+// Each successful allocation reports its actual size to
+// ValkeyModule_IncrExternalMemory so it counts against used_memory /
+// maxmemory just like the module's own malloc arena.
 constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 
 // Block size passed to svs_index_build_dynamic. SVS's "default" (0)
@@ -93,26 +96,49 @@ size_t RoundUpToPageSize(size_t size, size_t page_size) {
   return ((size + page_size - 1) / page_size) * page_size;
 }
 
+size_t SvsAllocatorSmallPageSize() {
+  static const size_t cached = []() {
+    const long v = sysconf(_SC_PAGESIZE);
+    return v > 0 ? static_cast<size_t>(v) : size_t{4096};
+  }();
+  return cached;
+}
+
+// Both alloc and dealloc round the caller's size using this helper so
+// they always agree on the mapping length passed to munmap.
+size_t SvsAllocatorAlignedSize(size_t size, size_t alignment) {
+  const size_t page_size = size >= kSvsAllocatorHugePageSize
+                               ? kSvsAllocatorHugePageSize
+                               : SvsAllocatorSmallPageSize();
+  return RoundUpToPageSize(size, std::max<size_t>(alignment, page_size));
+}
+
 void* SvsAllocatorAllocate(void* /*self*/, size_t size, size_t alignment,
                            svs_error_h /*out_err*/) {
   if (size == 0) {
     return nullptr;
   }
-  size_t aligned_size = RoundUpToPageSize(
-      size, std::max<size_t>(alignment, kSvsAllocatorHugePageSize));
+  const bool huge_eligible = size >= kSvsAllocatorHugePageSize;
+  const size_t aligned_size = SvsAllocatorAlignedSize(size, alignment);
 
-  void* ptr = mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+  void* ptr = MAP_FAILED;
+  if (huge_eligible) {
+    ptr = mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+  }
   if (ptr == MAP_FAILED) {
     ptr = mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (ptr == MAP_FAILED) {
       return nullptr;
     }
-    // Opportunistically ask the kernel to back this region with huge
-    // pages if transparent-hugepage is enabled. Best effort; ignore
-    // failures.
-    madvise(ptr, aligned_size, MADV_HUGEPAGE);
+    if (huge_eligible) {
+      // Opportunistically ask the kernel to back this region with
+      // huge pages if transparent-hugepage is enabled. Best effort;
+      // ignore failures. Skipped for small requests where THP
+      // promotion is unlikely to fire.
+      madvise(ptr, aligned_size, MADV_HUGEPAGE);
+    }
   }
   ValkeyModule_IncrExternalMemory(aligned_size);
   return ptr;
@@ -123,8 +149,7 @@ void SvsAllocatorDeallocate(void* /*self*/, void* ptr, size_t size,
   if (ptr == nullptr || size == 0) {
     return;
   }
-  size_t aligned_size = RoundUpToPageSize(
-      size, std::max<size_t>(alignment, kSvsAllocatorHugePageSize));
+  const size_t aligned_size = SvsAllocatorAlignedSize(size, alignment);
   munmap(ptr, aligned_size);
   ValkeyModule_DecrExternalMemory(aligned_size);
 }

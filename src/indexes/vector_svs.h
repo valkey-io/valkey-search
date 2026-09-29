@@ -32,7 +32,7 @@
 // vector_svs.cc.
 extern "C" {
 struct svs_index;
-typedef struct svs_index* svs_index_h;
+typedef struct svs_index *svs_index_h;
 }
 
 namespace valkey_search::indexes {

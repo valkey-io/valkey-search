@@ -394,9 +394,8 @@ vmsdk::KeyValueParser<HNSWParameters> CreateHNSWParser() {
 }
 vmsdk::KeyValueParser<SVSVamanaParameters> CreateSVSParser() {
   vmsdk::KeyValueParser<SVSVamanaParameters> parser;
-  parser.AddParamParser(
-      kDimensionsParam,
-      GENERATE_VALUE_PARSER(SVSVamanaParameters, dimensions));
+  parser.AddParamParser(kDimensionsParam,
+                        GENERATE_VALUE_PARSER(SVSVamanaParameters, dimensions));
   parser.AddParamParser(
       kDataTypeParam,
       GENERATE_ENUM_PARSER(SVSVamanaParameters, vector_data_type,
@@ -990,18 +989,16 @@ absl::Status SVSVamanaParameters::Verify() const {
         "compressed FP16 storage inside SVS.");
   }
   if (construction_window_size < graph_max_degree) {
-    return absl::InvalidArgumentError(
-        absl::StrCat(kConstructionWindowSizeParam, " (",
-                     construction_window_size, ") must be >= ",
-                     kGraphMaxDegreeParam, " (", graph_max_degree, ")."));
+    return absl::InvalidArgumentError(absl::StrCat(
+        kConstructionWindowSizeParam, " (", construction_window_size,
+        ") must be >= ", kGraphMaxDegreeParam, " (", graph_max_degree, ")."));
   }
   return absl::OkStatus();
 }
 
 std::unique_ptr<data_model::VectorIndex> SVSVamanaParameters::ToProto() const {
   auto vector_index_proto = FTCreateVectorParameters::ToProto();
-  auto svs_algorithm_proto =
-      std::make_unique<data_model::SVSVamanaAlgorithm>();
+  auto svs_algorithm_proto = std::make_unique<data_model::SVSVamanaAlgorithm>();
   svs_algorithm_proto->set_graph_max_degree(graph_max_degree);
   svs_algorithm_proto->set_construction_window_size(construction_window_size);
   svs_algorithm_proto->set_search_window_size(search_window_size);

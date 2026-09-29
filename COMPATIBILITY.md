@@ -52,6 +52,10 @@ Within a single document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in
 
 Floating-point arithmetic is inherently imprecise, and the observable result of a floating-point computation depends on the order in which individual operations are performed. Valkey Search and Redisearch do not guarantee that floating-point operations — including arithmetic involved in scoring, vector distance calculations, aggregations, numeric range comparisons, and the conversions performed when parsing floating-point values from text or formatting them back into text — are executed in the same order. Small numerical differences between the two modules on otherwise-equivalent inputs should be expected, and are **not** considered compatibility bugs. Applications that compare floating-point results for exact equality, or that depend on the exact textual representation of a floating-point value round-tripped through the module, should be reworked to tolerate small numerical differences.
 
+### A note on `COUNT_DISTINCTISH`
+
+`COUNT_DISTINCTISH` returns an estimate, and Valkey Search estimates differently from Redisearch. Valkey Search uses the HyperLogLog of Valkey's `PFCOUNT` (2^14 registers, a 64-bit MurmurHash of the value's text, standard error about 0.81%); Redisearch uses 2^8 registers and a 32-bit hash of the value (standard error about 6.5%). Valkey Search trades more memory per group for the lower error. Both results are deterministic, but for the same data they generally differ. These differences are **not** considered compatibility bugs. Applications that need an exact count should use `COUNT_DISTINCT`.
+
 ## Intentional Incompatibilities
 
 This section describes areas where Valkey Search intentionally diverges from Redisearch. Divergences here are by design and will not be treated as defects. Where possible, each item is described in terms of _what differs_, _why_, and _what migration impact to expect_.

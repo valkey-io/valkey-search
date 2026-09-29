@@ -95,6 +95,12 @@
         "optional": true
       },
       {
+        "name": "NOHL",
+        "type": "pure-token",
+        "optional": true,
+        "token": "NOHL"
+      },
+      {
         "name": "offsets",
         "type": "oneof",
         "optional": true,
@@ -346,16 +352,29 @@
                 ]
               },
               {
-                "name": "SORTABLE",
+                "name": "sortable",
+                "type": "block",
                 "optional": true,
-                "type": "pure-token",
-                "token": "SORTABLE"
+                "arguments": [
+                  {
+                    "name": "SORTABLE",
+                    "type": "pure-token",
+                    "token": "SORTABLE"
+                  },
+                  {
+                    "name": "UNF",
+                    "type": "pure-token",
+                    "optional": true,
+                    "token": "UNF"
+                  }
+                ]
               }
             ]
           }
         ]
       }
     ],
+    "arity": -5,
     "complexity": "Construction time O(N log N), where N is the number of indexed items",
     "group": "search",
     "module_since": "1.0.0",

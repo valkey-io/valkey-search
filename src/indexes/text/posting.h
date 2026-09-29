@@ -70,14 +70,18 @@ static_assert(sizeof(FieldMask) == 16, "FieldMask should exactly be 16 bytes");
 
 using PositionMap = absl::btree_map<Position, FieldMask>;
 
+struct PostingDocStats {
+  uint32_t tf;
+  uint32_t doc_len;
+};
+
 // Btree value: the position map pointer plus the key's (immutable) term
 // frequency and document length, co-located so the scoring hot path reads them
 // straight off the merge iterator instead of decoding the separately allocated
 // FlatPositionMap block (tf) or probing the per-key scoring map (doc_len).
 struct PostingValue {
   FlatPositionMap* map;
-  uint32_t tf;
-  uint32_t doc_len;
+  PostingDocStats doc_stats;
 };
 // doc_len fills the padding after tf, so PostingValue stays 16 bytes.
 static_assert(sizeof(PostingValue) == 16,
@@ -115,8 +119,8 @@ struct Postings {
   // One Postings is shared by every TEXT field, so key presence alone does not
   // mean the term occurred in a requested field: nullopt unless it falls in
   // `field_mask`. `~0ULL` means any field and skips the per-position scan.
-  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key,
-                                        uint64_t field_mask) const;
+  std::optional<PostingDocStats> GetPostingDocStats(
+      BorrowedInternedStringPtr key, uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -166,7 +170,8 @@ struct Postings {
  private:
   // Cache tf in PostingValue to avoid a map lookup
   // PostValue should be removed and restored if no extra-step
-  // Transparent comparator so LookupKey() can probe with a borrowed key.
+  // Transparent comparator so GetPostingDocStats() can probe with a borrowed
+  // key.
   absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
 };
 

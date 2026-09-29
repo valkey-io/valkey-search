@@ -170,8 +170,20 @@ void RunAggregateReply(ValkeyModuleCtx *ctx, MultiSearchParameters &params) {
   }
   params.agg->cancellation_token = params.cancellation_token;
   params.agg->index_schema = params.index_schema;
-  auto status = aggregate::RunAggregatePipeline(
-      ctx, params.search_result.neighbors, *params.agg);
+  auto *neighbors = &params.search_result.neighbors;
+  if (params.agg->cursor_options.has_value()) {
+    // A cursor takes ownership of the aggregate parameters it pages through,
+    // and its records point into the fused neighbors, so those move into the
+    // aggregate's own search result for the cursor to keep.
+    params.agg->db_num = params.db_num;
+    params.agg->search_result.neighbors =
+        std::move(params.search_result.neighbors);
+    neighbors = &params.agg->search_result.neighbors;
+  }
+  auto status = aggregate::RunAggregatePipeline(ctx, *neighbors, *params.agg);
+  if (params.agg->adopted_by_cursor) {
+    params.agg.release();  // Now owned by the cursor table.
+  }
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, status.message().data());

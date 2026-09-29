@@ -172,7 +172,8 @@ class IndexSchema : public KeyspaceEventSubscription,
       absl::string_view attribute_alias) const;
   absl::Status AddIndex(absl::string_view attribute_alias,
                         absl::string_view identifier,
-                        std::shared_ptr<indexes::IndexBase> index);
+                        std::shared_ptr<indexes::IndexBase> index,
+                        AttributeOptions options = {});
 
   void RespondWithInfo(ValkeyModuleCtx *ctx) const;
 
@@ -212,7 +213,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     if (!text_index_schema_) {
       return 0;
     }
-    return text_index_schema_->GetKeyDocLen(key);
+    return text_index_schema_->GetKeyDocLen(key, false);
   }
 
   uint32_t GetDocumentNorm(const Key &key) const
@@ -317,7 +318,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
-  bool IsMarkedDestructing() { return is_destructing_; };
+  bool IsMarkedDestructing() const { return is_destructing_.load(); }
   void ProcessMultiQueue();
   uint64_t GetBackfillScannedKeyCount() const;
   uint64_t GetBackfillDbSize() const;

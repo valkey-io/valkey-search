@@ -172,6 +172,11 @@ message SearchIndexPartitionRequest {
   // evaluate a null predicate. The shard never re-parses the query string, so
   // it has to cross the wire.
   bool is_match_all = 22;
+  optional InkeysFilter inkeys = 23;
+}
+
+message InkeysFilter {
+  repeated string keys = 1;
 }
 
 message NeighborEntry {

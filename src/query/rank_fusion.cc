@@ -16,8 +16,8 @@
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
-#include "absl/strings/str_format.h"
 #include "src/attribute_data_type.h"
+#include "src/expr/value.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/string_interning.h"
@@ -39,9 +39,6 @@ struct FusedEntry {
   std::vector<std::optional<double>> per_arm_score;
 };
 
-// Format a double the way the rest of the code formats reply doubles.
-std::string FormatScore(double v) { return absl::StrFormat("%.12g", v); }
-
 // Add a per-arm score to a fused neighbor's attribute_contents under the given
 // alias. If the neighbor doesn't yet have an attribute_contents map, allocate
 // one. The alias must outlive the fused neighbor; in practice it lives on
@@ -51,7 +48,7 @@ void AttachArmScore(indexes::Neighbor& n, const std::string& alias,
   if (!n.attribute_contents.has_value()) {
     n.attribute_contents.emplace();
   }
-  auto value_str = vmsdk::MakeUniqueValkeyString(FormatScore(value));
+  auto value_str = vmsdk::MakeUniqueValkeyString(expr::FormatDouble(value));
   auto identifier_str = vmsdk::MakeUniqueValkeyString(alias);
   // attribute_contents is keyed by string_view; the view must point at the
   // owned identifier_str's bytes for lifetime safety. The existing

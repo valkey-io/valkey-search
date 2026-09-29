@@ -521,6 +521,19 @@ absl::Status VectorSVS<T>::AddRecordImpl(
       MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
 
   absl::WriterMutexLock lock(&resize_mutex_);
+  // Reserve the map slot before touching SVS state. If the hash-map
+  // bucket allocation throws bad_alloc, SVS state is still pristine.
+  // If the SVS mutation later fails, the cleanup below erases the
+  // reservation so the map and SVS stay in step.
+  auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
+  if (!inserted) {
+    return absl::AlreadyExistsError(
+        absl::StrCat("SVS internal_id already present: ", internal_id));
+  }
+  absl::Cleanup rollback = [this, internal_id] {
+    label_to_record_.erase(internal_id);
+  };
+
   if (svs_index_ == nullptr) {
     auto result = BootstrapIndex(build_config_, this->distance_metric_,
                                  dimensions_, internal_id, fp32);
@@ -534,7 +547,8 @@ absl::Status VectorSVS<T>::AddRecordImpl(
       return SvsErrorToStatus(err.get(), "index_dynamic_add_points");
     }
   }
-  label_to_record_[internal_id] = std::move(vector_record);
+  it->second = std::move(vector_record);
+  std::move(rollback).Cancel();
   return absl::OkStatus();
 #else
   (void)internal_id;
@@ -552,17 +566,25 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
     return absl::NotFoundError(
         absl::StrCat("SVS internal_id not found: ", internal_id));
   }
+  // Erase the authoritative label mapping regardless of the SVS
+  // delete outcome. If SVS reports failure, its internal state for
+  // this id is unknown; dropping the map entry ensures search paths
+  // that resolve labels through the map first cannot surface a stale
+  // id, and a subsequent re-Add on the same id will not collide with
+  // the reservation in AddRecordImpl.
+  absl::Status svs_status = absl::OkStatus();
   if (svs_index_ != nullptr) {
     ScopedSvsError err;
     size_t deleted = 0;
     if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
                                          /*num_vectors=*/1, &deleted,
                                          err.get())) {
-      return SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
+      svs_status =
+          SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
     }
   }
   label_to_record_.erase(it);
-  return absl::OkStatus();
+  return svs_status;
 #else
   (void)internal_id;
   return absl::UnimplementedError(kUnavailableMsg);
@@ -596,6 +618,12 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(
     size_t added = 0;
     if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
                                       /*num_vectors=*/1, &added, err.get())) {
+      // Delete already committed inside SVS; the id is gone from the
+      // index and cannot be resurrected here (add just failed). Drop
+      // the stale map entry so the two views agree — the base class's
+      // RemoveRecordDueToError path will then NotFoundError out
+      // cleanly instead of hitting a phantom.
+      label_to_record_.erase(internal_id);
       return SvsErrorToStatus(err.get(), "modify: index_dynamic_add_points");
     }
   } else {

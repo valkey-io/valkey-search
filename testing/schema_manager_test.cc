@@ -658,4 +658,72 @@ TEST_F(SchemaManagerTest, MetadataUpdateAcceptsWithinLimitSchema) {
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
 }
 
+// The limit check runs inside the reconciliation callback, so it only ever sees
+// entries ReconcileMetadata has already decided to apply under its
+// (version, encoding_version, fingerprint) rule. An over-limit entry that loses
+// that comparison is skipped before validation and cannot fail the import; one
+// that wins is validated and rejected.
+TEST_F(SchemaManagerTest, ReconcileOnlyValidatesEntriesItApplies) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  // Materialize the fixture index (m=240) while the limit still allows it.
+  // Create it twice so the live entry sits at version 1 and an older (version
+  // 0) proposal is expressible without underflow.
+  for (int i = 0; i < 2; ++i) {
+    auto metadata = std::make_unique<google::protobuf::Any>();
+    metadata->PackFrom(test_index_schema_proto_);
+    ASSERT_TRUE(coordinator::MetadataManager::Instance()
+                    .CreateEntry(kSchemaManagerMetadataTypeName,
+                                 coordinator::ObjName(db_num_, index_name_),
+                                 std::move(metadata))
+                    .ok());
+  }
+  const auto encoded_id = coordinator::ObjName(db_num_, index_name_).Encode();
+  auto global = coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  const auto &existing = global->type_namespace_map()
+                             .at(std::string(kSchemaManagerMetadataTypeName))
+                             .entries()
+                             .at(encoded_id);
+  const uint32_t existing_version = existing.version();
+  const uint64_t existing_fingerprint = existing.fingerprint();
+  const uint32_t existing_encoding = existing.encoding_version();
+  ASSERT_GE(existing_version, 1U);
+
+  const auto saved_max_m = options::GetMaxM().GetValue();
+  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
+  absl::Cleanup restore = [saved_max_m] {
+    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
+  };
+
+  auto make_proposed = [&](uint32_t version) {
+    coordinator::GlobalMetadata proposed;
+    auto &entries = (*proposed.mutable_type_namespace_map())[std::string(
+        kSchemaManagerMetadataTypeName)];
+    coordinator::GlobalMetadataEntry entry;
+    entry.set_version(version);
+    entry.set_fingerprint(existing_fingerprint + 1);
+    entry.set_encoding_version(existing_encoding);
+    entry.mutable_content()->PackFrom(test_index_schema_proto_);
+    (*entries.mutable_entries())[encoded_id] = entry;
+    proposed.mutable_version_header()->set_top_level_version(version);
+    return proposed;
+  };
+
+  // Older version: reconcile ignores the entry, so the over-limit content is
+  // never validated and the existing index is untouched.
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().ReconcileMetadata(
+      make_proposed(existing_version - 1), "test"));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
+
+  // Newer version: reconcile applies the entry, which now fails the limit
+  // check.
+  auto status = coordinator::MetadataManager::Instance().ReconcileMetadata(
+      make_proposed(existing_version + 1), "test");
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+}
+
 }  // namespace valkey_search

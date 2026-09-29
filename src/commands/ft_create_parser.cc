@@ -659,16 +659,18 @@ bool HasVectorIndex(const data_model::IndexSchema &index_schema_proto) {
   return false;
 }
 
+// The incorrectly named max_vector_attributes is kept for backward
+// compatibility and takes precedence when set.
+long MaxAttributesLimit() {
+  return options::GetMaxVectorAttributes().WasSet()
+             ? options::GetMaxVectorAttributes().GetValue()
+             : options::GetMaxAttributes().GetValue();
+}
+
 }  // namespace
 absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
     ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-  // Get configuration values
-  // The incorrectly named max_vector_attributes is kept for backward
-  // compatibility.
-  const auto max_attributes_value =
-      options::GetMaxVectorAttributes().WasSet()
-          ? options::GetMaxVectorAttributes().GetValue()
-          : options::GetMaxAttributes().GetValue();
+  const auto max_attributes_value = MaxAttributesLimit();
 
   data_model::IndexSchema index_schema_proto;
   // Set default language
@@ -1001,11 +1003,7 @@ absl::Status ValidateIndexSchemaLimits(
       << "Number of prefixes (" << prefixes_cnt
       << ") exceeds the maximum allowed (" << max_prefixes << ")";
 
-  // The incorrectly named max_vector_attributes is kept for backward
-  // compatibility, as in ParseFTCreateArgs.
-  const auto max_attributes = options::GetMaxVectorAttributes().WasSet()
-                                  ? options::GetMaxVectorAttributes().GetValue()
-                                  : options::GetMaxAttributes().GetValue();
+  const auto max_attributes = MaxAttributesLimit();
   VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(index_schema_proto.attributes_size(),
                                            std::nullopt, max_attributes))
       << "The maximum number of attributes cannot exceed " << max_attributes

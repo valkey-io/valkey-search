@@ -127,12 +127,16 @@ class TestFTSearchInfieldsCluster(ValkeySearchClusterTestCase):
 
     def test_infields_suffix_with_mixed_suffix_support(self):
         """Only title has a suffix trie: a suffix term under INFIELDS matches
-        the suffix-capable subset, and nothing when that subset is empty."""
+        the suffix-capable subset, and errors when that subset is empty."""
         self._setup_hash()
         assert self._keys_from_every_coordinator(
             "idx", "*ple", "INFIELDS", "2", "title", "body") == TITLE_DOCS
-        assert self._keys_from_every_coordinator(
-            "idx", "*ple", "INFIELDS", "1", "body") == set()
+        for i in range(self.CLUSTER_SIZE):
+            with pytest.raises(ResponseError,
+                               match="No INFIELDS field supports suffix search"):
+                self.new_client_for_primary(i).execute_command(
+                    "FT.SEARCH", "idx", "*ple", "INFIELDS", "1", "body",
+                    "DIALECT", "2")
 
     def test_infields_hybrid_knn_prefilter(self):
         self._setup_hash()

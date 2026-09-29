@@ -1068,8 +1068,10 @@ TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    params->AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
-    params->AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
+    params->AddRecordAttribute("n1", "n1", "n1",
+                               indexes::IndexerType::kNumeric);
+    params->AddRecordAttribute("n2", "n2", "n2",
+                               indexes::IndexerType::kNumeric);
 
     auto parser = CreateAggregateParser();
     auto result = parser.Parse(*params, itr);
@@ -1250,14 +1252,12 @@ TEST_F(AggregateExecTest, ArgumentCountValidationProperty) {
 
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
-    EXPECT_EQ(
-        params->AddRecordAttribute("n1", "n1", "n1",
-                                   indexes::IndexerType::kNumeric),
-        0);
-    EXPECT_EQ(
-        params->AddRecordAttribute("n2", "n2", "n2",
-                                   indexes::IndexerType::kNumeric),
-        1);
+    EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
+                                         indexes::IndexerType::kNumeric),
+              0);
+    EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
+                                         indexes::IndexerType::kNumeric),
+              1);
 
     auto parser = CreateAggregateParser();
     auto result = parser.Parse(*params, itr);

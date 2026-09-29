@@ -604,8 +604,7 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
     if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
                                          /*num_vectors=*/1, &deleted,
                                          err.get())) {
-      svs_status =
-          SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
+      svs_status = SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
     }
   }
   label_to_record_.erase(it);

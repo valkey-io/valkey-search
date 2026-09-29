@@ -52,6 +52,19 @@ def _score_map(reply):
     return out
 
 
+def _module_external_memory(client: Valkey) -> int:
+    """Read `used_memory_module_external` from `INFO debug`. This is the
+    counter Valkey PR #4128 exposes; every byte our custom SVS allocator
+    passes through ValkeyModule_IncrExternalMemory lands here."""
+    info = client.info("debug")
+    if "used_memory_module_external" not in info:
+        raise AssertionError(
+            "used_memory_module_external not present in INFO debug; "
+            "this Valkey build predates PR #4128"
+        )
+    return int(info["used_memory_module_external"])
+
+
 class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
 
     def _create_default_index(self, client: Valkey, index: str = "svs_idx"):
@@ -279,6 +292,39 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         # distance rather than exact values.
         assert list(scores.keys())[0] == b"doc:2"
         assert scores[b"doc:2"] == pytest.approx(0.0, abs=1e-2)
+
+    def test_external_memory_tracks_svs_allocations(self):
+        """The custom SVS allocator routes graph-adjacency mmaps through
+        ValkeyModule_IncrExternalMemory (Valkey PR #4128). Verify the
+        counter moves with the lifetime of an SVS index: zero → positive
+        after ingest → back near zero after drop. Also confirms the
+        allocator vtable is actually installed."""
+        client: Valkey = self.server.get_new_client()
+        baseline = _module_external_memory(client)
+
+        self._create_default_index(client, "mem_idx")
+        # 200 vectors is enough to force the SVS graph builder to
+        # allocate through our allocator; using DIM=4 keeps the raw data
+        # small so any external growth is dominated by the graph.
+        self._populate(client, 200)
+        after_ingest = _module_external_memory(client)
+        assert after_ingest > baseline, (
+            f"external memory did not grow (baseline={baseline}, "
+            f"after_ingest={after_ingest}); custom allocator vtable is "
+            f"not being reached, or VM_IncrExternalMemory is unavailable"
+        )
+
+        client.execute_command("FT.DROPINDEX", "mem_idx")
+        client.execute_command("FLUSHALL")
+        after_drop = _module_external_memory(client)
+        # Allow some residual — index teardown may not free every
+        # allocation synchronously — but require it to shrink well
+        # below the ingested-state figure.
+        assert after_drop < baseline + (after_ingest - baseline) // 10, (
+            f"external memory not reclaimed after DROPINDEX (baseline="
+            f"{baseline}, after_ingest={after_ingest}, after_drop="
+            f"{after_drop})"
+        )
 
     def test_knn_with_tag_filter_returns_only_matching(self):
         """Filtered KNN returns docs matching the tag predicate. Regression

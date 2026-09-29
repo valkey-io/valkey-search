@@ -5,6 +5,7 @@ ignore-hidden = true
 extend-exclude = [
     "third_party/snowball/**",
     "third_party/icu/**",
+    "third_party/svs/**",
     "src/indexes/text/rax/**",
     "src/indexes/text/languages/**",
     "testing/snowball_language_test.cc",

@@ -1302,7 +1302,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx,
       1, 3, 0, "ft_info_score_field", [] { return true; },
       [] { return false; });
 
-  int arrSize = 30;  // includes the filter_rejected_keys counter
+  int arrSize = 32;  // includes the aliases and filter_rejected_keys pairs
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4

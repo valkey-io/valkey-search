@@ -52,7 +52,6 @@
 #include "vmsdk/src/memory_allocation_overrides.h"  // IWYU pragma: keep
 #include "third_party/hnswlib/hnswalg.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "third_party/hnswlib/stop_condition.h"
 // clang-format on
 
 namespace valkey_search::indexes {

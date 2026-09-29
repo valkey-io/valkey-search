@@ -469,6 +469,67 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.test_name;
     });
 
+// Allen Samuels' PR review point 2: FT.INTERNAL_UPDATE must omit the TYPE
+// keyword when the entry's type is the default (kSchemaManagerMetadataTypeName)
+// namespace, and must emit it for any other registered type. See
+// MetadataManager::ReplicateFTInternalUpdate.
+TEST_F(EntryOperationTest, ReplicateOmitsTypeKeywordForDefaultTypeOnly) {
+  test_metadata_manager_->RegisterType(
+      kSchemaManagerMetadataTypeName,
+      [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+        return 1;
+      },
+      [](const ObjName&, const google::protobuf::Any*, uint64_t, uint32_t) {
+        return absl::OkStatus();
+      },
+      [](auto) { return 1; }, vmsdk::ValkeyVersion{0, 0, 1});
+  test_metadata_manager_->RegisterType(
+      "some_other_type",
+      [](const google::protobuf::Any&) -> absl::StatusOr<uint64_t> {
+        return 1;
+      },
+      [](const ObjName&, const google::protobuf::Any*, uint64_t, uint32_t) {
+        return absl::OkStatus();
+      },
+      [](auto) { return 1; }, vmsdk::ValkeyVersion{0, 0, 1});
+
+  EXPECT_CALL(*kMockValkeyModule,
+              SendClusterMessage(fake_ctx, nullptr, testing::_, testing::_,
+                                 testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
+
+  // Default type: no "TYPE" argument, 3-arg "cbb" format.
+  EXPECT_CALL(*kMockValkeyModule,
+              Replicate(fake_ctx, testing::StrEq("FT.INTERNAL_UPDATE"),
+                        testing::StrEq("cbb")))
+      .Times(1)
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+  {
+    auto content = std::make_unique<google::protobuf::Any>();
+    content->set_type_url("type.googleapis.com/FakeType");
+    content->set_value("default-type-content");
+    auto result = test_metadata_manager_->CreateEntry(
+        kSchemaManagerMetadataTypeName, ObjName(0, "idx1"),
+        std::move(content));
+    EXPECT_TRUE(result.ok());
+  }
+
+  // Non-default type: "TYPE" argument present, 6-arg "cbbccc" format.
+  EXPECT_CALL(*kMockValkeyModule,
+              Replicate(fake_ctx, testing::StrEq("FT.INTERNAL_UPDATE"),
+                        testing::StrEq("cbbccc")))
+      .Times(1)
+      .WillOnce(testing::Return(VALKEYMODULE_OK));
+  {
+    auto content = std::make_unique<google::protobuf::Any>();
+    content->set_type_url("type.googleapis.com/FakeType");
+    content->set_value("other-type-content");
+    auto result = test_metadata_manager_->CreateEntry(
+        "some_other_type", ObjName(0, "obj1"), std::move(content));
+    EXPECT_TRUE(result.ok());
+  }
+}
+
 struct MetadataManagerReconciliationTestParam {
   std::string test_name;
   std::string existing_metadata_pbtxt;

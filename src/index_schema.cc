@@ -336,8 +336,6 @@ IndexSchema::IndexSchema(ValkeyModuleCtx *ctx,
       skip_initial_scan_(index_schema_proto.skip_initial_scan()),
       filter_expression_str_(
           index_schema_proto.has_filter() ? index_schema_proto.filter() : ""),
-      aliases_(index_schema_proto.aliases().begin(),
-               index_schema_proto.aliases().end()),
       min_stem_size_(index_schema_proto.min_stem_size() > 0
                          ? index_schema_proto.min_stem_size()
                          : 4),
@@ -2457,11 +2455,6 @@ bool IndexSchema::EvaluateFilter(const MutatedAttributes &mutated_attributes,
   // expression that evaluated to nothing for any other reason -- lower() of a
   // number, say -- is not true either, so both land here as a rejection.
   return result.IsTrue();
-}
-
-void IndexSchema::SetAliases(std::vector<std::string> aliases) {
-  aliases_ = std::move(aliases);
-}
 }
 
 }  // namespace valkey_search

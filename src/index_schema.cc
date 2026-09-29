@@ -1291,7 +1291,7 @@ IndexSchema::GetSortedAttributes() const {
 }
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx,
-                                 std::vector<std::string> aliases) const {
+                                  std::vector<std::string> aliases) const {
   // The index_definition block gained the score_field pair and switched
   // default_score from a hardcoded "1" bulk string to the configured score as
   // a double in 1.3.0. Pre-1.3.0: a 6-element array with no score_field and a
@@ -1450,8 +1450,7 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto(
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
   std::sort(aliases.begin(), aliases.end());
-  index_schema_proto->mutable_aliases()->Assign(aliases.begin(),
-                                                aliases.end());
+  index_schema_proto->mutable_aliases()->Assign(aliases.begin(), aliases.end());
   index_schema_proto->set_score(score_);
   if (score_field_.has_value()) {
     index_schema_proto->set_score_field(score_field_.value());

@@ -197,8 +197,7 @@ absl::Status SchemaManager::MutateIndexProtoInMetadata(
     uint32_t db_num, absl::string_view index_name,
     absl::FunctionRef<void(data_model::IndexSchema &)> mutate) {
   auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
-      kSchemaManagerMetadataTypeName,
-      coordinator::ObjName(db_num, index_name));
+      kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, index_name));
   if (!entry_or.ok()) {
     // Surface the raw status; callers decide how to treat NotFound.
     return entry_or.status();

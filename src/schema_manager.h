@@ -227,9 +227,8 @@ class SchemaManager {
   // Staged aliases captured from loaded index protos, swapped into
   // db_to_aliases_ atomically on loading ended. IndexSchema does not carry
   // aliases, so the load path preserves them here (single source of truth).
-  vmsdk::MainThreadAccessGuard<
-      absl::flat_hash_map<uint32_t,
-                          absl::flat_hash_map<std::string, std::string>>>
+  vmsdk::MainThreadAccessGuard<absl::flat_hash_map<
+      uint32_t, absl::flat_hash_map<std::string, std::string>>>
       staged_db_to_aliases_;
   absl::StatusOr<std::shared_ptr<IndexSchema>> LookupInternal(
       int db_num, absl::string_view name) const

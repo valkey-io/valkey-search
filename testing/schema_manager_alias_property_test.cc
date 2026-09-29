@@ -2192,7 +2192,8 @@ TEST_F(CrossIndexAliasConflictTest, HigherVersionWins) {
 
   auto schema_z = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_z");
   ASSERT_TRUE(schema_z.ok());
-  auto z_aliases = SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_z");
+  auto z_aliases =
+      SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_z");
   EXPECT_TRUE(std::find(z_aliases.begin(), z_aliases.end(), "shared_alias") ==
               z_aliases.end());
 }
@@ -2240,7 +2241,8 @@ TEST_F(CrossIndexAliasConflictTest, LoserAliasVectorCleaned) {
 
   auto schema_a = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_a");
   ASSERT_TRUE(schema_a.ok());
-  auto a_aliases = SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_a");
+  auto a_aliases =
+      SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_a");
   EXPECT_EQ(a_aliases.size(), 1);
   EXPECT_EQ(a_aliases[0], "only_a");
 }

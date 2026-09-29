@@ -98,7 +98,7 @@ class SearchConverterInfieldsTest : public vmsdk::ValkeyTest {};
 
 // Helper: serialize engaged infields to proto, decode via InfieldsFromGRPC.
 absl::flat_hash_set<std::string> SerializeAndReadBackInfields(
-    const absl::flat_hash_set<std::string>& original) {
+    const absl::flat_hash_set<std::string> &original) {
   UnitTestSearchParameters params;
   params.infields = original;
 

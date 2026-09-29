@@ -749,9 +749,9 @@ class Quantile : public GroupBy::ReducerInstance {
   struct Sample {
     double value;
     size_t g;      // Number of ranks this sample represents
-    size_t delta;  // Uncertainty between ranks
+    double delta;  // Uncertainty between ranks
 
-    Sample(double v, size_t g_val, size_t d) : value(v), g(g_val), delta(d) {}
+    Sample(double v, size_t g_val, double d) : value(v), g(g_val), delta(d) {}
   };
 
   static constexpr size_t kDefaultBufferSize = 500;
@@ -800,8 +800,9 @@ class Quantile : public GroupBy::ReducerInstance {
       while (buf_idx < buffer_.size() && samp_idx < samples_.size()) {
         if (buffer_[buf_idx] < samples_[samp_idx].value) {
           double max_val = GetMaxVal(r);
-          size_t delta =
-              max_val > 1.0 ? static_cast<size_t>(std::floor(max_val)) - 1 : 0;
+          // -1 below rank 50, as in RediSearch's QS_Flush; Compress and Query
+          // depend on it, so it must stay signed to match Redis.
+          double delta = std::floor(max_val) - 1;
           merged.emplace_back(buffer_[buf_idx++], 1, delta);
         } else {
           // Keep existing sample, advance rank

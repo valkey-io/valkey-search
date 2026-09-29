@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -1584,6 +1585,79 @@ TEST_F(AggregateExecTest, CompressBoundedSampleCount) {
       << "Median of [0," << kN << ") should be within 1% of " << expected;
 
   std::cerr << "CompressBoundedSampleCount passed, median=" << result << "\n";
+}
+
+// Distance from rank ceil(q * n) to the ranks `value` occupies in `sorted`.
+static double QuantileRankError(const std::vector<double> &sorted, double value,
+                                double q) {
+  auto lo = std::lower_bound(sorted.begin(), sorted.end(), value);
+  auto hi = std::upper_bound(sorted.begin(), sorted.end(), value);
+  EXPECT_NE(lo, hi) << value << " is not an input value";
+  double first = static_cast<double>(lo - sorted.begin()) + 1;
+  double last = static_cast<double>(hi - sorted.begin());
+  double target = std::max(1.0, std::ceil(q * sorted.size()));
+  return std::max({0.0, first - target, target - last});
+}
+
+// Fisher-Yates shuffle driven by a 64-bit LCG, so that the same order can be
+// generated outside C++ to load it into Redis.
+static void LcgShuffle(std::vector<double> &values, uint64_t seed) {
+  for (size_t i = values.size() - 1; i > 0; --i) {
+    seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+    std::swap(values[i], values[(seed >> 33) % (i + 1)]);
+  }
+}
+
+// Once the buffer has been flushed the result depends on the input order.
+// The expected values are what Redis 8.10.2 returns when fed the same order
+// (@v holds the value, @o its position):
+//   FT.AGGREGATE idx * LOAD 2 @v @o SORTBY 2 @o ASC MAX 10000
+//     GROUPBY 0 REDUCE QUANTILE 2 @v <q> AS r ...
+TEST_F(AggregateExecTest, QuantileMatchesRedisForUnsortedInput) {
+  const size_t kN = 10000;
+  const std::vector<std::string> kQs = {"0.001", "0.01", "0.05", "0.1", "0.25",
+                                        "0.5",   "0.75", "0.9",  "0.99"};
+  std::vector<double> sorted(kN);
+  for (size_t i = 0; i < kN; ++i) {
+    sorted[i] = static_cast<double>(i);
+  }
+  std::vector<double> descending(sorted.rbegin(), sorted.rend());
+  std::vector<double> shuffled = sorted;
+  LcgShuffle(shuffled, 1);
+  struct {
+    const char *name;
+    const std::vector<double> &values;
+    std::vector<double> expected;
+  } cases[] = {
+      {"descending",
+       descending,
+       {10, 101, 497, 997, 2518, 5018, 7518, 9019, 9844}},
+      {"shuffled", shuffled, {10, 100, 501, 999, 2484, 5019, 7474, 9053, 9803}},
+  };
+  std::string query = "groupby 1 @n2";
+  for (const auto &q : kQs) {
+    query += " reduce quantile 2 @n1 " + q;
+  }
+  for (const auto &tc : cases) {
+    RecordSet records(nullptr);
+    for (double v : tc.values) {
+      auto rec = std::make_unique<Record>(2);
+      rec->fields_[0] = expr::Value(v);
+      rec->fields_[1] = expr::Value(1.0);
+      records.emplace_back(std::move(rec));
+    }
+    auto param = MakeStages(query);
+    ASSERT_TRUE(param->stages_[0]->Execute(records).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    for (size_t i = 0; i < kQs.size(); ++i) {
+      double result = record->fields_.at(2 + i).AsDouble().value_or(-1);
+      EXPECT_EQ(result, tc.expected[i]) << tc.name << " q=" << kQs[i];
+      EXPECT_LE(QuantileRankError(sorted, result, std::stod(kQs[i])),
+                kQuantileEpsilon * kN)
+          << tc.name << " q=" << kQs[i];
+    }
+  }
 }
 
 TEST_F(AggregateExecTest, QuantileInstrumentationPathCoverage) {

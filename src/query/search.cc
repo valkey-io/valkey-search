@@ -263,7 +263,7 @@ inline PredicateType EvaluateAsComposedPredicate(
 // Helper fn to identify if query is not fully solved after the entries fetcher
 // search, meaning it requires prefilter evaluation Prefiltering is needed when
 // query contains an AND with numeric or tag predicates.
-// It is also needed when negate is involved.
+// It is also needed when negate or a vector range predicate is involved.
 inline bool IsUnsolvedQuery(QueryOperations query_operations,
                             bool is_match_all) {
   if (is_match_all) {
@@ -793,17 +793,12 @@ static absl::Status ForEachVectorRangePredicate(
     Predicate *predicate,
     absl::FunctionRef<absl::Status(VectorRangePredicate *)> fn);
 
-// Handle standalone Vector Range queries (no KNN). For the common case of a
-// single VectorRange predicate with no other filters, delegates to the vector
-// index's SearchRange method (HNSW uses EpsilonSearchStopCondition for O(log N
-// + result_count) traversal; Flat uses an O(N) linear scan).  For compound
-// queries (AND/OR of multiple predicates that include a VR predicate), falls
-// back to the universal-scan path so that the full predicate tree is evaluated.
+// Handle Vector Range queries (no KNN). When the VectorRange predicate is the
+// whole query, delegates to the vector index's SearchRange (see
+// VectorHNSW::SearchRange and VectorFlat::SearchRange). Otherwise the predicate
+// tree is evaluated per key over the entries fetched for it.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     const SearchParameters &parameters) {
-  // Fast path: single standalone VectorRange predicate with no other filters.
-  // This lets the HNSW index do graph-traversal stopping at the epsilon
-  // boundary instead of scanning every key.
   // The type check is not redundant with has_vector_range: a negated VR
   // query has has_vector_range == true but root->GetType() == kNegate.
   if (parameters.has_vector_range &&
@@ -835,9 +830,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     }
   }
 
-  // Fallback path: compound predicate tree (multiple VR predicates, OR/AND
-  // with non-VR predicates, negation, etc.).  Scan all keys and evaluate the
-  // full predicate tree including distance checks.
+  // Compound predicate tree (the VR predicate under AND/OR with non-VR
+  // predicates, or negated): evaluate the full tree, including the distance
+  // check, for each fetched key.
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
   if (parameters.filter_parse_results.is_match_all) {
@@ -921,8 +916,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
           *parameters.filter_parse_results.root_predicate, key);
       if (eval_result.matches) {
         if (neighbors.size() >= max_keys) {
-          // VECTOR_RANGE returns every match, as Redis does; the cap is only
-          // recorded, not applied to this scan.
+          // This fetcher is scanned to the end, but the fetchers after it
+          // (e.g. the remaining OR branches) are dropped by the break below.
           fetch_limited = true;
         }
         // Single-VR model: EvaluateFull propagates the matched VectorRange
@@ -935,8 +930,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
         // that is outside the radius (or not tracked in the vector index) has
         // no VR distance: mark has_vr_distance=false so it sorts after all
         // genuine VR matches and carries no yielded distance, matching a
-        // text-only match with no vdist. The sentinel is kept in the float only
-        // to sort last; readers must use has_vr_distance, not the float value.
+        // text-only match with no vdist. The +inf sentinel in the float is the
+        // cross-shard marker (fanout.cc); other readers use has_vr_distance.
         float distance;
         bool has_vr_distance = true;
         if (eval_result.HasVrScore()) {
@@ -2217,12 +2212,12 @@ size_t CountVectorRangePredicates(const Predicate *predicate) {
 }
 
 // Return the score field name for the single VR predicate in the query: the
-// explicit $yield_distance_as alias if set, otherwise "". Returns "" when the
-// query has no VR predicate. Single-VR only: the first VR predicate found is
-// authoritative.
+// name given by $yield_distance_as (or AS) if set, otherwise "". Returns ""
+// when the query has no VR predicate. Single-VR only: the first VR predicate
+// found is authoritative.
 //
 // Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
-// $yield_distance_as alias. Without it there is no default "__<alias>_score"
+// name. Without it there is no default "__<alias>_score"
 // field — Redisearch emits none (not by default, and not even when the client
 // explicitly passes RETURN "__<alias>_score"). Returning "" here suppresses the
 // field everywhere it is gated on a non-empty name (ft_search reply/SORTBY,
@@ -2489,10 +2484,8 @@ absl::Status query::SearchParameters::PreParseQueryString() {
           "VECTOR_RANGE predicates are not supported in the filter of a KNN "
           "query");
     }
-    // More than one VECTOR_RANGE predicate is not supported. The
-    // single-distance model carries exactly one VR distance per neighbor
-    // (Neighbor::distance); multi-VR would require the removed score-slot
-    // machinery.
+    // More than one VECTOR_RANGE predicate is not supported: each neighbor
+    // carries exactly one VR distance (Neighbor::distance).
     if (vr_count > 1) {
       return absl::InvalidArgumentError(
           "Only a single VECTOR_RANGE predicate is supported per query");

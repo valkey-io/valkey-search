@@ -388,8 +388,10 @@ size_t EvaluateFilterAsPrimary(
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters);
 
-// Standalone Vector Range query: scans all keys, evaluates distance against
-// radius, collects matching keys with distances.
+// Vector Range query (no KNN): returns the keys matching the filter, with the
+// VR distance in Neighbor::distance, in key order. A query that is only the VR
+// predicate is answered by VectorBase::SearchRange; a compound one evaluates
+// the full predicate tree per fetched key.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
     const SearchParameters &parameters);
 
@@ -402,7 +404,7 @@ CalcBestMatchingPrefilteredKeys(
 bool QueryHasTextPredicate(const SearchParameters &parameters);
 
 // Returns the distance score field name for the single VR predicate in the
-// query: the explicit $yield_distance_as alias if set, otherwise "" (empty).
+// query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
 // Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
 // alias — there is no default "__<alias>_score" field — so an empty name here
 // suppresses the field wherever emission is gated on a non-empty name. Also

@@ -66,7 +66,7 @@ struct SearchCommand : public QueryCommand {
     bool sort_by_vec_score{false};
     std::string sort_key_prefix;
     // The single VR distance field name (query::GetVrScoreFieldName).
-    // Empty unless the query used an explicit $yield_distance_as alias.
+    // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;
   };
   RowFormat GetRowFormat() const;

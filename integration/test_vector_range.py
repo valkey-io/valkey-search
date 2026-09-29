@@ -2,7 +2,8 @@
 Integration tests for Vector Range Search feature.
 
 Tests the @field:[VECTOR_RANGE radius $blob] syntax in FT.SEARCH,
-covering standalone queries, filter composition, hybrid KNN pre-filtering,
+covering standalone queries, filter composition, rejection of a VECTOR_RANGE
+predicate in a KNN filter,
 query attributes, FT.SEARCH options, error handling, and dialect compatibility.
 """
 
@@ -510,7 +511,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         assert keys == {"doc:2", "doc:3", "doc:4"}
 
     # =================================================================
-    # 9. Hybrid: Vector Range pre-filter + KNN
+    # 9. Vector Range pre-filter + KNN (rejected)
     # =================================================================
 
     def test_vector_range_prefilter_knn_rejected(self):
@@ -551,7 +552,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             )
 
     # =================================================================
-    # 10. Hybrid: Vector Range pre-filter + KNN with fewer candidates than K
+    # 10. Vector Range pre-filter + KNN with fewer candidates than K (rejected)
     # =================================================================
 
     def test_vector_range_prefilter_knn_fewer_candidates_rejected(self):
@@ -660,7 +661,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
             assert "dist" in fields
 
     # =================================================================
-    # 14. Default distance field naming: __<field>_score
+    # 14. Distance field requires an explicit name (no __<field>_score)
     # =================================================================
 
     def test_distance_field_requires_explicit_alias(self):

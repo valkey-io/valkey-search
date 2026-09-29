@@ -375,12 +375,12 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
 
-  // Use a standard KNN search with a large ef to explore the graph broadly,
-  // then filter to the radius.  The EpsilonSearchStopCondition approach
-  // fails for small-radius queries because it terminates as soon as any
-  // out-of-radius candidate is encountered — which happens immediately when
-  // the HNSW entry point is far from the query.  Using searchKnn avoids this
-  // by ensuring the exploration covers the full neighborhood.
+  // Run a KNN search for max_candidates neighbors (ef = max_candidates), then
+  // filter to the radius. Like any HNSW search this is approximate and can
+  // miss keys within the radius. The EpsilonSearchStopCondition approach was
+  // not used: it terminates as soon as any out-of-radius candidate is
+  // encountered, which happens immediately when the HNSW entry point is far
+  // from the query.
   auto perform_search =
       [this, &filter, max_candidates, &cancellation_token](
           absl::string_view query_view, float reciprocal_magnitude)

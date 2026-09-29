@@ -160,9 +160,8 @@ struct SearchPartitionResultsTracker {
           StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->distance(), std::move(attribute_contents)};
       // Single-VR model: the VR distance is carried in Neighbor::distance
-      // above. Cluster merge concatenates per-shard in-radius neighbors; the
-      // merged set is ordered like any non-vector result. No score-slot side
-      // channel.
+      // above. Cluster merge concatenates per-shard matches; the merged set is
+      // ordered like any non-vector result.
       // The wire format is unchanged; a compound-OR match with no VR distance
       // is transmitted as a +inf distance, so reconstruct has_vr_distance from
       // the bit pattern rather than adding a proto field. Only +inf is the

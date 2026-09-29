@@ -329,16 +329,17 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
-  // Returns all neighbors within `radius` of `query`. For HNSW indexes this
-  // uses the graph-traversal EpsilonSearchStopCondition path (O(log N +
-  // result_count)); for Flat indexes it falls back to a linear scan.
+  // Returns the neighbors within `radius` of `query`, unordered. FLAT scans
+  // every vector. HNSW runs an approximate KNN search for up to
+  // search.max-nonvector-search-results-fetched candidates, so it can miss
+  // keys; it falls back to SearchRangeExhaustive when the fetch fills the cap
+  // with the farthest candidate still in range.
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
 
-  // Distance and internal label for `key`, or an error if untracked. Public
-  // for PrefilterEvaluator's direct VR-distance use; prefer IsWithinVectorRange
-  // for a pass/fail check. Search-phase only: lock-free, like
+  // Distance and internal label for `key`, or an error if untracked. Backs
+  // IsWithinVectorRange. Search-phase only: lock-free, like
   // GetVectorDuringSearch.
   absl::StatusOr<std::pair<float, hnswlib::labeltype>>
   ComputeDistanceFromRecord(const InternedStringPtr &key,

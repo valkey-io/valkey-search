@@ -95,9 +95,9 @@ std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
 // If the SORTBY field matches the VR distance alias, returns the formatted
 // distance for this neighbor (to be emitted with the numeric '#' prefix for
 // WITHSORTKEYS). Returns std::nullopt when the SORTBY field is not the VR
-// alias or the neighbor has no VR distance (distance is +infinity for non-VR
-// OR-branch matches), so callers fall back to GetSortKeyValue(). vr_field is
-// the single VR score field name (empty when the query has no VR predicate).
+// alias or the neighbor has no VR distance (has_vr_distance is false), so
+// callers fall back to GetSortKeyValue(). vr_field is the single VR score
+// field name (empty when the query has no VR predicate).
 std::optional<std::string> GetVrSortKeyValue(const indexes::Neighbor &neighbor,
                                              const SearchCommand &command,
                                              const std::string &vr_field) {
@@ -184,9 +184,9 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   if (!vr_field.empty() && vr_field == sortby.field) {
     auto distance_compare = [&](const indexes::Neighbor &a,
                                 const indexes::Neighbor &b) -> bool {
-      // A neighbor that did not match the VR predicate (tag-only branch of a
-      // compound OR) has distance == +infinity and must sort after all
-      // matched neighbors, in both ascending and descending order.
+      // A neighbor with no VR distance (a non-VR OR-branch match outside the
+      // radius) must sort after all matched neighbors, in both ascending and
+      // descending order.
       const bool a_unmatched = !HasVrDistance(a);
       const bool b_unmatched = !HasVrDistance(b);
       if (a_unmatched || b_unmatched) {
@@ -416,9 +416,9 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
 
   // Vector queries also reply the distance, as the score_as field. A
   // standalone/compound VR query (no KNN) instead reports its distance under
-  // the explicit $yield_distance_as alias (format.vr_field), and only for a
-  // neighbor that actually carries a VR distance (a genuine in-radius match,
-  // not a non-VR OR-branch match whose distance is +infinity).
+  // the $yield_distance_as (or AS) name (format.vr_field), and only for a
+  // neighbor that carries a VR distance (not a non-VR OR-branch match outside
+  // the radius).
   const bool is_vector = !IsNonVectorQuery();
   const bool emit_vr_field =
       !format.vr_field.empty() && HasVrDistance(neighbor);

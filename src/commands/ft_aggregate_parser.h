@@ -229,9 +229,9 @@ struct AggregateParameters : public expr::Expression::CompileContext,
 
   } parse_vars_;
   // Populated by ParseCommand: the single VR predicate's distance field name —
-  // the explicit $yield_distance_as alias, or empty when no alias was given
-  // (Redisearch parity: no default "__<alias>_score" field) or the query has
-  // no VR predicate. Cleared by ClearAtEndOfParse.
+  // the name given by $yield_distance_as (or AS), or empty when no name was
+  // given (Redisearch parity: no default "__<alias>_score" field) or the query
+  // has no VR predicate. Cleared by ClearAtEndOfParse.
   std::string vr_score_field_name_;
   void ClearAtEndOfParse() {
     parse_vars_.index_interface_ = nullptr;

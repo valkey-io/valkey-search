@@ -37,6 +37,17 @@ typedef struct svs_index* svs_index_h;
 
 namespace valkey_search::indexes {
 
+// Build-time configuration retained on the class so the first HSET can
+// bootstrap the SVS index once it has an actual vector to build with
+// (svs_index_build_dynamic requires num_vectors > 0 at pin 5717f68).
+struct SVSBuildConfig {
+  uint32_t graph_max_degree{0};
+  uint32_t construction_window_size{0};
+  uint32_t search_window_size{0};
+  float alpha{0.0f};
+  data_model::SVSCompressionType compression{data_model::SVS_COMPRESSION_NONE};
+};
+
 template <typename T>
 class VectorSVS : public VectorType<T> {
  protected:
@@ -113,6 +124,7 @@ class VectorSVS : public VectorType<T> {
             data_model::AttributeDataType attribute_data_type, int db_num);
 
   svs_index_h svs_index_ ABSL_GUARDED_BY(resize_mutex_){nullptr};
+  SVSBuildConfig build_config_;
   mutable absl::flat_hash_map<uint64_t, std::shared_ptr<const VectorRecord>>
       label_to_record_ ABSL_GUARDED_BY(resize_mutex_);
 };

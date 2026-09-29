@@ -121,17 +121,38 @@ target_link_libraries(vector_svs PUBLIC vmsdklib)
 target_link_libraries(vector_svs PUBLIC valkey_module)
 
 # The SVS submodule (third_party/svs) is compiled on x86_64 Linux only.
-# Where it is available, plumb the SVS C API include paths and set
-# ENABLE_SVS=1 so vector_svs.cc pulls in the real implementation. On other
-# platforms vector_svs.cc compiles as a stub whose factories return
-# absl::UnimplementedError; the class declaration in vector_svs.h stays
-# available for consumers without needing per-call-site conditionals.
+# The SVS C API implementation sources compile with SVS's own strict
+# warnings-as-errors flags (via svs_compile_options), which would cascade
+# to vector_svs.cc's compile line if the two were mixed. Keep them in a
+# dedicated static library so those flags stay scoped, and have vector_svs
+# link it plus OpenMP. On other platforms vector_svs.cc compiles as a
+# stub whose factories return absl::UnimplementedError; arch is detected
+# in the source via __linux__ && __x86_64__ rather than a project flag.
 if(UNIX AND NOT APPLE
    AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-    target_include_directories(vector_svs PRIVATE
-        ${CMAKE_SOURCE_DIR}/third_party/svs/bindings/c/include
+    set(SVS_C_API_DIR "${CMAKE_SOURCE_DIR}/third_party/svs/bindings/c")
+    set(SRCS_SVS_C_API
+        ${SVS_C_API_DIR}/src/error.cpp
+        ${SVS_C_API_DIR}/src/svs_c.cpp
+        ${SVS_C_API_DIR}/src/dispatcher_vamana.cpp
+        ${SVS_C_API_DIR}/src/dispatcher_dynamic_vamana.cpp
+        ${SVS_C_API_DIR}/src/leanvec_training_data.cpp
+        ${SVS_C_API_DIR}/src/data_builder.cpp)
+    valkey_search_add_static_library(svs_c_api_static "${SRCS_SVS_C_API}")
+    target_include_directories(svs_c_api_static PUBLIC
+        ${SVS_C_API_DIR}/include
         ${CMAKE_BINARY_DIR}/third_party/svs-c-api-build/include)
-    target_compile_definitions(vector_svs PRIVATE ENABLE_SVS=1)
+    target_include_directories(svs_c_api_static PRIVATE ${SVS_C_API_DIR}/src)
+    target_compile_definitions(svs_c_api_static PRIVATE SVS_ENABLE_OMP=1)
+    target_compile_options(svs_c_api_static PRIVATE -fvisibility=hidden)
+    find_package(OpenMP REQUIRED)
+    target_link_libraries(svs_c_api_static PRIVATE
+        svs::svs
+        svs_compile_options
+        svs_x86_options_base)
+    target_link_libraries(svs_c_api_static PUBLIC OpenMP::OpenMP_CXX)
+
+    target_link_libraries(vector_svs PRIVATE svs_c_api_static)
 endif()
 
 set(SRCS_VECTOR_FLAT ${CMAKE_CURRENT_LIST_DIR}/vector_flat.cc

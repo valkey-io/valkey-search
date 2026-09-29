@@ -604,17 +604,13 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVector(
 
 template <typename T>
 std::optional<hnswlib::tableint> VectorSVS<T>::GetAlgoIdLockFree(
-    uint64_t internal_id) const {
-  auto it = label_to_record_.find(internal_id);
-  if (it == label_to_record_.end()) {
-    return std::nullopt;
-  }
-  // SVS addresses vectors by the same external id the caller supplied;
-  // there is no distinct internal-slot integer to return, so the id is
-  // its own algo-side identifier. Truncated to the hnswlib::tableint
-  // width the base class declares; callers use it only for equality
-  // checks against other results from this index.
-  return static_cast<hnswlib::tableint>(internal_id);
+    uint64_t /*internal_id*/) const {
+  // SVS addresses vectors by the external id the caller supplies and
+  // exposes no distinct algo-side integer identifier. The uint64_t id
+  // would also narrow through this return type at large scale. Return
+  // nullopt so no caller acts on a synthesized value; existence checks
+  // against a VectorSVS use GetVector / label_to_record_ directly.
+  return std::nullopt;
 }
 
 template <typename T>

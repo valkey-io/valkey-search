@@ -13,10 +13,12 @@
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -218,6 +220,33 @@ struct BuilderDeleter {
 };
 using BuilderPtr = std::unique_ptr<
     std::remove_pointer_t<svs_index_builder_h>, BuilderDeleter>;
+
+struct SearchParamsDeleter {
+  void operator()(svs_search_params_h h) const {
+    if (h != nullptr) svs_search_params_free(h);
+  }
+};
+using SearchParamsPtr = std::unique_ptr<
+    std::remove_pointer_t<svs_search_params_h>, SearchParamsDeleter>;
+
+// Bridges the base-class filter predicate through the SVS C ABI.
+// `self` carries the predicate object; is_member forwards each SVS
+// candidate id through operator(); filter_rate hints selectivity to
+// SVS's adaptive batch iterator.
+extern "C" bool SvsFilterIsMember(void* self, size_t id) {
+  auto* functor = static_cast<hnswlib::BaseFilterFunctor*>(self);
+  return functor->operator()(static_cast<hnswlib::labeltype>(id));
+}
+extern "C" float SvsFilterRate(void* /*self*/) {
+  // Selectivity is not plumbed into VectorBase::Search today, so hint
+  // conservatively that all candidates pass. SVS then runs the full
+  // top-k search and applies the filter batch-wise, avoiding the
+  // empty-return early-exit its adaptive batch iterator takes when
+  // the hint undershoots.
+  return 1.0f;
+}
+svs_id_filter_ops_t kSvsFilterOps =
+    SVS_INIT_ID_FILTER_OPS(SvsFilterIsMember, SvsFilterRate);
 
 // Materializes a const float* view of an n-element vector originally
 // stored as T. For T=float, returns the source pointer directly and
@@ -421,11 +450,70 @@ size_t VectorSVS<T>::GetCapacity() const {
 
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
-    absl::string_view /*query*/, uint64_t /*count*/,
+    absl::string_view query, uint64_t count,
     cancel::Token& /*cancellation_token*/,
-    std::unique_ptr<hnswlib::BaseFilterFunctor> /*filter*/,
-    std::optional<size_t> /*ef_runtime*/, bool /*enable_partial_results*/) {
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter,
+    std::optional<size_t> ef_runtime, bool /*enable_partial_results*/) {
+#if defined(__linux__) && defined(__x86_64__)
+  if (!IsValidSizeVector(query)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "SVS_VAMANA search: query vector blob size (", query.size(),
+        ") does not match index's expected size (",
+        dimensions_ * GetDataTypeSize(), ")."));
+  }
+
+  absl::ReaderMutexLock lock(&resize_mutex_);
+  if (svs_index_ == nullptr || label_to_record_.empty()) {
+    return std::vector<Neighbor>{};
+  }
+
+  const size_t k = std::min<size_t>(count, label_to_record_.size());
+  if (k == 0) {
+    return std::vector<Neighbor>{};
+  }
+
+  const T* raw = reinterpret_cast<const T*>(query.data());
+  VMSDK_RETURN_IF_ERROR(
+      CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
+  std::vector<float> scratch;
+  const float* fp32_query =
+      MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
+
+  ScopedSvsError err;
+  const size_t effective_window = std::max<size_t>(
+      k, ef_runtime.value_or(build_config_.search_window_size));
+  SearchParamsPtr search_params(
+      svs_search_params_create_vamana(effective_window, err.get()));
+  if (!search_params) {
+    return SvsErrorToStatus(err.get(), "search_params_create_vamana");
+  }
+
+  svs_id_filter_t filter_iface{&kSvsFilterOps, filter.get()};
+  svs_id_filter_i filter_arg = filter ? &filter_iface : nullptr;
+
+  svs_search_results_t results = SVS_INIT_SEARCH_RESULTS();
+  auto results_cleanup =
+      absl::MakeCleanup([&results]() { svs_search_results_free(&results); });
+
+  if (!svs_index_search_topk(svs_index_, fp32_query, /*num_queries=*/1, k,
+                             &results, search_params.get(), filter_arg,
+                             err.get())) {
+    return SvsErrorToStatus(err.get(), "index_search_topk");
+  }
+
+  std::priority_queue<std::pair<float, hnswlib::labeltype>> knn;
+  for (size_t i = 0; i < results.total_results; ++i) {
+    knn.push({results.distances[i],
+              static_cast<hnswlib::labeltype>(results.indices[i])});
+  }
+  return this->CreateReply(knn);
+#else
+  (void)query;
+  (void)count;
+  (void)filter;
+  (void)ef_runtime;
   return absl::UnimplementedError(kUnavailableMsg);
+#endif
 }
 
 template <typename T>
@@ -542,8 +630,16 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(
 
 template <typename T>
 void VectorSVS<T>::ToProtoImpl(
-    data_model::VectorIndex* /*vector_index_proto*/) const {
-  LOG(FATAL) << kUnavailableMsg;
+    data_model::VectorIndex* vector_index_proto) const {
+  this->SetProtoDataType(vector_index_proto);
+  auto svs_proto = std::make_unique<data_model::SVSVamanaAlgorithm>();
+  svs_proto->set_graph_max_degree(build_config_.graph_max_degree);
+  svs_proto->set_construction_window_size(
+      build_config_.construction_window_size);
+  svs_proto->set_search_window_size(build_config_.search_window_size);
+  svs_proto->set_alpha(build_config_.alpha);
+  svs_proto->set_compression(build_config_.compression);
+  vector_index_proto->set_allocated_svs_vamana_algorithm(svs_proto.release());
 }
 
 template <typename T>
@@ -580,11 +676,16 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
 }
 
 template <typename T>
-float VectorSVS<T>::ComputeDistance(absl::string_view /*query*/,
-                                    const VectorRecord* /*vector_record*/,
-                                    float /*query_magnitude*/) const {
-  LOG(FATAL) << kUnavailableMsg;
-  __builtin_unreachable();
+float VectorSVS<T>::ComputeDistance(absl::string_view query,
+                                    const VectorRecord* vector_record,
+                                    float query_magnitude) const {
+  // Distance evaluation uses the space populated by VectorType::Init
+  // from the configured distance metric. This mirrors the raw-bytes
+  // distance path the base class uses for pre-filter scoring and does
+  // not require the SVS index handle.
+  return space_->get_dist_func()(query.data(), vector_record->GetRawVector(),
+                                 space_->get_dist_func_param(),
+                                 query_magnitude);
 }
 
 template <typename T>

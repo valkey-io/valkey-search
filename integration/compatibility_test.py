@@ -173,9 +173,19 @@ def result_has_sortkeys(rs):
         return second_elem.startswith('#') or second_elem.startswith('$')
     return False
 
-def unpack_search_result(rs, key_type, has_sortkeys=False, no_content=False):
+def parse_sortkey(sortkey):
+    text = sortkey.decode() if isinstance(sortkey, bytes) else str(sortkey)
+    return float(text[1:]) if text.startswith('#') else text[1:]
+
+def unpack_search_result(rs, key_type, has_sortkeys=False, no_content=False,
+                         sortkeys=()):
     rows = []
-    if has_sortkeys:
+    if has_sortkeys and no_content:
+        # Format: [count, key1, sortkey1, key2, sortkey2, ...]
+        field = sortkeys[0]
+        for i in range(1, len(rs), 2):
+            rows += [{"__key": rs[i], field: parse_sortkey(rs[i+1])}]
+    elif has_sortkeys:
         # Format: [count, key1, sortkey1, [fields1], key2, sortkey2, [fields2], ...]
         # Step by 3 elements at a time
         for (key, sortkey, value) in [(rs[i], rs[i+1], rs[i+2]) for i in range(1, len(rs), 3)]:
@@ -306,7 +316,8 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
         no_content = any(
             str(t).upper() == "NOCONTENT" for t in cmd
         )
-        out = unpack_search_result(rs, key_type, has_sortkeys, no_content)
+        out = unpack_search_result(rs, key_type, has_sortkeys, no_content,
+                                   sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -804,6 +815,14 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             print(f"Excluded CLUSTER query raised: {e} for cmd {expected['cmd']}")
         return data_set
 
+    xfail = expected.get("xfail", False)
+
+    def record(matched):
+        if xfail:
+            (mark_as_xpassed if matched else mark_as_xfailed)(expected["testname"])
+        else:
+            (mark_as_passed if matched else mark_as_failed)(expected["testname"])
+
     result = {}
     try:
         print(
@@ -816,19 +835,13 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             *expected["cmd"], **cluster_routing(expected["cmd"]))
         result["exception"] = False
 
-        if compare_results(expected, result):
-            mark_as_passed(expected["testname"])
-        else:
-            mark_as_failed(expected["testname"])
+        record(compare_results(expected, result))
 
     except valkey.ResponseError as e:
         print(f"Got ResponseError: {e} for command {expected['cmd']}")
         result["exception"] = True
 
-        if compare_results(expected, result):
-            mark_as_passed(expected["testname"])
-        else:
-            mark_as_failed(expected["testname"])
+        record(compare_results(expected, result))
 
     return data_set
 

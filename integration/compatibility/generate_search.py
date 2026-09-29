@@ -157,10 +157,14 @@ class TestSearchCompatibility(BaseCompatibilityTest):
     def test_infields_with_nocontent_and_sortby(self, key_type, dialect):
         """NOCONTENT + SORTBY — verify ordering matches Redis Stack.
         No LIMIT so all results are returned, avoids flakiness from ties
-        at the page boundary."""
+        at the page boundary. WITHSORTKEYS carries the price into the
+        NOCONTENT reply so the comparison can check the order."""
         self.setup_data("pure text small", key_type)
         self.check("ft.search", f"{key_type}_idx1", "apple",
                    "INFIELDS", "2", "title", "body",
                    "SORTBY", "price", "ASC",
-                   "NOCONTENT",
+                   "WITHSORTKEYS", "NOCONTENT",
                    "DIALECT", str(dialect))
+        # xfail: WITHSORTKEYS is dropped under NOCONTENT, see
+        # https://github.com/valkey-io/valkey-search/issues/1353 (item 2).
+        self.answers[-1]["xfail"] = True

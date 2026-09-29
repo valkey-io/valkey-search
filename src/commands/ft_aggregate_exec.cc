@@ -840,7 +840,7 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
 
 class CountDistinctish : public GroupBy::ReducerInstance {
   HyperLogLog hll_;
-  void ProcessRecord(const ArgVector& values) override {
+  void ProcessRecord(const ArgVector &values) override {
     if (!values[0].IsNil()) {
       hll_.Add(values[0]);
     }

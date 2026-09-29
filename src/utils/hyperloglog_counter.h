@@ -1,4 +1,11 @@
 
+/*
+ * Copyright (c) 2025, valkey-search contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD 3-Clause
+ *
+ */
+
 #ifndef VALKEYSEARCH_SRC_UTILS_HYPERLOGLOG_COUNTER_H_
 #define VALKEYSEARCH_SRC_UTILS_HYPERLOGLOG_COUNTER_H_
 

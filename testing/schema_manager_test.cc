@@ -609,11 +609,11 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
                                             : test_case.index_schema_db_num);
 }
 
-// Coordinator metadata (gossip / FT.INTERNAL_UPDATE) reaches
-// CreateIndexSchemaInternal through the MetadataManager update callback
-// without ever passing through the FT.CREATE argument parser. The configurable
-// limits must still be enforced on that path, so a definition FT.CREATE would
-// reject is not materialized just because it arrived as a proto.
+// Coordinator metadata (gossip / FT.INTERNAL_UPDATE) reaches the schema
+// manager through the MetadataManager update callback without ever passing
+// through the FT.CREATE argument parser. The configurable limits must still be
+// enforced on that path, so a definition FT.CREATE would reject is not
+// materialized just because it arrived as a proto.
 TEST_F(SchemaManagerTest, MetadataUpdateRejectsOverLimitSchema) {
   coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
   SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
@@ -719,11 +719,48 @@ TEST_F(SchemaManagerTest, ReconcileOnlyValidatesEntriesItApplies) {
       SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
 
   // Newer version: reconcile applies the entry, which now fails the limit
-  // check.
+  // check. The check runs before the installed schema is removed, so the
+  // rejected update leaves the existing index in place.
+  auto before = SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(before);
   auto status = coordinator::MetadataManager::Instance().ReconcileMetadata(
       make_proposed(existing_version + 1), "test");
   EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
   EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  auto after = SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(after);
+  EXPECT_EQ(after.value(), before.value());
+}
+
+// In coordinated mode FLUSHDB removes each live schema and re-materializes it
+// from its own ToProto(). That recreation must not be subject to the limit
+// check: a limit lowered after the index was created would otherwise turn a
+// flush into an index loss, even though the cluster metadata still holds it.
+TEST_F(SchemaManagerTest, FlushDBRecreatesIndexEvenIfNowOverLimit) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+  VMSDK_EXPECT_OK(SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status());
+  auto previous =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(previous);
+
+  // Lower max-vector-m below the fixture's m=240 after creation.
+  const auto saved_max_m = options::GetMaxM().GetValue();
+  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
+  absl::Cleanup restore = [saved_max_m] {
+    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
+  };
+
+  SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_);
+
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+  auto recreated =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(recreated);
+  EXPECT_NE(recreated.value(), previous.value());
 }
 
 }  // namespace valkey_search

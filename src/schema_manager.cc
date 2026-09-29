@@ -327,12 +327,6 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
     return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
   }
 
-  // FT.CREATE enforces the configurable limits (M, EF_*, DIM, prefix and
-  // attribute counts, ...) while parsing its text arguments. Protos arriving
-  // via coordinator gossip or FT.INTERNAL_UPDATE never went through that
-  // parser, so re-check here to keep every creation path consistent.
-  VMSDK_RETURN_IF_ERROR(ValidateIndexSchemaLimits(index_schema_proto));
-
   // Run unconditionally: the schema is also checked against itself, and a
   // self-conflicting schema can be the first index in the database, where
   // there is no map entry to find.
@@ -514,33 +508,45 @@ absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  // FT.CREATE enforces the configurable limits (M, EF_*, DIM, prefix and
+  // attribute counts, ...) while parsing its text arguments. A proto arriving
+  // here via coordinator gossip or FT.INTERNAL_UPDATE never went through that
+  // parser, so re-check it up front. This runs before the existing schema is
+  // removed so a rejected update leaves the installed index untouched, and it
+  // is deliberately not in CreateIndexSchemaInternal: FLUSHDB recreates each
+  // live schema through that path, and a limit lowered after an index was
+  // created must not turn a flush into an index loss.
+  std::unique_ptr<data_model::IndexSchema> proposed_schema;
+  if (metadata != nullptr) {
+    proposed_schema = std::make_unique<data_model::IndexSchema>();
+    if (!metadata->UnpackTo(proposed_schema.get())) {
+      return absl::InternalError(absl::StrCat(
+          "Unable to unpack metadata for index schema ", obj_name));
+    }
+    VMSDK_RETURN_IF_ERROR(ValidateIndexSchemaLimits(*proposed_schema));
+  }
+
   auto old_schema =
       RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
   if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
     return old_schema.status();
   }
   absl::Status result = absl::OkStatus();
-  if (metadata == nullptr) {
-    // Nothing to create — just clean up the old schema below.
-  } else {
-    auto proposed_schema = std::make_unique<data_model::IndexSchema>();
-    if (!metadata->UnpackTo(proposed_schema.get())) {
-      result = absl::InternalError(absl::StrCat(
-          "Unable to unpack metadata for index schema ", obj_name));
+  if (proposed_schema != nullptr) {
+    auto create_status =
+        CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
+    if (!create_status.ok()) {
+      result = create_status;
     } else {
-      auto create_status =
-          CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-      if (!create_status.ok()) {
-        result = create_status;
-      } else {
-        auto created_schema =
-            LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
-        CHECK(created_schema != nullptr);
-        created_schema->SetFingerprint(fingerprint);
-        created_schema->SetVersion(version);
-      }
+      auto created_schema =
+          LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+      CHECK(created_schema != nullptr);
+      created_schema->SetFingerprint(fingerprint);
+      created_schema->SetVersion(version);
     }
   }
+  // metadata == nullptr is a deletion: nothing to create, just clean up the
+  // old schema below.
   if (old_schema.ok()) {
     ValkeySearch::Instance().ScheduleUtilityTask(
         [s = std::move(old_schema.value())]() mutable { s.reset(); });

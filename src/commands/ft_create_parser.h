@@ -133,7 +133,11 @@ absl::StatusOr<data_model::IndexSchema> ParseFTCreateArgs(
 // path that builds a schema directly from a proto -- coordinator metadata
 // gossip and FT.INTERNAL_UPDATE -- bypasses them, so a definition that
 // FT.CREATE would reject can be materialized. SchemaManager runs this on every
-// proto it creates a schema from so all paths agree.
+// proto it receives through the metadata update callback, before touching the
+// installed schema, so all creation paths agree and a rejected update leaves
+// the existing index in place. It is not applied when re-materializing an
+// already-installed schema (FLUSHDB recreation), since a limit lowered after
+// an index was created must not make that index disappear.
 //
 // INITIAL_CAP is only checked for a malformed (< 1) value: a serialized proto
 // carries the index's grown capacity (VectorBase::ToProto emits GetCapacity()),

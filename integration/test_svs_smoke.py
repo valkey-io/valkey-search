@@ -280,6 +280,44 @@ class TestSVSVamanaSmoke(ValkeySearchTestCaseBase):
         assert list(scores.keys())[0] == b"doc:2"
         assert scores[b"doc:2"] == pytest.approx(0.0, abs=1e-2)
 
+    def test_knn_with_tag_filter_returns_only_matching(self):
+        """Filtered KNN returns docs matching the tag predicate. Regression
+        guard for the filter_rate hint: SVS's adaptive batch iterator takes
+        an empty-return early-exit when the observed hit rate is less than
+        the hinted rate, so a mis-hint of 1.0 would silently return zero
+        results whenever the filter rejects any candidate."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "tag_idx",
+            "SCHEMA",
+            "color", "TAG",
+            "v", "VECTOR", "SVS_VAMANA",
+            "6", "TYPE", "FLOAT32", "DIM", str(DIM), "DISTANCE_METRIC", "L2",
+        )
+        # Ingest 10 docs. Even ids -> red; odd ids -> blue.
+        for i in range(1, 11):
+            values = [float(i)] + [0.0] * (DIM - 1)
+            client.hset(f"doc:{i}", mapping={
+                "v": _fp32(values),
+                "color": "red" if i % 2 == 0 else "blue",
+            })
+        # Filter: only red. Query at (3.7,0,0,0). Nearest red is doc:4.
+        reply = client.execute_command(
+            "FT.SEARCH", "tag_idx", "@color:{red}=>[KNN 3 @v $q]",
+            "PARAMS", "2", "q", _fp32([3.7, 0.0, 0.0, 0.0]),
+            "DIALECT", "2",
+        )
+        assert reply[0] == 3, (
+            f"filtered KNN returned {reply[0]} results (expected 3). "
+            f"If zero, SvsFilterRate is likely hinting above the actual "
+            f"hit rate."
+        )
+        # Every returned key must be an even doc (i.e. red).
+        for i in range(1, len(reply), 2):
+            key = reply[i]
+            assert int(key.split(b":")[1]) % 2 == 0, \
+                f"filter leaked non-red doc: {key!r}"
+
     @pytest.mark.parametrize("compression", ["NONE", "FP16"])
     def test_ft_create_supports_each_open_compression(self, compression):
         """NONE / FP16 are the v1 open compression kinds. SQ8 is fenced

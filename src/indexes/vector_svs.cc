@@ -35,13 +35,12 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #if defined(__linux__) && defined(__x86_64__)
+#include <svs/c/svs_c.h>
 #include <sys/mman.h>
 
 #include "absl/strings/str_cat.h"
 #include "src/index_schema.pb.h"
 #include "vmsdk/src/utils.h"
-
-#include <svs/c/svs_c.h>
 #endif
 
 namespace valkey_search::indexes {
@@ -102,9 +101,8 @@ void* SvsAllocatorAllocate(void* /*self*/, size_t size, size_t alignment,
   size_t aligned_size = RoundUpToPageSize(
       size, std::max<size_t>(alignment, kSvsAllocatorHugePageSize));
 
-  void* ptr =
-      mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE,
-           MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+  void* ptr = mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
   if (ptr == MAP_FAILED) {
     ptr = mmap(nullptr, aligned_size, PROT_READ | PROT_WRITE,
                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -202,32 +200,33 @@ struct StorageDeleter {
     if (h != nullptr) svs_storage_free(h);
   }
 };
-using StoragePtr = std::unique_ptr<
-    std::remove_pointer_t<svs_storage_h>, StorageDeleter>;
+using StoragePtr =
+    std::unique_ptr<std::remove_pointer_t<svs_storage_h>, StorageDeleter>;
 
 struct AlgorithmDeleter {
   void operator()(svs_algorithm_h h) const {
     if (h != nullptr) svs_algorithm_free(h);
   }
 };
-using AlgorithmPtr = std::unique_ptr<
-    std::remove_pointer_t<svs_algorithm_h>, AlgorithmDeleter>;
+using AlgorithmPtr =
+    std::unique_ptr<std::remove_pointer_t<svs_algorithm_h>, AlgorithmDeleter>;
 
 struct BuilderDeleter {
   void operator()(svs_index_builder_h h) const {
     if (h != nullptr) svs_index_builder_free(h);
   }
 };
-using BuilderPtr = std::unique_ptr<
-    std::remove_pointer_t<svs_index_builder_h>, BuilderDeleter>;
+using BuilderPtr =
+    std::unique_ptr<std::remove_pointer_t<svs_index_builder_h>, BuilderDeleter>;
 
 struct SearchParamsDeleter {
   void operator()(svs_search_params_h h) const {
     if (h != nullptr) svs_search_params_free(h);
   }
 };
-using SearchParamsPtr = std::unique_ptr<
-    std::remove_pointer_t<svs_search_params_h>, SearchParamsDeleter>;
+using SearchParamsPtr =
+    std::unique_ptr<std::remove_pointer_t<svs_search_params_h>,
+                    SearchParamsDeleter>;
 
 // Bridges the base-class filter predicate through the SVS C ABI.
 // `self` carries the predicate object; is_member forwards each SVS
@@ -238,12 +237,14 @@ extern "C" bool SvsFilterIsMember(void* self, size_t id) {
   return functor->operator()(static_cast<hnswlib::labeltype>(id));
 }
 extern "C" float SvsFilterRate(void* /*self*/) {
-  // Selectivity is not plumbed into VectorBase::Search today, so hint
-  // conservatively that all candidates pass. SVS then runs the full
-  // top-k search and applies the filter batch-wise, avoiding the
-  // empty-return early-exit its adaptive batch iterator takes when
-  // the hint undershoots.
-  return 1.0f;
+  // Return 0.0 to signal "no estimate". SVS's adaptive batch iterator
+  // takes an empty-return early-exit when the observed hit rate is
+  // less than the provided value; hinting 1.0 makes that condition
+  // trip on every filter that rejects any candidate. Selectivity is
+  // not plumbed into VectorBase::Search today, so 0.0 is the correct
+  // conservative signal until the search planner threads its estimate
+  // through.
+  return 0.0f;
 }
 svs_id_filter_ops_t kSvsFilterOps =
     SVS_INIT_ID_FILTER_OPS(SvsFilterIsMember, SvsFilterRate);
@@ -297,9 +298,8 @@ absl::Status CheckFiniteVector(const T* src, size_t n_elements) {
 // SVS C API requires num_vectors > 0 for svs_index_build_dynamic; the
 // first-add path passes the vector supplied by the ingest call.
 absl::StatusOr<svs_index_h> BootstrapIndex(
-    const SVSBuildConfig& config,
-    data_model::DistanceMetric distance_metric, int dimensions,
-    uint64_t label, const float* fp32_vector) {
+    const SVSBuildConfig& config, data_model::DistanceMetric distance_metric,
+    int dimensions, uint64_t label, const float* fp32_vector) {
   auto metric = ToSvsDistanceMetric(distance_metric);
   if (!metric.has_value()) {
     return absl::InvalidArgumentError(
@@ -320,8 +320,7 @@ absl::StatusOr<svs_index_h> BootstrapIndex(
   if (!algo) return SvsErrorToStatus(err.get(), "algorithm_create_vamana");
 
   if (config.alpha > 0.0f) {
-    if (!svs_algorithm_vamana_set_alpha(algo.get(), config.alpha,
-                                        err.get())) {
+    if (!svs_algorithm_vamana_set_alpha(algo.get(), config.alpha, err.get())) {
       return SvsErrorToStatus(err.get(), "algorithm_vamana_set_alpha");
     }
   }
@@ -338,22 +337,18 @@ absl::StatusOr<svs_index_h> BootstrapIndex(
       *metric, static_cast<size_t>(dimensions), algo.get(), err.get()));
   if (!builder) return SvsErrorToStatus(err.get(), "index_builder_create");
 
-  if (!svs_index_builder_set_storage(builder.get(), storage.get(),
-                                     err.get())) {
+  if (!svs_index_builder_set_storage(builder.get(), storage.get(), err.get())) {
     return SvsErrorToStatus(err.get(), "index_builder_set_storage");
   }
-  if (!svs_index_builder_set_threadpool_custom(builder.get(),
-                                               &kSvsThreadpoolIface,
-                                               err.get())) {
-    return SvsErrorToStatus(err.get(),
-                            "index_builder_set_threadpool_custom");
+  if (!svs_index_builder_set_threadpool_custom(
+          builder.get(), &kSvsThreadpoolIface, err.get())) {
+    return SvsErrorToStatus(err.get(), "index_builder_set_threadpool_custom");
   }
   if (ValkeyModule_IncrExternalMemory != nullptr &&
       ValkeyModule_DecrExternalMemory != nullptr) {
     if (!svs_index_builder_set_allocator_custom(
             builder.get(), &kSvsAllocatorIface, err.get())) {
-      return SvsErrorToStatus(err.get(),
-                              "index_builder_set_allocator_custom");
+      return SvsErrorToStatus(err.get(), "index_builder_set_allocator_custom");
     }
   } else {
     if (!svs_index_builder_set_allocator(
@@ -376,8 +371,7 @@ absl::StatusOr<svs_index_h> BootstrapIndex(
 #endif  // __linux__ && __x86_64__
 
 template <typename T>
-VectorSVS<T>::VectorSVS(int dimensions,
-                        absl::string_view attribute_identifier,
+VectorSVS<T>::VectorSVS(int dimensions, absl::string_view attribute_identifier,
                         data_model::AttributeDataType attribute_data_type,
                         int db_num)
     : VectorType<T>(IndexerType::kSVS, dimensions, attribute_data_type,
@@ -435,8 +429,7 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
 
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
-    ValkeyModuleCtx* /*ctx*/,
-    const AttributeDataType* /*attribute_data_type*/,
+    ValkeyModuleCtx* /*ctx*/, const AttributeDataType* /*attribute_data_type*/,
     const data_model::VectorIndex& /*vector_index_proto*/,
     absl::string_view /*attribute_identifier*/,
     SupplementalContentChunkIter&& /*iter*/, int /*db_num*/) {
@@ -456,10 +449,10 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
     std::optional<size_t> ef_runtime, bool /*enable_partial_results*/) {
 #if defined(__linux__) && defined(__x86_64__)
   if (!IsValidSizeVector(query)) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "SVS_VAMANA search: query vector blob size (", query.size(),
-        ") does not match index's expected size (",
-        dimensions_ * GetDataTypeSize(), ")."));
+    return absl::InvalidArgumentError(
+        absl::StrCat("SVS_VAMANA search: query vector blob size (",
+                     query.size(), ") does not match index's expected size (",
+                     dimensions_ * GetDataTypeSize(), ")."));
   }
 
   absl::ReaderMutexLock lock(&resize_mutex_);
@@ -518,8 +511,7 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
 
 template <typename T>
 absl::Status VectorSVS<T>::AddRecordImpl(
-    uint64_t internal_id,
-    std::shared_ptr<const VectorRecord>&& vector_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord>&& vector_record) {
 #if defined(__linux__) && defined(__x86_64__)
   const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
   VMSDK_RETURN_IF_ERROR(
@@ -530,17 +522,15 @@ absl::Status VectorSVS<T>::AddRecordImpl(
 
   absl::WriterMutexLock lock(&resize_mutex_);
   if (svs_index_ == nullptr) {
-    auto result =
-        BootstrapIndex(build_config_, this->distance_metric_, dimensions_,
-                       internal_id, fp32);
+    auto result = BootstrapIndex(build_config_, this->distance_metric_,
+                                 dimensions_, internal_id, fp32);
     if (!result.ok()) return result.status();
     svs_index_ = *result;
   } else {
     ScopedSvsError err;
     size_t added = 0;
     if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
-                                      /*num_vectors=*/1, &added,
-                                      err.get())) {
+                                      /*num_vectors=*/1, &added, err.get())) {
       return SvsErrorToStatus(err.get(), "index_dynamic_add_points");
     }
   }
@@ -581,8 +571,7 @@ absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
 
 template <typename T>
 absl::Status VectorSVS<T>::ModifyRecordImpl(
-    uint64_t internal_id,
-    std::shared_ptr<const VectorRecord>&& vector_record) {
+    uint64_t internal_id, std::shared_ptr<const VectorRecord>&& vector_record) {
 #if defined(__linux__) && defined(__x86_64__)
   // SVS's add_points throws on a duplicate external ID (the translator
   // insert is checked before the data mutation), so replacement is a
@@ -602,20 +591,16 @@ absl::Status VectorSVS<T>::ModifyRecordImpl(
     if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
                                          /*num_vectors=*/1, &deleted,
                                          err.get())) {
-      return SvsErrorToStatus(err.get(),
-                              "modify: index_dynamic_delete_points");
+      return SvsErrorToStatus(err.get(), "modify: index_dynamic_delete_points");
     }
     size_t added = 0;
     if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
-                                      /*num_vectors=*/1, &added,
-                                      err.get())) {
-      return SvsErrorToStatus(err.get(),
-                              "modify: index_dynamic_add_points");
+                                      /*num_vectors=*/1, &added, err.get())) {
+      return SvsErrorToStatus(err.get(), "modify: index_dynamic_add_points");
     }
   } else {
-    auto result =
-        BootstrapIndex(build_config_, this->distance_metric_, dimensions_,
-                       internal_id, fp32);
+    auto result = BootstrapIndex(build_config_, this->distance_metric_,
+                                 dimensions_, internal_id, fp32);
     if (!result.ok()) return result.status();
     svs_index_ = *result;
   }
@@ -649,11 +634,11 @@ int VectorSVS<T>::RespondWithInfoImpl(ValkeyModuleCtx* ctx) const {
   ValkeyModule_ReplyWithArray(ctx, 12);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");
   ValkeyModule_ReplyWithSimpleString(
-      ctx,
-      std::string(LookupKeyByValue(
-                      *kVectorAlgoByStr,
-                      data_model::VectorIndex::AlgorithmCase::kSvsVamanaAlgorithm))
-          .c_str());
+      ctx, std::string(
+               LookupKeyByValue(
+                   *kVectorAlgoByStr,
+                   data_model::VectorIndex::AlgorithmCase::kSvsVamanaAlgorithm))
+               .c_str());
   ValkeyModule_ReplyWithSimpleString(ctx, "graph_max_degree");
   ValkeyModule_ReplyWithLongLong(ctx, build_config_.graph_max_degree);
   ValkeyModule_ReplyWithSimpleString(ctx, "construction_window_size");

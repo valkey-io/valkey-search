@@ -65,12 +65,6 @@ class TestSearchCompatibility(BaseCompatibilityTest):
         self.check_knn(f"{key_type}_idx1", len(keys), far_keys, dialect)
         self.check_knn(f"{key_type}_idx1", 3, near_keys, dialect)
 
-
-@pytest.mark.parametrize("dialect", [2])
-@pytest.mark.parametrize("key_type", ["json", "hash"])
-class TestInfieldsCompatibility(BaseCompatibilityTest):
-    ANSWER_FILE_NAME = "search-answers.pickle.gz"
-
     def test_infields_basic_field_scoping(self, key_type, dialect):
         """Basic field scoping: restrict to title, then to body."""
         self.setup_data("pure text small", key_type)

@@ -5,6 +5,7 @@ from operator import itemgetter
 from itertools import chain, combinations
 import pickle
 import compatibility
+from valkey.cluster import ValkeyCluster
 from compatibility import GENERATORS, compute_sources_hash
 from compatibility.data_sets import *
 
@@ -29,6 +30,20 @@ from valkeytestframework.conftest import resource_port_tracker
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
 
+# How closely two engines' numbers have to agree, by the storage type of the
+# vectors in play. See compare_number_eq.
+#
+# FLOAT32 holds about seven decimal digits and the two engines agree to nearly
+# all of them; what differs is how they format the result. The 2-byte types
+# hold about three, and the engines round them differently -- the repo's own
+# space_distance_test.cc compares them at 1e-2 for the same reason.
+TOLERANCE_BY_VECTOR_TYPE = {
+    "FLOAT32": (1e-5, 1e-6),
+    "FLOAT16": (1e-2, 1e-2),
+    "BFLOAT16": (1e-2, 1e-2),
+}
+DEFAULT_TOLERANCE = TOLERANCE_BY_VECTOR_TYPE["FLOAT32"]
+
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
 def printable_cmd(cmd):
@@ -39,8 +54,16 @@ def printable_cmd(cmd):
 def printable_result(res):
     if isinstance(res, list):
         return [printable_result(x) for x in res]
-    else:
-        return unbytes(res)
+    if isinstance(res, bytes):
+        # Vector fields are raw little-endian floats, so a result carrying one
+        # (any FT.HYBRID answer loading the vector column, for instance) is not
+        # UTF-8. Fall back to repr rather than letting the diagnostic print
+        # raise and hide the mismatch it was called to explain.
+        try:
+            return res.decode("utf-8")
+        except UnicodeDecodeError:
+            return repr(res)
+    return unbytes(res)
 
 def sortkeyfunc(row):
     if isinstance(row, list):
@@ -183,6 +206,33 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
+def unpack_hybrid_result(rs, key_type):
+    """Unpack an FT.HYBRID reply into a list of row dicts.
+
+    The two engines wrap the same rows differently:
+
+      Redis   [b"total_results", N, b"results", [row, ...],
+               b"warnings", [...], b"execution_time", b"..."]
+      Valkey  [N, row, row, ...]                       (the FT.AGGREGATE shape)
+
+    Only the rows are comparable. Redis's `total_results` is the size of the
+    fused set *before* LIMIT while Valkey's leading count is the number of rows
+    actually returned, and `execution_time` is wall-clock noise, so both are
+    dropped here rather than compared.
+    """
+    if len(rs) >= 2 and unbytes(rs[0]) == "total_results":
+        fields = {unbytes(rs[i]): rs[i + 1] for i in range(0, len(rs), 2)}
+        rows = fields.get("results", [])
+    else:
+        rows = rs[1:]
+    out = []
+    for row in rows:
+        out.append({
+            parse_field(row[i], key_type): parse_value(row[i + 1], key_type)
+            for i in range(0, len(row), 2)
+        })
+    return out
+
 def order_insensitive(v):
     """Row-ordering form of a field value.
 
@@ -209,8 +259,41 @@ def row_sort_key(sortkeys):
     return key
 
 
-def unpack_result(cmd, key_type, rs, sortkeys):
-    if "ft.search" in cmd[0].lower():
+def canonicalize_ties(rows, sortkeys):
+    """Order the rows that tie on `sortkeys`, and leave everything else where
+    it is.
+
+    Used where the reply's own sequence is the answer. Two engines asked to
+    sort by a field must agree on the order of rows whose values differ, but
+    nothing decides the order of rows that hold the same value -- a SORTBY on
+    a field some documents do not carry leaves every one of those tied, and so
+    does a SORTBY over an array column where two groups hold the same array.
+    Canonicalizing each run of tied rows keeps those interchangeable without
+    giving up on the order of the rest.
+    """
+    def key_of(row):
+        return [order_insensitive(row.get(k)) for k in sortkeys]
+
+    def content_of(row):
+        return sorted((repr(k), order_insensitive(v)) for k, v in row.items())
+
+    out = []
+    i = 0
+    while i < len(rows):
+        j = i + 1
+        while j < len(rows) and key_of(rows[j]) == key_of(rows[i]):
+            j += 1
+        run = rows[i:j]
+        run.sort(key=content_of)
+        out.extend(run)
+        i = j
+    return out
+
+
+def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
+    if "ft.hybrid" in cmd[0].lower():
+        out = unpack_hybrid_result(rs, key_type)
+    elif "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
         # not just whether WITHSORTKEYS is in the command. This handles cases
         # where the expected result (from pickle) may not have sort keys even
@@ -220,8 +303,18 @@ def unpack_result(cmd, key_type, rs, sortkeys):
     else:
         out = unpack_agg_result(rs, key_type)
     #
-    # Sort by the sortkeys
+    # Align the rows for comparison. `ordered` means the command fixed the
+    # reply's sequence, so the sequence itself is the thing under test and
+    # only tied rows may be moved.
     #
+    if ordered and not any(isinstance(row.get(k), list)
+                           for row in out for k in sortkeys):
+        return canonicalize_ties(out, sortkeys)
+    # A list-valued sort key falls through to the alignment below. The engines
+    # return the elements of a TOLIST in different orders -- which is what
+    # order_insensitive() exists to absorb -- so they are not sorting the same
+    # values, and the sequence each produces is not something the other can be
+    # held to.
     if len(sortkeys) > 0:
         try:
             out.sort(key=row_sort_key(sortkeys))
@@ -229,11 +322,15 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             if sortkeys == ['__key']:
                 # we're not smart about when there is or isn't a key in the return
                 return out
+            # A sort field the engine did not return as its own column. That is
+            # itself a difference worth reporting, so leave the rows unsorted
+            # and let compare_results surface the mismatch -- aborting the whole
+            # run here would hide every answer after this one.
             print("Failed on sortkeys: ", sortkeys)
             print("CMD:", cmd)
             print("RESULT:", rs)
             print("Out:", out)
-            assert False
+            return out
     return out
 
 def _is_numeric(x):
@@ -246,7 +343,8 @@ def _is_numeric(x):
     except (ValueError, TypeError):
         return False
 
-def compare_number_eq(l, r):
+# `tol` is a (relative, absolute) pair: see the note at the comparison itself.
+def compare_number_eq(l, r, tol=DEFAULT_TOLERANCE):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
 
@@ -263,7 +361,7 @@ def compare_number_eq(l, r):
             print("mismatch vector field length: ", l, " ", r)
             return False
         for i in range(len(l)):
-            if not compare_number_eq(l[i], r[i]):
+            if not compare_number_eq(l[i], r[i], tol):
                 print("mismatch vector field value: ", l, " ", r, " at index ", i)
                 return False
         return True
@@ -275,13 +373,26 @@ def compare_number_eq(l, r):
             print("mismatch vector field length: ", ll, " ", rr)
             return False
         for i in range(len(ll)):
-            if not compare_number_eq(ll[i], rr[i]):
+            if not compare_number_eq(ll[i], rr[i], tol):
                 print("mismatch vector field value: ", ll, " ", rr, " at index ", i)
                 return False
         return True
     else:
         try:
-            return math.isclose(float(l), float(r), abs_tol=.01)
+            # Relative first, absolute only as a floor near zero.
+            #
+            # The absolute tolerance on its own was 0.01, which is wider than
+            # the whole range of a reciprocal-rank-fusion score: with the
+            # default constant those span about 0.012 to 0.033 across a page,
+            # so any permutation of them compared equal and the column was
+            # decorative. The two engines format the same value to different
+            # precision -- 0.0327868852459 against 0.0327868834138, a relative
+            # difference near 6e-8 -- which is what the relative tolerance is
+            # sized for. The absolute floor keeps values that straddle zero
+            # from being held to a relative standard they cannot meet.
+            rel_tol, abs_tol = tol
+            return math.isclose(float(l), float(r), rel_tol=rel_tol,
+                                abs_tol=abs_tol)
         except ValueError:
             print("ValueError comparing: ", l, " and ", r)
             return False
@@ -291,7 +402,7 @@ def compare_number_eq(l, r):
         
         
     
-def compare_row(l, r, key_type):
+def compare_row(l, r, key_type, tol=DEFAULT_TOLERANCE):
     lks = sorted(list(l.keys()))
     rks = sorted(list(r.keys()))
     #print("Comparing row: ", l, " and ", r)
@@ -314,7 +425,7 @@ def compare_row(l, r, key_type):
         # Hack, fields that start with an 'n' are assumed to be numeric
         #
         elif lks[i].startswith("n") or lks[i].endswith("score"):
-            if not compare_number_eq(l[lks[i]], r[rks[i]]):
+            if not compare_number_eq(l[lks[i]], r[rks[i]], tol):
                 print(f"mismatch numeric field: {l[lks[i]]}:{type(l[lks[i]])} and {r[rks[i]]}:{type(r[rks[i]])}")
                 print("RL: ", r)
                 print("VK: ", l)
@@ -327,7 +438,7 @@ def compare_row(l, r, key_type):
                 print("mismatch vector field length: ", l[lks[i]], " ", r[rks[i]])
                 return False
             for i in range(l[lks[i]]):
-                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i]):
+                if not compare_number_eq(l[lks[i]][i], r[rks[i]][i], tol):
                     print("mismatch vector field value: ", l[lks[i]], " ", r[rks[i]])
                     return False
         elif lks[i] == b'$' and rks[i] == b'$':
@@ -364,6 +475,8 @@ def compare_results(expected, results):
     print("CMD:", printable_cmd(expected["cmd"]))
     cmd = expected["cmd"]
     key_type = expected["key_type"]
+    tol = TOLERANCE_BY_VECTOR_TYPE.get(
+        expected.get("vector_data_type", "FLOAT32"), DEFAULT_TOLERANCE)
     if cmd != results["cmd"]:
         print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
@@ -372,21 +485,63 @@ def compare_results(expected, results):
     # the reply carries, and an earlier GROUPBY's key is gone from the output
     # once a later stage regroups.
     def last_index(keyword):
-        # Match exactly, as this has always done: an uppercase SORTBY in an
-        # FT.SEARCH goes down the "no sort keys" path.
-        hits = [i for i, c in enumerate(cmd) if c == keyword]
+        # Case-insensitive: a generator writing SORTBY the way the command
+        # reference does must not silently get a different comparison from one
+        # writing it in lower case. str() because a command carries a raw
+        # vector blob among its arguments.
+        hits = [i for i, c in enumerate(cmd) if str(c).lower() == keyword]
         return hits[-1] if hits else -1
+
+    def field_name(token):
+        return str(token).lstrip('@')
 
     gix = last_index('groupby')
     six = last_index('sortby')
+    # `ordered` says the command fixed the reply's sequence, so the sequence is
+    # itself under test and the rows are compared as they arrived. Only a
+    # SORTBY that nothing regroups afterwards does that: a GROUPBY puts the
+    # reply back in an order no one specified, so a reply ending in one is
+    # aligned on its group key instead.
+    ordered = False
     if gix > six:
         count = int(cmd[gix+1])
-        sortkeys = [cmd[gix+2+i][1:] for i in range(count)]
+        sortkeys = [field_name(cmd[gix+2+i]) for i in range(count)]
     elif six >= 0:
-        count = int(cmd[six+1]) if cmd[0] != 'ft.search' else 1
-        # Grab the fields after the count, stripping any leading '@'
-        sortkeys = [cmd[six+2+i][1 if cmd[six+2+i].startswith("@") else 0:] for i in range(count)]
+        ordered = True
+        # FT.SEARCH takes a bare field where the aggregate pipeline takes a
+        # count followed by that many tokens: `SORTBY @n1 ASC` against
+        # `SORTBY 2 @n1 ASC`. The names are still needed here, to tell which
+        # rows tie and may therefore be ordered either way.
+        if str(cmd[0]).lower() == 'ft.search':
+            sortkeys = [field_name(cmd[six+1])]
+        else:
+            count = int(cmd[six+1])
+            sortkeys = [field_name(cmd[six+2+i]) for i in range(count)]
         sortkeys = [f for f in sortkeys if f.lower() not in ('asc', 'desc')]
+    elif "ft.hybrid" in str(cmd[0]).lower():
+        # A rank-fusion command answers in fused-score order whether or not the
+        # query says so -- that ordering IS the answer -- so it is compared as
+        # it arrived. Without this the reply was aligned on `__key`, a column
+        # an FT.HYBRID reply does not even carry under `LOAD *`, so every row
+        # tied, the alignment fell back to whole-row content, and the ranking
+        # was never compared at all.
+        #
+        # The tie key is the name COMBINE gave the fused score, because that
+        # is the column that holds it. With no COMBINE alias there is no tie
+        # key at all and the order is compared strictly, position by position.
+        # `__score`, the default name, would work as one -- both engines emit
+        # it when the caller gave no LOAD clause -- but naming it would only
+        # let rows that share a score swap places, which is a comparison these
+        # cases pass without.
+        ordered = True
+        sortkeys = []
+        cix = last_index('combine')
+        if cix >= 0:
+            tail = [str(c) for c in cmd[cix:]]
+            for i, token in enumerate(tail):
+                if token.lower() == 'yield_score_as' and i + 1 < len(tail):
+                    sortkeys = [field_name(tail[i + 1])]
+                    break
     else:
         sortkeys=["__key"]
         # sortkeys=[]
@@ -414,8 +569,11 @@ def compare_results(expected, results):
 
     # The sortkey-prefix cases assert the sort-key bytes, which the generic
     # unpack path below discards (unpack_search_result drops the sort-key
-    # element). Their replies are fully deterministic, so compare them raw.
-    if expected.get("data_set_name") == SORTKEY_PREFIX_DATA_SET:
+    # element). The return-clause cases produce no-content replies whose
+    # 1-element stride the unpacker cannot parse. Both data sets are fully
+    # deterministic, so compare them raw.
+    if expected.get("data_set_name") in (SORTKEY_PREFIX_DATA_SET,
+                                         RETURN_CLAUSE_DATA_SET):
         if expected["result"] == results["result"]:
             return True
         print(f"CMD: {cmd}")
@@ -425,10 +583,12 @@ def compare_results(expected, results):
 
     # Output raw results
     # print("Raw expected result:", expected["result"])
-    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys)
+    rl = unpack_result(cmd, expected["key_type"], expected["result"], sortkeys,
+                       ordered)
     # print("Unpack of expected result:", rl)
     # print("Raw actual result:", results["result"])
-    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys)
+    vk = unpack_result(cmd, expected["key_type"], results["result"], sortkeys,
+                       ordered)
     # print("Unpack of actual result:", vk)
 
     # Process failures
@@ -447,7 +607,8 @@ def compare_results(expected, results):
     # if compare_results(vk, rl):
     # Directly comparing dicts instead of custom compare function
     # TODO: investigate this later
-    if all([compare_row(vk[i], rl[i], key_type) for i in range(len(rl))]):
+    if all([compare_row(vk[i], rl[i], key_type, tol)
+            for i in range(len(rl))]):
         # print("Results look good.")
         #print(TEST_MARKER)
         if "ft.search" in cmd:
@@ -459,7 +620,7 @@ def compare_results(expected, results):
     print("***** MISMATCH ON DATA *****, sortkeys=", sortkeys, " records=", len(rl), " TestName: ", expected["testname"], " <<< Identifies mismatching results")
     print(f"CMD: {cmd}")
     for i in range(len(rl)):
-        if not compare_row(rl[i], vk[i], key_type):
+        if not compare_row(rl[i], vk[i], key_type, tol):
             print("RL:",i,[(k,rl[i][k]) for k in sorted(rl[i].keys())], "<<<")
             print("VK:",i,[(k,vk[i][k]) for k in sorted(vk[i].keys())], "<<<")
         else:
@@ -476,6 +637,8 @@ wrong_answers = 0
 StopOnFailure = False
 failed_tests = {}
 passed_tests = {}
+xfailed_tests = {}
+xpassed_tests = {}
 
 def mark_as_passed(testname):
     global correct_answers, passed_tests
@@ -492,6 +655,23 @@ def mark_as_failed(testname):
     failed_tests[testname] += 1
     wrong_answers += 1
     assert not StopOnFailure, "Test failed, stopping execution"
+
+def mark_as_xfailed(testname):
+    """An answer marked `xfail` in the generator that did not match, as
+    expected. Counts as accounted-for so the suite stays green while the gap it
+    documents is open."""
+    global correct_answers, xfailed_tests
+    correct_answers += 1
+    xfailed_tests[testname] = xfailed_tests.get(testname, 0) + 1
+
+def mark_as_xpassed(testname):
+    """An answer marked `xfail` that now matches -- the gap it documents has
+    been closed, and the marker should come off. Reported loudly at the end of
+    the run; deliberately not a failure, so closing the gap does not break the
+    build before someone gets to the marker."""
+    global correct_answers, xpassed_tests
+    correct_answers += 1
+    xpassed_tests[testname] = xpassed_tests.get(testname, 0) + 1
 
 def do_answer(client, expected, data_set):
     global correct_answers, failed_tests, passed_tests
@@ -527,24 +707,49 @@ def do_answer(client, expected, data_set):
         except Exception as e:
             print(f"⚠ Failed to set Valkey compat mode for test: {expected['testname']}, error: {e}")
     
+    # An `xfail` answer is compared like any other, but a mismatch is the
+    # documented state of an open gap rather than a regression. See
+    # integration/compatibility/unsupported_tests.md for what each one covers.
+    xfail = expected.get('xfail', False)
+    if xfail:
+        print(f"xfail answer (known gap): {expected['cmd']}")
+
+    def record(matched):
+        if xfail:
+            (mark_as_xpassed if matched else mark_as_xfailed)(expected['testname'])
+        else:
+            (mark_as_passed if matched else mark_as_failed)(expected['testname'])
+
     result = {}
     try:
         print(f">>>>>> Starting Test {expected['testname']} So Far: Correct:{correct_answers} Wrong:{wrong_answers} <<<<<<<<<")
         result["cmd"] = expected['cmd']
         result["result"] = client.execute_command(*expected['cmd'])
         result["exception"] = False
-        if compare_results(expected, result):
-            mark_as_passed(expected['testname'])
-        else:
-            mark_as_failed(expected['testname'])
+        record(compare_results(expected, result))
     except valkey.ResponseError as e:
         print(f"Got ResponseError: {e} for command {expected['cmd']}")
         result["exception"] = True
-        if compare_results(expected, result):
-            mark_as_passed(expected['testname'])
-        else:
-            mark_as_failed(expected['testname'])
+        record(compare_results(expected, result))
     return data_set
+
+def cluster_routing(cmd):
+    """Extra execute_command kwargs needed to route `cmd` in cluster mode.
+
+    The cluster client routes a keyless command only if it recognizes the name:
+    its SEARCH_COMMANDS list carries FT.SEARCH and FT.AGGREGATE but predates
+    FT.HYBRID, so that one raises "No way to dispatch this command" instead of
+    reaching a node. Sending it to the default node is what the client does for
+    the two it knows, and any primary is a valid entry point -- the coordinator
+    fans out from wherever the command lands.
+    """
+    name = str(cmd[0]).upper()
+    if name in ValkeyCluster.SEARCH_COMMANDS[0]:
+        return {}
+    if name.startswith("FT."):
+        return {"target_nodes": ValkeyCluster.DEFAULT_NODE}
+    return {}
+
 
 def drop_index_cluster(test_case, key_type):
     index_name = "json_idx1" if key_type == "json" else "hash_idx1"
@@ -600,7 +805,8 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
         )
 
         result["cmd"] = expected["cmd"]
-        result["result"] = cluster_client.execute_command(*expected["cmd"])
+        result["result"] = cluster_client.execute_command(
+            *expected["cmd"], **cluster_routing(expected["cmd"]))
         result["exception"] = False
 
         if compare_results(expected, result):
@@ -670,12 +876,15 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
     def test_answers(self, answers):
         global client, data_set
         global correct_answers, failed_tests, passed_tests
+        global xfailed_tests, xpassed_tests
 
         # RESET GLOBAL COUNTERS AT START OF EACH TEST
         correct_answers = 0
         wrong_answers = 0
         failed_tests = {}
         passed_tests = {}
+        xfailed_tests = {}
+        xpassed_tests = {}
 
         print("Running test_answers with answers file:", answers)
         answers = _load_answers_with_hash_check(answers)
@@ -687,6 +896,22 @@ class TestAnswersCMD(ValkeySearchTestCaseDebugMode):
         )
         for i in range(len(answers)):
             data_set = do_answer(client, answers[i], data_set)
+
+        if xfailed_tests:
+            print(">>>>>>>>> Expected Failures (known gaps) <<<<<<<<<")
+            for k, v in sorted(xfailed_tests.items()):
+                print(f"xfail {k:60}: {v} times")
+        if xpassed_tests:
+            # Not a failure: closing the gap should not break the build before
+            # someone removes the marker. It does need to be impossible to miss.
+            print("!" * 78)
+            print("XPASS: answers marked `xfail` in the generator now MATCH.")
+            print("The gap they document has been closed -- drop the xfail")
+            print("marker in integration/compatibility/ and update")
+            print("unsupported_tests.md.")
+            for k, v in sorted(xpassed_tests.items()):
+                print(f"  xpass {k:60}: {v} times")
+            print("!" * 78)
 
         expected_count = sum(1 for a in answers if not a.get('excluded'))
         if correct_answers != expected_count:

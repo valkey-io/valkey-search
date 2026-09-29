@@ -2,7 +2,7 @@
 
 CI_DIR=$(readlink -f $(dirname $0))
 ROOT_DIR=$(readlink -f ${CI_DIR}/..)
-BUILD_SH_ARGS=$@
+BUILD_SH_ARGS=()
 WGET="wget -q"
 HOSTADDR="https://github.com/valkey-io/valkey-search/releases/download/1.0.0-rc1"
 
@@ -22,17 +22,20 @@ do
     case $arg in
     --debug)
         BUILD_CONFIG="debug"
+        BUILD_SH_ARGS+=("$arg")
         shift || true
         echo "Building in debug mode"
         ;;
     --asan)
         SAN_BUILD="address"
+        BUILD_SH_ARGS+=("$arg")
         shift || true
         san_suffix="-asan"
         echo "Building with ASAN enabled"
         ;;
     --tsan)
         SAN_BUILD="thread"
+        BUILD_SH_ARGS+=("$arg")
         shift || true
         san_suffix="-tsan"
         echo "Building with TSAN enabled"
@@ -49,10 +52,10 @@ do
         ;;
     --skip-prepare-env)
         SKIP_PREPARE_ENV="1"
-        BUILD_SH_ARGS="${BUILD_SH_ARGS/--skip-prepare-env/}"
         shift || true
         ;;
     *)
+        BUILD_SH_ARGS+=("$arg")
         shift || true
         ;;
     esac
@@ -108,87 +111,123 @@ function prepare_env() {
     fi
 }
 
+# Save integration test artifacts and logs to INTEGRATION_OUTPUT
 function save_integration_output() {
     echo "Saving integration test output to ${INTEGRATION_OUTPUT}"
-    local artifacts_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${san_suffix}"
+    local artifacts_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
     local third_party_dir="${ROOT_DIR}/.build-release${san_suffix}"
+    local status=0
     echo "Saving build artifacts from ${artifacts_dir}"
-    if [ -f "${third_party_dir}/valkey-json/build/src/libjson.so" ]; then
-        cp -- "${third_party_dir}/valkey-json/build/src/libjson.so" "${INTEGRATION_OUTPUT}"
+    if [ -f "${artifacts_dir}/valkey-json/build/src/libjson.so" ]; then
+        cp -- "${artifacts_dir}/valkey-json/build/src/libjson.so" "${INTEGRATION_OUTPUT}" || status=1
+    elif [ -f "${third_party_dir}/valkey-json/build/src/libjson.so" ]; then
+        cp -- "${third_party_dir}/valkey-json/build/src/libjson.so" "${INTEGRATION_OUTPUT}" || status=1
+    else
+        LOG_ERROR "Missing module artifact: libjson.so"
+        status=1
     fi
-    if [ -f "${third_party_dir}/valkey-server/.build-release/bin/valkey-server" ]; then
-        cp -- "${third_party_dir}/valkey-server/.build-release/bin/valkey-server" "${INTEGRATION_OUTPUT}"
+    if [ -f "${artifacts_dir}/valkey-server/.build-${BUILD_CONFIG}/bin/valkey-server" ]; then
+        cp -- "${artifacts_dir}/valkey-server/.build-${BUILD_CONFIG}/bin/valkey-server" "${INTEGRATION_OUTPUT}" || status=1
+    elif [ -f "${third_party_dir}/valkey-server/.build-release/bin/valkey-server" ]; then
+        cp -- "${third_party_dir}/valkey-server/.build-release/bin/valkey-server" "${INTEGRATION_OUTPUT}" || status=1
+    else
+        LOG_ERROR "Missing artifact: valkey-server"
+        status=1
     fi
     if [ -f "${artifacts_dir}/libsearch.so" ]; then
-        cp -- "${artifacts_dir}/libsearch.so" "${INTEGRATION_OUTPUT}"
+        cp -- "${artifacts_dir}/libsearch.so" "${INTEGRATION_OUTPUT}" || status=1
+    else
+        LOG_ERROR "Missing module artifact: ${artifacts_dir}/libsearch.so"
+        status=1
     fi
-    local result_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${san_suffix}/integration/.valkey-test-framework"
+    local result_dir="${artifacts_dir}/integration/.valkey-test-framework"
     echo "Results Directory is ${result_dir}"
     if [ -d "${result_dir}" ]; then
-        cp -r -P -- "${result_dir}" "${INTEGRATION_OUTPUT}"
-        mv -- "${INTEGRATION_OUTPUT}/.valkey-test-framework" "${INTEGRATION_OUTPUT}/valkey-test-framework"
+        if cp -r -P -- "${result_dir}" "${INTEGRATION_OUTPUT}"; then
+            mv -- "${INTEGRATION_OUTPUT}/.valkey-test-framework" "${INTEGRATION_OUTPUT}/valkey-test-framework" || status=1
+        else
+            status=1
+        fi
     fi
     # Do the stest outputs too.
-    local stest_dir="${ROOT_DIR}/testing/integration/.build-${BUILD_CONFIG}${san_suffix}"
+    local stest_dir="${ROOT_DIR}/testing/integration/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
     echo "Stest Directory output is ${stest_dir}"
     if [ -d "${stest_dir}" ]; then
         if [ -d "${stest_dir}/output" ]; then
-            cp -r -P -- "${stest_dir}/output" "${INTEGRATION_OUTPUT}"
+            cp -r -P -- "${stest_dir}/output" "${INTEGRATION_OUTPUT}" || status=1
         fi
         if [ -d "${stest_dir}/tmp" ]; then
-            cp -r -P -- "${stest_dir}/tmp" "${INTEGRATION_OUTPUT}"
+            cp -r -P -- "${stest_dir}/tmp" "${INTEGRATION_OUTPUT}" || status=1
         fi
     fi
+    return "${status}"
 }
 
+# Save unit test binaries and output logs to UNITTEST_OUTPUT
 function save_unittest_output() {
     echo "Saving unit test output to ${UNITTEST_OUTPUT}"
-    local result_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${san_suffix}"
+    local result_dir="${ROOT_DIR}/.build-${BUILD_CONFIG}${BUILD_DIR_SUFFIX:-}${san_suffix}"
+    local status=0
     echo "Results Directory is ${result_dir}"
     if [ -d "${result_dir}/tests" ]; then
-        ls -l "${result_dir}/tests"
-        cp -r -P -- "${result_dir}/tests" "${UNITTEST_OUTPUT}"
+        ls -l "${result_dir}/tests" || status=1
+        cp -r -P -- "${result_dir}/tests" "${UNITTEST_OUTPUT}" || status=1
+    else
+        LOG_ERROR "Missing unit test directory: ${result_dir}/tests"
+        status=1
     fi
     if [ -f "${result_dir}/tests.out" ]; then
-        cp -- "${result_dir}/tests.out" "${UNITTEST_OUTPUT}"
+        cp -- "${result_dir}/tests.out" "${UNITTEST_OUTPUT}" || status=1
     fi
+    return "${status}"
 }
 
+# Clean up and save requested test outputs before script exit
 function cleanup() {
     # This method is called just before the script exits
     local exit_code=$?
+    local cleanup_status=0
     LOG_INFO "Cleaning up before exit"
     if [[ -n "$INTEGRATION_OUTPUT" ]]; then
-       save_integration_output
+       save_integration_output || cleanup_status=$?
+       if [[ $exit_code -eq 0 && $cleanup_status -ne 0 ]]; then
+           exit_code=$cleanup_status
+       fi
     fi
     if [[ -n "$UNITTEST_OUTPUT" ]]; then
-       save_unittest_output
+       cleanup_status=0
+       save_unittest_output || cleanup_status=$?
+       if [[ $exit_code -eq 0 && $cleanup_status -ne 0 ]]; then
+           exit_code=$cleanup_status
+       fi
     fi
     if [[ $exit_code -ne 0 ]]; then
         LOG_ERROR "Script ended with error code ${exit_code}"
+        exit "${exit_code}"
     else
         LOG_INFO "Script completed successfully"
     fi
 }
 
+# Configure environment and invoke build.sh with forwarded arguments
 function build_and_run_tests() {
     local DEPS_DIR=/opt/valkey-search-deps${san_suffix}
     local CMAKE_DIR=${DEPS_DIR}/lib/cmake
     # Let CMake find <Package>-config.cmake files by updating the CMAKE_PREFIX_PATH variable
     export CMAKE_PREFIX_PATH=${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${CMAKE_DIR}/benchmark:${DEPS_DIR}
     # enable core dumps if building and sudo is available without password
-    if [[ "${BUILD_SH_ARGS}" != *"--no-build"* ]] && sudo -n true 2>/dev/null; then
+    if [[ "${BUILD_SH_ARGS[*]}" != *"--no-build"* ]] && sudo -n true 2>/dev/null; then
         echo Enabling core dumps
         ulimit -c unlimited || true
         echo 'core.%p' | sudo -n tee /proc/sys/kernel/core_pattern || true
     fi
 
     # Skip building C++ test binaries for integration tests (they only need libsearch.so)
-    if [[ "${BUILD_SH_ARGS}" == *"--run-integration-tests"* ]] && [[ "${BUILD_SH_ARGS}" != *"--run-tests"* ]]; then
+    if [[ "${BUILD_SH_ARGS[*]}" == *"--run-integration-tests"* ]] && [[ "${BUILD_SH_ARGS[*]}" != *"--run-tests"* ]]; then
         export CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_UNIT_TESTS=OFF"
     fi
 
-    (cd ${ROOT_DIR} && ./build.sh --test-errors-stdout ${BUILD_SH_ARGS})
+    (cd "${ROOT_DIR}" && ./build.sh --test-errors-stdout "${BUILD_SH_ARGS[@]}")
 }
 
 # Write a success or error message on exit

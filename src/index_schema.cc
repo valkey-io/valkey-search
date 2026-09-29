@@ -279,8 +279,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       VMSDK_ASSIGN_OR_RETURN(
           std::shared_ptr<indexes::IndexBase> index,
           IndexFactory(ctx, res.get(), attribute, std::nullopt));
-      VMSDK_RETURN_IF_ERROR(
-          res->AddIndex(attribute.alias(), attribute.identifier(), index));
+      VMSDK_RETURN_IF_ERROR(res->AddIndex(
+          attribute.alias(), attribute.identifier(), index,
+          {.sortable = attribute.sortable(), .unf = attribute.unf()}));
     }
   }
   // Compiling the FILTER resolves every @reference against the attributes, so
@@ -510,12 +511,14 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
-                                   std::shared_ptr<indexes::IndexBase> index) {
+                                   std::shared_ptr<indexes::IndexBase> index,
+                                   AttributeOptions options) {
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
-       Attribute{attribute_alias, identifier, index,
-                 static_cast<AttributePosition>(
-                     attributes_indexed_data_size_.size())}});
+       Attribute{
+           attribute_alias, identifier, index,
+           static_cast<AttributePosition>(attributes_indexed_data_size_.size()),
+           options}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
@@ -1865,7 +1868,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               IndexFactory(ctx, index_schema.get(), attribute,
                            supplemental_iter.IterateChunks()));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
-              attribute.alias(), attribute.identifier(), index));
+              attribute.alias(), attribute.identifier(), index,
+              {.sortable = attribute.sortable(), .unf = attribute.unf()}));
           break;
         }
         case data_model::SupplementalContentType::
@@ -2213,8 +2217,7 @@ void IndexSchema::MarkAsDestructing() {
       if (params) {
         params->search_result.status =
             GenerateIndexNotFoundError(db_num_, name_);
-        auto *raw_params = params.get();
-        raw_params->QueryCompleteMainThread(std::move(params));
+        params->QueryCompleteMainThread(std::move(params));
       }
     }
   }

@@ -360,6 +360,17 @@ ConstructGroupByParser() {
       });
 }
 
+std::unique_ptr<vmsdk::ParamParser<AggregateParameters>>
+ConstructWithCursorParser() {
+  return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
+      [](AggregateParameters &parameters,
+         vmsdk::ArgsIterator &itr) -> absl::Status {
+        VMSDK_ASSIGN_OR_RETURN(parameters.cursor_options,
+                               ParseCursorOptions(itr));
+        return absl::OkStatus();
+      });
+}
+
 vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
   vmsdk::KeyValueParser<AggregateParameters> parser;
   parser.AddParamParser(kDialectParam,
@@ -384,6 +395,7 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
   parser.AddParamParser(kLimitParam, ConstructLimitParser());
   parser.AddParamParser(kParamsParam, ConstructParamsParser());
   parser.AddParamParser(kSortByParam, ConstructSortByParser());
+  parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
   return parser;
 }
 

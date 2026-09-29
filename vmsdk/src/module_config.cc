@@ -24,7 +24,8 @@ namespace config {
 /// Valkey to load the configurations first time when the module loaded. Once
 /// this is done, we set it back to false. If the user passes "--debug-mode yes"
 /// we will change it back to "true".
-static auto debug_mode = BooleanBuilder(kDebugMode, true).Hidden().Build();
+static auto debug_mode =
+    BooleanBuilder(kDebugMode, true).HiddenMutable().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
@@ -123,7 +124,7 @@ void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
 
 absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
   for (const auto &[_, entry] : entries_) {
-    if (entry->IsHidden()) {
+    if (entry->IsHidden() && !entry->RegisterWhenHidden()) {
       continue;
     }
     VMSDK_RETURN_IF_ERROR(entry->Register(ctx));

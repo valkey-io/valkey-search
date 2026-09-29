@@ -151,6 +151,10 @@ class Registerable {
 
   inline void SetDeveloperConfig(bool b) { this->developer_config_ = b; }
   inline bool IsDeveloperConfig() const { return developer_config_; }
+  // When true, a Hidden config is still registered with Valkey so it can be
+  // read/modified at runtime via CONFIG GET/SET <exact-name>.
+  inline void SetRegisterWhenHidden(bool b) { register_when_hidden_ = b; }
+  inline bool RegisterWhenHidden() const { return register_when_hidden_; }
   // Getter for flags
   inline size_t GetFlags() const { return flags_; }
 
@@ -159,6 +163,7 @@ class Registerable {
   size_t flags_{kDefault};
   bool was_set_{false};
   bool developer_config_{false};
+  bool register_when_hidden_{false};
 };
 
 template <typename T>
@@ -533,6 +538,15 @@ class ConfigBuilder {
     return *this;
   }
 
+  /// Like Hidden(): excluded from `CONFIG GET <pattern>`. Unlike Hidden(), the
+  /// entry is still registered with Valkey, so it can be read and modified at
+  /// runtime via `CONFIG GET/SET <exact-name>`.
+  auto &HiddenMutable() {
+    config_->EnableFlag(VALKEYMODULE_CONFIG_HIDDEN);
+    config_->SetRegisterWhenHidden(true);
+    return *this;
+  }
+
   auto &Sensitive() {
     config_->EnableFlag(VALKEYMODULE_CONFIG_SENSITIVE);
     return *this;
@@ -544,10 +558,9 @@ class ConfigBuilder {
   }
 
   /// This configuration setting is restricted to developer use only. It can be
-  /// modified exclusively when `search.debug-mode` is set to `yes` (the default
-  /// setting is `no`). When a configuration entry is marked as `Dev()`, it
-  /// becomes both `Hidden` and `Immutable` if `search.debug-mode` is set to
-  /// `no`, preventing any runtime modifications.
+  /// modified only while `search.debug-mode` is `yes` (default `no`). Attempts
+  /// to modify it otherwise are rejected by `Validate()`. `debug-mode` itself
+  /// can be toggled at runtime via `CONFIG SET search.debug-mode`.
   auto &Dev() {
     config_->SetDeveloperConfig(true);
     return *this;

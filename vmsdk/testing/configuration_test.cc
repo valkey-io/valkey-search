@@ -323,6 +323,54 @@ TEST_F(ConfigTest, CheckDebugConfiguration) {
   }
 }
 
+// debug-mode must be registered with Valkey (as a hidden config) so it can be
+// toggled at runtime via CONFIG SET, which in turn gates Dev() configs.
+TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
+  ValkeyModuleConfigSetBoolFunc debug_mode_setfn = nullptr;
+  void *debug_mode_privdata = nullptr;
+  EXPECT_CALL(*kMockValkeyModule,
+              RegisterBoolConfig(&fake_ctx, StrEq("debug-mode"), _,
+                                 Eq(static_cast<unsigned int>(
+                                     VALKEYMODULE_CONFIG_HIDDEN)),
+                                 _, _, _, _))
+      .WillOnce([&](ValkeyModuleCtx *, const char *, int, unsigned int,
+                    ValkeyModuleConfigGetBoolFunc,
+                    ValkeyModuleConfigSetBoolFunc setfn,
+                    ValkeyModuleConfigApplyFunc, void *privdata) {
+        debug_mode_setfn = setfn;
+        debug_mode_privdata = privdata;
+        return VALKEYMODULE_OK;
+      });
+  ASSERT_TRUE(ModuleConfigManager::Instance().Init(&fake_ctx).ok());
+  ASSERT_NE(debug_mode_setfn, nullptr);
+
+  // Start with debug-mode off, as if loaded without `--debug-mode yes`.
+  auto args = vmsdk::ToValkeyStringVector("");
+  ASSERT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  ASSERT_FALSE(config::IsDebugModeEnabled());
+
+  auto dev_config =
+      config::BooleanBuilder("my-dev-bool", true).Dev().Build();
+  EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(false)));
+
+  // CONFIG SET search.debug-mode yes
+  EXPECT_EQ(debug_mode_setfn("debug-mode", 1, debug_mode_privdata, nullptr),
+            VALKEYMODULE_OK);
+  EXPECT_TRUE(config::IsDebugModeEnabled());
+  EXPECT_TRUE(dev_config->SetValue(false).ok());
+  EXPECT_FALSE(dev_config->GetValue());
+
+  // CONFIG SET search.debug-mode no
+  EXPECT_EQ(debug_mode_setfn("debug-mode", 0, debug_mode_privdata, nullptr),
+            VALKEYMODULE_OK);
+  EXPECT_FALSE(config::IsDebugModeEnabled());
+  EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(true)));
+  EXPECT_FALSE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+}
+
 TEST_F(ConfigTest, defaultValue) {
   // Define some configuration entries that will register themselves with the
   // configuration manager

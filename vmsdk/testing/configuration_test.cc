@@ -329,10 +329,10 @@ TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
   ValkeyModuleConfigSetBoolFunc debug_mode_setfn = nullptr;
   void *debug_mode_privdata = nullptr;
   EXPECT_CALL(*kMockValkeyModule,
-              RegisterBoolConfig(&fake_ctx, StrEq("debug-mode"), _,
-                                 Eq(static_cast<unsigned int>(
-                                     VALKEYMODULE_CONFIG_HIDDEN)),
-                                 _, _, _, _))
+              RegisterBoolConfig(
+                  &fake_ctx, StrEq("debug-mode"), _,
+                  Eq(static_cast<unsigned int>(VALKEYMODULE_CONFIG_HIDDEN)), _,
+                  _, _, _))
       .WillOnce([&](ValkeyModuleCtx *, const char *, int, unsigned int,
                     ValkeyModuleConfigGetBoolFunc,
                     ValkeyModuleConfigSetBoolFunc setfn,
@@ -351,8 +351,7 @@ TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
                   .ok());
   ASSERT_FALSE(config::IsDebugModeEnabled());
 
-  auto dev_config =
-      config::BooleanBuilder("my-dev-bool", true).Dev().Build();
+  auto dev_config = config::BooleanBuilder("my-dev-bool", true).Dev().Build();
   EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(false)));
 
   // CONFIG SET search.debug-mode yes

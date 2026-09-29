@@ -7,10 +7,13 @@
 
 #include "src/indexes/vector_svs.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -26,6 +29,7 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswlib.h"
+#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -77,6 +81,12 @@ svs_threadpool_t kSvsThreadpoolIface{&kSvsThreadpoolOps, nullptr};
 // so it counts against used_memory / maxmemory just like the module's
 // own malloc arena.
 constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
+
+// Block size passed to svs_index_build_dynamic. SVS's "default" (0)
+// resolves to 2^30 bytes, materialized up-front on the first HSET;
+// 16 MiB keeps the first-add reservation bounded. Measured 16–64 MiB
+// behave identically; smaller wastes per-block overhead at large DIM.
+constexpr size_t kSvsBlockSizeBytes = 16 * 1024 * 1024;
 
 size_t RoundUpToPageSize(size_t size, size_t page_size) {
   return ((size + page_size - 1) / page_size) * page_size;
@@ -142,7 +152,7 @@ std::optional<svs_distance_metric_t> ToSvsDistanceMetric(
 
 // Selects the SVS internal storage data type from the compression proto
 // value. FLOAT32 storage is the default; FP16 and SQ8 are the two open
-// v1 compression kinds registered in the SVS C API at the current pin.
+// v1 compression kinds the SVS C API registers.
 std::optional<svs_data_type_t> CompressionToSvsDataType(
     data_model::SVSCompressionType compression) {
   switch (compression) {
@@ -209,6 +219,129 @@ struct BuilderDeleter {
 using BuilderPtr = std::unique_ptr<
     std::remove_pointer_t<svs_index_builder_h>, BuilderDeleter>;
 
+// Materializes a const float* view of an n-element vector originally
+// stored as T. For T=float, returns the source pointer directly and
+// leaves scratch untouched. For other T, resizes scratch and fills it
+// via the compiler's native narrowing cast. The SVS C API requires
+// const float* regardless of the internal storage kind; any internal
+// quantization happens inside SVS after this call.
+template <typename T>
+const float* MakeFp32(const T* src, size_t n_elements,
+                      std::vector<float>& scratch) {
+  if constexpr (std::is_same_v<T, float>) {
+    (void)scratch;
+    return src;
+  } else {
+    scratch.resize(n_elements);
+    for (size_t i = 0; i < n_elements; ++i) {
+      scratch[i] = static_cast<float>(src[i]);
+    }
+    return scratch.data();
+  }
+}
+
+// Rejects a vector whose fp32 representation contains any non-finite
+// component (NaN or +/-Inf). SVS's graph build and search spin on NaN
+// distances; one bad vector pins the reader or writer thread for the
+// life of the process. Checked at ingest and query entry points.
+// Uses the IEEE-754 bit pattern (exponent == 0xFF) rather than
+// std::isfinite because the indexes TU is built with -ffast-math,
+// which lets the compiler fold isnan/isfinite to false.
+template <typename T>
+absl::Status CheckFiniteVector(const T* src, size_t n_elements) {
+  for (size_t i = 0; i < n_elements; ++i) {
+    const float v = static_cast<float>(src[i]);
+    uint32_t bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    if ((bits & 0x7F800000u) == 0x7F800000u) {
+      return absl::InvalidArgumentError(
+          "SVS_VAMANA: vector contains non-finite component");
+    }
+  }
+  return absl::OkStatus();
+}
+
+// Constructs the first svs_index for a VectorSVS instance on the first
+// HSET arriving at an index whose Create() left svs_index_ null.
+// Assembles algorithm/storage/builder, wires the sequential threadpool
+// and huge-page-aware allocator, and returns the built handle. The
+// SVS C API requires num_vectors > 0 for svs_index_build_dynamic; the
+// first-add path passes the vector supplied by the ingest call.
+absl::StatusOr<svs_index_h> BootstrapIndex(
+    const SVSBuildConfig& config,
+    data_model::DistanceMetric distance_metric, int dimensions,
+    uint64_t label, const float* fp32_vector) {
+  auto metric = ToSvsDistanceMetric(distance_metric);
+  if (!metric.has_value()) {
+    return absl::InvalidArgumentError(
+        "SVS_VAMANA: unsupported DISTANCE_METRIC");
+  }
+  auto storage_type = CompressionToSvsDataType(config.compression);
+  if (!storage_type.has_value()) {
+    return absl::InvalidArgumentError(
+        "SVS_VAMANA: COMPRESSION is proprietary / v2 and not available "
+        "in this build");
+  }
+
+  ScopedSvsError err;
+
+  AlgorithmPtr algo(svs_algorithm_create_vamana(
+      config.graph_max_degree, config.construction_window_size,
+      config.search_window_size, err.get()));
+  if (!algo) return SvsErrorToStatus(err.get(), "algorithm_create_vamana");
+
+  if (config.alpha > 0.0f) {
+    if (!svs_algorithm_vamana_set_alpha(algo.get(), config.alpha,
+                                        err.get())) {
+      return SvsErrorToStatus(err.get(), "algorithm_vamana_set_alpha");
+    }
+  }
+
+  StoragePtr storage;
+  if (config.compression == data_model::SVS_COMPRESSION_SQ8) {
+    storage.reset(svs_storage_create_sq(*storage_type, err.get()));
+  } else {
+    storage.reset(svs_storage_create_simple(*storage_type, err.get()));
+  }
+  if (!storage) return SvsErrorToStatus(err.get(), "storage_create");
+
+  BuilderPtr builder(svs_index_builder_create(
+      *metric, static_cast<size_t>(dimensions), algo.get(), err.get()));
+  if (!builder) return SvsErrorToStatus(err.get(), "index_builder_create");
+
+  if (!svs_index_builder_set_storage(builder.get(), storage.get(),
+                                     err.get())) {
+    return SvsErrorToStatus(err.get(), "index_builder_set_storage");
+  }
+  if (!svs_index_builder_set_threadpool_custom(builder.get(),
+                                               &kSvsThreadpoolIface,
+                                               err.get())) {
+    return SvsErrorToStatus(err.get(),
+                            "index_builder_set_threadpool_custom");
+  }
+  if (ValkeyModule_IncrExternalMemory != nullptr &&
+      ValkeyModule_DecrExternalMemory != nullptr) {
+    if (!svs_index_builder_set_allocator_custom(
+            builder.get(), &kSvsAllocatorIface, err.get())) {
+      return SvsErrorToStatus(err.get(),
+                              "index_builder_set_allocator_custom");
+    }
+  } else {
+    if (!svs_index_builder_set_allocator(
+            builder.get(), SVS_ALLOCATOR_KIND_SIMPLE, err.get())) {
+      return SvsErrorToStatus(err.get(), "index_builder_set_allocator");
+    }
+  }
+
+  svs_index_h index = svs_index_build_dynamic(
+      builder.get(), fp32_vector, &label, /*num_vectors=*/1,
+      /*blocksize_bytes=*/kSvsBlockSizeBytes, err.get());
+  if (index == nullptr) {
+    return SvsErrorToStatus(err.get(), "index_build_dynamic");
+  }
+  return index;
+}
+
 }  // namespace
 
 #endif  // __linux__ && __x86_64__
@@ -259,10 +392,8 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::Create(
       svs_proto.compression(),
   };
   // svs_index_ stays null until the first HSET bootstraps it via
-  // svs_index_build_dynamic. The SVS C API at pin 5717f68 requires
-  // num_vectors > 0 at build time and offers no create-empty entry
-  // point; the C++ runtime DynamicVamanaIndex::build accepts an empty
-  // init and the C API should follow (filed as upstream ask).
+  // svs_index_build_dynamic. The SVS C API requires num_vectors > 0 at
+  // build time and offers no create-empty entry point.
   return instance;
 #else
   (void)vector_index_proto;
@@ -299,21 +430,114 @@ absl::StatusOr<std::vector<Neighbor>> VectorSVS<T>::Search(
 
 template <typename T>
 absl::Status VectorSVS<T>::AddRecordImpl(
-    uint64_t /*internal_id*/,
-    std::shared_ptr<const VectorRecord>&& /*vector_record*/) {
+    uint64_t internal_id,
+    std::shared_ptr<const VectorRecord>&& vector_record) {
+#if defined(__linux__) && defined(__x86_64__)
+  const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
+  VMSDK_RETURN_IF_ERROR(
+      CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
+  std::vector<float> scratch;
+  const float* fp32 =
+      MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
+
+  absl::WriterMutexLock lock(&resize_mutex_);
+  if (svs_index_ == nullptr) {
+    auto result =
+        BootstrapIndex(build_config_, this->distance_metric_, dimensions_,
+                       internal_id, fp32);
+    if (!result.ok()) return result.status();
+    svs_index_ = *result;
+  } else {
+    ScopedSvsError err;
+    size_t added = 0;
+    if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
+                                      /*num_vectors=*/1, &added,
+                                      err.get())) {
+      return SvsErrorToStatus(err.get(), "index_dynamic_add_points");
+    }
+  }
+  label_to_record_[internal_id] = std::move(vector_record);
+  return absl::OkStatus();
+#else
+  (void)internal_id;
+  (void)vector_record;
   return absl::UnimplementedError(kUnavailableMsg);
+#endif
 }
 
 template <typename T>
-absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t /*internal_id*/) {
+absl::Status VectorSVS<T>::RemoveRecordImpl(uint64_t internal_id) {
+#if defined(__linux__) && defined(__x86_64__)
+  absl::WriterMutexLock lock(&resize_mutex_);
+  auto it = label_to_record_.find(internal_id);
+  if (it == label_to_record_.end()) {
+    return absl::NotFoundError(
+        absl::StrCat("SVS internal_id not found: ", internal_id));
+  }
+  if (svs_index_ != nullptr) {
+    ScopedSvsError err;
+    size_t deleted = 0;
+    if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
+                                         /*num_vectors=*/1, &deleted,
+                                         err.get())) {
+      return SvsErrorToStatus(err.get(), "index_dynamic_delete_points");
+    }
+  }
+  label_to_record_.erase(it);
+  return absl::OkStatus();
+#else
+  (void)internal_id;
   return absl::UnimplementedError(kUnavailableMsg);
+#endif
 }
 
 template <typename T>
 absl::Status VectorSVS<T>::ModifyRecordImpl(
-    uint64_t /*internal_id*/,
-    std::shared_ptr<const VectorRecord>&& /*vector_record*/) {
+    uint64_t internal_id,
+    std::shared_ptr<const VectorRecord>&& vector_record) {
+#if defined(__linux__) && defined(__x86_64__)
+  // SVS's add_points throws on a duplicate external ID (the translator
+  // insert is checked before the data mutation), so replacement is a
+  // delete followed by an add under the same lock. No native replace
+  // primitive on the C API surface today.
+  const T* raw = reinterpret_cast<const T*>(vector_record->GetRawVector());
+  VMSDK_RETURN_IF_ERROR(
+      CheckFiniteVector<T>(raw, static_cast<size_t>(dimensions_)));
+  std::vector<float> scratch;
+  const float* fp32 =
+      MakeFp32<T>(raw, static_cast<size_t>(dimensions_), scratch);
+
+  absl::WriterMutexLock lock(&resize_mutex_);
+  ScopedSvsError err;
+  if (svs_index_ != nullptr) {
+    size_t deleted = 0;
+    if (!svs_index_dynamic_delete_points(svs_index_, &internal_id,
+                                         /*num_vectors=*/1, &deleted,
+                                         err.get())) {
+      return SvsErrorToStatus(err.get(),
+                              "modify: index_dynamic_delete_points");
+    }
+    size_t added = 0;
+    if (!svs_index_dynamic_add_points(svs_index_, fp32, &internal_id,
+                                      /*num_vectors=*/1, &added,
+                                      err.get())) {
+      return SvsErrorToStatus(err.get(),
+                              "modify: index_dynamic_add_points");
+    }
+  } else {
+    auto result =
+        BootstrapIndex(build_config_, this->distance_metric_, dimensions_,
+                       internal_id, fp32);
+    if (!result.ok()) return result.status();
+    svs_index_ = *result;
+  }
+  label_to_record_[internal_id] = std::move(vector_record);
+  return absl::OkStatus();
+#else
+  (void)internal_id;
+  (void)vector_record;
   return absl::UnimplementedError(kUnavailableMsg);
+#endif
 }
 
 template <typename T>
@@ -365,32 +589,46 @@ float VectorSVS<T>::ComputeDistance(absl::string_view /*query*/,
 
 template <typename T>
 std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVectorLockFree(
-    uint64_t /*internal_id*/) const {
-  LOG(FATAL) << kUnavailableMsg;
-  __builtin_unreachable();
+    uint64_t internal_id) const {
+  auto it = label_to_record_.find(internal_id);
+  CHECK(it != label_to_record_.end())
+      << "SVS internal_id not found: " << internal_id;
+  return it->second;
 }
 
 template <typename T>
 std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVector(
-    uint64_t /*internal_id*/) const {
-  LOG(FATAL) << kUnavailableMsg;
-  __builtin_unreachable();
+    uint64_t internal_id) const {
+  return GetVectorLockFree(internal_id);
 }
 
 template <typename T>
 std::optional<hnswlib::tableint> VectorSVS<T>::GetAlgoIdLockFree(
-    uint64_t /*internal_id*/) const {
-  return std::nullopt;
+    uint64_t internal_id) const {
+  auto it = label_to_record_.find(internal_id);
+  if (it == label_to_record_.end()) {
+    return std::nullopt;
+  }
+  // SVS addresses vectors by the same external id the caller supplied;
+  // there is no distinct internal-slot integer to return, so the id is
+  // its own algo-side identifier. Truncated to the hnswlib::tableint
+  // width the base class declares; callers use it only for equality
+  // checks against other results from this index.
+  return static_cast<hnswlib::tableint>(internal_id);
 }
 
 template <typename T>
 uint64_t VectorSVS<T>::GetMaxLoadedLabel() const {
-  return 0;
+  uint64_t max_label = 0;
+  for (const auto& [id, _] : label_to_record_) {
+    if (id > max_label) max_label = id;
+  }
+  return max_label;
 }
 
 template <typename T>
 size_t VectorSVS<T>::GetLabelCount() const {
-  return 0;
+  return label_to_record_.size();
 }
 
 template class VectorSVS<float>;

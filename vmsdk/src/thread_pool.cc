@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -21,7 +22,6 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_join.h"
-#include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
 #include "absl/time/clock.h"
 #include "absl/time/time.h"
@@ -47,7 +47,25 @@ class ThreadRunContext {
 
 void *RunWorkerThread(void *arg) {
   ThreadRunContext *ctx = static_cast<ThreadRunContext *>(arg);
-  ctx->GetThread()->InitThreadMonitor();
+  auto thread = ctx->GetThread();
+  // The worker records its own id and names itself, rather than relying on
+  // the id pthread_create stores for the parent. POSIX does not order that
+  // store before the new thread starts running, and musl does it afterwards
+  // (after __clone), so a worker reading thread_id here could see the initial
+  // 0 -- measured at roughly 1 in 200 creations on musl, never on glibc. A
+  // ThreadMonitor built from that 0 later crashes INFO in
+  // pthread_getcpuclockid, which dereferences the handle.
+  //
+  // Doing it here instead makes this thread the only writer of thread_id, so
+  // the parent must not read it before the worker has published it: the
+  // naming moved in here for that reason (naming yourself also takes the
+  // prctl path, which never dereferences a handle), and pthread_join only
+  // reads it once IsJoinable() has synchronized with this thread.
+  thread->thread_id = pthread_self();
+#ifndef __APPLE__
+  pthread_setname_np(thread->thread_id, thread->name.c_str());
+#endif
+  thread->InitThreadMonitor();
   ctx->GetPool()->WorkerThread(ctx->GetThread());
   delete ctx;  // shallow delete
   return nullptr;
@@ -179,77 +197,88 @@ void ThreadPool::JoinTerminatedWorkers() {
   }
 }
 
+// The suspend/resume handshake counts workers instead of pre-computing how
+// many to wait for, since Resize can add or retire workers at any time, even
+// while suspended.
 absl::Status ThreadPool::SuspendWorkers() {
   absl::MutexLock lock(&suspend_resume_mutex_);
-  DCHECK(!blocking_refcount_);
-  {
-    absl::MutexLock lock(&queue_mutex_);
-    if (!started_) {
-      return absl::InvalidArgumentError("Thread pool is not started");
-    }
-    if (stop_mode_.has_value()) {
-      return absl::InvalidArgumentError(
-          "Cannot suspend workers after the thread pool is marked for stop");
-    }
-    if (suspend_workers_) {
-      return absl::InvalidArgumentError("Thread pool is already suspended");
-    }
-    suspend_workers_ = true;
-    blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.Size());
-    condition_.SignalAll();
+  absl::MutexLock queue_lock(&queue_mutex_);
+  if (!started_) {
+    return absl::InvalidArgumentError("Thread pool is not started");
   }
-  blocking_refcount_->Wait();
-  blocking_refcount_ = nullptr;
+  if (stop_mode_.has_value()) {
+    return absl::InvalidArgumentError(
+        "Cannot suspend workers after the thread pool is marked for stop");
+  }
+  if (suspend_workers_) {
+    return absl::InvalidArgumentError("Thread pool is already suspended");
+  }
+  suspend_workers_ = true;
+  condition_.SignalAll();
+  queue_mutex_.Await(absl::Condition(this, &ThreadPool::AllWorkersSuspended));
+  if (stop_mode_.has_value()) {
+    // Re-check: Await releases queue_mutex_ while waiting, so a stop request
+    // may have arrived and cleared the suspension in the meantime.
+    return absl::InvalidArgumentError(
+        "Cannot suspend workers as the thread pool was marked for stop while "
+        "suspension was in progress");
+  }
   return absl::OkStatus();
 }
 
 absl::Status ThreadPool::ResumeWorkers() {
   absl::MutexLock lock(&suspend_resume_mutex_);
-  DCHECK(!blocking_refcount_);
-  {
-    absl::MutexLock lock(&queue_mutex_);
-    if (stop_mode_.has_value()) {
-      return absl::InvalidArgumentError(
-          "Cannot resume workers after the thread pool is marked for stop");
-    }
-    if (!suspend_workers_) {
-      return absl::InvalidArgumentError("Thread pool is not suspended");
-    }
-    suspend_workers_ = false;
-    blocking_refcount_ =
-        std::make_unique<absl::BlockingCounter>(threads_.Size());
+  absl::MutexLock queue_lock(&queue_mutex_);
+  if (stop_mode_.has_value()) {
+    return absl::InvalidArgumentError(
+        "Cannot resume workers after the thread pool is marked for stop");
   }
-
-  blocking_refcount_->Wait();
-  blocking_refcount_ = nullptr;
+  if (!suspend_workers_) {
+    return absl::InvalidArgumentError("Thread pool is not suspended");
+  }
+  suspend_workers_ = false;
+  queue_mutex_.Await(absl::Condition(this, &ThreadPool::NoWorkerSuspended));
   return absl::OkStatus();
 }
 
-bool SuspendResumeReady(bool *suspend_workers) { return !(*suspend_workers); }
-
-void ThreadPool::AwaitSuspensionCleared()
+void ThreadPool::AwaitSuspensionCleared(const Thread &thread)
     ABSL_EXCLUSIVE_LOCKS_REQUIRED(queue_mutex_) {
-  if (!suspend_workers_) {
+  if (!suspend_workers_ || thread.IsShutdown()) {
     return;
   }
-  blocking_refcount_->DecrementCount();
-  queue_mutex_.Await(absl::Condition(SuspendResumeReady, &suspend_workers_));
-  if (blocking_refcount_) {
-    blocking_refcount_->DecrementCount();
-  }
+  // Wait per worker so a worker retired by Resize can exit during suspension;
+  // otherwise it stays blocked until resume while resizes add replacements.
+  auto suspension_cleared = [this, &thread]() {
+    queue_mutex_.AssertReaderHeld();
+    return !suspend_workers_ || thread.IsShutdown();
+  };
+  ++suspended_workers_;
+  queue_mutex_.Await(absl::Condition(&suspension_cleared));
+  --suspended_workers_;
 }
 
 void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
+  {
+    absl::MutexLock lock(&queue_mutex_);
+    ++active_workers_;
+  }
   while (true) {
     absl::AnyInvocable<void()> task;
     {
       absl::MutexLock lock(&queue_mutex_);
-      AwaitSuspensionCleared();
+      AwaitSuspensionCleared(*thread);
+      if (thread->IsShutdown()) {
+        // A retired worker exits after its current task; queued tasks are
+        // left to the remaining workers.
+        --active_workers_;
+        thread->MarkJoinable();
+        return;
+      }
       auto condition = absl::Condition(this, &ThreadPool::QueueReady);
       while (!condition.Eval()) {
         condition_.WaitWithTimeout(&queue_mutex_, absl::Seconds(1));
         if (thread->IsShutdown()) {
+          --active_workers_;
           thread->MarkJoinable();
           return;
         }
@@ -258,6 +287,7 @@ void ThreadPool::WorkerThread(std::shared_ptr<Thread> thread) {
           (stop_mode_.value() == StopMode::kAbrupt ||
            std::all_of(priority_tasks_.begin(), priority_tasks_.end(),
                        [](const auto &tasks) { return tasks.empty(); }))) {
+        --active_workers_;
         thread->MarkJoinable();
         return;
       }
@@ -286,13 +316,15 @@ size_t ThreadPool::QueueSize() const {
 void ThreadPool::IncrThreadCountBy(size_t count) {
   for (size_t i = 0; i < count; ++i) {
     std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
+    // Named before the thread starts: the worker names itself, and
+    // pthread_create orders this write before the worker reads it.
+    thread_ptr->name = name_prefix_ + std::to_string(threads_.Size());
     ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
-    pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
-    size_t thread_num = threads_.Size();
-    thread_ptr->name = name_prefix_ + std::to_string(thread_num);
-#ifndef __APPLE__
-    pthread_setname_np(thread_ptr->thread_id, thread_ptr->name.c_str());
-#endif
+    // The worker sets thread_id itself; see RunWorkerThread.
+    pthread_t unused;
+    const int rc = pthread_create(&unused, nullptr, RunWorkerThread, context);
+    CHECK_EQ(rc, 0) << "pthread_create failed for " << thread_ptr->name << ": "
+                    << strerror(rc);
     threads_.Add(thread_ptr);
   }
 }
@@ -310,12 +342,13 @@ void ThreadPool::DecrThreadCountBy(size_t count, bool sync) {
   if (targets.size() > count) {
     targets.erase(targets.begin(), targets.end() - count);
   }
-  for (const auto &thread : targets) {
-    thread->Shutdown();
-  }
-  // Wake idle workers so they observe shutdown_flag without waiting 1s.
+  // Set shutdown_flag under queue_mutex_ as a wait condition reads it; the
+  // signal wakes idle workers so they observe it without waiting 1s.
   {
     absl::MutexLock lock(&queue_mutex_);
+    for (const auto &thread : targets) {
+      thread->Shutdown();
+    }
     condition_.SignalAll();
   }
   if (sync) {

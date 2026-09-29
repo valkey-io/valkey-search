@@ -32,9 +32,20 @@ cleanup() {
     mkdir -p "$HOST_DEPS_DIR"
     docker cp "$CONTAINER_ID:/opt/valkey-search-deps/." "$HOST_DEPS_DIR" 2>/dev/null || true
   fi
-  for comp_db in "$WORKSPACE_DIR"/.build-*/compile_commands.json "$WORKSPACE_DIR"/.build-*-container/compile_commands.json; do
-    if [ -f "$comp_db" ] && [ -s "$comp_db" ]; then
-      python3 -c '
+  local current_link=""
+  if [ -L "$WORKSPACE_DIR/compile_commands.json" ]; then
+    current_link=$(readlink "$WORKSPACE_DIR/compile_commands.json")
+  fi
+
+  local comp_db=""
+  if [ -n "$current_link" ] && [[ "$current_link" =~ -container ]] && [ -f "$WORKSPACE_DIR/$current_link" ]; then
+    comp_db="$WORKSPACE_DIR/$current_link"
+  elif [ -z "$current_link" ] || [[ "$current_link" =~ -container ]]; then
+    comp_db=$(ls -t "$WORKSPACE_DIR"/.build-*-container*/compile_commands.json 2>/dev/null | head -n 1)
+  fi
+
+  if [ -n "$comp_db" ] && [ -f "$comp_db" ] && [ -s "$comp_db" ]; then
+    python3 -c '
 import sys
 with open(sys.argv[1], "r") as f:
     content = f.read()
@@ -44,11 +55,9 @@ if len(sys.argv) > 5 and sys.argv[4] and sys.argv[5]:
 with open(sys.argv[1], "w") as f:
     f.write(content)
 ' "$comp_db" "/workspaces/$WORKSPACE_BASENAME" "$WORKSPACE_DIR" "/opt/valkey-search-deps" "$HOST_DEPS_DIR" 2>/dev/null || true
-      rel_path="${comp_db#$WORKSPACE_DIR/}"
-      ln -sfn "$rel_path" "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
-      break
-    fi
-  done
+    local rel_path="${comp_db#$WORKSPACE_DIR/}"
+    ln -sfn "$rel_path" "$WORKSPACE_DIR/compile_commands.json" 2>/dev/null || true
+  fi
   if [ "$CREATED_CONTAINER" = "true" ] && [ -n "$CONTAINER_ID" ]; then
     docker rm -f "$CONTAINER_ID" 2>/dev/null || true
   fi

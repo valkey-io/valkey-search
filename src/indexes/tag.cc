@@ -17,6 +17,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/ascii.h"
+#include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
@@ -27,6 +28,7 @@
 #include "src/utils/scanner.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search_options.h"
+#include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -106,14 +108,16 @@ void Tag::DeindexTagForKey(absl::string_view tag,
 }
 
 absl::StatusOr<RecordResult> Tag::AddRecord(const InternedStringPtr &key,
-                                            absl::string_view data) {
-  if (!utils::IsValidUtf8(data)) {
+                                            AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto data_sv = vmsdk::ToStringView(str.get());
+  if (!utils::IsValidUtf8(data_sv)) {
     absl::MutexLock lock(&index_mutex_);
     untracked_keys_.insert(key);
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = StringInternStore::Intern(data);
+  auto interned_data = StringInternStore::Intern(data_sv);
   auto parsed_tags = ParseRecordTags(*interned_data, separator_);
   absl::MutexLock lock(&index_mutex_);
   if (parsed_tags.empty()) {
@@ -213,14 +217,16 @@ absl::flat_hash_set<absl::string_view> Tag::ParseRecordTags(
 }
 
 absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
-                                               absl::string_view data) {
-  if (!utils::IsValidUtf8(data)) {
+                                               AttributeData &&data) {
+  auto str = data.ConsumeString();
+  auto data_sv = vmsdk::ToStringView(str.get());
+  if (!utils::IsValidUtf8(data_sv)) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kIdentifier);
     return RecordResult::kInvalidData;
   }
 
-  auto interned_data = StringInternStore::Intern(data);
+  auto interned_data = StringInternStore::Intern(data_sv);
   auto new_parsed_tags = ParseRecordTags(*interned_data, separator_);
   if (new_parsed_tags.empty()) {
     [[maybe_unused]] auto res =
@@ -421,8 +427,9 @@ std::unique_ptr<EntriesFetcherBase> Tag::Search(
   size_t total = 0;
 
   auto collect_slot = [&](void *slot) {
-    if (slot == nullptr) return;
-    if (!seen.insert(slot).second) return;
+    if (!slot || !seen.insert(slot).second) {
+      return;
+    }
     matched_slots.push_back(slot);
     auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
     total += bag.size();
@@ -509,6 +516,32 @@ size_t Tag::GetTagValueDocCount(absl::string_view value) const {
   size_t count = bag.size();
   (void)bag.Release();
   return count;
+}
+
+size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
+                                   BorrowedInternedStringPtr key) const {
+  if (prefix_value.empty() || prefix_value.back() != '*') return 0;
+  const absl::string_view prefix =
+      prefix_value.substr(0, prefix_value.size() - 1);
+
+  // Scan the doc's own tags rather than the prefix's rax subtree: a doc carries
+  // a handful of tags while a prefix can match an unbounded slice of the index.
+  // Lock-free by the read-side invariant GetValue / ContainsKey rely on.
+  auto it = tracked_tags_by_keys_.find(key);
+  if (it == tracked_tags_by_keys_.end()) return 0;
+
+  for (const auto &part :
+       absl::StrSplit(it->second.raw_tag_string->Str(), separator_)) {
+    const absl::string_view tag = absl::StripAsciiWhitespace(part);
+    // Empty tags are never indexed (ParseRecordTags drops them), and a bare `*`
+    // query gives an empty prefix that would otherwise match one.
+    if (tag.empty()) continue;
+    if (case_sensitive_ ? absl::StartsWith(tag, prefix)
+                        : absl::StartsWithIgnoreCase(tag, prefix)) {
+      return GetTagValueDocCount(tag);
+    }
+  }
+  return 0;
 }
 
 bool Tag::IsTracked(const InternedStringPtr &key) const {

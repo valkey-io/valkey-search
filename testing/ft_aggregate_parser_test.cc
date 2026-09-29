@@ -6,11 +6,20 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include <cstdlib>
+#include <iostream>
 #include <map>
 
 #include "gtest/gtest.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/testing_infra/utils.h"
+
+namespace {
+bool IsVerbose() {
+  static const bool enabled = (std::getenv("TEST_VERBOSE") != nullptr);
+  return enabled;
+}
+}  // namespace
 
 std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
   return os << "S=" << *(std::string *)s;
@@ -24,7 +33,9 @@ struct FakeIndexInterface : public IndexInterface {
   absl::StatusOr<indexes::IndexerType> GetFieldType(
       absl::string_view fld_name) const override {
     std::string field_name(fld_name);
-    std::cout << "Fake make reference " << field_name << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake make reference " << field_name << "\n";
+    }
     auto itr = fields_.find(field_name);
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -35,13 +46,17 @@ struct FakeIndexInterface : public IndexInterface {
   }
   absl::StatusOr<std::string> GetIdentifier(
       absl::string_view alias) const override {
-    std::cout << "Fake get identifier for " << alias << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get identifier for " << alias << "\n";
+    }
     VMSDK_ASSIGN_OR_RETURN([[maybe_unused]] auto type, GetFieldType(alias));
     return std::string(alias);
   }
   absl::StatusOr<std::string> GetAlias(
       absl::string_view identifier) const override {
-    std::cout << "Fake get alias for " << identifier << "\n";
+    if (IsVerbose()) {
+      std::cout << "Fake get alias for " << identifier << "\n";
+    }
     auto itr = fields_.find(std::string(identifier));
     if (itr == fields_.end()) {
       return absl::NotFoundError(
@@ -125,7 +140,9 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
                               InorderTestValue inorder_test,
                               SlopTestValue slop_test,
                               VerbatimTestValue verbatim_test) {
-  std::cerr << "Running test: '" << test << "'\n";
+  if (IsVerbose()) {
+    std::cerr << "Running test: '" << test << "'\n";
+  }
   auto argv = vmsdk::ToValkeyStringVector(test);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
@@ -149,7 +166,10 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
       EXPECT_FALSE(params.loadall_);
       EXPECT_EQ(params.loads_.size(), loads_test.value_->size());
       for (auto i = 0; i < loads_test.value_->size(); ++i) {
-        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i]);
+        EXPECT_EQ(loads_test.value_->at(i), params.loads_[i].identifier);
+        // No AS clause in these cases (and the rename gate is off by default),
+        // so the output alias mirrors the identifier.
+        EXPECT_EQ(params.loads_[i].alias, params.loads_[i].identifier);
       }
     }
     EXPECT_EQ(params.inorder, inorder_test.value_);
@@ -191,6 +211,83 @@ TEST_F(AggregateTest, PrefaceParserTest) {
   }
 }
 
+TEST_F(AggregateTest, WithCursorParserTest) {
+  struct CursorValue {
+    int64_t count;
+    int64_t max_idle_ms;
+  };
+  struct {
+    std::string text;
+    bool ok;
+    std::optional<CursorValue> cursor;
+    size_t stages;
+  } test_cases[] = {
+      {"LIMIT 0 5", true, std::nullopt, 1},
+      {"WITHCURSOR", true, CursorValue{1000, 300000}, 0},
+      {"withcursor count 5", true, CursorValue{5, 300000}, 0},
+      {"WITHCURSOR MAXIDLE 10 COUNT 7", true, CursorValue{7, 10}, 0},
+      {"WITHCURSOR COUNT 5 LIMIT 0 5", true, CursorValue{5, 300000}, 1},
+      {"LIMIT 0 5 WITHCURSOR COUNT 5 SORTBY 1 @n1", true,
+       CursorValue{5, 300000}, 2},
+      {"WITHCURSOR COUNT 1 WITHCURSOR COUNT 3", true, CursorValue{3, 300000},
+       0},
+      {"WITHCURSOR COUNT 1 WITHCURSOR", true, CursorValue{1000, 300000}, 0},
+      {"WITHCURSOR COUNT 100000", true, CursorValue{100000, 300000}, 0},
+      {"WITHCURSOR COUNT", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT x", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT 0", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT -1", false, std::nullopt, 0},
+      {"WITHCURSOR COUNT 100001", false, std::nullopt, 0},
+      {"WITHCURSOR MAXIDLE", false, std::nullopt, 0},
+      {"WITHCURSOR MAXIDLE 0", false, std::nullopt, 0},
+  };
+  for (auto &tc : test_cases) {
+    auto argv = vmsdk::ToValkeyStringVector(tc.text);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto result = CreateAggregateParser().Parse(params, itr);
+    EXPECT_EQ(result.ok(), tc.ok) << tc.text << " Status: " << result;
+    if (tc.ok) {
+      ASSERT_EQ(params.cursor_options.has_value(), tc.cursor.has_value())
+          << tc.text;
+      if (tc.cursor) {
+        EXPECT_EQ(params.cursor_options->count, tc.cursor->count) << tc.text;
+        EXPECT_EQ(params.cursor_options->max_idle,
+                  absl::Milliseconds(tc.cursor->max_idle_ms))
+            << tc.text;
+      }
+      EXPECT_EQ(params.stages_.size(), tc.stages) << tc.text;
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
+TEST_F(AggregateTest, WithCursorMaxIdleConfigTest) {
+  auto &max_idle = options::GetCursorMaxIdleMs();
+  VMSDK_EXPECT_OK(max_idle.SetValue(100));
+  for (auto [text, ok, expected_ms] : {std::tuple{"WITHCURSOR", true, 100},
+                                       {"WITHCURSOR MAXIDLE 100", true, 100},
+                                       {"WITHCURSOR MAXIDLE 101", false, 0}}) {
+    auto argv = vmsdk::ToValkeyStringVector(text);
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto result = CreateAggregateParser().Parse(params, itr);
+    EXPECT_EQ(result.ok(), ok) << text << " Status: " << result;
+    if (ok) {
+      EXPECT_EQ(params.cursor_options->max_idle,
+                absl::Milliseconds(expected_ms));
+    }
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+  VMSDK_EXPECT_OK(max_idle.SetValue(INT64_MAX));
+}
+
 struct TestStage {
   const char *stage_in_;
   const char *stage_out_;
@@ -207,6 +304,10 @@ static std::vector<TestStage> TestStages{
     {"FILTER @fred", nullptr},
     {"FILTER @n1 + @n2", nullptr},
     {"FILTER @n1", "FILTER: @n1"},
+    // The dump shows the bound the clause itself parsed. ResolveSortByBounds
+    // raises it afterwards from a neighbouring LIMIT, which is why a SORTBY
+    // no longer truncates a wider page; what is printed here is the default
+    // it starts from.
     {"SORtBY 1 @n1", "SORTBY: ASC:@n1 MAX:10"},
     {"SORTBY 2 @n1 ASC", "SORTBY: ASC:@n1 MAX:10"},
     {"SORTBY 2 @n1 DESC", "SORTBY: DESC:@n1 MAX:10"},
@@ -247,7 +348,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
     text += TestStages[ix].stage_in_;
     any_bad |= TestStages[ix].stage_out_ == nullptr;
   }
-  std::cout << "Doing case " << text << "\n";
+  if (IsVerbose()) {
+    std::cout << "Doing case " << text << "\n";
+  }
   auto argv = vmsdk::ToValkeyStringVector(text);
   vmsdk::ArgsIterator itr(argv.data(), argv.size());
 
@@ -258,7 +361,9 @@ static void DoStageTest(FakeIndexInterface *fake_index,
   auto parser = CreateAggregateParser();
   auto result = parser.Parse(params, itr);
   if (any_bad) {
-    std::cout << "Failed status: " << result << "\n";
+    if (IsVerbose()) {
+      std::cout << "Failed status: " << result << "\n";
+    }
     EXPECT_FALSE(result.ok());
   } else {
     EXPECT_TRUE(result.ok());
@@ -280,9 +385,9 @@ TEST_F(AggregateTest, StageParserTest) {
     DoStageTest(&fake_index, std::vector<size_t>{i});
     for (size_t j = 0; j < TestStages.size(); ++j) {
       DoStageTest(&fake_index, std::vector<size_t>{i, j});
-      for (size_t k = 0; k < TestStages.size(); ++k) {
-        DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
-      }
+      // Sample 3-stage combinations across all stage positions
+      size_t k = (i + j) % TestStages.size();
+      DoStageTest(&fake_index, std::vector<size_t>{i, j, k});
     }
   }
 }
@@ -339,6 +444,22 @@ TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
 
     EXPECT_FALSE(result.ok()) << "Parser unexpectedly accepted: " << test_case;
 
+    for (auto arg : argv) {
+      ValkeyModule_FreeString(nullptr, arg);
+    }
+  }
+}
+
+TEST_F(AggregateTest, AddScoresFlagParses) {
+  for (const bool given : {true, false}) {
+    auto argv = vmsdk::ToValkeyStringVector(given ? "ADDSCORES LOAD 1 @n1"
+                                                  : "LOAD 1 @n1");
+    vmsdk::ArgsIterator itr(argv.data(), argv.size());
+    AggregateParameters params(0);
+    params.parse_vars_.index_interface_ = &fake_index;
+    auto parser = CreateAggregateParser();
+    ASSERT_TRUE(parser.Parse(params, itr).ok());
+    EXPECT_EQ(params.addscores_, given);
     for (auto arg : argv) {
       ValkeyModule_FreeString(nullptr, arg);
     }

@@ -42,11 +42,14 @@ An array of key value pairs.
   - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field.
   - `type` (string) One of `NUMERIC`, `TAG`, `TEXT` or `VECTOR`
   - Type-specific extension (see below)
+  - `SORTABLE` (string) `1` if the attribute was declared `SORTABLE`, `0` otherwise. Not reported for `VECTOR` attributes, which cannot be declared `SORTABLE`. RediSearch reports this as a bare token present only when declared.
+  - `UNF` (string) `1` if the attribute was declared `SORTABLE UNF`, `0` otherwise. Reported only for `TAG` and `TEXT` attributes, the only types whose sort value is normalized. RediSearch reports this as a bare token present only when declared.
 - `num_docs` (integer) Total keys in the index
 - `num_records` (integer) Total number of fields indexed.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.
 - `num_terms` (integer) Total number of unique terms in all text fields in this index.
 - `hash_indexing_failures` (integer) Count of unsuccessful indexing attempts
+- `filter_rejected_keys` (integer) Number of keys that were excluded from the index because they did not satisfy the index `FILTER` expression. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, in which case the field is read directly off the key; a misspelled field name therefore does not fail the command but instead behaves as a missing field. A `filter_rejected_keys` value that unexpectedly matches (or nearly matches) the number of ingested keys is the primary signal that a field name in the `FILTER` expression is misspelled.
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
 - `mutation_queue_size` (string) Number of keys contained in the mutation queue.
@@ -75,7 +78,7 @@ An array of key value pairs.
   - `dimensions` (integer) Dimension count
   - `distance_metric` (string) Possible values are `L2`, `IP` or `COSINE`
   - `size` (integer) Number of valid vectors for this attribute
-  - `data_type` (string) `FLOAT32`. This is the only available data type
+  - `data_type` (string) Element data type of the vector. Possible values are `FLOAT32`, `FLOAT16` or `BFLOAT16`
   - `algorithm` (array of key/value pairs) Extended information about the vector indexing algorithm for this attribute.
 
 #### FLAT VECTOR Field Type Extension.
@@ -99,6 +102,7 @@ An array of key value pairs
 - `num_docs` (string) INTEGER. Total keys in the index
 - `num_records` (string) INTEGER. Total records in the index
 - `hash_indexing_failures` (string) INTEGER. Count of unsuccessful indexing attempts
+- `filter_rejected_keys` (string) INTEGER. Number of keys excluded from the index because they did not satisfy the index `FILTER` expression (see the LOCAL response above for how this helps detect a misspelled `FILTER` field name).
 
 ### Response when the CLUSTER option is specified
 

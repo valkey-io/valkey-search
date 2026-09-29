@@ -1,0 +1,769 @@
+{
+  "FT.HYBRID": {
+    "acl_categories": [
+      "READ",
+      "SLOW",
+      "SEARCH"
+    ],
+    "history": [
+      [
+        "1.3.0",
+        "Hybrid search combining text/filter and vector arms"
+      ]
+    ],
+    "summary": "Performs hybrid search combining a text/filter arm with a vector arm, fuses results via RRF, LINEAR or a user-supplied FUNCTION, and feeds the fused list through the FT.AGGREGATE post-pipeline.",
+    "complexity": "O(N+M) where N is the complexity of the SEARCH arm and M is the complexity of the VSIM arm.",
+    "arguments": [
+      {
+        "name": "index",
+        "type": "key",
+        "key_spec_index": 0
+      },
+      {
+        "name": "search_clause",
+        "type": "block",
+        "arguments": [
+          {
+            "name": "search_token",
+            "type": "pure-token",
+            "token": "SEARCH"
+          },
+          {
+            "name": "query",
+            "type": "string"
+          },
+          {
+            "name": "scorer",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "scorer_token",
+                "type": "pure-token",
+                "token": "SCORER"
+              },
+              {
+                "name": "scorer_name",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "search_yield_score_as",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "yield_token",
+                "type": "pure-token",
+                "token": "YIELD_SCORE_AS"
+              },
+              {
+                "name": "search_score_alias",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "vsim_clause",
+        "type": "block",
+        "arguments": [
+          {
+            "name": "vsim_token",
+            "type": "pure-token",
+            "token": "VSIM"
+          },
+          {
+            "name": "vector_field",
+            "type": "string"
+          },
+          {
+            "name": "vector_param",
+            "type": "string"
+          },
+          {
+            "name": "vsim_mode",
+            "type": "oneof",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "knn_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "knn_token",
+                    "type": "pure-token",
+                    "token": "KNN"
+                  },
+                  {
+                    "name": "knn_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "k",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "k_token",
+                        "type": "pure-token",
+                        "token": "K"
+                      },
+                      {
+                        "name": "k_value",
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "ef_runtime",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "ef_runtime_token",
+                        "type": "pure-token",
+                        "token": "EF_RUNTIME"
+                      },
+                      {
+                        "name": "ef_runtime_value",
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "shard_k_ratio",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "shard_k_ratio_token",
+                        "type": "pure-token",
+                        "token": "SHARD_K_RATIO"
+                      },
+                      {
+                        "name": "shard_k_ratio_value",
+                        "type": "double"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "name": "range_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "range_token",
+                    "type": "pure-token",
+                    "token": "RANGE"
+                  },
+                  {
+                    "name": "range_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "radius_token",
+                    "type": "pure-token",
+                    "token": "RADIUS"
+                  },
+                  {
+                    "name": "radius_value",
+                    "type": "double"
+                  },
+                  {
+                    "name": "epsilon",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "epsilon_token",
+                        "type": "pure-token",
+                        "token": "EPSILON"
+                      },
+                      {
+                        "name": "epsilon_value",
+                        "type": "double"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "vsim_filter",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "vsim_filter_token",
+                "type": "pure-token",
+                "token": "FILTER"
+              },
+              {
+                "name": "vsim_filter_expression",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "vsim_policy",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "vsim_policy_token",
+                "type": "pure-token",
+                "token": "POLICY"
+              },
+              {
+                "name": "vsim_policy_value",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "vsim_batch_size",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "vsim_batch_size_token",
+                "type": "pure-token",
+                "token": "BATCH_SIZE"
+              },
+              {
+                "name": "vsim_batch_size_value",
+                "type": "integer"
+              }
+            ]
+          },
+          {
+            "name": "vsim_yield_score_as",
+            "type": "block",
+            "optional": true,
+            "arguments": [
+              {
+                "name": "vsim_yield_score_as_token",
+                "type": "pure-token",
+                "token": "YIELD_SCORE_AS"
+              },
+              {
+                "name": "vsim_score_alias",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "combine_clause",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "combine_token",
+            "type": "pure-token",
+            "token": "COMBINE"
+          },
+          {
+            "name": "combine_method",
+            "type": "oneof",
+            "arguments": [
+              {
+                "name": "rrf_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "rrf_token",
+                    "type": "pure-token",
+                    "token": "RRF"
+                  },
+                  {
+                    "name": "rrf_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "constant",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "constant_token",
+                        "type": "pure-token",
+                        "token": "CONSTANT"
+                      },
+                      {
+                        "name": "constant_value",
+                        "type": "double"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "window",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "window_token",
+                        "type": "pure-token",
+                        "token": "WINDOW"
+                      },
+                      {
+                        "name": "window_value",
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "combine_yield_score_as",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "combine_yield_score_as_token",
+                        "type": "pure-token",
+                        "token": "YIELD_SCORE_AS"
+                      },
+                      {
+                        "name": "combine_score_alias",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "name": "linear_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "linear_token",
+                    "type": "pure-token",
+                    "token": "LINEAR"
+                  },
+                  {
+                    "name": "linear_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "linear_weights",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "alpha_token",
+                        "type": "pure-token",
+                        "token": "ALPHA"
+                      },
+                      {
+                        "name": "alpha_value",
+                        "type": "double"
+                      },
+                      {
+                        "name": "beta_token",
+                        "type": "pure-token",
+                        "token": "BETA"
+                      },
+                      {
+                        "name": "beta_value",
+                        "type": "double"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "window",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "window_token",
+                        "type": "pure-token",
+                        "token": "WINDOW"
+                      },
+                      {
+                        "name": "window_value",
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "combine_yield_score_as",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "combine_yield_score_as_token",
+                        "type": "pure-token",
+                        "token": "YIELD_SCORE_AS"
+                      },
+                      {
+                        "name": "combine_score_alias",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "name": "function_block",
+                "type": "block",
+                "arguments": [
+                  {
+                    "name": "function_token",
+                    "type": "pure-token",
+                    "token": "FUNCTION"
+                  },
+                  {
+                    "name": "function_count",
+                    "type": "integer"
+                  },
+                  {
+                    "name": "expr_token",
+                    "type": "pure-token",
+                    "token": "EXPR"
+                  },
+                  {
+                    "name": "expr_value",
+                    "type": "string"
+                  },
+                  {
+                    "name": "window",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "window_token",
+                        "type": "pure-token",
+                        "token": "WINDOW"
+                      },
+                      {
+                        "name": "window_value",
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "combine_yield_score_as",
+                    "type": "block",
+                    "optional": true,
+                    "arguments": [
+                      {
+                        "name": "combine_yield_score_as_token",
+                        "type": "pure-token",
+                        "token": "YIELD_SCORE_AS"
+                      },
+                      {
+                        "name": "combine_score_alias",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "policy_block",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "policy_token",
+            "type": "pure-token",
+            "token": "POLICY"
+          },
+          {
+            "name": "policy_value",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "LOAD",
+        "type": "oneof",
+        "token": "LOAD",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "all",
+            "type": "pure-token",
+            "token": "*"
+          },
+          {
+            "name": "fields",
+            "type": "block",
+            "arguments": [
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "field",
+                "type": "string",
+                "multiple": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "PARAMS",
+        "type": "block",
+        "token": "PARAMS",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "parameters",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "timeout_block",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "timeout_token",
+            "type": "pure-token",
+            "token": "TIMEOUT"
+          },
+          {
+            "name": "timeout_ms",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "DIALECT",
+        "type": "integer",
+        "token": "DIALECT",
+        "optional": true
+      },
+      {
+        "name": "APPLY",
+        "type": "block",
+        "token": "APPLY",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "expression",
+            "type": "string"
+          },
+          {
+            "name": "as_token",
+            "type": "pure-token",
+            "token": "AS"
+          },
+          {
+            "name": "field",
+            "type": "string"
+          }
+        ],
+        "multiple_token": true
+      },
+      {
+        "name": "FILTER",
+        "type": "string",
+        "token": "FILTER",
+        "optional": true,
+        "multiple": true,
+        "multiple_token": true
+      },
+      {
+        "name": "GROUPBY",
+        "type": "block",
+        "token": "GROUPBY",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "field",
+            "type": "string",
+            "multiple": true
+          },
+          {
+            "name": "REDUCE",
+            "type": "block",
+            "token": "REDUCE",
+            "optional": true,
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "function",
+                "type": "oneof",
+                "arguments": [
+                  {
+                    "name": "COUNT",
+                    "type": "pure-token",
+                    "token": "COUNT"
+                  },
+                  {
+                    "name": "COUNT_DISTINCT",
+                    "type": "pure-token",
+                    "token": "COUNT_DISTINCT"
+                  },
+                  {
+                    "name": "SUM",
+                    "type": "pure-token",
+                    "token": "SUM"
+                  },
+                  {
+                    "name": "MIN",
+                    "type": "pure-token",
+                    "token": "MIN"
+                  },
+                  {
+                    "name": "MAX",
+                    "type": "pure-token",
+                    "token": "MAX"
+                  },
+                  {
+                    "name": "AVG",
+                    "type": "pure-token",
+                    "token": "AVG"
+                  },
+                  {
+                    "name": "STDDEV",
+                    "type": "pure-token",
+                    "token": "STDDEV"
+                  },
+                  {
+                    "name": "TOLIST",
+                    "type": "pure-token",
+                    "token": "TOLIST"
+                  },
+                  {
+                    "name": "FIRST_VALUE",
+                    "type": "pure-token",
+                    "token": "FIRST_VALUE"
+                  },
+                  {
+                    "name": "RANDOM_SAMPLE",
+                    "type": "pure-token",
+                    "token": "RANDOM_SAMPLE"
+                  }
+                ]
+              },
+              {
+                "name": "count",
+                "type": "integer"
+              },
+              {
+                "name": "expression",
+                "type": "string",
+                "optional": true,
+                "multiple": true
+              },
+              {
+                "name": "alias",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                  {
+                    "name": "as_token",
+                    "type": "pure-token",
+                    "token": "AS"
+                  },
+                  {
+                    "name": "name",
+                    "type": "string"
+                  }
+                ]
+              }
+            ],
+            "multiple_token": true
+          }
+        ],
+        "multiple_token": true
+      },
+      {
+        "name": "SORTBY",
+        "type": "block",
+        "token": "SORTBY",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "sort_params",
+            "type": "string",
+            "multiple": true
+          },
+          {
+            "name": "max",
+            "type": "integer",
+            "token": "MAX",
+            "optional": true
+          }
+        ]
+      },
+      {
+        "name": "LIMIT",
+        "type": "block",
+        "token": "LIMIT",
+        "optional": true,
+        "multiple": true,
+        "arguments": [
+          {
+            "name": "offset",
+            "type": "integer"
+          },
+          {
+            "name": "count",
+            "type": "integer"
+          }
+        ],
+        "multiple_token": true
+      },
+      {
+        "name": "WITHCURSOR",
+        "token": "WITHCURSOR",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "token": "COUNT",
+            "type": "integer",
+            "optional": true
+          },
+          {
+            "name": "maxidle",
+            "token": "MAXIDLE",
+            "type": "integer",
+            "optional": true
+          }
+        ]
+      }
+    ]
+  }
+}

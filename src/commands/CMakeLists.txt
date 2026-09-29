@@ -6,9 +6,13 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_aggregate_exec.h
     ${CMAKE_CURRENT_LIST_DIR}/ft_create.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_cursor.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_debug.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_info.cc 
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_parser.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_combine.h
+    ${CMAKE_CURRENT_LIST_DIR}/ft_info.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_internal_update.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.cc
@@ -18,6 +22,7 @@ set(SRCS_COMMANDS
 
 valkey_search_add_static_library(commands "${SRCS_COMMANDS}")
 target_include_directories(commands PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(commands PUBLIC cursor)
 target_link_libraries(commands PUBLIC ft_create_parser)
 target_link_libraries(commands PUBLIC ft_search_parser)
 target_link_libraries(commands PUBLIC index_schema)
@@ -27,6 +32,8 @@ target_link_libraries(commands PUBLIC schema_manager)
 target_link_libraries(commands PUBLIC valkey_search)
 target_link_libraries(commands PUBLIC vector_base)
 target_link_libraries(commands PUBLIC fanout)
+target_link_libraries(commands PUBLIC rank_fusion)
+target_link_libraries(commands PUBLIC multi_search)
 target_link_libraries(commands PUBLIC response_generator)
 target_link_libraries(commands PUBLIC search)
 target_link_libraries(commands PUBLIC vmsdklib)
@@ -40,6 +47,7 @@ set(SRCS_FT_SEARCH_PARSER ${CMAKE_CURRENT_LIST_DIR}/ft_search_parser.cc
 
 valkey_search_add_static_library(ft_search_parser "${SRCS_FT_SEARCH_PARSER}")
 target_include_directories(ft_search_parser PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(ft_search_parser PUBLIC cursor)
 target_link_libraries(ft_search_parser PUBLIC filter_parser)
 target_link_libraries(ft_search_parser PUBLIC index_schema)
 target_link_libraries(ft_search_parser PUBLIC metrics)

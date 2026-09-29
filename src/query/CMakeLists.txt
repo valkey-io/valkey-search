@@ -59,6 +59,32 @@ target_link_libraries(content_resolution PUBLIC response_generator)
 target_link_libraries(content_resolution PUBLIC metrics)
 target_link_libraries(content_resolution PUBLIC vmsdklib)
 
+set(SRCS_RANK_FUSION ${CMAKE_CURRENT_LIST_DIR}/rank_fusion.cc
+                ${CMAKE_CURRENT_LIST_DIR}/rank_fusion.h)
+
+valkey_search_add_static_library(rank_fusion "${SRCS_RANK_FUSION}")
+target_include_directories(rank_fusion PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(rank_fusion PUBLIC vector_base)
+# For indexes::scoring::IsNaN, used by the fused-score comparator.
+target_link_libraries(rank_fusion PUBLIC scoring)
+target_link_libraries(rank_fusion PUBLIC string_interning)
+target_link_libraries(rank_fusion PUBLIC attribute_data_type)
+target_link_libraries(rank_fusion PUBLIC vmsdklib)
+
+set(SRCS_MULTI_SEARCH ${CMAKE_CURRENT_LIST_DIR}/multi_search.cc
+                      ${CMAKE_CURRENT_LIST_DIR}/multi_search.h)
+
+valkey_search_add_static_library(multi_search "${SRCS_MULTI_SEARCH}")
+target_include_directories(multi_search PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(multi_search PUBLIC search)
+target_link_libraries(multi_search PUBLIC index_schema)
+target_link_libraries(multi_search PUBLIC coordinator_cc_proto)
+target_link_libraries(multi_search PUBLIC expr)
+# Pull in ft_aggregate_parser (and thus AggregateParameters' complete type)
+# via the commands library link path. The header is declared in
+# src/commands/ft_aggregate_parser.h.
+target_link_libraries(multi_search PUBLIC vmsdklib)
+
 set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
                 ${CMAKE_CURRENT_LIST_DIR}/fanout.h
                 ${CMAKE_CURRENT_LIST_DIR}/primary_info_fanout_operation.cc
@@ -69,6 +95,7 @@ set(SRCS_FANOUT ${CMAKE_CURRENT_LIST_DIR}/fanout.cc
 valkey_search_add_static_library(fanout "${SRCS_FANOUT}")
 target_include_directories(fanout PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(fanout PUBLIC search)
+target_link_libraries(fanout PUBLIC multi_search)
 target_link_libraries(fanout PUBLIC attribute_data_type)
 target_link_libraries(fanout PUBLIC index_schema)
 target_link_libraries(fanout PUBLIC client_pool)

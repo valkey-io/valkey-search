@@ -5,30 +5,21 @@
  */
 
 #include <algorithm>
-#include <ranges>
 #include <string>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "debug.h"
 #include "ft_search_parser.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_aggregate_exec.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
-#include "src/query/response_generator.h"
-#include "vmsdk/src/info.h"
 
 namespace valkey_search {
 namespace aggregate {
-
-CONTROLLED_BOOLEAN(ForceTimeoutAggregate, false);
-TEST_COUNTER(ForceTimeoutAggregateCancels);
-DEV_INTEGER_COUNTER(agg_stats, agg_input_records);
-DEV_INTEGER_COUNTER(agg_stats, agg_output_records);
 
 struct RealIndexInterface : public IndexInterface {
   std::shared_ptr<IndexSchema> schema_;
@@ -57,7 +48,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     CHECK(params.return_attributes.empty());
     return absl::OkStatus();
   } else {
-    std::vector<std::string> loads_to_process = params.loads_;
+    std::vector<LoadField> loads_to_process = params.loads_;
 
     // A field named by a pipeline stage but absent from the LOAD clause still
     // has to be fetched. Redisearch loads such fields implicitly; without that
@@ -74,6 +65,9 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
     // Only names that resolve to a declared attribute are loaded. Anything
     // else is produced by the pipeline itself (an APPLY or REDUCE output, a
     // chained GROUPBY over a reducer alias) and has no stored value to fetch.
+    //
+    // An implicit load is never a rename: it is emitted under the attribute
+    // name, exactly as if the query had written `@name` in the LOAD clause.
     const auto score_name = vmsdk::ToStringView(params.score_as.get());
     for (const auto &info : params.record_info_by_index_) {
       const std::string &name = info.alias_;
@@ -90,43 +84,74 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (indexes::IsVectorIndex(*indexer)) {
         continue;
       }
-      if (std::find(loads_to_process.begin(), loads_to_process.end(), name) ==
-          loads_to_process.end()) {
-        loads_to_process.push_back(name);
+      if (std::find_if(loads_to_process.begin(), loads_to_process.end(),
+                       [&name](const LoadField &f) {
+                         return f.identifier == name;
+                       }) == loads_to_process.end()) {
+        loads_to_process.push_back(
+            LoadField{.identifier = name, .alias = name, .renamed = false});
       }
     }
 
     for (const auto &load : loads_to_process) {
+      const std::string &identifier = load.identifier;
+      const std::string &alias = load.alias;  // output name (== identifier
+                                              // when there is no AS clause)
+      const bool renamed = load.renamed;
+      // Apply a LOAD ... AS rename to an attribute already present in the
+      // record table: emit it under `alias` and let `@alias` resolve in later
+      // pipeline stages (APPLY/SORTBY/FILTER).
+      auto apply_rename = [&](size_t record_index) {
+        params.record_info_by_index_[record_index].output_name_ = alias;
+        params.record_indexes_by_alias_[alias] = record_index;
+      };
       //
       // Skip loading of the score and the key, we always get those...
       //
-      if (load == "__key") {
+      if (identifier == "__key") {
         params.load_key = true;
+        if (renamed) {
+          apply_rename(params.record_indexes_by_alias_.at("__key"));
+        }
         continue;
       }
-      if (load == vmsdk::ToStringView(params.score_as.get())) {
+      if (identifier == vmsdk::ToStringView(params.score_as.get())) {
+        if (renamed) {
+          apply_rename(params.record_indexes_by_alias_.at(identifier));
+        }
         continue;
       }
       content = true;
-      VMSDK_ASSIGN_OR_RETURN(auto indexer, params.index_schema->GetIndex(load));
+      VMSDK_ASSIGN_OR_RETURN(auto indexer,
+                             params.index_schema->GetIndex(identifier));
+      auto indexer_type = indexer->GetIndexerType();
       if (indexes::IsVectorIndex(indexer)) {
-        return absl::InvalidArgumentError(absl::StrCat(
-            "Loading of vector fields is not supported (field `", load, "`)"));
+        return absl::InvalidArgumentError(
+            absl::StrCat("Loading of vector fields is not supported (field `",
+                         identifier, "`)"));
       }
-      auto schema_identifier = params.index_schema->GetIdentifier(load);
+      auto schema_identifier = params.index_schema->GetIdentifier(identifier);
+      size_t record_index;
       if (schema_identifier.ok()) {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
-            .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
-            .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(*schema_identifier, load,
-                                  indexer->GetIndexerType());
+            .attribute_alias = vmsdk::MakeUniqueValkeyString(identifier),
+            .alias = vmsdk::MakeUniqueValkeyString(alias)});
+        record_index = params.AddRecordAttribute(
+            *schema_identifier, identifier,
+            renamed ? alias : OutputNameFor(alias, *schema_identifier),
+            indexer_type);
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueValkeyString(load),
+            .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
-            .alias = vmsdk::MakeUniqueValkeyString(load)});
-        params.AddRecordAttribute(load, load, indexes::IndexerType::kNone);
+            .alias = vmsdk::MakeUniqueValkeyString(alias)});
+        record_index = params.AddRecordAttribute(identifier, identifier,
+                                                 renamed ? alias : identifier,
+                                                 indexes::IndexerType::kNone);
+      }
+      if (renamed) {
+        apply_rename(record_index);
       }
     }
   }
@@ -141,11 +166,18 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   parse_vars_.index_interface_ = &real_index_interface;
 
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
+  // Non-vector queries have no KNN AS clause to name the score field, so
+  // default to Redis' ADDSCORES name. This also makes @__score resolvable by
+  // LOAD and by stages (SORTBY/APPLY/GROUPBY) via record_indexes_by_alias_.
+  if (score_as == nullptr) {
+    score_as = vmsdk::MakeUniqueValkeyString("__score");
+  }
   // Ensure that key is first value if it gets included...
-  CHECK(AddRecordAttribute("__key", "__key", indexes::IndexerType::kNone) == 0);
+  CHECK(AddRecordAttribute("__key", "__key", "__key",
+                           indexes::IndexerType::kNone) == kKeyColumn);
   auto score_sv = vmsdk::ToStringView(score_as.get());
-  CHECK(AddRecordAttribute(score_sv, score_sv, indexes::IndexerType::kNone) ==
-        1);
+  CHECK(AddRecordAttribute(score_sv, score_sv, score_sv,
+                           indexes::IndexerType::kNone) == kScoreColumn);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -158,6 +190,11 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
     return absl::InvalidArgumentError("Only Dialects 2, 3 and 4 are supported");
   }
 
+  // SORTBY's retention bound depends on the LIMIT stages around it, so it can
+  // only be settled once the whole pipeline is known. Must precede
+  // GetSerializationRange(), which reads the resolved stages.
+  ResolveSortByBounds(*this);
+
   // Set limit parameters based on GetSerializationRange logic
   auto range = GetSerializationRange();
   limit.first_index = range.start_index;
@@ -166,282 +203,6 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*this));
-
-  return absl::OkStatus();
-}
-
-// Forward declaration for recursive serialization
-void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value);
-
-void SerializeArrayToResp(ValkeyModuleCtx *ctx, const expr::Value::Array vec) {
-  ValkeyModule_ReplyWithArray(ctx, vec->size());
-  for (const auto &elem : *vec) {
-    SerializeValueToResp(ctx, elem);
-  }
-}
-
-void SerializeValueToResp(ValkeyModuleCtx *ctx, const expr::Value &value) {
-  if (value.IsArray()) {
-    SerializeArrayToResp(ctx, value.GetArray());
-  } else if (value.IsBool()) {
-    ValkeyModule_ReplyWithLongLong(ctx, value.GetBool() ? 1 : 0);
-  } else if (value.IsDouble()) {
-    // IsDouble() guarantees AsString() returns a value.
-    auto value_str = *value.AsString();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_str.data(), value_str.size());
-  } else if (value.IsString()) {
-    auto value_sv = value.GetStringView();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-  } else {
-    // Fallback for Nil and unknown types
-    ValkeyModule_ReplyWithNull(ctx);
-  }
-}
-
-bool ReplyWithValue(ValkeyModuleCtx *ctx,
-                    data_model::AttributeDataType data_type,
-                    std::string_view name, indexes::IndexerType indexer_type,
-                    const expr::Value &value, int dialect) {
-  if (value.IsNil()) {
-    return false;
-  }
-
-  // Handle array values with RESP array serialization
-  if (value.IsArray()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    SerializeArrayToResp(ctx, value.GetArray());
-    return true;
-  }
-
-  if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    // Guarded by IsNil() check above; AsStringView always succeeds here.
-    auto value_sv = *value.AsStringView();
-    ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
-  } else {
-    if (name != "$") {
-      indexes::AssertValidIndexerType(indexer_type);
-    }
-    std::string_view value_view = *value.AsStringView();
-    ValkeyModule_ReplyWithSimpleString(ctx, name.data());
-    if (dialect == 2) {
-      ValkeyModule_ReplyWithStringBuffer(ctx, value_view.data(),
-                                         value_view.size());
-    } else {
-      std::string s = absl::StrCat("[", value_view, "]");
-      ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
-    }
-  }
-  return true;
-}
-
-// Process the query setup for vector vs non-vector queries and set up indices
-absl::StatusOr<std::pair<size_t, size_t>> ProcessNeighborsForProcessing(
-    ValkeyModuleCtx *ctx, std::vector<indexes::Neighbor> &neighbors,
-    AggregateParameters &parameters) {
-  size_t key_index = 0, scores_index = 0;
-
-  std::optional<std::string> vector_identifier;
-
-  if (parameters.load_key) {
-    key_index = parameters.AddRecordAttribute("__key", "__key",
-                                              indexes::IndexerType::kNone);
-  }
-  if (parameters.IsVectorQuery()) {
-    VMSDK_ASSIGN_OR_RETURN(
-        vector_identifier,
-        parameters.index_schema->GetIdentifier(parameters.attribute_alias));
-
-    auto score_sv = vmsdk::ToStringView(parameters.score_as.get());
-    scores_index = parameters.AddRecordAttribute(score_sv, score_sv,
-                                                 indexes::IndexerType::kNone);
-  }
-
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
-
-  return std::make_pair(key_index, scores_index);
-}
-
-// Process a single field value and convert it to the appropriate type
-absl::StatusOr<expr::Value> ProcessFieldValue(
-    std::string_view value, indexes::IndexerType indexer_type,
-    data_model::AttributeDataType data_type) {
-  switch (indexer_type) {
-    case indexes::IndexerType::kNumeric: {
-      auto numeric_value = vmsdk::To<double>(value);
-      if (numeric_value.ok()) {
-        return expr::Value(numeric_value.value());
-      } else {
-        // Return error status to indicate field should be skipped
-        return absl::InvalidArgumentError("Invalid numeric value");
-      }
-    }
-    default:
-      // JSON string values are already JSON-decoded when fetched/indexed
-      // (NormalizeJsonRecord), so they are treated the same as HASH values
-      // here. Decoding again would double-decode and corrupt escapes.
-      return expr::Value(value);
-  }
-}
-
-// Create records from neighbors and populate their fields
-absl::Status CreateRecordsFromNeighbors(
-    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
-    size_t key_index, size_t scores_index, RecordSet &records) {
-  auto data_type = parameters.index_schema->GetAttributeDataType().ToProto();
-
-  for (auto &n : neighbors) {
-    // Not record_indexes_by_alias_.size(): that undercounts once an alias has
-    // been re-bound (shadowed) to a new slot, leaving later slots out of
-    // bounds.
-    auto rec =
-        std::make_unique<Record>(parameters.record_info_by_index_.size());
-
-    // Set key field if requested
-    if (parameters.load_key) {
-      rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
-    }
-
-    // Set score field for vector queries
-    if (parameters.IsVectorQuery()) {
-      rec->fields_.at(scores_index) = expr::Value(n.score);
-    }
-
-    // Process attribute contents
-    if (n.attribute_contents.has_value() && !parameters.no_content) {
-      bool should_drop_record = false;
-
-      for (auto &[name, records_map_value] : *n.attribute_contents) {
-        auto value = vmsdk::ToStringView(records_map_value.value.get());
-        std::optional<size_t> record_index;
-
-        // Find the record index by alias or identifier
-        if (auto by_alias = parameters.record_indexes_by_alias_.find(name);
-            by_alias != parameters.record_indexes_by_alias_.end()) {
-          record_index = by_alias->second;
-          CHECK(record_index < rec->fields_.size());
-        } else if (auto by_identifier =
-                       parameters.record_indexes_by_identifier_.find(name);
-                   by_identifier !=
-                   parameters.record_indexes_by_identifier_.end()) {
-          record_index = by_identifier->second;
-          CHECK(record_index < rec->fields_.size());
-        }
-
-        if (record_index) {
-          // Process the field value based on its type
-          indexes::IndexerType indexer_type =
-              parameters.record_info_by_index_[*record_index].data_type_;
-          auto processed_value =
-              ProcessFieldValue(value, indexer_type, data_type);
-
-          if (processed_value.ok()) {
-            rec->fields_[*record_index] = std::move(*processed_value);
-          } else {
-            // For JSON unquote failures, drop the entire record
-            if (indexer_type != indexes::IndexerType::kNumeric) {
-              should_drop_record = true;
-              break;
-            }
-            // For numeric failures, skip the field but continue with the record
-          }
-        } else {
-          // Add as extra field
-          rec->extra_fields_.push_back(
-              std::make_pair(std::string(name), expr::Value(value)));
-        }
-      }
-
-      if (should_drop_record) {
-        continue;  // Skip adding this record to the set
-      }
-    }
-
-    records.push_back(std::move(rec));
-  }
-
-  return absl::OkStatus();
-}
-
-// Execute all aggregation stages on the record set
-absl::Status ExecuteAggregationStages(AggregateParameters &parameters,
-                                      RecordSet &records) {
-  agg_input_records.Increment(records.size());
-  for (auto &stage : parameters.stages_) {
-    // Check for timeout
-    if (parameters.cancellation_token->IsCancelled() ||
-        // Testing purpose only
-        ForceTimeoutAggregate.GetValue()) {
-      ForceTimeoutAggregateCancels.Increment(1);
-      return absl::CancelledError(
-          "Aggregate operation cancelled due to timeout");
-    }
-    VMSDK_RETURN_IF_ERROR(stage->Execute(records));
-  }
-  agg_output_records.Increment(records.size());
-  return absl::OkStatus();
-}
-
-// Generate the final response from processed records
-absl::Status GenerateResponse(ValkeyModuleCtx *ctx,
-                              AggregateParameters &parameters,
-                              RecordSet &records) {
-  ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
-  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
-
-  while (!records.empty()) {
-    auto rec = records.pop_front();
-    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
-
-    size_t array_count = 0;
-
-    // Process referenced fields
-    CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
-    for (size_t i = 0; i < rec->fields_.size(); ++i) {
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              parameters.record_info_by_index_[i].identifier_,
-              parameters.record_info_by_index_[i].data_type_, rec->fields_[i],
-              parameters.dialect)) {
-        array_count += 2;
-      }
-    }
-
-    // Process unreferenced (extra) fields
-    for (const auto &[name, value] : rec->extra_fields_) {
-      if (ReplyWithValue(
-              ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
-              name, indexes::IndexerType::kNone, value, parameters.dialect)) {
-        array_count += 2;
-      }
-    }
-
-    ValkeyModule_ReplySetArrayLength(ctx, array_count);
-  }
-
-  return absl::OkStatus();
-}
-
-absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
-                            std::vector<indexes::Neighbor> &neighbors,
-                            AggregateParameters &parameters) {
-  // 1. Process query setup and get key/score indices
-  VMSDK_ASSIGN_OR_RETURN(
-      auto indices, ProcessNeighborsForProcessing(ctx, neighbors, parameters));
-  auto [key_index, scores_index] = indices;
-
-  // 2. Create records from neighbors
-  RecordSet records(&parameters);
-  VMSDK_RETURN_IF_ERROR(CreateRecordsFromNeighbors(
-      neighbors, parameters, key_index, scores_index, records));
-
-  // 3. Execute aggregation stages
-  VMSDK_RETURN_IF_ERROR(ExecuteAggregationStages(parameters, records));
-
-  // 4. Generate the response
-  VMSDK_RETURN_IF_ERROR(GenerateResponse(ctx, parameters, records));
 
   return absl::OkStatus();
 }
@@ -469,7 +230,7 @@ query::SerializationRange AggregateParameters::GetSerializationRange() const {
 
 void AggregateParameters::SendReply(ValkeyModuleCtx *ctx,
                                     query::SearchResult &result) {
-  auto status = SendReplyInner(ctx, result.neighbors, *this);
+  auto status = RunAggregatePipeline(ctx, result.neighbors, *this);
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, status.message().data());

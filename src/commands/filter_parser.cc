@@ -586,14 +586,18 @@ absl::StatusOr<bool> FilterParser::HandleBackslashEscape(
 }
 
 // Returns a token within an exact phrase parsing it until reaching the
-// token boundary while handling escape chars.
+// token boundary while handling escape chars. `delim` is the character that
+// closes the phrase: `"` for double-quoted phrases, `'` for apostrophe-phrases
+// (the latter is enabled by the search.emulate-release >= 1.3.0 gate in
+// ParseTextTokens; see COMPATIBILITY.md).
 // Quoted Text Syntax:
-// word1 word2" word3 -> word1
-// word2" word3 -> word2
-// Token boundaries (separated by space): " <punctuation> \<non-punctuation>
+// word1 word2<delim> word3 -> word1
+// word2<delim> word3 -> word2
+// Token boundaries (separated by space): <delim> <punctuation>
+// \<non-punctuation>
 absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-    const std::optional<std::string>& field_or_default) {
+    const std::optional<std::string>& field_or_default, char delim) {
   const auto& lexer = text_index_schema->GetLexer();
   std::string processed_content;
   while (!IsEnd()) {
@@ -604,7 +608,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     }
     // Break to complete an exact phrase or start a new exact phrase.
     char ch = Peek();
-    if (ch == '"') break;
+    if (ch == delim) break;
     if (ch == '\\') continue;  // Don't break on backslash
     if (lexer.IsPunctuation(ch)) break;
     processed_content.push_back(ch);
@@ -818,6 +822,8 @@ absl::Status FilterParser::SetupTextFieldConfiguration(
 // a text predicate.
 // Text Parsing Syntax:
 //   Quoted: "word1 word2" -> ComposedAND(exact, slop=0, inorder=true)
+//   Apostrophe-quoted (>= 1.3.0 with emulate-release):
+//     'word1 word2' -> ComposedAND(exact, slop=0, inorder=true)
 //   Unquoted: word1 word2 -> TermPredicate(word1) - stops at first token
 // Token boundaries for unquoted text: <punctuation> ( ) | @ " - { } [ ] : ; $
 // Quoted phrases (Exact Phrase) parse all tokens within quotes, unquoted
@@ -829,17 +835,44 @@ FilterParser::ParseTextTokens(
   if (!text_index_schema) {
     return absl::InvalidArgumentError("Index does not have any text field");
   }
+  // Redisearch treats unescaped `'` as a secondary phrase delimiter, paired
+  // left-to-right and structurally equivalent to `"`. An apostrophe with no
+  // matching close ahead is silently treated as a separator — so we look
+  // ahead before entering phrase mode. Pre-1.3.0 valkey-search dropped
+  // unescaped apostrophes as ordinary punctuation, which silently changed
+  // the parse of queries like `great'wall great'wall`. Gate behind
+  // search.emulate-release per COMPATIBILITY.md.
+  const bool apostrophe_phrases_enabled = VALKEY_SEARCH_COMPATIBILITY_FIX(
+      1, 3, 0, "ft_search_apostrophe_phrase", [&] { return true; },
+      [&] { return false; });
+  auto has_matching_apostrophe_ahead = [&](size_t start) {
+    for (size_t i = start; i < expression_.size(); ++i) {
+      if (expression_[i] == '\\' && i + 1 < expression_.size()) {
+        ++i;  // skip escaped char
+        continue;
+      }
+      if (expression_[i] == '\'') return true;
+    }
+    return false;
+  };
   absl::InlinedVector<std::unique_ptr<query::TextPredicate>,
                       indexes::text::kProximityTermsInlineCapacity>
       terms;
-  bool in_quotes = false;
+  // 0 when not inside a phrase; otherwise the character (`"` or `'`) that
+  // opened the phrase. The same character must close it.
+  char phrase_delim = 0;
   bool exact_phrase = false;
   while (!IsEnd()) {
     char c = Peek();
-    if (c == '"') {
-      in_quotes = !in_quotes;
+    const bool is_phrase_open =
+        (phrase_delim == 0 &&
+         (c == '"' || (apostrophe_phrases_enabled && c == '\'' &&
+                       has_matching_apostrophe_ahead(pos_ + 1))));
+    const bool is_phrase_close = (phrase_delim != 0 && c == phrase_delim);
+    if (is_phrase_open || is_phrase_close) {
+      phrase_delim = is_phrase_open ? c : 0;
       ++pos_;
-      if (in_quotes && terms.empty()) {
+      if (is_phrase_open && terms.empty()) {
         exact_phrase = true;
         continue;
       }
@@ -848,8 +881,9 @@ FilterParser::ParseTextTokens(
     size_t token_start = pos_;
     VMSDK_ASSIGN_OR_RETURN(
         auto result,
-        in_quotes
-            ? ParseQuotedTextToken(text_index_schema, field_or_default)
+        (phrase_delim != 0)
+            ? ParseQuotedTextToken(text_index_schema, field_or_default,
+                                   phrase_delim)
             : ParseUnquotedTextToken(text_index_schema, field_or_default));
     if (result.predicate) {
       terms.push_back(std::move(result.predicate));
@@ -1009,6 +1043,10 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
 // 7. A tag field has the following pattern: @field_name:{tag1|tag2|tag3}.
 // 8. A text field has the following pattern : @field_name:phrase. Where phrase
 // can be a combination of different words, *, % for different text operations.
+// A text field can also scope a group: @field_name:(a|b|c) applies the field
+// to every bare term inside, e.g. @f:(a|b) => OR(@f:a, @f:b). An explicit
+// @other:term inside the group is a syntax error (rejected, matching
+// RediSearch).
 // 9. The tag separator character is configurable with a default value of '|'.
 // 10. A field name can be wrapped with `()` to group multiple predicates.
 // 11. Space between predicates is considered as AND while '|' is considered as
@@ -1020,7 +1058,7 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
 // 14. Numeric filters are inclusive. Exclusive min or max are expressed with (
 // prepended to the number, for example, [(100 (200].
 absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
-    uint32_t level) {
+    uint32_t level, const std::optional<std::string>& default_field) {
   if (level++ >= options::GetQueryStringDepth().GetValue()) {
     return absl::InvalidArgumentError("Query string is too complex");
   }
@@ -1041,7 +1079,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
     std::unique_ptr<query::Predicate> predicate;
     bool negate = Match('-');
     if (Match('(')) {
-      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                             ParseExpression(level, default_field));
       if (!Match(')')) {
         return absl::InvalidArgumentError(
             absl::StrCat("Expected ')' after expression got '",
@@ -1076,7 +1115,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       if (negate) {
         return UnexpectedChar(expression_, pos_ - 1);
       }
-      VMSDK_ASSIGN_OR_RETURN(auto sub_result, ParseExpression(level));
+      VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                             ParseExpression(level, default_field));
       predicate = std::move(sub_result.prev_predicate);
       if (!predicate) {
         return absl::InvalidArgumentError("Missing OR term");
@@ -1098,9 +1138,15 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // bracket and we do not want stale results to propagate.
       result.not_rightmost_bracket = true;
     } else {
-      std::optional<std::string> field_name;
+      std::optional<std::string> field_name = default_field;
       bool non_text = false;
+      bool field_scoped_group = false;
       if (Peek() == '@') {
+        // A field modifier inside a field-scoped group is a syntax error,
+        // matching RediSearch (e.g. @f1:(a|@f2:b) is rejected).
+        if (default_field.has_value()) {
+          return UnexpectedChar(expression_, pos_);
+        }
         std::string parsed_field;
         VMSDK_ASSIGN_OR_RETURN(parsed_field, ParseFieldName());
         field_name = parsed_field;
@@ -1112,6 +1158,23 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
           node_count_++;
           VMSDK_ASSIGN_OR_RETURN(predicate, ParseTagPredicate(*field_name));
           non_text = true;
+        } else if (Match('(')) {
+          // Field-scoped group: @field:(a|b|c) applies the field to each text
+          // term inside the parentheses.
+          VMSDK_ASSIGN_OR_RETURN(auto sub_result,
+                                 ParseExpression(level, field_name));
+          if (!Match(')')) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Expected ')' after expression got '",
+                expression_.substr(pos_, 1), "'. Position: ", pos_));
+          }
+          predicate = std::move(sub_result.prev_predicate);
+          if (!predicate) {
+            return absl::InvalidArgumentError(absl::StrCat(
+                "Empty brackets detected at Position: ", pos_ - 1));
+          }
+          non_text = true;
+          field_scoped_group = true;
         }
       }
       if (!non_text) {
@@ -1125,7 +1188,8 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // Attach an optional QMA block (=> { ... }) to this bare term, matching
       // RediSearch which allows attributes on a term, not only on a group.
       VMSDK_RETURN_IF_ERROR(MaybeConsumeQMABlock(*predicate));
-      if (result.prev_predicate) {
+      const bool had_prev_predicate = result.prev_predicate != nullptr;
+      if (had_prev_predicate) {
         node_count_++;
       }
       VMSDK_ASSIGN_OR_RETURN(
@@ -1136,7 +1200,9 @@ absl::StatusOr<FilterParser::ParseResult> FilterParser::ParseExpression(
       // After the above wrap predicate there will always be a previous
       // predicate. Hence we set it to false.
       result.not_rightmost_bracket = false;
-      no_prev_grp = false;
+      // A leading field-scoped group is its own subtree: keep no_prev_grp set
+      // so a following AND term does not flatten into it (mirrors plain '(').
+      no_prev_grp = field_scoped_group && !had_prev_predicate;
     }
     SkipWhitespace();
     auto max_node_count = options::GetQueryStringTermsCount().GetValue();

@@ -32,6 +32,8 @@ struct AttributeParameters {
   absl::string_view identifier;
   absl::string_view attribute_alias;
   indexes::IndexerType indexer_type{indexes::IndexerType::kNone};
+  bool sortable{false};
+  bool unf{false};
 };
 
 // Default stop words
@@ -64,6 +66,7 @@ struct FTCreateParameters {
   absl::string_view score_field;
   absl::string_view payload_field;
   bool skip_initial_scan{false};
+  std::string filter;
   std::vector<AttributeParameters> attributes;
   ExpectedPerIndexTextParameters per_index_text_params;
 };
@@ -143,6 +146,14 @@ TEST_P(FTCreateParserTest, ParseParams) {
       EXPECT_FLOAT_EQ(index_schema_proto->score(), test_case.expected.score);
     }
 
+    // Verify filter
+    if (!test_case.expected.filter.empty()) {
+      EXPECT_TRUE(index_schema_proto->has_filter());
+      EXPECT_EQ(index_schema_proto->filter(), test_case.expected.filter);
+    } else {
+      EXPECT_FALSE(index_schema_proto->has_filter());
+    }
+
     // Verify schema-level text parameters if we have text fields
     bool has_text_fields = false;
     for (const auto &attr : test_case.expected.attributes) {
@@ -188,6 +199,10 @@ TEST_P(FTCreateParserTest, ParseParams) {
                 test_case.expected.attributes[i].identifier);
       EXPECT_EQ(index_schema_proto->attributes(i).alias(),
                 test_case.expected.attributes[i].attribute_alias);
+      EXPECT_EQ(index_schema_proto->attributes(i).sortable(),
+                test_case.expected.attributes[i].sortable);
+      EXPECT_EQ(index_schema_proto->attributes(i).unf(),
+                test_case.expected.attributes[i].unf);
       if (test_case.expected.attributes[i].indexer_type ==
           indexes::IndexerType::kFlat) {
         EXPECT_TRUE(index_schema_proto->attributes(i)
@@ -675,6 +690,39 @@ INSTANTIATE_TEST_SUITE_P(
                           }}},
          },
          {
+             // Regression test for issue #1195: the same source field may be
+             // indexed multiple times under distinct aliases (e.g. once as
+             // TEXT and once as TAG). Uniqueness is keyed on the alias, not the
+             // source identifier, matching RediSearch behavior.
+             .test_name = "same_identifier_distinct_aliases_text_and_tag",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku as sku_text TEXT "
+                            "sku as sku_tag TAG ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+                 .weight = 1.0,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku_text",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kText,
+                                         },
+                                         {
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku_tag",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         }}},
+         },
+         {
              .test_name = "happy_path_skip_initial_scan",
              .success = true,
              .command_str = "idx1 on HASH SKIPINITIALSCAN SCHEMA hash_field1 as "
@@ -691,6 +739,150 @@ INSTANTIATE_TEST_SUITE_P(
                               .attribute_alias = "hash_field11",
                               .indexer_type = indexes::IndexerType::kTag,
                           }}},
+         },
+         {
+             .test_name = "sortable_unf_at_end_of_schema",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku as sku TAG SORTABLE UNF",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "sku",
+                              .attribute_alias = "sku",
+                              .indexer_type = indexes::IndexerType::kTag,
+                              .sortable = true,
+                              .unf = true,
+                          }}},
+         },
+         {
+             .test_name = "sortable_only_sets_sortable",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG SORTABLE",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "sku",
+                              .attribute_alias = "sku",
+                              .indexer_type = indexes::IndexerType::kTag,
+                              .sortable = true,
+                          }}},
+         },
+         {
+             .test_name = "sortable_unf_followed_by_another_attribute",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG SORTABLE UNF "
+                            "price NUMERIC SORTABLE UNF",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                             .sortable = true,
+                                             .unf = true,
+                                         },
+                                         {
+                                             .identifier = "price",
+                                             .attribute_alias = "price",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kNumeric,
+                                             .sortable = true,
+                                             .unf = true,
+                                         }}},
+         },
+         {
+             .test_name = "nohl_ignored",
+             .success = true,
+             .command_str = "idx1 on HASH NOHL SCHEMA hash_field1 as "
+                            "hash_field11 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field11",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             // Redis accepts NOHL in any pre-SCHEMA position, and twice.
+             .test_name = "nohl_accepted_in_any_position_and_repeated",
+             .success = true,
+             .command_str = "idx1 on HASH PREFIX 1 p: NOHL SKIPINITIALSCAN NOHL "
+                            "SCHEMA hash_field1 tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .prefixes = {"p:"},
+                          .skip_initial_scan = true,
+                          .attributes = {{
+                              .identifier = "hash_field1",
+                              .attribute_alias = "hash_field1",
+                              .indexer_type = indexes::IndexerType::kTag,
+                          }}},
+         },
+         {
+             // Redis does the same: a token in identifier position is a field
+             // name, so this creates a field literally called UNF.
+             .test_name = "unf_without_sortable_becomes_a_field_name",
+             .success = true,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF TEXT",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .text_parameters = {{
+                 .with_suffix_trie = false,
+                 .no_stem = false,
+                 .weight = 1.0,
+             }},
+             .expected = {.index_schema_name = "idx1",
+                          .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                          .attributes = {{
+                                             .identifier = "sku",
+                                             .attribute_alias = "sku",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kTag,
+                                         },
+                                         {
+                                             .identifier = "UNF",
+                                             .attribute_alias = "UNF",
+                                             .indexer_type =
+                                                 indexes::IndexerType::kText,
+                                         }}},
+         },
+         {
+             .test_name = "unf_without_sortable_before_a_field_is_rejected",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF body TEXT",
+             .expected_error_message =
+                 "Invalid field type for field `UNF`: Unknown argument `body`",
+         },
+         {
+             .test_name = "unf_without_sortable_is_rejected",
+             .success = false,
+             .command_str = "idx1 on HASH SCHEMA sku TAG UNF",
+             .expected_error_message =
+                 "Invalid field type for field `UNF`: Missing argument",
          },
          {
             .test_name = "score_field_supported",
@@ -1151,13 +1343,163 @@ INSTANTIATE_TEST_SUITE_P(
                  "value for the parameter `TYPE` - Unknown argument `FLOAT321`",
          },
          {
-             .test_name = "unexpected_filter",
+             .test_name = "happy_path_filter_with_tag",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH FILTER \"@status=='active'\" SCHEMA "
+                 "status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             .test_name = "filter_empty_expression",
              .success = false,
              .command_str =
-                 " idx1 filter aa SChema hash_field1 vector hnsw 6 TYPE "
-                 "FLOAT321 DIM 5 DISTANCE_METRIC IP ",
+                 "idx1 on HASH FILTER \"\" SCHEMA status tag ",
              .expected_error_message =
-                 "The parameter `FILTER` is not supported",
+                 "FILTER expression cannot be empty",
+         },
+         {
+             // FILTER is a pre-SCHEMA option like SCORE and LANGUAGE, so it
+             // must be accepted after them, not only immediately after
+             // PREFIX. It used to be parsed once before the flexible
+             // ordering loop, which made this form fail with
+             // "Unexpected parameter `FILTER`".
+             .test_name = "filter_after_score_and_language",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: SCORE 0.5 LANGUAGE english "
+                 "FILTER \"@status=='active'\" SCHEMA status tag ",
+             .tag_parameters = {{
+                 .separator = ",",
+                 .case_sensitive = false,
+             }},
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@status=='active'",
+                  .attributes = {{
+                      .identifier = "status",
+                      .attribute_alias = "status",
+                      .indexer_type = indexes::IndexerType::kTag,
+                  }}},
+         },
+         {
+             // ... and before them, interleaved with the other options.
+             .test_name = "filter_before_score_and_skipinitialscan",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 p: FILTER \"@price>100\" "
+                 "SKIPINITIALSCAN SCORE 0.5 SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .skip_initial_scan = true,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // An empty expression is rejected wherever FILTER appears, not
+             // just in the position the old pre-loop parse handled.
+             .test_name = "filter_empty_expression_after_score",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"\" SCHEMA status tag ",
+             .expected_error_message =
+                 "FILTER expression cannot be empty",
+         },
+         {
+             // PREFIX is parsed from the flexible ordering loop too, so it
+             // no longer has to come first among the pre-SCHEMA options.
+             .test_name = "prefix_after_score_and_filter",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SCORE 0.5 FILTER \"@price>100\" "
+                 "PREFIX 1 p: SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p:"},
+                  .score = 0.5,
+                  .filter = "@price>100",
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             .test_name = "prefix_between_other_options",
+             .success = true,
+             .command_str =
+                 "idx1 on HASH SKIPINITIALSCAN PREFIX 2 a: b: LANGUAGE english "
+                 "SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx1",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"a:", "b:"},
+                  .skip_initial_scan = true,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // A hash-tagged index still requires a PREFIX clause; the check
+             // moved out of ParsePrefixes() to after the ordering loop, so it
+             // must still fire when PREFIX appears in a late position...
+             .test_name = "hash_tagged_index_with_late_prefix",
+             .success = true,
+             .command_str =
+                 "idx{a} on HASH SCORE 0.5 PREFIX 1 p{a} SCHEMA price numeric ",
+             .expected =
+                 {.index_schema_name = "idx{a}",
+                  .on_data_type = data_model::ATTRIBUTE_DATA_TYPE_HASH,
+                  .prefixes = {"p{a}"},
+                  .score = 0.5,
+                  .attributes = {{
+                      .identifier = "price",
+                      .attribute_alias = "price",
+                      .indexer_type = indexes::IndexerType::kNumeric,
+                  }}},
+         },
+         {
+             // ... and must still reject a hash-tagged index that has other
+             // pre-SCHEMA options but no PREFIX at all.
+             .test_name = "hash_tagged_index_missing_prefix_with_options",
+             .success = false,
+             .command_str = "idx{a} on HASH SCORE 0.5 SCHEMA price numeric ",
+             .expected_error_message =
+                 "PREFIX parameter is required for hash-tagged indexes",
+         },
+         {
+             // Two PREFIX clauses are rejected outright rather than appended,
+             // so repeats cannot slip past the max-prefixes bound.
+             .test_name = "duplicate_prefix_clause",
+             .success = false,
+             .command_str =
+                 "idx1 on HASH PREFIX 1 a: PREFIX 1 b: SCHEMA price numeric ",
+             .expected_error_message = "`PREFIX` specified multiple times",
          },
          {
              .test_name = "invalid_language_parameter_value",

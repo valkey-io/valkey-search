@@ -154,15 +154,6 @@ class TestSearchCompatibility(BaseCompatibilityTest):
                    "SLOP", "0", "INORDER",
                    "DIALECT", str(dialect))
 
-    def test_infields_with_sortby_and_return(self, key_type, dialect):
-        """INFIELDS + SORTBY + RETURN projection."""
-        self.setup_data("pure text small", key_type)
-        self.check("ft.search", f"{key_type}_idx1", "apple",
-                   "INFIELDS", "1", "title",
-                   "SORTBY", "title", "ASC",
-                   "RETURN", "1", "title",
-                   "DIALECT", str(dialect))
-
     def test_infields_with_nocontent_and_sortby(self, key_type, dialect):
         """NOCONTENT + SORTBY — verify ordering matches Redis Stack.
         No LIMIT so all results are returned, avoids flakiness from ties

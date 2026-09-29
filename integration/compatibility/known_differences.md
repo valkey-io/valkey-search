@@ -200,6 +200,33 @@ OR), a weighted group on its own, and `$weight: 1.0` all agree.
 `scoring_query_builder.py` never weights a group whose operator matches its
 parent's, so the `weight` shape does not compare this case.
 
+### 1.8 Weight on an OR group with only one non-empty branch
+
+Redis ignores an OR group's `$weight` when only one branch of the OR matches any
+document in the index. A branch is empty if it is a term no document contains, or
+an AND containing such a term. The query then scores as the remaining branch
+alone. valkey-search applies the weight regardless. Measured on `redis:latest`,
+`SCORER BM25STD`, on the `nostem` scoring corpus, for a document containing
+`heavy`. `zzqqxx` is in no document:
+
+```
+query                                        Redis    valkey-search
+heavy                                        1.387    1.387
+(heavy | zzqqxx) => { $weight: 0.5 }         1.387    0.694
+(heavy | zzqqxx) => { $weight: 3.0 }         1.387    4.162
+```
+
+With a second non-empty branch, both engines apply the weight and agree. That
+holds for `(heavy | olive | zzqqxx) => { $weight: 0.5 }`, where `olive` is in
+three documents. Redis's EXPLAINSCORE shows the group's `Weight 0.50` replaced
+by `Weight 1.00` once only one branch is left.
+
+The standalone generators never meet this: every queried term occurs somewhere
+in the corpus. A cluster shard holds only part of the corpus, so a branch is
+often empty there. `generate_scoring_cluster.py` therefore records every query
+that weights an OR group as `excluded`, 572 of 10878 answers. See
+`unsupported_tests.md` §6.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and

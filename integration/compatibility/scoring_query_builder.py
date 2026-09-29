@@ -116,6 +116,8 @@ class _QueryBuilder:
 
     def __init__(self, rng, schema_type):
         self.rng = rng
+        # whether the query being built weights an OR group; reset per emit
+        self.weighted_or = False
         # terms: {term: {doc: tf}}
         self.docs, self.terms = compute_scoring_corpus(schema_type=schema_type)
         # docs each term matches as a query; the "default" index stems its text
@@ -193,7 +195,9 @@ class _QueryBuilder:
 
     def _emit(self, shape, query, hits, params=()):
         self.shapes.setdefault(shape, []).append(
-            {"shape": shape, "query": query, "hits": set(hits), "params": tuple(params)})
+            {"shape": shape, "query": query, "hits": set(hits), "params": tuple(params),
+             "weighted_or": self.weighted_or})
+        self.weighted_or = False
 
     # --- terms ---
 
@@ -297,6 +301,7 @@ class _QueryBuilder:
         if _root_op(shape) == parent_op:
             return query
         if tree.weighted and self.rng.random() < GROUP_WEIGHT_RATE:
+            self.weighted_or |= _root_op(shape) == "OR"
             return _weight(query, self.rng.choice(WEIGHTS))
         return query
 

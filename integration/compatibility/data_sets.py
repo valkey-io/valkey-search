@@ -298,12 +298,15 @@ class ClientSystem:
 
     def execute_command(self, *cmd):
         print("Execute:", *cmd)
+        # A cluster client cannot route a command written as one string.
+        if isinstance(cmd[0], str):
+            cmd = (*cmd[0].split(), *cmd[1:])
         result = self.client.execute_command(*cmd)
         #print("Result:", result)
         return result
     
     def ft_info(self, index):
-        values = self.client.execute_command(f"FT.INFO {index}")
+        values = self.client.execute_command("FT.INFO", index)
         result = {unbytes(values[i]):unbytes(values[i+1]) for i in range(0, len(values), 2)}
         return result
         
@@ -1663,7 +1666,9 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type,
     # Same corpus dispatch load_data does. Hardcoding the vector corpora here
     # is what kept the text and hybrid answer files out of cluster replay:
     # their data sets are not in that dictionary, so the lookup below raised.
-    if data_set in HYBRID_DATASETS:
+    if data_set in SCORING_DATASETS:
+        data = compute_scoring_data_sets(data_set, schema_type=schema_type)
+    elif data_set in HYBRID_DATASETS:
         data = compute_hybrid_data_sets()
     elif data_set in TEXT_DATASETS:
         data = compute_text_data_sets(data_set, schema_type=schema_type)
@@ -1673,6 +1678,9 @@ def load_data_cluster(cluster_client, test_case, data_set, key_type,
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:
         primary0.execute_command(create_cmd)
+    from utils import IndexingTestHelper
+    IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+        test_case.get_all_primary_clients(), f"{key_type}_idx1")
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":

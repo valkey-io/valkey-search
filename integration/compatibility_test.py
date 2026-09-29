@@ -9,7 +9,7 @@ from valkey.cluster import ValkeyCluster
 from compatibility import GENERATORS, compute_sources_hash
 from compatibility.data_sets import *
 
-ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
+ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS if g.get("standalone", True)]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
@@ -787,7 +787,8 @@ def drop_index_cluster(test_case, key_type):
 def do_answer_cluster(cluster_client, expected, data_set, test_case):
     global correct_answers, failed_tests, passed_tests
 
-    next_data_set = (expected["data_set_name"], expected["key_type"])
+    next_data_set = (expected["data_set_name"], expected["key_type"],
+                     expected.get("schema_type"))
 
     if data_set != next_data_set:
         print(
@@ -806,7 +807,12 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             test_case,
             expected["data_set_name"],
             expected["key_type"],
+            schema_type=expected.get("schema_type", "default"),
         )
+        # Scores depend on every shard's full corpus, so wait out indexing on each.
+        for primary in test_case.get_all_primary_clients():
+            waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(
+                primary, f"{expected['key_type']}_idx1"))
 
         data_set = next_data_set
 

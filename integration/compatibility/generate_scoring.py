@@ -78,6 +78,9 @@ class TestScoringCompatibility(BaseCompatibilityTest):
             assert descriptor["hits"], \
                 f"{shape} query {descriptor['query']!r} predicts no hits"
             answer = self.capture(search_args(f"{key_type}_idx1", descriptor))
+            # Per shard, Redis drops a weighted OR's weight when one branch is empty; see unsupported_tests.md.
+            if self.CLUSTER and descriptor["weighted_or"]:
+                answer["excluded"] = True
             scores = self._scores_by_doc(answer["result"])
             # The replay trusts the captured answer, so only this catches a bad prediction.
             assert set(scores) == descriptor["hits"], (

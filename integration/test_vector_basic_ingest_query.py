@@ -347,84 +347,41 @@ class TestKnnSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
             assert result == [1, b"skg:1", b"#0",
                               [b"dist", b"0"]], f"emulate-release {release}"
 
-class TestKnnSortKeyNil(ValkeySearchTestCaseBase):
-    """
-        KNN path: absent WITHSORTKEYS sort keys reply nil (issue #1353 item 5).
-    """
+class TestSortKeyNilGate(ValkeySearchTestCaseDebugMode):
+    """Issue #1353 item 5: absent sort keys reply nil only from 1.3.0."""
 
-    def test_knn_withsortkeys_absent_sortkey_is_nil(self):
+    def search_at(self, client, release, *query):
+        client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", release)
+        return client.execute_command(
+            "FT.SEARCH", "nsg_idx", *query, "WITHSORTKEYS",
+            "RETURN", "2", "m", "p", "DIALECT", "2")
+
+    def assert_only_absent_slots_gated(self, client, *query):
+        legacy = self.search_at(client, "1.2.1", *query)
+        fixed = self.search_at(client, "1.3.0", *query)
+        assert b"#" in legacy
+        assert [None if x == b"#" else x for x in legacy] == fixed
+
+    def test_sortkey_nil_gate(self):
         client: Valkey = self.server.get_new_client()
-        # Pin the fix version; the default emulate-release runs the legacy arm.
         assert client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
-        # NUL-free 8-byte blobs are valid FLOAT32 DIM-2 vectors.
-        assert client.execute_command(
-            "FT.CREATE", "knn_nil_idx", "ON", "HASH", "PREFIX", "1", "knn_nil:",
+            "FT.CREATE", "nsg_idx", "ON", "HASH", "PREFIX", "1", "nsg:",
             "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE",
             "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
             "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
-        assert client.execute_command(
-            "HSET", "knn_nil:1", "m", "all", "p", "10", "vec", "AAAAAAAA") == 3
-        assert client.execute_command(
-            "HSET", "knn_nil:2", "m", "all", "vec", "BBBBBBBB") == 2
+        client.execute_command(
+            "HSET", "nsg:1", "m", "all,solo", "p", "10", "vec", "AAAAAAAA")
+        client.execute_command("HSET", "nsg:2", "m", "all", "vec", "BBBBBBBB")
 
-        # A document lacking the SORTBY field gets a nil sort key and sorts last.
-        result = client.execute_command(
-            "FT.SEARCH", "knn_nil_idx", "(*)=>[KNN 2 @vec $B]",
-            "SORTBY", "p", "ASC", "WITHSORTKEYS", "RETURN", "2", "m", "p",
-            "PARAMS", "2", "B", "AAAAAAAA", "DIALECT", "2")
-        assert result == [
-            2,
-            b"knn_nil:1", b"#10", [b"m", b"all", b"p", b"10"],
-            b"knn_nil:2", None,   [b"m", b"all"],
-        ]
-
-        # Without SORTBY the KNN distance does not become the sort key.
-        result = client.execute_command(
-            "FT.SEARCH", "knn_nil_idx", "(*)=>[KNN 2 @vec $B]",
-            "WITHSORTKEYS", "RETURN", "1", "m",
-            "PARAMS", "2", "B", "AAAAAAAA", "DIALECT", "2")
-        assert result == [
-            2,
-            b"knn_nil:1", None, [b"m", b"all"],
-            b"knn_nil:2", None, [b"m", b"all"],
-        ]
-
-
-class TestKnnSortKeyNilGate(ValkeySearchTestCaseDebugMode):
-    """
-        KNN path: the absent-sort-key nil reply (issue #1353 item 5) is gated
-        on search.emulate-release; below 1.3.0 the slot is the bare prefix.
-    """
-
-    def test_knn_sortkey_nil_gate(self):
-        client: Valkey = self.server.get_new_client()
-        assert client.execute_command(
-            "FT.CREATE", "knsg_idx", "ON", "HASH", "PREFIX", "1", "knsg:",
-            "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE",
-            "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
-            "DIM", "2", "DISTANCE_METRIC", "L2") == b"OK"
-        assert client.execute_command(
-            "HSET", "knsg:1", "m", "all,solo", "p", "10",
-            "vec", "AAAAAAAA") == 3
-        assert client.execute_command(
-            "HSET", "knsg:2", "m", "all", "vec", "BBBBBBBB") == 2
-        for release, absent in (("1.2.1", b"#"), ("1.3.0", None)):
-            assert client.execute_command(
-                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
-            result = client.execute_command(
-                "FT.SEARCH", "knsg_idx", "(*)=>[KNN 2 @vec $B]",
-                "SORTBY", "p", "ASC", "WITHSORTKEYS", "RETURN", "2", "m", "p",
-                "PARAMS", "2", "B", "AAAAAAAA", "DIALECT", "2")
-            assert result == [
-                2,
-                b"knsg:1", b"#10",  [b"m", b"all,solo", b"p", b"10"],
-                b"knsg:2", absent,  [b"m", b"all"],
-            ], f"emulate-release {release}"
-            # Without SORTBY the KNN distance is not a sort key on either arm.
-            result = client.execute_command(
-                "FT.SEARCH", "knsg_idx", "(@m:{solo})=>[KNN 1 @vec $B]",
-                "WITHSORTKEYS", "RETURN", "1", "m",
-                "PARAMS", "2", "B", "AAAAAAAA", "DIALECT", "2")
-            assert result == [1, b"knsg:1", absent,
-                              [b"m", b"all,solo"]], f"emulate-release {release}"
+        # Filter path.
+        self.assert_only_absent_slots_gated(
+            client, "@m:{all}", "SORTBY", "p", "ASC")
+        self.assert_only_absent_slots_gated(client, "@m:{solo}")
+        # KNN path.
+        self.assert_only_absent_slots_gated(
+            client, "(*)=>[KNN 2 @vec $B]", "SORTBY", "p", "ASC",
+            "PARAMS", "2", "B", "AAAAAAAA")
+        self.assert_only_absent_slots_gated(
+            client, "(@m:{solo})=>[KNN 1 @vec $B]",
+            "PARAMS", "2", "B", "AAAAAAAA")

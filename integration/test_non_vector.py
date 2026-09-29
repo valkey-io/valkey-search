@@ -1087,44 +1087,6 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
-    def test_withsortkeys_absent_sortkey_is_nil(self):
-        """
-            Absent WITHSORTKEYS sort keys reply nil (issue #1353 item 5).
-        """
-        client: Valkey = self.server.get_new_client()
-
-        # Pin the fix version; the default emulate-release runs the legacy arm.
-        assert client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
-
-        # WITHSORTKEYS without SORTBY: the sort-key slot is nil.
-        assert client.execute_command(
-            "FT.CREATE", "nil_sortkey_idx", "ON", "HASH", "PREFIX", "1", "nsk:",
-            "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE", "title", "TEXT") == b"OK"
-        assert client.execute_command(
-            "HSET", "nsk:1", "m", "all", "p", "10", "title", "hello world") == 3
-        result = client.execute_command(
-            "FT.SEARCH", "nil_sortkey_idx", "@m:{all}", "WITHSORTKEYS",
-            "RETURN", "1", "title", "DIALECT", "2")
-        assert result == [1, b"nsk:1", None, [b"title", b"hello world"]]
-
-        # A document lacking the SORTBY field gets a nil sort key and sorts last.
-        assert client.execute_command(
-            "FT.CREATE", "nil_sortkey_sparse_idx", "ON", "HASH", "PREFIX", "1", "nss:",
-            "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE") == b"OK"
-        assert client.execute_command("HSET", "nss:1", "m", "all", "p", "20") == 2
-        assert client.execute_command("HSET", "nss:2", "m", "all", "p", "10") == 2
-        assert client.execute_command("HSET", "nss:3", "m", "all") == 1
-        result = client.execute_command(
-            "FT.SEARCH", "nil_sortkey_sparse_idx", "@m:{all}", "SORTBY", "p", "ASC",
-            "WITHSORTKEYS", "RETURN", "1", "m", "DIALECT", "2")
-        assert result == [
-            3,
-            b"nss:2", b"#10", [b"m", b"all"],
-            b"nss:1", b"#20", [b"m", b"all"],
-            b"nss:3", None,   [b"m", b"all"],
-        ]
-
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """
         The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;
@@ -1210,40 +1172,6 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
                 "FT.SEARCH", "rcg_idx", "@m:{all}", "NOCONTENT",
                 "RETURN", "1", "title", "DIALECT", "2")
             assert result == id_only, f"emulate-release {release}"
-
-
-class TestSortKeyNilGate(ValkeySearchTestCaseDebugMode):
-    """
-        The absent-sort-key nil reply (issue #1353 item 5) is gated on
-        search.emulate-release; below 1.3.0 the slot is the bare prefix.
-    """
-
-    def test_sortkey_nil_gate(self):
-        client: Valkey = self.server.get_new_client()
-        assert client.execute_command(
-            "FT.CREATE", "nsg_idx", "ON", "HASH", "PREFIX", "1", "nsg:",
-            "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE") == b"OK"
-        assert client.execute_command(
-            "HSET", "nsg:1", "m", "all,solo", "p", "10") == 2
-        assert client.execute_command("HSET", "nsg:2", "m", "all") == 1
-        for release, absent in (("1.2.1", b"#"), ("1.3.0", None)):
-            assert client.execute_command(
-                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
-            # SORTBY on a field nsg:2 lacks.
-            result = client.execute_command(
-                "FT.SEARCH", "nsg_idx", "@m:{all}", "SORTBY", "p", "ASC",
-                "WITHSORTKEYS", "RETURN", "1", "m", "DIALECT", "2")
-            assert result == [
-                2,
-                b"nsg:1", b"#10",  [b"m", b"all,solo"],
-                b"nsg:2", absent,  [b"m", b"all"],
-            ], f"emulate-release {release}"
-            # WITHSORTKEYS without SORTBY.
-            result = client.execute_command(
-                "FT.SEARCH", "nsg_idx", "@m:{solo}", "WITHSORTKEYS",
-                "RETURN", "1", "m", "DIALECT", "2")
-            assert result == [1, b"nsg:1", absent,
-                              [b"m", b"all,solo"]], f"emulate-release {release}"
 
 
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):

@@ -44,22 +44,6 @@ void SortByToGRPC(const std::optional<query::SortByParameter>& sortby,
                        : coordinator::SORT_ORDER_DESCENDING);
 }
 
-absl::StatusOr<std::optional<absl::flat_hash_set<std::string>>>
-InfieldsFromGRPC(const SearchIndexPartitionRequest& request) {
-  if (request.infields().empty()) {
-    return std::nullopt;
-  }
-  if (static_cast<size_t>(request.infields().size()) > kMaxTextFieldsCount) {
-    return absl::InvalidArgumentError(absl::StrCat(
-        "INFIELDS count (", request.infields().size(),
-        ") exceeds maximum supported (", kMaxTextFieldsCount, ")"));
-  }
-  absl::flat_hash_set<std::string> infields;
-  infields.reserve(request.infields().size());
-  infields.insert(request.infields().begin(), request.infields().end());
-  return infields;
-}
-
 std::optional<query::SortByParameter> SortByFromGRPC(
     const SearchIndexPartitionRequest& request) {
   if (!request.has_sortby()) {
@@ -321,7 +305,6 @@ absl::Status GRPCSearchRequestToParameters(
       dest.insert(key);
     }
   }
-  VMSDK_ASSIGN_OR_RETURN(parameters->infields, InfieldsFromGRPC(request));
   return absl::OkStatus();
 }
 
@@ -507,11 +490,6 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
     auto* inkeys_filter = request->mutable_inkeys();
     for (const auto& key : *parameters.inkeys) {
       inkeys_filter->add_keys(key);
-    }
-  }
-  if (parameters.infields.has_value()) {
-    for (const auto& field : *parameters.infields) {
-      request->add_infields(field);
     }
   }
   return request;

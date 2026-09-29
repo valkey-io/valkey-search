@@ -53,13 +53,6 @@ coordinator::Scorer ScorerToGRPC(indexes::scoring::ScorerType scorer);
 
 indexes::scoring::ScorerType ScorerFromGRPC(coordinator::Scorer scorer);
 
-// Decodes the infields repeated field from a proto request into an optional
-// set. Returns nullopt when no infields are present on the wire (same semantics
-// as an unset optional in SearchParameters). Returns an error if the infields
-// count exceeds kMaxTextFieldsCount.
-absl::StatusOr<std::optional<absl::flat_hash_set<std::string>>>
-InfieldsFromGRPC(const SearchIndexPartitionRequest& request);
-
 }  // namespace valkey_search::coordinator
 
 #endif  // VALKEYSEARCH_SRC_COORDINATOR_SEARCH_CONVERTER_H_

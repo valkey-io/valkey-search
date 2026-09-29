@@ -983,6 +983,12 @@ std::unique_ptr<data_model::VectorIndex> FlatParameters::ToProto() const {
 
 absl::Status SVSVamanaParameters::Verify() const {
   VMSDK_RETURN_IF_ERROR(FTCreateVectorParameters::Verify());
+  if (vector_data_type == data_model::VECTOR_DATA_TYPE_BFLOAT16) {
+    return absl::InvalidArgumentError(
+        "BFLOAT16 wire format is not supported for SVS_VAMANA; use "
+        "ALGORITHM HNSW for BFLOAT16 storage, or COMPRESSION FP16 for "
+        "compressed FP16 storage inside SVS.");
+  }
   if (construction_window_size < graph_max_degree) {
     return absl::InvalidArgumentError(
         absl::StrCat(kConstructionWindowSizeParam, " (",

@@ -38,8 +38,8 @@ typedef struct svs_index* svs_index_h;
 namespace valkey_search::indexes {
 
 // Build-time configuration retained on the class so the first HSET can
-// bootstrap the SVS index once it has an actual vector to build with
-// (svs_index_build_dynamic requires num_vectors > 0 at pin 5717f68).
+// bootstrap the SVS index once it has an actual vector to build with;
+// the SVS C API's svs_index_build_dynamic requires num_vectors > 0.
 struct SVSBuildConfig {
   uint32_t graph_max_degree{0};
   uint32_t construction_window_size{0};

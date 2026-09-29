@@ -1859,8 +1859,10 @@ TEST_P(InfieldsFilterTest, ParseParams) {
   {
     auto key = StringInternStore::Intern("key_field2_only");
     auto field2 = index_schema->GetIndex("text_field2").value();
-    VMSDK_EXPECT_OK(static_cast<indexes::Text *>(field2.get())
-                        ->AddRecord(key, AttributeData(vmsdk::MakeUniqueValkeyString("hello"))));
+    VMSDK_EXPECT_OK(
+        static_cast<indexes::Text *>(field2.get())
+            ->AddRecord(key,
+                        AttributeData(vmsdk::MakeUniqueValkeyString("hello"))));
     index_schema->GetTextIndexSchema()->CommitKeyData(key);
   }
   TextParsingOptions options{

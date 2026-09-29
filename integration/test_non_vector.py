@@ -6,7 +6,6 @@ import json
 import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
-from utils import IndexingTestHelper
 import time
 import pytest
 from utils import IndexingTestHelper
@@ -1088,52 +1087,48 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
-    def test_json_tag_query_wildcard_path(self):
+class TestJsonTagWildcardGate(ValkeySearchTestCaseDebugMode):
+    """
+        A JSON TAG field on a wildcard path indexes each array element as its
+        own tag, and null elements are skipped, matching Redisearch. Gated on
+        search.emulate-release: pre-1.3.0 the whole JSON array text was split
+        on the separator, so elements kept their quotes and never matched.
+        debug-mode is required to set emulate-release at the module version.
+    """
+
+    def test_json_tag_wildcard_gate(self):
         client: Valkey = self.server.get_new_client()
+        for release, fixed in (("1.2.1", False), ("1.3.0", True)):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            index = f"jtw_idx_{release}"
+            prefix = f"jtw_{release}:"
+            assert client.execute_command(
+                "FT.CREATE", index, "ON", "JSON", "PREFIX", "1", prefix,
+                "SCHEMA", "$.address[*].city", "AS", "city", "TAG") == b"OK"
+            assert client.execute_command(
+                "JSON.SET", f"{prefix}1", "$",
+                '{"address":[{"city":"Seoul"},{"city":"New York"},'
+                '{"city":"Seoul"},{"city":""}]}') == b"OK"
+            assert client.execute_command(
+                "JSON.SET", f"{prefix}2", "$",
+                '{"address":[{"city":"Busan"}]}') == b"OK"
+            assert client.execute_command(
+                "JSON.SET", f"{prefix}3", "$",
+                '{"address":[{"city":"Daegu"},{"city":null}]}') == b"OK"
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, index)
 
-        assert client.execute_command(
-            "FT.CREATE", "idx_wildcard_json_tag",
-            "ON", "JSON",
-            "PREFIX", "1", "user:",
-            "SCHEMA", "$.address[*].city", "AS", "address__city", "TAG"
-        ) == b"OK"
+            def search(city):
+                return client.execute_command(
+                    "FT.SEARCH", index, f"@city:{{{city}}}", "NOCONTENT",
+                    "DIALECT", "2")
 
-        assert client.execute_command(
-            "JSON.SET", "user:1", "$",
-            '{"address":[{"city":"Seoul"},{"city":"New York"},{"city":"Seoul"},{"city":""}]}'
-        ) == b"OK"
+            # A single-element array is unaffected by the gate.
+            assert search("Busan") == [1, f"{prefix}2".encode()]
+            for city, key in (("Seoul", 1), ("New York", 1), ("Daegu", 3)):
+                expected = [1, f"{prefix}{key}".encode()] if fixed else [0]
+                assert search(city) == expected, f"emulate-release {release}"
 
-        assert client.execute_command(
-            "JSON.SET", "user:2", "$",
-            '{"address":[{"city":"Busan"}]}'
-        ) == b"OK"
-
-        IndexingTestHelper.wait_for_indexing_complete_on_node(
-            client, "idx_wildcard_json_tag")
-
-        result = client.execute_command(
-            "FT.SEARCH", "idx_wildcard_json_tag",
-            "@address__city:{Seoul}",
-            "NOCONTENT"
-        )
-        assert result[0] == 1
-        assert result[1] == b"user:1"
-
-        result = client.execute_command(
-            "FT.SEARCH", "idx_wildcard_json_tag",
-            "@address__city:{New York}",
-            "NOCONTENT"
-        )
-        assert result[0] == 1
-        assert result[1] == b"user:1"
-
-        result = client.execute_command(
-            "FT.SEARCH", "idx_wildcard_json_tag",
-            "@address__city:{Busan}",
-            "NOCONTENT"
-        )
-        assert result[0] == 1
-        assert result[1] == b"user:2"
 
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """

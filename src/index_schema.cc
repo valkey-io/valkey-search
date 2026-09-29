@@ -678,7 +678,8 @@ void IndexSchema::ProcessKeyspaceNotification(ValkeyModuleCtx *ctx,
                            attribute.GetIdentifier(),
                            attribute.GetIndex()->GetIndexerType() ==
                                    indexes::IndexerType::kTag &&
-                               options::EnabledInVersion(1, 3, 0))
+                               options::EnabledInVersion(
+                                   indexes::Tag::kJsonArrayFixVersion))
             .value_or(vmsdk::UniqueValkeyString());
     if (attr_val && attribute_data_type_->AttributesProvidedAsString() &&
         attribute.GetIndex()) {

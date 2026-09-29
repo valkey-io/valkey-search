@@ -19,7 +19,6 @@
 #include "absl/strings/ascii.h"
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_replace.h"
 #include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
@@ -65,33 +64,41 @@ std::optional<std::string> JoinJsonStringArray(absl::string_view record,
     if (pos == record.size() - 1) {
       return joined;
     }
-    if (pos >= record.size() - 1 || record[pos++] != '"') {
-      return std::nullopt;
-    }
-
-    const size_t value_start = pos;
-    while (pos < record.size() - 1 && record[pos] != '"') {
-      if (record[pos] == '\\') {
-        if (++pos >= record.size() - 1) {
-          return std::nullopt;
-        }
-      }
-      ++pos;
-    }
     if (pos >= record.size() - 1) {
       return std::nullopt;
     }
-    auto value =
-        vmsdk::JsonUnquote(record.substr(value_start, pos - value_start));
-    if (!value.has_value()) {
-      return std::nullopt;
+    if (record.substr(pos, 4) == "null") {
+      // A null element carries no tag; skip it and keep the other elements.
+      pos += 4;
+    } else {
+      if (record[pos++] != '"') {
+        return std::nullopt;
+      }
+
+      const size_t value_start = pos;
+      while (pos < record.size() - 1 && record[pos] != '"') {
+        if (record[pos] == '\\') {
+          if (++pos >= record.size() - 1) {
+            return std::nullopt;
+          }
+        }
+        ++pos;
+      }
+      if (pos >= record.size() - 1) {
+        return std::nullopt;
+      }
+      auto value =
+          vmsdk::JsonUnquote(record.substr(value_start, pos - value_start));
+      if (!value.has_value()) {
+        return std::nullopt;
+      }
+      if (!first) {
+        joined += separator;
+      }
+      joined += *value;
+      first = false;
+      ++pos;
     }
-    if (!first) {
-      joined += separator;
-    }
-    joined += *value;
-    first = false;
-    ++pos;
 
     while (pos < record.size() && absl::ascii_isspace(record[pos])) {
       ++pos;
@@ -321,7 +328,8 @@ absl::StatusOr<RecordResult> Tag::ModifyRecord(const InternedStringPtr &key,
 vmsdk::UniqueValkeyString Tag::NormalizeStringAttribute(
     vmsdk::UniqueValkeyString input) const {
   return VALKEY_SEARCH_COMPATIBILITY_FIX(
-      1, 3, 0, "json_tag_wildcard_array",
+      kJsonArrayFixVersion.Major(), kJsonArrayFixVersion.Minor(),
+      kJsonArrayFixVersion.Patch(), "json_tag_wildcard_array",
       [&] {
         if (!input) {
           return std::move(input);

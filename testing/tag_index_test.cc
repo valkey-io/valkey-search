@@ -161,6 +161,14 @@ TEST_F(TagIndexTest, NormalizeStringRecordPreservesLiteralArrayDelimiter) {
   EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "foo\",\"bar|baz");
 }
 
+TEST_F(TagIndexTest, NormalizeStringRecordSkipsNullArrayElements) {
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+  auto normalized = index->NormalizeStringAttribute(
+      vmsdk::MakeUniqueValkeyString("[\"Seoul\",null,\"New York\"]"));
+  ASSERT_TRUE(normalized);
+  EXPECT_EQ(vmsdk::ToStringView(normalized.get()), "Seoul,New York");
+}
+
 TEST_F(TagIndexTest, NormalizeStringRecordUsesLegacyBehaviorBeforeFix) {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 0, 0}));
   auto input = vmsdk::MakeUniqueValkeyString("Seoul\",\"New York");

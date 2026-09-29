@@ -139,6 +139,11 @@ absl::Status NormalizeJsonAttribute(absl::string_view attribute,
     return absl::NotFoundError("Invalid attribute");
   }
   if (preserve_json_array) {
+    // A path that matches nothing yields "[]"; report it as missing, as the
+    // flattening path below does.
+    if (attribute == "[]") {
+      return absl::NotFoundError("Empty attribute");
+    }
     out_attribute = vmsdk::MakeUniqueValkeyString(attribute);
     return absl::OkStatus();
   }

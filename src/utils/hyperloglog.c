@@ -170,15 +170,6 @@ static int hllDenseSet(uint8_t *registers, long index, uint8_t count) {
   return 0;
 }
 
-/* Add an element to the dense HLL. Returns 1 if a register was
- * updated, 0 otherwise. */
-static int hllDenseAdd(uint8_t *registers, const unsigned char *ele,
-                       size_t elesize) {
-  long index;
-  uint8_t count = (uint8_t)hllPatLen(ele, elesize, &index);
-  return hllDenseSet(registers, index, count);
-}
-
 /* Compute the register histogram in the dense representation.
  * Optimized unrolled loop for P=14, BITS=6. */
 static void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
@@ -267,13 +258,11 @@ static double hllTau(double x) {
 }
 
 /* Return the approximated cardinality using the improved Ertl estimator. */
-static uint64_t hllCountRegisters(uint8_t *registers) {
+uint64_t hll_count_histogram(const int *reghisto) {
   double m = HLL_REGISTERS;
   double E;
   int j;
-  int reghisto[64] = {0};
 
-  hllDenseRegHisto(registers, reghisto);
   /* Empty sketch: sigma(1) is infinite and the estimate is 0. Return early,
    * since -ffast-math leaves arithmetic on infinity undefined. */
   if (reghisto[0] == HLL_REGISTERS) {
@@ -298,8 +287,12 @@ void hll_init(struct HLL *hll) {
   HLL_INVALIDATE_CACHE(hll);
 }
 
-void hll_add(struct HLL *hll, const void *buf, size_t len) {
-  if (hllDenseAdd(hll->registers, (const unsigned char *)buf, len)) {
+int hll_pat_len(const void *buf, size_t len, long *index) {
+  return hllPatLen((const unsigned char *)buf, len, index);
+}
+
+void hll_set(struct HLL *hll, long index, int count) {
+  if (hllDenseSet(hll->registers, index, (uint8_t)count)) {
     HLL_INVALIDATE_CACHE(hll);
   }
 }
@@ -308,7 +301,9 @@ uint64_t hll_count(const struct HLL *hll) {
   if (HLL_VALID_CACHE(hll)) {
     return hll->cached_card;
   }
-  uint64_t card = hllCountRegisters(((struct HLL *)hll)->registers);
+  int reghisto[64] = {0};
+  hllDenseRegHisto(((struct HLL *)hll)->registers, reghisto);
+  uint64_t card = hll_count_histogram(reghisto);
   ((struct HLL *)hll)->cached_card = card;
   return card;
 }

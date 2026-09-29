@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -544,6 +545,35 @@ TEST_F(AggregateExecTest, CountDistinctishSingleValue) {
   double estimate = *(record->fields_.at(2).AsDouble());
   EXPECT_GE(estimate, 1);
   EXPECT_LE(estimate, 1);
+}
+
+// Every group holds one sketch, so its 12 KB dense registers must be
+// allocated only for groups with many distinct values.
+TEST_F(AggregateExecTest, CountDistinctishSmallGroupSize) {
+  EXPECT_LE(sizeof(HyperLogLog), 64);
+}
+
+// Values 0..n-1 set 1023, 1024 and 1025 registers at n = 1053, 1054 and
+// 1055, around the switch from the sparse to the dense representation; at
+// n = 1102 a register lowered by a colliding value would give 1105. The
+// expected values are the dense sketch's estimates.
+TEST_F(AggregateExecTest, CountDistinctishSparseToDense) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  for (auto [n, expected] :
+       std::vector<std::pair<size_t, double>>{{1053, 1056},
+                                              {1054, 1057},
+                                              {1055, 1058},
+                                              {1102, 1106},
+                                              {100000, 99565}}) {
+    auto records = MakeData(n);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_EQ(*records.pop_front()->fields_.at(2).AsDouble(), expected) << n;
+    records = MakeDuplicateData(n, 3);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    EXPECT_EQ(*records.pop_front()->fields_.at(2).AsDouble(), expected) << n;
+  }
 }
 
 TEST_F(AggregateExecTest, CountDistinctishMultipleReducers) {

@@ -2,17 +2,21 @@
 #ifndef VALKEYSEARCH_SRC_UTILS_HYPERLOGLOG_COUNTER_H_
 #define VALKEYSEARCH_SRC_UTILS_HYPERLOGLOG_COUNTER_H_
 
+#include <cstdint>
+#include <memory>
+
+#include "absl/container/inlined_vector.h"
 #include "src/expr/value.h"
 #include "src/utils/hyperloglog.h"
 
 namespace valkey_search {
 
-// C++ wrapper around the Valkey HyperLogLog dense implementation for
+// C++ wrapper around the Valkey HyperLogLog implementation for
 // use with expr::Value types. Uses P=14 (16384 registers, ~0.81%
 // standard error) matching the Valkey core HyperLogLog.
 class HyperLogLog {
  public:
-  HyperLogLog();
+  HyperLogLog() = default;
   ~HyperLogLog() = default;
 
   HyperLogLog(const HyperLogLog&) = delete;
@@ -27,7 +31,15 @@ class HyperLogLog {
   uint64_t Estimate() const;
 
  private:
-  struct HLL hll_;
+  void AddBuffer(const void* buf, size_t len);
+
+  // The dense registers take 12 KB and most GROUPBY groups see few values,
+  // so the non-zero registers are kept in sparse_, sorted as
+  // (index << 8 | value), until there are more than kMaxSparse of them.
+  // Both forms hold the same registers and give the same estimate.
+  static constexpr size_t kMaxSparse = 1024;
+  absl::InlinedVector<uint32_t, 4> sparse_;
+  std::unique_ptr<struct HLL> dense_;
 };
 
 }  // namespace valkey_search

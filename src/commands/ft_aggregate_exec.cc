@@ -921,17 +921,9 @@ class Quantile : public GroupBy::ReducerInstance {
   }
 
   expr::Value GetResult() const override {
-    if (n_ == 0) {
-      return expr::Value();
-    }
-
-    double result = Query(quantile_);
-
-    if (expr::IsNan(result)) {
-      return expr::Value();
-    }
-
-    return expr::Value(result);
+    // Query answers nan when nothing was inserted, as Redisearch does. Not
+    // gated like SUM and AVG: no earlier release had QUANTILE.
+    return expr::Value(Query(quantile_));
   }
 };
 

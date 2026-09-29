@@ -77,9 +77,9 @@ class BruteforceSearch
   inline dist_t EvaluateDistance(const VectorRecordT &a,
                                  const VectorRecordT &b) const {
     float reciprocal_mag_product =
-        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
                     : 1.0f;
-    return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
+    return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
 

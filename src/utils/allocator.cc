@@ -30,7 +30,7 @@ class ChunkTracker {
   ChunkTracker() = default;
   void Track(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock(&mutex_);
-    chunks_by_data_.insert(std::make_pair(chunk->data.get(), chunk));
+    chunks_by_data_.insert(std::make_pair(chunk->data, chunk));
   }
   const AllocatorChunk *FindChunk(char *ptr) const ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock(&mutex_);
@@ -38,11 +38,9 @@ class ChunkTracker {
     auto it = chunks_by_data_.upper_bound(ptr);
     if (it != chunks_by_data_.begin()) {
       --it;
-      if (it->second->data.get() <= ptr) {
-        DCHECK_GT(it->second->data.get() +
-                      BufferSize(it->second->entries_in_chunk,
-                                 it->second->allocator->ChunkSize()),
-                  ptr);
+      if (ptr <
+          it->second->data + BufferSize(it->second->entries_in_chunk,
+                                        it->second->allocator->ChunkSize())) {
         return it->second;
       }
     }
@@ -50,7 +48,7 @@ class ChunkTracker {
   }
   void Untrack(const AllocatorChunk *chunk) ABSL_LOCKS_EXCLUDED(mutex_) {
     absl::MutexLock lock(&mutex_);
-    chunks_by_data_.erase(chunk->data.get());
+    chunks_by_data_.erase(chunk->data);
   }
 
  private:
@@ -71,7 +69,6 @@ size_t CalcChunkFreeGroup(size_t free_cnt) {
 
 int UpperBoundToMultipleOf8(int num) { return (num + 7) & ~7; }
 
-// TODO: allow deletion of chunks when they are empty
 FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
     : size_(size), require_ptr_alignment_(require_ptr_alignment) {
   if (require_ptr_alignment_) {
@@ -214,25 +211,32 @@ size_t EntriesFitInChunk(size_t size, size_t num_pages) {
 
 AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
     : entries_in_chunk(EntriesFitInChunk(size, kChunkBufferPages)),
-      // Note: Using new[] to avoid calling constructor of char[].
-      data(std::unique_ptr<char[]>(
-          new char[BufferSize(entries_in_chunk, size)])),
       allocator(allocator) {
+  const size_t alignment = GetPageSize();
+  size_t buffer_size = BufferSize(entries_in_chunk, size) + alignment;
+  raw_data = std::make_unique<char[]>(buffer_size);
+  uintptr_t raw_addr = reinterpret_cast<uintptr_t>(raw_data.get());
+  uintptr_t aligned_addr = (raw_addr + alignment - 1) & ~(alignment - 1);
+  data = reinterpret_cast<char *>(aligned_addr);
+  CHECK_EQ(reinterpret_cast<uintptr_t>(data) % alignment, 0u);
   for (size_t i = 0; i < entries_in_chunk; ++i) {
-    free_list.push(data.get() + i * size);
+    free_list.push(data + i * size);
   }
   chunk_tracker.Track(this);
 }
 
 AllocatorChunk::~AllocatorChunk() { chunk_tracker.Untrack(this); }
 
-bool Allocator::Free(char *ptr) {
+void Allocator::Free(char *ptr) {
+  if (ptr == nullptr) {
+    return;
+  }
   auto chunk = chunk_tracker.FindChunk(ptr);
   if (!chunk) {
-    return false;
+    ::operator delete(ptr);
+    return;
   }
   chunk->allocator->Free(const_cast<AllocatorChunk *>(chunk), ptr);
-  return true;
 }
 
 }  // namespace valkey_search

@@ -237,23 +237,18 @@ class HierarchicalNSW
         (*data_level0_memory_)[internal_id] + offsetData_);
   }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-  inline StoredVectorT GetDataByInternalId(tableint internal_id) const {
-    return std::atomic_load(GetDataPtrByInternalId(internal_id));
+  inline const StoredVectorT &GetDataByInternalId(tableint internal_id) const {
+    return *GetDataPtrByInternalId(internal_id);
   }
 
   inline void SetDataByInternalId(tableint internal_id,
                                   QueryVectorT &&datapoint) {
-    std::atomic_store(GetDataPtrByInternalId(internal_id),
-                      datapoint.GetVectorRecord());
+    *GetDataPtrByInternalId(internal_id) = datapoint.GetVectorRecord();
   }
   inline void SetDataByInternalId(tableint internal_id,
                                   StoredVectorT &&datapoint) {
-    std::atomic_store(GetDataPtrByInternalId(internal_id),
-                      std::move(datapoint));
+    *GetDataPtrByInternalId(internal_id) = std::move(datapoint);
   }
-#pragma GCC diagnostic pop
 
   inline void InitDataByInternalId(tableint internal_id,
                                    QueryVectorT &&datapoint) {
@@ -264,9 +259,9 @@ class HierarchicalNSW
   inline dist_t EvaluateDistance(const StoredVectorT &a,
                                  const StoredVectorT &b) const {
     float reciprocal_mag_product =
-        normalized_ ? a->GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
                     : 1.0f;
-    return fstdistfunc_(a->GetRawVector(), b->GetRawVector(), dist_func_param_,
+    return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
 
@@ -275,12 +270,12 @@ class HierarchicalNSW
     if (is_rhs_marked_deleted) {
       const char *query_vec =
           normalized_ ? a.GetNormalizedVector() : a.GetRawVector();
-      return fstdistfunc_(query_vec, b->GetRawVector(), dist_func_param_, 1);
+      return fstdistfunc_(query_vec, b.GetRawVector(), dist_func_param_, 1);
     }
     float reciprocal_mag_product =
-        normalized_ ? a.GetReciprocalMagnitude() * b->GetReciprocalMagnitude()
+        normalized_ ? a.GetReciprocalMagnitude() * b.GetReciprocalMagnitude()
                     : 1.0f;
-    return fstdistfunc_(a.GetRawVector(), b->GetRawVector(), dist_func_param_,
+    return fstdistfunc_(a.GetRawVector(), b.GetRawVector(), dist_func_param_,
                         reciprocal_mag_product);
   }
 
@@ -352,10 +347,10 @@ class HierarchicalNSW
       if (size > 0) {
         __builtin_prefetch((char *)(visited_array + *datal), 0, 3);
         __builtin_prefetch((char *)(visited_array + *datal + 64), 0, 3);
-        __builtin_prefetch(GetDataByInternalId(*datal)->GetRawVector(), 0, 3);
+        __builtin_prefetch(GetDataByInternalId(*datal).GetRawVector(), 0, 3);
       }
       if (size > 1) {
-        __builtin_prefetch(GetDataByInternalId(*(datal + 1))->GetRawVector(), 0,
+        __builtin_prefetch(GetDataByInternalId(*(datal + 1)).GetRawVector(), 0,
                            3);
       }
 #endif
@@ -367,7 +362,7 @@ class HierarchicalNSW
         if (j + 1 < size) {
           __builtin_prefetch((char *)(visited_array + *(datal + j + 1)), 0, 3);
           __builtin_prefetch(
-              GetDataByInternalId(*(datal + j + 1))->GetRawVector(), 0, 3);
+              GetDataByInternalId(*(datal + j + 1)).GetRawVector(), 0, 3);
         }
 #endif
         if (visited_array[candidate_id] == visited_array_tag) continue;
@@ -380,7 +375,7 @@ class HierarchicalNSW
           candidateSet.emplace(-dist1, candidate_id);
 #ifdef USE_PREFETCH
           __builtin_prefetch(
-              GetDataByInternalId(candidateSet.top().second)->GetRawVector(), 0,
+              GetDataByInternalId(candidateSet.top().second).GetRawVector(), 0,
               3);
 #endif
 
@@ -432,7 +427,7 @@ class HierarchicalNSW
       top_candidates.emplace(dist, ep_id);
       if (!bare_bone_search && stop_condition) {
         stop_condition->add_point_to_result(GetExternalLabel(ep_id),
-                                            ep_data->GetRawVector(), dist);
+                                            ep_data.GetRawVector(), dist);
       }
       candidate_set.emplace(-dist, ep_id);
     } else {
@@ -525,9 +520,7 @@ class HierarchicalNSW
 #ifdef USE_PREFETCH
         if (k + kSlotLookahead < n_unvisited) {
           __builtin_prefetch(
-              (*GetDataPtrByInternalId(unvisited[k + kSlotLookahead]))
-                  ->GetRawVector(),
-              0, 0);
+              GetDataPtrByInternalId(unvisited[k + kSlotLookahead]), 0, 0);
         }
 #endif
         vptrs[k] = GetDataPtrByInternalId(unvisited[k]);
@@ -539,7 +532,7 @@ class HierarchicalNSW
       for (size_t k = 0; k < n_unvisited; k++) {
 #ifdef USE_PREFETCH
         if (k + kVectorLookahead < n_unvisited) {
-          const char *h = (*vptrs[k + kVectorLookahead])->GetRawVector();
+          const char *h = vptrs[k + kVectorLookahead]->GetRawVector();
           __builtin_prefetch(h, 0, 0);
           __builtin_prefetch(h + 128, 0, 0);
         }
@@ -574,7 +567,7 @@ class HierarchicalNSW
             top_candidates.emplace(dist, candidate_id);
             if (!bare_bone_search && stop_condition) {
               stop_condition->add_point_to_result(
-                  GetExternalLabel(candidate_id), (*currObj1)->GetRawVector(),
+                  GetExternalLabel(candidate_id), currObj1->GetRawVector(),
                   dist);
             }
           }
@@ -590,7 +583,7 @@ class HierarchicalNSW
             top_candidates.pop();
             if (!bare_bone_search && stop_condition) {
               stop_condition->remove_point_from_result(
-                  GetExternalLabel(id), GetDataByInternalId(id)->GetRawVector(),
+                  GetExternalLabel(id), GetDataByInternalId(id).GetRawVector(),
                   dist);
               flag_remove_extra = stop_condition->should_remove_extra();
             } else {
@@ -1534,13 +1527,13 @@ class HierarchicalNSW
           if (size == 0) break;
           tableint *datal = (tableint *)(data + 1);
 #ifdef USE_PREFETCH
-          __builtin_prefetch(GetDataByInternalId(*datal)->GetRawVector(), 0, 3);
+          __builtin_prefetch(GetDataByInternalId(*datal).GetRawVector(), 0, 3);
 #endif
           for (int i = 0; i < size; i++) {
 #ifdef USE_PREFETCH
             if (i + 1 < size) {
               __builtin_prefetch(
-                  GetDataByInternalId(*(datal + i + 1))->GetRawVector(), 1, 3);
+                  GetDataByInternalId(*(datal + i + 1)).GetRawVector(), 0, 3);
             }
 #endif
             tableint cand = datal[i];

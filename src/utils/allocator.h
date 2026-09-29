@@ -40,7 +40,7 @@ struct AllocatorChunk;
 class Allocator {
  public:
   virtual char *Allocate(size_t size) = 0;
-  static bool Free(char *ptr);
+  static void Free(char *ptr);
   virtual ~Allocator() = default;
   virtual size_t ChunkSize() const = 0;
 
@@ -54,7 +54,8 @@ struct AllocatorChunk {
   AllocatorChunk(Allocator *allocator, size_t size);
   ~AllocatorChunk();
   size_t entries_in_chunk;
-  std::unique_ptr<char[]> data;
+  std::unique_ptr<char[]> raw_data;
+  char *data{nullptr};
   std::stack<char *> free_list;
   Allocator *allocator;
   // Intrusive linked list.

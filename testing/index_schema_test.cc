@@ -2139,13 +2139,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         index_schema->ConsumeTrackedMutatedAttribute(key, true);
     ASSERT_TRUE(consumed_data.has_value());
     ASSERT_FALSE(consumed_data->empty());
-    std::shared_ptr<const indexes::VectorRecord> consumed_vector;
+    indexes::VectorRecord consumed_vector;
     absl::string_view data_view;
     if (!data_ptr.empty()) {
       EXPECT_TRUE(consumed_data->begin()->second.IsVector());
       consumed_vector = consumed_data->begin()->second.ConsumeVector();
       ASSERT_NE(consumed_vector, nullptr);
-      data_view = absl::string_view(consumed_vector->GetRawVector(),
+      data_view = absl::string_view(consumed_vector.GetRawVector(),
                                     dimensions * sizeof(float));
     } else {
       EXPECT_TRUE(consumed_data->begin()->second.IsNull());
@@ -2180,7 +2180,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_TRUE(consumed_data->begin()->second.IsVector());
       auto consumed_vector2 = consumed_data->begin()->second.ConsumeVector();
       ASSERT_NE(consumed_vector2, nullptr);
-      absl::string_view data_view2(consumed_vector2->GetRawVector(),
+      absl::string_view data_view2(consumed_vector2.GetRawVector(),
                                    dimensions * sizeof(float));
       EXPECT_EQ(data_view2, track_after_consumption_data_ptr);
     }

@@ -493,9 +493,9 @@ TEST_F(EntryOperationTest, ReplicateOmitsTypeKeywordForDefaultTypeOnly) {
       },
       [](auto) { return 1; }, vmsdk::ValkeyVersion{0, 0, 1});
 
-  EXPECT_CALL(*kMockValkeyModule,
-              SendClusterMessage(fake_ctx, nullptr, testing::_, testing::_,
-                                 testing::_))
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      SendClusterMessage(fake_ctx, nullptr, testing::_, testing::_, testing::_))
       .WillRepeatedly(testing::Return(VALKEYMODULE_OK));
 
   // Default type: no "TYPE" argument, 3-arg "cbb" format.
@@ -509,8 +509,7 @@ TEST_F(EntryOperationTest, ReplicateOmitsTypeKeywordForDefaultTypeOnly) {
     content->set_type_url("type.googleapis.com/FakeType");
     content->set_value("default-type-content");
     auto result = test_metadata_manager_->CreateEntry(
-        kSchemaManagerMetadataTypeName, ObjName(0, "idx1"),
-        std::move(content));
+        kSchemaManagerMetadataTypeName, ObjName(0, "idx1"), std::move(content));
     EXPECT_TRUE(result.ok());
   }
 

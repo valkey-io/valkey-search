@@ -9,7 +9,7 @@ from valkey.cluster import ValkeyCluster
 from compatibility import GENERATORS, compute_sources_hash
 from compatibility.data_sets import *
 
-ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS]
+ALL_ANSWER_FILES = [g["answers"] for g in GENERATORS if g.get("standalone", True)]
 CLUSTER_ANSWER_FILES = [g["answers"] for g in GENERATORS if g["cluster"]]
 TEST_MARKER = "*" * 100
 from valkey_search_test_case import (
@@ -192,6 +192,25 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
             rows += [row]
     return rows
 
+def has_token(cmd, token):
+    """Whether cmd carries a keyword, case-insensitively."""
+    # Case-insensitive: the generators emit uppercase. isinstance skips binary BLOBs.
+    return any(isinstance(c, str) and c.lower() == token for c in cmd)
+
+def unpack_scored_search_result(rs, key_type, has_content):
+    """Unpack a WITHSCORES reply: [count, key, score, (fields), ...]."""
+    # result_has_sortkeys cannot detect this shape, so the stride comes from the command.
+    rows = []
+    stride = 3 if has_content else 2
+    for i in range(1, len(rs), stride):
+        row = {"__key": rs[i], "__score": rs[i + 1]}
+        if has_content:
+            fields = rs[i + 2]
+            for j in range(0, len(fields), 2):
+                row[parse_field(fields[j], key_type)] = parse_value(fields[j + 1], key_type)
+        rows += [row]
+    return rows
+
 def unpack_agg_result(rs, key_type):
     # Skip the first gibberish int
     try:
@@ -294,12 +313,17 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
     if "ft.hybrid" in cmd[0].lower():
         out = unpack_hybrid_result(rs, key_type)
     elif "ft.search" in cmd[0].lower():
-        # Detect if the result actually has sort keys by checking the format,
-        # not just whether WITHSORTKEYS is in the command. This handles cases
-        # where the expected result (from pickle) may not have sort keys even
-        # if the command requested them.
-        has_sortkeys = result_has_sortkeys(rs)
-        out = unpack_search_result(rs, key_type, has_sortkeys)
+        if has_token(cmd, "withscores"):
+            # NOCONTENT is the only suppressor emitted; RETURN 0 would need the same.
+            out = unpack_scored_search_result(
+                rs, key_type, has_content=not has_token(cmd, "nocontent"))
+        else:
+            # Detect if the result actually has sort keys by checking the format,
+            # not just whether WITHSORTKEYS is in the command. This handles cases
+            # where the expected result (from pickle) may not have sort keys even
+            # if the command requested them.
+            has_sortkeys = result_has_sortkeys(rs)
+            out = unpack_search_result(rs, key_type, has_sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -763,7 +787,8 @@ def drop_index_cluster(test_case, key_type):
 def do_answer_cluster(cluster_client, expected, data_set, test_case):
     global correct_answers, failed_tests, passed_tests
 
-    next_data_set = (expected["data_set_name"], expected["key_type"])
+    next_data_set = (expected["data_set_name"], expected["key_type"],
+                     expected.get("schema_type"))
 
     if data_set != next_data_set:
         print(
@@ -782,7 +807,12 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             test_case,
             expected["data_set_name"],
             expected["key_type"],
+            schema_type=expected.get("schema_type", "default"),
         )
+        # Scores depend on every shard's full corpus, so wait out indexing on each.
+        for primary in test_case.get_all_primary_clients():
+            waiters.wait_for_true(lambda: IndexingTestHelper.is_indexing_complete_on_node(
+                primary, f"{expected['key_type']}_idx1"))
 
         data_set = next_data_set
 

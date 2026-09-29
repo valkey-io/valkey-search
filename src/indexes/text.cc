@@ -239,6 +239,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       found_original,
       indexes::text::TermScoringParams{
           .leaf_weight = GetWeight() * or_weight_multiplier,
+          .stem_weight = or_weight_multiplier,
           .num_doc_contain_term = num_doc_contain_term,
           .stem_num_doc_contain_term = stem_num_doc_contain_term,
           .root_num_doc_contain_term = root_num_doc_contain_term,

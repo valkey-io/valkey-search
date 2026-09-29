@@ -30,6 +30,7 @@ TermIterator::TermIterator(
       has_original_(has_original),
       has_root_(scoring.has_root),
       leaf_weight_(scoring.leaf_weight),
+      stem_weight_(scoring.stem_weight),
       num_doc_contain_term_(scoring.num_doc_contain_term),
       text_index_schema_(scoring.text_index_schema) {
   // Derive the query-invariant corpus stats from the schema and precompute the
@@ -129,11 +130,11 @@ float TermIterator::GetScore() const {
   }
   if (root_tf > 0) {
     score += scorer_->ScoreLeaf(
-        {idf_root_, root_tf, doc_len, avg_doc_len_, leaf_weight_});
+        {idf_root_, root_tf, doc_len, avg_doc_len_, stem_weight_});
   }
   if (stem_tf > 0) {
     score += scorer_->ScoreLeaf(
-        {idf_stem_, stem_tf, doc_len, avg_doc_len_, leaf_weight_});
+        {idf_stem_, stem_tf, doc_len, avg_doc_len_, stem_weight_});
   }
   return score;
 }

@@ -680,3 +680,6 @@ computation, or to capture a second set of reference answers from a Redis
 cluster. Until one of those happens, flipping the flag would record the
 divergence 169 times rather than test anything. Note the reference engine's own
 cluster behaviour is unmeasured here: this generator runs one container.
+
+## 6. Scoring in cluster mode — weighted OR groups
+In `scoring-cluster-answers.pickle.gz`, queries that put a `$weight` on an OR group are excluded. On a shard where only one branch of the OR matches any document, Redis ignores the group's weight and ValkeySearch applies it. These queries are still compared in the standalone answers. See `known_differences.md` §1.8 for the measurements.

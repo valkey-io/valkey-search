@@ -46,7 +46,9 @@ from all the posting iterators that are on the current key and field mask.
 // Inputs used only for scoring. The default (null schema/scorer) disables
 // scoring, and GetScore() falls back to the constant stub.
 struct TermScoringParams {
+  // leaf_weight scales the exact word; stem_weight the stem leaves.
   float leaf_weight = 1.0f;
+  float stem_weight = 1.0f;
   uint32_t num_doc_contain_term = 0;
   // Stem scoring inputs; mutually exclusive with per_term_dt below, since an
   // expansion never stems.
@@ -118,6 +120,7 @@ class TermIterator : public TextIterator {
   // time; text_index_schema_ supplies the query-invariant corpus stats and the
   // per-document doc_len (null disables scoring).
   const float leaf_weight_;
+  const float stem_weight_;
   const uint32_t num_doc_contain_term_;
   const TextIndexSchema* const text_index_schema_;
 

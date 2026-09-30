@@ -115,6 +115,13 @@ extern template float CalcReciprocalMagnitude<bfloat16>(const bfloat16 *,
 // still serve FLOAT32 and FLOAT16 indexes.
 absl::Status CheckSimsimdBf16Capability();
 
+// Makes the first call to each simsimd dynamic-dispatch entry point used by the
+// vector spaces. Each entry point lazily resolves its SIMD kernel into an
+// unsynchronized static on first call, and concurrent first calls can race and
+// call a NULL function pointer. Must be called while the process is still
+// single-threaded, i.e. before the worker thread pools are started.
+void InitSimsimdDispatch();
+
 // Scales `record` by `reciprocal_magnitude`, interpreting it as elements of
 // storage type T. The scale is applied in float and rounded once back into T.
 template <typename T>

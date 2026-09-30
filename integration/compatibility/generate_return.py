@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest
 
 from .data_sets import RETURN_CLAUSE_DATA_SET

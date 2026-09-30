@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest
 import random
 import re

@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 """Capture FT.HYBRID reference answers from the Redis query engine.
 
 FT.HYBRID does not exist in the `redis/redis-stack-server` image the other

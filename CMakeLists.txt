@@ -30,6 +30,13 @@ set(SAN_BUILD
     ""
     CACHE STRING "Sanitizer to enable: 'address' or 'thread'")
 
+# An empty SAN_BUILD cache value represents a normal non-sanitizer build.
+if(SAN_BUILD)
+  string(TOLOWER "${SAN_BUILD}" SAN_BUILD_LOWER)
+else()
+  set(SAN_BUILD_LOWER "no")
+endif()
+
 if(APPLE)
   add_compile_options(-Wno-defaulted-function-deleted)
 endif()

@@ -32,6 +32,7 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -166,14 +167,21 @@ bool VerifyFilter(const query::SearchParameters &parameters,
   // For text predicates, evaluate using the text index instead of raw data.
   if (parameters.index_schema &&
       parameters.index_schema->GetTextIndexSchema()) {
-    const indexes::text::TextIndex *text_index =
-        parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
-            n.external_id, true);
+    // Hold the reader lock across lookup and evaluation so a concurrent
+    // DeleteKeyData cannot free the per-key text index while it is in use.
+    EvaluationResult result(false);
+    {
+      vmsdk::ReaderMutexLock lock(
+          &parameters.index_schema->GetTimeSlicedMutex());
+      const indexes::text::TextIndex *text_index =
+          parameters.index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
+              n.external_id, false);
 
-    PredicateEvaluator evaluator(
-        records, text_index, n.external_id,
-        parameters.filter_parse_results.query_operations);
-    EvaluationResult result = predicate->Evaluate(evaluator);
+      PredicateEvaluator evaluator(
+          records, text_index, n.external_id,
+          parameters.filter_parse_results.query_operations);
+      result = predicate->Evaluate(evaluator);
+    }
     return result.matches;
   }
   PredicateEvaluator evaluator(

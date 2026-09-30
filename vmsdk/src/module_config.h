@@ -151,10 +151,6 @@ class Registerable {
 
   inline void SetDeveloperConfig(bool b) { this->developer_config_ = b; }
   inline bool IsDeveloperConfig() const { return developer_config_; }
-  // When true, a Hidden config is still registered with Valkey so it can be
-  // read/modified at runtime via CONFIG GET/SET <exact-name>.
-  inline void SetRegisterWhenHidden(bool b) { register_when_hidden_ = b; }
-  inline bool RegisterWhenHidden() const { return register_when_hidden_; }
   // Getter for flags
   inline size_t GetFlags() const { return flags_; }
 
@@ -163,7 +159,6 @@ class Registerable {
   size_t flags_{kDefault};
   bool was_set_{false};
   bool developer_config_{false};
-  bool register_when_hidden_{false};
 };
 
 template <typename T>
@@ -220,7 +215,7 @@ class ConfigBase : public Registerable {
   }
 
   virtual absl::Status Validate(T val) const {
-    if (IsDeveloperConfig() && !IsDebugModeEnabled()) {
+    if (IsDeveloperConfig() && !IsDebugModeEnabled() && val != GetValue()) {
       return absl::PermissionDeniedError(
           absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
                           GetName(), kDebugMode));
@@ -535,15 +530,6 @@ class ConfigBuilder {
 
   auto &Hidden() {
     config_->EnableFlag(VALKEYMODULE_CONFIG_HIDDEN);
-    return *this;
-  }
-
-  /// Like Hidden(): excluded from `CONFIG GET <pattern>`. Unlike Hidden(), the
-  /// entry is still registered with Valkey, so it can be read and modified at
-  /// runtime via `CONFIG GET/SET <exact-name>`.
-  auto &HiddenMutable() {
-    config_->EnableFlag(VALKEYMODULE_CONFIG_HIDDEN);
-    config_->SetRegisterWhenHidden(true);
     return *this;
   }
 

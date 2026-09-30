@@ -20,12 +20,8 @@
 namespace vmsdk {
 namespace config {
 
-/// Controls the modules debug mode flag. We set it here to "true" to allow
-/// Valkey to load the configurations first time when the module loaded. Once
-/// this is done, we set it back to false. If the user passes "--debug-mode yes"
-/// we will change it back to "true".
-static auto debug_mode =
-    BooleanBuilder(kDebugMode, true).HiddenMutable().Build();
+/// Controls the modules debug mode flag.
+static auto debug_mode = BooleanBuilder(kDebugMode, false).Hidden().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
@@ -123,8 +119,11 @@ void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
 }
 
 absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
+  // Valkey applies configs in registration order. entries_ is a hash map
+  // with no ordering, so debug-mode has to be registered explicitly first.
+  VMSDK_RETURN_IF_ERROR(debug_mode->Register(ctx));
   for (const auto &[_, entry] : entries_) {
-    if (entry->IsHidden() && !entry->RegisterWhenHidden()) {
+    if (entry == debug_mode.get() || entry->IsHidden()) {
       continue;
     }
     VMSDK_RETURN_IF_ERROR(entry->Register(ctx));
@@ -135,8 +134,6 @@ absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
 absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
-  // reset the debug mode to "false".
-  CHECK(debug_mode->SetValueOrLog(false, LogLevel::kWarning).ok());
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());

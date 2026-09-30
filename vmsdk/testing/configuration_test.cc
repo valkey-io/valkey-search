@@ -45,6 +45,11 @@ TEST_F(ConfigTest, registration) {
                                  Eq(1), _, _, _, _, _))
       .Times(testing::AtLeast(1));
 
+  EXPECT_CALL(*kMockValkeyModule,
+              RegisterBoolConfig(&fake_ctx, StrEq("debug-mode"), Eq(0), _, _, _,
+                                 _, _))
+      .Times(testing::AtLeast(1));
+
   // 2 integer registration
   EXPECT_CALL(*kMockValkeyModule,
               RegisterNumericConfig(&fake_ctx, StrEq("number"), Eq(42), _,
@@ -328,6 +333,8 @@ TEST_F(ConfigTest, CheckDebugConfiguration) {
 TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
   ValkeyModuleConfigSetBoolFunc debug_mode_setfn = nullptr;
   void *debug_mode_privdata = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, RegisterBoolConfig(_, _, _, _, _, _, _, _))
+      .Times(testing::AnyNumber());
   EXPECT_CALL(*kMockValkeyModule,
               RegisterBoolConfig(
                   &fake_ctx, StrEq("debug-mode"), _,
@@ -345,7 +352,7 @@ TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
   ASSERT_NE(debug_mode_setfn, nullptr);
 
   // Start with debug-mode off, as if loaded without `--debug-mode yes`.
-  auto args = vmsdk::ToValkeyStringVector("");
+  auto args = vmsdk::ToValkeyStringVector("--debug-mode no");
   ASSERT_TRUE(ModuleConfigManager::Instance()
                   .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
                   .ok());
@@ -367,6 +374,34 @@ TEST_F(ConfigTest, DebugModeMutableAtRuntime) {
   EXPECT_FALSE(config::IsDebugModeEnabled());
   EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(true)));
   EXPECT_FALSE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+}
+
+// A Dev() config passed as a module argument must be rejected unless
+// debug-mode is enabled.
+TEST_F(ConfigTest, DevConfigFromArgvRequiresDebugMode) {
+  auto dev_config =
+      config::BooleanBuilder("my-argv-dev-bool", false).Dev().Build();
+
+  auto args =
+      vmsdk::ToValkeyStringVector("--debug-mode no --my-argv-dev-bool yes");
+  EXPECT_TRUE(absl::IsPermissionDenied(
+      ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
+                                                       args.size())));
+  EXPECT_FALSE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+
+  args = vmsdk::ToValkeyStringVector("--debug-mode yes --my-argv-dev-bool yes");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_TRUE(dev_config->GetValue());
+  FreeValkeyArgs(args);
+
+  args = vmsdk::ToValkeyStringVector("--debug-mode no");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
   FreeValkeyArgs(args);
 }
 

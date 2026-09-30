@@ -1278,6 +1278,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
     VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeySearchTest::SetUp();
+    SetDebugMode(true);
     auto &write_v2 =
         const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
     auto &read_v2 =
@@ -1293,6 +1294,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
     VMSDK_EXPECT_OK(write_v2.SetValue(true));
     VMSDK_EXPECT_OK(read_v2.SetValue(true));
+    SetDebugMode(false);
     auto &enable_sharing =
         const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
     VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
@@ -2008,6 +2010,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
 
   // Test 7: Different weight config values
   {
+    SetDebugMode(true);
     VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(200));
     std::string data(400, 'v');  // 400 bytes
     auto key7 = StringInternStore::Intern("weighted_key_7");
@@ -2024,6 +2027,7 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
     }
     // Restore default
     VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(130));
+    SetDebugMode(false);
   }
 }
 

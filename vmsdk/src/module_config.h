@@ -217,8 +217,8 @@ class ConfigBase : public Registerable {
   }
 
   virtual absl::Status Validate(T val) const {
-    if (IsDeveloperConfig() && !IsDebugModeEnabled() && !IsLoadingConfigFile() &&
-        val != GetValue()) {
+    if (IsDeveloperConfig() && !IsDebugModeEnabled() &&
+        !IsLoadingConfigFile() && val != GetValue()) {
       return absl::PermissionDeniedError(
           absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
                           GetName(), kDebugMode));

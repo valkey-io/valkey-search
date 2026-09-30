@@ -11,12 +11,15 @@
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gtest/gtest.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/text_index.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search {
@@ -110,6 +113,31 @@ TEST_F(TextIndexSchemaTest, StemDistinctDocsDecrementsOnDelete) {
   // The last document leaves no parents, so the root drops out of the tree.
   schema->DeleteKeyData(key2);
   EXPECT_EQ(StemDistinctDocs(*schema, "running"), std::nullopt);
+}
+
+// doc2 adds "runs" while doc1's delete has emptied it but not yet updated the
+// stem tree. The delete must not drop the root doc2 just counted.
+TEST_F(TextIndexSchemaTest, StemDistinctDocsSurvivesConcurrentDeleteAndAdd) {
+  auto schema = CreateSchema();
+  data_model::TextIndex proto;
+  auto text = std::make_shared<Text>(proto, schema);
+  schema->SetStemTextFieldMask(1);
+
+  auto key1 = StringInternStore::Intern("doc1");
+  auto key2 = StringInternStore::Intern("doc2");
+  CommitStemmed(*schema, key1, "runs");
+
+  constexpr absl::string_view kPausePoint = "delete_key_data_stem_update";
+  vmsdk::debug::PausePointControl(kPausePoint, true);
+  std::thread deleter([&] { schema->DeleteKeyData(key1); });
+  while (vmsdk::debug::PausePointWaiters(kPausePoint).value_or(0) == 0) {
+    absl::SleepFor(absl::Milliseconds(1));
+  }
+  CommitStemmed(*schema, key2, "runs");
+  vmsdk::debug::PausePointControl(kPausePoint, false);
+  deleter.join();
+
+  EXPECT_EQ(StemDistinctDocs(*schema, "runs"), 1);
 }
 
 // Concurrent CommitKeyData calls with overlapping words must

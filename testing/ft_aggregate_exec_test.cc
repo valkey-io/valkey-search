@@ -1551,6 +1551,38 @@ TEST_F(AggregateExecTest, QuantileStringNumericValueTest) {
   EXPECT_NEAR(result, 2.0, 1.0);
 }
 
+TEST_F(AggregateExecTest, QuantileArrayValueTest) {
+  // Array elements join the sample one level deep, as in Redisearch: nil,
+  // non-numeric and nested-array elements contribute nothing, so the sample
+  // is {1, 2, 3, 5}.
+  RecordSet records(nullptr);
+  using Elements = std::vector<expr::Value>;
+  for (auto &value :
+       {expr::Value(Elements{expr::Value(5.0), expr::Value("3"), expr::Value(),
+                             expr::Value("abc")}),
+        expr::Value(1.0),
+        expr::Value(Elements{expr::Value(Elements{expr::Value(100.0)}),
+                             expr::Value(2.0)})}) {
+    auto rec = std::make_unique<Record>(2);
+    rec->fields_[0] = value;
+    rec->fields_[1] = expr::Value(1.0);
+    records.emplace_back(std::move(rec));
+  }
+
+  auto param = MakeStages(
+      "groupby 1 @n2 reduce quantile 2 @n1 0 reduce quantile 2 @n1 0.5 "
+      "reduce quantile 2 @n1 0.75 reduce quantile 2 @n1 1");
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  ASSERT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  std::cerr << "Result: " << *record << "\n";
+  std::vector<double> expected{1.0, 2.0, 3.0, 5.0};
+  for (size_t i = 0; i < expected.size(); ++i) {
+    ASSERT_TRUE(record->fields_.at(i + 2).IsDouble());
+    EXPECT_EQ(*record->fields_.at(i + 2).AsDouble(), expected[i]);
+  }
+}
+
 // Regression test for the Compress() zombie-parent bug.
 // Before the fix, each Compress() pass deleted at most one sample because
 // merged (g==0) samples were used as merge targets, reviving them.  After the

@@ -1014,6 +1014,14 @@ class Quantile : public GroupBy::ReducerInstance {
   }
 
   void ProcessRecord(const ArgVector &values) override {
+    // Redisearch spreads an array across the sample, one level deep: a nested
+    // array is not a number and contributes nothing.
+    if (values[0].IsArray()) {
+      for (const auto &element : *values[0].GetArray()) {
+        InsertValue(element);
+      }
+      return;
+    }
     InsertValue(values[0]);
   }
 

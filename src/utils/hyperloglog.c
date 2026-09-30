@@ -234,9 +234,9 @@ static void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
 
 /* Helper function sigma as defined in
  * "New cardinality estimation algorithms for HyperLogLog sketches"
- * Otmar Ertl, arXiv:1702.01284 */
+ * Otmar Ertl, arXiv:1702.01284. Requires x < 1: the caller handles the empty
+ * sketch (x == 1). */
 static double hllSigma(double x) {
-  if (x == 1.) return INFINITY;
   double zPrime;
   double y = 1;
   double z = x;
@@ -274,6 +274,11 @@ static uint64_t hllCountRegisters(uint8_t *registers) {
   int reghisto[64] = {0};
 
   hllDenseRegHisto(registers, reghisto);
+  /* Empty sketch: sigma(1) is infinite and the estimate is 0. Return early,
+   * since -ffast-math leaves arithmetic on infinity undefined. */
+  if (reghisto[0] == HLL_REGISTERS) {
+    return 0;
+  }
 
   double z = m * hllTau((m - reghisto[HLL_Q + 1]) / (double)m);
   for (j = HLL_Q; j >= 1; --j) {

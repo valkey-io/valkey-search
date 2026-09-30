@@ -19,6 +19,7 @@ GENERATORS = [
     {"generator": "generate_sortkey.py", "answers": "sortkey-answers.pickle.gz",      "cluster": False},
     {"generator": "generate_filter.py",  "answers": "filter-answers.pickle.gz",       "cluster": False},
     {"generator": "generate_return.py",  "answers": "return-answers.pickle.gz",       "cluster": False},
+    {"generator": "generate_scoring.py", "answers": "scoring-answers.pickle.gz",      "cluster": False},
     # "cluster": False for the reason generate_text.py is -- text scores are
     # computed from shard-local corpus statistics, so these standalone-captured
     # answers cannot match a cluster replay. See unsupported_tests.md 5.9. The

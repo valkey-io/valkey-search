@@ -192,6 +192,25 @@ def unpack_search_result(rs, key_type, has_sortkeys=False):
             rows += [row]
     return rows
 
+def has_token(cmd, token):
+    """Whether cmd carries a keyword, case-insensitively."""
+    # Case-insensitive: the generators emit uppercase. isinstance skips binary BLOBs.
+    return any(isinstance(c, str) and c.lower() == token for c in cmd)
+
+def unpack_scored_search_result(rs, key_type, has_content):
+    """Unpack a WITHSCORES reply: [count, key, score, (fields), ...]."""
+    # result_has_sortkeys cannot detect this shape, so the stride comes from the command.
+    rows = []
+    stride = 3 if has_content else 2
+    for i in range(1, len(rs), stride):
+        row = {"__key": rs[i], "__score": rs[i + 1]}
+        if has_content:
+            fields = rs[i + 2]
+            for j in range(0, len(fields), 2):
+                row[parse_field(fields[j], key_type)] = parse_value(fields[j + 1], key_type)
+        rows += [row]
+    return rows
+
 def unpack_agg_result(rs, key_type):
     # Skip the first gibberish int
     try:
@@ -294,12 +313,17 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
     if "ft.hybrid" in cmd[0].lower():
         out = unpack_hybrid_result(rs, key_type)
     elif "ft.search" in cmd[0].lower():
-        # Detect if the result actually has sort keys by checking the format,
-        # not just whether WITHSORTKEYS is in the command. This handles cases
-        # where the expected result (from pickle) may not have sort keys even
-        # if the command requested them.
-        has_sortkeys = result_has_sortkeys(rs)
-        out = unpack_search_result(rs, key_type, has_sortkeys)
+        if has_token(cmd, "withscores"):
+            # NOCONTENT is the only suppressor emitted; RETURN 0 would need the same.
+            out = unpack_scored_search_result(
+                rs, key_type, has_content=not has_token(cmd, "nocontent"))
+        else:
+            # Detect if the result actually has sort keys by checking the format,
+            # not just whether WITHSORTKEYS is in the command. This handles cases
+            # where the expected result (from pickle) may not have sort keys even
+            # if the command requested them.
+            has_sortkeys = result_has_sortkeys(rs)
+            out = unpack_search_result(rs, key_type, has_sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)
     #

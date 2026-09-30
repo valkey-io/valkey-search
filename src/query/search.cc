@@ -715,6 +715,8 @@ struct TermGroup {
   float idf = 0.0f;  // Precomputed once per query.
   // Only occurrences in these fields count; all TEXT fields share one tree.
   uint64_t field_mask = ~0ULL;
+  // A term's own $weight scales its exact-word group only.
+  float weight = 1.0f;
 };
 
 // Term leaf: sums up to 3 groups (exact word, stem root, stem inflections).
@@ -876,7 +878,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // literal): one posting list, IDF from that word's own df. Ingestion
       // stores original words in the posting tree, resolved via
       // FindPostingsTarget; an absent word adds no group.
-      auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
+      auto add_word_group = [&](absl::string_view word, uint64_t field_mask,
+                                float weight) {
         auto postings = prefix.FindPostingsTarget(word);
         if (!postings) return;
         const uint32_t dt =
@@ -885,6 +888,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         group.postings.push_back(std::move(postings));
         group.idf = scorer->PrecomputeIDF({total_docs, dt});
         group.field_mask = field_mask;
+        group.weight = weight;
         leaf.groups.push_back(std::move(group));
       };
 
@@ -893,7 +897,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // scored again in the inflection group below (it is one of its parents) —
       // the deliberate exact-match boost.
       add_word_group(
-          word, ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields));
+          word, ScoringFieldMask(term_pred->GetFieldMask(), num_text_fields),
+          term_pred->GetWeight());
 
       const uint64_t stem_field_mask =
           term_pred->GetFieldMask() & text_index_schema->GetStemTextFieldMask();
@@ -915,7 +920,8 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
         // indexed.
         if (stemmed != word) {
           add_word_group(stemmed,
-                         ScoringFieldMask(stem_field_mask, num_text_fields));
+                         ScoringFieldMask(stem_field_mask, num_text_fields),
+                         1.0f);
         }
 
         // Leaf 3: the stem inflection group. F sums the per-doc frequencies of
@@ -1093,9 +1099,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         }
         if (tf == 0) continue;
         matched = true;
-        total += score_ctx.scorer->ScoreLeaf({group.idf, tf, doc_len,
-                                              score_ctx.avg_doc_len,
-                                              predicate->GetWeight()});
+        total += score_ctx.scorer->ScoreLeaf(
+            {group.idf, tf, doc_len, score_ctx.avg_doc_len, group.weight});
       }
       return matched ? std::optional<float>(total) : std::nullopt;
     }

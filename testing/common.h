@@ -512,8 +512,9 @@ inline void InitThreadPools(std::optional<size_t> readers,
 inline void SetDebugMode(bool enabled) {
   auto args = vmsdk::ToValkeyStringVector(enabled ? "--debug-mode yes"
                                                   : "--debug-mode no");
-  VMSDK_EXPECT_OK(vmsdk::config::ModuleConfigManager::Instance()
-                      .ParseAndLoadArgv(nullptr, args.data(), args.size()));
+  VMSDK_EXPECT_OK(
+      vmsdk::config::ModuleConfigManager::Instance().ParseAndLoadArgv(
+          nullptr, args.data(), args.size()));
   for (auto *arg : args) {
     TestValkeyModule_FreeString(nullptr, arg);
   }

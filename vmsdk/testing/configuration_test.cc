@@ -45,9 +45,9 @@ TEST_F(ConfigTest, registration) {
                                  Eq(1), _, _, _, _, _))
       .Times(testing::AtLeast(1));
 
-  EXPECT_CALL(*kMockValkeyModule,
-              RegisterBoolConfig(&fake_ctx, StrEq("debug-mode"), Eq(0), _, _, _,
-                                 _, _))
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      RegisterBoolConfig(&fake_ctx, StrEq("debug-mode"), Eq(0), _, _, _, _, _))
       .Times(testing::AtLeast(1));
 
   // 2 integer registration
@@ -385,9 +385,9 @@ TEST_F(ConfigTest, DevConfigFromArgvRequiresDebugMode) {
 
   auto args =
       vmsdk::ToValkeyStringVector("--debug-mode no --my-argv-dev-bool yes");
-  EXPECT_TRUE(absl::IsPermissionDenied(
-      ModuleConfigManager::Instance().ParseAndLoadArgv(&fake_ctx, args.data(),
-                                                       args.size())));
+  EXPECT_TRUE(
+      absl::IsPermissionDenied(ModuleConfigManager::Instance().ParseAndLoadArgv(
+          &fake_ctx, args.data(), args.size())));
   EXPECT_FALSE(dev_config->GetValue());
   FreeValkeyArgs(args);
 

@@ -69,11 +69,19 @@ struct HLL {
 /* Initialize an HLL to the empty state. */
 void hll_init(struct HLL *hll);
 
-/* Add a raw buffer to the HLL (hashed with MurmurHash64A). */
-void hll_add(struct HLL *hll, const void *buf, size_t len);
+/* Hash a raw buffer with MurmurHash64A. Returns the register value it
+ * yields (1..HLL_Q+1) and stores the register index in *index. */
+int hll_pat_len(const void *buf, size_t len, long *index);
 
-/* Estimate the cardinality. Result is cached until next add. */
+/* Raise register 'index' to 'count' if it is smaller. */
+void hll_set(struct HLL *hll, long index, int count);
+
+/* Estimate the cardinality. Result is cached until next set. */
 uint64_t hll_count(const struct HLL *hll);
+
+/* Estimate the cardinality from a histogram of the register values, where
+ * reghisto[v] is the number of registers holding v. */
+uint64_t hll_count_histogram(const int *reghisto);
 
 #ifdef __cplusplus
 }

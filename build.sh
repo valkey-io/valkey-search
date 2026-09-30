@@ -188,12 +188,14 @@ while [ $# -gt 0 ]; do
     --build-benchmarks)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_BENCHMARKS=ON"
         BUILD_BENCHMARKS_OPTION="yes"
+        RUN_CMAKE="yes"
         shift || true
         echo "Building Google Benchmark executables"
         ;;
     --run-benchmarks)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_BENCHMARKS=ON"
         BUILD_BENCHMARKS_OPTION="yes"
+        RUN_CMAKE="yes"
         RUN_BENCHMARKS="yes"
         shift || true
         echo "Running Google Benchmark executables"

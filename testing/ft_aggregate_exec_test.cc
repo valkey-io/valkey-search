@@ -610,10 +610,8 @@ TEST_F(AggregateExecTest, CountDistinctishSmallDataset) {
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
-  double estimate = *(record->fields_.at(2).AsDouble());
-  // 4 distinct values — HLL should be very close
-  EXPECT_GE(estimate, 3);
-  EXPECT_LE(estimate, 5);
+  // The estimate is deterministic; these 4 values set 4 distinct registers.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 4);
 }
 
 TEST_F(AggregateExecTest, CountDistinctishLargeDataset) {
@@ -623,10 +621,8 @@ TEST_F(AggregateExecTest, CountDistinctishLargeDataset) {
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
-  double estimate = *(record->fields_.at(2).AsDouble());
-  // 1000 distinct values, allow ~20% tolerance for HLL approximation
-  EXPECT_GE(estimate, 800);
-  EXPECT_LE(estimate, 1200);
+  // Same estimate as PFADD/PFCOUNT of the same 1000 strings in Valkey.
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 1001);
 }
 
 TEST_F(AggregateExecTest, CountDistinctishDuplicates) {
@@ -636,10 +632,8 @@ TEST_F(AggregateExecTest, CountDistinctishDuplicates) {
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
-  double estimate = *(record->fields_.at(2).AsDouble());
   // 10 distinct values regardless of duplicates
-  EXPECT_GE(estimate, 8);
-  EXPECT_LE(estimate, 12);
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 10);
 }
 
 TEST_F(AggregateExecTest, CountDistinctishNilValues) {
@@ -655,10 +649,8 @@ TEST_F(AggregateExecTest, CountDistinctishNilValues) {
   EXPECT_EQ(records.size(), 1);
   auto record = records.pop_front();
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
-  double estimate = *(record->fields_.at(2).AsDouble());
   // 3 distinct non-nil values
-  EXPECT_GE(estimate, 2);
-  EXPECT_LE(estimate, 4);
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
 }
 
 TEST_F(AggregateExecTest, CountDistinctishEmptyGroup) {
@@ -733,14 +725,10 @@ TEST_F(AggregateExecTest, CountDistinctishMultipleReducers) {
   auto record = records.pop_front();
   // First reducer: count_distinctish of n1 (4 distinct values: 0,1,2,3)
   EXPECT_TRUE(record->fields_.at(2).IsDouble());
-  double estimate_n1 = *(record->fields_.at(2).AsDouble());
-  EXPECT_GE(estimate_n1, 3);
-  EXPECT_LE(estimate_n1, 5);
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 4);
   // Second reducer: count_distinctish of n2 (1 distinct value: 4)
   EXPECT_TRUE(record->fields_.at(3).IsDouble());
-  double estimate_n2 = *(record->fields_.at(3).AsDouble());
-  EXPECT_GE(estimate_n2, 1);
-  EXPECT_LE(estimate_n2, 1);
+  EXPECT_EQ(*(record->fields_.at(3).AsDouble()), 1);
 }
 
 TEST_F(AggregateExecTest, CountDistinctishVsCountDistinct) {
@@ -759,9 +747,23 @@ TEST_F(AggregateExecTest, CountDistinctishVsCountDistinct) {
   double exact = *(rec_exact->fields_.at(2).AsDouble());
   // COUNT_DISTINCT should be exactly 20
   EXPECT_EQ(exact, 20);
-  // COUNT_DISTINCTISH should be close to 20
-  EXPECT_GE(approx, 16);
-  EXPECT_LE(approx, 24);
+  EXPECT_EQ(approx, exact);
+}
+
+TEST_F(AggregateExecTest, CountDistinctishArrayValues) {
+  auto param = MakeStages("groupby 1 @n2 reduce count_distinctish 1 @n1");
+  using expr::Value;
+  RecordSet records(nullptr);
+  // Each array counts as one value: [1,2], [2,1], [1,2], "x" are 3 distinct.
+  records.emplace_back(RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  records.emplace_back(RecordWithValue(Value({Value(2.0), Value(1.0)}), 1));
+  records.emplace_back(RecordWithValue(Value({Value(1.0), Value(2.0)}), 1));
+  records.emplace_back(RecordWithValue(Value("x"), 1));
+  EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+  EXPECT_EQ(records.size(), 1);
+  auto record = records.pop_front();
+  EXPECT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_EQ(*(record->fields_.at(2).AsDouble()), 3);
 }
 
 /*

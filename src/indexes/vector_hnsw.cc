@@ -118,12 +118,12 @@ absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> VectorHNSW<T>::LoadFromRDB(
       if (!is_marked_deleted) {
         return VectorRecord(nullptr);
       }
-      float reciprocal_magnitude = CalcReciprocalMagnitude(
-          reinterpret_cast<const T *>(vector_data.data()),
-          vector_data.size() / sizeof(T));
+      // For normalized indexes, tombstones are saved already normalized (see
+      // AlgoDeleteRecord), so restore them with a reciprocal magnitude of
+      // exactly 1.0; the HNSW distance path relies on this invariant. For
+      // other indexes the magnitude is not used.
       return VectorRecord::Construct(
-          vector_data, reciprocal_magnitude,
-          static_cast<FixedSizeAllocator *>(allocator));
+          vector_data, 1.0f, static_cast<FixedSizeAllocator *>(allocator));
     };
     VMSDK_RETURN_IF_ERROR(index->algo_->LoadIndex(
         input, index->space_.get(), vector_index_proto.initial_cap(),
@@ -147,15 +147,6 @@ VectorHNSW<T>::VectorHNSW(int dimensions,
     : VectorType<T>(IndexerType::kHNSW, dimensions, attribute_data_type,
                     attribute_identifier, db_num) {}
 
-const char *QueryVector::GetNormalizedVector() const {
-  if (normalize_ && !normalized_vector_) {
-    const auto &record = GetRecord();
-    normalized_vector_ = std::make_unique<std::vector<char>>(NormalizeVector(
-        absl::string_view(record.GetRawVector(), vector_record_size_),
-        data_type_, record.GetReciprocalMagnitude()));
-  }
-  return normalized_vector_ ? normalized_vector_->data() : nullptr;
-}
 template <typename T>
 absl::Status VectorHNSW<T>::AddRecordImpl(uint64_t internal_id,
                                           VectorRecord &&vector_record) {

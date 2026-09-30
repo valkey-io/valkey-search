@@ -54,8 +54,7 @@ struct AllocatorChunk {
   AllocatorChunk(Allocator *allocator, size_t size);
   ~AllocatorChunk();
   size_t entries_in_chunk;
-  std::unique_ptr<char[]> raw_data;
-  char *data{nullptr};
+  std::unique_ptr<char[]> data;
   std::stack<char *> free_list;
   Allocator *allocator;
   // Intrusive linked list.

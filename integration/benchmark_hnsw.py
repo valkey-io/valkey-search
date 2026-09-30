@@ -6,43 +6,13 @@ Benchmarks concurrent ingestion into an HNSW vector index, measures background
 indexing completion time, and evaluates search throughput (QPS) and latency percentiles
 after ingestion is complete.
 
-Environment / VM CPU Info:
---------------------------
-Architecture:        x86_64 (64-bit Little Endian)
-CPU Model:           Intel(R) Xeon(R) CPU @ 2.60GHz (Family 6, Model 106, Stepping 6)
-CPU Cores / Threads: 48 vCPUs (1 socket, 24 physical cores, 2 threads per core)
-Caches:              L1d: 1.1 MiB (24x48 KiB), L1i: 768 KiB (24x32 KiB),
-                     L2: 30 MiB (24x1.25 MiB), L3: 54 MiB shared
-Hypervisor / Virt:   KVM (Full Virtualization)
-
-Captured Benchmark Results:
----------------------------
-Configuration:
-  - Vectors: 50,000 (dim=768, metric=COSINE, seed=42)
-  - Ingestion: 8 client threads
-  - Search: 8 client threads, 30s duration, k=10
-
-Results Comparison:
-+-----------------------------------+--------------------+--------------------+
-| Metric                            | Baseline (0f3c267~) | Current Codebase   |
-+-----------------------------------+--------------------+--------------------+
-| Ingest Elapsed Time               | 11.45 s            | 11.40 s            |
-| Ingest Throughput                 | 4,364.9 vec/s      | 4,386.0 vec/s      |
-| Background Indexing Wait          | 0.44 ms            | 0.35 ms            |
-| Effective Indexing Rate           | 4,364.8 docs/s     | 4,385.9 docs/s     |
-| Search Total Queries (30s)        | 169,282            | 169,021            |
-| Search Throughput                 | 5,641.6 QPS        | 5,632.6 QPS        |
-| Search Latency (Avg)              | 1.42 ms            | 1.42 ms            |
-| Search Latency (p50)              | 1.28 ms            | 1.29 ms            |
-| Search Latency (p95)              | 2.65 ms            | 2.60 ms            |
-| Search Latency (p99)              | 3.57 ms            | 3.53 ms            |
-+-----------------------------------+--------------------+--------------------+
 """
 
 import argparse
 import concurrent.futures
 import json
 import os
+import shutil
 import signal
 import socket
 import struct
@@ -111,7 +81,8 @@ def start_server(server_path: str, conf_path: str, port: int) -> subprocess.Pope
         except Exception:
             time.sleep(0.1)
 
-    proc.terminate()
+    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    proc.wait()
     raise TimeoutError(f"Server at port {port} failed to start within timeout.")
 
 
@@ -180,12 +151,12 @@ def run_search_worker(
                 "DIALECT",
                 "2",
             )
-            t1 = time.perf_counter()
-            latencies.append((t1 - t0) * 1000.0)  # ms
-            ops += 1
         except Exception as e:
-            print(f"[Worker {worker_id}] Search error: {e}", file=sys.stderr)
-            break
+            # Fail the whole benchmark rather than reporting partial results.
+            raise RuntimeError(f"[Worker {worker_id}] Search error: {e}") from e
+        t1 = time.perf_counter()
+        latencies.append((t1 - t0) * 1000.0)  # ms
+        ops += 1
 
     return ops, latencies
 
@@ -229,13 +200,15 @@ def run_benchmark(args) -> Dict:
     print(f"Search K:          {args.k}")
     print("-" * 80)
 
-    server_proc = start_server(args.server, conf_path, port)
-    pool = redis.ConnectionPool(
-        host="127.0.0.1", port=port, decode_responses=False, max_connections=64
-    )
-    client = redis.Redis(connection_pool=pool)
-
+    server_proc = None
+    pool = None
     try:
+        server_proc = start_server(args.server, conf_path, port)
+        pool = redis.ConnectionPool(
+            host="127.0.0.1", port=port, decode_responses=False, max_connections=64
+        )
+        client = redis.Redis(connection_pool=pool)
+
         index_name = "idx_bench"
         print(f"Creating HNSW index '{index_name}'...")
         client.execute_command(
@@ -299,16 +272,22 @@ def run_benchmark(args) -> Dict:
         # -------------------------------------------------------------
         print("\n[Phase 2] Waiting for background indexing to complete...")
         index_wait_start = time.perf_counter()
+        index_deadline = index_wait_start + args.index_timeout
         while True:
             info = parse_ft_info(client.execute_command("FT.INFO", index_name))
             failures = int(info.get("hash_indexing_failures", 0))
             if failures > 0:
-                print(f"  WARNING: {failures} hash indexing failures reported!", file=sys.stderr)
+                raise RuntimeError(f"{failures} hash indexing failures reported")
 
             num_docs = int(info.get("num_docs", 0))
             mutation_queue = int(info.get("mutation_queue_size", 0))
             if num_docs >= args.num_vectors and mutation_queue == 0:
                 break
+            if time.perf_counter() > index_deadline:
+                raise TimeoutError(
+                    f"Indexing did not complete within {args.index_timeout}s "
+                    f"(num_docs={num_docs}, mutation_queue_size={mutation_queue})"
+                )
             time.sleep(0.1)
 
         index_wait_elapsed = time.perf_counter() - index_wait_start
@@ -417,27 +396,20 @@ def run_benchmark(args) -> Dict:
         return results
 
     finally:
-        pool.disconnect()
-        try:
-            os.killpg(os.getpgid(server_proc.pid), signal.SIGTERM)
-            server_proc.wait(timeout=5)
-        except Exception:
+        if pool is not None:
+            pool.disconnect()
+        if server_proc is not None and server_proc.poll() is None:
             try:
-                os.killpg(os.getpgid(server_proc.pid), signal.SIGKILL)
+                os.killpg(os.getpgid(server_proc.pid), signal.SIGTERM)
+                server_proc.wait(timeout=5)
             except Exception:
-                pass
-
-        if os.path.exists(conf_path):
-            os.remove(conf_path)
-        for f in os.listdir(work_dir):
-            try:
-                os.remove(os.path.join(work_dir, f))
-            except Exception:
-                pass
-        try:
-            os.rmdir(work_dir)
-        except Exception:
-            pass
+                try:
+                    os.killpg(os.getpgid(server_proc.pid), signal.SIGKILL)
+                    server_proc.wait(timeout=5)
+                except Exception:
+                    pass
+        # conf_path lives inside work_dir.
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def main():
@@ -506,6 +478,12 @@ def main():
         "--output_json",
         default="",
         help="Optional path to output results in JSON format",
+    )
+    parser.add_argument(
+        "--index_timeout",
+        type=int,
+        default=600,
+        help="Max seconds to wait for background indexing (default: 600)",
     )
     parser.add_argument(
         "--seed",

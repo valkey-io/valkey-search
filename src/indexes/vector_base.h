@@ -136,6 +136,12 @@ class VectorRecord {
     return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
   }
 
+  // Reciprocal magnitude of the record whose (non-null) vector data starts at
+  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
+  static float ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
+    return GetHeader(data_ptr)->reciprocal_magnitude_;
+  }
+
   uint32_t RefCount() const noexcept {
     const char *ptr = data_.load(std::memory_order_relaxed);
     return ptr ? GetHeader(ptr)->ref_count_.load(std::memory_order_relaxed) : 0;

@@ -228,13 +228,15 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  float reciprocal_magnitude =
-      normalize_ ? CalcReciprocalMagnitude(
-                       reinterpret_cast<const T *>(query.data()), dimensions_)
-                 : 1.0f;
-
   try {
     CancelCondition canceler(cancellation_token);
+    // The query stays raw and carries its reciprocal magnitude, applied in
+    // float during the scan (see BruteforceSearch::EvaluateDistance).
+    // Normalizing it into T would add rounding for two-byte types.
+    const float reciprocal_magnitude =
+        normalize_ ? CalcReciprocalMagnitude(
+                         reinterpret_cast<const T *>(query.data()), dimensions_)
+                   : kDefaultMagnitude;
     auto embedding =
         VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
     auto res = algo_->searchKnn(

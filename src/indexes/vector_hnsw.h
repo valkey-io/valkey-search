@@ -31,47 +31,39 @@ namespace valkey_search::indexes {
 
 class QueryVector {
  public:
-  // `data_type` selects the element width used when normalizing; QueryVector
-  // is shared across all VectorHNSW<T> instantiations, so it cannot take the
-  // storage type as a template parameter.
-  QueryVector(const VectorRecord &vector_record, size_t vector_record_size,
-              bool normalize, data_model::VectorDataType data_type)
+  // Holds a query or inserted vector and caches its raw data pointer and
+  // reciprocal magnitude so HNSW distance evaluations do not reload the record
+  // header on every candidate.
+  QueryVector(const VectorRecord &vector_record, size_t vector_record_size = 0,
+              bool normalize = false,
+              data_model::VectorDataType data_type =
+                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
       : record_ref_(&vector_record),
-        vector_record_size_(vector_record_size),
-        data_type_(data_type),
-        normalize_(normalize) {}
+        raw_vector_(vector_record.GetRawVector()),
+        reciprocal_magnitude_(vector_record.GetReciprocalMagnitude()) {}
 
-  QueryVector(VectorRecord &&vector_record, size_t vector_record_size,
-              bool normalize, data_model::VectorDataType data_type)
+  QueryVector(VectorRecord &&vector_record, size_t vector_record_size = 0,
+              bool normalize = false,
+              data_model::VectorDataType data_type =
+                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
       : owned_record_(std::move(vector_record)),
-        vector_record_size_(vector_record_size),
-        data_type_(data_type),
-        normalize_(normalize) {}
+        raw_vector_(owned_record_.GetRawVector()),
+        reciprocal_magnitude_(owned_record_.GetReciprocalMagnitude()) {}
 
-  QueryVector(const QueryVector &other)
+  QueryVector(const QueryVector &other) noexcept
       : record_ref_(other.record_ref_),
         owned_record_(other.owned_record_),
-        vector_record_size_(other.vector_record_size_),
-        data_type_(other.data_type_),
-        normalize_(other.normalize_),
-        normalized_vector_(
-            other.normalized_vector_
-                ? std::make_unique<std::vector<char>>(*other.normalized_vector_)
-                : nullptr) {}
+        raw_vector_(other.raw_vector_),
+        reciprocal_magnitude_(other.reciprocal_magnitude_) {}
 
   QueryVector(QueryVector &&other) noexcept = default;
   QueryVector &operator=(QueryVector &&other) noexcept = default;
-  QueryVector &operator=(const QueryVector &other) {
+  QueryVector &operator=(const QueryVector &other) noexcept {
     if (this != &other) {
       record_ref_ = other.record_ref_;
       owned_record_ = other.owned_record_;
-      vector_record_size_ = other.vector_record_size_;
-      data_type_ = other.data_type_;
-      normalize_ = other.normalize_;
-      normalized_vector_ =
-          other.normalized_vector_
-              ? std::make_unique<std::vector<char>>(*other.normalized_vector_)
-              : nullptr;
+      raw_vector_ = other.raw_vector_;
+      reciprocal_magnitude_ = other.reciprocal_magnitude_;
     }
     return *this;
   }
@@ -80,23 +72,18 @@ class QueryVector {
     return record_ref_ != nullptr ? *record_ref_ : owned_record_;
   }
 
-  const char *GetRawVector() const noexcept {
-    return GetRecord().GetRawVector();
-  }
+  const char *GetRawVector() const noexcept { return raw_vector_; }
   float GetReciprocalMagnitude() const noexcept {
-    return GetRecord().GetReciprocalMagnitude();
+    return reciprocal_magnitude_;
   }
-  const char *GetNormalizedVector() const;
 
-  VectorRecord GetVectorRecord() const { return GetRecord(); }
+  VectorRecord GetVectorRecord() const noexcept { return GetRecord(); }
 
  private:
   const VectorRecord *record_ref_{nullptr};
   VectorRecord owned_record_;
-  size_t vector_record_size_{0};
-  data_model::VectorDataType data_type_{data_model::VECTOR_DATA_TYPE_FLOAT32};
-  bool normalize_{false};
-  mutable std::unique_ptr<std::vector<char>> normalized_vector_;
+  const char *raw_vector_{nullptr};
+  float reciprocal_magnitude_{1.0f};
 };
 
 template <typename T>

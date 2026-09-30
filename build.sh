@@ -8,6 +8,8 @@ CMAKE_TARGET=""
 CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS:-}"
 FORMAT="no"
 RUN_TEST=""
+RUN_BENCHMARKS="no"
+BUILD_BENCHMARKS_OPTION="no"
 RUN_BUILD="yes"
 DUMP_TEST_ERRORS_STDOUT="no"
 INTEGRATION_TEST="no"
@@ -38,6 +40,8 @@ Usage: build.sh [options...]
     --run-integration-tests[=pattern] Run integration tests.
     --parallel[=N] | -j[=N]           Run integration tests in parallel with N workers (default: all CPU cores).
     --no-system-modules               Disable system dependencies and force building from submodules.
+    --build-benchmarks                Build the optional Google Benchmark executables.
+    --run-benchmarks                  Build and run the optional Google Benchmark executables.
     --asan                            Build with address sanitizer enabled.
     --tsan                            Build with thread sanitizer enabled.
     --retries=N                       Attempt to run integration tests N times. Default is 1.
@@ -50,6 +54,12 @@ Example usage:
 
     # Force run cmake and build the debug configuration
     ./build.sh --configure --debug
+
+    # Build the optional Google Benchmark executables
+    ./build.sh --build-benchmarks
+
+    # Build and run the optional Google Benchmark executables
+    ./build.sh --run-benchmarks
 
     # Build debug version and run all unit tests
     ./build.sh --debug --run-tests
@@ -175,6 +185,19 @@ while [ $# -gt 0 ]; do
         USE_SYSTEM_MODULES="no"
         shift || true
         ;;
+    --build-benchmarks)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_BENCHMARKS=ON"
+        BUILD_BENCHMARKS_OPTION="yes"
+        shift || true
+        echo "Building Google Benchmark executables"
+        ;;
+    --run-benchmarks)
+        CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DBUILD_BENCHMARKS=ON"
+        BUILD_BENCHMARKS_OPTION="yes"
+        RUN_BENCHMARKS="yes"
+        shift || true
+        echo "Running Google Benchmark executables"
+        ;;
     --asan)
         CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DSAN_BUILD=address"
         SAN_BUILD="address"
@@ -215,6 +238,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [[ "${BUILD_BENCHMARKS_OPTION}" == "yes" && "${SAN_BUILD}" != "no" ]]; then
+    echo "ERROR: Benchmark builds are disabled for sanitizer configurations; omit --asan/--tsan." >&2
+    exit 1
+fi
+
 if [[ "${USE_SYSTEM_MODULES}" != "no" ]]; then
     san_suffix=""
     if [[ "${SAN_BUILD}" == "address" ]]; then
@@ -227,7 +255,13 @@ if [[ "${USE_SYSTEM_MODULES}" != "no" ]]; then
         CMAKE_DIR="${DEPS_DIR}/lib/cmake"
         export CMAKE_PREFIX_PATH="${CMAKE_DIR}/protobuf:${CMAKE_DIR}/absl:${CMAKE_DIR}/grpc:${CMAKE_DIR}/GTest:${CMAKE_DIR}/utf8_range:${CMAKE_DIR}/benchmark:${DEPS_DIR}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
         if [[ "${CMAKE_EXTRA_ARGS}" != *"-DWITH_SUBMODULES_SYSTEM"* ]]; then
-            CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
+            if [[ "${BUILD_BENCHMARKS_OPTION}" == "yes" &&
+                  ! -f "${DEPS_DIR}/lib/cmake/benchmark/benchmarkConfig.cmake" ]]; then
+                CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=OFF"
+                echo "Google Benchmark is not present in ${DEPS_DIR}; using source dependencies"
+            else
+                CMAKE_EXTRA_ARGS="${CMAKE_EXTRA_ARGS} -DWITH_SUBMODULES_SYSTEM=ON"
+            fi
         fi
         echo "Auto-detected system dependencies from ${DEPS_DIR}"
     fi
@@ -581,6 +615,17 @@ fi
 
 if [[ "${RUN_BUILD}" == "yes" ]]; then
     build
+fi
+
+if [[ "${RUN_BENCHMARKS}" == "yes" ]]; then
+    benchmark_path="${BUILD_DIR}/tests/sharded_atomic_benchmark"
+    if [[ ! -x "${benchmark_path}" ]]; then
+        echo "ERROR: Benchmark executable was not built: ${benchmark_path}" >&2
+        EXIT_CODE=1
+    else
+        printf "${BOLD_PINK}Running Google Benchmark executables${RESET}\n"
+        "${benchmark_path}" || EXIT_CODE=1
+    fi
 fi
 
 END_TIME=$(date +%s)

@@ -20,8 +20,7 @@ set(MODULE_HIGHWAYHASH "highwayhash")
 set(MODULE_GRPC "grpc")
 set(MODULE_GOOGLE_TEST "googletest")
 
-string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
-if("${SAN_BUILD_LOWER}" STREQUAL "no")
+if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
   set(MODULE_BENCHMARK "benchmark")
 endif()
 

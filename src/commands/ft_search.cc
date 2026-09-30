@@ -41,10 +41,9 @@ namespace valkey_search {
 
 namespace {
 // Reply text formats for doubles. Sort keys round-trip the exact double;
-// RETURN values and scores use 12 significant digits (Redis-compatible).
+// RETURN values use 12 significant digits (Redis-compatible).
 constexpr absl::string_view kSortKeyDoubleFormat = "%.17g";
 constexpr absl::string_view kReturnValueDoubleFormat = "%.12g";
-constexpr absl::string_view kScoreFormat = "%.12g";
 // RETURN values in [-2^63, 2^63) render as integers (Redis-compatible, probed
 // to one ULP on both sides). 2^63 is exact as a double.
 constexpr double kReturnValueIntegerBound = static_cast<double>(1ULL << 63);
@@ -77,7 +76,7 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
   // The score_as field carries the vector distance (Redis' __<field>_score).
   // For pure vector queries Neighbor.score == distance; for hybrid text=>[KNN]
   // queries Neighbor.score is the text relevance while distance stays here.
-  auto score_value = absl::StrFormat(kScoreFormat, neighbor.distance);
+  auto score_value = expr::FormatDouble(neighbor.distance);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
@@ -85,13 +84,13 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
 void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
-  auto score_value = absl::StrFormat(kScoreFormat, score);
+  auto score_value = expr::FormatDouble(score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command);
+std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
+                                           const SearchCommand &command);
 
 // WITHSORTKEYS prefixes each sort key by the SORTBY field's declared type:
 // '#' for NUMERIC fields, '$' for everything else (RediSearch-compatible).
@@ -110,17 +109,18 @@ bool IsSortByFieldNumeric(const SearchCommand &command,
          idx.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
 }
 
-// Helper function to get the sort key value for a neighbor
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command) {
+// Returns std::nullopt when the query has no SORTBY or the document lacks the
+// sort field.
+std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
+                                           const SearchCommand &command) {
   if (!command.sortby_parameter.has_value() ||
       !neighbor.attribute_contents.has_value()) {
-    return "";
+    return std::nullopt;
   }
 
   auto it = neighbor.attribute_contents->find(command.sortby_parameter->field);
   if (it == neighbor.attribute_contents->end()) {
-    return "";
+    return std::nullopt;
   }
 
   return std::string(vmsdk::ToStringView(it->second.value.get()));
@@ -345,6 +345,10 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
                                                                        : "$";
         },
         [&]() -> std::string { return "#"; });
+    // Issue #1353 item 5.
+    format.nil_absent_sort_key = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_search_sortkey_nil", [&]() { return true; },
+        [&]() { return false; });
   }
   // Issue #1353 item 6, filter path only: the KNN path pre-fills NUMERIC
   // content from the index on a worker thread and is handled separately.
@@ -385,15 +389,20 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
   // Prefix the sort key: '#' for NUMERIC fields, '$' for string fields
   // (RediSearch-compatible).
   if (with_sort_keys) {
-    std::string value = format.sort_by_vec_score
-                            ? absl::StrFormat(kScoreFormat, neighbor.distance)
-                            : GetSortKeyValue(neighbor, *this);
-    if (format.numeric_sort_key) {
-      value = FormatNumericSortKey(value);
+    std::optional<std::string> value =
+        format.sort_by_vec_score
+            ? std::make_optional(expr::FormatDouble(neighbor.distance))
+            : GetSortKeyValue(neighbor, *this);
+    if (value.has_value() && format.numeric_sort_key) {
+      value = FormatNumericSortKey(*value);
     }
-    ValkeyModule_ReplyWithString(
-        ctx,
-        vmsdk::MakeUniqueValkeyString(format.sort_key_prefix + value).get());
+    if (!value.has_value() && format.nil_absent_sort_key) {
+      ValkeyModule_ReplyWithNull(ctx);
+    } else {
+      std::string prefixed_value = format.sort_key_prefix + value.value_or("");
+      ValkeyModule_ReplyWithString(
+          ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
+    }
     ++elements;
   }
 

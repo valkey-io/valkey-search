@@ -891,8 +891,11 @@ jobs:
             });
             const ALLOWED_LABELS = new Set(repoLabels.map(l => l.name));
             const BENCHMARK_LABELS = new Map([
-              ['run-search-benchmark', 'false'],
-              ['run-search-benchmark-skip-profiling', 'true'],
+              // label -> extra workflow_dispatch inputs for search-benchmark-pr.yml.
+              // Keys must be declared inputs on that workflow; unlisted inputs use
+              // their workflow default.
+              ['run-search-benchmark',                { skip_profiling: 'false' }],
+              ['run-search-benchmark-skip-profiling', { skip_profiling: 'true'  }],
             ]);
 
             const labelMatch = body.match(/^\/label\s+(.+)$/m);
@@ -966,8 +969,8 @@ jobs:
                           workflow_id: 'search-benchmark-pr.yml',
                           ref: benchmarkRef,
                           inputs: {
+                            ...BENCHMARK_LABELS.get(benchmarkLabel),
                             pr_number: String(context.issue.number),
-                            skip_profiling: BENCHMARK_LABELS.get(benchmarkLabel),
                             trigger_label: benchmarkLabel,
                           },
                         });

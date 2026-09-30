@@ -53,15 +53,15 @@ class BaseCompatibilityTest:
 
     # Reference engine image. Subclasses override it when they need a command
     # the default image does not implement -- FT.HYBRID, for instance, only
-    # exists in the Redis 8.4+ query engine. The container name carries a
-    # random suffix either way, so two generators never collide on it.
+    # exists in the Redis 8.4+ query engine. The container name carries the
+    # class name and a random suffix, so two generators never collide on it.
     
     @classmethod
     def setup_class(cls):
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        cls.container_name = f"{CONTAINER_PREFIX}-{random.randint(1000, 9999)}"
+        cls.container_name = f"{CONTAINER_PREFIX}-{cls.__name__}-{random.randint(1000, 9999)}"
         if os.system(f"docker run --rm -d --name {cls.container_name} "
                      f"-p 0:6379 redis:latest") != 0:
             print("Failed to start Redis server, please check your Docker setup.")
@@ -172,7 +172,7 @@ class BaseCompatibilityTest:
         self.data_set_name = data_set_name
         self.key_type = key_type
         self.vector_data_type = vector_data_type
-        load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
+        return load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
 
     def execute_command(self, cmd, excluded=False):
         answer = {"cmd": cmd,
@@ -1215,4 +1215,5 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"groupby 1 @n2 "
             f"reduce first_value 4 @n1 BY @n2 INVALID as first_error_invalid"
         )
+
 

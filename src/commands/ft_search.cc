@@ -465,9 +465,11 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
 bool SearchCommand::CanGenerateReplyInBackground() const {
   // LIMIT 0 (and a vector offset past K) returns only the count. NOCONTENT
   // avoids database access unless SORTBY requires loading values to order the
-  // result set. QueryCompleteBackground preserves dropped-index validation
-  // before generating these replies.
-  return query::ShouldReturnNoResults(*this) || NoProcessingRequired();
+  // result set. WITHCURSOR may insert into the main-thread-only CursorTable,
+  // except for the count-only reply. QueryCompleteBackground preserves
+  // dropped-index validation before generating these replies.
+  return query::ShouldReturnNoResults(*this) ||
+         (NoProcessingRequired() && !cursor_options.has_value());
 }
 
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,

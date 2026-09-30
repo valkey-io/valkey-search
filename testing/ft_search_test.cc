@@ -634,6 +634,13 @@ TEST_F(ValkeySearchTest, BackgroundReplyEligibility) {
   parameters.no_content = true;
   EXPECT_TRUE(parameters.CanGenerateReplyInBackground());
 
+  parameters.cursor_options = CursorOptions{};
+  EXPECT_FALSE(parameters.CanGenerateReplyInBackground());
+  parameters.limit.number = 0;
+  EXPECT_TRUE(parameters.CanGenerateReplyInBackground());
+  parameters.cursor_options.reset();
+  parameters.limit.number = 10;
+
   parameters.sortby_parameter = query::SortByParameter{.field = "sort_field"};
   EXPECT_FALSE(parameters.CanGenerateReplyInBackground());
 

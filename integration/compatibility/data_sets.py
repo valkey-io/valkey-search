@@ -1,5 +1,4 @@
-import itertools, valkey, json, struct, random
-from numeric_format import INT64_MAX, INT64_MIN, TWO_POW_53, ulp_above, ulp_below
+import itertools, valkey, json, struct, random, math
 
 ### Reusable Data ###
 #
@@ -1251,11 +1250,22 @@ SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 
 # Fixture for numeric re-serialization (issue #1353 item 6). Stored values
 # cover integer, trailing-zero, scientific, signed-zero, high-precision and
-# int64-boundary shapes. Listed in ascending numeric order, all distinct as
-# doubles (no sort ties); the regression test asserts both.
+# int64-boundary shapes, in strictly ascending order as doubles.
 SORTKEY_NUMERIC_FORMAT_DATA_SET = "sortkey numeric format"
+INT64_MAX = (1 << 63) - 1   # parses to 2^63
+INT64_MIN = -(1 << 63)
+TWO_POW_53 = 1 << 53
+
+
+def _adjacent_double(n, direction):
+    """Nearest double to n, stepped one ULP toward direction, as an int."""
+    f = math.nextafter(float(n), direction)
+    assert f.is_integer()
+    return int(f)
+
+
 SORTKEY_NUMERIC_FORMAT_VALUES = [
-    str(ulp_below(INT64_MIN)),  # below -2^63: scientific
+    str(_adjacent_double(INT64_MIN, -math.inf)),  # below -2^63: scientific
     str(INT64_MIN),             # -2^63 exactly: integer
     "-0",                       # RETURN drops the sign, sort key keeps it
     "1e-7",
@@ -1266,11 +1276,14 @@ SORTKEY_NUMERIC_FORMAT_VALUES = [
     "1e3",
     str(TWO_POW_53 + 1),        # parse rounds to 2^53, format does not
     str(1 << 60),
-    str(ulp_below(INT64_MAX)),  # last double below 2^63: integer
+    str(_adjacent_double(INT64_MAX, -math.inf)),  # last double below 2^63: integer
     str(INT64_MAX),             # parses to 2^63: scientific
-    str(ulp_above(INT64_MAX)),  # scientific
+    str(_adjacent_double(INT64_MAX, math.inf)),   # scientific
     "1e20",
 ]
+# Ties would make the replayed row order nondeterministic.
+_parsed = [float(v) for v in SORTKEY_NUMERIC_FORMAT_VALUES]
+assert _parsed == sorted(set(_parsed)), "fixture must be strictly ascending"
 
 # Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
 SORTKEY_NIL_DATA_SET = "sortkey nil"
@@ -1353,8 +1366,11 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
-        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET,
-                          SORTKEY_NUMERIC_FORMAT_DATA_SET):
+        elif data_set in (
+            SORTKEY_PREFIX_DATA_SET,
+            SORTKEY_NIL_DATA_SET,
+            SORTKEY_NUMERIC_FORMAT_DATA_SET
+        ):
             data_source = "sortkey"
         elif data_set == RETURN_CLAUSE_DATA_SET:
             data_source = "return"

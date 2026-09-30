@@ -8,8 +8,6 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
 import pytest
-from compatibility.data_sets import SORTKEY_NUMERIC_FORMAT_VALUES
-from numeric_format import redis_return_value, redis_sort_key
 from utils import IndexingTestHelper
 from valkeytestframework.util import waiters
 
@@ -1089,51 +1087,6 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
-    def test_numeric_sortkey_and_return_normalized(self):
-        """
-            Regression test for issue #1353, item 6: NUMERIC sort keys and
-            RETURN values are re-serialized from the parsed double, not the
-            stored bytes (rule in numeric_format.py). Full-content replies
-            keep the stored bytes. The same inputs are compat-tested against
-            Redis, so the rule here and the oracle pickle check each other.
-        """
-        client: Valkey = self.server.get_new_client()
-        assert client.execute_command(
-            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
-
-        values = SORTKEY_NUMERIC_FORMAT_VALUES
-        parsed = [float(v) for v in values]
-        assert parsed == sorted(parsed) and len(set(parsed)) == len(parsed), \
-            "fixture must be strictly ascending as doubles"
-
-        assert client.execute_command(
-            "FT.CREATE", "num_fmt_idx", "ON", "HASH", "PREFIX", "1", "nfm:",
-            "SCHEMA", "p", "NUMERIC", "SORTABLE") == b"OK"
-        keys = [f"nfm:{i}".encode() for i in range(len(values))]
-        for key, value in zip(keys, values):
-            assert client.execute_command("HSET", key, "p", value) == 1
-        limit = str(len(values))
-
-        result = client.execute_command(
-            "FT.SEARCH", "num_fmt_idx", "*", "SORTBY", "p", "ASC",
-            "WITHSORTKEYS", "RETURN", "1", "p", "LIMIT", "0", limit,
-            "DIALECT", "2")
-        expected = [len(values)]
-        for key, value in zip(keys, values):
-            expected += [key, redis_sort_key(value),
-                         [b"p", redis_return_value(value)]]
-        assert result == expected
-
-        # Full-content replies (no RETURN) keep the stored bytes; only the
-        # sort-key slot is re-serialized.
-        result = client.execute_command(
-            "FT.SEARCH", "num_fmt_idx", "*", "SORTBY", "p", "ASC",
-            "WITHSORTKEYS", "LIMIT", "0", limit, "DIALECT", "2")
-        expected = [len(values)]
-        for key, value in zip(keys, values):
-            expected += [key, redis_sort_key(value), [b"p", value.encode()]]
-        assert result == expected
-
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """
         The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;
@@ -1231,21 +1184,23 @@ class TestNumericFormatGate(ValkeySearchTestCaseDebugMode):
         client: Valkey = self.server.get_new_client()
         assert client.execute_command(
             "FT.CREATE", "nfg_idx", "ON", "HASH", "PREFIX", "1", "nfg:",
-            "SCHEMA", "m", "TAG", "p", "NUMERIC", "SORTABLE") == b"OK"
-        value = "2.500"
-        assert client.execute_command(
-            "HSET", "nfg:1", "m", "all", "p", value) == 2
-        stored = value.encode()
-        for release, sort_key, ret in (
-                ("1.2.1", b"#" + stored, stored),
-                ("1.3.0", redis_sort_key(value), redis_return_value(value))):
+            "SCHEMA", "p", "NUMERIC", "SORTABLE") == b"OK"
+        # One field, so full-content replies have a fixed field order.
+        assert client.execute_command("HSET", "nfg:1", "p", "2.500") == 1
+        query = ("FT.SEARCH", "nfg_idx", "*", "SORTBY", "p", "ASC",
+                 "WITHSORTKEYS")
+        for release, sort_key, ret in (("1.2.1", b"#2.500", b"2.500"),
+                                       ("1.3.0", b"#2.5", b"2.5")):
             assert client.execute_command(
                 "CONFIG", "SET", "search.emulate-release", release) == b"OK"
             result = client.execute_command(
-                "FT.SEARCH", "nfg_idx", "@m:{all}", "SORTBY", "p", "ASC",
-                "WITHSORTKEYS", "RETURN", "1", "p", "DIALECT", "2")
+                *query, "RETURN", "1", "p", "DIALECT", "2")
             assert result == [1, b"nfg:1", sort_key,
                               [b"p", ret]], f"emulate-release {release}"
+            # Full-content replies keep the stored bytes at every release.
+            result = client.execute_command(*query, "DIALECT", "2")
+            assert result == [1, b"nfg:1", sort_key,
+                              [b"p", b"2.500"]], f"emulate-release {release}"
 
 
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):

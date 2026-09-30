@@ -107,15 +107,16 @@ std::string FormatDouble(double d) {
       return "nan";
     }
   }
+  // Text-level: -ffast-math (no-signed-zeros) may fold a double-level -0 fix.
+  if (d == 0.0) {
+    return "0";
+  }
   char storage[32];
-  // Redisearch splits on integrality, and so does this. Integers print in
-  // fixed notation: "%.12g" would turn an epoch-millisecond 1700000000123
-  // into "1.70000000012e+12" (the #1262 precision loss), and shortest-
-  // round-trip to_chars would shorten 1700000000 to "1.7e+09". Above 2^53
-  // integrality is an artifact of the binary representation, and the fixed
-  // expansion of a value like 1e300 would not fit storage, so the fixed path
-  // stops at 1e17 -- still well past epoch microseconds.
-  if (!IsInf(d) && d == std::floor(d) && std::fabs(d) < 1e17) {
+  // Redisearch prints an integral double in [-2^63, 2^63) as an integer, so
+  // 1700000000123 is not "%.12g"'s "1.70000000012e+12"; 2^63 is exact.
+  constexpr double kIntegerBound = static_cast<double>(1ULL << 63);
+  if (!IsInf(d) && d >= -kIntegerBound && d < kIntegerBound &&
+      d == std::floor(d)) {
     auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
                                    std::chars_format::fixed, 0);
     CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
@@ -128,6 +129,14 @@ std::string FormatDouble(double d) {
   size_t output_chars = snprintf(storage, sizeof(storage), "%.12g", d);
   CHECK(output_chars < sizeof(storage))
       << "FormatDouble overflowed formatting " << d;
+  return {storage, output_chars};
+}
+
+std::string FormatDoubleLossless(double d) {
+  char storage[32];
+  size_t output_chars = snprintf(storage, sizeof(storage), "%.17g", d);
+  CHECK(output_chars < sizeof(storage))
+      << "FormatDoubleLossless overflowed formatting " << d;
   return {storage, output_chars};
 }
 

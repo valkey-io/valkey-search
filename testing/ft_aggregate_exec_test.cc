@@ -944,7 +944,9 @@ TEST_F(AggregateExecTest, QuantileAllNilTest) {
   auto record = records.pop_front();
   std::cerr << "Result: " << *record << "\n";
 
-  EXPECT_TRUE(record->fields_.at(2).IsNil());
+  // Redisearch answers nan for a group with no numeric value.
+  ASSERT_TRUE(record->fields_.at(2).IsDouble());
+  EXPECT_TRUE(expr::IsNan(*record->fields_.at(2).AsDouble()));
 }
 
 TEST_F(AggregateExecTest, QuantileDuplicateValuesTest) {

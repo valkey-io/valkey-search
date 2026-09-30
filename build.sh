@@ -245,6 +245,11 @@ if [[ "${BUILD_BENCHMARKS_OPTION}" == "yes" && "${SAN_BUILD}" != "no" ]]; then
     exit 1
 fi
 
+if [[ "${BUILD_BENCHMARKS_OPTION}" == "yes" ]]; then
+    # Keep benchmark configuration separate so opt-in does not persist in ordinary builds.
+    BUILD_DIR_SUFFIX="${BUILD_DIR_SUFFIX:-}-benchmarks"
+fi
+
 if [[ "${USE_SYSTEM_MODULES}" != "no" ]]; then
     san_suffix=""
     if [[ "${SAN_BUILD}" == "address" ]]; then

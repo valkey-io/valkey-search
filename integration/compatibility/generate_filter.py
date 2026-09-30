@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest
 from .generate import BaseCompatibilityTest
 from .data_sets import (

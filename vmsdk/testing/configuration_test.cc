@@ -405,6 +405,27 @@ TEST_F(ConfigTest, DevConfigFromArgvRequiresDebugMode) {
   FreeValkeyArgs(args);
 }
 
+// Dev() configs from the config file (applied between Init and
+// ParseAndLoadArgv) are accepted without debug-mode, as before debug-mode was
+// registered.
+TEST_F(ConfigTest, DevConfigFromConfigFileAllowed) {
+  auto dev_config =
+      config::BooleanBuilder("my-file-dev-bool", false).Dev().Build();
+  EXPECT_CALL(*kMockValkeyModule, RegisterBoolConfig(_, _, _, _, _, _, _, _))
+      .Times(testing::AnyNumber());
+  ASSERT_TRUE(ModuleConfigManager::Instance().Init(&fake_ctx).ok());
+  ASSERT_FALSE(config::IsDebugModeEnabled());
+  EXPECT_TRUE(dev_config->SetValue(true).ok());
+  EXPECT_TRUE(dev_config->GetValue());
+
+  auto args = vmsdk::ToValkeyStringVector("--debug-mode no");
+  EXPECT_TRUE(ModuleConfigManager::Instance()
+                  .ParseAndLoadArgv(&fake_ctx, args.data(), args.size())
+                  .ok());
+  EXPECT_TRUE(absl::IsPermissionDenied(dev_config->SetValue(false)));
+  FreeValkeyArgs(args);
+}
+
 TEST_F(ConfigTest, defaultValue) {
   // Define some configuration entries that will register themselves with the
   // configuration manager

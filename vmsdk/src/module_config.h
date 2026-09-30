@@ -44,6 +44,8 @@ enum Flags {
 /// Return true if debug mode is enabled. "search.debug-mode == yes"
 constexpr absl::string_view kDebugMode{"debug-mode"};
 bool IsDebugModeEnabled();
+/// Return true while Valkey applies the config file during module load.
+bool IsLoadingConfigFile();
 
 /// Return true if user data should be hidden from logs.
 /// "search.hide-user-data-from-log == yes"
@@ -215,7 +217,8 @@ class ConfigBase : public Registerable {
   }
 
   virtual absl::Status Validate(T val) const {
-    if (IsDeveloperConfig() && !IsDebugModeEnabled() && val != GetValue()) {
+    if (IsDeveloperConfig() && !IsDebugModeEnabled() && !IsLoadingConfigFile() &&
+        val != GetValue()) {
       return absl::PermissionDeniedError(
           absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
                           GetName(), kDebugMode));

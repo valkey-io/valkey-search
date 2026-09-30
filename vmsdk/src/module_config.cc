@@ -25,6 +25,14 @@ static auto debug_mode = BooleanBuilder(kDebugMode, false).Hidden().Build();
 
 bool IsDebugModeEnabled() { return debug_mode->GetValue(); }
 
+/// True while Valkey applies the config file (between `Init` and
+/// `ParseAndLoadArgv`). Dev configs from the config file are accepted
+/// regardless of debug mode, so config files written before debug-mode was
+/// registered keep loading.
+static bool loading_config_file = false;
+
+bool IsLoadingConfigFile() { return loading_config_file; }
+
 /// Controls the verbose logging flag
 static auto hide_user_data_config = BooleanBuilder(kHideUserDataFromLog, true)
                                         .Dev()  // can only be set in debug mode
@@ -119,6 +127,7 @@ void ModuleConfigManager::UnregisterConfig(Registerable *config_item) {
 }
 
 absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
+  loading_config_file = true;
   // Valkey applies configs in registration order. entries_ is a hash map
   // with no ordering, so debug-mode has to be registered explicitly first.
   VMSDK_RETURN_IF_ERROR(debug_mode->Register(ctx));
@@ -134,6 +143,7 @@ absl::Status ModuleConfigManager::Init(ValkeyModuleCtx *ctx) {
 absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
+  loading_config_file = false;
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());

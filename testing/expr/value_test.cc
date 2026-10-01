@@ -1476,10 +1476,10 @@ TEST_F(ValueTest, Serialize_NegativeNumbers) {
   Value neg(-42.5);
   EXPECT_EQ(neg.Serialize(), "-42.5");
 
-  // -0.0 serializes as "0": FormatDouble's integral path uses
-  // std::to_chars(fixed, precision 0), which drops the sign of negative zero.
+  // -0.0 serializes as "-0" (IEEE 754 negative zero is preserved by
+  // FormatDouble)
   Value arr({Value(-1.0), Value(-0.0), Value(0.0)});
-  EXPECT_EQ(arr.Serialize(), "[-1,0,0]");
+  EXPECT_EQ(arr.Serialize(), "[-1,-0,0]");
 }
 
 TEST_F(ValueTest, Serialize_VeryLargeAndSmallDoubles) {

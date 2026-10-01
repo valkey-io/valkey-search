@@ -261,8 +261,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST mutation_processing") > 0
         )
 
-        # TAG-only query should NOT block even though index has TEXT field
-        result = client.execute_command("FT.SEARCH", "idx", "@category:{news}")
+        # A TAG-only query on an index with a TEXT field blocks, since its rescore
+        # reads the text index. NOCONTENT skips the rescore, so it does not block.
+        result = client.execute_command("FT.SEARCH", "idx", "@category:{news}", "NOCONTENT")
         assert result is not None
         assert client.info("SEARCH")["search_text_query_blocked_count"] == 0
 

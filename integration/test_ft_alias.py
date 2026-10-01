@@ -623,8 +623,16 @@ class TestFTAliasNameBoundaries(ValkeySearchTestCaseBase):
     def test_aliasadd_empty_index_name(self):
         """FT.ALIASADD with an empty index name is rejected."""
         client = self.client
-        with pytest.raises(ResponseError):
+        with pytest.raises(ResponseError) as exc_info:
             client.execute_command("FT.ALIASADD", ALIAS_NAME, "")
+        assert "Index name cannot be empty" in str(exc_info.value)
+
+    def test_aliasupdate_empty_index_name(self):
+        """FT.ALIASUPDATE with an empty index name is rejected."""
+        client = self.client
+        with pytest.raises(ResponseError) as exc_info:
+            client.execute_command("FT.ALIASUPDATE", ALIAS_NAME, "")
+        assert "Index name cannot be empty" in str(exc_info.value)
 
     def test_aliasadd_very_long_alias_name(self):
         """FT.ALIASADD with a 512-character alias name succeeds."""

@@ -229,6 +229,9 @@ absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return absl::InvalidArgumentError("Alias name cannot be empty");
   }
   auto index_name = vmsdk::ToStringView(argv[2]);
+  if (index_name.empty()) {
+    return absl::InvalidArgumentError("Index name cannot be empty");
+  }
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().AddAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
@@ -264,6 +267,9 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     return absl::InvalidArgumentError("Alias name cannot be empty");
   }
   auto index_name = vmsdk::ToStringView(argv[2]);
+  if (index_name.empty()) {
+    return absl::InvalidArgumentError("Index name cannot be empty");
+  }
 
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().UpdateAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));

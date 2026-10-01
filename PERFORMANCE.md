@@ -50,5 +50,7 @@ From the Actions tab, run the **PR Search Benchmark** workflow
 
 Both paths run through the same workflow and post the same comparison-comment
 format. Manual dispatch can override `config_file`, `num_runs`, `core_commit`,
-and the skip flags, so a manual run may not match what a label would have
-produced on the same PR.
+and the skip flags. In particular, manual dispatch defaults `skip_profiling`
+to `true`, while the `run-search-benchmark` label includes profiling — set
+`skip_profiling` to `false` to reproduce that label's output. Other overrides
+can likewise produce different results.

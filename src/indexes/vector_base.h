@@ -49,35 +49,151 @@ namespace valkey_search::indexes {
 
 constexpr float kDefaultMagnitude = 1.0f;
 
+inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
+  return (num + 63) & ~size_t(63);
+}
+
 class VectorRecord {
  public:
-  // Disallow copy and move because it is variable-sized and should only be
-  // managed via std::shared_ptr.
-  VectorRecord(const VectorRecord &) = delete;
-  VectorRecord &operator=(const VectorRecord &) = delete;
-  VectorRecord(VectorRecord &&) = delete;
-  VectorRecord &operator=(VectorRecord &&) = delete;
-  ~VectorRecord() = default;
+  struct Header {
+    mutable std::atomic<uint32_t> ref_count_{1};
+    const float reciprocal_magnitude_{1.0f};
+  };
 
-  // Static factory method to construct a VectorRecord managed by
-  // std::shared_ptr.
-  static std::shared_ptr<VectorRecord> Construct(
-      absl::string_view vector, float reciprocal_magnitude,
-      Allocator *allocator = nullptr);
+  static constexpr size_t kStorageHeaderSize = sizeof(Header);
+  static_assert(kStorageHeaderSize == 8,
+                "VectorRecord::Header must be exactly 8 bytes");
 
-  inline const char *GetRawVector() const { return data_; }
-  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  VectorRecord() noexcept : data_(nullptr) {}
+  VectorRecord(std::nullptr_t) noexcept : data_(nullptr) {}
+
+  VectorRecord(const VectorRecord &other) noexcept
+      : data_(other.data_.load(std::memory_order_relaxed)) {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    if (ptr) {
+      GetHeader(ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  VectorRecord(VectorRecord &&other) noexcept
+      : data_(other.data_.exchange(nullptr, std::memory_order_relaxed)) {}
+
+  VectorRecord &operator=(const VectorRecord &other) noexcept {
+    if (this != &other) {
+      const char *new_ptr = other.data_.load(std::memory_order_relaxed);
+      if (new_ptr) {
+        GetHeader(new_ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+      }
+      const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
+      if (old_ptr) {
+        Release(old_ptr);
+      }
+    }
+    return *this;
+  }
+
+  VectorRecord &operator=(VectorRecord &&other) noexcept {
+    if (this != &other) {
+      const char *new_ptr =
+          other.data_.exchange(nullptr, std::memory_order_relaxed);
+      const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
+      if (old_ptr) {
+        Release(old_ptr);
+      }
+    }
+    return *this;
+  }
+
+  VectorRecord &operator=(std::nullptr_t) noexcept {
+    reset();
+    return *this;
+  }
+
+  ~VectorRecord() noexcept {
+    const char *old_ptr = data_.exchange(nullptr, std::memory_order_relaxed);
+    if (old_ptr) {
+      Release(old_ptr);
+    }
+  }
+
+  void reset() noexcept {
+    const char *old_ptr = data_.exchange(nullptr, std::memory_order_acq_rel);
+    if (old_ptr) {
+      Release(old_ptr);
+    }
+  }
+
+  static VectorRecord Construct(absl::string_view vector,
+                                float reciprocal_magnitude,
+                                Allocator *allocator);
+
+  const char *GetRawVector() const noexcept {
+    return data_.load(std::memory_order_relaxed);
+  }
+
+  float GetReciprocalMagnitude() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
+  }
+
+  // Reciprocal magnitude of the record whose (non-null) vector data starts at
+  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
+  static float ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
+    return GetHeader(data_ptr)->reciprocal_magnitude_;
+  }
+
+  uint32_t RefCount() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    return ptr ? GetHeader(ptr)->ref_count_.load(std::memory_order_relaxed) : 0;
+  }
+
+  bool empty() const noexcept {
+    return data_.load(std::memory_order_relaxed) == nullptr;
+  }
+
+  explicit operator bool() const noexcept { return !empty(); }
+
+  bool operator==(const VectorRecord &other) const noexcept {
+    return data_.load(std::memory_order_relaxed) ==
+           other.data_.load(std::memory_order_relaxed);
+  }
+
+  bool operator!=(const VectorRecord &other) const noexcept {
+    return !(*this == other);
+  }
+
+  bool operator==(std::nullptr_t) const noexcept { return empty(); }
+  bool operator!=(std::nullptr_t) const noexcept { return !empty(); }
+
+  friend std::ostream &operator<<(std::ostream &os, const VectorRecord &r) {
+    return os << "VectorRecord("
+              << static_cast<const void *>(
+                     r.data_.load(std::memory_order_relaxed))
+              << ")";
+  }
 
  private:
-  // Constructor is private, called via placement new in Construct.
-  VectorRecord(absl::string_view vector, float reciprocal_magnitude);
+  static Header *GetHeader(const char *data_ptr) noexcept {
+    return const_cast<Header *>(reinterpret_cast<const Header *>(data_ptr) - 1);
+  }
 
-  const float reciprocal_magnitude_;
-  char data_[0];  // flexible array member
+  static void Release(const char *data_ptr) noexcept {
+    Header *h = GetHeader(data_ptr);
+    if (h->ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      Allocator::Free(reinterpret_cast<char *>(h));
+    }
+  }
+
+  explicit VectorRecord(const char *data_ptr) noexcept : data_(data_ptr) {}
+
+  mutable std::atomic<const char *> data_{nullptr};
 };
 
+static_assert(sizeof(VectorRecord) == sizeof(void *),
+              "VectorRecord must be single pointer sized");
+
 struct VectorRecordWithSize {
-  std::shared_ptr<VectorRecord> vector_record;
+  VectorRecord vector_record;
   size_t size{0};
 
   bool operator==(const VectorRecordWithSize &other) const = default;
@@ -86,7 +202,7 @@ struct VectorRecordWithSize {
 
   bool operator==(absl::string_view bytes) const {
     return vector_record != nullptr && size == bytes.size() &&
-           std::memcmp(vector_record->GetRawVector(), bytes.data(), size) == 0;
+           std::memcmp(vector_record.GetRawVector(), bytes.data(), size) == 0;
   }
   bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
 };
@@ -376,7 +492,7 @@ class VectorBase : public IndexBase {
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator,
-            sizeof(VectorRecord) + dimensions * element_size, true))
+            VectorRecord::kStorageHeaderSize + dimensions * element_size, true))
 #endif  // !SAN_BUILD
   {
   }
@@ -392,13 +508,11 @@ class VectorBase : public IndexBase {
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
 
-  virtual absl::Status AddRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) = 0;
+  virtual absl::Status AddRecordImpl(uint64_t internal_id,
+                                     VectorRecord &&vector_record) = 0;
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
-  virtual absl::Status ModifyRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) = 0;
+  virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                        VectorRecord &&vector_record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -407,10 +521,8 @@ class VectorBase : public IndexBase {
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
 
-  virtual std::shared_ptr<const VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const = 0;
-  virtual std::shared_ptr<const VectorRecord> &GetVector(
-      uint64_t internal_id) const = 0;
+  virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
+  virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
 
   int db_num_;
   int dimensions_;
@@ -420,7 +532,7 @@ class VectorBase : public IndexBase {
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
   virtual float ComputeDistance(absl::string_view query,
-                                const VectorRecord *vector_record,
+                                const VectorRecord &vector_record,
                                 float query_magnitude) const = 0;
   virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const = 0;
@@ -434,7 +546,7 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
                                          float magnitude,
-                                         const VectorRecord *vector_record)
+                                         const VectorRecord &vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);

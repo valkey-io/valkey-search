@@ -64,7 +64,9 @@ else
     echo "pytest-xdist not found in ${PYTHON}; running generators serially." >&2
 fi
 echo "==> Running ${GENERATOR_FILES[*]}"
-"${PYTHON}" -m pytest "${XDIST_ARGS[@]}" "${GENERATOR_FILES[@]}" "$@"
+# The default fd capture writes each print() unbuffered to a temp file;
+# sys capture keeps the same per-test output in memory.
+"${PYTHON}" -m pytest "${XDIST_ARGS[@]}" --capture=sys "${GENERATOR_FILES[@]}" "$@"
 
 echo
 echo "Done. Updated files:"

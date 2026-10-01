@@ -1342,10 +1342,9 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
   if (coordinator_enabled_) {
     // Coordinator mode: validate under lock, then release before calling
     // MetadataManager (which invokes OnMetadataCallback, acquiring the lock).
-    // NOTE: This creates a TOCTOU window where concurrent AddAlias calls for
-    // the same alias targeting different indexes can both pass validation.
-    // Resolution is last-writer-wins at the MetadataManager level, the final
-    // CreateEntry determines the authoritative alias mapping.
+    // Both steps run on the main thread, so no local command interleaves.
+    // ALIASADDs racing on different nodes are settled by metadata
+    // reconciliation (see RebuildAliasMapsForIndex).
     {
       absl::MutexLock lock(&db_to_index_schemas_mutex_);
 

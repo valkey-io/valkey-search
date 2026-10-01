@@ -20,6 +20,14 @@ target_link_libraries(concurrency_test PUBLIC vmsdklib)
 target_link_libraries(concurrency_test PUBLIC vmsdk_testing_infra)
 finalize_test_flags(concurrency_test)
 
+set(SRCS_EPOCH_RECLAMATION_TEST
+    ${CMAKE_CURRENT_LIST_DIR}/epoch_reclamation_test.cc)
+add_executable(epoch_reclamation_test ${SRCS_EPOCH_RECLAMATION_TEST})
+target_include_directories(epoch_reclamation_test
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(epoch_reclamation_test PUBLIC vmsdklib)
+finalize_test_flags(epoch_reclamation_test)
+
 set(SRCS_MODULE_TYPE_TEST ${CMAKE_CURRENT_LIST_DIR}/module_type_test.cc)
 add_executable(module_type_test ${SRCS_MODULE_TYPE_TEST})
 target_include_directories(module_type_test PUBLIC ${CMAKE_CURRENT_LIST_DIR})

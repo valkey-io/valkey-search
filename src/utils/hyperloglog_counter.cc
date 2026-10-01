@@ -25,6 +25,15 @@ void HyperLogLog::Add(const expr::Value& value) {
     AddBuffer(serialized.data(), serialized.size());
     return;
   }
+  // Doubles format to 12 significant digits, so hash their bits instead.
+  if (value.IsDouble()) {
+    double d = *value.AsDouble();
+    if (d == 0.0) {
+      d = 0.0;  // -0.0 and 0.0 hash alike
+    }
+    AddBuffer(&d, sizeof(d));
+    return;
+  }
   auto sv = value.AsStringView();
   if (sv.has_value()) {
     AddBuffer(sv->data(), sv->size());

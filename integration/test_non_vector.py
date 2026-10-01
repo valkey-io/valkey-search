@@ -980,9 +980,9 @@ def validate_aggregate_count_distinctish(client: Valkey):
         Uses the 1000-record dataset: price 1-1000 (unique), rating cycles
         through (i%100)+1.0 so each category gets 50 distinct ratings,
         category alternates electronics/books (500 each).
-        The estimates are deterministic: they equal PFCOUNT of the same values.
+        The estimates are deterministic for a given hash input.
     """
-    expected_prices = {b'electronics': 496, b'books': 501}
+    expected_prices = {b'electronics': 501, b'books': 501}
     # 1. Basic COUNT_DISTINCTISH - count distinct prices per category
     # 500 unique prices per category
     result = client.execute_command(

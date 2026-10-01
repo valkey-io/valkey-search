@@ -2346,5 +2346,28 @@ TEST_F(CrossIndexAliasConflictTest, CreateIndexShadowsExistingAliasName) {
   EXPECT_EQ(idx_a_aliases[0], "shared_name");
 }
 
+// A real index that shadows an alias is a valid ALIASADD/ALIASUPDATE target.
+TEST_F(CrossIndexAliasConflictTest, ShadowingIndexIsValidAliasTarget) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+  SimulateAliasCallback("idx_a", {"shared_name"});
+  CreateIndex("shared_name");
+
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().AddAlias(kDbNum, "added", "shared_name"));
+  SimulateAliasCallback("idx_b", {"updated"});
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().UpdateAlias(kDbNum, "updated", "shared_name"));
+
+  auto shadowing =
+      SchemaManager::Instance().GetIndexSchema(kDbNum, "shared_name");
+  ASSERT_TRUE(shadowing.ok());
+  for (const auto *alias : {"added", "updated"}) {
+    auto resolved = SchemaManager::Instance().GetIndexSchema(kDbNum, alias);
+    ASSERT_TRUE(resolved.ok()) << alias;
+    EXPECT_EQ(resolved.value(), shadowing.value()) << alias;
+  }
+}
+
 }  // namespace
 }  // namespace valkey_search

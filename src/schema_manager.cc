@@ -1352,8 +1352,10 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
       // Check if alias already exists in this db.
       auto db_alias_it = db_to_aliases_.find(db_num);
       if (db_alias_it != db_to_aliases_.end()) {
-        // Reject if index_name is itself an alias.
-        if (db_alias_it->second.contains(index_name)) {
+        // Reject if index_name is only an alias; a real index shadowing an
+        // alias of the same name is a valid target.
+        if (db_alias_it->second.contains(index_name) &&
+            !LookupInternal(db_num, index_name).ok()) {
           return absl::InvalidArgumentError(
               "Unknown index name or name is an alias");
         }
@@ -1386,7 +1388,8 @@ absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
   // Check if alias already exists.
   auto db_alias_it = db_to_aliases_.find(db_num);
   if (db_alias_it != db_to_aliases_.end()) {
-    if (db_alias_it->second.contains(index_name)) {
+    if (db_alias_it->second.contains(index_name) &&
+        !LookupInternal(db_num, index_name).ok()) {
       return absl::InvalidArgumentError(
           "Unknown index name or name is an alias");
     }
@@ -1491,8 +1494,9 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
           }
           old_index = alias_it->second;
         }
-        // Reject if index_name is itself an alias.
-        if (db_alias_it->second.contains(index_name)) {
+        // Reject if index_name is only an alias.
+        if (db_alias_it->second.contains(index_name) &&
+            !LookupInternal(db_num, index_name).ok()) {
           return absl::InvalidArgumentError(
               "Unknown index name or name is an alias");
         }
@@ -1583,8 +1587,9 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
         return absl::OkStatus();
       }
     }
-    // Reject if index_name is itself an alias.
-    if (db_alias_it->second.contains(index_name)) {
+    // Reject if index_name is only an alias.
+    if (db_alias_it->second.contains(index_name) &&
+        !LookupInternal(db_num, index_name).ok()) {
       return absl::InvalidArgumentError(
           "Unknown index name or name is an alias");
     }

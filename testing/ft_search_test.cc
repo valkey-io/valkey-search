@@ -8,6 +8,7 @@
 #include "src/commands/ft_search.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -27,6 +28,8 @@
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
+#include "absl/time/clock.h"
+#include "absl/time/time.h"
 #include "gmock/gmock.h"
 #include "grpcpp/support/status.h"
 #include "gtest/gtest.h"
@@ -41,6 +44,7 @@
 #include "src/metrics.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
+#include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
@@ -648,6 +652,56 @@ TEST_F(ValkeySearchTest, BackgroundReplyEligibility) {
   EXPECT_TRUE(parameters.CanGenerateReplyInBackground());
   EXPECT_EQ(parameters.GetContentProcessing(),
             query::ContentProcessing::kNoContent);
+}
+
+// A background reply that passed its dropped-index check must unblock its
+// client before MarkAsDestructing() can complete.
+TEST_F(ValkeySearchTest, BackgroundReplyCompletesBeforeDestruction) {
+  auto index_schema = CreateVectorHNSWSchema("idx", &fake_ctx_).value();
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->index_schema = index_schema;
+  parameters->no_content = true;
+  parameters->timeout_ms = 10000;
+  parameters->cancellation_token =
+      cancel::Make(parameters->timeout_ms, nullptr);
+  auto *blocked_client = (ValkeyModuleBlockedClient *)1;
+  EXPECT_CALL(
+      *kMockValkeyModule,
+      BlockClient(testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillOnce(testing::Return(blocked_client));
+  parameters->blocked_client = vmsdk::BlockedClient(
+      &fake_ctx_, async::Reply, async::Timeout, async::Free, 0);
+
+  // The reply context is created after the check. Stall there so that
+  // MarkAsDestructing() runs while the reader is between check and unblock.
+  ValkeyModuleCtx background_ctx;
+  absl::Notification checked;
+  EXPECT_CALL(*kMockValkeyModule, GetThreadSafeContext(blocked_client))
+      .WillOnce([&](ValkeyModuleBlockedClient *) {
+        checked.Notify();
+        absl::SleepFor(absl::Milliseconds(100));
+        return &background_ctx;
+      });
+  std::atomic<bool> unblocked{false};
+  void *private_data = nullptr;
+  EXPECT_CALL(*kMockValkeyModule, UnblockClient(blocked_client, testing::_))
+      .WillOnce([&](ValkeyModuleBlockedClient *, void *data) {
+        private_data = data;
+        unblocked = true;
+        return VALKEYMODULE_OK;
+      });
+
+  std::thread reader([parameters = std::move(parameters)]() mutable {
+    auto *command = parameters.get();
+    command->QueryCompleteBackground(std::move(parameters));
+  });
+  checked.WaitForNotification();
+  index_schema->MarkAsDestructing();
+  EXPECT_TRUE(unblocked);
+  reader.join();
+
+  EXPECT_EQ(background_ctx.reply_capture.GetReply(), "*1\r\n:0\r\n");
+  async::Free(&fake_ctx_, private_data);
 }
 
 using ::testing::TestParamInfo;

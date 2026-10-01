@@ -10,6 +10,7 @@
 #include <memory>
 #include <vector>
 
+#include "absl/synchronization/mutex.h"
 #include "fanout.h"
 #include "ft_create_parser.h"
 #include "src/acl.h"
@@ -347,7 +348,13 @@ void QueryCommand::QueryCompleteBackground(
   CHECK(command == this);
   // kNoContent normally skips ResolveContent(), which performs this check on
   // the main thread. Preserve its dropped-index behavior before a background
-  // thread materializes a reply.
+  // thread materializes a reply. Hold the gate until the client is unblocked,
+  // so the query either completes before MarkAsDestructing() or sees it.
+  // Keep only the mutex alive locally: once unblocked, async::Free may drop
+  // command->index_schema before the lock is released, and the schema must
+  // not be destroyed on this thread.
+  auto destructing_mutex = command->index_schema->GetDestructingMutex();
+  absl::ReaderMutexLock destructing_lock(destructing_mutex.get());
   if (command->index_schema->IsMarkedDestructing()) {
     command->search_result.status = GenerateIndexNotFoundError(
         command->index_schema->GetDBNum(), command->index_schema->GetName());

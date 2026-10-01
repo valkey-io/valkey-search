@@ -583,8 +583,7 @@ class VectorBase : public IndexBase {
     if (normalize_) {
       query_magnitude *= record.GetReciprocalMagnitude();
     }
-    return ClampCosineDistance(
-        ComputeDistance(query, record, query_magnitude));
+    return ClampCosineDistance(ComputeDistance(query, record, query_magnitude));
   }
 
   // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW

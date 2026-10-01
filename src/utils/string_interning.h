@@ -167,7 +167,7 @@ class InternedStringPtr {
 
   bool IsInline() const { return (impl_ & kInlineMask) != 0; }
 
-  absl::string_view Str() const {
+  absl::string_view Str() const & {
     if (IsInline()) {
       uint8_t len = (impl_ & 0x1C) >> 2;
       return {reinterpret_cast<const char *>(&impl_) + 1, len};
@@ -177,8 +177,10 @@ class InternedStringPtr {
     }
     return {};
   }
+  absl::string_view Str() && = delete;
 
-  operator absl::string_view() const { return Str(); }
+  operator absl::string_view() const & { return Str(); }
+  operator absl::string_view() && = delete;
 
   const InternedStringPtr *operator->() const { return this; }
   const InternedStringPtr &operator*() const { return *this; }
@@ -560,7 +562,7 @@ class BagOfInternedStringPtrs {
         if (idx == arr->size()) {
           return end();
         }
-        return const_iterator(this, arr->data(), ArrayCount(*arr), idx);
+        return {this, arr->data(), ArrayCount(*arr), idx};
       }
       case kArray8Tag: {
         auto *arr = GetArray8();
@@ -568,7 +570,7 @@ class BagOfInternedStringPtrs {
         if (idx == arr->size()) {
           return end();
         }
-        return const_iterator(this, arr->data(), ArrayCount(*arr), idx);
+        return {this, arr->data(), ArrayCount(*arr), idx};
       }
       case kSetTag: {
         auto *set = GetSet();
@@ -576,7 +578,7 @@ class BagOfInternedStringPtrs {
         if (it == set->end()) {
           return end();
         }
-        return const_iterator(this, it);
+        return {this, it};
       }
     }
     return end();
@@ -650,7 +652,7 @@ class BagOfInternedStringPtrs {
         if (storage_ == 0) {
           return end();
         }
-        return const_iterator(const_iterator::Tag::kSingle, this);
+        return {const_iterator::Tag::kSingle, this};
       case kArray4Tag: {
         auto *arr = GetArray4();
         std::size_t cnt = ArrayCount(*arr);

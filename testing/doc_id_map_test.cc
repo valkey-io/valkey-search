@@ -17,13 +17,9 @@ namespace valkey_search {
 
 class DocIdMapTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    DocIdMap::Instance().Clear();
-  }
+  void SetUp() override { DocIdMap::Instance().Clear(); }
 
-  void TearDown() override {
-    DocIdMap::Instance().Clear();
-  }
+  void TearDown() override { DocIdMap::Instance().Clear(); }
 };
 
 TEST_F(DocIdMapTest, BasicGetOrAssignWithInternedPtr) {
@@ -52,8 +48,8 @@ TEST_F(DocIdMapTest, ReverseLookupReturnsInternedPtr) {
   DocId id1 = map.GetOrAssign(StringInternStore::Intern("doc:alpha"));
   DocId id2 = map.GetOrAssign(StringInternStore::Intern("doc:beta"));
 
-  const InternedStringPtr &key1 = map.GetKey(id1);
-  const InternedStringPtr &key2 = map.GetKey(id2);
+  const InternedStringPtr& key1 = map.GetKey(id1);
+  const InternedStringPtr& key2 = map.GetKey(id2);
 
   EXPECT_TRUE(key1);
   EXPECT_EQ(key1->Str(), "doc:alpha");
@@ -65,7 +61,7 @@ TEST_F(DocIdMapTest, ReverseLookupReturnsInternedPtr) {
   EXPECT_EQ(key1.RawPtr(), expected_key1.RawPtr());
 
   // Invalid ID check
-  const InternedStringPtr &empty = map.GetKey(999999);
+  const InternedStringPtr& empty = map.GetKey(999999);
   EXPECT_FALSE(empty);
 }
 
@@ -98,7 +94,8 @@ TEST_F(DocIdMapTest, RemoveAndRecycleWithBatches) {
 TEST_F(DocIdMapTest, CrossThreadBatchTransfer) {
   auto& map = DocIdMap::Instance();
 
-  constexpr size_t total_deletions = 150; // Exceeds 128 (active + spare batch cap)
+  constexpr size_t total_deletions =
+      150;  // Exceeds 128 (active + spare batch cap)
   std::vector<InternedStringPtr> doc_ptrs;
   doc_ptrs.reserve(total_deletions);
 
@@ -122,13 +119,14 @@ TEST_F(DocIdMapTest, CrossThreadBatchTransfer) {
   // Global stack should have received at least 1 full batch
   EXPECT_GT(map.GlobalFreeBatchesCount(), 0);
 
-  // Thread 2: Allocate new documents -> should consume from global lock-free stack!
+  // Thread 2: Allocate new documents -> should consume from global lock-free
+  // stack!
   std::thread t2([&]() {
     for (size_t i = 0; i < 50; ++i) {
       std::string new_key = "new_doc:" + std::to_string(i);
       DocId id = map.GetOrAssign(StringInternStore::Intern(new_key));
       EXPECT_NE(id, kInvalidDocId);
-      EXPECT_LE(id, total_deletions); // Reused an existing freed DocId!
+      EXPECT_LE(id, total_deletions);  // Reused an existing freed DocId!
     }
   });
   t2.join();
@@ -151,7 +149,7 @@ TEST_F(DocIdMapTest, CrossChunkAllocationWithInterning) {
 
   for (size_t i = 0; i < total_docs; ++i) {
     std::string expected_key = "doc:" + std::to_string(i);
-    const InternedStringPtr &key_ptr = map.GetKey(ids[i]);
+    const InternedStringPtr& key_ptr = map.GetKey(ids[i]);
     EXPECT_EQ(key_ptr->Str(), expected_key);
   }
 }
@@ -167,7 +165,8 @@ TEST_F(DocIdMapTest, ConcurrentGetOrAssignAndRecycle) {
   for (int t = 0; t < num_threads; ++t) {
     threads.emplace_back([t, &map]() {
       for (int i = 0; i < docs_per_thread; ++i) {
-        std::string key = "thread_" + std::to_string(t) + "_doc_" + std::to_string(i);
+        std::string key =
+            "thread_" + std::to_string(t) + "_doc_" + std::to_string(i);
         InternedStringPtr ptr = StringInternStore::Intern(key);
         DocId id = map.GetOrAssign(ptr);
         EXPECT_NE(id, kInvalidDocId);
@@ -197,6 +196,35 @@ TEST_F(DocIdMapTest, ClearResetsMap) {
 
   DocId new_id = map.GetOrAssign(StringInternStore::Intern("doc:1"));
   EXPECT_EQ(new_id, 1);
+}
+
+TEST_F(DocIdMapTest, ExhaustionRejection) {
+  auto& map = DocIdMap::Instance();
+  map.Clear();
+
+  // Seed next_id_ to the boundary value
+  map.SetNextIdForTesting(DocIdMap::kMaxAllocatableDocId);
+
+  InternedStringPtr key1 = StringInternStore::Intern("exhaustion:1");
+  DocId id1 = map.GetOrAssign(key1);
+  EXPECT_EQ(id1, DocIdMap::kMaxAllocatableDocId);
+
+  // Next allocation must be rejected (kInvalidDocId) and not wrap to 0 or 1
+  InternedStringPtr key2 = StringInternStore::Intern("exhaustion:2");
+  DocId id2 = map.GetOrAssign(key2);
+  EXPECT_EQ(id2, kInvalidDocId);
+
+  // Subsequent allocation must still be rejected
+  InternedStringPtr key3 = StringInternStore::Intern("exhaustion:3");
+  DocId id3 = map.GetOrAssign(key3);
+  EXPECT_EQ(id3, kInvalidDocId);
+
+  // Verify key1 remains valid
+  EXPECT_EQ(map.GetDocId(key1), DocIdMap::kMaxAllocatableDocId);
+  EXPECT_EQ(map.GetKey(DocIdMap::kMaxAllocatableDocId), key1);
+
+  // Reset map for subsequent tests
+  map.Clear();
 }
 
 }  // namespace valkey_search

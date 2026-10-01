@@ -38,10 +38,16 @@ class DocIdMap {
       1ULL << kChunkShift;  // 65,536 elements per chunk
   static constexpr size_t kMaxChunks =
       1ULL << (32 - kChunkShift);  // 65,536 chunks (Supports up to 4.29B docs)
+  static constexpr DocId kMaxAllocatableDocId =
+      std::numeric_limits<uint32_t>::max() - 1;
 
   static DocIdMap &Instance() {
     static DocIdMap instance;
     return instance;
+  }
+
+  void SetNextIdForTesting(DocId id) {
+    next_id_.store(id, std::memory_order_relaxed);
   }
 
   DocId GetOrAssign(const InternedStringPtr &doc_key) {
@@ -62,9 +68,13 @@ class DocIdMap {
       target_shard.key_to_id.erase(iter);
       return kInvalidDocId;
     }
-    iter->second = assigned_doc_id;
 
-    EnsureChunkAllocated(assigned_doc_id);
+    if (ABSL_PREDICT_FALSE(!EnsureChunkAllocated(assigned_doc_id))) {
+      target_shard.key_to_id.erase(iter);
+      RecycleId(assigned_doc_id);
+      return kInvalidDocId;
+    }
+    iter->second = assigned_doc_id;
 
     size_t chunk_idx = assigned_doc_id >> kChunkShift;
     size_t offset = assigned_doc_id & (kChunkSize - 1);
@@ -192,10 +202,9 @@ class DocIdMap {
     absl::MutexLock alloc_lock(&alloc_mutex_);
     for (auto &chunk : chunks_) {
       InternedStringPtr *allocated_chunk =
-          chunk.load(std::memory_order_relaxed);
+          chunk.exchange(nullptr, std::memory_order_acq_rel);
       if (allocated_chunk != nullptr) {
         delete[] allocated_chunk;
-        chunk.store(nullptr, std::memory_order_relaxed);
       }
     }
 
@@ -283,13 +292,18 @@ class DocIdMap {
       return tl.active_batch->entries[--tl.active_batch->count];
     }
 
-    DocId assigned_doc_id = next_id_.fetch_add(1, std::memory_order_relaxed);
-    if (ABSL_PREDICT_FALSE(assigned_doc_id >=
-                           std::numeric_limits<uint32_t>::max() - kChunkSize)) {
-      next_id_.store(kInvalidDocId, std::memory_order_relaxed);
-      return kInvalidDocId;
+    DocId curr = next_id_.load(std::memory_order_relaxed);
+    while (true) {
+      if (ABSL_PREDICT_FALSE(curr > kMaxAllocatableDocId ||
+                             curr == kInvalidDocId)) {
+        return kInvalidDocId;
+      }
+      if (next_id_.compare_exchange_weak(curr, curr + 1,
+                                         std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+        return curr;
+      }
     }
-    return assigned_doc_id;
   }
 
   void RecycleId(DocId doc_id) {
@@ -315,10 +329,10 @@ class DocIdMap {
     tl.active_batch->entries[tl.active_batch->count++] = doc_id;
   }
 
-  void EnsureChunkAllocated(DocId doc_id) {
+  bool EnsureChunkAllocated(DocId doc_id) {
     size_t chunk_idx = doc_id >> kChunkShift;
     if (chunk_idx >= kMaxChunks) {
-      return;
+      return false;
     }
 
     if (chunks_[chunk_idx].load(std::memory_order_acquire) == nullptr) {
@@ -328,6 +342,7 @@ class DocIdMap {
         chunks_[chunk_idx].store(new_chunk, std::memory_order_release);
       }
     }
+    return true;
   }
 
   static constexpr size_t kNumShards = 256;

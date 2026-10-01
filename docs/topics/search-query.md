@@ -150,27 +150,25 @@ Unlike a KNN query it has no result count: every key within the radius matches.
 It can be combined with other matchers using AND, OR and negation.
 
 ```
-@<field-name>:[VECTOR_RANGE <radius> $<parameter>]
+@<field-name>:[VECTOR_RANGE <radius> $<parameter> [EF_RUNTIME <ef>] [AS <name>]]
 @<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$YIELD_DISTANCE_AS: <name>}
 @<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$YIELD_DISTANCE_AS: <name>; $EPSILON: <epsilon>}
 ```
 
-- `field-name` (required): A `VECTOR` field of the index, `HNSW` or `FLAT`.
-- `radius` (required): A non-negative number, or `$<name>` to take it from `PARAMS`. A key matches when its distance to the query vector is less than or equal to the radius, which can be `inf`. The distance depends on the `DISTANCE_METRIC` of the field:
-  - `L2`: the **squared** Euclidean distance.
-  - `IP`: `1 - dot(a, b)`, which is negative when the dot product is greater than 1.
-  - `COSINE`: `1 - cos(a, b)`, between 0 and 2. Because of floating-point rounding, the distance between identical vectors can be slightly greater than 0, so use a small positive radius rather than 0 to match them.
+- `field-name` (required): A `VECTOR` field of the index.
+- `radius` (required): A non-negative floating point number, or `$<name>` to take it from `PARAMS`. A key matches when its distance to the query vector is less than or equal to the radius, which can be `inf`. The distance depends on the `DISTANCE_METRIC` of the field, see [FT.CREATE](../commands/ft.create.md). For `COSINE`, use a small positive radius rather than 0 to match identical vectors.
 - `parameter` (required): A `PARAMS` name whose value is the query vector, encoded as for a KNN query (see above).
-- `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.
-- `$EPSILON: <epsilon>` (optional): Accepted on `HNSW` fields for compatibility and ignored. It must be greater than 0. It is an error on `FLAT` fields.
+- `EF_RUNTIME <ef>` (optional): Parsed and ignored.
+- `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.
+- `$EPSILON: <epsilon>` (optional): Currently accepted on `HNSW` fields and ignored. It must be greater than 0. It is an error on `FLAT` fields.
 
-The keyword and the attribute names are case-insensitive. As an extension, the distance can also be named with `AS <name>` inside the brackets, as in a KNN query: `@<field-name>:[VECTOR_RANGE <radius> $<parameter> AS <name>]`.
+The keyword and the attribute names are case-insensitive.
 
 Restrictions:
 
-- A query can contain at most one vector range matcher, and a vector range matcher cannot be used in the filter of a KNN query (Redis accepts both).
-- `EF_RUNTIME` is not supported.
-- The attributes must directly follow the closing `]`, so `(@v:[VECTOR_RANGE 0.2 $vec])=>{$YIELD_DISTANCE_AS: dist}` is an error. `$weight` is not supported, and attribute values are not substituted from `PARAMS`.
+- A query can contain at most one vector range matcher, and a vector range matcher cannot be used in the filter of a KNN query.
+- The attributes must directly follow the closing `]`, so `(@v:[VECTOR_RANGE 0.2 $vec])=>{$YIELD_DISTANCE_AS: dist}` is an error. Attribute values are not substituted from `PARAMS`.
+- `$weight` is not supported.
 
 Order and scores: a vector range query is a non-vector query, so its results are not sorted by distance, and `WITHSCORES` reports the relevance score of the other matchers of the query (0 if there are none).
 To get the closest keys first, yield the distance and sort on it, for example `SORTBY <name> ASC`.
@@ -178,6 +176,8 @@ To get the closest keys first, yield the distance and sort on it, for example `S
 Non-finite distances: a NaN or `+inf` distance, from a NaN or infinite vector component, is within no radius, not even `inf`; a `-inf` distance, which only `IP` can produce, is within every radius.
 
 `HNSW` fields: the search examines at most `search.max-nonvector-search-results-fetched` (default 100000) candidates, so the result is approximate, as for a KNN query, and can miss keys within the radius; a query that matches at least that many keys is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
+
+OR: when a key matches through another branch of a `|` (OR), its distance is still computed. It is returned under `<name>` only if the key is within the radius.
 
 Limitation: when a query combines a vector range matcher with other matchers using `|` (OR), and it matches more keys than `search.max-nonvector-search-results-fetched`, some of the matching keys can be missing from the result.
 

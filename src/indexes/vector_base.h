@@ -446,12 +446,13 @@ class VectorBase : public IndexBase {
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
   // Returns the neighbors within `radius` of `query`, unordered. FLAT scans
-  // every vector. HNSW runs an approximate KNN search for up to
-  // search.max-nonvector-search-results-fetched candidates, so it can miss
-  // keys; it falls back to SearchRangeExhaustive when the fetch fills the cap
-  // with the farthest candidate still in range.
+  // every vector exhaustively. HNSW uses EpsilonSearchStopCondition with a
+  // shell of radius*(1+epsilon) to bridge connectivity gaps near the ball
+  // boundary; shell nodes are traversed but not emitted.
+  // `epsilon` defaults to 0.0f so existing non-VR callers are unaffected.
   virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
+      float epsilon = 0.0f,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
 
   // Distance and internal label for `key`, or an error if untracked. Backs

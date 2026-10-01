@@ -156,6 +156,7 @@ class VectorHNSW : public VectorType<T> {
 
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
+      float epsilon = 0.0f,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
       ABSL_LOCKS_EXCLUDED(resize_mutex_) override;
 

@@ -89,8 +89,11 @@ class VectorFlat : public VectorType<T> {
 
   // Lock-free search optimization, as for Search: reads the FLAT store and the
   // tracked-key maps under the phase lock only.
+  // `epsilon` is accepted for interface uniformity with VectorHNSW but ignored:
+  // the linear scan is already exhaustive and has no need for shell expansion.
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
+      float epsilon = 0.0f,
       std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 

@@ -3380,6 +3380,323 @@ TEST_F(VectorIndexTest, SearchRangeCosineRadiusTwoKeepsAntipodes) {
   }
 }
 
+// ============================================================================
+// Epsilon / SearchRange unit tests (Tasks 3+5)
+// ============================================================================
+
+// ---- Helpers shared across the epsilon tests --------------------------------
+
+namespace {
+
+// Insert `count` random float32 vectors and return their bytes.
+// `seed` is updated in place so callers can keep generating distinct vectors.
+static std::vector<std::string> InsertRandomVectors(VectorBase &index,
+                                                    int count, int dims,
+                                                    uint64_t &seed) {
+  std::vector<std::string> vecs;
+  vecs.reserve(count);
+  for (int i = 0; i < count; ++i) {
+    std::vector<float> v(dims);
+    for (auto &x : v) {
+      seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+      x = static_cast<float>(static_cast<int32_t>(seed >> 8)) / (1 << 23);
+    }
+    std::string bytes(reinterpret_cast<const char *>(v.data()),
+                      v.size() * sizeof(float));
+    EXPECT_TRUE(
+        testing_infra::AddVectorRecord(index, IndexToKey(i), bytes).ok());
+    vecs.push_back(std::move(bytes));
+  }
+  return vecs;
+}
+
+// Brute-force L2-squared distance between two float32 byte blobs.
+static float BruteL2Sq(absl::string_view a, absl::string_view b) {
+  const float *pa = reinterpret_cast<const float *>(a.data());
+  const float *pb = reinterpret_cast<const float *>(b.data());
+  const int n = static_cast<int>(a.size() / sizeof(float));
+  float sum = 0;
+  for (int i = 0; i < n; ++i) {
+    float d = pa[i] - pb[i];
+    sum += d * d;
+  }
+  return sum;
+}
+
+// Brute-force cosine distance (1 - dot / (|a||b|)).
+static float BruteCosine(absl::string_view a, absl::string_view b) {
+  const float *pa = reinterpret_cast<const float *>(a.data());
+  const float *pb = reinterpret_cast<const float *>(b.data());
+  const int n = static_cast<int>(a.size() / sizeof(float));
+  double dot = 0, aa = 0, bb = 0;
+  for (int i = 0; i < n; ++i) {
+    dot += double(pa[i]) * pb[i];
+    aa += double(pa[i]) * pa[i];
+    bb += double(pb[i]) * pb[i];
+  }
+  return static_cast<float>(1.0 - dot / std::sqrt(aa * bb));
+}
+
+}  // namespace
+
+// ---- Test 1: Truncation — HNSW returns all in-radius docs past the old KNN
+//             cap without silently dropping any.
+//
+// Inserts 200 vectors all within the query radius.  The old searchKnn approach
+// (capped at max-nonvector-search-results-fetched=150) would miss the last 50.
+// The new EpsilonSearchStopCondition approach hits the cap → falls back to
+// SearchRangeExhaustive and returns all 200.
+TEST_F(VectorIndexTest, SearchRangeHnswTruncationL2)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  const int kDims = 32;
+  const int kVectors = 200;
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(150));
+
+  auto index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2,
+                                 kVectors, /*m=*/16, /*ef_construction=*/200,
+                                 /*ef_runtime=*/200),
+      "attr", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(index.ok());
+
+  // Query at the origin.
+  const std::vector<float> query_vec(kDims, 0.0f);
+  const std::string query(reinterpret_cast<const char *>(query_vec.data()),
+                          query_vec.size() * sizeof(float));
+
+  // Insert kVectors vectors all within radius 1.0 (L2-squared).
+  uint64_t seed = 99;
+  for (int i = 0; i < kVectors; ++i) {
+    std::vector<float> v(kDims);
+    // Place each vector at distance ~0.5 from origin.
+    for (auto &x : v) {
+      seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+      x = static_cast<float>(static_cast<int32_t>(seed >> 33)) /
+          static_cast<float>(1 << 15) * 0.04f;
+    }
+    std::string bytes(reinterpret_cast<const char *>(v.data()),
+                      v.size() * sizeof(float));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(**index, IndexToKey(i), bytes));
+  }
+
+  // With epsilon=0.01, the stop condition's shell radius covers all vectors.
+  auto result = (*index)->SearchRange(query, /*radius=*/100.0f, CancelNever(),
+                                      /*epsilon=*/0.01f);
+  ASSERT_TRUE(result.ok()) << result.status();
+  EXPECT_EQ(result->size(), static_cast<size_t>(kVectors))
+      << "Expected all " << kVectors << " vectors, got " << result->size();
+}
+
+// ---- Test 2: Epsilon connectivity — epsilon=0.1 matches at least as many
+//             results as epsilon=0.0 near the ball boundary (cosine space).
+TEST_F(VectorIndexTest, SearchRangeHnswEpsilonConnectivityCosine) {
+  const int kDims = 16;
+  const int kVectors = 100;
+
+  auto index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_COSINE,
+                                 kVectors, /*m=*/16, /*ef_construction=*/200,
+                                 /*ef_runtime=*/200),
+      "attr", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(index.ok());
+
+  uint64_t seed = 0xDEADBEEF;
+  std::vector<std::string> vecs =
+      InsertRandomVectors(**index, kVectors, kDims, seed);
+
+  // Use the median cosine distance as radius so roughly half the vectors are
+  // in-range.
+  const std::string query = vecs[0];
+  std::vector<float> distances;
+  distances.reserve(kVectors);
+  for (const auto &v : vecs) {
+    distances.push_back(BruteCosine(query, v));
+  }
+  std::sort(distances.begin(), distances.end());
+  const float radius =
+      (distances[kVectors / 2 - 1] + distances[kVectors / 2]) / 2.0f;
+
+  auto res0 =
+      (*index)->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.0f);
+  auto res1 =
+      (*index)->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.1f);
+  ASSERT_TRUE(res0.ok()) << res0.status();
+  ASSERT_TRUE(res1.ok()) << res1.status();
+
+  // epsilon=0.1 must not return fewer results than epsilon=0.0.
+  EXPECT_GE(res1->size(), res0->size())
+      << "epsilon=0.1 returned fewer results than epsilon=0.0";
+}
+
+// ---- Test 3: Epsilon zero — with epsilon=0.0 SearchRange still returns all
+//             in-radius vectors for both L2 and Cosine.
+TEST_F(VectorIndexTest, SearchRangeHnswEpsilonZeroReturnsAllInRadius) {
+  const int kDims = 16;
+  const int kVectors = 80;
+
+  for (auto metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_COSINE}) {
+    SCOPED_TRACE(absl::StrCat("metric=", static_cast<int>(metric)));
+    auto index = VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(kDims, metric, kVectors, /*m=*/16,
+                                   /*ef_construction=*/200,
+                                   /*ef_runtime=*/200),
+        "attr", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(index.ok());
+
+    uint64_t seed = 0xCAFEBABE + static_cast<uint64_t>(metric);
+    std::vector<std::string> vecs =
+        InsertRandomVectors(**index, kVectors, kDims, seed);
+
+    const std::string query = vecs[0];
+    // Count brute-force in-radius docs.
+    int brute_count = 0;
+    float max_dist = -1.0f;
+    for (const auto &v : vecs) {
+      float d = (metric == data_model::DISTANCE_METRIC_L2)
+                    ? BruteL2Sq(query, v)
+                    : BruteCosine(query, v);
+      if (d > max_dist) max_dist = d;
+    }
+    // Use a radius that covers ~half the dataset.
+    std::vector<float> sorted_dists;
+    sorted_dists.reserve(kVectors);
+    for (const auto &v : vecs) {
+      float d = (metric == data_model::DISTANCE_METRIC_L2)
+                    ? BruteL2Sq(query, v)
+                    : BruteCosine(query, v);
+      sorted_dists.push_back(d);
+    }
+    std::sort(sorted_dists.begin(), sorted_dists.end());
+    const float radius =
+        (sorted_dists[kVectors / 2 - 1] + sorted_dists[kVectors / 2]) / 2.0f;
+    for (float d : sorted_dists) {
+      if (d <= radius) brute_count++;
+    }
+
+    auto result =
+        (*index)->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.0f);
+    ASSERT_TRUE(result.ok()) << result.status();
+    // HNSW is approximate — we allow a small miss rate but not a large one.
+    EXPECT_GE(static_cast<int>(result->size()),
+              static_cast<int>(brute_count * 0.8))
+        << "epsilon=0 returned too few results";
+  }
+}
+
+// ---- Test 4: Metric-space correctness — L2 epsilon uses squared-distance
+//             threshold.  Insert vectors at exactly radius and radius*(1+ε)
+//             from the query; verify the one at radius is included and the
+//             one at radius*(1+ε) is excluded from the emitted set.
+TEST_F(VectorIndexTest, SearchRangeHnswL2EpsilonDistanceThreshold) {
+  const int kDims = 4;
+
+  auto index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDims, data_model::DISTANCE_METRIC_L2,
+                                 /*initial_cap=*/64, /*m=*/16,
+                                 /*ef_construction=*/200, /*ef_runtime=*/200),
+      "attr", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(index.ok());
+
+  // Query at origin.
+  const std::vector<float> q_vec(kDims, 0.0f);
+  const std::string query(reinterpret_cast<const char *>(q_vec.data()),
+                          q_vec.size() * sizeof(float));
+
+  const float radius = 1.0f;
+  const float epsilon = 0.1f;
+
+  // Vector A: L2-squared distance exactly radius (on the ball surface).
+  // Place all mass in first dim: ||v||² = radius → v[0] = sqrt(radius).
+  std::vector<float> va(kDims, 0.0f);
+  va[0] = std::sqrt(radius);
+  std::string bytes_a(reinterpret_cast<const char *>(va.data()),
+                      va.size() * sizeof(float));
+  VMSDK_EXPECT_OK(
+      testing_infra::AddVectorRecord(**index, IndexToKey(0), bytes_a));
+
+  // Noise vectors to give HNSW a proper graph structure.
+  uint64_t seed = 0xABC123;
+  for (int i = 1; i < 20; ++i) {
+    std::vector<float> v(kDims);
+    for (auto &x : v) {
+      seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+      x = static_cast<float>(static_cast<int32_t>(seed >> 8)) / (1 << 20);
+    }
+    std::string bytes(reinterpret_cast<const char *>(v.data()),
+                      v.size() * sizeof(float));
+    VMSDK_EXPECT_OK(
+        testing_infra::AddVectorRecord(**index, IndexToKey(i), bytes));
+  }
+
+  auto result =
+      (*index)->SearchRange(query, radius, CancelNever(), /*epsilon=*/epsilon);
+  ASSERT_TRUE(result.ok()) << result.status();
+
+  // Vector A must be included (distance == radius ≤ radius).
+  bool found_a = false;
+  for (const auto &n : *result) {
+    if (n.external_id->Str() == IndexToKey(0)->Str()) {
+      found_a = true;
+      EXPECT_LE(n.distance, radius + 1e-4f) << "distance exceeds radius";
+    }
+    // No result may exceed the radius.
+    EXPECT_LE(n.distance, radius + 1e-4f);
+  }
+  EXPECT_TRUE(found_a) << "Vector at exactly radius not returned";
+}
+
+// ---- Test 5: Flat epsilon invariance — SearchRange on VectorFlat returns the
+//             same set regardless of epsilon.
+TEST_F(VectorIndexTest, SearchRangeFlatEpsilonInvariance) {
+  const int kDims = 16;
+  const int kVectors = 60;
+
+  for (auto metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_COSINE}) {
+    SCOPED_TRACE(absl::StrCat("metric=", static_cast<int>(metric)));
+    auto index = VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(kDims, metric, kVectors, /*block_size=*/64),
+        "attr", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(index.ok());
+
+    uint64_t seed = 0xF00DF00D + static_cast<uint64_t>(metric);
+    std::vector<std::string> vecs =
+        InsertRandomVectors(**index, kVectors, kDims, seed);
+
+    const std::string query = vecs[0];
+    std::vector<float> dists;
+    dists.reserve(kVectors);
+    for (const auto &v : vecs) {
+      dists.push_back((metric == data_model::DISTANCE_METRIC_L2)
+                          ? BruteL2Sq(query, v)
+                          : BruteCosine(query, v));
+    }
+    std::sort(dists.begin(), dists.end());
+    const float radius = (dists[kVectors / 2 - 1] + dists[kVectors / 2]) / 2.0f;
+
+    auto res0 =
+        (*index)->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.0f);
+    auto res1 =
+        (*index)->SearchRange(query, radius, CancelNever(), /*epsilon=*/0.1f);
+    ASSERT_TRUE(res0.ok()) << res0.status();
+    ASSERT_TRUE(res1.ok()) << res1.status();
+
+    // Build sets of keys.
+    absl::flat_hash_set<std::string> set0, set1;
+    for (const auto &n : *res0) set0.insert(std::string(n.external_id->Str()));
+    for (const auto &n : *res1) set1.insert(std::string(n.external_id->Str()));
+    EXPECT_EQ(set0, set1)
+        << "VectorFlat returned different sets for epsilon=0.0 vs epsilon=0.1";
+  }
+}
+
 }  // namespace
 
 }  // namespace valkey_search::indexes

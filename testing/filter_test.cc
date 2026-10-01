@@ -1947,13 +1947,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "Unexpected argument 'UNKNOWN_PARAM'",
         },
         {
-            .test_name = "vector_range_ef_runtime_unsupported",
+            .test_name = "vector_range_ef_runtime_ignored",
             .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 100]",
-            // EF_RUNTIME is not supported for VECTOR_RANGE queries — it is
-            // rejected with a clear error rather than silently ignored.
-            .create_success = false,
-            .create_expected_error_message =
-                "EF_RUNTIME is not supported for VECTOR_RANGE queries",
+            .create_success = true,
         },
         {
             .test_name = "vector_range_empty_yield_distance_as",

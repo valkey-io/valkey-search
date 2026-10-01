@@ -1334,8 +1334,7 @@ class TestVectorRange(ValkeySearchTestCaseBase):
 
     def test_optional_param_ef_runtime(self):
         """
-        EF_RUNTIME is not supported for HNSW Vector Range and is rejected
-        with a clear error rather than silently ignored.
+        EF_RUNTIME is parsed and ignored for Vector Range.
         Req: 1.3
         """
         client = self.server.get_new_client()
@@ -1343,13 +1342,13 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         self._load_vector_data(client)
 
         query_blob = float_to_bytes(QUERY_VEC)
-        with pytest.raises(ResponseError, match="EF_RUNTIME is not supported"):
-            self._search(
-                client, "idx",
-                "@vec:[VECTOR_RANGE 5 $blob EF_RUNTIME 100]",
-                "PARAMS", "2", "blob", query_blob,
-                "NOCONTENT",
-            )
+        result = self._search(
+            client, "idx",
+            "@vec:[VECTOR_RANGE 5 $blob EF_RUNTIME 100]",
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert parse_result_keys(result) == {"doc:0", "doc:1", "doc:2"}
 
     # =================================================================
     # 38. Optional params: AS (alias for distance field)

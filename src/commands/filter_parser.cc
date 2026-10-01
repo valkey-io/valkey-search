@@ -410,7 +410,7 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   // At entry: "@<attribute_alias>:[VECTOR_RANGE" has already been consumed by
   // ParseExpression. We now parse the remainder of the bracket contents:
   //   <radius> $<blob_param> [AS <name>] ]
-  // (EF_RUNTIME is recognized only to reject it), followed by optional suffix
+  // (EF_RUNTIME is parsed and ignored), followed by optional suffix
   // query attributes: ]=>{$yield_distance_as: ...}
   auto index = index_schema_.GetIndex(attribute_alias);
   if (!index.ok()) {
@@ -466,15 +466,11 @@ FilterParser::ParseVectorRangePredicate(const std::string& attribute_alias) {
   while (!IsEnd() && Peek() != ']') {
     // Try to match known optional parameter keywords
     if (MatchInsensitive("EF_RUNTIME")) {
-      // EF_RUNTIME is a KNN beam-width knob (the HNSW candidate-list size for a
-      // top-k search). VECTOR_RANGE does not use it: HNSW SearchRange sets ef
-      // from search.max-nonvector-search-results-fetched. Reject it rather
-      // than imply a tuning effect that does not exist.
+      // Parsed and ignored: HNSW SearchRange sets ef from
+      // search.max-nonvector-search-results-fetched.
       VMSDK_ASSIGN_OR_RETURN(auto ef_value,
                              ParseToken("]", "EF_RUNTIME argument is missing"));
       (void)ef_value;
-      return absl::InvalidArgumentError(
-          "EF_RUNTIME is not supported for VECTOR_RANGE queries");
     } else if (MatchInsensitive("AS")) {
       VMSDK_ASSIGN_OR_RETURN(auto as_name,
                              ParseToken("]", "AS argument is missing"));

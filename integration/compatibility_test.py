@@ -730,7 +730,7 @@ def mark_as_xpassed(testname):
     correct_answers += 1
     xpassed_tests[testname] = xpassed_tests.get(testname, 0) + 1
 
-_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.ALIASLIST", "FT.INFO", "FT.DROPINDEX", "FT._LIST"}
+_SIMPLE_COMPARE_CMDS = {"FT.ALIASADD", "FT.ALIASDEL", "FT.ALIASUPDATE", "FT.ALIASLIST", "FT.INFO", "FT.DROPINDEX", "FT._LIST", "FT.CREATE"}
 
 def _is_simple_compare_cmd(cmd):
     """Return True if cmd should use direct equality comparison (not search/aggregate unpacking)."""
@@ -889,7 +889,7 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
     # Replay alias, index-mutation, and simple-compare commands via primary 0.
     # These commands can't be reliably slot-routed by the cluster client.
     if _is_alias_mutation_cmd(expected["cmd"]) or (
-        expected["cmd"] and expected["cmd"][0].upper() in ("FT.DROPINDEX", "FT.INFO", "FT._LIST")
+        expected["cmd"] and expected["cmd"][0].upper() in ("FT.CREATE", "FT.DROPINDEX", "FT.INFO", "FT._LIST")
     ):
         result = {}
         result["cmd"] = expected["cmd"]

@@ -8,6 +8,8 @@ set(VMSDKLIB_SRCS
     ${CMAKE_CURRENT_LIST_DIR}/concurrency.h
     ${CMAKE_CURRENT_LIST_DIR}/debug.cc
     ${CMAKE_CURRENT_LIST_DIR}/debug.h
+    ${CMAKE_CURRENT_LIST_DIR}/epoch_reclamation.cc
+    ${CMAKE_CURRENT_LIST_DIR}/epoch_reclamation.h
     ${CMAKE_CURRENT_LIST_DIR}/info.h
     ${CMAKE_CURRENT_LIST_DIR}/info.cc
     ${CMAKE_CURRENT_LIST_DIR}/utils.cc

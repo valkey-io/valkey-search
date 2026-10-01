@@ -1479,6 +1479,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
         << vmsdk::config::RedactIfNeeded(name_);
     DrainMutationQueue(detached_ctx_.get());
   }
+  // A foreground save (SAVE, SHUTDOWN, DEBUG RELOAD) runs while writer threads
+  // may still apply queued mutations. Holding the read phase excludes them, so
+  // the save never reads a vector being replaced or a neighbor list being
+  // rewritten. A forked child (BGSAVE) has no writer threads.
+  std::optional<vmsdk::ReaderMutexLock> time_slice_lock;
+  if (!is_bgsave) {
+    time_slice_lock.emplace(&time_sliced_mutex_);
+  }
 
   VMSDK_LOG(NOTICE, nullptr)
       << "Starting RDB save for index schema: "

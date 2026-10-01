@@ -72,7 +72,6 @@ class TestSortKeyPrefixCompatibility(BaseCompatibilityTest):
         # Numeric re-serialization (issue #1353 item 6): sort keys and RETURN
         # values come from the parsed double, not the stored bytes.
         self.setup_data(SORTKEY_NUMERIC_FORMAT_DATA_SET, key_type)
-        time.sleep(0.5)
         limit = str(len(SORTKEY_NUMERIC_FORMAT_VALUES))
         self.check("FT.SEARCH", f"{key_type}_idx1", "@m:{all}",
                    "SORTBY", "p", "ASC", "WITHSORTKEYS",

@@ -1285,6 +1285,14 @@ SORTKEY_NUMERIC_FORMAT_VALUES = [
 _parsed = [float(v) for v in SORTKEY_NUMERIC_FORMAT_VALUES]
 assert _parsed == sorted(set(_parsed)), "fixture must be strictly ascending"
 
+
+def _json_number(spelling):
+    """The fixture value as a JSON number: int when exact, else float."""
+    try:
+        return int(spelling)
+    except ValueError:
+        return float(spelling)
+
 # Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
 SORTKEY_NIL_DATA_SET = "sortkey nil"
 
@@ -1308,15 +1316,28 @@ def compute_sortkey_data_sets():
             ],
         },
         SORTKEY_NUMERIC_FORMAT_DATA_SET: {
-            # First doc also carries tag "solo" for the single-match query.
+            # First doc also carries tag s=solo for the single-match query.
             SETS_KEY("hash"): [
-                (f"hash:nfm{i}", {"m": "all,solo" if i == 1 else "all",
+                (f"hash:nfm{i}", {"m": "all", "s": "solo" if i == 1 else "none",
                                   "p": v, "q": v})
                 for i, v in enumerate(SORTKEY_NUMERIC_FORMAT_VALUES, 1)
             ],
             CREATES_KEY("hash"): [
                 "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
-                "m TAG p NUMERIC SORTABLE q NUMERIC"
+                "m TAG s TAG p NUMERIC SORTABLE q NUMERIC"
+            ],
+            # JSON numbers: the spelling is the serializer's, so only the
+            # parsed value is under test; -0 is dropped (valkey-json stores 0).
+            SETS_KEY("json"): [
+                (f"json:nfm{i}", {"m": "all", "s": "solo" if i == 1 else "none",
+                                  "p": _json_number(v), "q": _json_number(v)})
+                for i, v in enumerate(
+                    (v for v in SORTKEY_NUMERIC_FORMAT_VALUES if v != "-0"), 1)
+            ],
+            CREATES_KEY("json"): [
+                "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+                "$.m AS m TAG $.s AS s TAG $.p AS p NUMERIC SORTABLE "
+                "$.q AS q NUMERIC"
             ],
         },
         SORTKEY_NIL_DATA_SET: {

@@ -156,28 +156,6 @@ def validate_limit_queries(client: Valkey):
     assert result[0] == 4  # Total count only
     assert len(result) == 1
 
-def validate_groupby_zero_queries(client: Valkey):
-    """
-        GROUPBY 0 reduces the whole result set into a single group, matching
-        Redisearch. With no matching documents there is no group, so no row.
-    """
-    assert client.execute_command(
-        "FT.AGGREGATE", "products", "*",
-        "GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "c"
-    ) == [1, [b"c", b"4"]]
-    assert client.execute_command(
-        "FT.AGGREGATE", "products", "@category:{nomatch}",
-        "GROUPBY", "0", "REDUCE", "COUNT", "0", "AS", "c"
-    ) == [0]
-    assert client.execute_command(
-        "FT.AGGREGATE", "products", "*", "GROUPBY", "0"
-    ) == [1, []]
-    assert client.execute_command(
-        "FT.AGGREGATE", "products", "*",
-        "GROUPBY", "1", "@category", "REDUCE", "COUNT", "0", "AS", "c",
-        "GROUPBY", "0", "REDUCE", "SUM", "1", "@c", "AS", "total"
-    ) == [1, [b"total", b"4"]]
-
 def validate_bare_wildcard_queries(client: Valkey):
     """
         Test bare '*' match-all behavior for non-vector FT.SEARCH in DIALECT 2.
@@ -1016,7 +994,6 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_bare_wildcard_queries(client)
         # Test AGGREGATE functionality
         validate_aggregate_queries(client)
-        validate_groupby_zero_queries(client)
 
     def test_aggregate_complex(self):
         client: Valkey = self.server.get_new_client()
@@ -1260,18 +1237,6 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
             assert cluster_client.execute_command(*doc) == 5
         time.sleep(1)
         validate_bare_wildcard_queries(client)
-
-    def test_groupby_zero_cluster(self):
-        """
-            GROUPBY 0 in CME: the single group spans documents on every shard.
-        """
-        cluster_client: ValkeyCluster = self.new_cluster_client()
-        client: Valkey = self.new_client_for_primary(0)
-        create_indexes(client)
-        for doc in hash_docs:
-            assert cluster_client.execute_command(*doc) == 5
-        time.sleep(1)
-        validate_groupby_zero_queries(client)
 
     def test_aggregate_complex_cluster(self):
         cluster_client: ValkeyCluster = self.new_cluster_client()

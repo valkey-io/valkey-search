@@ -266,7 +266,7 @@ StringInternStore::Stats StringInternStore::GetStats() const {
       auto allocated = str.RawPtr()->Allocated();
       auto refcount =
           str.RefCount();  // This is volatile even while holding the lock
-      if (str->IsInline()) {
+      if (str.RawPtr()->IsInline()) {
         stats.inline_total_stats_.count_++;
         stats.inline_total_stats_.bytes_ += size;
         stats.inline_total_stats_.allocated_ += allocated;

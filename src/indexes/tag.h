@@ -130,8 +130,7 @@ class Tag : public IndexBase {
 
   class EntriesFetcher : public EntriesFetcherBase {
    public:
-    EntriesFetcher(SlotsVector matched_slots,
-                   ExtrasVector extras, size_t size)
+    EntriesFetcher(SlotsVector matched_slots, ExtrasVector extras, size_t size)
         : size_(size),
           matched_slots_(std::move(matched_slots)),
           extras_(std::move(extras)) {}

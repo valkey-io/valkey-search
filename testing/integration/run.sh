@@ -138,6 +138,10 @@ function configure() {
             build_flag="--debug"
         fi
         ${WORKSPACE_HOME}/build.sh ${build_flag}
+        if [ ! -f "${VALKEY_SEARCH_PATH}" ]; then
+            printf "\n${RED}Error: ${VALKEY_SEARCH_PATH} was not produced by build.sh${RESET}\n\n" >&2
+            exit 1
+        fi
     else
         printf "... ${GREEN}found${RESET}\n"
     fi

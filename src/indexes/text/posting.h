@@ -50,31 +50,35 @@ struct PostingChunk {
 // ============================================================================
 // Variable-Byte (Varint / LEB128) Bit Manipulation Constants and Macros
 // ============================================================================
-// The posting list encodes integer sequences (DocId, position counts, delta-encoded
-// positions, and field bitmasks) using variable-length byte encoding (Varint/LEB128).
+// The posting list encodes integer sequences (DocId, position counts,
+// delta-encoded positions, and field bitmasks) using variable-length byte
+// encoding (Varint/LEB128).
 //
 // Byte Layout:
 //   - Bit 7 (MSB): Continuation flag.
 //       1 = More bytes follow for this integer.
 //       0 = Terminal (last) byte of this integer.
-//   - Bits 0..6: 7-bit payload data (stored in little-endian order, 7 bits per byte).
+//   - Bits 0..6: 7-bit payload data (stored in little-endian order, 7 bits per
+//   byte).
 // ============================================================================
 
-#define VARINT_DATA_MASK        0x7FU  // 0b01111111: extracts 7 bits of payload data
-#define VARINT_CONTINUE_BIT     0x80U  // 0b10000000: flag indicating continuation byte
-#define VARINT_BITS_PER_BYTE    7U     // Number of data bits per byte
+#define VARINT_DATA_MASK 0x7FU  // 0b01111111: extracts 7 bits of payload data
+#define VARINT_CONTINUE_BIT \
+  0x80U  // 0b10000000: flag indicating continuation byte
+#define VARINT_BITS_PER_BYTE 7U  // Number of data bits per byte
 
 // Macro helpers for varint byte encoding and inspection:
-#define VARINT_ENCODE_MORE(val) (static_cast<uint8_t>(((val) & VARINT_DATA_MASK) | VARINT_CONTINUE_BIT))
+#define VARINT_ENCODE_MORE(val) \
+  (static_cast<uint8_t>(((val) & VARINT_DATA_MASK) | VARINT_CONTINUE_BIT))
 #define VARINT_ENCODE_LAST(val) (static_cast<uint8_t>((val) & VARINT_DATA_MASK))
-#define VARINT_IS_LAST(byte)    (((byte) & VARINT_CONTINUE_BIT) == 0)
-#define VARINT_PAYLOAD(byte)    (static_cast<uint64_t>((byte) & VARINT_DATA_MASK))
+#define VARINT_IS_LAST(byte) (((byte) & VARINT_CONTINUE_BIT) == 0)
+#define VARINT_PAYLOAD(byte) (static_cast<uint64_t>((byte) & VARINT_DATA_MASK))
 
 // Fast-path bit-shift constants for branch-predicted varint decoding:
-#define VARINT_SHIFT_BYTE_1     7U
-#define VARINT_SHIFT_BYTE_2     14U
-#define VARINT_SHIFT_BYTE_3     21U
-#define VARINT_SHIFT_BYTE_4     28U
+#define VARINT_SHIFT_BYTE_1 7U
+#define VARINT_SHIFT_BYTE_2 14U
+#define VARINT_SHIFT_BYTE_3 21U
+#define VARINT_SHIFT_BYTE_4 28U
 
 struct BlockSkipEntry {
   DocId max_doc_id{0};
@@ -115,8 +119,9 @@ struct EncodedDocId {
 static constexpr size_t kBlockSkipInterval = 64;
 
 // Reads a 64-bit unsigned integer from a varint-encoded byte stream.
-// Returns the number of bytes consumed (or 0 if buffer is malformed or exhausted).
-// Branch-predicted fast-paths handle 1-byte, 2-byte, and 3-byte integers.
+// Returns the number of bytes consumed (or 0 if buffer is malformed or
+// exhausted). Branch-predicted fast-paths handle 1-byte, 2-byte, and 3-byte
+// integers.
 static inline size_t ReadVarint(const uint8_t *src, size_t max_len,
                                 uint64_t &val) {
   if (ABSL_PREDICT_TRUE(max_len > 0)) {
@@ -152,6 +157,10 @@ static inline size_t ReadVarint(const uint8_t *src, size_t max_len,
   size_t idx = 0;
   while (idx < max_len && shift < 64) {
     uint8_t byte = src[idx++];
+    if (shift == 63 && byte > 1) {
+      val = 0;
+      return 0;
+    }
     val |= VARINT_PAYLOAD(byte) << shift;
     if (VARINT_IS_LAST(byte)) {
       return idx;

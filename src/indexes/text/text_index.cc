@@ -257,8 +257,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       }
       bool is_new_word = !existing;
 
-      updated_target =
-          AddKeyToPostings(std::move(existing), enc_doc_id, pos_map, &metadata_);
+      updated_target = AddKeyToPostings(std::move(existing), enc_doc_id,
+                                        pos_map, &metadata_);
 
       if (is_new_word) {
         absl::WriterMutexLock tree_lock(&text_index_mutex_);

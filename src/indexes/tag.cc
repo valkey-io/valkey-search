@@ -340,8 +340,7 @@ std::optional<absl::string_view> Tag::GetRawTagString(
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
 
 Tag::EntriesFetcherIterator::EntriesFetcherIterator(
-    const Tag::SlotsVector &slots,
-    const Tag::ExtrasVector &extras)
+    const Tag::SlotsVector &slots, const Tag::ExtrasVector &extras)
     : slots_(slots), extras_(extras) {
   AdvanceToNextNonEmpty();
 }

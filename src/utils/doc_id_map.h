@@ -38,10 +38,16 @@ class DocIdMap {
       1ULL << kChunkShift;  // 65,536 elements per chunk
   static constexpr size_t kMaxChunks =
       1ULL << (32 - kChunkShift);  // 65,536 chunks (Supports up to 4.29B docs)
+  static constexpr DocId kMaxAllocatableDocId =
+      std::numeric_limits<uint32_t>::max() - 1;
 
   static DocIdMap &Instance() {
     static DocIdMap instance;
     return instance;
+  }
+
+  void SetNextIdForTesting(DocId id) {
+    next_id_.store(id, std::memory_order_relaxed);
   }
 
   DocId GetOrAssign(const InternedStringPtr &doc_key) {
@@ -62,9 +68,13 @@ class DocIdMap {
       target_shard.key_to_id.erase(iter);
       return kInvalidDocId;
     }
-    iter->second = assigned_doc_id;
 
-    EnsureChunkAllocated(assigned_doc_id);
+    if (ABSL_PREDICT_FALSE(!EnsureChunkAllocated(assigned_doc_id))) {
+      target_shard.key_to_id.erase(iter);
+      RecycleId(assigned_doc_id);
+      return kInvalidDocId;
+    }
+    iter->second = assigned_doc_id;
 
     size_t chunk_idx = assigned_doc_id >> kChunkShift;
     size_t offset = assigned_doc_id & (kChunkSize - 1);
@@ -154,8 +164,11 @@ class DocIdMap {
     return global_free_batches_count_.load(std::memory_order_relaxed);
   }
 
-  void PushBatchToGlobal(FreeBatch *batch) {
-    if (!batch || batch->count == 0) {
+  void PushBatchToGlobal(FreeBatch *batch, uint64_t batch_gen = 0) {
+    if (!batch || batch->count == 0 ||
+        shutting_down_.load(std::memory_order_acquire) ||
+        (batch_gen != 0 &&
+         batch_gen != generation_.load(std::memory_order_acquire))) {
       delete batch;
       return;
     }
@@ -192,10 +205,9 @@ class DocIdMap {
     absl::MutexLock alloc_lock(&alloc_mutex_);
     for (auto &chunk : chunks_) {
       InternedStringPtr *allocated_chunk =
-          chunk.load(std::memory_order_relaxed);
+          chunk.exchange(nullptr, std::memory_order_acq_rel);
       if (allocated_chunk != nullptr) {
         delete[] allocated_chunk;
-        chunk.store(nullptr, std::memory_order_relaxed);
       }
     }
 
@@ -207,24 +219,24 @@ class DocIdMap {
       curr = nxt;
     }
     global_free_batches_count_.store(0, std::memory_order_relaxed);
-
-    ThreadLocalCache &tl = GetThreadLocalCache();
-    if (tl.active_batch) {
-      tl.active_batch->count = 0;
-    }
-    if (tl.spare_batch) {
-      tl.spare_batch->count = 0;
-    }
+    generation_.fetch_add(1, std::memory_order_acq_rel);
 
     next_id_.store(1, std::memory_order_relaxed);
     active_doc_count_.store(0, std::memory_order_relaxed);
   }
 
-  ~DocIdMap() { Clear(); }
+  ~DocIdMap() {
+    shutting_down_.store(true, std::memory_order_release);
+    Clear();
+  }
 
  private:
   DocIdMap()
-      : next_id_(1), active_doc_count_(0), global_free_batches_count_(0) {
+      : next_id_(1),
+        active_doc_count_(0),
+        global_free_batches_count_(0),
+        generation_(1),
+        shutting_down_(false) {
     for (auto &chunk : chunks_) {
       chunk.store(nullptr, std::memory_order_relaxed);
     }
@@ -234,16 +246,29 @@ class DocIdMap {
   struct ThreadLocalCache {
     FreeBatch *active_batch = nullptr;
     FreeBatch *spare_batch = nullptr;
+    uint64_t generation = 0;
 
     ThreadLocalCache() {
       active_batch = new FreeBatch();
       spare_batch = new FreeBatch();
     }
 
+    void SyncGeneration(uint64_t current_gen) {
+      if (ABSL_PREDICT_FALSE(generation != current_gen)) {
+        if (active_batch) {
+          active_batch->count = 0;
+        }
+        if (spare_batch) {
+          spare_batch->count = 0;
+        }
+        generation = current_gen;
+      }
+    }
+
     ~ThreadLocalCache() {
       if (active_batch) {
         if (active_batch->count > 0) {
-          DocIdMap::Instance().PushBatchToGlobal(active_batch);
+          DocIdMap::Instance().PushBatchToGlobal(active_batch, generation);
         } else {
           delete active_batch;
         }
@@ -251,7 +276,7 @@ class DocIdMap {
       }
       if (spare_batch) {
         if (spare_batch->count > 0) {
-          DocIdMap::Instance().PushBatchToGlobal(spare_batch);
+          DocIdMap::Instance().PushBatchToGlobal(spare_batch, generation);
         } else {
           delete spare_batch;
         }
@@ -267,6 +292,7 @@ class DocIdMap {
 
   DocId AllocateOrRecycleDocId() {
     ThreadLocalCache &tl = GetThreadLocalCache();
+    tl.SyncGeneration(generation_.load(std::memory_order_acquire));
     if (tl.active_batch->count > 0) {
       return tl.active_batch->entries[--tl.active_batch->count];
     }
@@ -283,17 +309,24 @@ class DocIdMap {
       return tl.active_batch->entries[--tl.active_batch->count];
     }
 
-    DocId assigned_doc_id = next_id_.fetch_add(1, std::memory_order_relaxed);
-    if (ABSL_PREDICT_FALSE(assigned_doc_id >=
-                           std::numeric_limits<uint32_t>::max() - kChunkSize)) {
-      next_id_.store(kInvalidDocId, std::memory_order_relaxed);
-      return kInvalidDocId;
+    DocId curr = next_id_.load(std::memory_order_relaxed);
+    while (true) {
+      if (ABSL_PREDICT_FALSE(curr > kMaxAllocatableDocId ||
+                             curr == kInvalidDocId)) {
+        return kInvalidDocId;
+      }
+      if (next_id_.compare_exchange_weak(curr, curr + 1,
+                                         std::memory_order_relaxed,
+                                         std::memory_order_relaxed)) {
+        return curr;
+      }
     }
-    return assigned_doc_id;
   }
 
   void RecycleId(DocId doc_id) {
     ThreadLocalCache &tl = GetThreadLocalCache();
+    uint64_t current_gen = generation_.load(std::memory_order_acquire);
+    tl.SyncGeneration(current_gen);
     if (tl.active_batch->count < FreeBatch::kCapacity) {
       tl.active_batch->entries[tl.active_batch->count++] = doc_id;
       return;
@@ -307,7 +340,7 @@ class DocIdMap {
 
     // Both batches are full, push
     // spare_batch to global lock-free stack
-    PushBatchToGlobal(tl.spare_batch);
+    PushBatchToGlobal(tl.spare_batch, current_gen);
     tl.spare_batch = new FreeBatch();
 
     // Swap active and spare
@@ -315,10 +348,10 @@ class DocIdMap {
     tl.active_batch->entries[tl.active_batch->count++] = doc_id;
   }
 
-  void EnsureChunkAllocated(DocId doc_id) {
+  bool EnsureChunkAllocated(DocId doc_id) {
     size_t chunk_idx = doc_id >> kChunkShift;
     if (chunk_idx >= kMaxChunks) {
-      return;
+      return false;
     }
 
     if (chunks_[chunk_idx].load(std::memory_order_acquire) == nullptr) {
@@ -328,6 +361,7 @@ class DocIdMap {
         chunks_[chunk_idx].store(new_chunk, std::memory_order_release);
       }
     }
+    return true;
   }
 
   static constexpr size_t kNumShards = 256;
@@ -345,6 +379,8 @@ class DocIdMap {
 
   std::atomic<FreeBatch *> global_free_stack_;
   std::atomic<size_t> global_free_batches_count_;
+  std::atomic<uint64_t> generation_;
+  std::atomic<bool> shutting_down_;
 };
 
 }  // namespace valkey_search

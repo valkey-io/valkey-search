@@ -50,18 +50,19 @@ using InProgressStemMap = absl::flat_hash_map<
     absl::InlinedVector<std::string, kInProgressStemVariantsInlineCapacity>>;
 
 struct Lexer {
-  Lexer(data_model::Language language, const std::string& punctuation,
-        const std::vector<std::string>& stop_words);
+  Lexer(data_model::Language language, const std::string &punctuation,
+        const std::vector<std::string> &stop_words);
   ~Lexer() = default;
 
   absl::StatusOr<std::vector<std::string>> Tokenize(
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
-      InProgressStemMap* stem_mappings = nullptr) const;
+      InProgressStemMap *stem_mappings = nullptr) const;
 
   template <typename Callback>
-  absl::Status Tokenize(
-      absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
-      InProgressStemMap* stem_mappings, Callback&& callback) const;
+  absl::Status Tokenize(absl::string_view text, bool stemming_enabled,
+                        uint32_t min_stem_size,
+                        InProgressStemMap *stem_mappings,
+                        Callback &&callback) const;
 
   bool IsPunctuation(char c) const {
     return punct_bitmap_[static_cast<unsigned char>(c)];
@@ -70,13 +71,13 @@ struct Lexer {
   bool IsStopWord(absl::string_view lowercase_word) const {
     return stop_words_set_.contains(lowercase_word);
   }
-  sb_stemmer* GetStemmer() const;
-  void NormalizeLowerCaseInPlace(std::string& str) const;
-  void StemWordInPlace(std::string& word, sb_stemmer* stemmer,
+  sb_stemmer *GetStemmer() const;
+  void NormalizeLowerCaseInPlace(std::string &str) const;
+  void StemWordInPlace(std::string &word, sb_stemmer *stemmer,
                        uint32_t min_stem_size = 0) const;
-  void UpdateStemMap(absl::string_view original_word, sb_stemmer* stemmer,
+  void UpdateStemMap(absl::string_view original_word, sb_stemmer *stemmer,
                      uint32_t min_stem_size,
-                     InProgressStemMap& stem_mappings) const;
+                     InProgressStemMap &stem_mappings) const;
 
  private:
   data_model::Language language_;
@@ -86,14 +87,16 @@ struct Lexer {
   // UTF-8 processing helpers
   bool IsValidUtf8(absl::string_view text) const;
   // Common stemming logic
-  std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
+  std::string_view DoStemming(absl::string_view word, sb_stemmer *stemmer,
                               uint32_t min_stem_size) const;
 };
 
 template <typename Callback>
-inline absl::Status Lexer::Tokenize(
-    absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
-    InProgressStemMap* stem_mappings, Callback&& callback) const {
+inline absl::Status Lexer::Tokenize(absl::string_view text,
+                                    bool stemming_enabled,
+                                    uint32_t min_stem_size,
+                                    InProgressStemMap *stem_mappings,
+                                    Callback &&callback) const {
   if (stemming_enabled) {
     CHECK(stem_mappings) << "stem_mappings must not be null";
   }
@@ -101,7 +104,7 @@ inline absl::Status Lexer::Tokenize(
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
-  sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
+  sb_stemmer *stemmer = stemming_enabled ? GetStemmer() : nullptr;
   std::string word;
   word.reserve(64);
   size_t pos = 0;

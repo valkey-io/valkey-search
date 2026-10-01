@@ -71,8 +71,7 @@ void TermIterator::InsertValidKeyIterator(size_t idx) {
     key_iter.NextKey();
   }
   if (key_iter.IsValid()) {
-    key_set_.push_back_unsorted(
-        valkey_search::PriorityQueueEntry<Key>{&key_iter.GetKey(), idx});
+    key_set_.push_back_unsorted(key_iter.GetDocId(), idx);
   }
 }
 
@@ -80,6 +79,7 @@ bool TermIterator::FindMinimumValidKey() {
   if (key_iterators_.size() == 1) {
     auto &iter = key_iterators_[0];
     if (iter.IsValid()) {
+      current_doc_id_ = iter.GetDocId();
       current_key_ = &iter.GetKey();
       current_key_indices_ = {0};
       if (require_positions_) {
@@ -102,13 +102,14 @@ bool TermIterator::FindMinimumValidKey() {
   }
   // 2. Restore the min-heap property. O(K).
   key_set_.heapify();
-  current_key_ = key_set_.min().key;
+  current_doc_id_ = key_set_.min().first;
   current_key_indices_.clear();
-  // 3. Extract all iterators that share this minimum key.
-  while (!key_set_.empty() && *key_set_.min().key == *current_key_) {
-    current_key_indices_.push_back(key_set_.min().idx);
+  // 3. Extract all iterators that share this minimum DocId.
+  while (!key_set_.empty() && key_set_.min().first == current_doc_id_) {
+    current_key_indices_.push_back(key_set_.min().second);
     key_set_.pop_min();  // O(log K)
   }
+  current_key_ = &key_iterators_[current_key_indices_[0]].GetKey();
   // 4. Initialize position iteration for the specific new key if required.
   if (require_positions_) {
     ClearPositionState();
@@ -149,7 +150,12 @@ bool TermIterator::NextKey() {
 }
 
 bool TermIterator::SeekForwardKey(const InternedStringPtr &target_key) {
-  if (current_key_ && *current_key_ >= target_key) {
+  DocId target_id = DocIdMap::Instance().GetDocId(target_key);
+  if (target_id == kInvalidDocId) {
+    ClearKeyState();
+    return false;
+  }
+  if (current_key_ && current_doc_id_ >= target_id) {
     return true;
   }
 
@@ -158,24 +164,28 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr &target_key) {
     const auto field_mask = (has_original_ || stem_field_mask_ == 0)
                                 ? query_field_mask_
                                 : stem_field_mask_;
-    iter.SkipForwardKey(target_key);
+    iter.SkipForwardDocId(target_id);
     while (iter.IsValid() && !iter.ContainsFields(field_mask)) {
       iter.NextKey();
     }
     return FindMinimumValidKey();
   }
 
-  // Drain laggards from the heap that are behind the target.
-  while (!key_set_.empty() && *key_set_.min().key < target_key) {
-    size_t idx = key_set_.min().idx;
+  // Drain laggards from the heap that are behind the target before re-inserting
+  // so pop_min() always operates on a valid heap.
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity> laggards;
+  while (!key_set_.empty() && key_set_.min().first < target_id) {
+    laggards.push_back(key_set_.min().second);
     key_set_.pop_min();
-    key_iterators_[idx].SkipForwardKey(target_key);
+  }
+  for (size_t idx : laggards) {
+    key_iterators_[idx].SkipForwardDocId(target_id);
     InsertValidKeyIterator(idx);
   }
   // Update active indices that were already extracted from the heap.
   if (current_key_) {
     for (size_t idx : current_key_indices_) {
-      key_iterators_[idx].SkipForwardKey(target_key);
+      key_iterators_[idx].SkipForwardDocId(target_id);
       InsertValidKeyIterator(idx);
     }
     current_key_indices_.clear();
@@ -260,10 +270,13 @@ bool TermIterator::SeekForwardPosition(Position target_position) {
       current_position_.value().start >= target_position) {
     return true;
   }
-  // Drain laggard positions from the heap.
+  // Drain laggard positions from the heap before re-inserting.
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity> laggards;
   while (!pos_set_.empty() && pos_set_.min().first < target_position) {
-    size_t idx = pos_set_.min().second;
+    laggards.push_back(pos_set_.min().second);
     pos_set_.pop_min();
+  }
+  for (size_t idx : laggards) {
     pos_iterators_[idx].SkipForwardPosition(target_position);
     InsertValidPositionIterator(idx);
   }
@@ -285,6 +298,7 @@ FieldMaskPredicate TermIterator::CurrentFieldMask() const {
 
 void TermIterator::ClearKeyState() {
   current_key_ = nullptr;
+  current_doc_id_ = kInvalidDocId;
   key_set_.clear();
   current_key_indices_.clear();
   ClearPositionState();

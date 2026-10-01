@@ -25,7 +25,7 @@ namespace valkey_search::indexes::text {
 
 ProximityIterator::ProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
-                        kProximityTermsInlineCapacity>&& iters,
+                        kProximityTermsInlineCapacity> &&iters,
     std::optional<uint32_t> slop, bool in_order, bool skip_positional_checks)
     : iters_(std::move(iters)),
       slop_(slop),
@@ -35,7 +35,7 @@ ProximityIterator::ProximityIterator(
       skip_positional_checks_(skip_positional_checks) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
   query_field_mask_ = ~0ULL;
-  for (const auto& iter : iters_) {
+  for (const auto &iter : iters_) {
     query_field_mask_ &= iter->QueryFieldMask();
   }
   if (!skip_positional_checks_) {
@@ -64,7 +64,7 @@ bool ProximityIterator::DoneKeys() const {
   if (iters_.empty()) {
     return true;
   }
-  for (auto& iter : iters_) {
+  for (auto &iter : iters_) {
     if (iter->DoneKeys()) {
       return true;
     }
@@ -72,7 +72,7 @@ bool ProximityIterator::DoneKeys() const {
   return false;
 }
 
-const Key& ProximityIterator::CurrentKey() const {
+const Key &ProximityIterator::CurrentKey() const {
   CHECK(current_key_);
   return current_key_;
 }
@@ -81,7 +81,7 @@ bool ProximityIterator::NextKey() {
   // On the second call onwards, advance any text iterators that are still
   // sitting on the old key.
   auto advance = [&]() -> void {
-    for (auto& iter : iters_) {
+    for (auto &iter : iters_) {
       if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
         iter->NextKey();
       }
@@ -104,46 +104,61 @@ bool ProximityIterator::NextKey() {
       } else if (NextPosition()) {
         return true;
       }
+      // Common key did not satisfy positional constraints; advance past it.
+      advance();
     }
-    // Otherwise, loop and try again.
-    advance();
   }
   current_key_ = nullptr;
+  current_doc_id_ = kInvalidDocId;
   return false;
 }
 
 bool ProximityIterator::FindCommonKey() {
-  // 1) Validate children and compute min/max among current keys
-  // Raw pointers to avoid ref counting. Safe because max_key points to the
-  // child with the largest key, and SeekForwardKey on that child is a no-op
-  // (already >= target), so its CurrentKey() is not invalidated.
-  const Key* min_key = &iters_[0]->CurrentKey();
-  const Key* max_key = min_key;
+  // 1) Validate children and compute min/max DocId among current keys
+  DocId min_id = iters_[0]->CurrentDocId();
+  DocId max_id = min_id;
+  const Key *max_key = &iters_[0]->CurrentKey();
   for (size_t i = 1; i < iters_.size(); ++i) {
-    const Key& k = iters_[i]->CurrentKey();
-    if (k < *min_key) min_key = &k;
-    if (k > *max_key) max_key = &k;
+    DocId id = iters_[i]->CurrentDocId();
+    if (id < min_id) {
+      min_id = id;
+    }
+    if (id > max_id) {
+      max_id = id;
+      max_key = &iters_[i]->CurrentKey();
+    }
   }
   // 2) If min == max, we found a common key
-  if (*min_key == *max_key) {
+  if (min_id == max_id) {
     current_key_ = *max_key;
+    current_doc_id_ = max_id;
     return true;
   }
   // 3) Advance all iterators that are strictly behind the current max_key
-  for (auto& iter : iters_) {
-    iter->SeekForwardKey(*max_key);
+  const Key target_key = *max_key;
+  for (auto &iter : iters_) {
+    iter->SeekForwardKey(target_key);
   }
   return false;
 }
 
-bool ProximityIterator::SeekForwardKey(const Key& target_key) {
+bool ProximityIterator::SeekForwardKey(const Key &target_key) {
+  DocId target_id = DocIdMap::Instance().GetDocId(target_key);
+  if (target_id == kInvalidDocId) {
+    iters_.clear();
+    current_key_ = nullptr;
+    current_doc_id_ = kInvalidDocId;
+    current_position_ = std::nullopt;
+    current_field_mask_ = 0ULL;
+    return false;
+  }
   // If current key is already >= target_key, no need to seek
-  if (current_key_ && current_key_ >= target_key) {
+  if (current_key_ && current_doc_id_ >= target_id) {
     return true;
   }
   // Skip all keys less than target_key for all iterators
-  for (auto& iter : iters_) {
-    if (!iter->DoneKeys() && iter->CurrentKey() < target_key) {
+  for (auto &iter : iters_) {
+    if (!iter->DoneKeys() && iter->CurrentDocId() < target_id) {
       iter->SeekForwardKey(target_key);
     }
   }
@@ -157,15 +172,16 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
       } else if (NextPosition()) {
         return true;
       }
-    }
-    // Advance past current key and try again
-    for (auto& iter : iters_) {
-      if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
-        iter->NextKey();
+      // Advance past current key and try again
+      for (auto &iter : iters_) {
+        if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
+          iter->NextKey();
+        }
       }
     }
   }
   current_key_ = nullptr;
+  current_doc_id_ = kInvalidDocId;
   return false;
 }
 
@@ -173,7 +189,7 @@ bool ProximityIterator::DonePositions() const {
   if (iters_.empty()) {
     return true;
   }
-  for (auto& iter : iters_) {
+  for (auto &iter : iters_) {
     if (iter->DonePositions()) {
       return true;
     }
@@ -181,7 +197,7 @@ bool ProximityIterator::DonePositions() const {
   return false;
 }
 
-const PositionRange& ProximityIterator::CurrentPosition() const {
+const PositionRange &ProximityIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
   return current_position_.value();
 }
@@ -352,7 +368,7 @@ bool ProximityIterator::SeekForwardPosition(Position target_position) {
     return true;
   }
   // Seek all child iterators to target position
-  for (auto& iter : iters_) {
+  for (auto &iter : iters_) {
     if (!iter->DonePositions() &&
         target_position > iter->CurrentPosition().start) {
       iter->SeekForwardPosition(target_position);

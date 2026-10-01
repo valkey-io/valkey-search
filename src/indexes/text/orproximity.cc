@@ -4,17 +4,13 @@ namespace valkey_search::indexes::text {
 
 OrProximityIterator::OrProximityIterator(
     absl::InlinedVector<std::unique_ptr<TextIterator>,
-                        kProximityTermsInlineCapacity>&& iters)
+                        kProximityTermsInlineCapacity> &&iters)
     : iters_(std::move(iters)),
       current_position_(std::nullopt),
-      current_field_mask_(0ULL),
-      key_set_(),
-      current_key_indices_(),
-      pos_set_(),
-      current_pos_indices_() {
+      current_field_mask_(0ULL) {
   CHECK(!iters_.empty()) << "must have at least one text iterator";
   query_field_mask_ = 0ULL;
-  for (const auto& iter : iters_) {
+  for (const auto &iter : iters_) {
     query_field_mask_ |= iter->QueryFieldMask();
   }
   NextKey();
@@ -25,21 +21,23 @@ FieldMaskPredicate OrProximityIterator::QueryFieldMask() const {
 }
 
 bool OrProximityIterator::DoneKeys() const {
-  for (const auto& iter : iters_) {
-    if (!iter->DoneKeys()) return false;
+  for (const auto &iter : iters_) {
+    if (!iter->DoneKeys()) {
+      return false;
+    }
   }
   return true;
 }
 
-const Key& OrProximityIterator::CurrentKey() const {
+const Key &OrProximityIterator::CurrentKey() const {
   CHECK(current_key_);
   return current_key_;
 }
 
 void OrProximityIterator::InsertValidKeyIterator(size_t idx) {
-  auto& iter = iters_[idx];
+  auto &iter = iters_[idx];
   if (!iter->DoneKeys()) {
-    key_set_.push_back_unsorted(iter->CurrentKey(), idx);
+    key_set_.push_back_unsorted(iter->CurrentDocId(), idx);
   }
 }
 
@@ -51,19 +49,21 @@ bool OrProximityIterator::FindMinimumKey() {
   }
   if (key_set_.empty()) {
     current_key_ = nullptr;
+    current_doc_id_ = kInvalidDocId;
     current_position_ = std::nullopt;
     current_field_mask_ = 0ULL;
     return false;
   }
   key_set_.heapify();
-  current_key_ = key_set_.min().first;
+  current_doc_id_ = key_set_.min().first;
   current_key_indices_.clear();
-  // Collect all iterators with minimum key.
-  // Extract all iterators with minimum key from the heap.
-  while (!key_set_.empty() && key_set_.min().first == current_key_) {
+  // Collect all iterators with minimum DocId.
+  // Extract all iterators with minimum DocId from the heap.
+  while (!key_set_.empty() && key_set_.min().first == current_doc_id_) {
     current_key_indices_.push_back(key_set_.min().second);
     key_set_.pop_min();
   }
+  current_key_ = iters_[current_key_indices_[0]]->CurrentKey();
   pos_set_.clear();
   current_position_ = std::nullopt;
   NextPosition();
@@ -84,15 +84,28 @@ bool OrProximityIterator::NextKey() {
   return FindMinimumKey();
 }
 
-bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
-  if (current_key_ && current_key_ >= target_key) {
+bool OrProximityIterator::SeekForwardKey(const Key &target_key) {
+  DocId target_id = DocIdMap::Instance().GetDocId(target_key);
+  if (target_id == kInvalidDocId) {
+    key_set_.clear();
+    current_key_indices_.clear();
+    for (auto &iter : iters_) {
+      iter->SeekForwardKey(target_key);
+    }
+    current_key_ = nullptr;
+    current_doc_id_ = kInvalidDocId;
+    current_position_ = std::nullopt;
+    current_field_mask_ = 0ULL;
+    return false;
+  }
+  if (current_key_ && current_doc_id_ >= target_id) {
     return true;
   }
   // Clear queue and seek all iterators to target_key or beyond.
   key_set_.clear();
-  for (size_t i = 0; i < iters_.size(); ++i) {
-    if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() < target_key) {
-      iters_[i]->SeekForwardKey(target_key);
+  for (auto &iter : iters_) {
+    if (!iter->DoneKeys() && iter->CurrentDocId() < target_id) {
+      iter->SeekForwardKey(target_key);
     }
   }
   // Rebuild key set if needed or returns false if all are exhausted.
@@ -101,12 +114,14 @@ bool OrProximityIterator::SeekForwardKey(const Key& target_key) {
 
 bool OrProximityIterator::DonePositions() const {
   for (size_t idx : current_key_indices_) {
-    if (!iters_[idx]->DonePositions()) return false;
+    if (!iters_[idx]->DonePositions()) {
+      return false;
+    }
   }
   return true;
 }
 
-const PositionRange& OrProximityIterator::CurrentPosition() const {
+const PositionRange &OrProximityIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
   return current_position_.value();
 }

@@ -13,7 +13,7 @@ namespace valkey_search::indexes::text {
 TEST(FOR128Test, PackUnpack) {
   uint32_t original[128];
   for (size_t i = 0; i < 128; ++i) {
-    original[i] = (i * 3 + 7) % 15; // Requires 4 bits max
+    original[i] = (i * 3 + 7) % 15;  // Requires 4 bits max
   }
 
   uint8_t bits = FOR128Codec::BitsRequired(original, 128);
@@ -21,7 +21,7 @@ TEST(FOR128Test, PackUnpack) {
 
   uint8_t buffer[256];
   size_t bytes_written = FOR128Codec::Pack(original, 128, bits, buffer);
-  EXPECT_EQ(bytes_written, 2 + 64); // 2 bytes header + 64 bytes payload
+  EXPECT_EQ(bytes_written, 2 + 64);  // 2 bytes header + 64 bytes payload
 
   uint32_t decoded[128];
   size_t count = 0;

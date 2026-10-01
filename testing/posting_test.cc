@@ -457,10 +457,58 @@ TEST_F(PostingTest, ReadVarintTruncationAndOverflow) {
   EXPECT_EQ(val, 0);
 
   // Varint with shift >= 64 (10 continuation bytes)
+  uint8_t overflow_cont_data[] = {0x80, 0x80, 0x80, 0x80, 0x80,
+                                  0x80, 0x80, 0x80, 0x80, 0x80};
+  val = 12345;
+  EXPECT_EQ(ReadVarint(overflow_cont_data, sizeof(overflow_cont_data), val), 0);
+  EXPECT_EQ(val, 0);
+
+  // Varint with terminal byte > 1 at shift == 63 (overflows uint64_t)
   uint8_t overflow_data[] = {0x80, 0x80, 0x80, 0x80, 0x80,
-                             0x80, 0x80, 0x80, 0x80, 0x80};
+                             0x80, 0x80, 0x80, 0x80, 0x02};
+  val = 12345;
   EXPECT_EQ(ReadVarint(overflow_data, sizeof(overflow_data), val), 0);
   EXPECT_EQ(val, 0);
+}
+
+TEST_F(PostingTest, OutOfOrderAndDuplicateInsertAndRemove) {
+  auto k1 = InternKey("doc_order_1");
+  auto k2 = InternKey("doc_order_2");
+  DocId id1 = DocIdMap::Instance().GetOrAssign(k1);
+  DocId id2 = DocIdMap::Instance().GetOrAssign(k2);
+  ASSERT_LT(id1, id2);
+
+  // Insert out of DocId order: id2 first, then id1
+  InsertKeyWithPositionMap(k2, CreatePositionMap({{20, {0}}}));
+  InsertKeyWithPositionMap(k1, CreatePositionMap({{10, {0}}}));
+  EXPECT_EQ(postings_->GetKeyCount(), 2);
+
+  // Re-insert k1 (duplicate DocId) with updated positions
+  InsertKeyWithPositionMap(k1, CreatePositionMap({{15, {0}}, {25, {1}}}));
+  EXPECT_EQ(postings_->GetKeyCount(), 2);
+  EXPECT_EQ(postings_->GetPositionCount(), 3);
+  EXPECT_EQ(postings_->GetTotalTermFrequency(), 3);
+
+  // Iteration should yield id1 then id2 in sorted DocId order
+  auto iter = postings_->GetKeyIterator();
+  ASSERT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetDocId(), id1);
+  iter.NextKey();
+  ASSERT_TRUE(iter.IsValid());
+  EXPECT_EQ(iter.GetDocId(), id2);
+  iter.NextKey();
+  EXPECT_FALSE(iter.IsValid());
+
+  // Unknown key SkipForwardKey should return false and invalidate iterator
+  iter = postings_->GetKeyIterator();
+  EXPECT_FALSE(iter.SkipForwardKey(InternKey("unknown_unindexed_key")));
+  EXPECT_FALSE(iter.IsValid());
+
+  // Remove k1 and verify only k2 remains
+  postings_->RemoveKey(k1, metadata_.get());
+  EXPECT_EQ(postings_->GetKeyCount(), 1);
+  postings_->RemoveKey(k2, metadata_.get());
+  EXPECT_TRUE(postings_->IsEmpty());
 }
 
 }  // namespace valkey_search::indexes::text

@@ -186,7 +186,9 @@ def generate_dataset_if_missing(dataset_dir, num_docs=15000):
 
     if not os.path.exists(queries_file):
         with open(queries_file, "w", encoding="utf-8") as f:
-            sample_queries = rng.choices(vocab, k=50) + rng.choices(prefix_vocab, k=50)
+            sample_queries = rng.choices(vocab, k=50) + [
+                p + "*" for p in rng.choices(prefix_vocab, k=50)
+            ]
             for q in sample_queries:
                 f.write(f"{q}\n")
 
@@ -366,7 +368,7 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
                 info_idx = client.execute_command("FT.INFO", "bench_idx")
                 info_dict = {}
                 if isinstance(info_idx, list):
-                    for i in range(0, len(info_idx), 2):
+                    for i in range(0, len(info_idx) - 1, 2):
                         k = info_idx[i].decode() if isinstance(info_idx[i], bytes) else str(info_idx[i])
                         info_dict[k] = info_idx[i+1]
                 elif isinstance(info_idx, dict):
@@ -451,8 +453,9 @@ def run_benchmark_for_threads(server_bin, module_bin, docs, queries, num_threads
             "--hide-histogram",
             f"--json-out-file={json_filename}"
         ]
-        memtier_cmd.append(f"--command={active_queries[0]}")
-        print(f"Executing memtier_benchmark ({MEMTIER_THREADS} threads, {MEMTIER_CLIENTS} client/thread, representative query '{active_queries[0]}', target={TOTAL_SEARCH_QUERIES} queries)...")
+        for q in active_queries:
+            memtier_cmd.append(f"--command={q}")
+        print(f"Executing memtier_benchmark ({MEMTIER_THREADS} threads, {MEMTIER_CLIENTS} client/thread, {len(active_queries)} queries, target={TOTAL_SEARCH_QUERIES} queries)...")
         search_start = time.perf_counter()
         subprocess.run(memtier_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         search_end = time.perf_counter()
@@ -715,6 +718,8 @@ def main():
         print(f"[INFO] libsearch.so not found at '{args.module}'. Building automatically...")
         build_script = os.path.join(PROJECT_ROOT, "build.sh")
         subprocess.run([build_script], check=True, cwd=PROJECT_ROOT)
+        if not os.path.exists(args.module):
+            raise FileNotFoundError(f"libsearch.so still not found at '{args.module}' after running build.sh")
 
     csv_path = os.path.abspath(args.csv if args.csv else get_default_csv_path())
     

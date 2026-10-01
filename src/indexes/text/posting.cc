@@ -41,8 +41,8 @@ static bool ReadDocRecordHeaderFromChunk(const PostingChunk *chunk,
   if (doc_id_bytes_read == 0) {
     return false;
   }
-  size_t pos_count_bytes_read =
-      ReadVarint(data + doc_id_bytes_read, remain - doc_id_bytes_read, num_pos_64);
+  size_t pos_count_bytes_read = ReadVarint(
+      data + doc_id_bytes_read, remain - doc_id_bytes_read, num_pos_64);
   if (pos_count_bytes_read == 0) {
     return false;
   }
@@ -59,7 +59,8 @@ static bool ReadDocRecordHeaderFromChunk(const PostingChunk *chunk,
   uint64_t payload_len = 0;
   size_t payload_len_bytes =
       ReadVarint(data + header_bytes, remain - header_bytes, payload_len);
-  if (payload_len_bytes == 0) {
+  if (payload_len_bytes == 0 ||
+      payload_len > remain - header_bytes - payload_len_bytes) {
     return false;
   }
   info.end_offset = offset + header_bytes + payload_len_bytes + payload_len;
@@ -82,8 +83,16 @@ static size_t DecodeDocRecordTermFreqFromChunk(const PostingChunk *chunk,
   size_t freq = 0;
   for (size_t i = 0; i < info.num_pos; ++i) {
     uint64_t delta = 0, mask = 0;
-    idx += ReadVarint(pdata + idx, premain - idx, delta);
-    idx += ReadVarint(pdata + idx, premain - idx, mask);
+    size_t db = ReadVarint(pdata + idx, premain - idx, delta);
+    if (db == 0) {
+      break;
+    }
+    idx += db;
+    size_t mb = ReadVarint(pdata + idx, premain - idx, mask);
+    if (mb == 0) {
+      break;
+    }
+    idx += mb;
     freq += __builtin_popcountll(mask);
   }
   return freq;
@@ -161,15 +170,31 @@ bool Postings::IsEmpty() const { return key_count_ == 0; }
 
 void Postings::InsertKey(const Key &key, const PositionMap *pos_map) {
   DocId doc_id = DocIdMap::Instance().GetOrAssign(key);
+  if (ABSL_PREDICT_FALSE(doc_id == kInvalidDocId)) {
+    return;
+  }
   InsertKey(doc_id, pos_map);
 }
 
 void Postings::InsertKey(DocId doc_id, const PositionMap *pos_map) {
+  if (ABSL_PREDICT_FALSE(doc_id == kInvalidDocId)) {
+    return;
+  }
   InsertKey(EncodedDocId::Encode(doc_id), pos_map);
 }
 
 void Postings::InsertKey(const EncodedDocId &enc_doc_id,
                          const PositionMap *pos_map) {
+  if (ABSL_PREDICT_FALSE(enc_doc_id.doc_id == kInvalidDocId)) {
+    return;
+  }
+
+  // If the incoming DocId is <= last_doc_id_, remove any existing entry for
+  // this DocId first so re-indexing replaces rather than duplicates.
+  if (ABSL_PREDICT_FALSE(key_count_ > 0 && enc_doc_id.doc_id <= last_doc_id_)) {
+    RemoveKey(enc_doc_id.doc_id, nullptr);
+  }
+
   size_t num_pos = pos_map ? pos_map->size() : 0;
   size_t term_freq = 0;
   if (pos_map) {
@@ -178,8 +203,100 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
     }
   }
 
-  // Ensure tail chunk exists and has enough capacity for this doc record
-  size_t est_bytes_needed = 24 + num_pos * 10;
+  // Worst-case per position: 5-byte uint32 delta + 10-byte uint64 mask = 15B.
+  // Reserve 16 bytes per position to guarantee no buffer overrun.
+  size_t max_pos_bytes = num_pos * 16;
+  uint8_t stack_buf[512];
+  uint8_t *pdest = stack_buf;
+  std::unique_ptr<uint8_t[]> heap_buf;
+  if (pos_map && num_pos > 0) {
+    if (ABSL_PREDICT_FALSE(max_pos_bytes > sizeof(stack_buf))) {
+      heap_buf = std::make_unique<uint8_t[]>(max_pos_bytes);
+      pdest = heap_buf.get();
+    }
+    uint32_t last_pos = 0;
+    for (const auto &[pos, mask] : *pos_map) {
+      WriteVarint(pdest, pos - last_pos);
+      WriteVarint(pdest, mask.GetMask());
+      last_pos = pos;
+    }
+  }
+  uint8_t *pstart = heap_buf ? heap_buf.get() : stack_buf;
+  size_t payload_len = static_cast<size_t>(pdest - pstart);
+
+  // If this DocId belongs before existing higher DocIds (e.g. recycled DocId
+  // or out-of-order insertion), insert in sorted DocId position.
+  if (ABSL_PREDICT_FALSE(key_count_ > 0 && enc_doc_id.doc_id < last_doc_id_)) {
+    uint8_t header_buf[32];
+    uint8_t *hptr = header_buf;
+    std::memcpy(hptr, enc_doc_id.bytes, enc_doc_id.len);
+    hptr += enc_doc_id.len;
+    WriteVarint(hptr, num_pos);
+    if (num_pos > 0) {
+      WriteVarint(hptr, payload_len);
+    }
+    size_t header_len = static_cast<size_t>(hptr - header_buf);
+    size_t record_len = header_len + payload_len;
+
+    PostingChunk *chunk = head_;
+    PostingChunk *prev_chunk = nullptr;
+    while (chunk != nullptr) {
+      uint32_t offset = 0;
+      while (offset < chunk->size) {
+        DocRecordInfo existing_info;
+        if (!ReadDocRecordHeaderFromChunk(chunk, offset, existing_info)) {
+          break;
+        }
+        if (existing_info.doc_id > enc_doc_id.doc_id) {
+          if (chunk->size + record_len <= chunk->capacity) {
+            std::memmove(chunk->data + offset + record_len,
+                         chunk->data + offset, chunk->size - offset);
+            std::memcpy(chunk->data + offset, header_buf, header_len);
+            if (payload_len > 0) {
+              std::memcpy(chunk->data + offset + header_len, pstart,
+                          payload_len);
+            }
+            chunk->size += static_cast<uint32_t>(record_len);
+          } else {
+            uint32_t new_cap =
+                std::max(PostingChunk::kDefaultCapacity,
+                         static_cast<uint32_t>(chunk->size + record_len + 32));
+            PostingChunk *new_chunk = PostingChunk::Create(new_cap);
+            std::memcpy(new_chunk->data, chunk->data, offset);
+            std::memcpy(new_chunk->data + offset, header_buf, header_len);
+            if (payload_len > 0) {
+              std::memcpy(new_chunk->data + offset + header_len, pstart,
+                          payload_len);
+            }
+            std::memcpy(new_chunk->data + offset + record_len,
+                        chunk->data + offset, chunk->size - offset);
+            new_chunk->size = static_cast<uint32_t>(chunk->size + record_len);
+            new_chunk->next = chunk->next;
+            if (prev_chunk != nullptr) {
+              prev_chunk->next = new_chunk;
+            } else {
+              head_ = new_chunk;
+            }
+            if (tail_ == chunk) {
+              tail_ = new_chunk;
+            }
+            PostingChunk::Destroy(chunk);
+          }
+          skip_index_.clear();
+          key_count_++;
+          total_positions_ += num_pos;
+          total_term_frequency_ += term_freq;
+          return;
+        }
+        offset = existing_info.end_offset;
+      }
+      prev_chunk = chunk;
+      chunk = chunk->next;
+    }
+  }
+
+  // Fast path: append to tail_ in ascending DocId order.
+  size_t est_bytes_needed = 24 + payload_len;
   if (tail_ == nullptr ||
       (tail_->size + est_bytes_needed > tail_->capacity && tail_->size > 0)) {
     uint32_t chunk_cap = std::max(PostingChunk::kDefaultCapacity,
@@ -197,9 +314,11 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   uint8_t *record_start = dest;
 
   // Layout per document record in PostingChunk:
-  // [Encoded DocId (varint)] [num_pos (varint)] [payload_len (varint)] [delta1, mask1, delta2, mask2, ...]
+  // [Encoded DocId (varint)] [num_pos (varint)] [payload_len (varint)] [delta1,
+  // mask1, delta2, mask2, ...]
 
-  // 1. Append pre-encoded doc_id bytes (cached to avoid repeated varint encoding)
+  // 1. Append pre-encoded doc_id bytes (cached to avoid repeated varint
+  // encoding)
   std::memcpy(dest, enc_doc_id.bytes, enc_doc_id.len);
   dest += enc_doc_id.len;
 
@@ -207,29 +326,8 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   WriteVarint(dest, num_pos);
 
   // 3. Append serialized positions & field bitmasks if present
-  if (pos_map && num_pos > 0) {
-    uint8_t stack_buf[512];
-    uint8_t *pdest = stack_buf;
-    std::unique_ptr<uint8_t[]> heap_buf;
-    if (ABSL_PREDICT_FALSE(num_pos * 10 > sizeof(stack_buf))) {
-      heap_buf = std::make_unique<uint8_t[]>(num_pos * 10);
-      pdest = heap_buf.get();
-    }
-    uint8_t *pstart = pdest;
-
-    uint32_t last_pos = 0;
-    for (const auto &[pos, mask] : *pos_map) {
-      // Delta-encode position relative to previous position for compact storage
-      WriteVarint(pdest, pos - last_pos);
-      // Bitmask where bit i = 1 means the term appeared in text field i
-      WriteVarint(pdest, mask.GetMask());
-      last_pos = pos;
-    }
-
-    size_t payload_len = static_cast<size_t>(pdest - pstart);
-    // Write total byte size of serialized position payload
+  if (num_pos > 0) {
     WriteVarint(dest, payload_len);
-
     std::memcpy(dest, pstart, payload_len);
     dest += payload_len;
   }
@@ -246,8 +344,6 @@ void Postings::InsertKey(const EncodedDocId &enc_doc_id,
   total_positions_ += num_pos;
   total_term_frequency_ += term_freq;
 }
-
-
 
 void Postings::RemoveKey(const Key &key, TextIndexMetadata *metadata) {
   DocId target_id = DocIdMap::Instance().GetDocId(key);
@@ -269,7 +365,7 @@ void Postings::RemoveKey(DocId target_id, TextIndexMetadata *metadata) {
         break;
       }
       if (existing_info.doc_id == target_id) {
-        if (metadata && existing_info.num_pos > 0) {
+        if (existing_info.num_pos > 0) {
           existing_info.term_freq =
               DecodeDocRecordTermFreqFromChunk(chunk, existing_info);
         }
@@ -316,8 +412,11 @@ void Postings::RemoveKey(DocId target_id, TextIndexMetadata *metadata) {
 
         if (key_count_ == 0) {
           last_doc_id_ = 0;
-          head_ = nullptr;
-          tail_ = nullptr;
+          if (head_ != nullptr) {
+            PostingChunk::Destroy(head_);
+            head_ = nullptr;
+            tail_ = nullptr;
+          }
         } else if (target_id == last_doc_id_) {
           PostingChunk *c = head_;
           DocId l_id = 0;
@@ -332,9 +431,6 @@ void Postings::RemoveKey(DocId target_id, TextIndexMetadata *metadata) {
           }
           last_doc_id_ = l_id;
         }
-        return;
-      }
-      if (existing_info.doc_id > target_id) {
         return;
       }
       offset = existing_info.end_offset;
@@ -408,7 +504,8 @@ void Postings::KeyIterator::DecodeDocRecordAtOffset() {
     size_t header_len = doc_id_bytes_read + pos_count_bytes_read;
     size_t payload_bytes_read =
         ReadVarint(data + header_len, remain - header_len, payload_len);
-    if (payload_bytes_read == 0) {
+    if (payload_bytes_read == 0 ||
+        payload_len > remain - header_len - payload_bytes_read) {
       current_chunk_ = nullptr;
       current_doc_id_ = kInvalidDocId;
       current_pos_count_ = 0;
@@ -433,23 +530,29 @@ void Postings::KeyIterator::NextKey() {
 }
 
 bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
-  if (!IsValid()) {
+  if (!IsValid() || current_pos_count_ == 0 || !pos_data_ptr_) {
     return false;
   }
   if (field_mask == ~0ULL) {
     return true;
   }
-  if (current_pos_count_ > 0 && pos_data_ptr_) {
-    const uint8_t *data = pos_data_ptr_;
-    size_t remain = next_doc_offset_ - (pos_data_ptr_ - current_chunk_->data);
-    size_t idx = 0;
-    for (size_t i = 0; i < current_pos_count_; ++i) {
-      uint64_t delta = 0, mask = 0;
-      idx += ReadVarint(data + idx, remain - idx, delta);
-      idx += ReadVarint(data + idx, remain - idx, mask);
-      if ((mask & field_mask) != 0) {
-        return true;
-      }
+  const uint8_t *data = pos_data_ptr_;
+  size_t remain = next_doc_offset_ - (pos_data_ptr_ - current_chunk_->data);
+  size_t idx = 0;
+  for (size_t i = 0; i < current_pos_count_; ++i) {
+    uint64_t delta = 0, mask = 0;
+    size_t b1 = ReadVarint(data + idx, remain - idx, delta);
+    if (b1 == 0) {
+      return false;
+    }
+    idx += b1;
+    size_t b2 = ReadVarint(data + idx, remain - idx, mask);
+    if (b2 == 0) {
+      return false;
+    }
+    idx += b2;
+    if ((mask & field_mask) != 0) {
+      return true;
     }
   }
   return false;
@@ -486,6 +589,9 @@ bool Postings::KeyIterator::SkipForwardDocId(DocId target_id) {
 bool Postings::KeyIterator::SkipForwardKey(const Key &key) {
   DocId target_id = DocIdMap::Instance().GetDocId(key);
   if (target_id == kInvalidDocId) {
+    current_chunk_ = nullptr;
+    current_doc_id_ = kInvalidDocId;
+    current_pos_count_ = 0;
     return false;
   }
   return SkipForwardDocId(target_id);
@@ -528,17 +634,17 @@ void PositionIterator::DecodeStreamPosition() {
     return;
   }
   uint64_t delta = 0, mask = 0;
-  size_t delta_bytes_read =
-      ReadVarint(reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
-                 stream_max_bytes_ - stream_byte_offset_, delta);
+  size_t delta_bytes_read = ReadVarint(
+      reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
+      stream_max_bytes_ - stream_byte_offset_, delta);
   if (delta_bytes_read == 0) {
     stream_pos_index_ = stream_num_positions_;
     return;
   }
   stream_byte_offset_ += delta_bytes_read;
-  size_t mask_bytes_read =
-      ReadVarint(reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
-                 stream_max_bytes_ - stream_byte_offset_, mask);
+  size_t mask_bytes_read = ReadVarint(
+      reinterpret_cast<const uint8_t *>(stream_data_) + stream_byte_offset_,
+      stream_max_bytes_ - stream_byte_offset_, mask);
   if (mask_bytes_read == 0) {
     stream_pos_index_ = stream_num_positions_;
     return;
@@ -572,8 +678,6 @@ Position PositionIterator::GetPosition() const {
   return stream_cumulative_pos_;
 }
 
-uint64_t PositionIterator::GetFieldMask() const {
-  return stream_field_mask_;
-}
+uint64_t PositionIterator::GetFieldMask() const { return stream_field_mask_; }
 
 }  // namespace valkey_search::indexes::text

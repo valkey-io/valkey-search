@@ -54,6 +54,11 @@ class TextIterator {
   // Returns the current key.
   // ASSERT: !DoneKeys()
   virtual const Key &CurrentKey() const = 0;
+  // Returns the current DocId.
+  // ASSERT: !DoneKeys()
+  virtual DocId CurrentDocId() const {
+    return DocIdMap::Instance().GetDocId(CurrentKey());
+  }
   // Advances the key iteration until there is a match OR until we have
   // exhausted all keys. Returns true when there is a match wrt constraints
   // (e.g. field, position, inorder, slop, etc). Returns false otherwise. When

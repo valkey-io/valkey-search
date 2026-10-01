@@ -41,6 +41,7 @@ message IndexSchema {
   uint32 min_stem_size = 12;
   bool skip_initial_scan = 13;
   optional string score_field = 14;
+  optional string filter = 15;
 }
 
 
@@ -60,6 +61,8 @@ message Attribute {
   string alias = 1;
   string identifier = 2;
   Index index = 3;
+  bool sortable = 4;
+  bool unf = 5;
 }
 
 message Index {

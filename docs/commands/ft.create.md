@@ -11,12 +11,14 @@ For indexes on `JSON` keys, the path is a `JSON` path to the data of the declare
 FT.CREATE <index-name>
     [ON HASH | ON JSON]
     [PREFIX <count> <prefix> [<prefix>...]]
+    [FILTER <expression>]
     [SCORE default_value]
     [SCORE_FIELD <field_name>]
     [LANGUAGE <language>]
     [SKIPINITIALSCAN]
     [MINSTEMSIZE <min_stem_size>]
     [WITHOFFSETS | NOOFFSETS]
+    [NOHL]
     [NOSTOPWORDS | STOPWORDS <count> <word> word ...]
     [PUNCTUATION <punctuation>]
     SCHEMA
@@ -26,7 +28,7 @@ FT.CREATE <index-name>
                 | TAG [SEPARATOR <sep>] [CASESENSITIVE]
                 | TEXT [NOSTEM] [WITHSUFFIXTRIE | NOSUFFIXTRIE] [WEIGHT <weight>]
                 | VECTOR [HNSW | FLAT] <attr_count> [<attribute_name> <attribute_value>]+
-            [SORTABLE]
+            [SORTABLE [UNF]]
         )+
 ```
 
@@ -36,11 +38,21 @@ FT.CREATE <index-name>
 
 - `PREFIX <prefix-count> <prefix>` (optional): If this clause is specified, then only keys that begin with the same bytes as one or more of the specified prefixes will be included into this index. If this clause is omitted, all keys of the correct type will be included. A zero-length prefix would also match all keys of the correct type.
 
+- `FILTER <expression>` (optional): A boolean expression evaluated for each candidate key during ingestion; only keys for which it evaluates to true are included in the index. A comparison involving a missing field is **false**, so a key that has no `status` field is admitted by neither `@status == 'active'` nor `@status != 'active'` — a negation such as `!(@status == 'active')` admits it instead, because the comparison it negates is false. The number of keys excluded by the filter is reported by `FT.INFO` as `filter_rejected_keys`.
+
+  See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
+
+  A field's value always reaches the expression as its stored bytes, whatever type the `SCHEMA` declares — a `NUMERIC` field is not a number to a `FILTER`. A comparison is numeric only when one side really is a number, meaning a bare numeric literal such as `5` or a number-returning function such as `strlen()`. So `@price > 100` compares numerically, while `@price > '100'` and `@price > @cost` compare the values as strings, byte by byte. In a numeric comparison a value that is not a number is unordered: `@price != 5` is true for it and every other comparison is false.
+
+  Field references use the `@<name>` syntax. For a `HASH` index the expression may reference a field that is **not** declared in the `SCHEMA`; its value is read directly off the key at ingestion time (an absent field makes the comparison false). Because an undeclared field name is read verbatim from the key, a **misspelled** field name does not produce an error — watch `filter_rejected_keys` in `FT.INFO` to detect this. For a `JSON` index every field referenced by the expression must be declared in the `SCHEMA`; referencing an undeclared field is rejected when the index is created.
+
 - `LANGUAGE <language>` (optional): For text fields, the language used to control lexical parsing and stemming. Currently only the value `ENGLISH` is supported.
 
 - `MINSTEMSIZE <min_stem_size>` (optional): For text fields with stemming enabled. This controls the minimum length of a word required for it to be subjected to stemming. The default value is 4.
 
 - `WITHOFFSETS | NOOFFSETS` (optional): Enables/Disables the retention of per-word offsets within a text field. Offsets are required to perform exact phrase matching and slop-based proximity matching. Thus if offsets are disabled, those query operations will be rejected with an error. The default is `WITHOFFSETS`.
+
+- `NOHL` (optional): This parameter is accepted for compatibility, but has no effect.
 
 - `NOSTOPWORDS | STOPWORDS <count> <word1> <word2>...` (optional): Stop words are words which are not put into the indexes. The default value of `STOPWORDS`is language dependent. For`LANGUAGE ENGLISH` the default is: [a, an, and, are, as, at, be, but, by, for, if, in, into, is, it, no, not, of, on, or, such, that, their, then, there, these, they, this, to, was, will, with].
 
@@ -103,7 +115,9 @@ This table shows the actual computation that Search uses when computing the dist
 
 ### Field options
 
-`SORTABLE` (optional): This parameter is accepted for compatibility, but has no effect and is not required.
+`SORTABLE` (optional): This parameter is not required. Any field may be used with `SORTBY` whether or not it is declared `SORTABLE`. It is recorded on the attribute and reported by [`FT.INFO`](ft.info.md), but does not otherwise affect indexing or query behavior.
+
+- `UNF` (optional): Only valid immediately after `SORTABLE`. In RediSearch this keeps a sortable field's sort value in its original, un-normalized form rather than lowercased. `SORTBY` already compares the stored field value directly, so this has no effect beyond being reported by [`FT.INFO`](ft.info.md).
 
 ## Examples
 

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <numeric>
 #include <ranges>
@@ -46,7 +47,25 @@ class ThreadRunContext {
 
 void *RunWorkerThread(void *arg) {
   ThreadRunContext *ctx = static_cast<ThreadRunContext *>(arg);
-  ctx->GetThread()->InitThreadMonitor();
+  auto thread = ctx->GetThread();
+  // The worker records its own id and names itself, rather than relying on
+  // the id pthread_create stores for the parent. POSIX does not order that
+  // store before the new thread starts running, and musl does it afterwards
+  // (after __clone), so a worker reading thread_id here could see the initial
+  // 0 -- measured at roughly 1 in 200 creations on musl, never on glibc. A
+  // ThreadMonitor built from that 0 later crashes INFO in
+  // pthread_getcpuclockid, which dereferences the handle.
+  //
+  // Doing it here instead makes this thread the only writer of thread_id, so
+  // the parent must not read it before the worker has published it: the
+  // naming moved in here for that reason (naming yourself also takes the
+  // prctl path, which never dereferences a handle), and pthread_join only
+  // reads it once IsJoinable() has synchronized with this thread.
+  thread->thread_id = pthread_self();
+#ifndef __APPLE__
+  pthread_setname_np(thread->thread_id, thread->name.c_str());
+#endif
+  thread->InitThreadMonitor();
   ctx->GetPool()->WorkerThread(ctx->GetThread());
   delete ctx;  // shallow delete
   return nullptr;
@@ -297,13 +316,15 @@ size_t ThreadPool::QueueSize() const {
 void ThreadPool::IncrThreadCountBy(size_t count) {
   for (size_t i = 0; i < count; ++i) {
     std::shared_ptr<Thread> thread_ptr = std::make_shared<Thread>();
+    // Named before the thread starts: the worker names itself, and
+    // pthread_create orders this write before the worker reads it.
+    thread_ptr->name = name_prefix_ + std::to_string(threads_.Size());
     ThreadRunContext *context = new ThreadRunContext{this, thread_ptr};
-    pthread_create(&thread_ptr->thread_id, nullptr, RunWorkerThread, context);
-    size_t thread_num = threads_.Size();
-    thread_ptr->name = name_prefix_ + std::to_string(thread_num);
-#ifndef __APPLE__
-    pthread_setname_np(thread_ptr->thread_id, thread_ptr->name.c_str());
-#endif
+    // The worker sets thread_id itself; see RunWorkerThread.
+    pthread_t unused;
+    const int rc = pthread_create(&unused, nullptr, RunWorkerThread, context);
+    CHECK_EQ(rc, 0) << "pthread_create failed for " << thread_ptr->name << ": "
+                    << strerror(rc);
     threads_.Add(thread_ptr);
   }
 }

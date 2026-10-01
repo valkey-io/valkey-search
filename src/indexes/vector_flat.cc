@@ -15,7 +15,6 @@
 #include <mutex>  // NOLINT(build/c++11)
 #include <optional>
 #include <string>
-#include <type_traits>
 #include <utility>
 
 #include "absl/log/check.h"
@@ -37,6 +36,7 @@
 #include "src/utils/cancel.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 // Note that the ordering matters here - we want to minimize the memory
@@ -59,7 +59,8 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
         new VectorFlat<T>(vector_index_proto.dimension_count(),
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
-                          attribute_identifier, attribute_data_type, db_num));
+                          attribute_identifier, attribute_data_type, db_num),
+        vmsdk::DestructByMainThread<VectorFlat<T>>{});
     index->Init(vector_index_proto.distance_metric());
     index->algo_ =
         std::make_unique<FlatIndex>(index->space_.get(), index->normalize_,
@@ -152,21 +153,20 @@ absl::Status VectorFlat<T>::ResizeIfFull() {
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::AddRecordImpl(
-    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
+absl::Status VectorFlat<T>::AddRecordImpl(uint64_t internal_id,
+                                          VectorRecord &&vector_record) {
   do {
     try {
       absl::ReaderMutexLock lock(&resize_mutex_);
       algo_->addPoint(std::move(vector_record), internal_id);
     } catch (const std::exception &e) {
       ++Metrics::GetStats().flat_add_exceptions_cnt;
-      std::string error_msg = e.what();
       if (absl::StrContains(
-              error_msg,
-              "The number of elements exceeds the specified limit")) {
+              e.what(), "The number of elements exceeds the specified limit")) {
         VMSDK_RETURN_IF_ERROR(ResizeIfFull());
         continue;
       }
+      DCHECK(false) << "Unexpected error while adding a record: " << e.what();
       return absl::InternalError(
           absl::StrCat("Error while adding a record: ", e.what()));
     }
@@ -175,11 +175,10 @@ absl::Status VectorFlat<T>::AddRecordImpl(
 }
 
 template <typename T>
-absl::Status VectorFlat<T>::ModifyRecordImpl(
-    uint64_t internal_id, std::shared_ptr<const VectorRecord> &&vector_record) {
+absl::Status VectorFlat<T>::ModifyRecordImpl(uint64_t internal_id,
+                                             VectorRecord &&vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  std::shared_ptr<const VectorRecord> *stored_record =
-      algo_->GetPoint(internal_id);
+  VectorRecord *stored_record = algo_->GetPoint(internal_id);
   if (!stored_record) {
     return absl::InternalError(
         absl::StrCat("Couldn't find internal id: ", internal_id));
@@ -197,6 +196,7 @@ absl::Status VectorFlat<T>::RemoveRecordImpl(uint64_t internal_id) {
     algo_->removePoint(internal_id);
   } catch (const std::exception &e) {
     ++Metrics::GetStats().flat_remove_exceptions_cnt;
+    DCHECK(false) << "Unexpected error while removing a record: " << e.what();
     return absl::InternalError(
         absl::StrCat("Error while removing a FLAT record: ", e.what()));
   }
@@ -228,14 +228,17 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
-  float reciprocal_magnitude =
-      normalize_ ? CalcReciprocalMagnitude(
-                       reinterpret_cast<const T *>(query.data()), dimensions_)
-                 : 1.0f;
-
   try {
     CancelCondition canceler(cancellation_token);
-    auto embedding = VectorRecord::Construct(query, reciprocal_magnitude);
+    // The query stays raw and carries its reciprocal magnitude, applied in
+    // float during the scan (see BruteforceSearch::EvaluateDistance).
+    // Normalizing it into T would add rounding for two-byte types.
+    const float reciprocal_magnitude =
+        normalize_ ? CalcReciprocalMagnitude(
+                         reinterpret_cast<const T *>(query.data()), dimensions_)
+                   : kDefaultMagnitude;
+    auto embedding =
+        VectorRecord::Construct(query, reciprocal_magnitude, nullptr);
     auto res = algo_->searchKnn(
         embedding,
         std::min(count, static_cast<uint64_t>(algo_->cur_element_count_)),
@@ -254,9 +257,9 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
 
 template <typename T>
 float VectorFlat<T>::ComputeDistance(absl::string_view query,
-                                     const VectorRecord *vector_record,
+                                     const VectorRecord &vector_record,
                                      float query_magnitude) const {
-  return algo_->fstdistfunc_(query.data(), vector_record->GetRawVector(),
+  return algo_->fstdistfunc_(query.data(), vector_record.GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
 }
 
@@ -294,26 +297,24 @@ absl::Status VectorFlat<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
   absl::ReaderMutexLock lock(&resize_mutex_);
   auto serializer = [normalize = normalize_, vector_size = GetVectorDataSize()](
-                        const std::shared_ptr<const VectorRecord> &record) {
+                        const VectorRecord &record) {
     if (normalize) {
       return NormalizeVector<T>(
-          absl::string_view(record->GetRawVector(), vector_size));
+          absl::string_view(record.GetRawVector(), vector_size));
     }
-    return std::vector<char>(record->GetRawVector(),
-                             record->GetRawVector() + vector_size);
+    return std::vector<char>(record.GetRawVector(),
+                             record.GetRawVector() + vector_size);
   };
   return algo_->SaveIndex(chunked_out, serializer);
 }
 
 template <typename T>
-std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVectorLockFree(
-    uint64_t internal_id) const {
+VectorRecord &VectorFlat<T>::GetVectorLockFree(uint64_t internal_id) const {
   return *algo_->GetPointLockFree(internal_id);
 }
 
 template <typename T>
-std::shared_ptr<const VectorRecord> &VectorFlat<T>::GetVector(
-    uint64_t internal_id) const {
+VectorRecord &VectorFlat<T>::GetVector(uint64_t internal_id) const {
   return *algo_->GetPoint(internal_id);
 }
 

@@ -1,4 +1,7 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest, traceback, valkey, time, struct
+import random
 import sys, os
 import pickle
 import gzip
@@ -13,10 +16,35 @@ TEST_MARKER = "*" * 100
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
 
-SYSTEM_R_ADDRESS = ('localhost', 6380)
+# format_stack() output depends only on each frame's code object and line, and
+# most answers share a stack, so cache the text per frame chain.
+_stack_text_cache = {}
+def format_stack_cached():
+    key, f = [], sys._getframe(1)
+    while f is not None:
+        key.append((f.f_code, f.f_lasti, f.f_lineno))
+        f = f.f_back
+    key = tuple(key)
+    text = _stack_text_cache.get(key)
+    if text is None:
+        text = _stack_text_cache[key] = "".join(
+            traceback.format_stack(sys._getframe(1)))
+    return text
+
+# Every generator used to run a container literally named "Generate-search"
+# on a fixed port 6380, so two checkouts generating at once on one machine
+# shared both: the second `docker run` replaced the first one's server and the
+# first run collapsed mid-generation. 6380 also belongs to
+# testing/integration/vector_search_integration_test.py, so the clash was not
+# only between generators.
+#
+# The name now carries a per-run suffix, and the port is left to docker --
+# publishing to port 0 has the kernel hand out one that is free, which a
+# randomly chosen number cannot promise.
+CONTAINER_PREFIX = "Generate-search"
 class ClientRSystem(ClientSystem):
-    def __init__(self):
-        super().__init__(SYSTEM_R_ADDRESS)
+    def __init__(self, address):
+        super().__init__(address)
         try:
             self.client.execute_command("FT.CONFIG SET TIMEOUT 0")
         except:
@@ -39,20 +67,41 @@ class BaseCompatibilityTest:
     
     # Subclasses must define this
     ANSWER_FILE_NAME = None
+
+    # Reference engine image. Subclasses override it when they need a command
+    # the default image does not implement -- FT.HYBRID, for instance, only
+    # exists in the Redis 8.4+ query engine. The container name carries the
+    # class name and a random suffix, so two generators never collide on it.
     
     @classmethod
     def setup_class(cls):
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        if os.system("docker run --rm -d --name Generate-search -p 6380:6379 redis/redis-stack-server") != 0:
-            print("Failed to start Redis Stack server, please check your Docker setup.")
+        cls.container_name = f"{CONTAINER_PREFIX}-{cls.__name__}-{random.randint(1000, 9999)}"
+        # --search-workers 0 makes every write search-visible before the next
+        # command, so no sleep is needed between loading data and querying it:
+        # https://redis.io/docs/latest/develop/ai/redisvl/concepts/search-and-indexing/#search-visibility-after-writes
+        if os.system(f"docker run --rm -d --name {cls.container_name} "
+                     f"-p 0:6379 redis:latest "
+                     f"redis-server --search-workers 0") != 0:
+            print("Failed to start Redis server, please check your Docker setup.")
             sys.exit(1)
-        print("Started Generate-search server")
+        port = cls._published_port()
+        if port is None:
+            os.system(f"docker stop {cls.container_name}")
+            print(f"Could not read the published port of {cls.container_name}.")
+            sys.exit(1)
+        cls.address = ("localhost", port)
+        print(f"Started {cls.container_name} server on port {port}")
+        # teardown_class has no route to the pytest session, and it must not
+        # write an answer file from a run that did not finish. Set it up front
+        # so that a run which never reaches a test is treated as incomplete.
+        cls.session = None
         cls.answers = []
         # add reply count to check redis non-empty answer
         cls.replied_count = 0
-        cls.client = ClientRSystem()
+        cls.client = ClientRSystem(cls.address)
         while True:
             try:
                 cls.client.execute_command("PING")
@@ -63,9 +112,71 @@ class BaseCompatibilityTest:
         print("Done initializing")
 
     @classmethod
+    def _published_port(cls):
+        """The host port docker chose for the container's 6379.
+
+        `docker port` prints one line per binding -- the IPv4 and IPv6 forms
+        name the same port. The mapping exists as soon as the container is
+        created, but the daemon can take a moment to report it, so this
+        retries rather than losing a run to that race.
+        """
+        for _ in range(40):
+            out = os.popen(f"docker port {cls.container_name} 6379").read().strip()
+            if out:
+                return int(out.splitlines()[0].rsplit(":", 1)[1])
+            time.sleep(.25)
+        return None
+
+    @pytest.fixture(autouse=True)
+    def _remember_session(self, request):
+        type(self).session = request.session
+
+    @classmethod
     def teardown_class(cls):
-        print("Stopping Generate-search server")
-        os.system("docker stop Generate-search")
+        print(f"Stopping {cls.container_name} server")
+        os.system(f"docker stop {cls.container_name}")
+
+        # A generator that died part way collected only some of its answers.
+        # Writing them replaces a complete answer file with a short one that
+        # still satisfies the sources-hash check, so the loss stays invisible
+        # until someone counts the answers -- a flaky docker start once cut
+        # text-search from 42612 answers to 11000 this way. Leave the file
+        # alone; pytest's non-zero exit stops regenerate.sh.
+        if cls.session is None:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: no test reported in, "
+                  f"so the run never started properly.")
+            return
+        if cls.session.testsfailed:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: "
+                  f"{cls.session.testsfailed} test(s) failed, so the "
+                  f"{len(cls.answers)} answers collected are incomplete.")
+            return
+
+        # A run that was narrowed to a subset is short for the same reason a
+        # failed one is, and just as quietly: `pytest generate_array.py -k
+        # test_filter_missing_field` took that answer file from 490 answers to
+        # 8. Only a whole, unfiltered, unaborted run may write.
+        option = cls.session.config.option
+        narrowed = [
+            flag
+            for flag, value in (
+                ("-k", getattr(option, "keyword", "")),
+                ("-m", getattr(option, "markexpr", "")),
+                ("--deselect", getattr(option, "deselect", None)),
+                ("--last-failed", getattr(option, "last_failed", False)),
+            )
+            if value
+        ]
+        if any("::" in arg for arg in cls.session.config.args):
+            narrowed.append("a test id")
+        if cls.session.shouldstop:
+            narrowed.append("an early exit")
+        if narrowed:
+            print(f"NOT writing {cls.ANSWER_FILE_NAME}: {', '.join(narrowed)} "
+                  f"narrowed the run, so the {len(cls.answers)} answers "
+                  f"collected are incomplete.")
+            return
+
         print("Dumping ", len(cls.answers), " answers")
         payload = {
             "sources_hash": compute_sources_hash(),
@@ -76,13 +187,12 @@ class BaseCompatibilityTest:
 
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
-        time.sleep(1)
 
     def setup_data(self, data_set_name, key_type, vector_data_type="FLOAT32"):
         self.data_set_name = data_set_name
         self.key_type = key_type
         self.vector_data_type = vector_data_type
-        load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
+        return load_data(self.client, data_set_name, key_type, vector_data_type=vector_data_type)
 
     def execute_command(self, cmd, excluded=False):
         answer = {"cmd": cmd,
@@ -90,7 +200,7 @@ class BaseCompatibilityTest:
                   "data_set_name": self.data_set_name,
                   "vector_data_type": getattr(self, "vector_data_type", "FLOAT32"),
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
-                  "traceback": "".join(traceback.format_stack())}
+                  "traceback": format_stack_cached()}
         if excluded:
             # Known, intentional difference from Redisearch. The answer is still
             # captured, but the replay only checks that valkey-search does not
@@ -348,6 +458,37 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
 
+    def test_aggregate_groupby_missing_field_reducers(self, key_type, dialect, vector_data_type):
+        """Reducers folding over a group in which no member has the field.
+
+        `missing numbers` groups by @t1 into g_all (every member has @n1),
+        g_none (no member does) and g_mixed. The g_none group is the case that
+        matters: MIN/MAX/SUM/AVG have to fold zero values there, and Redis 8
+        answers inf / -inf / nan rather than a value or an omitted field. Every
+        other dataset populates @n1 on every key, so nothing else in this suite
+        reaches that branch.
+        """
+        self.setup_data("missing numbers", key_type, vector_data_type=vector_data_type)
+        for reducer in ["min", "max", "sum", "avg", "count_distinct"]:
+            self.check(dialect,
+                f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+                f"groupby 1 @t1 reduce {reducer} 1 @n1 as r"
+            )
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+            f"groupby 1 @t1 reduce count 0 as c reduce min 1 @n1 as mn "
+            f"reduce max 1 @n1 as mx reduce sum 1 @n1 as sm reduce avg 1 @n1 as av"
+        )
+        # A TAG field folded by MIN/MAX: Redis 8 folds only numbers, so a
+        # non-numeric input contributes nothing and the group answers the
+        # identity rather than 0.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 4 @__key @n1 @n2 @t1 "
+            f"groupby 1 @t1 reduce min 1 @t1 as mn reduce max 1 @t1 as mx"
+        )
+        # Not covered here: GROUPBY on @n1 itself, where the group key is
+        # absent on some keys.
+
     def test_aggregate_groupby_tolist(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
         # Basic TOLIST on numeric field grouped by tag
@@ -432,6 +573,97 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key asc limit 1 4 ")
         self.check(dialect, f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 sortby 2 @__key desc limit 1 4")
+
+    def test_aggregate_sortby_limit_window(self, key_type, dialect, vector_data_type):
+        """SORTBY paired with a LIMIT that reaches past SORTBY's own bound.
+
+        SORTBY keeps only a bounded number of records, and every other
+        SORTBY+LIMIT case in this suite asks for at most 5 rows at an offset of
+        at most 2, which fits inside that bound whatever it is. These do not:
+        `sortable numbers` holds 15 documents, so a count of 15 exceeds the
+        bound and an offset of 12 starts past it. Without them a SORTBY that
+        silently truncates to its default looks correct.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        # Count past the bound: all 15 rows, not the first few.
+        self.check(dialect, f"{base} limit 0 15")
+        # Offset past the bound: the last 3 rows, not an empty reply.
+        self.check(dialect, f"{base} limit 12 5")
+        # An offset beyond the data is empty for a different reason, and should
+        # stay empty.
+        self.check(dialect, f"{base} limit 20 5")
+        # An explicit MAX smaller than the LIMIT: the LIMIT wins.
+        self.check(dialect, f"{base} max 3 limit 0 15")
+        # MAX 0 means no MAX, so the default bound applies.
+        self.check(dialect, f"{base} max 0")
+        # MAX alone sets the bound when no LIMIT follows.
+        self.check(dialect, f"{base} max 12")
+        # A LIMIT ahead of the SORTBY has already bounded the stream.
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 limit 0 14 sortby 2 @n1 asc")
+
+    def test_aggregate_sortby_bound_across_a_stage(self, key_type, dialect, vector_data_type):
+        """A LIMIT bounds a SORTBY only when the two stages are adjacent.
+
+        Redisearch folds a SORTBY and a neighbouring LIMIT into one pipeline
+        step, so they see the same records. Put any stage between them and they
+        no longer share one, and the LIMIT stops saying anything about how many
+        sorted records have to survive. Nothing else in this suite places a
+        stage between the two, so without these the rule is untested.
+
+        `sortable numbers` holds 15 documents and the default bound is 10.
+        Grouping on @n1, whose 15 values are distinct, turns the surviving
+        records into one row each, so the reply says both how many survived the
+        sort and which ones: 10 rows means the sort kept its default, 15 means
+        the trailing LIMIT reached back across the GROUPBY and raised it.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        group = "groupby 1 @n1 reduce count 0 as c"
+        # A GROUPBY between the two: the LIMIT must not raise the sort's bound.
+        self.check(dialect, f"{base} {group} limit 0 15")
+        # The same pipeline with no trailing LIMIT, for contrast.
+        self.check(dialect, f"{base} {group}")
+        # The LIMIT adjacent to the SORTBY instead: here it does raise it.
+        self.check(dialect, f"{base} limit 0 15 {group}")
+        # An explicit MAX is not overridden by a LIMIT across the GROUPBY.
+        self.check(dialect, f"{base} max 3 {group} limit 0 15")
+        # An APPLY between them behaves the same way, so this is not about
+        # GROUPBY changing the record count.
+        self.check(dialect, f"{base} apply @n1 as m {group} limit 0 15")
+
+    def test_aggregate_sortby_max(self, key_type, dialect, vector_data_type):
+        """MAX replaces SORTBY's default retention bound of 10.
+
+        `sortable numbers` holds 15 documents, so a MAX between 10 and 15
+        separates the three outcomes: 10 rows means the default survived, the
+        MAX value means it was honored, and 15 means nothing bounded the sort.
+
+        MAX 0 is not "unlimited". Measured on redis:8.2 and
+        redis/redis-stack-server over 40 documents, `SORTBY ... MAX 0` returns
+        10 rows, exactly as if no MAX had been written. It spells "unset", so
+        the default applies and a bare MAX 0 cannot be told apart from no MAX.
+        """
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        base = f"ft.aggregate {key_type}_idx1 * load 3 @__key @n1 @n2 sortby 2 @n1 asc"
+        # Below the default: MAX wins, fewer than 10 rows.
+        self.check(dialect, f"{base} max 4")
+        # Between the default and the data size: MAX wins over the default.
+        self.check(dialect, f"{base} max 11")
+        self.check(dialect, f"{base} max 14")
+        # At and past the data size: every record survives.
+        self.check(dialect, f"{base} max 15")
+        self.check(dialect, f"{base} max 100")
+        # MAX 0 means unset, so the default of 10 applies. If MAX 0 were
+        # unlimited this would return all 15.
+        self.check(dialect, f"{base} max 0")
+        # MAX 0 with an adjacent LIMIT past the default: the LIMIT raises the
+        # bound, exactly as it does when no MAX is written at all.
+        self.check(dialect, f"{base} max 0 limit 0 15")
+        # MAX 0 with a GROUPBY in between: nothing raises the bound, so the
+        # default of 10 stands.
+        self.check(dialect, f"{base} max 0 groupby 1 @n1 reduce count 0 as c limit 0 15")
 
     def test_aggregate_short_limit(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
@@ -738,102 +970,61 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 2 @__key @n1 apply {f}(@n1) as nn"
             )
 
-    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
-    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset, vector_data_type):
-        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
+    # Each case is (load_field, apply_expr).
+    #
+    # The TAG-field entries (@t1/@t2/@t3) are the original coverage of
+    # contains() over string attributes and string literals.
+    #
+    # The NUMERIC-field entries (@n1) probe how each engine handles a
+    # numeric attribute when a string function is applied to it. Observed
+    # Redis Stack behavior:
+    #   - strlen/startswith/contains/substr on a numeric -> the APPLY
+    #     pipeline raises an error. The compat framework auto-skips the
+    #     comparison whenever Redis Stack raised, so these cases act as
+    #     no-crash probes against valkey's coercion path -- valkey itself
+    #     coerces the numeric to a string (FormatDouble, %.11g) and
+    #     produces a value. The only assertion here is that valkey does
+    #     not crash on the same input that errors in Redis Stack.
+    #   - lower/upper on a numeric -> Redis Stack returns nil (no error).
+    #     valkey returns the formatted string. This is a *real*
+    #     divergence; lower(@n1) / upper(@n1) are intentionally NOT
+    #     included in the table because they would produce permanent
+    #     compat failures rather than informative coverage.
+    AGGREGATE_STRING_APPLY_CASES = [
+        ("t3", 'contains(@t3, "all")'),
+        ("t3", 'contains(@t3, "value")'),
+        ("t2", 'contains(@t2, "two")'),
+        ("t1", 'contains(@t1, "one")'),
+        ("t1", 'contains(@t1, "")'),
+        ("t1", 'contains("", "one")'),
+        ("t3", 'contains("", "")'),
+        # String functions on a NUMERIC attribute (no-crash probe; see comment).
+        ("n1", 'strlen(@n1)'),
+        ("n1", 'startswith(@n1, "1")'),
+        ("n1", 'startswith(@n1, "-")'),
+        ("n1", 'contains(@n1, "0")'),
+        ("n1", 'substr(@n1, 0, 1)'),
+        ("n1", 'substr(@n1, 0, 3)'),
+    ]
 
-        # String apply function "contains"
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "all")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains(@t3, "value")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t2",
-            "__key",
-            "apply",
-            'contains(@t2, "two")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "one")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "t1",
-            "__key",
-            "apply",
-            'contains(@t1, "")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t1",
-            "apply",
-            'contains("", "one")',
-            "as",
-            "apply_result",
-        )
-        self.check(dialect, 
-            "ft.aggregate",
-            f"{key_type}_idx1",
-            "*",
-            "load",
-            "2",
-            "__key",
-            "t3",
-            "apply",
-            'contains("", "")',
-            "as",
-            "apply_result",
-        )
+    @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
+    def test_aggregate_string_apply_functions(self, key_type, dialect, dataset,
+                                              vector_data_type):
+        self.setup_data(dataset, key_type, vector_data_type=vector_data_type)
+        for load_field, apply_expr in self.AGGREGATE_STRING_APPLY_CASES:
+            self.check(dialect,
+                "ft.aggregate",
+                f"{key_type}_idx1",
+                "*",
+                "load",
+                "2",
+                "__key",
+                load_field,
+                "apply",
+                apply_expr,
+                "as",
+                "apply_result",
+            )
 
     @pytest.mark.parametrize("dataset", ["hard numbers", "hard strings"])
     def test_aggregate_substr(self, key_type, dialect, dataset, vector_data_type):
@@ -1000,7 +1191,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         
         # Switch to sortable numbers for duplicate comparison values
         self.client.execute_command("FLUSHALL SYNC")
-        time.sleep(0.5)
         self.setup_data("sortable numbers", key_type)
         
         # Test with duplicate comparison values (tie-breaking)
@@ -1044,4 +1234,5 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
             f"groupby 1 @n2 "
             f"reduce first_value 4 @n1 BY @n2 INVALID as first_error_invalid"
         )
+
 

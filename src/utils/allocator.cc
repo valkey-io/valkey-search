@@ -17,6 +17,7 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/log/check.h"
 #include "absl/synchronization/mutex.h"
+#include "vmsdk/src/sharded_atomic.h"
 
 namespace valkey_search {
 
@@ -37,11 +38,9 @@ class ChunkTracker {
     auto it = chunks_by_data_.upper_bound(ptr);
     if (it != chunks_by_data_.begin()) {
       --it;
-      if (it->second->data.get() <= ptr) {
-        DCHECK_GT(it->second->data.get() +
-                      BufferSize(it->second->entries_in_chunk,
-                                 it->second->allocator->ChunkSize()),
-                  ptr);
+      if (ptr < it->second->data.get() +
+                    BufferSize(it->second->entries_in_chunk,
+                               it->second->allocator->ChunkSize())) {
         return it->second;
       }
     }
@@ -70,7 +69,6 @@ size_t CalcChunkFreeGroup(size_t free_cnt) {
 
 int UpperBoundToMultipleOf8(int num) { return (num + 7) & ~7; }
 
-// TODO: allow deletion of chunks when they are empty
 FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
     : size_(size), require_ptr_alignment_(require_ptr_alignment) {
   if (require_ptr_alignment_) {
@@ -83,6 +81,19 @@ FixedSizeAllocator::~FixedSizeAllocator() {
   for (auto &chunk_group : chunks_grouped_by_free_entries_) {
     CHECK(chunk_group.Empty());
   }
+}
+
+namespace {
+vmsdk::ShardedAtomic<int64_t> global_active_allocations;
+vmsdk::ShardedAtomic<int64_t> global_chunk_count;
+}  // namespace
+
+uint64_t FixedSizeAllocator::GlobalActiveAllocations() {
+  return static_cast<uint64_t>(global_active_allocations.GetNonNegativeTotal());
+}
+
+uint64_t FixedSizeAllocator::GlobalChunkCount() {
+  return static_cast<uint64_t>(global_chunk_count.GetNonNegativeTotal());
 }
 
 size_t FixedSizeAllocator::ChunkCount() const {
@@ -112,6 +123,7 @@ char *FixedSizeAllocator::Allocate() {
   auto ptr = current_chunk_->free_list.top();
   current_chunk_->free_list.pop();
   ++active_allocations_;
+  global_active_allocations.Add(1);
 
   HandleChunkEntryUsageChange(current_chunk_, old_free_group);
   if (!current_chunk_) {
@@ -162,12 +174,14 @@ void FixedSizeAllocator::AllocateChunk() {
   chunks_grouped_by_free_entries_[CalcChunkFreeGroup(
                                       current_chunk_->entries_in_chunk)]
       .PushBack(current_chunk_);
+  global_chunk_count.Add(1);
 }
 
 void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
   {
     absl::MutexLock lock(&mutex_);
     --active_allocations_;
+    global_active_allocations.Subtract(1);
 
     int free_group = CalcChunkFreeGroup(chunk->free_list.size());
     chunk->free_list.push(ptr);
@@ -180,6 +194,7 @@ void FixedSizeAllocator::Free(AllocatorChunk *chunk, char *ptr) {
         current_chunk_ = nullptr;
       }
       delete chunk;
+      global_chunk_count.Subtract(1);
     }
     SelectCurrentChunk();
   }
@@ -208,13 +223,16 @@ AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
 
 AllocatorChunk::~AllocatorChunk() { chunk_tracker.Untrack(this); }
 
-bool Allocator::Free(char *ptr) {
+void Allocator::Free(char *ptr) {
+  if (ptr == nullptr) {
+    return;
+  }
   auto chunk = chunk_tracker.FindChunk(ptr);
   if (!chunk) {
-    return false;
+    ::operator delete(ptr);
+    return;
   }
   chunk->allocator->Free(const_cast<AllocatorChunk *>(chunk), ptr);
-  return true;
 }
 
 }  // namespace valkey_search

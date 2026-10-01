@@ -1,20 +1,24 @@
 """
 End-to-end tests for BM25STD scoring through FT.SEARCH ... WITHSCORES.
 
-Scores are verified against the 8.6 reference implementation. Every TEXT field
-is NOSTEM so query terms match raw tokens and the verified tables apply directly.
+Scores are verified against the 8.6 reference implementation. Most TEXT fields are
+NOSTEM so query terms match raw tokens and the verified tables apply directly;
+idxStem (Group 15) enables stemming to cover stem-family scoring.
 
 WITHSCORES reply layout: [count, key, score_str, attrs, key, score_str, ...]
-where score_str is formatted "%.12g".
+where score_str is formatted by expr::FormatDouble.
 """
 
 import struct
 
 import pytest
 from valkey import ResponseError
-from valkey_search_test_case import ValkeySearchTestCaseBase
+from valkey_search_test_case import (
+    ValkeySearchTestCaseBase,
+    ValkeySearchTestCaseDebugMode,
+)
 from valkeytestframework.conftest import resource_port_tracker
-from utils import IndexingTestHelper
+from utils import IndexingTestHelper, run_in_thread
 from valkeytestframework.util import waiters
 
 SCORE_ABS_TOL = 1e-5
@@ -30,9 +34,13 @@ def _vec(*floats):
 # =====================================================================
 
 # General-purpose index: two TEXT fields + NUMERIC + TAG + VECTOR.
+# WITHSUFFIXTRIE on `body` enables the suffix expansion queries; it is a lookup
+# structure only and changes neither tokenization nor scores, so every verified
+# constant below applies unchanged.
 IDX_MAIN = [
     "FT.CREATE", "idxMain", "ON", "HASH", "PREFIX", "1", "doc:",
-    "SCHEMA", "body", "TEXT", "NOSTEM", "title", "TEXT", "NOSTEM",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+    "title", "TEXT", "NOSTEM",
     "rank", "NUMERIC", "cat", "TAG",
     "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "2",
     "DISTANCE_METRIC", "L2",
@@ -52,6 +60,78 @@ IDX_NO_TEXT_FIELD = [
     "SCHEMA", "rank", "NUMERIC", "cat", "TAG",
 ]
 
+# Single TEXT field with a suffix trie, for prefix / suffix / fuzzy EXPANSION
+# scoring on a corpus where several terms expand from one pattern.
+IDX_EXPANSION = [
+    "FT.CREATE", "idxExpansion", "ON", "HASH", "PREFIX", "1", "exp:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+]
+
+# TEXT (so doc lengths are non-zero and tag terms can score) + TAG + NUMERIC,
+# for TAG PREFIX expansion scoring.
+IDX_TAG_PREFIX = [
+    "FT.CREATE", "idxTagPrefix", "ON", "HASH", "PREFIX", "1", "tpx:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "cat", "TAG", "rank", "NUMERIC",
+]
+
+# Two TEXT fields share one posting tree, so which field a term occurred in is
+# visible only through the field mask. NUMERIC forces the extra-step scoring path;
+# WITHSUFFIXTRIE enables the suffix expansion.
+IDX_FIELD_SCOPE = [
+    "FT.CREATE", "idxFieldScope", "ON", "HASH", "PREFIX", "1", "fs:",
+    "SCHEMA", "body", "TEXT", "NOSTEM", "WITHSUFFIXTRIE",
+    "title", "TEXT", "NOSTEM", "rank", "NUMERIC",
+]
+
+
+# idxStem: one stemming index (no NOSTEM) shared by the stem-family tests. Query
+# "running" (stem root "run") exercises all three BM25 leaves:
+#   - exact word "running"    -> s:1, s:5, s:6
+#   - stem root literal "run" -> s:4, s:5   (its own leaf, own dt)
+#   - stem inflections        -> s:1/s:2/s:3/s:5/s:6 (distinct-doc dt)
+# s:5 "run running" hits all three leaves; s:6 "running runs" holds two distinct
+# inflections so the stem leaf's dt must count it once; s:7 ("swim") doesn't
+# match. N=7, avg_doc_len=1.571. Leaf dts: exact 3, root 2, stem 5 (distinct).
+_DOCS_STEM = {
+    "s:1": "running",         # exact + stem
+    "s:2": "runs",            # stem only
+    "s:3": "runs runs runs",  # stem only, TF 3
+    "s:4": "run",             # stem root literal -> its own leaf only
+    "s:5": "run running",     # root + exact + stem -> all three leaves summed
+    "s:6": "running runs",    # two inflections -> stem dt counts once
+    "s:7": "swimming",        # filler, does not match
+}
+IDX_STEM = [
+    "FT.CREATE", "idxStem", "ON", "HASH", "PREFIX", "1", "s:",
+    "SCHEMA", "body", "TEXT",
+]
+STEM_DOCS = {key: {"body": body} for key, body in _DOCS_STEM.items()}
+# Each matched doc scored on the leaves it hits, summed. Verified against the
+# industry-standard reference.
+STEM_RUNNING_SCORES = {
+    "s:5": 2.127192, "s:1": 1.411321, "s:4": 1.366420,
+    "s:6": 1.222204, "s:3": 0.492803, "s:2": 0.440174,
+}
+
+# idxStemMix: the SAME 7 stemming text docs as idxStem (same keys, so N=7,
+# avg_doc_len, and every stem-leaf dt are identical, and the stem scores match
+# STEM_RUNNING_SCORES) PLUS a numeric `rank` and tag `cat` field. A query that
+# adds a numeric or tag clause has a non-text predicate, so its scoring takes the
+# EXTRA-STEP path (ResolveLeaves/ScoreNode) rather than the pure-text in-iterator
+# path -- Group 15 pins the stem split on that path against idxStem.
+_STEMMIX_RANK = {"s:1": 1, "s:2": 2, "s:3": 3, "s:4": 4,
+                 "s:5": 5, "s:6": 6, "s:7": 7}
+_STEMMIX_CAT = {"s:1": "a", "s:2": "a", "s:3": "b", "s:4": "a",
+                "s:5": "b", "s:6": "a", "s:7": "b"}
+IDX_STEM_MIX = [
+    "FT.CREATE", "idxStemMix", "ON", "HASH", "PREFIX", "1", "s:",
+    "SCHEMA", "body", "TEXT", "rank", "NUMERIC", "cat", "TAG",
+]
+STEM_MIX_DOCS = {
+    key: {"body": body, "rank": str(_STEMMIX_RANK[key]),
+          "cat": _STEMMIX_CAT[key]}
+    for key, body in _DOCS_STEM.items()
+}
 
 # =====================================================================
 # Documents
@@ -96,9 +176,59 @@ PARTIAL_TEXT_DOCS = {
     **{f"doc:{i}": {"cat": "x", "rank": str(i)} for i in range(5, 11)},
 }
 
+# Every doc carries the same tag, so the tag leaf's IDF is constant and doc_len
+# alone ranks it: shortest body first. The vectors run the other way, so KNN
+# distance order is the exact reverse of tag-score order.
+TAG_VEC_DOCS = {
+    f"doc:{i}": {
+        "body": " ".join("one two three four five".split()[:i]),
+        "cat": "a",
+        "vec": _vec(round(0.6 - 0.1 * i, 1), 0.0),
+    }
+    for i in range(1, 6)
+}
+
 # Ten non-stopword tokens: doc_len is 10 in an indexed TEXT field, 0 anywhere
 # else, so the same value tells the two apart.
 TEN_WORDS = "one two three four five six seven eight nine ten"
+
+# Expansion corpus. dt: cat=1, category=3, catalog=1, running=1, jogging=1.
+# exp:multi matches cat* through two terms, every other doc through exactly one.
+EXPANSION_DOCS = {
+    "exp:cat": {"body": "cat"},
+    "exp:multi": {"body": "category catalog"},
+    "exp:cat2": {"body": "category"},
+    "exp:cat3": {"body": "category"},
+    "exp:run": {"body": "running"},
+    "exp:jog": {"body": "jogging"},
+    "exp:dog": {"body": "dog"},
+}
+
+# Field-scope corpus: fs:1 carries `alxta` in title and `alzta` in body, the rest
+# carry `alxta` in body. dt: alxta=4, alzta=1. Every doc_len is 2 = avg_doc_len,
+# so the TF factor is exactly 1 and each score equals its term's IDF. `alxta`
+# sorts ahead of `alzta` in the forward AND the reversed trie, so a field-blind
+# expansion would credit fs:1 with alxta -- the wrong term, at 1/11th the score.
+FIELD_SCOPE_DOCS = {
+    "fs:1": {"body": "alzta", "title": "alxta", "rank": "1"},
+    "fs:2": {"body": "alxta", "title": "zed", "rank": "2"},
+    "fs:3": {"body": "alxta", "title": "zed", "rank": "3"},
+    "fs:4": {"body": "alxta", "title": "zed", "rank": "4"},
+}
+IDF_ALZTA = 1.203973
+IDF_ALXTA = 0.105361
+
+# Tag prefix corpus: cat dt redis=4 (a,b,c,multi), redcap=2 (d,multi), so the two
+# values matching `red*` carry distinct IDFs and the value a multi-match doc is
+# scored on is observable. Identical one-token bodies keep doc_len constant.
+TAG_PREFIX_DOCS = {
+    "tpx:a": {"body": "aa", "cat": "redis", "rank": "1"},
+    "tpx:b": {"body": "aa", "cat": "redis", "rank": "2"},
+    "tpx:c": {"body": "aa", "cat": "redis", "rank": "3"},
+    "tpx:d": {"body": "aa", "cat": "redcap", "rank": "4"},
+    "tpx:multi": {"body": "aa", "cat": "redis,redcap", "rank": "5"},
+    "tpx:green": {"body": "aa", "cat": "green", "rank": "6"},
+}
 
 
 # =====================================================================
@@ -206,6 +336,34 @@ class TestScoring(ValkeySearchTestCaseBase):
         assert or_groups == pytest.approx({**hello_world, "doc:6": 3.404279},
                                           abs=SCORE_ABS_TOL)
 
+        # A nested OR is still one flat union: doc:6 matches both inner branches
+        # and accumulates rare + unique, doc:8 only rare.
+        _, rare = search(client, IDX_MAIN, "rare")
+        _, unique = search(client, IDX_MAIN, "unique")
+        keys, nested_or = search(client, IDX_MAIN, "hello | (rare | unique)")
+        assert keys == ["doc:6", "doc:8", "doc:5", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert nested_or == pytest.approx(
+            {**hello,
+             "doc:6": rare["doc:6"] + unique["doc:6"],
+             "doc:8": rare["doc:8"]},
+            abs=SCORE_ABS_TOL)
+
+        # Group weights accumulate down both OR levels before reaching a leaf:
+        # hello scales by 2*2, rare by 2*2*3, unique by 2*2*2. doc:6 sums the two
+        # inner branches at their own multipliers.
+        keys, weighted_nested_or = search(
+            client, IDX_MAIN,
+            "((hello)=>{$weight:2} | ((rare)=>{$weight:3} | "
+            "(unique)=>{$weight:2})=>{$weight:2})=>{$weight:2}")
+        assert keys == ["doc:6", "doc:8", "doc:5", "doc:4", "doc:3", "doc:2",
+                        "doc:7", "doc:1"]
+        assert weighted_nested_or == pytest.approx(
+            {**{k: 4 * v for k, v in hello.items()},
+             "doc:6": 12 * rare["doc:6"] + 8 * unique["doc:6"],
+             "doc:8": 12 * rare["doc:8"]},
+            abs=SCORE_ABS_TOL)
+
         # Three-leaf AND accumulates every leaf.
         keys, three_leaf = search(client, IDX_MAIN, "hello world one")
         assert keys == ["doc:2", "doc:7", "doc:3", "doc:1", "doc:4"]
@@ -296,6 +454,28 @@ class TestScoring(ValkeySearchTestCaseBase):
         _, title = search(client, IDX_MAIN, "@title:alpha")
         assert title == pytest.approx({"doc:1": scoped["doc:1"]},
                                       abs=SCORE_ABS_TOL)
+
+        # TF is doc-wide, but ADMISSION stays per-field: a term the doc carries
+        # only in another field must contribute nothing. fs:1 has `alxta` in title
+        # alone, so the OR admits it on rank while the @body leaf scores 0.
+        load(client, IDX_FIELD_SCOPE, FIELD_SCOPE_DOCS)
+        keys, or_scoped = search(client, IDX_FIELD_SCOPE,
+                                 "(@body:alxta)|(@rank:[1 1])")
+        assert keys == ["fs:2", "fs:3", "fs:4", "fs:1"]
+        assert or_scoped == pytest.approx(
+            {"fs:2": IDF_ALXTA, "fs:3": IDF_ALXTA, "fs:4": IDF_ALXTA,
+             "fs:1": 0.0}, abs=SCORE_ABS_TOL)
+
+        # Scoping the same leaf to the field fs:1 does carry admits only fs:1.
+        _, title_scoped = search(client, IDX_FIELD_SCOPE,
+                                 "(@title:alxta)|(@rank:[1 1])")
+        assert title_scoped == pytest.approx({"fs:1": IDF_ALXTA},
+                                             abs=SCORE_ABS_TOL)
+
+        # Unscoped, the mask covers both fields, so every doc scores on alxta.
+        _, all_fields = search(client, IDX_FIELD_SCOPE, "alxta @rank:[0 100]")
+        assert all_fields == pytest.approx(
+            {f"fs:{i}": IDF_ALXTA for i in range(1, 5)}, abs=SCORE_ABS_TOL)
 
     # Group 6: an exact phrase narrows admission by adjacency without changing scores.
     def test_exact_phrase(self):
@@ -546,3 +726,240 @@ class TestScoring(ValkeySearchTestCaseBase):
         wait_indexed(client, IDX_MAIN, 8)
         _, restored = search(client, IDX_MAIN, "hello")
         assert restored == pytest.approx(before, abs=SCORE_ABS_TOL)
+
+    # Group 15: a stemmed term is a UNION of independent BM25 leaves whose scores
+    # are SUMMED -- the exact word, the stem root literal, and the stem
+    # inflections -- each with its own dt, unlike prefix/fuzzy which pick one.
+    # A pure-text query scores in the term iterator; adding a numeric or tag
+    # clause routes the same split through the extra-step path, yield same result.
+    def test_stemming(self):
+        client = self.server.get_new_client()
+        load(client, IDX_STEM, STEM_DOCS)
+
+        # Each doc scores on the leaves it hits: s:5 "run running" all three,
+        # s:4 "run" the root leaf alone, s:6 "running runs" counted once in the
+        # stem leaf's distinct dt. s:7 ("swimming") does not match at all.
+        keys, stem = search(client, IDX_STEM, "running")
+        assert keys == ["s:5", "s:1", "s:4", "s:6", "s:3", "s:2"]
+        assert stem == pytest.approx(STEM_RUNNING_SCORES, abs=SCORE_ABS_TOL)
+
+        # The exact query form earns both the exact and the stem leaf, so s:1
+        # ("running", TF 1) outranks s:3 ("runs runs runs", TF 3) which carries
+        # the stem leaf alone: the exact-match boost beats the higher inflection TF.
+        assert stem["s:1"] > stem["s:3"]
+
+        # Same docs and same query, but a schema with a numeric and a tag field:
+        # any non-text clause makes scoring take the extra-step path instead of
+        # the term iterator. idxStemMix indexes the same 7 bodies, so every corpus
+        # statistic matches and the scores above are the oracle for that path.
+        load(client, IDX_STEM_MIX, STEM_MIX_DOCS)
+
+        # A numeric clause admits every doc and contributes 0, so the run-family
+        # scores must come out identical to the in-iterator run above.
+        keys, with_numeric = search(client, IDX_STEM_MIX, "running @rank:[1 100]")
+        assert keys == ["s:5", "s:1", "s:4", "s:6", "s:3", "s:2"]
+        assert with_numeric == pytest.approx(stem, abs=SCORE_ABS_TOL)
+
+        # ORing the numeric branch admits s:7 too, which holds no "run" term and
+        # so scores 0 while the rest keep their stem scores.
+        _, or_numeric = search(client, IDX_STEM_MIX, "running | @rank:[7 7]")
+        assert or_numeric == pytest.approx({**stem, "s:7": 0.0},
+                                           abs=SCORE_ABS_TOL)
+
+        # The stem expansion and a tag leaf sum, so each admitted doc scores its
+        # stem total plus its tag-only score.
+        keys, with_tag = search(client, IDX_STEM_MIX, "running @cat:{a}")
+        _, tag_only = search(client, IDX_STEM_MIX, "@cat:{a}")
+        assert set(keys) == {"s:1", "s:2", "s:4", "s:6"}
+        assert with_tag == pytest.approx(
+            {k: stem[k] + tag_only[k] for k in keys}, abs=SCORE_ABS_TOL)
+
+    # Group 16: prefix / suffix / fuzzy expansions score ONE matched term.
+    # No reference values pinned: which term represents a multi-match doc is
+    # unspecified and we pick differently, so assert against our own scores.
+    def test_expansion_scoring(self):
+        client = self.server.get_new_client()
+        load(client, IDX_EXPANSION, EXPANSION_DOCS)
+
+        # Each pattern expands to several terms, but the asserted doc carries
+        # exactly one, so it must score the same as the exact-term query.
+        for pattern, term, key in [("cat*", "cat", "exp:cat"),
+                                   ("@body:*ing", "running", "exp:run"),
+                                   ("%cat%", "cat", "exp:cat")]:
+            _, expanded = search(client, IDX_EXPANSION, pattern)
+            _, exact = search(client, IDX_EXPANSION, term)
+            assert expanded[key] > 0.0, pattern
+            assert expanded[key] == pytest.approx(exact[key],
+                                                  abs=SCORE_ABS_TOL), pattern
+
+        # exp:multi matches cat* via "category" (dt=3) and "catalog" (dt=1), so
+        # the pick is observable: one of them, and strictly below their sum.
+        _, prefix = search(client, IDX_EXPANSION, "cat*")
+        _, category = search(client, IDX_EXPANSION, "category")
+        _, catalog = search(client, IDX_EXPANSION, "catalog")
+        got = prefix["exp:multi"]
+        one, two = category["exp:multi"], catalog["exp:multi"]
+        assert got < one + two - SCORE_ABS_TOL
+        assert (got == pytest.approx(one, abs=SCORE_ABS_TOL)
+                or got == pytest.approx(two, abs=SCORE_ABS_TOL)), (
+            f"prefix={got} category={one} catalog={two}")
+
+        # A text+numeric/tag query takes the extra-step path. Each pattern
+        # single-matches "hello", so these are the verified "hello @cat:{a}"
+        # values; a dropped expansion would leave the text leaf at 0.
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        for pattern in ("hell*", "@body:*llo", "@body:%helo%"):
+            keys, scores = search(client, IDX_MAIN,
+                                  f"{pattern} @cat:{{a}} @rank:[0 100]")
+            assert keys == ["doc:3", "doc:1"], pattern
+            assert scores == pytest.approx(
+                {"doc:3": 2.234903, "doc:1": 1.492684},
+                abs=SCORE_ABS_TOL), pattern
+
+        # A field-scoped expansion must represent a doc by a term it carries in
+        # THAT field. fs:1 holds alzta in body and alxta in title, so despite
+        # alxta sorting first it may only be scored on alzta -- one term matches
+        # per field here, so unlike above the pick is determined and pinnable.
+        load(client, IDX_FIELD_SCOPE, FIELD_SCOPE_DOCS)
+        for pattern in ("@body:al*", "@body:*ta", "@body:%alata%"):
+            keys, scores = search(client, IDX_FIELD_SCOPE,
+                                  f"{pattern} @rank:[0 100]")
+            assert keys == ["fs:1", "fs:2", "fs:3", "fs:4"], pattern
+            assert scores == pytest.approx(
+                {"fs:1": IDF_ALZTA, "fs:2": IDF_ALXTA,
+                 "fs:3": IDF_ALXTA, "fs:4": IDF_ALXTA},
+                abs=SCORE_ABS_TOL), pattern
+
+        # Scoped to title, the same patterns reach only fs:1, and only via alxta.
+        # No suffix pattern: only `body` has WITHSUFFIXTRIE.
+        for pattern in ("@title:al*", "@title:%alata%"):
+            _, scores = search(client, IDX_FIELD_SCOPE,
+                               f"{pattern} @rank:[0 100]")
+            assert scores == pytest.approx({"fs:1": IDF_ALXTA},
+                                           abs=SCORE_ABS_TOL), pattern
+
+    # Group 17: a tag prefix scores ONE matched value, an explicit union sums.
+    def test_tag_prefix_scoring(self):
+        client = self.server.get_new_client()
+        load(client, IDX_TAG_PREFIX, TAG_PREFIX_DOCS)
+        _, prefix = search(client, IDX_TAG_PREFIX, "@cat:{red*}")
+        _, redis = search(client, IDX_TAG_PREFIX, "@cat:{redis}")
+        _, redcap = search(client, IDX_TAG_PREFIX, "@cat:{redcap}")
+
+        # tpx:a carries only `redis`, so red* resolves to that one value.
+        assert prefix["tpx:a"] > 0.0
+        assert prefix["tpx:a"] == pytest.approx(redis["tpx:a"],
+                                                abs=SCORE_ABS_TOL)
+
+        # tpx:multi carries both values red* matches, with distinct IDFs. An
+        # explicit union sums them...
+        _, both = search(client, IDX_TAG_PREFIX, "@cat:{redis|redcap}")
+        got = prefix["tpx:multi"]
+        one, two = redis["tpx:multi"], redcap["tpx:multi"]
+        assert both["tpx:multi"] == pytest.approx(one + two,
+                                                  abs=SCORE_ABS_TOL)
+        # ...while the prefix contributes exactly one of them.
+        assert got < both["tpx:multi"] - SCORE_ABS_TOL
+        assert (got == pytest.approx(one, abs=SCORE_ABS_TOL)
+                or got == pytest.approx(two, abs=SCORE_ABS_TOL)), (
+            f"prefix={got} redis={one} redcap={two}")
+
+        # The numeric adds 0, so the combined query must equal the prefix alone.
+        _, combined = search(client, IDX_TAG_PREFIX,
+                             "@cat:{red*} @rank:[0 100]")
+        assert combined == pytest.approx(prefix, abs=SCORE_ABS_TOL)
+
+
+# The kill switch is a dev config, so it needs debug-mode to be settable.
+    # Group 15: a hybrid tag=>[KNN] query ranks by tag score, not by distance.
+    # The reference (Redis 8.10.1 / search 81000) scores a tag-only prefilter
+    # exactly as it scores the same tag query without the KNN clause.
+    @pytest.mark.skip(reason=(
+        "https://github.com/valkey-io/valkey-search/issues/1414"
+        " -- a tag=>[KNN] prefilter returns score 0 for every document and"
+        " keeps distance order, where the reference scores the tag predicate"
+        " exactly as it does without the KNN clause. The test is written to"
+        " fail against that defect; unskip it when the issue is fixed."))
+    def test_hybrid_tag_vector(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, TAG_VEC_DOCS)
+        params = ("PARAMS", "2", "q", _vec(0.0, 0.0), "DIALECT", "2")
+
+        # Baseline: the tag query on its own ranks shortest-body-first.
+        keys, tag_only = search(client, IDX_MAIN, "@cat:{a}")
+        assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5"]
+        assert tag_only == pytest.approx({
+            "doc:1": 0.119641, "doc:2": 0.100750, "doc:3": 0.087011,
+            "doc:4": 0.076570, "doc:5": 0.068366,
+        }, abs=SCORE_ABS_TOL)
+
+        # Attaching KNN must not drop the tag relevance: same scores, same
+        # order, even though the KNN distance order is the exact reverse.
+        keys, hybrid = search(client, IDX_MAIN, "@cat:{a}=>[KNN 5 @vec $q]",
+                              *params)
+        assert hybrid == pytest.approx(tag_only, abs=SCORE_ABS_TOL)
+        assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5"]
+
+
+class TestScoringDisabled(ValkeySearchTestCaseDebugMode):
+
+    def test_scoring_disabled_zeroes_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+
+        # Pure text is scored in-iterator; text+tag takes the extra step.
+        queries = ["hello", "hello @cat:{a}"]
+
+        # Baseline: scores are non-zero, so the zeroes below are the switch
+        # working rather than an empty result.
+        for query in queries:
+            _, scores = search(client, IDX_MAIN, query)
+            assert scores and all(v > 0.0 for v in scores.values()), \
+                f"expected non-zero scores for {query!r}, got {scores}"
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same queries still match the same docs; every score is now 0.
+        for query in queries:
+            keys, scores = search(client, IDX_MAIN, query)
+            assert keys and scores == pytest.approx({k: 0.0 for k in keys}), \
+                f"expected all-zero scores for {query!r}, got {scores}"
+
+    def test_scoring_disabled_zeroes_recomputed_scores(self):
+        client = self.server.get_new_client()
+        load(client, IDX_MAIN, PARTIAL_TEXT_DOCS)
+        stat = lambda field: int(client.info("SEARCH")["search_" + field])
+        pausepoint = lambda verb: client.execute_command(
+            "FT._DEBUG PAUSEPOINT", verb, "block_mutation_queue")
+
+        def score_across_mutation(body):
+            """Parks doc:1's index update so its db sequence number runs ahead
+            of the index's: the query blocks on the contention check, then
+            resumes into the content fetch, which rescores doc:1 through
+            SingleDocumentScorer. Returns (scores, docs rescored there)."""
+            revals, blocked = stat("predicate_revalidation"), stat(
+                "text_query_blocked_count")
+            pausepoint("SET")
+            hset = run_in_thread(lambda: self.server.get_new_client().hset(
+                "doc:1", "body", body))[0]
+            waiters.wait_for_true(lambda: int(pausepoint("TEST")) > 0)
+            searcher, res, _ = run_in_thread(
+                lambda: search(self.server.get_new_client(), IDX_MAIN, "hello"))
+            waiters.wait_for_true(
+                lambda: stat("text_query_blocked_count") > blocked)
+            pausepoint("RESET")
+            for thread in (hset, searcher):
+                thread.join()
+            return res[0][1], stat("predicate_revalidation") - revals
+
+        # Baseline: the recompute runs and yields a non-zero score.
+        scores, rescored = score_across_mutation("hello hello world")
+        assert rescored >= 1 and scores["doc:1"] > 0.0, scores
+
+        client.execute_command("CONFIG", "SET", "search.scoring-disabled", "yes")
+
+        # Same window, switch on: still revalidated and kept, now scored 0.
+        scores, rescored = score_across_mutation("hello hello")
+        assert rescored >= 1, "recompute path never ran"
+        assert "doc:1" in scores, scores
+        assert scores == pytest.approx({k: 0.0 for k in scores}), scores

@@ -1,11 +1,12 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest
 import random
 import re
 import os
-import traceback
 from . import data_sets
 from .data_sets import load_data
-from .generate import BaseCompatibilityTest
+from .generate import BaseCompatibilityTest, format_stack_cached
 from .text_query_builder import *
 
 # exclude some edge cases with known Redis bugs
@@ -88,7 +89,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         self.key_type = key_type
         self.schema_type = schema_type
         self.client.execute_command("FLUSHALL SYNC")
-        load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
+        return load_data(self.client, data_set_name, key_type, data_source='text', schema_type=schema_type)
     
     def execute_command(self, cmd):
         """Override to include schema_type in answer."""
@@ -97,7 +98,7 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
                 "data_set_name": self.data_set_name,
                 "schema_type": self.schema_type,
                 "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
-                "traceback": "".join(traceback.format_stack())}
+                "traceback": format_stack_cached()}
         try:
             print("Cmd:", *cmd)
             answer["result"] = self.client.execute_command(*cmd)

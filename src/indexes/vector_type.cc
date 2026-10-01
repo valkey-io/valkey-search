@@ -139,11 +139,11 @@ void VectorType<T>::SetProtoDataType(
 }
 
 template <typename T>
-vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringRecord(
-    vmsdk::UniqueValkeyString record) const {
-  auto record_str = vmsdk::ToStringView(record.get());
-  if (absl::ConsumePrefix(&record_str, "[")) {
-    absl::ConsumeSuffix(&record_str, "]");
+vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringAttribute(
+    vmsdk::UniqueValkeyString attribute) const {
+  auto attribute_str = vmsdk::ToStringView(attribute.get());
+  if (absl::ConsumePrefix(&attribute_str, "[")) {
+    absl::ConsumeSuffix(&attribute_str, "]");
   }
   std::string binary_string;
   // The payload is expected to hold `dimensions_` elements. Reserving that up
@@ -154,7 +154,7 @@ vmsdk::UniqueValkeyString VectorType<T>::NormalizeStringRecord(
   // std::vector<std::string>: absl::StrSplit yields string_views into the
   // record, so no per-element buffer is allocated.
   for (absl::string_view element :
-       absl::StrSplit(record_str, ',', absl::SkipWhitespace())) {
+       absl::StrSplit(attribute_str, ',', absl::SkipWhitespace())) {
     float value;
     if (!absl::SimpleAtof(element, &value)) {
       return nullptr;

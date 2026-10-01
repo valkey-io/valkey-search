@@ -8,6 +8,8 @@ from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
 import pytest
+from utils import IndexingTestHelper
+from valkeytestframework.util import waiters
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -1025,6 +1027,50 @@ class TestNonVector(ValkeySearchTestCaseBase):
         assert result[0] == 1
         assert result[1] == b'multifield_product:4'
 
+    def test_zero_length_json_key_is_indexed(self):
+        client: Valkey = self.server.get_new_client()
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 19.99, "rating": 4.8})
+        ) == b"OK"
+        assert client.execute_command(
+            "FT.CREATE", "idx", "ON", "JSON", "PREFIX", "1", "",
+            "SCHEMA",
+            "$.category", "AS", "category", "TAG",
+            "$.price", "AS", "price", "NUMERIC",
+            "$.rating", "AS", "rating", "NUMERIC"
+        ) == b"OK"
+
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
+
+        result = client.execute_command(
+            "FT.SEARCH", "idx", "@category:{books} @price:[19 20]"
+        )
+        assert result[0] == 1
+        assert result[1] == b""
+        assert result[2][0] == b"$"
+        assert json.loads(result[2][1].decode("utf-8")) == {
+            "category": "books",
+            "price": 19.99,
+            "rating": 4.8,
+        }
+
+        assert client.execute_command(
+            "JSON.SET", "", "$",
+            json.dumps({"category": "books", "price": 25.0, "rating": 4.8})
+        ) == b"OK"
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[25 25]", "NOCONTENT"
+            )[0] == 1
+        )
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "idx", "@category:{books} @price:[19 20]", "NOCONTENT"
+            )[0] == 0
+        )
+
     def test_bulk_limit_background_changes(self):
         """
             Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
@@ -1040,6 +1086,93 @@ class TestNonVector(ValkeySearchTestCaseBase):
         client: Valkey = self.server.get_new_client()
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
+
+class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
+    """
+        The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;
+        issue #1353 item 4) is gated on search.emulate-release: pre-1.3.0
+        every sort key used '#'. debug-mode is required to set
+        emulate-release at the module version.
+    """
+
+    def test_sortkey_prefix_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "skg_idx", "ON", "HASH", "PREFIX", "1", "skg:",
+            "SCHEMA", "m", "TAG", "z", "TEXT", "SORTABLE",
+            "n", "NUMERIC") == b"OK"
+        assert client.execute_command(
+            "HSET", "skg:1", "m", "all", "z", "apple", "n", "1") == 3
+        # NUMERIC stays '#' on both sides of the gate.
+        for release, z_prefix in (("1.2.1", b"#"), ("1.3.0", b"$")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "skg_idx", "@m:{all}", "SORTBY", "z", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "z", "DIALECT", "2")
+            assert result == [1, b"skg:1", z_prefix + b"apple",
+                              [b"z", b"apple"]], f"emulate-release {release}"
+            result = client.execute_command(
+                "FT.SEARCH", "skg_idx", "@m:{all}", "SORTBY", "n", "ASC",
+                "WITHSORTKEYS", "RETURN", "1", "n", "DIALECT", "2")
+            assert result == [1, b"skg:1", b"#1",
+                              [b"n", b"1"]], f"emulate-release {release}"
+
+
+class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
+    """
+        Repeated RETURN clauses are last-one-wins (issue #1353 item 7),
+        gated on search.emulate-release: pre-1.3.0 a `RETURN 0` latched
+        no-content for the whole command and repeated clauses accumulated
+        fields. The NOCONTENT keyword is sticky on both sides of the gate.
+        debug-mode is required to set emulate-release at the module version.
+    """
+
+    def test_divergence_return_clause_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "rcg_idx", "ON", "HASH", "PREFIX", "1", "rcg:",
+            "SCHEMA", "m", "TAG", "p", "NUMERIC", "title", "TEXT") == b"OK"
+        assert client.execute_command(
+            "HSET", "rcg:1", "m", "all", "p", "10",
+            "title", "hello world") == 3
+        # TODO: remove the valkey-side indexing barriers like this one.
+        # valkey-search blocks the writing client until its own mutation is
+        # indexed, so a single-connection write-then-search cannot observe a
+        # stale index; the barrier is kept only for test-suite convention.
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "rcg_idx")
+
+        with_title = [1, b"rcg:1", [b"title", b"hello world"]]
+        id_only = [1, b"rcg:1"]
+        for release, later_return, replaced, latched in (
+            # Legacy: RETURN 0 latches no-content; field lists accumulate.
+            ("1.2.1", id_only,
+             [1, b"rcg:1", [b"title", b"hello world", b"p", b"10"]],
+             id_only),
+            # Fixed: the last RETURN clause wins.
+            ("1.3.0", with_title, [1, b"rcg:1", [b"p", b"10"]], id_only),
+        ):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "RETURN", "0",
+                "RETURN", "1", "title", "DIALECT", "2")
+            assert result == later_return, f"emulate-release {release}"
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "RETURN", "1", "title",
+                "RETURN", "1", "p", "DIALECT", "2")
+            assert result == replaced, f"emulate-release {release}"
+            # A final RETURN 0 suppresses fields on both sides of the gate.
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "RETURN", "1", "title",
+                "RETURN", "0", "DIALECT", "2")
+            assert result == latched, f"emulate-release {release}"
+            # NOCONTENT stays sticky on both sides of the gate.
+            result = client.execute_command(
+                "FT.SEARCH", "rcg_idx", "@m:{all}", "NOCONTENT",
+                "RETURN", "1", "title", "DIALECT", "2")
+            assert result == id_only, f"emulate-release {release}"
+
 
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
@@ -1090,7 +1223,21 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         validate_limit_queries(client)
         # Test bulk limit functionality
         validate_bulk_limit_queries(client)
-    
+
+    def test_bare_wildcard_cluster(self):
+        """
+            Test bare '*' match-all FT.SEARCH in Valkey Search CME. The
+            match-all flag is derived on the coordinating node and has to reach
+            each shard, which never re-parses the query string.
+        """
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        create_indexes(client)
+        for doc in hash_docs:
+            assert cluster_client.execute_command(*doc) == 5
+        time.sleep(1)
+        validate_bare_wildcard_queries(client)
+
     def test_aggregate_complex_cluster(self):
         cluster_client: ValkeyCluster = self.new_cluster_client()
         client: Valkey = self.new_client_for_primary(0)

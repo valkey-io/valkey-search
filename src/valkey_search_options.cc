@@ -74,6 +74,26 @@ static auto query_string_bytes =
                           UINT_MAX)                  // max size
         .Build();
 
+/// Register the "--cursor-max-count" flag. The largest COUNT accepted by
+/// WITHCURSOR and FT.CURSOR READ.
+constexpr absl::string_view kCursorMaxCountConfig{"cursor-max-count"};
+static auto cursor_max_count =
+    config::NumberBuilder(kCursorMaxCountConfig,  // name
+                          100000,                 // default
+                          1,                      // min
+                          INT64_MAX)              // max
+        .Build();
+
+/// Register the "--cursor-max-idle-ms" flag. The largest MAXIDLE accepted by
+/// WITHCURSOR.
+constexpr absl::string_view kCursorMaxIdleMsConfig{"cursor-max-idle-ms"};
+static auto cursor_max_idle_ms =
+    config::NumberBuilder(kCursorMaxIdleMsConfig,  // name
+                          INT64_MAX,               // default
+                          1,                       // min
+                          INT64_MAX)               // max
+        .Build();
+
 constexpr absl::string_view kHNSWBlockSizeConfig{"hnsw-block-size"};
 static auto hnsw_block_size =
     config::NumberBuilder(kHNSWBlockSizeConfig,   // name
@@ -234,6 +254,14 @@ static auto default_scorer = [] {
       .Build();
 }();
 
+/// Kill switch for relevance scoring. When set, both scoring paths are skipped
+/// (in-iterator for pure-text queries and the extra step for combined,
+/// match-all, hybrid, and recompute) and every result keeps a 0 score.
+constexpr absl::string_view kScoringDisabled{"scoring-disabled"};
+static auto scoring_disabled = config::BooleanBuilder(kScoringDisabled, false)
+                                   .Dev()  // can only be set in debug mode
+                                   .Build();
+
 /// Prefer partial results by default of not
 /// If set to true, search will use SOMESHARDS if user does not explicitly
 /// provide an option in the command
@@ -368,6 +396,43 @@ static auto max_term_expansions =
                           kDefaultMaxTermExpansions,  // default limit (200)
                           kMinimumMaxTermExpansions,  // min limit (1)
                           kMaximumMaxTermExpansions)  // max limit (100k)
+        .Build();
+
+/// Register the "--max-combine-window" flag. Caps COMBINE ... WINDOW on
+/// FT.HYBRID. WINDOW decides how many of each arm's results take part in
+/// fusion, and in cluster mode it also sets each shard's fetch limit, so a
+/// large value costs memory at the coordinator and work on every shard.
+/// Dev-only: the default is far above anything a legitimate query asks for,
+/// and lowering it is a debugging and investigation tool rather than a
+/// deployment knob.
+///
+/// It is a ceiling on every window, not only an explicitly supplied one: the
+/// parser resolves `WINDOW 0` -- and COMBINE FUNCTION's implicit default --
+/// to this value rather than leaving a zero sentinel for the fanout to turn
+/// into a per-shard fetch limit of 10.
+constexpr absl::string_view kMaxCombineWindowConfig{"max-combine-window"};
+constexpr uint32_t kDefaultMaxCombineWindow{1000000};
+constexpr uint32_t kMinimumMaxCombineWindow{1};
+static auto max_combine_window =
+    config::NumberBuilder(kMaxCombineWindowConfig,   // name
+                          kDefaultMaxCombineWindow,  // default limit (1M)
+                          kMinimumMaxCombineWindow,  // min limit (1)
+                          UINT_MAX)                  // max limit
+        .Dev()                                       // debug mode only
+        .Build();
+
+/// Register the "--max-group-key-expansion" flag. A GROUPBY over a multi-value
+/// field puts the record in one group per element, so a record with several
+/// such key fields expands to the product of their lengths.
+constexpr absl::string_view kMaxGroupKeyExpansionConfig{
+    "max-group-key-expansion"};
+constexpr uint32_t kDefaultMaxGroupKeyExpansion{1 << 16};
+constexpr uint32_t kMinimumMaxGroupKeyExpansion{1};
+static auto max_group_key_expansion =
+    config::NumberBuilder(kMaxGroupKeyExpansionConfig,   // name
+                          kDefaultMaxGroupKeyExpansion,  // default limit (64k)
+                          kMinimumMaxGroupKeyExpansion,  // min limit (1)
+                          UINT_MAX)                      // max limit
         .Build();
 
 /// Register the "--tag-min-prefix-length" flag. Controls the minimum number
@@ -547,6 +612,18 @@ static auto query_string_depth =
                                             kQueryStringDepthConfig))
         .Build();
 
+/// Register the "--vector-unshare-batch-size" flag. Controls the batch size
+/// of vector records unshared per server cron tick.
+constexpr absl::string_view kVectorUnshareBatchSizeConfig{
+    "vector-unshare-batch-size"};
+constexpr uint32_t kDefaultVectorUnshareBatchSize{1024 * 10};
+constexpr uint32_t kMinimumVectorUnshareBatchSize{1};
+static auto vector_unshare_batch_size =
+    config::NumberBuilder(kVectorUnshareBatchSizeConfig,
+                          kDefaultVectorUnshareBatchSize,
+                          kMinimumVectorUnshareBatchSize, UINT_MAX)
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number &GetHNSWBlockSize() {
@@ -614,12 +691,16 @@ absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   VMSDK_RETURN_IF_ERROR(rdb_load_skip_index->SetValue(false));
   VMSDK_RETURN_IF_ERROR(enable_vector_sharing->SetValue(true));
+  VMSDK_RETURN_IF_ERROR(
+      vector_unshare_batch_size->SetValue(kDefaultVectorUnshareBatchSize));
   return absl::OkStatus();
 }
 
 config::Enum &GetDefaultScorer() {
   return dynamic_cast<config::Enum &>(*default_scorer);
 }
+
+bool IsScoringDisabled() { return scoring_disabled->GetValue(); }
 
 const vmsdk::config::Boolean &GetPreferPartialResults() {
   return static_cast<vmsdk::config::Boolean &>(prefer_partial_results);
@@ -661,6 +742,22 @@ vmsdk::config::Number &GetThreadPoolWaitTimeSamples() {
 
 vmsdk::config::Number &GetMaxTermExpansions() {
   return dynamic_cast<vmsdk::config::Number &>(*max_term_expansions);
+}
+
+vmsdk::config::Number &GetCursorMaxCount() {
+  return dynamic_cast<vmsdk::config::Number &>(*cursor_max_count);
+}
+
+vmsdk::config::Number &GetCursorMaxIdleMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*cursor_max_idle_ms);
+}
+
+vmsdk::config::Number &GetMaxCombineWindow() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_combine_window);
+}
+
+vmsdk::config::Number &GetMaxGroupKeyExpansion() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_group_key_expansion);
 }
 
 vmsdk::config::Number &GetTagMinPrefixLength() {
@@ -769,6 +866,10 @@ config::Number &GetMutationWeightNumeric() {
 
 config::Number &GetMutationWeightTag() {
   return dynamic_cast<config::Number &>(*mutation_weight_tag);
+}
+
+config::Number &GetVectorUnshareBatchSize() {
+  return dynamic_cast<config::Number &>(*vector_unshare_batch_size);
 }
 
 /// Register the "emulate-release" flag (see COMPATIBILITY.md).

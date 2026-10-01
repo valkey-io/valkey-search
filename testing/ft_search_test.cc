@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/notification.h"
@@ -517,6 +518,114 @@ TEST_F(ValkeySearchTest, NoContentWithScoresEmitsScore) {
                            "$4\r\n0.25\r\n"));
 }
 
+// WITHCURSOR replies [total, [row...], cursor_id]; FT.CURSOR READ then replies
+// [n, row...] for the rows that remain.
+TEST_F(ValkeySearchTest, WithCursorReply) {
+  CursorTable::InitInstance(std::make_unique<CursorTable>(1, 0));
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->attribute_alias = "vec";
+  parameters->score_as = vmsdk::MakeUniqueValkeyString("score_as");
+  parameters->k = 20;
+  parameters->limit = {.first_index = 0, .number = 10};
+  parameters->no_content = true;
+  parameters->with_scores = true;
+  parameters->filter_parse_results.query_operations =
+      QueryOperations::kContainsText;
+  parameters->cursor_options = CursorOptions{.count = 2};
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(ToIndexesNeighbor({.external_id = "abc", .score = 0.5f}));
+  neighbors.push_back(
+      ToIndexesNeighbor({.external_id = "def", .score = 0.25f}));
+  neighbors.push_back(
+      ToIndexesNeighbor({.external_id = "ghi", .score = 0.125f}));
+  auto neighbor_count = neighbors.size();
+  parameters->search_result =
+      query::SearchResult(neighbor_count, std::move(neighbors), *parameters);
+  auto *command = parameters.get();
+  command->SendReply(&fake_ctx_, command->search_result);
+  ASSERT_TRUE(command->adopted_by_cursor);
+  parameters.release();  // Owned by the cursor table.
+
+  auto &table = CursorTable::Instance();
+  ASSERT_EQ(table.Size(), 1);
+  uint64_t id = uint64_t{1} << 32 | 1;
+  EXPECT_EQ(ParseRespReply(fake_ctx_.reply_capture.GetReply()),
+            ParseRespReply(absl::StrCat(
+                "*3\r\n:3\r\n*2\r\n*2\r\n$3\r\nabc\r\n$3\r\n0.5\r\n"
+                "*2\r\n$3\r\ndef\r\n$4\r\n0.25\r\n:",
+                id, "\r\n")));
+
+  fake_ctx_.reply_capture.ClearReply();
+  auto *cursor = table.Lookup(id);
+  ASSERT_NE(cursor, nullptr);
+  cursor->ReplyRows(&fake_ctx_, nullptr, 5);
+  EXPECT_EQ(cursor->RemainingRows(), 0);
+  EXPECT_EQ(ParseRespReply(fake_ctx_.reply_capture.GetReply()),
+            ParseRespReply("*2\r\n:1\r\n*2\r\n$3\r\nghi\r\n$5\r\n0.125\r\n"));
+  CursorTable::InitInstance(nullptr);
+}
+
+// A cursor holds the rows it has yet to return, and nothing more: the rows of
+// each reply are released as they are read rather than at the end. The key of
+// a released row is the last reference to its interned string, so the string
+// pool is what the test watches.
+TEST_F(ValkeySearchTest, WithCursorReleasesRowsAsTheyAreRead) {
+  CursorTable::InitInstance(std::make_unique<CursorTable>(1, 0));
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->limit = {.first_index = 1, .number = 3};
+  parameters->no_content = true;
+  parameters->cursor_options = CursorOptions{.count = 1};
+
+  const size_t interned_before = StringInternStore::Instance().UniqueStrings();
+  std::vector<indexes::Neighbor> neighbors;
+  for (auto id : {"row0", "row1", "row2", "row3", "row4"}) {
+    neighbors.push_back(ToIndexesNeighbor({.external_id = id, .score = 1.0f}));
+  }
+  auto neighbor_count = neighbors.size();
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(),
+            interned_before + neighbor_count);
+  parameters->search_result =
+      query::SearchResult(neighbor_count, std::move(neighbors), *parameters);
+  auto *command = parameters.get();
+  command->SendReply(&fake_ctx_, command->search_result);
+  ASSERT_TRUE(command->adopted_by_cursor);
+  parameters.release();  // Owned by the cursor table.
+
+  auto &table = CursorTable::Instance();
+  auto *cursor = table.Lookup(uint64_t{1} << 32 | 1);
+  ASSERT_NE(cursor, nullptr);
+  // LIMIT 1 3 means rows 1..3 are the cursor's, and the first reply returned
+  // one of them. The row it replied, the row LIMIT skipped and the row past
+  // the window are all gone already.
+  EXPECT_EQ(cursor->RemainingRows(), 2);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before + 2);
+
+  fake_ctx_.reply_capture.ClearReply();
+  cursor->ReplyRows(&fake_ctx_, nullptr, 1);
+  EXPECT_EQ(cursor->RemainingRows(), 1);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before + 1);
+
+  cursor->ReplyRows(&fake_ctx_, nullptr, 1);
+  EXPECT_EQ(cursor->RemainingRows(), 0);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before);
+  CursorTable::InitInstance(nullptr);
+}
+
+TEST_F(ValkeySearchTest, WithCursorNoResultsReply) {
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->limit = {.first_index = 0, .number = 0};
+  parameters->no_content = true;
+  parameters->cursor_options = CursorOptions{};
+  parameters->search_result.total_count = 3;
+  parameters->SendReply(&fake_ctx_, parameters->search_result);
+  EXPECT_FALSE(parameters->adopted_by_cursor);
+  EXPECT_EQ(ParseRespReply(fake_ctx_.reply_capture.GetReply()),
+            ParseRespReply("*3\r\n:3\r\n*0\r\n:0\r\n"));
+}
+
 using ::testing::TestParamInfo;
 using ::testing::ValuesIn;
 
@@ -540,10 +649,12 @@ class FTSearchTest : public ValkeySearchTestWithParam<
       std::string vector = std::string((char *)vectors[i].data(),
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
-      std::cerr << "Inserting Key: " << interned_key->Str() << std::endl;
       index_schema.value()->SetDbMutationSequenceNumber(interned_key, i);
       index_schema.value()->SetIndexMutationSequenceNumber(interned_key, i);
-      VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(index.value().get());
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_base, interned_key, vector));
     }
   }
   const std::string index_name = "my_index";
@@ -833,7 +944,10 @@ class FTSearchMaxLimitTest
                                        vectors[i].size() * sizeof(float));
       auto interned_key = StringInternStore::Intern(key);
 
-      VMSDK_EXPECT_OK(index.value()->AddRecord(interned_key, vector));
+      auto *vector_base =
+          dynamic_cast<indexes::VectorBase *>(index.value().get());
+      VMSDK_EXPECT_OK(
+          testing_infra::AddVectorRecord(*vector_base, interned_key, vector));
     }
   }
 
@@ -929,6 +1043,95 @@ INSTANTIATE_TEST_SUITE_P(
     [](const TestParamInfo<MaxLimitTestCase> &info) {
       return info.param.test_name;
     });
+
+}  // namespace
+
+namespace {
+
+std::vector<indexes::Neighbor> MakeNeighbors(
+    const std::vector<std::string> &keys) {
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.reserve(keys.size());
+  for (const auto &key : keys) {
+    neighbors.emplace_back(StringInternStore::Intern(key), 0.0f);
+  }
+  return neighbors;
+}
+
+std::vector<std::string> NeighborKeys(
+    const std::vector<indexes::Neighbor> &neighbors) {
+  std::vector<std::string> keys;
+  keys.reserve(neighbors.size());
+  for (const auto &n : neighbors) {
+    keys.push_back(std::string(n.external_id->Str()));
+  }
+  return keys;
+}
+
+// Verifies intersection semantics and count accuracy across representative
+// cases: all match, no match, partial overlap, empty neighbors, special chars.
+TEST(ApplyInkeysFilterTest, IntersectionAndCount) {
+  const std::vector<
+      std::pair<std::vector<std::string>, std::vector<std::string>>>
+      cases = {
+          {{"a", "b", "c"}, {"a", "b", "c"}},
+          {{"x", "y", "z"}, {"a", "b"}},
+          {{"a", "b", "c", "d"}, {"b", "d"}},
+          {{}, {"a", "b"}},
+          {{"only"}, {"only"}},
+          {{"key:1", "key:2", "key:3"}, {"key:1", "key:3"}},
+      };
+
+  for (const auto &[neighbor_keys, inkeys_vec] : cases) {
+    SCOPED_TRACE("neighbors=" + std::to_string(neighbor_keys.size()) +
+                 " inkeys=" + std::to_string(inkeys_vec.size()));
+
+    absl::flat_hash_set<std::string> inkeys(inkeys_vec.begin(),
+                                            inkeys_vec.end());
+    absl::flat_hash_set<std::string> expected;
+    for (const auto &k : neighbor_keys) {
+      if (inkeys.contains(k)) {
+        expected.insert(k);
+      }
+    }
+
+    query::SearchResult result;
+    result.neighbors = MakeNeighbors(neighbor_keys);
+    result.total_count = result.neighbors.size();
+    ApplyInkeysFilter(result, inkeys);
+
+    EXPECT_EQ(result.neighbors.size(), expected.size());
+    EXPECT_EQ(result.total_count, result.neighbors.size());
+    for (const auto &n : result.neighbors) {
+      EXPECT_TRUE(inkeys.contains(n.external_id->Str()));
+    }
+  }
+}
+
+// Empty inkeys drops everything; total_count saturates at zero when
+// underflow would occur.
+TEST(ApplyInkeysFilterTest, EdgeCases) {
+  // Empty inkeys — all neighbors removed (INKEYS 0 semantics)
+  {
+    query::SearchResult result;
+    result.neighbors = MakeNeighbors({"a", "b", "c"});
+    result.total_count = result.neighbors.size();
+    absl::flat_hash_set<std::string> empty_inkeys;
+    ApplyInkeysFilter(result, empty_inkeys);
+    EXPECT_TRUE(result.neighbors.empty());
+    EXPECT_EQ(result.total_count, 0u);
+  }
+  // total_count smaller than removed count — saturates at 0
+  {
+    query::SearchResult result;
+    result.neighbors = MakeNeighbors({"x", "y"});
+    result.total_count = 1;
+    absl::flat_hash_set<std::string> inkeys = {"a"};
+    ApplyInkeysFilter(result, inkeys);
+    EXPECT_TRUE(result.neighbors.empty());
+    EXPECT_EQ(result.total_count, 0u);
+  }
+}
 
 }  // namespace
 

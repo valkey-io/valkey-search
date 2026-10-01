@@ -7,6 +7,17 @@
 
 #include "vmsdk/src/utils.h"
 
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+#include <array>
+#include <cerrno>
+#include <climits>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <iomanip>
 #include <string>
 #include <utility>
@@ -41,7 +52,9 @@ void RunAnyInvocable(void *invocable) {
   absl::AnyInvocable<void()> *fn = (absl::AnyInvocable<void()> *)invocable;
   {
     absl::MutexLock lock(&outstanding_callbacks_mu);
-    outstanding_callbacks.erase(fn);
+    if (outstanding_callbacks.erase(fn) == 0) {
+      return;
+    }
   }
   (*fn)();
   delete fn;
@@ -94,7 +107,7 @@ void MarkAsShuttingDown() { shutting_down.store(true); }
 bool IsShuttingDown() { return shutting_down.load(); }
 
 int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
-  if (IsMainThread() && !force_async) {
+  if (IsMainThread() && (!force_async || IsShuttingDown())) {
     fn();
     return VALKEYMODULE_OK;
   }
@@ -118,11 +131,24 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async) {
 }
 
 void DrainPendingMainCallbacks() {
-  absl::MutexLock lock(&outstanding_callbacks_mu);
-  for (absl::AnyInvocable<void()> *fn : outstanding_callbacks) {
-    delete fn;
+  VerifyMainThread();
+  while (true) {
+    absl::flat_hash_set<absl::AnyInvocable<void()> *> callbacks_to_run;
+    {
+      absl::MutexLock lock(&outstanding_callbacks_mu);
+      if (outstanding_callbacks.empty()) {
+        break;
+      }
+      callbacks_to_run = std::move(outstanding_callbacks);
+      outstanding_callbacks.clear();
+    }
+    for (absl::AnyInvocable<void()> *fn : callbacks_to_run) {
+      if (fn) {
+        (*fn)();
+        delete fn;
+      }
+    }
   }
-  outstanding_callbacks.clear();
 }
 
 std::string WrongArity(absl::string_view cmd) {
@@ -146,6 +172,11 @@ bool IsRealUserClient(ValkeyModuleCtx *ctx) {
 bool MultiOrLua(ValkeyModuleCtx *ctx) {
   return (ValkeyModule_GetContextFlags(ctx) &
           (VALKEYMODULE_CTX_FLAGS_MULTI | VALKEYMODULE_CTX_FLAGS_LUA)) != 0;
+}
+
+bool IsReplica(ValkeyModuleCtx *ctx) {
+  return (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SLAVE) !=
+         0;
 }
 
 std::optional<absl::string_view> ParseHashTag(absl::string_view s) {
@@ -423,5 +454,73 @@ std::string StringToHex(std::string_view s) {
   }
   return result;
 }
+
+uint32_t Crc32(absl::string_view data, uint32_t crc) {
+  static constexpr auto kTable = [] {
+    std::array<uint32_t, 256> table;
+    for (uint32_t i = 0; i < 256; ++i) {
+      uint32_t c = i;
+      for (int k = 0; k < 8; ++k) {
+        c = (c >> 1) ^ ((c & 1) ? 0xEDB88320 : 0);
+      }
+      table[i] = c;
+    }
+    return table;
+  }();
+  crc = ~crc;
+  for (unsigned char b : data) {
+    crc = kTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
+  }
+  return ~crc;
+}
+
+#ifdef __linux__
+// The kernel resolves the path: opening with O_PATH and reading back
+// /proc/self/fd/<n> yields the fully resolved path, symlinks and .. included,
+// with no allocation. That is what lets the module's own realpath be built on
+// this. It cannot call libc's realpath, which is the name it defines; glibc's
+// fortified __realpath_chk would avoid the recursion, but musl has no such
+// symbol, and depending on it would mean Alpine builds carry gcompat for that
+// one name. /proc is not a new dependency: thread_group_cpu_monitor.cc already
+// walks /proc/self/task.
+//
+// With nullptr the result is resolved on the stack and returned via strdup.
+// Linked into the module, that is the module's own strdup, allocating from
+// ValkeyModule_Alloc -- so the caller's eventual free() is the module's too,
+// as with getcwd(nullptr, 0). Linked into a test, both are libc's.
+char *RealPath(const char *path, char *resolved_path) {
+  char stack_buffer[PATH_MAX];
+  char *out = resolved_path != nullptr ? resolved_path : stack_buffer;
+
+  const int fd = open(path, O_PATH | O_CLOEXEC);
+  if (fd < 0) {
+    return nullptr;
+  }
+  char fd_path[sizeof("/proc/self/fd/") + 3 * sizeof(int)];
+  snprintf(fd_path, sizeof(fd_path), "/proc/self/fd/%d", fd);
+
+  const ssize_t len = readlink(fd_path, out, PATH_MAX);
+  const int saved_errno = errno;
+  close(fd);
+  if (len < 0) {
+    errno = saved_errno;
+    return nullptr;
+  }
+  if (len >= PATH_MAX) {
+    // Truncated: readlink does not report how much it dropped.
+    errno = ENAMETOOLONG;
+    return nullptr;
+  }
+  out[len] = '\0';
+  if (resolved_path != nullptr) {
+    return resolved_path;
+  }
+  char *copy = strdup(stack_buffer);
+  if (copy == nullptr) {
+    errno = ENOMEM;
+  }
+  return copy;
+}
+#endif
 
 }  // namespace vmsdk

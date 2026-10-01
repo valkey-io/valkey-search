@@ -25,7 +25,6 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/rdb_serialization.h"
 #include "version.h"
-#include "vmsdk/src/cluster_map.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/utils.h"

@@ -18,7 +18,14 @@ class TestPostFilter(ValkeySearchTestCaseDebugMode):
         self.thread = threading.Thread(target=f)
         self.thread.start()
         waiters.wait_for_true(lambda: index.info(self.client).mutation_queue_size > 0)
-        assert int(self.client.execute_command("ft._debug PAUSEPOINT test block_mutation_queue")) > 0
+        waiters.wait_for_true(
+            lambda: int(
+                self.client.execute_command(
+                    "ft._debug PAUSEPOINT test block_mutation_queue"
+                )
+            )
+            > 0
+        )
 
     def release_modification(self, index):
         self.client.execute_command("ft._debug PAUSEPOINT RESET block_mutation_queue")

@@ -7,6 +7,10 @@
 #ifndef VALKEYSEARCH_SRC_COMMANDS_FT_AGGREGATE_PARSER_H
 #define VALKEYSEARCH_SRC_COMMANDS_FT_AGGREGATE_PARSER_H
 
+#include <cstddef>
+#include <limits>
+#include <optional>
+
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/container/inlined_vector.h"
@@ -77,14 +81,30 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
+  // Replies [count, row...] with the first `count` records, removing them.
+  void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
   bool loadall_{false};
+  // A record column the pipeline needs but the reply must not carry.
+  // FT.HYBRID registers its fused score as a column so SORTBY/APPLY/FILTER
+  // can reference it, and hides it from the caller when a LOAD clause has
+  // replaced the default projection without asking for it back.
+  //
+  // Held as a column index rather than a name: a LOAD clause may rename some
+  // other field onto the same output name -- `LOAD 3 @price AS __score` --
+  // and suppressing by name would drop that column too. Unset means nothing
+  // is suppressed.
+  std::optional<size_t> suppressed_reply_column_;
   std::vector<LoadField> loads_;
   bool load_key{false};
+  // ADDSCORES: expose the relevance score as pipeline field __score
+  // (see ProcessNeighborsForProcessing / CreateRecordsFromNeighbors).
   bool addscores_{false};
   std::vector<std::unique_ptr<Stage>> stages_;
 
   absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
   MakeReference(const absl::string_view s, bool create) override;
+
+  bool UseFilterComparisonSemantics() const override { return false; }
 
   absl::StatusOr<expr::Value> GetParam(
       const absl::string_view s) const override {
@@ -100,6 +120,11 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // Determine if we need full results or if we can optimize with trimming via
   // LIMIT offset & count.
   bool RequiresCompleteResults() const override;
+
+  // SORTBY does not lead to content fetching in the no content case unlike
+  // FT.SEARCH.
+  bool NoProcessingRequired() const override { return no_content; }
+
   //
   // Number of records required as output of the query phase.
   // If all records are required, then it will be
@@ -211,6 +236,12 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   friend std::ostream& operator<<(std::ostream& os,
                                   const AggregateParameters& agg);
 };
+
+// Turns the parsed LOAD clause (plus the fields a pipeline stage references
+// implicitly) into record columns and into the `return_attributes` the content
+// fetch reads. Called at the end of AggregateParameters::ParseCommand, and by
+// the FT.HYBRID parser for the aggregate suffix it embeds.
+absl::Status ManipulateReturnsClause(AggregateParameters& params);
 
 class Stage {
  public:
@@ -356,7 +387,12 @@ class SortBy : public Stage {
     Direction direction_;
     std::unique_ptr<expr::Expression> expr_;
   };
-  size_t max_{10};
+  // Redis keeps 10 sorted records when SORTBY is given neither a MAX nor an
+  // adjacent LIMIT to derive a bound from. ResolveSortByBounds() replaces this
+  // once the whole pipeline is known.
+  static constexpr size_t kDefaultMax = 10;
+  static constexpr size_t kUnbounded = std::numeric_limits<size_t>::max();
+  size_t max_{kDefaultMax};
   absl::InlinedVector<SortKey, 4> sortkeys_;
   void Dump(std::ostream& os) const override {
     os << "SORTBY:";
@@ -373,11 +409,16 @@ class SortBy : public Stage {
       }
       os << k.expr_.get();
     }
-    if (max_) {
+    if (max_ != kUnbounded) {
       os << " MAX:" << max_;
     }
   }
 };
+
+// Fixes up every SORTBY stage's retention bound once the whole pipeline has
+// been parsed, because the bound depends on the LIMIT stages around it. Must
+// run after parsing and before execution.
+void ResolveSortByBounds(AggregateParameters& params);
 
 absl::StatusOr<std::unique_ptr<QueryCommand>> ParseAggregateParameters(
     ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc,

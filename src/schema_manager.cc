@@ -31,6 +31,7 @@
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
 #include "src/coordinator/metadata_manager.h"
+#include "src/cursor.h"
 #include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/vector_base.h"
@@ -417,6 +418,12 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   // backlog of mutations, they can keep the index schema alive and cause
   // unnecessary CPU and memory usage.
   result->MarkAsDestructing();
+  // Cursors hold this index's saved query output, which is of no use once the
+  // index is gone. This is the single choke point for every removal path
+  // (FT.DROPINDEX, FLUSHDB, replica full sync, RDB load, metadata updates).
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().EraseIndex(db_num, name);
+  }
   return result;
 }
 
@@ -679,7 +686,6 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
         VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
                                 << vmsdk::config::RedactIfNeeded(name)
                                 << " on FLUSHDB of DB " << selected_db;
-        continue;
       }
     }
     // Move expensive destruction (radix trees, posting lists, per-key indexes)
@@ -706,6 +712,11 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
        absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>()});
   std::swap(db_to_index_schemas_[swap_db_info->dbnum_first],
             db_to_index_schemas_[swap_db_info->dbnum_second]);
+  // Cursors follow their index schema to its new database.
+  if (CursorTable::HasInstance()) {
+    CursorTable::Instance().SwapDb(swap_db_info->dbnum_first,
+                                   swap_db_info->dbnum_second);
+  }
   for (auto &schema : db_to_index_schemas_[swap_db_info->dbnum_first]) {
     schema.second->OnSwapDB(swap_db_info);
   }
@@ -874,12 +885,11 @@ absl::Status SchemaManager::LoadIndex(
   return absl::OkStatus();
 }
 
-void SchemaManager::OnFlushDBCallback(ValkeyModuleCtx *ctx,
-                                      ValkeyModuleEvent eid, uint64_t subevent,
-                                      void *data) {
-  if (subevent & VALKEYMODULE_SUBEVENT_FLUSHDB_END) {
-    SchemaManager::Instance().OnFlushDBEnded(ctx);
-  }
+void SchemaManager::OnFlushEndDBCallback(ValkeyModuleCtx *ctx,
+                                         [[maybe_unused]] ValkeyModuleEvent eid,
+                                         [[maybe_unused]] uint64_t subevent,
+                                         [[maybe_unused]] void *data) {
+  SchemaManager::Instance().OnFlushDBEnded(ctx);
 }
 
 void SchemaManager::OnLoadingCallback(ValkeyModuleCtx *ctx,
@@ -969,12 +979,19 @@ absl::Status SchemaManager::ShowIndexSchemas(ValkeyModuleCtx *ctx,
 static vmsdk::info_field::Integer number_of_indexes(
     "index_stats", "number_of_indexes",
     vmsdk::info_field::IntegerBuilder().App().Computed([]() -> long long {
-      // Consider indexes pending RDB load
+      // Consider indexes pending RDB load. The residual is only meaningful
+      // while a load is actually in progress. RDB sections can include
+      // non-index sections, so this residual must not affect the at-rest
+      // count.
       auto &stats = Metrics::GetStats();
-      return SchemaManager::Instance().GetNumberOfIndexSchemas() +
-             std::max(stats.rdb_restore_total_indexes.load() -
-                          stats.rdb_restore_completed_indexes.load(),
-                      uint64_t{0});
+      uint64_t pending = 0;
+      if (stats.rdb_restore_in_progress.load()) {
+        uint64_t total = stats.rdb_restore_total_indexes.load();
+        uint64_t completed = stats.rdb_restore_completed_indexes.load();
+        // Unsigned subtraction: guard rather than let it wrap.
+        pending = total > completed ? total - completed : 0;
+      }
+      return SchemaManager::Instance().GetNumberOfIndexSchemas() + pending;
     }));
 static vmsdk::info_field::Integer number_of_attributes(
     "index_stats", "number_of_attributes",

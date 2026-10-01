@@ -19,7 +19,6 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "src/commands/commands.h"
@@ -76,7 +75,7 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
   // The score_as field carries the vector distance (Redis' __<field>_score).
   // For pure vector queries Neighbor.score == distance; for hybrid text=>[KNN]
   // queries Neighbor.score is the text relevance while distance stays here.
-  auto score_value = absl::StrFormat("%.12g", neighbor.distance);
+  auto score_value = expr::FormatDouble(neighbor.distance);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
@@ -84,13 +83,13 @@ void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
 // Reply with just the score value as a top-level element (Redis WITHSCORES
 // format: score appears between document ID and attributes array).
 void ReplyScoreTopLevel(ValkeyModuleCtx *ctx, float score) {
-  auto score_value = absl::StrFormat("%.12g", score);
+  auto score_value = expr::FormatDouble(score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
 
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command);
+std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
+                                           const SearchCommand &command);
 
 // If the SORTBY field matches the VR distance alias, returns the formatted
 // distance for this neighbor (to be emitted with the numeric '#' prefix for
@@ -110,7 +109,7 @@ std::optional<std::string> GetVrSortKeyValue(const indexes::Neighbor &neighbor,
   if (!HasVrDistance(neighbor)) {
     return std::nullopt;
   }
-  return absl::StrFormat("%.12g", neighbor.distance);
+  return expr::FormatDouble(neighbor.distance);
 }
 
 // WITHSORTKEYS prefixes each sort key by the SORTBY field's declared type:
@@ -137,17 +136,18 @@ bool IsSortByFieldNumeric(const SearchCommand &command,
          idx.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
 }
 
-// Helper function to get the sort key value for a neighbor
-std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
-                            const SearchCommand &command) {
+// Returns std::nullopt when the query has no SORTBY or the document lacks the
+// sort field.
+std::optional<std::string> GetSortKeyValue(const indexes::Neighbor &neighbor,
+                                           const SearchCommand &command) {
   if (!command.sortby_parameter.has_value() ||
       !neighbor.attribute_contents.has_value()) {
-    return "";
+    return std::nullopt;
   }
 
   auto it = neighbor.attribute_contents->find(command.sortby_parameter->field);
   if (it == neighbor.attribute_contents->end()) {
-    return "";
+    return std::nullopt;
   }
 
   return std::string(vmsdk::ToStringView(it->second.value.get()));
@@ -366,6 +366,10 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
                                                                        : "$";
         },
         [&]() -> std::string { return "#"; });
+    // Issue #1353 item 5.
+    format.nil_absent_sort_key = VALKEY_SEARCH_COMPATIBILITY_FIX(
+        1, 3, 0, "ft_search_sortkey_nil", [&]() { return true; },
+        [&]() { return false; });
   }
   if (IsVectorRangeQuery()) {
     format.vr_field = query::GetVrScoreFieldName(*this);
@@ -397,20 +401,23 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
   if (with_sort_keys) {
     std::optional<std::string> vr_value =
         GetVrSortKeyValue(neighbor, *this, format.vr_field);
-    std::string value;
-    std::string prefix;
+    std::optional<std::string> value;
+    std::string prefix = format.sort_key_prefix;
     if (vr_value.has_value()) {
-      value = *vr_value;
+      value = std::move(vr_value);
       prefix = "#";
     } else if (format.sort_by_vec_score) {
-      value = absl::StrFormat("%.12g", neighbor.distance);
-      prefix = format.sort_key_prefix;
+      value = expr::FormatDouble(neighbor.distance);
     } else {
       value = GetSortKeyValue(neighbor, *this);
-      prefix = format.sort_key_prefix;
     }
-    ValkeyModule_ReplyWithString(
-        ctx, vmsdk::MakeUniqueValkeyString(prefix + value).get());
+    if (!value.has_value() && format.nil_absent_sort_key) {
+      ValkeyModule_ReplyWithNull(ctx);
+    } else {
+      ValkeyModule_ReplyWithString(
+          ctx,
+          vmsdk::MakeUniqueValkeyString(prefix + value.value_or("")).get());
+    }
     ++elements;
   }
 
@@ -432,7 +439,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
     if (emit_vr_field) {
       ValkeyModule_ReplyWithString(
           ctx, vmsdk::MakeUniqueValkeyString(format.vr_field).get());
-      auto score_value = absl::StrFormat("%.12g", neighbor.distance);
+      auto score_value = expr::FormatDouble(neighbor.distance);
       ValkeyModule_ReplyWithString(
           ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
     }
@@ -455,7 +462,7 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       if (!format.vr_field.empty() && ret_id == format.vr_field) {
         if (HasVrDistance(neighbor)) {
           ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-          auto score_value = absl::StrFormat("%.12g", neighbor.distance);
+          auto score_value = expr::FormatDouble(neighbor.distance);
           ValkeyModule_ReplyWithString(
               ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
           ++cnt;

@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest, traceback, valkey, time, struct
 import random
 import sys, os
@@ -13,6 +15,21 @@ Capture answer from Redisearch
 TEST_MARKER = "*" * 100
 
 encoder = lambda x: x.encode() if not isinstance(x, bytes) else x
+
+# format_stack() output depends only on each frame's code object and line, and
+# most answers share a stack, so cache the text per frame chain.
+_stack_text_cache = {}
+def format_stack_cached():
+    key, f = [], sys._getframe(1)
+    while f is not None:
+        key.append((f.f_code, f.f_lasti, f.f_lineno))
+        f = f.f_back
+    key = tuple(key)
+    text = _stack_text_cache.get(key)
+    if text is None:
+        text = _stack_text_cache[key] = "".join(
+            traceback.format_stack(sys._getframe(1)))
+    return text
 
 # Every generator used to run a container literally named "Generate-search"
 # on a fixed port 6380, so two checkouts generating at once on one machine
@@ -89,17 +106,21 @@ class BaseCompatibilityTest:
 
     # Reference engine image. Subclasses override it when they need a command
     # the default image does not implement -- FT.HYBRID, for instance, only
-    # exists in the Redis 8.4+ query engine. The container name carries a
-    # random suffix either way, so two generators never collide on it.
+    # exists in the Redis 8.4+ query engine. The container name carries the
+    # class name and a random suffix, so two generators never collide on it.
     
     @classmethod
     def setup_class(cls):
         if cls.ANSWER_FILE_NAME is None:
             raise NotImplementedError("Subclass must define ANSWER_FILE_NAME")
             
-        cls.container_name = f"{CONTAINER_PREFIX}-{random.randint(1000, 9999)}"
+        cls.container_name = f"{CONTAINER_PREFIX}-{cls.__name__}-{random.randint(1000, 9999)}"
+        # --search-workers 0 makes every write search-visible before the next
+        # command, so no sleep is needed between loading data and querying it:
+        # https://redis.io/docs/latest/develop/ai/redisvl/concepts/search-and-indexing/#search-visibility-after-writes
         if os.system(f"docker run --rm -d --name {cls.container_name} "
-                     f"-p 0:6379 redis:latest") != 0:
+                     f"-p 0:6379 redis:latest "
+                     f"redis-server --search-workers 0") != 0:
             print("Failed to start Redis server, please check your Docker setup.")
             sys.exit(1)
         port = cls._published_port()
@@ -202,7 +223,6 @@ class BaseCompatibilityTest:
 
     def setup_method(self):
         self.client.execute_command("FLUSHALL SYNC")
-        time.sleep(1)
 
     def setup_data(self, data_set_name, key_type, vector_data_type="FLOAT32"):
         self.data_set_name = data_set_name
@@ -216,7 +236,7 @@ class BaseCompatibilityTest:
                   "data_set_name": self.data_set_name,
                   "vector_data_type": getattr(self, "vector_data_type", "FLOAT32"),
                   "testname": os.environ.get('PYTEST_CURRENT_TEST').split(':')[-1].split(' ')[0],
-                  "traceback": "".join(traceback.format_stack())}
+                  "traceback": format_stack_cached()}
         if excluded:
             # Known, intentional difference from Redisearch. The answer is still
             # captured, but the replay only checks that valkey-search does not
@@ -1623,7 +1643,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         
         # Switch to sortable numbers for duplicate comparison values
         self.client.execute_command("FLUSHALL SYNC")
-        time.sleep(0.5)
         self.setup_data("sortable numbers", key_type)
         
         # Test with duplicate comparison values (tie-breaking)

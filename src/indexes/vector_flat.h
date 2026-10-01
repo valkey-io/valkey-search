@@ -18,8 +18,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/indexes/bfloat16.h"
-#include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
@@ -51,8 +49,7 @@ class VectorFlat : public VectorType<T> {
   using VectorType<T>::Init;
 
  public:
-  using FlatIndex =
-      hnswlib::BruteforceSearch<float, std::shared_ptr<const VectorRecord>>;
+  using FlatIndex = hnswlib::BruteforceSearch<float, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -99,15 +96,13 @@ class VectorFlat : public VectorType<T> {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) override
+  absl::Status AddRecordImpl(uint64_t internal_id,
+                             VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status ModifyRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) override
+  absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
@@ -116,12 +111,12 @@ class VectorFlat : public VectorType<T> {
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
   float ComputeDistance(
-      absl::string_view query, const VectorRecord *vector_record,
+      absl::string_view query, const VectorRecord &vector_record,
       float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  std::shared_ptr<const VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  std::shared_ptr<const VectorRecord> &GetVector(
-      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  VectorRecord &GetVector(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
   // Lock-free search optimization: Phase-based locking guarantees that queries
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.

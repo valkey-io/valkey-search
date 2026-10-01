@@ -279,8 +279,9 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
       VMSDK_ASSIGN_OR_RETURN(
           std::shared_ptr<indexes::IndexBase> index,
           IndexFactory(ctx, res.get(), attribute, std::nullopt));
-      VMSDK_RETURN_IF_ERROR(
-          res->AddIndex(attribute.alias(), attribute.identifier(), index));
+      VMSDK_RETURN_IF_ERROR(res->AddIndex(
+          attribute.alias(), attribute.identifier(), index,
+          {.sortable = attribute.sortable(), .unf = attribute.unf()}));
     }
   }
   // Compiling the FILTER resolves every @reference against the attributes, so
@@ -510,12 +511,14 @@ absl::StatusOr<vmsdk::UniqueValkeyString> IndexSchema::DefaultReplyScoreAs(
 
 absl::Status IndexSchema::AddIndex(absl::string_view attribute_alias,
                                    absl::string_view identifier,
-                                   std::shared_ptr<indexes::IndexBase> index) {
+                                   std::shared_ptr<indexes::IndexBase> index,
+                                   AttributeOptions options) {
   auto [_, res] = attributes_.insert(
       {std::string(attribute_alias),
-       Attribute{attribute_alias, identifier, index,
-                 static_cast<AttributePosition>(
-                     attributes_indexed_data_size_.size())}});
+       Attribute{
+           attribute_alias, identifier, index,
+           static_cast<AttributePosition>(attributes_indexed_data_size_.size()),
+           options}});
   if (!res) {
     return absl::AlreadyExistsError(
         absl::StrCat("Index field `", attribute_alias, "` already exists"));
@@ -1480,6 +1483,14 @@ absl::Status IndexSchema::RDBSave(SafeRDB *rdb) const {
         << vmsdk::config::RedactIfNeeded(name_);
     DrainMutationQueue(detached_ctx_.get());
   }
+  // A foreground save (SAVE, SHUTDOWN, DEBUG RELOAD) runs while writer threads
+  // may still apply queued mutations. Holding the read phase excludes them, so
+  // the save never reads a vector being replaced or a neighbor list being
+  // rewritten. A forked child (BGSAVE) has no writer threads.
+  std::optional<vmsdk::ReaderMutexLock> time_slice_lock;
+  if (!is_bgsave) {
+    time_slice_lock.emplace(&time_sliced_mutex_);
+  }
 
   VMSDK_LOG(NOTICE, nullptr)
       << "Starting RDB save for index schema: "
@@ -1865,7 +1876,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
               IndexFactory(ctx, index_schema.get(), attribute,
                            supplemental_iter.IterateChunks()));
           VMSDK_RETURN_IF_ERROR(index_schema->AddIndex(
-              attribute.alias(), attribute.identifier(), index));
+              attribute.alias(), attribute.identifier(), index,
+              {.sortable = attribute.sortable(), .unf = attribute.unf()}));
           break;
         }
         case data_model::SupplementalContentType::

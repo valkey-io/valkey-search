@@ -19,8 +19,6 @@
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/attribute_data_type.h"
-#include "src/indexes/bfloat16.h"
-#include "src/indexes/fp16.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
@@ -33,26 +31,59 @@ namespace valkey_search::indexes {
 
 class QueryVector {
  public:
-  // `data_type` selects the element width used when normalizing; QueryVector
-  // is shared across all VectorHNSW<T> instantiations, so it cannot take the
-  // storage type as a template parameter.
-  QueryVector(const std::shared_ptr<const VectorRecord> &vector_record,
-              size_t vector_record_size, bool normalize,
+  // Holds a query or inserted vector and caches its raw data pointer and
+  // reciprocal magnitude so HNSW distance evaluations do not reload the record
+  // header on every candidate.
+  QueryVector(const VectorRecord &vector_record, size_t vector_record_size = 0,
+              bool normalize = false,
               data_model::VectorDataType data_type =
-                  data_model::VECTOR_DATA_TYPE_FLOAT32);
-  const char *GetRawVector() const { return vector_record_->GetRawVector(); }
-  float GetReciprocalMagnitude() const {
-    return vector_record_->GetReciprocalMagnitude();
-  }
-  const char *GetNormalizedVector() const { return normalized_vector_.data(); }
+                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
+      : record_ref_(&vector_record),
+        raw_vector_(vector_record.GetRawVector()),
+        reciprocal_magnitude_(vector_record.GetReciprocalMagnitude()) {}
 
-  std::shared_ptr<const VectorRecord> GetVectorRecord() const {
-    return vector_record_;
+  QueryVector(VectorRecord &&vector_record, size_t vector_record_size = 0,
+              bool normalize = false,
+              data_model::VectorDataType data_type =
+                  data_model::VECTOR_DATA_TYPE_FLOAT32) noexcept
+      : owned_record_(std::move(vector_record)),
+        raw_vector_(owned_record_.GetRawVector()),
+        reciprocal_magnitude_(owned_record_.GetReciprocalMagnitude()) {}
+
+  QueryVector(const QueryVector &other) noexcept
+      : record_ref_(other.record_ref_),
+        owned_record_(other.owned_record_),
+        raw_vector_(other.raw_vector_),
+        reciprocal_magnitude_(other.reciprocal_magnitude_) {}
+
+  QueryVector(QueryVector &&other) noexcept = default;
+  QueryVector &operator=(QueryVector &&other) noexcept = default;
+  QueryVector &operator=(const QueryVector &other) noexcept {
+    if (this != &other) {
+      record_ref_ = other.record_ref_;
+      owned_record_ = other.owned_record_;
+      raw_vector_ = other.raw_vector_;
+      reciprocal_magnitude_ = other.reciprocal_magnitude_;
+    }
+    return *this;
   }
+
+  const VectorRecord &GetRecord() const noexcept {
+    return record_ref_ != nullptr ? *record_ref_ : owned_record_;
+  }
+
+  const char *GetRawVector() const noexcept { return raw_vector_; }
+  float GetReciprocalMagnitude() const noexcept {
+    return reciprocal_magnitude_;
+  }
+
+  VectorRecord GetVectorRecord() const noexcept { return GetRecord(); }
 
  private:
-  std::shared_ptr<const VectorRecord> vector_record_;
-  std::vector<char> normalized_vector_;
+  const VectorRecord *record_ref_{nullptr};
+  VectorRecord owned_record_;
+  const char *raw_vector_{nullptr};
+  float reciprocal_magnitude_{1.0f};
 };
 
 template <typename T>
@@ -77,9 +108,7 @@ class VectorHNSW : public VectorType<T> {
   using VectorType<T>::Init;
 
  public:
-  using HNSWIndex =
-      hnswlib::HierarchicalNSW<float, QueryVector,
-                               std::shared_ptr<const VectorRecord>>;
+  using HNSWIndex = hnswlib::HierarchicalNSW<float, QueryVector, VectorRecord>;
 
   static absl::StatusOr<std::shared_ptr<VectorHNSW<T>>> Create(
       const data_model::VectorIndex &vector_index_proto,
@@ -132,16 +161,14 @@ class VectorHNSW : public VectorType<T> {
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status AddRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) override
+  absl::Status AddRecordImpl(uint64_t internal_id,
+                             VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
 
   absl::Status RemoveRecordImpl(uint64_t internal_id) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
-  absl::Status ModifyRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) override
+  absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                VectorRecord &&vector_record) override
       ABSL_LOCKS_EXCLUDED(resize_mutex_);
   void ToProtoImpl(data_model::VectorIndex *vector_index_proto) const override;
   int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const override;
@@ -150,17 +177,17 @@ class VectorHNSW : public VectorType<T> {
   // and resizes/mutations are strictly mutually exclusive. Therefore, no data
   // races can occur during the search phase.
   float ComputeDistance(
-      absl::string_view query, const VectorRecord *vector_record,
+      absl::string_view query, const VectorRecord &vector_record,
       float query_magnitude) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
-  std::shared_ptr<const VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VectorRecord &GetVectorLockFree(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPointLockFree(internal_id);
     CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
                           << internal_id;
     return *ptr;
   }
-  std::shared_ptr<const VectorRecord> &GetVector(
-      uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  VectorRecord &GetVector(uint64_t internal_id) const override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto *ptr = algo_->GetPoint(internal_id);
     CHECK(ptr != nullptr) << "Internal ID not found in label_lookup: "
                           << internal_id;

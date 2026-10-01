@@ -1251,6 +1251,9 @@ def compute_filter_data_sets(dataset_name):
 # future JSON variant: add SETS/CREATES "json" entries here.
 SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 
+# Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
+SORTKEY_NIL_DATA_SET = "sortkey nil"
+
 
 def compute_sortkey_data_sets():
     schema = ("m TAG z TEXT SORTABLE t TAG n NUMERIC f NUMERIC "
@@ -1269,7 +1272,20 @@ def compute_sortkey_data_sets():
             CREATES_KEY("hash"): [
                 f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
             ],
-        }
+        },
+        SORTKEY_NIL_DATA_SET: {
+            SETS_KEY("hash"): [
+                ("hash:nsk1", {"m": "all,solo", "p": "10",
+                               "vec": b"AAAAAAAA"}),
+                ("hash:nsk2", {"m": "all", "p": "20", "vec": b"BBBBBBBB"}),
+                ("hash:nsk3", {"m": "all", "vec": b"CCCCCCCC"}),
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "m TAG p NUMERIC SORTABLE "
+                "vec VECTOR FLAT 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2"
+            ],
+        },
     }
 
 
@@ -1335,21 +1351,20 @@ def compute_alias_data():
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
     if data_source is None:
-        match data_set:
-            case "alias":
-                data_source = "alias"
-            case _ if data_set in HYBRID_DATASETS:
-                data_source = "hybrid"
-            case _ if data_set in TEXT_DATASETS:
-                data_source = "text"
-            case _ if data_set in FILTER_DATASETS:
-                data_source = "filter"
-            case _ if data_set == SORTKEY_PREFIX_DATA_SET:
-                data_source = "sortkey"
-            case _ if data_set == RETURN_CLAUSE_DATA_SET:
-                data_source = "return"
-            case _:
-                data_source = "vector"
+        if data_set == "alias":
+            data_source = "alias"
+        elif data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET):
+            data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        else:
+            data_source = "vector"
 
     match data_source:
         case "alias":

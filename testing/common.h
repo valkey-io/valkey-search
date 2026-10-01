@@ -230,12 +230,10 @@ class MockIndex : public indexes::VectorBase {
   MOCK_METHOD(size_t, GetCapacity, (), (const, override));
   MOCK_METHOD(absl::Status, RemoveRecordImpl, (uint64_t internal_id),
               (override));
-  absl::Status ModifyRecordImpl(
-      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+  absl::Status ModifyRecordImpl(uint64_t, indexes::VectorRecord &&) override {
     return absl::OkStatus();
   }
-  absl::Status AddRecordImpl(
-      uint64_t, std::shared_ptr<const indexes::VectorRecord> &&) override {
+  absl::Status AddRecordImpl(uint64_t, indexes::VectorRecord &&) override {
     return absl::OkStatus();
   }
   MOCK_METHOD(int, RespondWithInfoImpl, (ValkeyModuleCtx * ctx),
@@ -246,17 +244,15 @@ class MockIndex : public indexes::VectorBase {
   absl::Status SaveIndexImpl(RDBChunkOutputStream) const override {
     return absl::OkStatus();
   }
-  std::shared_ptr<const indexes::VectorRecord> &GetVectorLockFree(
-      uint64_t) const override {
-    static std::shared_ptr<const indexes::VectorRecord> p;
+  indexes::VectorRecord &GetVectorLockFree(uint64_t) const override {
+    static indexes::VectorRecord p;
     return p;
   }
-  std::shared_ptr<const indexes::VectorRecord> &GetVector(
-      uint64_t) const override {
-    static std::shared_ptr<const indexes::VectorRecord> p;
+  indexes::VectorRecord &GetVector(uint64_t) const override {
+    static indexes::VectorRecord p;
     return p;
   }
-  float ComputeDistance(absl::string_view, const indexes::VectorRecord *,
+  float ComputeDistance(absl::string_view, const indexes::VectorRecord &,
                         float) const override {
     return 0.0f;
   }
@@ -707,12 +703,13 @@ class UnitTestSearchParameters : public query::SearchParameters {
 
 namespace testing_infra {
 
-inline std::shared_ptr<indexes::VectorRecord> MakeVectorRecord(
+inline indexes::VectorRecord MakeVectorRecord(
     absl::string_view raw_vector_bytes) {
   float reciprocal_mag = indexes::CalcReciprocalMagnitude(
       reinterpret_cast<const float *>(raw_vector_bytes.data()),
       raw_vector_bytes.size() / sizeof(float));
-  return indexes::VectorRecord::Construct(raw_vector_bytes, reciprocal_mag);
+  return indexes::VectorRecord::Construct(raw_vector_bytes, reciprocal_mag,
+                                          nullptr);
 }
 
 inline AttributeData MakeStringAttributeData(absl::string_view str) {

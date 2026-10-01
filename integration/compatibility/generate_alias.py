@@ -78,6 +78,28 @@ class TestAliasCompatibility(BaseCompatibilityTest):
         """FT.ALIASUPDATE for a non-existent index returns an error."""
         self.execute_command(["FT.ALIASUPDATE", "new_alias", "no_such_index"])
 
+    def test_aliasadd_empty_index_name(self, key_type):
+        """FT.ALIASADD with an empty index name returns an error."""
+        self.execute_command(["FT.ALIASADD", "new_alias", ""])
+
+    def test_aliasupdate_empty_index_name(self, key_type):
+        """FT.ALIASUPDATE with an empty index name returns an error."""
+        self.execute_command(["FT.ALIASUPDATE", "new_alias", ""])
+
+    def test_alias_target_shadowed_by_index(self, key_type):
+        """An index created over an existing alias name is a valid alias target."""
+        self.execute_command(["FT.ALIASADD", "shadow_name", f"{key_type}_idx1"])
+        if key_type == "hash":
+            self.execute_command(["FT.CREATE", "shadow_name", "ON", "HASH",
+                "PREFIX", "1", "sdoc:", "SCHEMA", "val", "NUMERIC"])
+        else:
+            self.execute_command(["FT.CREATE", "shadow_name", "ON", "JSON",
+                "PREFIX", "1", "sdoc:", "SCHEMA", "$.val", "AS", "val", "NUMERIC"])
+        self.execute_command(["FT.ALIASADD", "shadow_add", "shadow_name"])
+        self.execute_command(["FT.ALIASUPDATE", "alias_search", "shadow_name"])
+        self.execute_command(["FT.INFO", "shadow_add"])
+        self.execute_command(["FT.INFO", "alias_search"])
+
     # Alias name restriction tests (divergence: we reject empty aliases)
 
     def test_aliasadd_null_byte_in_name(self, key_type):

@@ -8,7 +8,7 @@ START_TIME=$(date +%s)
 # TEST=all
 TEST=vector_search_integration
 CLEAN="no"
-VALKEY_VERSION="9.1"
+VALKEY_VERSION="9.2"
 VALKEY_JSON_VERSION="unstable"
 DUMP_TEST_ERRORS_STDOUT="no"
 

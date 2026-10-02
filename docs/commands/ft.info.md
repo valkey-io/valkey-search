@@ -50,11 +50,11 @@ An array of key value pairs.
 - `total_term_occurrences` (integer) Total number of terms in all text fields in this index.
 - `num_terms` (integer) Total number of unique terms in all text fields in this index.
 - `hash_indexing_failures` (string) INTEGER. Count of unsuccessful indexing attempts
-- `filter_rejected_keys` (string) INTEGER. Number of keys that were excluded from the index because they did not satisfy the index `FILTER` expression. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, in which case the field is read directly off the key; a misspelled field name therefore does not fail the command but instead behaves as a missing field. A `filter_rejected_keys` value that unexpectedly matches (or nearly matches) the number of ingested keys is the primary signal that a field name in the `FILTER` expression is misspelled.
+- `filter_rejected_keys` (string) INTEGER. Number of filter-rejection events: each time a key is evaluated against the index `FILTER` expression and does not satisfy it, the count increases by one. A key can be rejected more than once (for example, when it is rewritten, or when it is written while the initial backfill is in progress), so this is not a count of distinct keys. For a `HASH` index a `FILTER` may reference a field that is not declared in the schema, in which case the field is read directly off the key; a misspelled field name therefore does not fail the command but instead behaves as a missing field. A `filter_rejected_keys` value that unexpectedly matches, nearly matches, or exceeds the number of ingested keys is the primary signal that a field name in the `FILTER` expression is misspelled.
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
 - `mutation_queue_size` (string) Number of keys contained in the mutation queue.
-- `recent_mutations_queue_delay` (string) `0 sec` if the mutation queue is empty. Otherwise it is the mutation queue occupancy of the last key to be ingested, in the form `<seconds> sec`.
+- `recent_mutations_queue_delay` (string) `0 sec` if the mutation queue is empty. Otherwise it is the time a recently sampled mutation took from being queued to being processed, in whole seconds rounded down, in the form `<seconds> sec`. One in every 1000 mutations is sampled.
 - `state` (string) Current backfill state. `ready` indicates not backfill is in progress. `backfill_in_progress` backfill operation proceeding normally. `backfill_paused_by_oom` backfill is paused because the Valkey instance is out of memory.
 
 The following four fields are only present when the index has at least one `TEXT` attribute.
@@ -63,6 +63,8 @@ The following four fields are only present when the index has at least one `TEXT
 - `stop_words` (array of strings) list of stop words. Empty if the index was created with `NOSTOPWORDS`.
 - `with_offsets` (string) "1" if offsets are included. "0" if offsets are not included
 - `min_stem_size` (integer) Minimum stemming size for this index.
+
+The following field is always present:
 
 - `language` (string) The index's `LANGUAGE`. Currently always `english`.
 
@@ -108,6 +110,10 @@ The following four fields are only present when the index has at least one `TEXT
 
 An array of key value pairs
 
+Totals are summed over the primaries that responded. With `SOMESHARDS`, a primary that does not respond is omitted, so totals may be lower than the full cluster's.
+
+Inside `MULTI`/`EXEC` or a Lua script, no other nodes are queried and the LOCAL response is returned instead.
+
 - `mode` (string) Will have the value `primary`.
 - `index_name` (string) The index name
 - `num_docs` (string) INTEGER. Total keys in the index
@@ -118,11 +124,16 @@ An array of key value pairs
   - `attribute` (string) The name used to refer to this index in query and aggregation expressions.
   - `user_indexed_memory` (integer) Number of bytes of user data ingested into this field, summed across the primaries.
   - `num_records` (integer) Number of records indexed for this attribute, summed across the primaries.
-- `filter_rejected_keys` (string) INTEGER. Number of keys excluded from the index because they did not satisfy the index `FILTER` expression (see the LOCAL response above for how this helps detect a misspelled `FILTER` field name).
+- `index_fingerprint` (integer) Fingerprint of the index definition on the node that executes the command. Only present when `search.info-developer-visible` is `yes`; intended for debugging.
+- `index_version` (integer) Version of the index definition on the node that executes the command. Only present when `search.info-developer-visible` is `yes`; intended for debugging.
 
 ### Response when the CLUSTER option is specified
 
 An array of key value pairs
+
+Totals, minimums and maximums are computed over the nodes that responded. With `SOMESHARDS`, a node that does not respond is omitted, so totals may be lower than the full cluster's.
+
+Inside `MULTI`/`EXEC` or a Lua script, no other nodes are queried and the LOCAL response is returned instead.
 
 - `mode` (string) Will have the value `cluster`.
 - `index_name` (string) The index name

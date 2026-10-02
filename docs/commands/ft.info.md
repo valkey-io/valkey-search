@@ -54,7 +54,7 @@ An array of key value pairs.
 - `backfill_in_progress` (string). "1" if a backfill is currently running. "0" if not.
 - `backfill_complete_percent` (string) Estimated progress of background indexing. Percentage is expressed as a fractional value from 0 to 1.0.
 - `mutation_queue_size` (string) Number of keys contained in the mutation queue.
-- `recent_mutations_queue_delay` (string) `0 sec` if the mutation queue is empty. Otherwise it is the time a recently sampled mutation took from being queued to being processed, in whole seconds rounded down, in the form `<seconds> sec`. One in every 1000 mutations is sampled.
+- `recent_mutations_queue_delay` (string) `0 sec` if the mutation queue is empty. Otherwise it is the elapsed time for the most recently sampled scheduled mutation, from scheduling through completion of processing, in whole seconds rounded down, in the form `<seconds> sec`. One in every 1000 scheduled mutations is sampled; mutations processed inline are not sampled.
 - `state` (string) Current backfill state. `ready` indicates not backfill is in progress. `backfill_in_progress` backfill operation proceeding normally. `backfill_paused_by_oom` backfill is paused because the Valkey instance is out of memory.
 
 The following four fields are only present when the index has at least one `TEXT` attribute.

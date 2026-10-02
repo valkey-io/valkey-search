@@ -12,7 +12,6 @@
 
 namespace valkey_search::query {
 
-enum class HybridPolicy;
 struct SearchParameters;
 
 // Returns whether to use pre-filtering as opposed to inline filtering based on

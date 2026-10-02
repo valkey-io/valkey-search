@@ -131,6 +131,18 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
             after_batches = strategy_counts()
             assert after_batches == (after_adhoc[0], after_adhoc[1] + 1), command
 
+        for policy in ["ADHOC", "BATCHES"]:
+            before = strategy_counts()
+            result = client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                "FILTER", "3", "*", "POLICY", policy,
+                "PARAMS", "2", "q", self.Q,
+            )
+            assert isinstance(result, list)
+            assert strategy_counts() == before, policy
+
     # ---------------------------------------------------------------------
     # Control-path coverage (local-only; cluster control paths are deferred
     # to the cluster-fixture suite below).

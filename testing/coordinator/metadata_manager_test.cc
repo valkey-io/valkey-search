@@ -1753,6 +1753,16 @@ class MetadataManagerTest : public vmsdk::ValkeyTest {
   }
 };
 
+TEST_F(MetadataManagerTest, CompatibleMinimumVersionIgnoresHighCounter) {
+  GlobalMetadata proposed_metadata;
+  auto* header = proposed_metadata.mutable_version_header();
+  header->set_top_level_version(kModuleVersion.ToInt() + 1);
+  header->set_top_level_min_version(kModuleVersion.ToInt());
+
+  VMSDK_EXPECT_OK(
+      test_metadata_manager_->ReconcileMetadata(proposed_metadata, "test"));
+}
+
 TEST_F(MetadataManagerTest, TestBroadcastMetadata) {
   GlobalMetadata existing_metadata;
   ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(

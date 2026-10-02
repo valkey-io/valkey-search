@@ -1024,6 +1024,8 @@ void MetadataManager::ReplicateFTInternalUpdate(
 
   // Only emit the TYPE keyword when the type is non-default, improving
   // inter-release compatibility (older nodes don't see unknown arguments).
+  // Mirrors the call path above; the receiver defaults it in
+  // ft_internal_update.cc.
   if (type_name == kSchemaManagerMetadataTypeName) {
     ValkeyModule_Replicate(detached_ctx_.get(), "FT.INTERNAL_UPDATE", "cbb",
                            std::string(encoded_id).c_str(),

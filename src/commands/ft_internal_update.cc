@@ -67,6 +67,8 @@ absl::Status FTInternalUpdateCmd(ValkeyModuleCtx *ctx,
   // format: KEYWORD <arg_count> <arg1> ... <argN>.
   // Unrecognized keywords are silently skipped (using their declared count)
   // for forward compatibility.
+  // Senders omit TYPE for this default; see MetadataManager's
+  // FT.INTERNAL_UPDATE call and replicate paths.
   absl::string_view type_name = kSchemaManagerMetadataTypeName;
   for (int i = kFTInternalUpdateMinArgCount; i < argc;) {
     auto key = vmsdk::ToStringView(argv[i]);

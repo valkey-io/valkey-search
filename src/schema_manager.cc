@@ -1519,6 +1519,7 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
     if (alias_it == db_alias_it->second.end()) {
       return absl::NotFoundError("Alias does not exist");
     }
+    // Standalone: no competing claims and no global metadata to update.
     if (!coordinator_enabled_) {
       db_alias_it->second.erase(alias_it);
       if (db_alias_it->second.empty()) {

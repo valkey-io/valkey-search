@@ -258,7 +258,8 @@ static auto default_scorer = [] {
 /// (in-iterator for pure-text queries and the extra step for combined,
 /// match-all, hybrid, and recompute) and every result keeps a 0 score.
 constexpr absl::string_view kScoringDisabled{"scoring-disabled"};
-static auto scoring_disabled = config::BooleanBuilder(kScoringDisabled, false)
+// Default true on this branch to disable scoring for the perf test.
+static auto scoring_disabled = config::BooleanBuilder(kScoringDisabled, true)
                                    .Dev()  // can only be set in debug mode
                                    .Build();
 

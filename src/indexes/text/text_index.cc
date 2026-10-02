@@ -237,12 +237,18 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
 
   TextIndex key_index{with_suffix_trie_};
 
+  // Kill switch: skip all scoring-stat precomputation on the write path when
+  // scoring is disabled (query-side scoring is gated separately).
+  const bool scoring_disabled = options::IsScoringDisabled();
+
   // doc_len (total term frequency for this key) must be known before postings
   // are inserted, so each PostingValue can carry it for the scoring hot path.
   uint32_t doc_len = 0;
-  for (const auto &entry : token_positions) {
-    for (const auto &[_, field_mask] : entry.second.first) {
-      doc_len += field_mask.CountSetFields();
+  if (!scoring_disabled) {
+    for (const auto &entry : token_positions) {
+      for (const auto &[_, field_mask] : entry.second.first) {
+        doc_len += field_mask.CountSetFields();
+      }
     }
   }
   uint32_t norm = 0;
@@ -261,10 +267,12 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
     // for this token, so it also seeds the posting entry below.
     metadata_.total_positions += pos_map.size();
     uint32_t token_freq = 0;
-    for (const auto &[_, field_mask] : pos_map) {
-      token_freq += field_mask.CountSetFields();
+    if (!scoring_disabled) {
+      for (const auto &[_, field_mask] : pos_map) {
+        token_freq += field_mask.CountSetFields();
+      }
+      norm = std::max(norm, token_freq);
     }
-    norm = std::max(norm, token_freq);
 
     // Create FlatPositionMap from PositionMap
     FlatPositionMap *flat_map =
@@ -326,9 +334,11 @@ TextIndexSchema::CommitResult TextIndexSchema::CommitKeyData(
   {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
-    per_key_scoring_info_[key] = {doc_len, norm};
-    metadata_.total_doc_len += doc_len;
-    metadata_.total_term_frequency += doc_len;
+    if (!scoring_disabled) {
+      per_key_scoring_info_[key] = {doc_len, norm};
+      metadata_.total_doc_len += doc_len;
+      metadata_.total_term_frequency += doc_len;
+    }
   }
 
   return {doc_len, norm};

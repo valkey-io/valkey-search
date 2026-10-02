@@ -609,7 +609,8 @@ absl::Status SchemaManager::DropLosingClaimsOfOwnedAliases(
 
 absl::Status SchemaManager::StripLosingClaims(
     uint32_t db_num, const LosingClaims &losers_by_index) {
-  for (const auto &[claimant, aliases] : losers_by_index) {
+  for (const auto &[claimant, claimant_aliases] : losers_by_index) {
+    const auto &aliases = claimant_aliases;
     auto status = MutateIndexProtoInMetadata(
         db_num, claimant, [&](data_model::IndexSchema &proto) {
           auto *entries = proto.mutable_aliases();

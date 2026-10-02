@@ -253,6 +253,7 @@ TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
     // 6. Verify the forward alias map reflects the new aliases.
     auto all_aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
     std::vector<std::pair<std::string, std::string>> expected;
+    expected.reserve(new_aliases.size());
     for (const auto &alias : new_aliases) {
       expected.emplace_back(alias, index_name);
     }
@@ -757,8 +758,10 @@ std::vector<StructuralChangeTestCase> GenerateStructuralTestCases() {
   const int num_mutations = static_cast<int>(StructuralMutation::kCount);
 
   std::mt19937 rng(42);  // Fixed seed for reproducibility.
+  cases.reserve(num_mutations);
   for (int m = 0; m < num_mutations; ++m) {
-    cases.push_back({static_cast<StructuralMutation>(m), rng()});
+    cases.push_back(
+        {static_cast<StructuralMutation>(m), static_cast<uint32_t>(rng())});
   }
   return cases;
 }
@@ -1828,7 +1831,9 @@ TEST_F(SwapDBAliasAtomicityTest, PropertySwapDBSwapsAliasMaps) {
     int alias_count_0 = alias_count_dist(rng);
     for (int i = 0; i < alias_count_0; ++i) {
       std::string alias = "a0_" + RandomString(rng, 6);
-      SchemaManager::Instance().AddAlias(kDbNum0, alias, index_name_0);
+      SchemaManager::Instance()
+          .AddAlias(kDbNum0, alias, index_name_0)
+          .IgnoreError();
     }
 
     // --- Create an index in db 1 with random aliases ---
@@ -1863,7 +1868,9 @@ TEST_F(SwapDBAliasAtomicityTest, PropertySwapDBSwapsAliasMaps) {
     int alias_count_1 = alias_count_dist(rng);
     for (int i = 0; i < alias_count_1; ++i) {
       std::string alias = "a1_" + RandomString(rng, 6);
-      SchemaManager::Instance().AddAlias(kDbNum1, alias, index_name_1);
+      SchemaManager::Instance()
+          .AddAlias(kDbNum1, alias, index_name_1)
+          .IgnoreError();
     }
 
     // Record the alias maps for both databases before the swap.
@@ -2447,7 +2454,9 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
     }
     std::vector<size_t> cursor(streams.size(), 0);
     size_t remaining = 0;
-    for (const auto &s : streams) remaining += s.size();
+    for (const auto &s : streams) {
+      remaining += s.size();
+    }
     while (remaining > 0) {
       size_t pick = rng ? (*rng)() % streams.size() : 0;
       while (cursor[pick] == streams[pick].size()) {

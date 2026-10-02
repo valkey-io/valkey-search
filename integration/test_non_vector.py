@@ -1174,6 +1174,56 @@ class TestReturnClauseGate(ValkeySearchTestCaseDebugMode):
             assert result == id_only, f"emulate-release {release}"
 
 
+class TestNumericFormatGate(ValkeySearchTestCaseDebugMode):
+    """
+        Numeric sort-key and RETURN re-serialization (issue #1353 item 6) is
+        gated on search.emulate-release: pre-1.3.0 echoed the stored bytes.
+    """
+
+    def test_numeric_format_gate(self):
+        client: Valkey = self.server.get_new_client()
+        assert client.execute_command(
+            "FT.CREATE", "nfg_idx", "ON", "HASH", "PREFIX", "1", "nfg:",
+            "SCHEMA", "p", "NUMERIC", "SORTABLE") == b"OK"
+        # One field, so full-content replies have a fixed field order.
+        assert client.execute_command("HSET", "nfg:1", "p", "2.500") == 1
+        query = ("FT.SEARCH", "nfg_idx", "*", "SORTBY", "p", "ASC",
+                 "WITHSORTKEYS")
+        for release, sort_key, ret in (("1.2.1", b"#2.500", b"2.500"),
+                                       ("1.3.0", b"#2.5", b"2.5")):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            result = client.execute_command(
+                *query, "RETURN", "1", "p", "DIALECT", "2")
+            assert result == [1, b"nfg:1", sort_key,
+                              [b"p", ret]], f"emulate-release {release}"
+            # Full-content replies keep the stored bytes at every release.
+            result = client.execute_command(*query, "DIALECT", "2")
+            assert result == [1, b"nfg:1", sort_key,
+                              [b"p", b"2.500"]], f"emulate-release {release}"
+
+        # The compatibility counter counts only legacy replies that carry a
+        # NUMERIC sort key or RETURN value.
+        def compat_count():
+            return int(client.info("search").get(
+                "search_compatibility-ft_search_numeric_format", 0))
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.2.1") == b"OK"
+        before = compat_count()
+        client.execute_command("FT.SEARCH", "nfg_idx", "*", "DIALECT", "2")
+        assert compat_count() == before
+        client.execute_command("FT.SEARCH", "nfg_idx", "*",
+                               "RETURN", "1", "p", "DIALECT", "2")
+        assert compat_count() == before + 1
+        client.execute_command(*query, "DIALECT", "2")
+        assert compat_count() == before + 2
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
+        client.execute_command("FT.SEARCH", "nfg_idx", "*",
+                               "RETURN", "1", "p", "DIALECT", "2")
+        assert compat_count() == before + 2
+
+
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """
         A REDUCE with no AS clause auto-generates its output name, and which form

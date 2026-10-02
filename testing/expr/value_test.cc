@@ -1367,6 +1367,41 @@ TEST_F(ValueTest, FormatDoubleIntegralUsesFixedNotation) {
   EXPECT_EQ(FormatDouble(-std::numeric_limits<double>::infinity()), "-inf");
 }
 
+TEST_F(ValueTest, FormatNumericReturnValuePrintsIntegersUpToTwoPow63) {
+  EXPECT_EQ(FormatNumericReturnValue(1700000000123.0), "1700000000123");
+  EXPECT_EQ(FormatNumericReturnValue(1e17), "100000000000000000");
+  EXPECT_EQ(FormatNumericReturnValue(-1e17), "-100000000000000000");
+  EXPECT_EQ(FormatNumericReturnValue(static_cast<double>(1ULL << 60)),
+            "1152921504606846976");
+
+  // The integer range is [-2^63, 2^63): one ULP either side of each bound.
+  const double two_pow_63 = static_cast<double>(1ULL << 63);
+  const double inf = std::numeric_limits<double>::infinity();
+  EXPECT_EQ(FormatNumericReturnValue(std::nextafter(two_pow_63, 0.0)),
+            "9223372036854774784");
+  EXPECT_EQ(FormatNumericReturnValue(two_pow_63), "9.22337203685e+18");
+  EXPECT_EQ(FormatNumericReturnValue(-two_pow_63), "-9223372036854775808");
+  EXPECT_EQ(FormatNumericReturnValue(std::nextafter(-two_pow_63, -inf)),
+            "-9.22337203685e+18");
+
+  // Non-integral values keep 12 significant digits; -0 prints as 0.
+  EXPECT_EQ(FormatNumericReturnValue(1.5), "1.5");
+  EXPECT_EQ(FormatNumericReturnValue(3.14159265358979), "3.14159265359");
+  EXPECT_EQ(FormatNumericReturnValue(-0.0), "0");
+  EXPECT_EQ(FormatNumericReturnValue(inf), "inf");
+  EXPECT_EQ(FormatNumericReturnValue(-inf), "-inf");
+}
+
+TEST_F(ValueTest, FormatNumericSortKeyKeepsSeventeenDigits) {
+  EXPECT_EQ(FormatNumericSortKey(2.5), "2.5");
+  EXPECT_EQ(FormatNumericSortKey(0.1), "0.10000000000000001");
+  EXPECT_EQ(FormatNumericSortKey(1e3), "1000");
+  EXPECT_EQ(FormatNumericSortKey(1e17), "1e+17");
+  EXPECT_EQ(FormatNumericSortKey(static_cast<double>(1ULL << 60)),
+            "1.152921504606847e+18");
+  EXPECT_EQ(FormatNumericSortKey(-0.0), "-0");
+}
+
 // Streaming an array used to reach operator<<'s CHECK(false). GroupKey streams
 // its elements, so expanding a multi-value GROUPBY key aborted any DBG build.
 TEST_F(ValueTest, StreamArrayValue) {

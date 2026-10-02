@@ -1,4 +1,4 @@
-import itertools, valkey, json, struct, random
+import itertools, valkey, json, struct, random, math
 
 ### Reusable Data ###
 #
@@ -1298,6 +1298,51 @@ def compute_filter_data_sets(dataset_name):
 # future JSON variant: add SETS/CREATES "json" entries here.
 SORTKEY_PREFIX_DATA_SET = "sortkey prefix"
 
+# Fixture for numeric re-serialization (issue #1353 item 6). Stored values
+# cover integer, trailing-zero, scientific, signed-zero, high-precision and
+# int64-boundary shapes, in strictly ascending order as doubles.
+SORTKEY_NUMERIC_FORMAT_DATA_SET = "sortkey numeric format"
+INT64_MAX = (1 << 63) - 1   # parses to 2^63
+INT64_MIN = -(1 << 63)
+TWO_POW_53 = 1 << 53
+
+
+def _adjacent_double(n, direction):
+    """Nearest double to n, stepped one ULP toward direction, as an int."""
+    f = math.nextafter(float(n), direction)
+    assert f.is_integer()
+    return int(f)
+
+
+SORTKEY_NUMERIC_FORMAT_VALUES = [
+    str(_adjacent_double(INT64_MIN, -math.inf)),  # below -2^63: scientific
+    str(INT64_MIN),             # -2^63 exactly: integer
+    "-0",                       # RETURN drops the sign, sort key keeps it
+    "1e-7",
+    "0.1",
+    "2.500",
+    "3.14159265358979",         # 15 digits: RETURN rounds to 12
+    "10",
+    "1e3",
+    str(TWO_POW_53 + 1),        # parse rounds to 2^53, format does not
+    str(1 << 60),
+    str(_adjacent_double(INT64_MAX, -math.inf)),  # last double below 2^63: integer
+    str(INT64_MAX),             # parses to 2^63: scientific
+    str(_adjacent_double(INT64_MAX, math.inf)),   # scientific
+    "1e20",
+]
+# Ties would make the replayed row order nondeterministic.
+_parsed = [float(v) for v in SORTKEY_NUMERIC_FORMAT_VALUES]
+assert _parsed == sorted(set(_parsed)), "fixture must be strictly ascending"
+
+
+def _json_number(spelling):
+    """The fixture value as a JSON number: int when exact, else float."""
+    try:
+        return int(spelling)
+    except ValueError:
+        return float(spelling)
+
 # Absent-sort-key cases: nsk3 lacks p; the 'solo' tag isolates one document.
 SORTKEY_NIL_DATA_SET = "sortkey nil"
 
@@ -1318,6 +1363,31 @@ def compute_sortkey_data_sets():
             SETS_KEY("hash"): docs,
             CREATES_KEY("hash"): [
                 f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA {schema}"
+            ],
+        },
+        SORTKEY_NUMERIC_FORMAT_DATA_SET: {
+            # First doc also carries tag s=solo for the single-match query.
+            SETS_KEY("hash"): [
+                (f"hash:nfm{i}", {"m": "all", "s": "solo" if i == 1 else "none",
+                                  "p": v, "q": v})
+                for i, v in enumerate(SORTKEY_NUMERIC_FORMAT_VALUES, 1)
+            ],
+            CREATES_KEY("hash"): [
+                "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+                "m TAG s TAG p NUMERIC SORTABLE q NUMERIC"
+            ],
+            # JSON numbers: the spelling is the serializer's, so only the
+            # parsed value is under test; -0 is dropped (valkey-json stores 0).
+            SETS_KEY("json"): [
+                (f"json:nfm{i}", {"m": "all", "s": "solo" if i == 1 else "none",
+                                  "p": _json_number(v), "q": _json_number(v)})
+                for i, v in enumerate(
+                    (v for v in SORTKEY_NUMERIC_FORMAT_VALUES if v != "-0"), 1)
+            ],
+            CREATES_KEY("json"): [
+                "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+                "$.m AS m TAG $.s AS s TAG $.p AS p NUMERIC SORTABLE "
+                "$.q AS q NUMERIC"
             ],
         },
         SORTKEY_NIL_DATA_SET: {
@@ -1401,7 +1471,11 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "text"
         elif data_set in FILTER_DATASETS:
             data_source = "filter"
-        elif data_set in (SORTKEY_PREFIX_DATA_SET, SORTKEY_NIL_DATA_SET):
+        elif data_set in (
+            SORTKEY_PREFIX_DATA_SET,
+            SORTKEY_NIL_DATA_SET,
+            SORTKEY_NUMERIC_FORMAT_DATA_SET
+        ):
             data_source = "sortkey"
         elif data_set == RETURN_CLAUSE_DATA_SET:
             data_source = "return"

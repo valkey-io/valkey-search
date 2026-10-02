@@ -256,6 +256,13 @@ Value FuncConcat(const absl::InlinedVector<Value, 4> &values);
 
 Value FuncTimefmt(const Value &t, const Value &fmt);
 std::string FormatDouble(double d);
+// Gated change for 1.3.0: Redisearch's FT.SEARCH RETURN form for a NUMERIC
+// field, an integer in [-2^63, 2^63) in full, -0 as "0", other values at 12
+// significant digits.
+std::string FormatNumericReturnValue(double d);
+// Gated change for 1.3.0: Redisearch's WITHSORTKEYS form for a NUMERIC field,
+// without the '#': 17 significant digits, sign of -0 kept.
+std::string FormatNumericSortKey(double d);
 Value FuncParsetime(const Value &t, const Value &fmt);
 Value FuncDay(const Value &t);
 Value FuncHour(const Value &t);

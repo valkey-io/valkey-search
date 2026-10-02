@@ -16,6 +16,7 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data.h"
 #include "src/indexes/index_base.h"
@@ -26,6 +27,9 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
+
+// Parses a NUMERIC field value as the index does; nullopt if rejected.
+std::optional<double> ParseNumber(absl::string_view data);
 
 class Numeric : public IndexBase {
  public:

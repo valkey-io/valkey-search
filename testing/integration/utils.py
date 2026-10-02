@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -113,6 +114,10 @@ class ValkeyServerUnderTest:
 
     def ping(self) -> Any:
         return valkey.Valkey(port=self.port).ping()
+
+
+# Server args not carried over to a restarted node.
+_RESTART_ARG_EXCLUSIONS = frozenset({"repl-diskless-load"})
 
 
 def ports_still_listening(ports: Iterable[int]) -> List[int]:
@@ -249,10 +254,16 @@ class ValkeyClusterUnderTest:
         servers: List[ValkeyServerUnderTest],
         stdout_files: List[TextIO] = None,
         node_dirs: List[str] = None,
+        node_args: Dict[str, str] | None = None,
+        node_modules: Dict[str, str] | None = None,
     ):
         self.servers = list(servers)
         self.stdout_files = list(stdout_files or [])
         self.node_dirs = list(node_dirs or [])
+        # The server and module args this cluster was created with, so a node
+        # restarted later comes back on the same configuration.
+        self.node_args = dict(node_args or {})
+        self.node_modules = dict(node_modules or {})
         ValkeyClusterUnderTest.active_clusters.add(self)
         ValkeyClusterUnderTest.active_cluster = self
 
@@ -505,7 +516,16 @@ def start_valkey_cluster(
         # too early, even after checking with ping.
         time.sleep(10)
 
-        return ValkeyClusterUnderTest(processes, stdout_files, node_dirs)
+        # `args` is the caller's original dict; the per-node cluster settings were
+        # applied to the local `cluster_args` copy, so what is recorded here is the
+        # test's intent rather than the last node's derived values.
+        return ValkeyClusterUnderTest(
+            processes,
+            stdout_files,
+            node_dirs,
+            node_args=args,
+            node_modules=modules,
+        )
     except Exception:
         for p in processes:
             try:
@@ -957,11 +977,18 @@ class RandomIntervalTask:
         randomize: bool,
         work_func: Callable[[], bool],
         failover_state: dict | None = None,
+        initial_delay_sec: float = 0,
     ):
         stop_condition = threading.Condition()
         self.stopped = False
         self.interval = interval
         self.randomize = randomize
+        # Minimum wait before the first execution, on top of the usual interval.
+        # The failover task needs this: `interval * random()` can fire within a
+        # second of start-up, and a failover that tears down connections before
+        # memtier has reached steady state trips its --connection-stage-timeout
+        # supervisor, which exits with code 2 instead of running the test.
+        self.initial_delay_sec = initial_delay_sec
         self.stop_condition = stop_condition
         self.task = work_func
         self.ops = 0
@@ -1030,12 +1057,17 @@ class RandomIntervalTask:
     def loop(self):
         """Main loop that executes the task at intervals, pausing during failovers."""
         with self.stop_condition:
+            first_iteration = True
             while True:
                 modifier = 1
                 if self.randomize:
                     modifier = random.random()
+                wait_sec = self.interval * modifier
+                if first_iteration:
+                    wait_sec = max(wait_sec, self.initial_delay_sec)
+                    first_iteration = False
                 self.stop_condition.wait_for(
-                    lambda: self.stopped, timeout=self.interval * modifier
+                    lambda: self.stopped, timeout=wait_sec
                 )
                 if self.stopped:
                     return
@@ -1112,12 +1144,59 @@ _NODE_ERRORS = (
 )
 
 
+# How long after the last failover state change the cluster is still allowed to
+# report that it cannot reach every member. Covers the tail where a command that
+# was issued during the outage returns just after recovery, and where the module
+# is still reconciling. Outside this window the same error is a real failure.
+FAILOVER_TRANSIENT_GRACE_SEC = 15
+
+# Errors the module raises because a cluster member is unreachable. In
+# coordinator mode FT.CREATE and FT.DROPINDEX confirm the new schema version on
+# every node before replying (see CreateConsistencyCheckFanoutOperation in
+# src/commands/ft_create.cc), so taking a node down makes this the module's
+# correct answer, not a defect.
+_MEMBER_UNREACHABLE_ERRORS = ("unable to contact all cluster members",)
+
+
 def get_failed_ports(failover_state: dict | None) -> set:
     """Snapshot the ports currently down because of a failover."""
     if failover_state is None:
         return set()
     with failover_state["lock"]:
         return set(failover_state["failed_ports"])
+
+
+def note_failover_activity(failover_state: dict | None) -> None:
+    """Timestamp a failover state change, for failover_recently_active()."""
+    if failover_state is None:
+        return
+    with failover_state["lock"]:
+        failover_state["last_failover_activity"] = time.time()
+
+
+def failover_recently_active(
+    failover_state: dict | None,
+    grace_sec: float = FAILOVER_TRANSIENT_GRACE_SEC,
+) -> bool:
+    """True during a failover, and for `grace_sec` after the last change.
+
+    "During" means a failover is running or a node is still down; the grace tail
+    covers a command that was issued while the cluster was degraded but only
+    returned afterwards.
+    """
+    if failover_state is None:
+        return False
+    with failover_state["lock"]:
+        if failover_state["in_progress"] or failover_state["failed_ports"]:
+            return True
+        last = failover_state.get("last_failover_activity", 0.0)
+    return bool(last) and (time.time() - last) < grace_sec
+
+
+def is_member_unreachable_error(error: Exception) -> bool:
+    """True if the module is reporting that it could not reach every member."""
+    text = str(error).lower()
+    return any(marker in text for marker in _MEMBER_UNREACHABLE_ERRORS)
 
 
 def refresh_cluster_topology(
@@ -1295,6 +1374,7 @@ def drop_index_on_node(
     node,
     index_name: str,
     index_state: IndexState,
+    failover_state: dict | None = None,
 ) -> bool:
     """FT.DROPINDEX against one node. Returns False on an unexpected error."""
     try:
@@ -1303,6 +1383,22 @@ def drop_index_on_node(
         index_state.observe(node.port, False)
         return True
     except valkey.exceptions.ResponseError as e:
+        if is_member_unreachable_error(e) and failover_recently_active(
+            failover_state
+        ):
+            # Expected: the drop is confirmed across the cluster before it
+            # replies, and we have a node down on purpose. The local drop may
+            # still have applied, so the node's state is now unknown rather than
+            # either value - otherwise the next round could report a bogus
+            # "index is missing although it was created there".
+            index_state.forget(node.port)
+            logging.info(
+                "<FT.DROPINDEX> %s could not confirm across the cluster during"
+                " failover, treating as transient: %s",
+                describe_node(node),
+                e,
+            )
+            return True
         if "not found" in str(e):
             # Expected while this node is not known to hold the index, which
             # covers a node whose state is unknown because it just rejoined.
@@ -1364,7 +1460,9 @@ def periodic_ftdrop_task(
 
         succeeded = True
         for node in targets:
-            if not drop_index_on_node(client, node, index_name, index_state):
+            if not drop_index_on_node(
+                client, node, index_name, index_state, failover_state
+            ):
                 succeeded = False
 
         if succeeded:
@@ -1406,6 +1504,7 @@ def create_index_on_node(
     index_name: str,
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
+    failover_state: dict | None = None,
 ) -> bool:
     """FT.CREATE against one node. Returns False on an unexpected error."""
     try:
@@ -1420,6 +1519,24 @@ def create_index_on_node(
         index_state.observe(node.port, True)
         return True
     except valkey.exceptions.ResponseError as e:
+        if is_member_unreachable_error(e) and failover_recently_active(
+            failover_state
+        ):
+            # Expected: in coordinator mode FT.CREATE only replies OK once every
+            # node has confirmed the new schema version, and we have a node down
+            # on purpose. The schema may well have been created locally and
+            # propagated to the reachable nodes, with only the confirmation
+            # failing, so this node's state becomes unknown rather than either
+            # value - otherwise the next round could report a bogus "already
+            # exists although it was dropped there".
+            index_state.forget(node.port)
+            logging.info(
+                "<FT.CREATE> %s could not confirm across the cluster during"
+                " failover, treating as transient: %s",
+                describe_node(node),
+                e,
+            )
+            return True
         if "already exists" in str(e):
             # Expected while this node is known to hold the index, and also
             # while its state is unknown: a node that just rejoined may have
@@ -1485,7 +1602,12 @@ def periodic_ftcreate_task(
         succeeded = True
         for node in targets:
             if not create_index_on_node(
-                client, node, index_name, attributes, index_state
+                client,
+                node,
+                index_name,
+                attributes,
+                index_state,
+                failover_state,
             ):
                 succeeded = False
 
@@ -1657,6 +1779,13 @@ def spawn_memtier_process(command: str) -> subprocess.Popen[Any]:
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        # Put memtier in its own process group so it can be signalled as a group.
+        # With shell=True the child is /bin/sh, which normally execs a simple
+        # command so the pid is memtier itself - but that is not guaranteed, and
+        # signalling the group covers both cases. Required for the SIGSTOP /
+        # SIGCONT pause used during failover, and it also stops a kill from
+        # leaving an orphaned memtier behind.
+        start_new_session=True,
     )
     if memtier_process.stdout is not None:
         set_non_blocking(memtier_process.stdout.fileno())
@@ -1700,27 +1829,100 @@ class MemtierProcess:
         self.error_predicate = error_predicate
         self.total_ops = 0
         self.avg_ops_sec = 0
+        # True while the process is stopped by SIGSTOP. A paused process keeps
+        # every byte of its state - counters, key-pattern position, open
+        # connections - which is the whole point of pausing rather than killing.
+        self.paused = False
+
+    def _signal_group(self, sig: int, action: str) -> bool:
+        """Send `sig` to the process group. False if there is nothing to signal."""
+        if self.done or self.process.poll() is not None:
+            logging.debug(
+                "<%s> not %s: process already exited", self.name, action
+            )
+            return False
+        try:
+            pgid = os.getpgid(self.process.pid)
+        except (ProcessLookupError, OSError) as e:
+            logging.warning("<%s> could not %s: %s", self.name, action, e)
+            return False
+
+        # Never signal our own group. spawn_memtier_process uses
+        # start_new_session=True so the child leads its own group and this cannot
+        # normally happen, but if that were ever dropped, SIGSTOP would freeze
+        # the test harness itself and the run would hang with no output.
+        if pgid == os.getpgrp():
+            logging.error(
+                "<%s> refusing to %s: process group %d is our own; memtier was"
+                " not started in its own session",
+                self.name,
+                action,
+                pgid,
+            )
+            return False
+
+        try:
+            os.killpg(pgid, sig)
+            return True
+        except (ProcessLookupError, PermissionError, OSError) as e:
+            logging.warning("<%s> could not %s: %s", self.name, action, e)
+            return False
+
+    def pause(self) -> bool:
+        """Stop the process from sending load, without losing its state.
+
+        SIGSTOP freezes every thread where it stands. Note this does not pause
+        memtier's own clock: --test-time is a wall-clock deadline evaluated when
+        an op completes (run_stats::roll_cur_stats computes the current second
+        from the start time), so time spent paused is time deducted from the
+        test. Callers that pause must therefore drive memtier by request count
+        (-n) rather than --test-time, or the run ends on resume.
+        """
+        if self.paused:
+            return False
+        if not self._signal_group(signal.SIGSTOP, "pause"):
+            return False
+        self.paused = True
+        logging.info("<%s> paused", self.name)
+        return True
+
+    def resume(self) -> bool:
+        """Let a paused process carry on from exactly where it stopped."""
+        if not self.paused:
+            return False
+        # Clear the flag either way: if the process died while frozen there is
+        # nothing left to resume and staying "paused" would block every future
+        # pause/resume cycle.
+        self.paused = False
+        if not self._signal_group(signal.SIGCONT, "resume"):
+            return False
+        logging.info("<%s> resumed", self.name)
+        return True
+
+
 
     def close(self, timeout_sec: float = 10.0):
         """Stop this memtier process and release its OS resources.
 
-        Idempotent. kill() alone leaves the process unreaped and its two stdout/
-        stderr pipes open until the garbage collector happens to finalize them,
-        which is what surfaces as "ResourceWarning: unclosed file
-        <_io.BufferedReader ...>". Processes are killed and replaced on every
-        failover, so without this each failover abandons another pair of pipes
-        and another zombie.
+        Idempotent. kill() alone leaves the process unreaped and its stdout/
+        stderr pipes open until garbage collection ("ResourceWarning: unclosed
+        file").
 
-        Release-only on purpose: this must NOT call process_logs(). That would
-        route buffered lines through _add_line_to_stats, which increments
-        `failures` and can set `halted` -- letting a cleanup call turn a passing
-        run into a failing one. Any line still buffered when we get here was
-        already unread before this method existed, so dropping it keeps the
-        pass/fail behaviour identical to before.
+        Release-only: it does not read the pipes. Callers that need the final
+        output call process_logs() first, as the timeout path in
+        StabilityRunner.run() does.
         """
+        # A process stopped by SIGSTOP is still killed by SIGKILL (the kernel
+        # does not need it to run), so there is no need to resume it first; the
+        # flag is only cleared so a later pause/resume call is not confused.
+        self.paused = False
         try:
             if self.process.poll() is None:
-                self.process.kill()
+                # Signal the group, not just the handle: with shell=True the
+                # direct child may be a shell, and killing only that would leave
+                # memtier running for the rest of the session.
+                if not self._signal_group(signal.SIGKILL, "kill"):
+                    self.process.kill()
             self.process.wait(timeout=timeout_sec)
         except subprocess.TimeoutExpired:
             logging.warning(
@@ -2166,36 +2368,143 @@ def wait_for_new_primary(
     return False, None
 
 
-def wait_for_cluster_ok(client: valkey.ValkeyCluster, timeout: int = 30) -> bool:
-    """Wait for the cluster to reach a healthy state with full slot coverage.
-    
-    After failover, this function ensures:
-    1. All 16384 hash slots are assigned to available primarys
-    2. No slots are in "migrating" or "importing" state
-    3. Cluster state is reported as "ok"
+def victim_still_owns_slots(cluster_nodes_output: str, victim_node_id: str) -> bool:
+    """True if this CLUSTER NODES view still has the victim serving slots.
+
+    CLUSTER NODES fields are: id addr flags primary ping pong epoch link-state
+    [slots...]. A node is still serving if it is flagged as a primary and has at
+    least one slot range, which is exactly the state a node that has not yet
+    noticed the failure reports.
+    """
+    for line in cluster_nodes_output.splitlines():
+        parts = line.split()
+        if len(parts) < 8 or parts[0] != victim_node_id:
+            continue
+        flags = parts[2]
+        slots = parts[8:]
+        return "master" in flags and bool(slots)
+    # Absent from this node's view entirely - nothing is routed to it.
+    return False
+
+
+def wait_for_cluster_ok(
+    client: valkey.ValkeyCluster,
+    timeout: int = 30,
+    failover_state: dict | None = None,
+    password: str | None = None,
+    victim_node_id: str | None = None,
+) -> bool:
+    """Wait until every reachable node agrees on the post-failover topology.
+
+    This gate releases the paused load generators, so it has to mean "the
+    cluster will serve these clients". cluster_state:ok alone is not enough: a
+    node that has not yet noticed the victim is gone still reports ok, because
+    it believes the victim is a healthy slot owner.
+
+    So every reachable node must report cluster_state:ok, and none may still
+    list the victim as a slot-owning primary in CLUSTER NODES.
+
+    Nodes down for the failover are skipped. Any other unreachable node counts
+    as not converged, so a crashed node is not mistaken for a healthy cluster.
+
+    Args:
+        victim_node_id: node id of the node being failed over. Without it only
+            the cluster_state check runs.
+
     Returns:
-        True if cluster reaches OK state within timeout, False otherwise
+        True once every reachable node agrees, False on timeout.
     """
     start = time.time()
-    logging.info("Waiting for cluster to reach OK state")
-    
+    failed_ports = get_failed_ports(failover_state)
+    logging.info(
+        "Waiting for every node to agree the topology has moved on from %s"
+        " (skipping failed ports %s)",
+        victim_node_id or "the failed node",
+        failed_ports or "{}",
+    )
+    # Initialised here so the timeout message below is safe even if the loop
+    # never completed an iteration.
+    not_converged = []
+
     while time.time() - start < timeout:
-        try:
-            info = client.execute_command("CLUSTER", "INFO").decode()
-            if "cluster_state:ok" in info:
-                logging.info("Cluster reached OK state after %.1fs", time.time() - start)
-                return True
-            else:
-                # Log the current state for debugging
-                for line in info.split("\r\n"):
-                    if "cluster_state" in line:
-                        logging.debug("Current cluster state: %s", line)
-        except (valkey.exceptions.ConnectionError, valkey.exceptions.ResponseError) as e:
-            logging.debug("Error checking cluster state (will retry): %s", e)
-        
+        nodes = get_healthy_nodes(
+            client,
+            failover_state,
+            primaries_only=False,
+            task_name="CLUSTER-OK",
+        )
+        if not nodes:
+            logging.debug("<CLUSTER-OK> No reachable nodes to poll yet")
+            time.sleep(1)
+            continue
+
+        not_converged = []
+        for node in nodes:
+            node_client = valkey.Valkey(
+                host=node.host,
+                port=node.port,
+                password=password,
+                socket_timeout=2,
+            )
+            try:
+                info = node_client.execute_command("CLUSTER", "INFO")
+                if isinstance(info, bytes):
+                    info = info.decode()
+                if "cluster_state:ok" not in str(info):
+                    state = next(
+                        (
+                            line
+                            for line in str(info).splitlines()
+                            if "cluster_state" in line
+                        ),
+                        "cluster_state:unknown",
+                    )
+                    not_converged.append(
+                        f"{describe_node(node)}({state.strip()})"
+                    )
+                    continue
+
+                if victim_node_id:
+                    nodes_out = node_client.execute_command("CLUSTER", "NODES")
+                    if isinstance(nodes_out, bytes):
+                        nodes_out = nodes_out.decode()
+                    if victim_still_owns_slots(str(nodes_out), victim_node_id):
+                        # cluster_state cannot see this: the node is ok because
+                        # it has not yet noticed the victim is gone.
+                        not_converged.append(
+                            f"{describe_node(node)}(still routes slots to victim)"
+                        )
+            except (
+                valkey.exceptions.ValkeyError,
+                valkey.exceptions.ValkeyClusterException,
+                OSError,
+            ) as e:
+                not_converged.append(f"{describe_node(node)}(unreachable: {e})")
+            finally:
+                node_client.close()
+
+        if not not_converged:
+            logging.info(
+                "All %d reachable node(s) agree on the new topology after %.1fs",
+                len(nodes),
+                time.time() - start,
+            )
+            return True
+
+        logging.debug(
+            "<CLUSTER-OK> %d/%d node(s) not converged yet: %s",
+            len(not_converged),
+            len(nodes),
+            ", ".join(not_converged),
+        )
         time.sleep(1)
-    
-    logging.error("Timeout waiting for cluster OK state after %d seconds", timeout)
+
+    logging.error(
+        "Timeout waiting for topology agreement after %ds; still not"
+        " converged: %s",
+        timeout,
+        ", ".join(not_converged) if not_converged else "unknown",
+    )
     return False
 
 
@@ -2217,8 +2526,10 @@ def wait_for_node_topology_convergence(
     
     while time.time() - start < timeout:
         try:
-            # Get CLUSTER NODES from all active nodes
-            all_nodes = client.get_nodes()
+            # Get CLUSTER NODES from all active nodes. Snapshot under the lock,
+            # since other threads may be re-initializing the client topology.
+            with _TOPOLOGY_LOCK:
+                all_nodes = list(client.get_nodes())
             convergence_achieved = True
             nodes_checked = 0
             nodes_see_rejoined = 0
@@ -2311,7 +2622,8 @@ def restart_node(
     config_dir: str,
     stdout_dir: str,
     modules: Dict[str, str],
-    password: str | None = None
+    password: str | None = None,
+    cluster: "ValkeyClusterUnderTest | None" = None,
 ) -> ValkeyServerUnderTest | None:
     """Restart a previously failed node to test recovery and rejoin behavior.
     
@@ -2322,7 +2634,9 @@ def restart_node(
         stdout_dir: Directory for stdout logs
         modules: Dictionary of module paths to their arguments (must match initial startup)
         password: Optional password for authentication
-        
+        cluster: Cluster whose server and module args the restarted node is
+          started with.
+
     Returns:
         ValkeyServerUnderTest object if restart succeeds, None otherwise
     """
@@ -2338,16 +2652,38 @@ def restart_node(
             return None
         
         logging.info("Restarting node on port %d using start_valkey_process", port)
-        
-        stdout_file = open(stdout_path, "w", buffering=1)
-        
-        # Build cluster args exactly as in start_valkey_cluster
+
+        # Appended, never truncated: a node can be restarted more than once in
+        # a run, and an earlier restart's crash report must survive. A separator
+        # marks each restart.
+        stdout_file = open(stdout_path, "a", buffering=1)
+        stdout_file.write(
+            f"\n===== restart of port {port} at "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S')} =====\n"
+        )
+
+        # Start from the args the cluster was created with, then apply the same
+        # per-node cluster settings start_valkey_cluster applies.
         cluster_args = {
-            "cluster-enabled": "yes",
-            "cluster-config-file": os.path.join(node_dir, "nodes.conf"),
-            "cluster-node-timeout": "10000"  # Use same timeout as initial startup (not 45000)
-        }
-        
+            k: v
+            for k, v in cluster.node_args.items()
+            if k not in _RESTART_ARG_EXCLUSIONS
+        } if cluster is not None else {}
+        cluster_args["cluster-enabled"] = "yes"
+        cluster_args["cluster-config-file"] = os.path.join(node_dir, "nodes.conf")
+        # Matches the override start_valkey_cluster performs, which supersedes
+        # whatever the test asked for.
+        cluster_args["cluster-node-timeout"] = "10000"
+
+        # The cluster's own module args win over anything the caller assembled.
+        if cluster is not None and cluster.node_modules:
+            if modules and modules != cluster.node_modules:
+                logging.info(
+                    "Restarting port %d with the cluster's module args rather "
+                    "than the caller's", port
+                )
+            modules = dict(cluster.node_modules)
+
         # Reuse start_valkey_process to ensure identical configuration
         # This guarantees same module loading order, argument parsing, etc.
         server = start_valkey_process(
@@ -2359,11 +2695,11 @@ def restart_node(
             modules=modules,
             password=password
         )
-        for cluster in ValkeyClusterUnderTest.active_clusters:
-            if any(s.port == port for s in cluster.servers) or any(
-                d == node_dir for d in cluster.node_dirs
+        for active in ValkeyClusterUnderTest.active_clusters:
+            if any(s.port == port for s in active.servers) or any(
+                d == node_dir for d in active.node_dirs
             ):
-                cluster.register_server(server, stdout_file)
+                active.register_server(server, stdout_file)
                 break
         else:
             if ValkeyClusterUnderTest.active_cluster is not None:
@@ -2383,6 +2719,32 @@ def restart_node(
 
 
 def periodic_failover_task(
+    *args, failover_state: dict | None = None, **kwargs
+) -> bool:
+    """Execute one failover; see _run_failover_sequence.
+
+    Wraps the sequence so an unexpected exception cannot leave
+    failover_state['in_progress'] set. That would keep memtier paused and every
+    background task skipping its turns for the rest of the run. The exception
+    is re-raised so RandomIntervalTask still counts it as a crash.
+    """
+    try:
+        return _run_failover_sequence(
+            *args, failover_state=failover_state, **kwargs
+        )
+    except Exception:
+        if failover_state is not None:
+            with failover_state['lock']:
+                failover_state['in_progress'] = False
+            note_failover_activity(failover_state)
+            logging.error(
+                "<FAILOVER> Unexpected exception; cleared"
+                " failover_state['in_progress']"
+            )
+        raise
+
+
+def _run_failover_sequence(
     client: valkey.ValkeyCluster,
     valkey_server_path: str,
     config_dir: str,
@@ -2393,6 +2755,7 @@ def periodic_failover_task(
     failed_ports_tracker: set | None = None,
     failover_state: dict | None = None,
     entry_point_port: int | None = None,
+    cluster: "ValkeyClusterUnderTest | None" = None,
     # Must only ever be wired to a teardown signal -- currently
     # `lambda: thread.stopped`, set solely by RandomIntervalTask.stop(), which is
     # only called from StabilityRunner.cleanup() and the end of run(). See the
@@ -2400,6 +2763,11 @@ def periodic_failover_task(
     # pause/skip signal: the abandonment path deliberately does not restore
     # cluster state.
     stop_check: Callable[[], bool] | None = None,
+    # Called once, immediately before SHUTDOWN, to quiesce whatever is
+    # generating load. Runs on this task's thread and must return promptly; it
+    # is expected to be the inverse of clearing failover_state['in_progress'],
+    # which is what releases the load again.
+    before_shutdown: Callable[[], None] | None = None,
 ) -> bool:
     """Execute a single cluster failover operation.
     
@@ -2446,9 +2814,9 @@ def periodic_failover_task(
     def abort(reason: str) -> bool:
         """Clear in_progress on an aborted failover and report the failure.
 
-        Leaving in_progress set would pause every background task and keep the
-        memtier processes killed for the remainder of the run, turning one
-        aborted failover into a silent stall. Ports already recorded in
+        Leaving in_progress set would pause every background task and keep
+        memtier paused for the remainder of the run, turning one aborted
+        failover into a silent stall. Ports already recorded in
         failed_ports stay there: that node really is down, so the fan-out has to
         keep skipping it.
         """
@@ -2456,6 +2824,7 @@ def periodic_failover_task(
         if failover_state is not None:
             with failover_state['lock']:
                 failover_state['in_progress'] = False
+            note_failover_activity(failover_state)
             logging.info(
                 "<FAILOVER> Cleared failover_state['in_progress'] after abort"
             )
@@ -2465,6 +2834,7 @@ def periodic_failover_task(
     if failover_state is not None:
         with failover_state['lock']:
             failover_state['in_progress'] = True
+        note_failover_activity(failover_state)
         logging.info("<FAILOVER> Set failover_state['in_progress'] = True")
     
     # Step 1: Get cluster topology
@@ -2493,10 +2863,29 @@ def periodic_failover_task(
             with failover_state['lock']:
                 failover_state['failed_ports'].add(victim_port)
                 failover_state['new_primary_connected'] = False
+            note_failover_activity(failover_state)
             logging.info("<FAILOVER> Added port %d to shared failover_state", victim_port)
     except Exception as e:
         logging.warning("<FAILOVER> Could not extract port from address %s: %s", victim.addr, e)
-    
+
+    # Quiesce the load generators before the node dies, not after. Callers that
+    # merely watch failover_state['in_progress'] can only react on their next
+    # poll, which leaves up to a second of traffic in flight when the primary
+    # disappears - and those connection errors are indistinguishable from real
+    # ones in the results. Doing it here makes the ordering guaranteed rather
+    # than racy: nothing is being sent at the moment SHUTDOWN is issued.
+    if before_shutdown is not None:
+        try:
+            before_shutdown()
+        except Exception as e:  # pylint: disable=broad-except
+            # A hook failure must not abandon the failover: in_progress is
+            # already set and the port is already recorded, so returning here
+            # would leave the run wedged. Continue and let the load generators
+            # take the errors they would have taken before this hook existed.
+            logging.error(
+                "<FAILOVER> before_shutdown hook failed, continuing: %s", e
+            )
+
     # Step 3: Shut down the primary
     if not shutdown_node(victim.addr, password):
         return abort(f"failed to shutdown node {victim.addr}")
@@ -2516,8 +2905,18 @@ def periodic_failover_task(
     if cancelled("after replica promotion"):
         return True
 
-    # Step 5: Wait for cluster OK state
-    if not wait_for_cluster_ok(client, timeout=30):
+    # Step 5: Wait until every reachable node has moved the victim's slots to the
+    # promoted replica. Passing victim.node_id is what makes this a topology
+    # check rather than a cluster_state check - see wait_for_cluster_ok. The
+    # victim's own port is skipped via failover_state, since it is down on
+    # purpose.
+    if not wait_for_cluster_ok(
+        client,
+        timeout=30,
+        failover_state=failover_state,
+        password=password,
+        victim_node_id=victim.node_id,
+    ):
         return abort("cluster did not reach OK state in time")
 
     if cancelled("after cluster reached OK"):
@@ -2532,6 +2931,7 @@ def periodic_failover_task(
             failover_state['in_progress'] = False
             if new_primary_addr:
                 failover_state['new_primary_addr'] = new_primary_addr
+        note_failover_activity(failover_state)
         logging.info("<FAILOVER> Set failover_state['in_progress'] = False - memtier processes can restart now")
     
     # Step 6: Wait for traffic redirection before bringing old primary back
@@ -2571,7 +2971,8 @@ def periodic_failover_task(
                 config_dir=config_dir,
                 stdout_dir=stdout_dir,
                 modules=modules,
-                password=password
+                password=password,
+                cluster=cluster,
             )
             if restarted_node:
                 logging.info("<FAILOVER> Old primary successfully reconnected to cluster")
@@ -2601,6 +3002,9 @@ def periodic_failover_task(
                         # Mark new primary as connected
                         failover_state['new_primary_connected'] = True
                         logging.info("<FAILOVER> Set new_primary_connected = True")
+                    # Starts the grace tail: commands issued while the node was
+                    # down can still be returning their fanout errors.
+                    note_failover_activity(failover_state)
                 
                 # Force client to refresh its topology to see the rejoined node
                 try:
@@ -2665,6 +3069,9 @@ def periodic_failover(
     password: str | None = None,
     failover_state: dict | None = None,
     entry_point_port: int | None = None,
+    cluster: "ValkeyClusterUnderTest | None" = None,
+    initial_delay_sec: float = 0,
+    before_shutdown: Callable[[], None] | None = None,
 ) -> RandomIntervalTask:
     """Create a background task that periodically triggers cluster failovers.
     
@@ -2681,6 +3088,7 @@ def periodic_failover(
         interval_sec,
         randomize,
         lambda: False,  # Temporary placeholder
+        initial_delay_sec=initial_delay_sec,
     )
     
     # Now set the actual work function that has access to the thread
@@ -2695,7 +3103,9 @@ def periodic_failover(
         failed_ports_tracker=thread.failed_ports,
         failover_state=failover_state,
         entry_point_port=entry_point_port,
+        cluster=cluster,
         stop_check=lambda: thread.stopped,
+        before_shutdown=before_shutdown,
     )
     
     thread.run()

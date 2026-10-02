@@ -10,6 +10,20 @@ import valkey
 import utils
 
 
+# How long to leave memtier alone before the first failover. memtier's
+# --connection-stage-timeout aborts the process (exit code 2) if connections
+# fail before it reaches steady state, so a failover must not land during
+# start-up.
+MEMTIER_STARTUP_GRACE_SEC = 20
+
+# Upper bound on how much paused time is added back to the test_timeout budget,
+# so a failover stuck with in_progress set cannot extend the deadline forever.
+MAX_PAUSE_COMPENSATION_SEC = 300
+
+# How long a single pause may last before the poll loop force-resumes memtier.
+MAX_SINGLE_PAUSE_SEC = 120
+
+
 class MemtierProcessRunResult(NamedTuple):
     """Results for a single memtier process run."""
 
@@ -76,8 +90,11 @@ class StabilityRunner:
       failover_state: Shared state for coordinating process pausing during failover
     """
 
-    def __init__(self, config: StabilityTestConfig):
+    def __init__(self, config: StabilityTestConfig, cluster=None):
         self.config = config
+        # Cluster under test, so nodes restarted by failover recovery come back
+        # with the same server and module args the cluster was created with.
+        self.cluster = cluster
         # Background tasks and memtier processes, tracked so cleanup() can
         # release them if run() raises before its own cleanup.
         self._threads = []
@@ -87,8 +104,20 @@ class StabilityRunner:
             'in_progress': False,
             'failed_ports': set(),  # Ports that are currently down due to failover
             'new_primary_connected': False,  # Whether the new primary is fully operational
+            # Monotonic timestamp of the last failover state change. Used to
+            # recognise the window "during and shortly after a failover", in
+            # which the module legitimately reports that it cannot reach every
+            # cluster member. See utils.failover_recently_active().
+            'last_failover_activity': 0.0,
             'lock': threading.Lock(),
         }
+        # Memtier pause bookkeeping. Touched from two threads: the failover task
+        # pauses via the before_shutdown hook, and the poll loop resumes once
+        # failover_state['in_progress'] clears, so the lock is what keeps the
+        # "since" timestamp and the running total consistent.
+        self._memtier_pause_lock = threading.Lock()
+        self._memtier_paused_since: float | None = None
+        self._memtier_paused_total = 0.0
         logging.basicConfig(
             handlers=[
                 logging.StreamHandler(stream=sys.stdout),
@@ -99,14 +128,61 @@ class StabilityRunner:
             ),
         )
 
+    def pause_memtier(self, reason: str) -> None:
+        """Freeze every memtier process. Idempotent, safe from any thread.
+
+        Wired into periodic_failover as before_shutdown so the load is quiet
+        before the primary is shut down rather than a poll interval afterwards.
+        """
+        with self._memtier_pause_lock:
+            if self._memtier_paused_since is not None:
+                return
+            paused = [p.name for p in self._processes if p.pause()]
+            self._memtier_paused_since = time.time()
+        logging.info(
+            "Pausing memtier (%s): %s", reason, ", ".join(paused) or "none"
+        )
+
+    def resume_memtier(self, reason: str) -> None:
+        """Let every paused memtier process continue. Idempotent."""
+        with self._memtier_pause_lock:
+            if self._memtier_paused_since is None:
+                return
+            resumed = [p.name for p in self._processes if p.resume()]
+            paused_for = time.time() - self._memtier_paused_since
+            self._memtier_paused_since = None
+            self._memtier_paused_total += paused_for
+        logging.info(
+            "Resuming memtier after %.1fs (%s): %s",
+            paused_for,
+            reason,
+            ", ".join(resumed) or "none",
+        )
+
+    def memtier_paused(self) -> bool:
+        with self._memtier_pause_lock:
+            return self._memtier_paused_since is not None
+
+    def current_pause_seconds(self) -> float:
+        """How long the current pause has lasted, or 0 if not paused."""
+        with self._memtier_pause_lock:
+            if self._memtier_paused_since is None:
+                return 0.0
+            return time.time() - self._memtier_paused_since
+
+    def paused_seconds(self) -> float:
+        """Total time memtier has spent frozen, including any current pause."""
+        with self._memtier_pause_lock:
+            total = self._memtier_paused_total
+            if self._memtier_paused_since is not None:
+                total += time.time() - self._memtier_paused_since
+        return min(total, MAX_PAUSE_COMPENSATION_SEC)
+
     def cleanup(self):
         """Stop background tasks and release memtier resources.
 
-        Idempotent, so it is safe to call from tearDown even after run()
-        completed normally and already did this. Needed because run() raising
-        (a memtier read error, an unexpected exception) skips its own cleanup,
-        and the background tasks swallow exceptions in order to keep generating
-        load - so a task left running spins for the remainder of the process.
+        Idempotent, so tearDown can call it even after run() cleaned up. Needed
+        because run() raising skips its own cleanup.
         """
         for thread in self._threads:
             try:
@@ -194,16 +270,14 @@ class StabilityRunner:
         else:
             raise ValueError(f"Unknown index type: {self.config.index_type}")
         
-        # The index is created on, and later dropped from, every node the test
-        # queries. periodic_ftcreate_task/periodic_ftdrop_task decide how far to
-        # fan out: one rotating primary when the coordinator replicates the
-        # schema cluster-wide, every reachable primary when it does not. Reusing
-        # them here keeps setup and the background tasks on one code path, and
-        # seeds the per-node index state they rely on.
+        # Setup reuses the background tasks' create/drop path, which also seeds
+        # the per-node index state they rely on. Every node starts as unknown:
+        # replicas are never targeted but do hold the index (it is replicated),
+        # so seeding them as "absent" would turn a promoted replica's correct
+        # "already exists" into a false failure.
         index_state = utils.IndexState(
             index_lock=threading.Lock(),
             ft_created=False,
-            ports=self.config.ports,
         )
 
         # Clean up an index left over from an earlier run. A "not found" reply is
@@ -305,11 +379,12 @@ class StabilityRunner:
             config_dir = os.environ["TEST_TMPDIR"]
             stdout_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
             
-            # Build modules dict matching the initial cluster startup
+            # Fallback only: restart_node prefers cluster.node_modules, so a
+            # restarted node loads the module the same way its peers did.
             modules = {}
             if "VALKEY_SEARCH_PATH" in os.environ:
                 modules[os.environ["VALKEY_SEARCH_PATH"]] = (
-                    "--reader-threads 2 --writer-threads 5 --log-level notice --cluster-map-expiration-ms 0"
+                    "--reader-threads 2 --writer-threads 5 --log-level notice"
                     + (" --use-coordinator" if self.config.use_coordinator else "")
                 )
             
@@ -331,6 +406,15 @@ class StabilityRunner:
                     test_recovery=self.config.test_failover_recovery,
                     failover_state=self.failover_state,
                     entry_point_port=self.config.ports[0],  # Protect entry point from failover
+                    cluster=self.cluster,
+                    # Let memtier finish connecting before the first failover.
+                    initial_delay_sec=MEMTIER_STARTUP_GRACE_SEC,
+                    # Quiesce the load before the node is shut down. The
+                    # processes are spawned later, so self._processes is read at
+                    # call time.
+                    before_shutdown=lambda: self.pause_memtier(
+                        "failover about to shut a node down"
+                    ),
                 )
             )
         elif self.config.failover_interval_sec != 0 and self.config.replica_count == 0:
@@ -340,8 +424,10 @@ class StabilityRunner:
 
         memtier_output_dir = os.environ["TEST_UNDECLARED_OUTPUTS_DIR"]
 
-        # For failover testing: we kill all memtier processes during failover
-        # and restart them after recovery completes, rather than having them retry connections
+        # For failover testing the memtier processes are paused (SIGSTOP) for the
+        # duration of the failover and resumed afterwards, so each one keeps its
+        # counters, its position in the key range and its connections. See the
+        # poll loop below.
         # Build HSET command based on index type
         if self.config.index_type in ["HNSW", "FLAT"]:
             # Vector-based index: include embedding field with text fields
@@ -374,8 +460,6 @@ class StabilityRunner:
                 f" -p {self.config.ports[0]}"
                 f" -t {self.config.num_memtier_threads}"
                 f" -c {self.config.num_memtier_clients}"
-                " --reconnect-on-error"
-                " --max-reconnect-attempts=3"
                 " --random-data"
                 " -d 100"
                 " --command='HSET __key__ "
@@ -449,25 +533,6 @@ class StabilityRunner:
             f" {memtier_output_dir}/{self.config.index_name}_memtier_expire.json"
         )
 
-        if self.config.insertion_mode == "request_count":
-            keys_per_client = int(
-                self.config.keyspace_size
-                / self.config.num_memtier_clients
-                / self.config.num_memtier_threads
-            )
-            logging.debug("%d keys per client needed", keys_per_client)
-            insert_command += f" -n {keys_per_client}"
-            delete_command += f" -n {keys_per_client}"
-            expire_command += f" -n {keys_per_client}"
-        elif self.config.insertion_mode == "time_interval":
-            insert_command += f" --test-time {self.config.test_time_sec}"
-            delete_command += f" --test-time {self.config.test_time_sec}"
-            expire_command += f" --test-time {self.config.test_time_sec}"
-        else:
-            raise ValueError(
-                f"Unknown insertion mode: {self.config.insertion_mode}"
-            )
-        
         # Build search query based on index type
         if self.config.index_type == "TEXT":
             # Text search - Multiple search types
@@ -497,7 +562,6 @@ class StabilityRunner:
                 f" --command='FT.SEARCH {self.config.index_name} \"@content:systems matching enable\" SLOP 3'"
                 " --command-ratio=1"
                 " --pipeline=1"
-                f" --test-time={self.config.test_time_sec}"
                 " --json-out-file"
                 f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
             )
@@ -520,7 +584,6 @@ class StabilityRunner:
                 f" -c {self.config.num_search_clients}"
                 " -"
                 f" --command='FT.SEARCH {self.config.index_name} {search_query}'"
-                f" --test-time={self.config.test_time_sec}"
                 f" -d {self.config.vector_dimensions*4}"
                 " --json-out-file"
                 f" {memtier_output_dir}/{self.config.index_name}_memtier_search.json"
@@ -535,7 +598,6 @@ class StabilityRunner:
             f" -c {self.config.num_search_clients}"
             " -"
             f" --command='FT.INFO {self.config.index_name}'"
-            f" --test-time={self.config.test_time_sec}"
             f" -d {self.config.vector_dimensions*4}"
             f" --json-out-file"
             f" {memtier_output_dir}/{self.config.index_name}_memtier_ftinfo.json"
@@ -550,11 +612,43 @@ class StabilityRunner:
             f" -c {self.config.num_search_clients}"
             " -"
             " --command='FT._LIST'"
-            f" --test-time={self.config.test_time_sec}"
             f" -d {self.config.vector_dimensions*4}"
             " --json-out-file"
             f" {memtier_output_dir}/{self.config.index_name}_memtier_ftlist.json"
         )
+
+        # How long each process runs, applied uniformly to all six.
+        #
+        # request_count is what makes pausing safe. --test-time is a wall-clock
+        # deadline, so time spent stopped by SIGSTOP is deducted from the test.
+        # -n counts requests, so a paused run continues where it left off.
+        if self.config.insertion_mode == "request_count":
+            requests_per_client = int(
+                self.config.keyspace_size
+                / self.config.num_memtier_clients
+                / self.config.num_memtier_threads
+            )
+            logging.debug("%d requests per client", requests_per_client)
+            duration_args = f" -n {requests_per_client}"
+        elif self.config.insertion_mode == "time_interval":
+            duration_args = f" --test-time {self.config.test_time_sec}"
+        else:
+            raise ValueError(
+                f"Unknown insertion mode: {self.config.insertion_mode}"
+            )
+
+        # Deliberately NO --reconnect-on-error. On memtier 2.3.0 the reconnect
+        # path trips an assert in cluster_client::connect()
+        # (`m_connections.size() == m_key_index_pools.size()`) and aborts the
+        # process. Newer memtier fixes this, so it can come back once the
+        # memtier used here includes that fix. Until then connections to the
+        # failed node stay down for the rest of the run.
+        insert_command += duration_args
+        delete_command += duration_args
+        expire_command += duration_args
+        search_command += duration_args
+        ft_info_command += duration_args
+        ft_list_command += duration_args
 
         logging.debug("insert_command: %s", insert_command)
         logging.debug("delete_command: %s", delete_command)
@@ -593,122 +687,78 @@ class StabilityRunner:
             utils.MemtierProcess(command=ft_list_command, name="FT._LIST")
         )
 
-        process_commands = {
-            "HSET": insert_command,
-            "DEL": delete_command,
-            "EXPIRE": expire_command,
-            "FT.SEARCH": search_command,
-            "FT.INFO": ft_info_command,
-            "FT._LIST": ft_list_command,
-        }
-        
-        # Published so the test can clean up even when run() raises partway
-        # through: on that path the stop()/close() calls at the end of this
-        # method are skipped, leaving background tasks looping and memtier
-        # pipes open. See StabilityRunner.cleanup().
+        # Published so cleanup() can release them if run() raises.
         self._threads = threads
         self._processes = processes
 
-        test_start_time = time.time()
         timeout_start = time.time()
-        processes_killed_for_failover = False
-        time_when_killed = 0
-        
-        while time.time() - timeout_start < self.config.test_timeout:
-            elapsed = time.time() - test_start_time
-            
+
+        # The deadline is pushed out by however long the processes were frozen, so
+        # a failover does not consume the budget meant for the test itself.
+        while (
+            time.time() - timeout_start - self.paused_seconds()
+            < self.config.test_timeout
+        ):
             # Check if failover is in progress
             with self.failover_state['lock']:
                 failover_in_progress = self.failover_state['in_progress']
-            
-            # If failover started and processes are still running, kill them
-            if failover_in_progress and not processes_killed_for_failover:
-                logging.info("Failover in progress - stopping all memtier processes")
-                for process in processes:
-                    if not process.done:
-                        # close() rather than kill(): these objects are about to
-                        # be replaced by restarted ones, so anything not released
-                        # here is leaked for the rest of the run.
-                        process.close()
-                        logging.info("<%s> killed for failover", process.name)
-                processes_killed_for_failover = True
-                time_when_killed = elapsed
-            
-            # If failover completed and processes were killed, restart them with remaining time
-            if not failover_in_progress and processes_killed_for_failover:
-                logging.info("Failover completed - restarting all memtier processes")
-                # Calculate remaining time based on when processes were killed, not current elapsed time
-                # This accounts for the time spent during failover (cluster recovery + 20s delay)
-                remaining_time = self.config.test_time_sec - time_when_killed
-                
-                if remaining_time > 5:  # Only restart if there's meaningful time left
-                    # Rebuild commands with remaining time
-                    new_processes = []
-                    
-                    for process in processes:
-                        base_command = process_commands[process.name]
-                        # Replace --test-time value with remaining time
-                        import re
-                        new_command = re.sub(
-                            r'--test-time\s+\d+',
-                            f'--test-time {int(remaining_time)}',
-                            base_command
-                        )
-                        
-                        error_predicate = None
-                        if process.name in ["FT.SEARCH", "FT.INFO"]:
-                            error_predicate = lambda err: err != f"-Index with name '{self.config.index_name}' not found"
-                        
-                        new_process = utils.MemtierProcess(
-                            command=new_command,
-                            name=process.name,
-                            error_predicate=error_predicate
-                        )
-                        new_processes.append(new_process)
-                        logging.info("<%s> restarted with %ds remaining", process.name, int(remaining_time))
-                    
-                    processes = new_processes
-                    self._processes = processes
-                else:
-                    logging.warning(
-                        "Not restarting processes - only %.1fs remaining (less than 5s minimum)",
-                        remaining_time
+
+            if failover_in_progress:
+                # Normally already paused by periodic_failover's before_shutdown
+                # hook; this is the fallback and is a no-op otherwise. SIGSTOP
+                # keeps memtier's counters, key position and connections intact.
+                self.pause_memtier("failover in progress")
+
+                paused_for = self.current_pause_seconds()
+                if paused_for > MAX_SINGLE_PAUSE_SEC:
+                    logging.error(
+                        "Memtier has been paused for %.0fs (limit %ds) and"
+                        " failover still reports in_progress - resuming anyway",
+                        paused_for,
+                        MAX_SINGLE_PAUSE_SEC,
                     )
-                
-                processes_killed_for_failover = False
-            
-            # Normal process status checking
+                    self.resume_memtier("pause exceeded its limit")
+            else:
+                self.resume_memtier("failover complete")
+
+            currently_paused = self.memtier_paused()
+
             if all(p.done for p in processes):
-                if failover_in_progress or processes_killed_for_failover:
-                    # During or right after failover, wait for restart
-                    logging.debug("All processes done, but waiting for failover to complete before restart")
-                else:
-                    # Normal completion - all processes finished naturally
-                    logging.info("---===All processes finished===---")
-                    break
+                logging.info("---===All processes finished===---")
+                break
+
             for process in processes:
+                # Drain the pipes even while paused, but skip print_status: it
+                # marks a process done, which a stopped process is not.
                 process.process_logs()
-                process.print_status()
+                if not currently_paused:
+                    process.print_status()
             time.sleep(1)
         else:
-            logging.error("Timed out waiting for processes to finish")
-            logging.info("killing processes...")
+            # For request_count runs this is the normal end of the run:
+            # test_timeout (plus paused time) sets the run length and
+            # test_time_sec is not used. time_interval runs should end on their
+            # own through --test-time, so reaching this there means something
+            # stalled. Either way, pass/fail comes from the failure, halted and
+            # total_ops checks in the test.
+            log = (
+                logging.info
+                if self.config.insertion_mode == "request_count"
+                else logging.error
+            )
+            log("Reached test_timeout with processes still running, ending the run")
             for process in processes:
                 if not process.done:
+                    # Read what was printed since the last poll, so errors
+                    # from the final second are still counted.
+                    process.process_logs()
                     process.close()
-            logging.error("Processes killed")
 
         for thread in threads:
             thread.stop()
 
-        # Snapshot AFTER stopping, not before. periodic_failover_task records the
-        # victim port before it issues SHUTDOWN, so a failover that begins in the
-        # window between the snapshot and stop() takes a node down whose port is
-        # missing from this set -- and the caller's "servers died unexpectedly"
-        # check then fails a test for a shutdown the harness performed itself.
-        # Once stop() has returned no new failover can start, so reading it here
-        # is race-free. Nothing in stop() mutates failed_ports; the only removal
-        # is on a successful restart.
+        # Snapshot AFTER stopping: once stop() returns no new failover can start,
+        # so no intentionally shut down port can be missing from this set.
         intentionally_failed_ports = set()
         for thread in threads:
             if thread.name == "FAILOVER":
@@ -716,11 +766,8 @@ class StabilityRunner:
                 logging.info("Collected intentionally failed ports: %s", intentionally_failed_ports)
                 break
 
-        # Release the memtier pipes and reap the processes. Even on the normal
-        # path, where every process exited on its own, the two pipes per process
-        # stay open until the garbage collector finalizes them. close() is
-        # release-only and deliberately does not drain the pipes, so the stats
-        # read below are exactly what the polling loop already observed.
+        # Release the memtier pipes and reap the processes. close() does not
+        # drain the pipes, so the stats below are what the poll loop observed.
         for process in processes:
             process.close()
 

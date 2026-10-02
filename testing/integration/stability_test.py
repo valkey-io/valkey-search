@@ -290,7 +290,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=60,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -316,7 +316,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=60,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -342,7 +342,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=180,
                 keyspace_size=1000000,
@@ -370,7 +370,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=120,
                 test_timeout=180,
                 keyspace_size=1000000,
@@ -468,7 +468,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -566,7 +566,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -664,7 +664,7 @@ class StabilityTests(parameterized.TestCase):
                 num_memtier_threads=10,
                 num_memtier_clients=10,
                 num_search_clients=10,
-                insertion_mode="time_interval",
+                insertion_mode="request_count",  # -n, not --test-time: memtier is paused for failover
                 test_time_sec=90,
                 test_timeout=120,
                 keyspace_size=1000000,
@@ -733,7 +733,9 @@ class StabilityTests(parameterized.TestCase):
 
         # Kept on self so tearDown can release the runner's background tasks and
         # memtier processes even if run() or a later assertion raises.
-        self.stability_runner = stability_runner.StabilityRunner(config)
+        self.stability_runner = stability_runner.StabilityRunner(
+            config, cluster=self.valkey_cluster_under_test
+        )
         results = self.stability_runner.run()
 
         if results is None:
@@ -813,26 +815,15 @@ class StabilityTests(parameterized.TestCase):
                 0,
                 msg=f"Expected positive total ops for background task {result.name}",
             )
-            # BGSAVE failures are still tolerated here, but the count is now
-            # meaningful: periodic_bgsave_task no longer counts "Background save
-            # already in progress" (expected, since the interval is shorter than
-            # a save of this keyspace), so anything left is a real error. Kept
-            # tolerant for now because a node busy forking can also exceed the
-            # client's socket timeout under load; tighten to assertEqual(0) once
-            # a few clean runs confirm that does not happen.
+            # BGSAVE failures are tolerated: a node busy forking can exceed the
+            # client's socket timeout under load. "Background save already in
+            # progress" is not counted as a failure at all.
             if result.name == "BGSAVE":
                 pass
             else:
-                # Zero failures is required even with failover enabled. The
-                # earlier allowance of 3 transient failures per task existed
-                # because the harness could send a command to a node it held
-                # stale information about. That is no longer expected: a node is
-                # excluded from the fan-out for as long as it is down (see
-                # failover_state['failed_ports']), the topology is re-read when
-                # that set changes, and each node's index state is tracked
-                # individually so a node that legitimately disagrees after
-                # rejoining is not counted. A failure here now means the cluster
-                # answered a command it should have been able to serve.
+                # Zero failures is required even with failover enabled: a node
+                # is excluded from the fan-out while it is down, and index
+                # state is tracked per node.
                 self.assertEqual(
                     result.failures,
                     0,

@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <stop_token>
 
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
@@ -1280,12 +1281,17 @@ class CancelAfterPolls : public cancel::Base {
     ++polls_;
     return polls_ > grace_;
   }
-  void Cancel() override { grace_ = 0; }
+  void Cancel() override {
+    grace_ = 0;
+    stop_source_.request_stop();
+  }
+  std::stop_token GetStopToken() override { return stop_source_.get_token(); }
   size_t polls() const { return polls_; }
 
  private:
   size_t grace_;
   size_t polls_{0};
+  std::stop_source stop_source_;
 };
 
 // Larger than kCancellationPollInterval (1024) so a stage has to poll partway

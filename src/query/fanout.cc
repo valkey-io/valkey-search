@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <queue>
+#include <stop_token>
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,6 +42,7 @@
 #include "src/valkey_search.h"
 #include "valkey_search_options.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -52,6 +54,12 @@
 namespace valkey_search::query::fanout {
 
 CONTROLLED_BOOLEAN(ForceInvalidSlotFingerprint, false);
+
+// Number of query fanouts that proactively cancelled their remaining shards
+// (a shard or the local search failed with partial results disabled, or a
+// consistency check failed). Counted once per fanout.
+static vmsdk::info_field::Integer FanoutCancels(
+    "query", "fanout-cancels", vmsdk::info_field::IntegerBuilder().Dev());
 
 struct NeighborComparator {
   bool operator()(const indexes::Neighbor &a,
@@ -87,11 +95,15 @@ struct SearchPartitionResultsTracker {
   //
   // Since there can only be a single LocalResponder, this doesn't need a lock.
   //
-  std::unique_ptr<SearchParameters> local_responder_;
+  [[maybe_unused]] std::unique_ptr<SearchParameters> local_responder_;
   std::priority_queue<indexes::Neighbor, std::vector<indexes::Neighbor>,
                       NeighborComparator>
       results ABSL_GUARDED_BY(mutex);
-  int outstanding_requests ABSL_GUARDED_BY(mutex);
+  [[maybe_unused]] int outstanding_requests ABSL_GUARDED_BY(mutex);
+  // Shared cancellation token for the fanout.
+  cancel::Token token;
+  // Ensures the fanout-cancel metric is counted at most once per fanout.
+  std::atomic_bool cancel_counted{false};
   std::unique_ptr<SearchParameters> parameters ABSL_GUARDED_BY(mutex);
   // Error tracking
   std::atomic_bool consistency_failed{false};
@@ -108,29 +120,48 @@ struct SearchPartitionResultsTracker {
   std::shared_ptr<query::MultiSearchTracker> meta_tracker_;
   size_t arm_index_{0};
 
-  SearchPartitionResultsTracker(int outstanding_requests, int k,
+  SearchPartitionResultsTracker(int outstanding_requests,
+                                [[maybe_unused]] int k,
                                 std::unique_ptr<SearchParameters> parameters)
       : outstanding_requests(outstanding_requests),
+        // Initialize token before moving parameters.
+        token(parameters->cancellation_token),
         parameters(std::move(parameters)) {}
+
+  // Cancel all fanout work. Call this without holding mutex.
+  void CancelFanout() ABSL_LOCKS_EXCLUDED(mutex) {
+    // Count at most once per fanout, even if several failure paths race here.
+    if (!cancel_counted.exchange(true)) {
+      FanoutCancels.Increment(1);
+    }
+    token->Cancel();
+  }
 
   void HandleResponse(coordinator::SearchIndexPartitionResponse &response,
                       const std::string &address, const grpc::Status &status) {
     if (!status.ok()) {
-      absl::MutexLock lock(&mutex);
-      // Store first error for partial results disabled case
-      if (!has_node_error.load()) {
-        has_node_error.store(true);
-        first_node_error = ToAbslStatus(status);
+      bool should_cancel = false;
+      {
+        absl::MutexLock lock(&mutex);
+        // Ignore CANCELLED caused by fanout cancellation.
+        bool propagated_cancel =
+            status.error_code() == grpc::StatusCode::CANCELLED &&
+            token->GetStopToken().stop_requested();
+        // Store the first non-propagated error.
+        if (!has_node_error.load() && !propagated_cancel) {
+          has_node_error.store(true);
+          first_node_error = ToAbslStatus(status);
+        }
+        if (parameters->enable_consistency &&
+            status.error_code() == grpc::FAILED_PRECONDITION) {
+          consistency_failed.store(true);
+        }
+        // Cancel on consistency errors or when partial results are disabled.
+        should_cancel =
+            consistency_failed.load() || !parameters->enable_partial_results;
       }
-      if (parameters->enable_consistency &&
-          status.error_code() == grpc::FAILED_PRECONDITION) {
-        consistency_failed.store(true);
-      }
-      // Cancel for consistency failures or when partial results are disabled
-      bool should_cancel =
-          consistency_failed.load() || !parameters->enable_partial_results;
       if (should_cancel) {
-        parameters->cancellation_token->Cancel();
+        CancelFanout();
       }
       VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
           << "Error during handling of FT.SEARCH on node " << address
@@ -308,6 +339,9 @@ class LocalResponderSearch : public query::SearchParameters {
       if (enable_partial_results) {
         tracker->AddResults(search_result.neighbors);
         tracker->AddTotalCount(search_result.total_count);
+      } else {
+        // Cancel all remote RPCs.
+        tracker->CancelFanout();
       }
       VMSDK_LOG_EVERY_N_SEC(DEBUG, nullptr, 1)
           << "Error during local handling of the search operation";
@@ -332,12 +366,13 @@ void PerformRemoteSearchRequest(
     std::unique_ptr<coordinator::SearchIndexPartitionRequest> request,
     const std::string &address,
     coordinator::ClientPool *coordinator_client_pool,
-    std::shared_ptr<SearchPartitionResultsTracker> tracker) {
+    std::shared_ptr<SearchPartitionResultsTracker> tracker,
+    std::stop_token stop_token) {
   auto client = coordinator_client_pool->GetClient(address);
 
   client->SearchIndexPartition(
-      std::move(request),
-      [tracker, address](
+      std::move(request), stop_token,
+      [tracker, address = std::string(address)](
           grpc::Status status,
           coordinator::SearchIndexPartitionResponse &response) mutable {
         tracker->HandleResponse(response, address, status);
@@ -349,12 +384,13 @@ void PerformRemoteSearchRequestAsync(
     const std::string &address,
     coordinator::ClientPool *coordinator_client_pool,
     std::shared_ptr<SearchPartitionResultsTracker> tracker,
-    vmsdk::ThreadPool *thread_pool) {
+    std::stop_token stop_token, vmsdk::ThreadPool *thread_pool) {
   thread_pool->Schedule(
-      [coordinator_client_pool, address, request = std::move(request),
-       tracker]() mutable {
+      [coordinator_client_pool, address = std::string(address),
+       request = std::move(request), tracker, stop_token]() mutable {
         PerformRemoteSearchRequest(std::move(request), address,
-                                   coordinator_client_pool, tracker);
+                                   coordinator_client_pool, tracker,
+                                   stop_token);
       },
       vmsdk::ThreadPool::Priority::kHigh);
 }
@@ -446,12 +482,13 @@ absl::Status PerformSearchFanoutAsync(
     if (search_targets.size() >=
             valkey_search::options::GetAsyncFanoutThreshold().GetValue() &&
         thread_pool->Size() > 1) {
-      PerformRemoteSearchRequestAsync(std::move(request_copy), target_address,
-                                      coordinator_client_pool, tracker,
-                                      thread_pool);
+      PerformRemoteSearchRequestAsync(
+          std::move(request_copy), target_address, coordinator_client_pool,
+          tracker, tracker->token->GetStopToken(), thread_pool);
     } else {
       PerformRemoteSearchRequest(std::move(request_copy), target_address,
-                                 coordinator_client_pool, tracker);
+                                 coordinator_client_pool, tracker,
+                                 tracker->token->GetStopToken());
     }
   }
   if (has_local_target) {
@@ -459,6 +496,8 @@ absl::Status PerformSearchFanoutAsync(
     VMSDK_RETURN_IF_ERROR(coordinator::GRPCSearchRequestToParameters(
         *request, nullptr, local_parameters.get()));
     local_parameters->tracker = tracker;
+    // Use the shared token for local and remote cancellation.
+    local_parameters->cancellation_token = tracker->token;
     VMSDK_RETURN_IF_ERROR(query::SearchAsync(std::move(local_parameters),
                                              thread_pool, SearchMode::kLocal))
         << "Failed to handle FT.SEARCH locally during fan-out";

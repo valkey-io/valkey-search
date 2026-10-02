@@ -185,7 +185,7 @@ absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
+  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, TrackKey(key, magnitude));
   absl::Status add_result =
       AddRecordImpl(internal_id, std::move(vector_record));
@@ -233,10 +233,10 @@ absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
-  float magnitude = 1.0f / vector_record->GetReciprocalMagnitude();
+  float magnitude = 1.0f / vector_record.GetReciprocalMagnitude();
   VMSDK_ASSIGN_OR_RETURN(auto internal_id, GetInternalId(key));
-  VMSDK_ASSIGN_OR_RETURN(
-      bool res, IsVectorUnchanged(key, magnitude, vector_record.get()));
+  VMSDK_ASSIGN_OR_RETURN(bool res,
+                         IsVectorUnchanged(key, magnitude, vector_record));
   if (res) {
     return RecordResult::kMissing;
   }
@@ -281,7 +281,7 @@ absl::StatusOr<std::vector<char>> VectorBase::GetVectorDuringSearch(
   if (!vector_record) {
     return absl::NotFoundError("Record was not found");
   }
-  const char *value = vector_record->GetRawVector();
+  const char *value = vector_record.GetRawVector();
   result.assign(value, value + GetVectorDataSize());
   return result;
 }
@@ -353,9 +353,9 @@ absl::StatusOr<uint64_t> VectorBase::TrackKey(const InternedStringPtr &key,
 
 absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     const InternedStringPtr &key, float magnitude,
-    const VectorRecord *vector_record) {
+    const VectorRecord &vector_record) {
   absl::ReaderMutexLock lock(&resize_mutex_);
-  const VectorRecord *stored_record;
+  VectorRecord stored_record;
   {
     absl::WriterMutexLock lock(&key_to_metadata_mutex_);
     auto it = tracked_metadata_by_key_.find(key);
@@ -368,14 +368,14 @@ absl::StatusOr<bool> VectorBase::IsVectorUnchanged(
     if (!stored_ptr) {
       return false;  // No stored record, so vectors are not matching
     }
-    stored_record = stored_ptr.get();
+    stored_record = stored_ptr;
   }
   if (stored_record == vector_record) {
     return true;  // Fast path: shared VectorRegistry record, definitely
                   // matching
   }
-  return (std::memcmp(stored_record->GetRawVector(),
-                      vector_record->GetRawVector(), GetVectorDataSize()) == 0);
+  return (std::memcmp(stored_record.GetRawVector(),
+                      vector_record.GetRawVector(), GetVectorDataSize()) == 0);
 }
 
 int VectorBase::RespondWithInfo(ValkeyModuleCtx *ctx) const {
@@ -497,11 +497,10 @@ VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
         absl::StrCat("Couldn't find internal id: ", internal_id));
   }
   if (normalize_) {
-    query_magnitude *= vector_record->GetReciprocalMagnitude();
+    query_magnitude *= vector_record.GetReciprocalMagnitude();
   }
   return (std::pair<float, hnswlib::labeltype>){
-      ComputeDistance(query, vector_record.get(), query_magnitude),
-      internal_id};
+      ComputeDistance(query, vector_record, query_magnitude), internal_id};
 }
 
 absl::StatusOr<float> VectorBase::RecomputeDistance(
@@ -514,17 +513,17 @@ absl::StatusOr<float> VectorBase::RecomputeDistance(
   // Built with the default allocator rather than the index's own: this runs on
   // the main thread while writers may be using that allocator, and one record
   // per mutated key is not worth sharing.
-  auto vector_record =
-      VectorRecord::Construct(record, ComputeReciprocalMagnitude(record));
+  auto vector_record = VectorRecord::Construct(
+      record, ComputeReciprocalMagnitude(record), nullptr);
   if (!vector_record) {
     return absl::InternalError("Could not construct a vector record");
   }
   float query_magnitude = kDefaultMagnitude;
   if (normalize_) {
     query_magnitude = CalcReciprocalMagnitude(query, GetVectorDataType()) *
-                      vector_record->GetReciprocalMagnitude();
+                      vector_record.GetReciprocalMagnitude();
   }
-  return ComputeDistance(query, vector_record.get(), query_magnitude);
+  return ComputeDistance(query, vector_record, query_magnitude);
 }
 
 bool VectorBase::AddPrefilteredKey(
@@ -611,27 +610,18 @@ absl::Status CheckSimsimdBf16Capability() {
   return absl::OkStatus();
 }
 
-std::shared_ptr<VectorRecord> VectorRecord::Construct(
-    absl::string_view vector, float reciprocal_magnitude,
-    Allocator *allocator) {
-  size_t total_size = sizeof(VectorRecord) + vector.size();
-  void *mem =
-      allocator ? allocator->Allocate(total_size) : ::operator new(total_size);
-  VectorRecord *ptr = new (mem) VectorRecord(vector, reciprocal_magnitude);
-  return {ptr, [allocator_used = (allocator != nullptr)](VectorRecord *p) {
-            p->~VectorRecord();
-            if (allocator_used) {
-              Allocator::Free(reinterpret_cast<char *>(p));
-            } else {
-              ::operator delete(p);
-            }
-          }};
-}
-
-VectorRecord::VectorRecord(absl::string_view vector, float reciprocal_magnitude)
-    : reciprocal_magnitude_(
-          reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude) {
-  std::memcpy(data_, vector.data(), vector.size());
+VectorRecord VectorRecord::Construct(absl::string_view vector,
+                                     float reciprocal_magnitude,
+                                     Allocator *allocator) {
+  size_t total_size = sizeof(VectorRecord::Header) + vector.size();
+  void *mem = allocator ? allocator->Allocate(allocator->ChunkSize())
+                        : ::operator new(total_size);
+  float mag = reciprocal_magnitude == 0.0f ? 1.0f : reciprocal_magnitude;
+  new (mem)
+      VectorRecord::Header{/*ref_count_=*/{1}, /*reciprocal_magnitude_=*/mag};
+  char *data = reinterpret_cast<char *>(mem) + sizeof(VectorRecord::Header);
+  std::memcpy(data, vector.data(), vector.size());
+  return VectorRecord(static_cast<const char *>(data));
 }
 }  // namespace indexes
 

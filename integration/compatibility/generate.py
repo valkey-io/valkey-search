@@ -458,6 +458,19 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
         )
         self.check(dialect, f'ft.aggregate {key_type}_idx1 * load 6 @__key @n1 @n2 @t1 @t2 @t3 groupby 1 @t1 reduce max 1 @n2 as nmax')
 
+    def test_aggregate_groupby_zero(self, key_type, dialect, vector_data_type):
+        """GROUPBY 0 reduces the whole result set into a single group. The
+        negated queries `check` substitutes match nothing, which covers the
+        empty case: no group, so no row."""
+        self.setup_data("sortable numbers", key_type, vector_data_type=vector_data_type)
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce count 0 as c")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0 reduce sum 1 @n1 as s")
+        self.check(dialect, f"ft.aggregate {key_type}_idx1 * load 2 @__key @n1 groupby 0")
+        self.check(dialect,
+            f"ft.aggregate {key_type}_idx1 * load 2 @__key @t1 groupby 1 @t1 reduce count 0 as c "
+            f"groupby 0 reduce sum 1 @c as total"
+        )
+
     def test_aggregate_groupby_missing_field_reducers(self, key_type, dialect, vector_data_type):
         """Reducers folding over a group in which no member has the field.
 

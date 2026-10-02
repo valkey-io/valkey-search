@@ -316,6 +316,27 @@ TEST_F(AggregateExecTest, GroupTest) {
   }
 }
 
+// GROUPBY 0 reduces every record into one group, and like Redisearch emits no
+// group at all when there is no input.
+TEST_F(AggregateExecTest, GroupByZeroTest) {
+  {
+    auto param =
+        MakeStages("groupby 0 reduce count 0 as c reduce sum 1 @n1 as s");
+    auto records = MakeData(4);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    ASSERT_EQ(records.size(), 1);
+    auto record = records.pop_front();
+    EXPECT_EQ(record->fields_.at(2), expr::Value(4.0));
+    EXPECT_EQ(record->fields_.at(3), expr::Value(6.0));
+  }
+  {
+    auto param = MakeStages("groupby 0 reduce count 0 as c");
+    RecordSet records(nullptr);
+    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
+    EXPECT_EQ(records.size(), 0);
+  }
+}
+
 TEST_F(AggregateExecTest, GroupByArrayKeyExpandsTest) {
   // An array group key is a multi-value field: the record joins one group per
   // element, and one per combination when both key fields hold arrays.

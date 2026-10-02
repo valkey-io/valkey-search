@@ -38,11 +38,9 @@ class ChunkTracker {
     auto it = chunks_by_data_.upper_bound(ptr);
     if (it != chunks_by_data_.begin()) {
       --it;
-      if (it->second->data.get() <= ptr) {
-        DCHECK_GT(it->second->data.get() +
-                      BufferSize(it->second->entries_in_chunk,
-                                 it->second->allocator->ChunkSize()),
-                  ptr);
+      if (ptr < it->second->data.get() +
+                    BufferSize(it->second->entries_in_chunk,
+                               it->second->allocator->ChunkSize())) {
         return it->second;
       }
     }
@@ -71,7 +69,6 @@ size_t CalcChunkFreeGroup(size_t free_cnt) {
 
 int UpperBoundToMultipleOf8(int num) { return (num + 7) & ~7; }
 
-// TODO: allow deletion of chunks when they are empty
 FixedSizeAllocator::FixedSizeAllocator(size_t size, bool require_ptr_alignment)
     : size_(size), require_ptr_alignment_(require_ptr_alignment) {
   if (require_ptr_alignment_) {
@@ -226,13 +223,16 @@ AllocatorChunk::AllocatorChunk(Allocator *allocator, size_t size)
 
 AllocatorChunk::~AllocatorChunk() { chunk_tracker.Untrack(this); }
 
-bool Allocator::Free(char *ptr) {
+void Allocator::Free(char *ptr) {
+  if (ptr == nullptr) {
+    return;
+  }
   auto chunk = chunk_tracker.FindChunk(ptr);
   if (!chunk) {
-    return false;
+    ::operator delete(ptr);
+    return;
   }
   chunk->allocator->Free(const_cast<AllocatorChunk *>(chunk), ptr);
-  return true;
 }
 
 }  // namespace valkey_search

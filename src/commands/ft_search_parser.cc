@@ -156,6 +156,26 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
         return absl::OkStatus();
       });
 }
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructInfieldsParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        uint32_t count{0};
+        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
+        if (count > kMaxTextFieldsCount) {
+          return absl::InvalidArgumentError(
+              absl::StrCat("INFIELDS count exceeds maximum supported (",
+                           kMaxTextFieldsCount, ")"));
+        }
+        parameters.infields.emplace();
+        parameters.infields->reserve(count);
+        for (uint32_t i = 0; i < count; ++i) {
+          VMSDK_ASSIGN_OR_RETURN(auto field, itr.PopNext());
+          parameters.infields->insert(std::string(vmsdk::ToStringView(field)));
+        }
+        return absl::OkStatus();
+      });
+}
+
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
@@ -312,6 +332,7 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
           }));
   parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
   parser.AddParamParser(query::kInkeysParam, ConstructInkeysParser());
+  parser.AddParamParser(query::kInfieldsParam, ConstructInfieldsParser());
 
   return parser;
 }

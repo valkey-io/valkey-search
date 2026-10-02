@@ -26,6 +26,7 @@
 #include "src/index_schema.pb.h"
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
+#include "src/indexes/text.h"
 #include "src/indexes/vector_flat.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
@@ -95,6 +96,7 @@ struct FTSearchParserTestCase {  // NOLINT
   std::optional<int64_t> cursor_count;
   std::optional<int64_t> cursor_max_idle_ms;
   std::optional<absl::flat_hash_set<std::string>> inkeys;
+  std::optional<absl::flat_hash_set<std::string>> expected_infields;
 };
 
 class FTSearchParserTest
@@ -305,6 +307,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                 test_case.sortby_order);
     }
     EXPECT_EQ(search_params.value()->inkeys, test_case.inkeys);
+    EXPECT_EQ(search_params.value()->infields, test_case.expected_infields);
   } else {
     if (IsVerbose()) {
       std::cerr << "Failed to parse command: `" << vmsdk::ToStringView(args[0])
@@ -375,6 +378,14 @@ std::shared_ptr<IndexSchema> SetupIndexSchemaForTestCase(
                      .value();
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+    // Add TEXT fields so INFIELDS validation passes for vector+INFIELDS tests.
+    index_schema->CreateTextIndexSchema();
+    auto text_schema = index_schema->GetTextIndexSchema();
+    data_model::TextIndex text_proto;
+    auto tf1 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    auto tf2 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_1", "tid1", tf1));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_2", "tid2", tf2));
   } else {
     // Non Vector index setup
     data_model::NumericIndex numeric_index_proto;
@@ -389,6 +400,14 @@ std::shared_ptr<IndexSchema> SetupIndexSchemaForTestCase(
     VMSDK_EXPECT_OK(index_schema->AddIndex(
         "__score", "id3",
         std::make_shared<indexes::Numeric>(numeric_index_proto)));
+    // Add TEXT fields for INFIELDS tests.
+    index_schema->CreateTextIndexSchema();
+    auto text_schema = index_schema->GetTextIndexSchema();
+    data_model::TextIndex text_proto;
+    auto tf1 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    auto tf2 = std::make_shared<indexes::Text>(text_proto, text_schema);
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_1", "tid1", tf1));
+    VMSDK_EXPECT_OK(index_schema->AddIndex("text_field_2", "tid2", tf2));
   }
   return index_schema;
 }
@@ -1449,6 +1468,165 @@ INSTANTIATE_TEST_SUITE_P(
             .search_parameters_str = "INKEYS 2 k1 k2 NOCONTENT",
             .vector_query = false,
             .inkeys = absl::flat_hash_set<std::string>{"k1", "k2"},
+        },
+        // INFIELDS parameter tests
+        {
+            .test_name = "infields_single_field",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 1 text_field_1",
+            .vector_query = false,
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1"},
+        },
+        {
+            .test_name = "infields_multiple_fields",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 2 text_field_1 text_field_2",
+            .vector_query = false,
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1",
+                                                 "text_field_2"},
+        },
+        {
+            .test_name = "infields_duplicate_fields_deduped",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str =
+                "INFIELDS 3 text_field_1 text_field_1 text_field_2",
+            .vector_query = false,
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1",
+                                                 "text_field_2"},
+        },
+        {
+            .test_name = "infields_repeated_last_wins",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str =
+                "INFIELDS 1 text_field_1 INFIELDS 1 text_field_2",
+            .vector_query = false,
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_2"},
+        },
+        {
+            .test_name = "infields_repeated_zero_count_resets",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 1 text_field_1 INFIELDS 0",
+            .vector_query = false,
+            .expected_infields = absl::flat_hash_set<std::string>{},
+        },
+        {
+            .test_name = "infields_zero_count_no_op",
+            .success = true,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .search_parameters_str = "INFIELDS 0",
+            .vector_query = false,
+            // INFIELDS 0 engages the optional to an empty set. Downstream,
+            // the filter parser treats an empty set as "search all fields"
+            // for Redis parity.
+            .expected_infields = absl::flat_hash_set<std::string>{},
+        },
+        {
+            .test_name = "infields_non_integer_count_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS`",
+            .search_parameters_str = "INFIELDS abc",
+            .vector_query = false,
+        },
+        {
+            .test_name = "infields_count_exceeds_args_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS`",
+            .search_parameters_str = "INFIELDS 5 f1 f2",
+            .vector_query = false,
+        },
+        {
+            .test_name = "infields_with_vector_query",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "* =>[KNN 5 @vec $BLOB]",
+            .k = 5,
+            .search_parameters_str = "INFIELDS 2 text_field_1 text_field_2",
+            .expected_infields =
+                absl::flat_hash_set<std::string>{"text_field_1",
+                                                 "text_field_2"},
+        },
+        {
+            .test_name = "infields_negative_count_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS` - "
+                "`-1` is outside acceptable bounds",
+            .search_parameters_str = "INFIELDS -1",
+            .vector_query = false,
+        },
+        {
+            .test_name = "infields_count_exceeds_max_error",
+            .success = false,
+            .params_str = "",
+            .filter_str = "@attribute_identifier_1:[300 1000]",
+            .attribute_alias = "",
+            .k = 0,
+            .ef = 0,
+            .score_as = "",
+            .expected_error_message =
+                "Error parsing value for the parameter `INFIELDS` - "
+                "INFIELDS count exceeds maximum supported (64)",
+            .search_parameters_str = "INFIELDS 65",
+            .vector_query = false,
         },
     }),
     [](const TestParamInfo<FTSearchParserTestCase> &info) {

@@ -173,10 +173,19 @@ def result_has_sortkeys(rs):
         return second_elem.startswith('#') or second_elem.startswith('$')
     return False
 
+def parse_sortkey(sortkey):
+    text = sortkey.decode() if isinstance(sortkey, bytes) else str(sortkey)
+    return float(text[1:]) if text.startswith('#') else text[1:]
+
 def unpack_search_result(rs, key_type, has_sortkeys=False, nocontent=False,
-                         has_scores=False):
+                         has_scores=False, sortkeys=()):
     rows = []
-    if nocontent:
+    if has_sortkeys and nocontent:
+        # Format: [count, key1, sortkey1, key2, sortkey2, ...]
+        field = sortkeys[0]
+        for i in range(1, len(rs), 2):
+            rows += [{"__key": rs[i], field: parse_sortkey(rs[i+1])}]
+    elif nocontent:
         # NOCONTENT reply carries no field arrays. Driven by the command
         # (see unpack_result), not inferred from the reply shape.
         if has_scores:
@@ -214,6 +223,10 @@ def unpack_search_result(rs, key_type, has_sortkeys=False, nocontent=False,
             for j in range(0, len(value), 2):
                 row[parse_field(value[j], key_type)] = parse_value(value[j+1], key_type)
             rows += [row]
+    elif nocontent:
+        # Format: [count, key1, key2, ...]
+        for key in rs[1:]:
+            rows += [{"__key": key}]
     else:
         # Format: [count, key1, [fields1], key2, [fields2], ...]
         for (key, value) in [(rs[i],rs[i+1]) for i in range(1, len(rs), 2)]:
@@ -365,7 +378,7 @@ def unpack_result(cmd, key_type, rs, sortkeys, ordered=False):
             isinstance(c, str) and c.lower() == "withscores" for c in cmd
         )
         out = unpack_search_result(rs, key_type, has_sortkeys, nocontent,
-                                   has_scores)
+                                   has_scores, sortkeys)
     else:
         out = unpack_agg_result(rs, key_type)
     #
@@ -883,6 +896,14 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             print(f"Excluded CLUSTER query raised: {e} for cmd {expected['cmd']}")
         return data_set
 
+    xfail = expected.get("xfail", False)
+
+    def record(matched):
+        if xfail:
+            (mark_as_xpassed if matched else mark_as_xfailed)(expected["testname"])
+        else:
+            (mark_as_passed if matched else mark_as_failed)(expected["testname"])
+
     result = {}
     try:
         print(
@@ -895,19 +916,13 @@ def do_answer_cluster(cluster_client, expected, data_set, test_case):
             *expected["cmd"], **cluster_routing(expected["cmd"]))
         result["exception"] = False
 
-        if compare_results(expected, result):
-            mark_as_passed(expected["testname"])
-        else:
-            mark_as_failed(expected["testname"])
+        record(compare_results(expected, result))
 
     except valkey.ResponseError as e:
         print(f"Got ResponseError: {e} for command {expected['cmd']}")
         result["exception"] = True
 
-        if compare_results(expected, result):
-            mark_as_passed(expected["testname"])
-        else:
-            mark_as_failed(expected["testname"])
+        record(compare_results(expected, result))
 
     return data_set
 

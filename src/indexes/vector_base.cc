@@ -159,7 +159,8 @@ query::EvaluationResult PrefilterEvaluator::EvaluateTags(
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
     const query::NumericPredicate &predicate) {
   CHECK(key_);
-  const auto *value = predicate.GetIndex()->GetValue(*key_);
+  const auto *value =
+      predicate.GetIndex()->GetValue(BorrowedInternedStringPtr(*key_));
   return predicate.Evaluate(value);
 }
 

@@ -175,6 +175,101 @@ def validate_bare_wildcard_queries(client: Valkey):
     assert result[0] == 4
     assert len(result) == 5
 
+def create_numeric_sortby_data(index_client: Valkey, data_client):
+    """
+        30 docs priced 10..300, inserted out of price order, plus one doc
+        without a price and one whose price does not parse.
+    """
+    assert index_client.execute_command(
+        "FT.CREATE", "sortby_idx", "ON", "HASH", "PREFIX", "1", "sb:",
+        "SCHEMA", "price", "NUMERIC", "category", "TAG") == b"OK"
+    order = list(range(30))
+    random.Random(7).shuffle(order)
+    for i in order:
+        data_client.execute_command(
+            "HSET", f"sb:{i}", "category", "all", "price", str((i + 1) * 10))
+    data_client.execute_command("HSET", "sb:missing", "category", "all")
+    data_client.execute_command(
+        "HSET", "sb:bad", "category", "all", "price", "N/A")
+
+def validate_numeric_sortby_queries(client: Valkey):
+    """
+        A numeric SORTBY is trimmed in the background by the index value; every
+        page must match a full sort. The index cannot order sb:missing or
+        sb:bad, so they reach the final sort untrimmed and keep its rules: a
+        missing field sorts last, an unparsable value as 0. Under
+        emulate-release >= 1.3.0 sb:bad is not indexed at all.
+    """
+    def page(order, offset, count):
+        result = client.execute_command(
+            "FT.SEARCH", "sortby_idx", "@category:{all}", "SORTBY", "price",
+            order, "LIMIT", str(offset), str(count), "RETURN", "1", "price")
+        # A doc without a price returns no fields.
+        return [(key, fields[1] if fields else None) for key, fields in
+                zip(result[1::2], result[2::2])]
+
+    release = client.execute_command(
+        "CONFIG", "GET", "search.emulate-release")[1].decode()
+    bad_indexed = tuple(map(int, release.split("."))) < (1, 3, 0)
+    priced = [(f"sb:{i}".encode(), str((i + 1) * 10).encode())
+              for i in range(30)]
+    bad = [(b"sb:bad", b"N/A")] if bad_indexed else []
+    missing = [(b"sb:missing", None)]
+    expected = {"ASC": bad + priced + missing,
+                "DESC": priced[::-1] + bad + missing}
+    for order, docs in expected.items():
+        for offset, count in ((0, 3), (5, 3), (28, 5), (29, 5)):
+            assert page(order, offset, count) == docs[offset:offset + count], \
+                f"{order} LIMIT {offset} {count}"
+
+def validate_numeric_sortby_refills_dropped_candidates(clients, data_client,
+                                                       multi=False):
+    """
+        The 20 cheapest of 30 docs expire while active expiry is off, so they
+        stay indexed until content loading finds them expired. That drops every
+        candidate the background trim kept for LIMIT 0 5; the page must still
+        be filled from the ones it trimmed. Then only the cheapest remaining
+        doc expires: LIMIT 1 1 must skip it before applying the offset, so the
+        offset counts only valid docs. Inside MULTI the query runs
+        synchronously, which resolves content on a separate path.
+    """
+    def search(offset, count):
+        args = ["FT.SEARCH", "ttl_idx", "@category:{all}", "SORTBY", "price",
+                "ASC", "LIMIT", str(offset), str(count), "NOCONTENT"]
+        if multi:
+            pipe = clients[0].pipeline(transaction=True)
+            pipe.execute_command(*args)
+            return pipe.execute()[0][1:]
+        return clients[0].execute_command(*args)[1:]
+
+    for c in clients:
+        assert c.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "0") == b"OK"
+    try:
+        assert clients[0].execute_command(
+            "FT.CREATE", "ttl_idx", "ON", "HASH", "PREFIX", "1", "ttl:",
+            "SCHEMA", "price", "NUMERIC", "category", "TAG") == b"OK"
+        for i in range(30):
+            data_client.execute_command(
+                "HSET", f"ttl:{i}", "category", "all",
+                "price", str((i + 1) * 10))
+        # Docs without a price reach the final sort untrimmed; they must not
+        # count toward filling the page in place of the dropped priced ones.
+        for i in range(10):
+            data_client.execute_command(
+                "HSET", f"ttl:unpriced{i}", "category", "all")
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+            clients, "ttl_idx")
+        for i in range(20):
+            data_client.execute_command("PEXPIRE", f"ttl:{i}", "1")
+        time.sleep(0.1)
+        assert search(0, 5) == [f"ttl:{i}".encode() for i in range(20, 25)]
+        data_client.execute_command("PEXPIRE", "ttl:20", "1")
+        time.sleep(0.1)
+        assert search(1, 1) == [b"ttl:22"]
+    finally:
+        for c in clients:
+            c.execute_command("DEBUG", "SET-ACTIVE-EXPIRE", "1")
+
 def create_bulk_data_standalone(client: Valkey):
     """
         Create bulk data for standalone testing.
@@ -1071,6 +1166,21 @@ class TestNonVector(ValkeySearchTestCaseBase):
             )[0] == 0
         )
 
+    def test_numeric_sortby(self):
+        client: Valkey = self.server.get_new_client()
+        create_numeric_sortby_data(client, client)
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "sortby_idx")
+        validate_numeric_sortby_queries(client)
+
+    def test_numeric_sortby_refills_dropped_candidates(self):
+        client: Valkey = self.server.get_new_client()
+        validate_numeric_sortby_refills_dropped_candidates([client], client)
+
+    def test_numeric_sortby_refills_dropped_candidates_in_multi(self):
+        client: Valkey = self.server.get_new_client()
+        validate_numeric_sortby_refills_dropped_candidates(
+            [client], client, multi=True)
+
     def test_bulk_limit_background_changes(self):
         """
             Test bulk operations with various LIMIT and OFFSET combinations to validate background limit changes.
@@ -1223,6 +1333,24 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         validate_limit_queries(client)
         # Test bulk limit functionality
         validate_bulk_limit_queries(client)
+
+    def test_numeric_sortby_cluster(self):
+        """
+            Each shard trims its numeric SORTBY candidates in the background;
+            the coordinator's merged page must still match a full sort.
+        """
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        create_numeric_sortby_data(client, cluster_client)
+        IndexingTestHelper.wait_for_indexing_complete_on_all_nodes(
+            [self.new_client_for_primary(i) for i in range(self.CLUSTER_SIZE)],
+            "sortby_idx")
+        validate_numeric_sortby_queries(client)
+
+    def test_numeric_sortby_refills_dropped_candidates_cluster(self):
+        validate_numeric_sortby_refills_dropped_candidates(
+            [self.new_client_for_primary(i) for i in range(self.CLUSTER_SIZE)],
+            self.new_cluster_client())
 
     def test_bare_wildcard_cluster(self):
         """

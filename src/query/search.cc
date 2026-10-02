@@ -667,11 +667,38 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (parameters.no_content || parameters.return_attributes.empty()) {
     return results;
   }
+
+  // Collect the attributes to serve from indexes: the RETURN fields plus the
+  // SORTBY field that the sort comparator reads later.
   struct AttributeInfo {
-    const ReturnAttribute *attribute;
+    // Bag key; views memory owned by `parameters`.
+    absl::string_view identifier;
     indexes::IndexBase *index;
   };
   std::vector<AttributeInfo> attributes;
+  // If SORTBY is on a doc field while RETURN does not specify that field, we
+  // should add it here so sorting can read it from its index.
+  const bool sort_by_vec_score =
+      parameters.sortby_parameter.has_value() && parameters.score_as &&
+      parameters.sortby_parameter->field ==
+          vmsdk::ToStringView(parameters.score_as.get());
+  if (parameters.sortby_parameter.has_value() && !sort_by_vec_score) {
+    const std::string &sortby_field = parameters.sortby_parameter->field;
+    const bool sortby_served_by_return = std::any_of(
+        parameters.return_attributes.begin(),
+        parameters.return_attributes.end(), [&](const ReturnAttribute &attr) {
+          return attr.identifier.get() &&
+                 vmsdk::ToStringView(attr.identifier.get()) == sortby_field;
+        });
+    if (!sortby_served_by_return) {
+      auto index = parameters.index_schema->GetIndex(sortby_field);
+      if (!index.ok()) {
+        return results;
+      }
+      attributes.push_back(AttributeInfo{.identifier = sortby_field,
+                                         .index = index.value().get()});
+    }
+  }
   for (auto &attribute : parameters.return_attributes) {
     if (!attribute.attribute_alias.get()) {
       // Any attribute that is not indexed will result in all attributes being
@@ -683,7 +710,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
     if (!index.ok()) {
       return results;
     }
-    attributes.push_back(AttributeInfo{&attribute, index.value().get()});
+    attributes.push_back(AttributeInfo{
+        .identifier = vmsdk::ToStringView(attribute.identifier.get()),
+        .index = index.value().get()});
   }
   for (auto &neighbor : *results) {
     if (neighbor.attribute_contents.has_value()) {
@@ -707,6 +736,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
               dynamic_cast<indexes::Numeric *>(attribute_info.index);
           const auto *numeric = numeric_index->GetValue(neighbor.external_id);
           if (numeric != nullptr) {
+            // TODO: re-serialized bytes ("10.50" -> "10.5"); values equal in
+            // the first 12 significant digits collapse to a tie.
             attribute_value =
                 vmsdk::MakeUniqueValkeyString(expr::FormatDouble(*numeric));
           }
@@ -766,8 +797,8 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
       }
 
       if (attribute_value != nullptr) {
-        auto identifier = vmsdk::MakeUniqueValkeyString(
-            vmsdk::ToStringView(attribute_info.attribute->identifier.get()));
+        auto identifier =
+            vmsdk::MakeUniqueValkeyString(attribute_info.identifier);
         auto identifier_view = vmsdk::ToStringView(identifier.get());
         neighbor.attribute_contents->emplace(
             identifier_view,

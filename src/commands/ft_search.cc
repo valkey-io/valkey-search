@@ -11,11 +11,13 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/base/casts.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
@@ -168,7 +170,8 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
 
 }  // namespace
 
-// Apply sorting to neighbors based on attribute values in attribute_contents
+// Apply deterministic (but unstable) sorting to neighbors based on attribute
+// values in attribute_contents
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
   if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
@@ -217,6 +220,18 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
   bool is_numeric =
       index_result.ok() &&
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
+
+  // WARNING: this tie_breaker should only be used if both values are 1)
+  // present and equal, or 2) both missing. Never call on mixed pair as it can
+  // create a comparison cycle which will result in undefined behavior in
+  // std::sort
+  auto tie_breaker = [&](const indexes::Neighbor &a,
+                         const indexes::Neighbor &b) -> bool {
+    // external id is unique in keyspace so they will never tie
+    return sortby.order == query::SortOrder::kAscending
+               ? a.external_id->Str() < b.external_id->Str()
+               : a.external_id->Str() > b.external_id->Str();
+  };
   auto compare = [&](const indexes::Neighbor &a,
                      const indexes::Neighbor &b) -> bool {
     if (is_vector_score) {
@@ -225,33 +240,55 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                    ? a.distance < b.distance
                    : a.distance > b.distance;
       }
-      // Tie-break on key ascending for a deterministic order.
-      return a.external_id->Str() < b.external_id->Str();
-    }
-    if (!a.attribute_contents.has_value() ||
-        !b.attribute_contents.has_value()) {
-      return false;
+      return tie_breaker(a, b);
     }
 
-    auto it_a = a.attribute_contents->find(sortby.field);
-    auto it_b = b.attribute_contents->find(sortby.field);
+    auto get_sortkey_val = [&](const indexes::Neighbor &neighbor)
+        -> std::optional<absl::string_view> {
+      if (!neighbor.attribute_contents.has_value()) {
+        return std::nullopt;
+      }
+      auto target_field_it = neighbor.attribute_contents->find(sortby.field);
+      if (target_field_it == neighbor.attribute_contents->end()) {
+        return std::nullopt;
+      }
+      return vmsdk::ToStringView(target_field_it->second.value.get());
+    };
 
-    if (it_a == a.attribute_contents->end()) {
-      return false;
-    }
-    if (it_b == b.attribute_contents->end()) {
-      return true;
-    }
+    auto op_str_a = get_sortkey_val(a);
+    auto op_str_b = get_sortkey_val(b);
 
-    auto str_a = vmsdk::ToStringView(it_a->second.value.get());
-    auto str_b = vmsdk::ToStringView(it_b->second.value.get());
+    if (!op_str_a.has_value() || !op_str_b.has_value()) {
+      // mandatory guard to prevent cyclical sorting order
+      if (!op_str_a.has_value() && !op_str_b.has_value()) {
+        return tie_breaker(a, b);
+      }
+      // missing docs last so LIMIT pages stay relevant
+      return !op_str_b.has_value();
+    }
+    auto str_a = op_str_a.value();
+    auto str_b = op_str_b.value();
 
     expr::Value val_a, val_b;
     if (is_numeric) {
-      auto num_a = vmsdk::To<double>(str_a).value_or(0.0);
-      auto num_b = vmsdk::To<double>(str_b).value_or(0.0);
-      val_a = expr::Value(num_a);
-      val_b = expr::Value(num_b);
+      // vmsdk::To<double> rejects only the bare "nan" spelling; "-nan" or
+      // "nan(2)" still parse to a real NaN. We have to fold NaN to real value
+      // as NaN comparison yields kUNORDERED, which would send the comparison
+      // pair to tie_breaker causing UB. Currently vmsdk::To is used by
+      // FT.AGGREGATE and cannot be easily altered due to that dependency hence
+      // the guard rests here.
+      auto to_sortable_double = [](absl::string_view s) {
+        const double d = vmsdk::To<double>(s).value_or(0.0);
+        // Bit-pattern NaN test: built-in isnan is unreliable under
+        // -ffast-math (see expr/value.cc).
+        const uint64_t v = absl::bit_cast<uint64_t>(d);
+        const bool is_nan =
+            (v & 0x7FF0000000000000ull) == 0x7FF0000000000000ull &&
+            (v & 0x000FFFFFFFFFFFFFull) != 0;
+        return is_nan ? 0.0 : d;
+      };
+      val_a = expr::Value(to_sortable_double(str_a));
+      val_b = expr::Value(to_sortable_double(str_b));
     } else {
       val_a = expr::Value(str_a);
       val_b = expr::Value(str_b);
@@ -264,7 +301,7 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
     if (cmp == expr::Ordering::kGREATER) {
       return sortby.order == query::SortOrder::kDescending;
     }
-    return false;
+    return tie_breaker(a, b);
   };
 
   PerformSortingOnRelevantPortion(neighbors, parameters, compare);

@@ -156,9 +156,9 @@ class ValkeyVersion {
                  (static_cast<unsigned>(minor) << 8) |
                  static_cast<unsigned>(patch)) {}
   constexpr ValkeyVersion(int version) : version_(version) {}
-  unsigned Major() const { return (version_ >> 16) & 0xFFFF; }
-  unsigned Minor() const { return (version_ >> 8) & 0xFF; }
-  unsigned Patch() const { return (version_) & 0xFF; }
+  constexpr unsigned Major() const { return (version_ >> 16) & 0xFFFF; }
+  constexpr unsigned Minor() const { return (version_ >> 8) & 0xFF; }
+  constexpr unsigned Patch() const { return (version_) & 0xFF; }
   operator unsigned() const { return version_; }
   std::string ToString() const {
     return absl::StrFormat("%d.%d.%d", Major(), Minor(), Patch());

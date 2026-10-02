@@ -28,6 +28,7 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
@@ -46,6 +47,9 @@ namespace valkey_search::indexes {
 class Tag : public IndexBase {
  public:
   using KeySet = BagOfInternedStringPtrs;
+  // Release that indexes JSON wildcard TAG arrays element by element. The
+  // ingestion gate in IndexSchema and NormalizeStringAttribute must agree.
+  static constexpr vmsdk::ValkeyVersion kJsonArrayFixVersion{1, 3, 0};
 
   explicit Tag(const data_model::TagIndex &tag_index_proto);
   ~Tag() override;
@@ -60,6 +64,8 @@ class Tag : public IndexBase {
   absl::StatusOr<RecordResult> ModifyRecord(const InternedStringPtr &key,
                                             AttributeData &&data) override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+  vmsdk::UniqueValkeyString NormalizeStringAttribute(
+      vmsdk::UniqueValkeyString input) const override;
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override
       ABSL_LOCKS_EXCLUDED(index_mutex_);
   absl::Status SaveIndex(RDBChunkOutputStream chunked_out) const override {

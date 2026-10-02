@@ -20,8 +20,7 @@ set(MODULE_HIGHWAYHASH "highwayhash")
 set(MODULE_GRPC "grpc")
 set(MODULE_GOOGLE_TEST "googletest")
 
-string(TOLOWER "$ENV{SAN_BUILD}" SAN_BUILD_LOWER)
-if("${SAN_BUILD_LOWER}" STREQUAL "no")
+if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
   set(MODULE_BENCHMARK "benchmark")
 endif()
 
@@ -170,7 +169,7 @@ if(WITH_SUBMODULES_SYSTEM)
   message(STATUS "libhighwayhash.a found: ${LIBHIGHWAYHASH}")
   message(STATUS "highwayhash include path: ${LIBHIGHWAYHASH_INCLUDE}")
 
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     find_package(benchmark REQUIRED)
     message(STATUS "Found system google benchmark")
   endif()
@@ -200,7 +199,15 @@ else()
     ${MODULE_GOOGLE_TEST} "https://github.com/google/googletest.git" "main"
     "${MODULES_DIR}/googletest/build-release")
 
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  set(MODULES_COMMON_CMAKE_ARGS
+      -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX}
+      -DCMAKE_CXX_STANDARD=20
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  )
+
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
   
     checkout_submodule_branch(
       ${MODULE_BENCHMARK} "https://github.com/google/benchmark.git" "v1.8.3"
@@ -214,14 +221,6 @@ else()
         -DBENCHMARK_DOWNLOAD_DEPENDENCIES=OFF
     )
    endif()
-
-  set(MODULES_COMMON_CMAKE_ARGS
-      -DCMAKE_BUILD_TYPE=Release
-      -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-      -DCMAKE_INSTALL_PREFIX=${MODULES_INSTALL_PREFIX}
-      -DCMAKE_CXX_STANDARD=20
-      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-  )
 
   set(GOOGLE_TEST_CMAKE_ARGS ${MODULES_COMMON_CMAKE_ARGS})
   set(GRPC_CMAKE_ARGS
@@ -238,7 +237,7 @@ else()
   build_submodule(${MODULE_GRPC} "${GRPC_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/include/absl/base/options.h")
   
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     build_submodule(${MODULE_BENCHMARK} "${BENCHMARK_CMAKE_ARGS}"
                   "${MODULES_INSTALL_PREFIX}/lib/cmake/benchmark/benchmarkConfig.cmake")
   endif()
@@ -262,7 +261,7 @@ else()
   update_cmake_prefix("protobuf" __CMAKE_PREFIX_PATH)
   update_cmake_prefix("utf8_range" __CMAKE_PREFIX_PATH)
   
-  if("${SAN_BUILD_LOWER}" STREQUAL "no")
+  if("${SAN_BUILD_LOWER}" STREQUAL "no" AND BUILD_BENCHMARKS)
     update_cmake_prefix("benchmark" __CMAKE_PREFIX_PATH)
   endif()
   

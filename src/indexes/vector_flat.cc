@@ -83,6 +83,17 @@ std::optional<hnswlib::tableint> VectorFlat<T>::GetAlgoIdLockFree(
   return search->second;
 }
 
+// A FLAT delete frees its label (no tombstones), so the labels still present
+// are the only ones a key added after the load could collide with.
+template <typename T>
+uint64_t VectorFlat<T>::GetMaxLoadedLabel() const {
+  uint64_t max_label = 0;
+  for (const auto &[label, _] : algo_->dict_external_to_internal) {
+    max_label = std::max(max_label, static_cast<uint64_t>(label));
+  }
+  return max_label;
+}
+
 template <typename T>
 absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
@@ -261,6 +272,39 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
                                      float query_magnitude) const {
   return algo_->fstdistfunc_(query.data(), vector_record.GetRawVector(),
                              algo_->dist_func_param_, query_magnitude);
+}
+
+// Linear scan of the contiguous FLAT store: the loop and distance kernel of
+// FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
+template <typename T>
+absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    std::unique_ptr<hnswlib::BaseFilterFunctor> filter) {
+  auto nq = this->NormalizeQueryIfNeeded(query);
+  const float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
+                 : kDefaultMagnitude;
+
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(kRangeReserve);
+  for (size_t i = 0; i < algo_->cur_element_count_; ++i) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    const auto *stored_vector = algo_->GetDataPtrByInternalId(i);
+    const hnswlib::labeltype label = algo_->GetLabel(stored_vector);
+    if (!*stored_vector || (filter && !(*filter)(label))) {
+      continue;
+    }
+    float distance =
+        this->RangeDistance(nq.view, query_magnitude, *stored_vector);
+    if (distance <= radius) {
+      if (const auto *key = this->FindKeyDuringSearch(label)) {
+        neighbors.emplace_back(*key, distance);
+      }
+    }
+  }
+  return neighbors;
 }
 
 template <typename T>

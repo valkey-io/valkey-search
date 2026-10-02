@@ -153,7 +153,8 @@
           {
             "name": "field",
             "type": "string",
-            "multiple": true
+            "multiple": true,
+            "optional": true
           },
           {
             "name": "REDUCE",
@@ -216,6 +217,11 @@
                     "name": "RANDOM_SAMPLE",
                     "type": "pure-token",
                     "token": "RANDOM_SAMPLE"
+                  },
+                  {
+                    "name": "QUANTILE",
+                    "type": "pure-token",
+                    "token": "QUANTILE"
                   }
                 ]
               },

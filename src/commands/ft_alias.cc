@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/commands/commands.h"
@@ -153,7 +154,7 @@ absl::Status RejectIfMultiExecInCme(ValkeyModuleCtx *ctx) {
 // can resolve the alias name to an index via GetIndexSchema. The IFV
 // (fingerprint/version) check is secondary — it guards against stale index
 // state but is not the mechanism that ensures alias visibility.
-void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
+absl::Status FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
   const bool is_loading =
       ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_LOADING;
   if (ValkeySearch::Instance().IsCluster() &&
@@ -174,17 +175,17 @@ void FanoutAliasExists(ValkeyModuleCtx *ctx, absl::string_view alias) {
             ValkeyModule_GetSelectedDb(ctx), std::string(alias), timeout_ms,
             ifv);
         op->StartOperation(ctx);
-        return;
+        return absl::OkStatus();
       }
-      VMSDK_LOG(WARNING, ctx)
-          << "FanoutAliasExists: failed to resolve alias '" << alias
-          << "' locally, skipping cluster consistency fanout: "
-          << schema_or.status().message();
+      // The alias was just committed on this node, so failing to resolve it
+      // means the change did not take effect; never report that as success.
+      return absl::InternalError(
+          absl::StrCat("Alias '", alias, "' did not resolve after the update: ",
+                       schema_or.status().message()));
     }
-    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "OK");
   }
+  ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+  return absl::OkStatus();
 }
 
 // Performs the cluster consistency fanout for alias delete operations,
@@ -232,7 +233,7 @@ absl::Status FTAliasAddCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().AddAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
 
-  FanoutAliasExists(ctx, alias);
+  VMSDK_RETURN_IF_ERROR(FanoutAliasExists(ctx, alias));
   ReplicateIfNeeded(ctx);
   return absl::OkStatus();
 }
@@ -270,7 +271,7 @@ absl::Status FTAliasUpdateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   VMSDK_RETURN_IF_ERROR(SchemaManager::Instance().UpdateAlias(
       ValkeyModule_GetSelectedDb(ctx), alias, index_name));
 
-  FanoutAliasExists(ctx, alias);
+  VMSDK_RETURN_IF_ERROR(FanoutAliasExists(ctx, alias));
   ReplicateIfNeeded(ctx);
   return absl::OkStatus();
 }

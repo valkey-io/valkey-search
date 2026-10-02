@@ -54,6 +54,12 @@
         ]
       },
       {
+        "name": "FILTER",
+        "token": "FILTER",
+        "type": "string",
+        "optional": true
+      },
+      {
         "name": "SCORE",
         "token": "SCORE",
         "type": "string",
@@ -291,6 +297,16 @@
                                 "name": "float32",
                                 "type": "pure-token",
                                 "token": "FLOAT32"
+                              },
+                              {
+                                "name": "float16",
+                                "type": "pure-token",
+                                "token": "FLOAT16"
+                              },
+                              {
+                                "name": "bfloat16",
+                                "type": "pure-token",
+                                "token": "BFLOAT16"
                               }
                             ]
                           },

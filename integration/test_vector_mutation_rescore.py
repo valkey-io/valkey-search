@@ -5,6 +5,10 @@ filter at content-fetch time. These cover the other half of that: its distance
 is recomputed against the vector it holds now, and the reply is put back in
 order once it has been. The last case covers FT.HYBRID, whose VSIM arm does the
 same work in RevalidateArmsBeforeFusion before the arms are fused.
+
+The VECTOR_RANGE cases at the end cover the filter half for a range query: a
+rewritten document stays in the reply only if the vector it holds now is in
+range.
 """
 
 import struct
@@ -62,8 +66,8 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
             rows.append((result[i], fields[b"dist"]))
         return rows
 
-    def _park_mutation(self, client: Valkey, *hset_args):
-        """Queue an HSET and hold it at the mutation pausepoint.
+    def _park_mutation(self, client: Valkey, *write):
+        """Queue a write and hold it at the mutation pausepoint.
 
         The write lands in the database immediately; only the index update
         waits. So while this is parked the index still describes the old
@@ -73,7 +77,7 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         client.execute_command(
             "FT._DEBUG", "PAUSEPOINT", "SET", "mutation_processing")
         thread, _, err = run_in_thread(
-            lambda: self.server.get_new_client().execute_command(*hset_args))
+            lambda: self.server.get_new_client().execute_command(*write))
         waiters.wait_for_true(
             lambda: client.execute_command(
                 "FT._DEBUG", "PAUSEPOINT", "TEST", "mutation_processing") >= 1,
@@ -227,3 +231,81 @@ class TestVectorMutationRescore(ValkeySearchTestCaseDebugMode):
         rows = self.knn(client)
         assert [k for k, _ in rows] == [b"d:1", b"d:2", b"d:3", b"d:4"]
         assert [float(d) for _, d in rows] == [1.0, 4.0, 9.0, 16.0]
+
+    # -------- VECTOR_RANGE: membership is re-checked on the current vector --
+    #
+    # A VECTOR_RANGE reply re-checks a mutated document's predicate while its
+    # content is fetched, like any other filter. The range test there has to
+    # read the vector the document holds now: the index still holds the old
+    # one, and is not safe to read outside the search's reader lock anyway.
+
+    def vr(self, client: Valkey):
+        """Keys of a content-returning VECTOR_RANGE reply. Radius 5 around
+        the origin takes the documents at 1 and 4."""
+        result = client.execute_command(
+            "FT.SEARCH", self.INDEX, "@vec:[VECTOR_RANGE 5 $q]",
+            "RETURN", "1", "price",
+            "DIALECT", "2", "PARAMS", "2", "q", self.Q)
+        return sorted(result[i] for i in range(1, len(result), 2))
+
+    def test_vector_range_drops_a_document_that_left_the_range(self):
+        """d:1 is in range, then its vector moves far away. A reply taken
+        while the index still holds the old vector must leave it out."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+        assert self.vr(client) == [b"d:1", b"d:2"]
+
+        thread, err = self._park_mutation(
+            client, "HSET", "d:1", "vec", _vec(99.0, 0, 0, 0))
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"d:2"]
+
+    def test_vector_range_drops_a_document_whose_vector_is_gone(self):
+        """A document whose vector field was deleted has no vector that could
+        be in range."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        thread, err = self._park_mutation(client, "HDEL", "d:1", "vec")
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"d:2"]
+
+    def test_vector_range_keeps_a_document_that_moved_within_the_range(self):
+        """The control: a document that moved but is still in range stays."""
+        client: Valkey = self.server.get_new_client()
+        self.setup_index(client)
+
+        thread, err = self._park_mutation(
+            client, "HSET", "d:2", "vec", _vec(0.5, 0, 0, 0))
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"d:1", b"d:2"]
+
+    def test_vector_range_json_drops_a_document_that_left_the_range(self):
+        """The same for JSON, whose vector is fetched as text and has to be
+        converted the way ingestion converts it."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", self.INDEX, "ON", "JSON", "PREFIX", "1", "j:",
+            "SCHEMA", "$.price", "AS", "price", "NUMERIC",
+            "$.vec", "AS", "vec", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2")
+        for i in range(1, 5):
+            client.execute_command(
+                "JSON.SET", f"j:{i}", "$",
+                f'{{"price": {i}, "vec": [{i}, 0, 0, 0]}}')
+        IndexingTestHelper.wait_for_indexing_complete_on_node(
+            client, self.INDEX)
+        assert self.vr(client) == [b"j:1", b"j:2"]
+
+        thread, err = self._park_mutation(
+            client, "JSON.SET", "j:1", "$.vec", "[99, 0, 0, 0]")
+        during = self.vr(client)
+        self._release(client, thread, err)
+
+        assert during == self.vr(client) == [b"j:2"]

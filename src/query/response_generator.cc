@@ -85,17 +85,23 @@ namespace valkey_search::query {
 class PredicateEvaluator : public query::Evaluator {
  public:
   PredicateEvaluator(const RecordsMap &records,
-                     QueryOperations query_operations)
-      : Evaluator(query_operations), records_(records) {}
+                     QueryOperations query_operations,
+                     const valkey_search::IndexSchema *index_schema = nullptr)
+      : Evaluator(query_operations),
+        records_(records),
+        text_index_(nullptr),
+        index_schema_(index_schema) {}
 
   PredicateEvaluator(const RecordsMap &records,
                      const valkey_search::indexes::text::TextIndex *text_index,
                      InternedStringPtr target_key,
-                     QueryOperations query_operations)
+                     QueryOperations query_operations,
+                     const valkey_search::IndexSchema *index_schema = nullptr)
       : Evaluator(query_operations),
         records_(records),
         text_index_(text_index),
-        target_key_(target_key) {}
+        target_key_(target_key),
+        index_schema_(index_schema) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
@@ -143,10 +149,51 @@ class PredicateEvaluator : public query::Evaluator {
     return predicate.Evaluate(*text_index_, target_key_, require_positions);
   }
 
+  EvaluationResult EvaluateVectorRange(
+      const query::VectorRangePredicate &predicate) override {
+    if (!index_schema_) {
+      // No index schema available — cannot re-verify; pass through.
+      return EvaluationResult(true);
+    }
+    auto query_vector = predicate.GetQueryVector();
+    if (query_vector.empty()) {
+      return EvaluationResult(false);
+    }
+    auto index = index_schema_->GetIndex(predicate.GetAlias());
+    if (!index.ok()) {
+      return EvaluationResult(false);
+    }
+    auto *vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
+    if (!vector_index) {
+      return EvaluationResult(false);
+    }
+    // Judges the vector as fetched into records_ (like the tag/numeric checks
+    // above), not via the index: this runs post-lock on the main thread, so
+    // the lock-free index accessors would race writer threads.
+    auto it = records_.find(predicate.GetIdentifier());
+    if (it == records_.end()) {
+      return EvaluationResult(false);
+    }
+    ValkeyModuleString *record = it->second.value.get();
+    // A JSON vector is fetched as text; convert it the way ingestion does.
+    vmsdk::UniqueValkeyString converted;
+    if (index_schema_->GetAttributeDataType().AttributesProvidedAsString()) {
+      converted = vector_index->NormalizeStringAttribute(
+          vmsdk::RetainUniqueValkeyString(record));
+      if (!converted) {
+        return EvaluationResult(false);
+      }
+      record = converted.get();
+    }
+    return EvaluationResult(vector_index->IsRecordWithinVectorRange(
+        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
+  }
+
  private:
   const RecordsMap &records_;
   const valkey_search::indexes::text::TextIndex *text_index_ = nullptr;
   InternedStringPtr target_key_;
+  const valkey_search::IndexSchema *index_schema_ = nullptr;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
@@ -241,13 +288,15 @@ FilterVerification VerifyFilter(
 
       PredicateEvaluator evaluator(
           records, text_index, n.external_id,
-          parameters.filter_parse_results.query_operations);
+          parameters.filter_parse_results.query_operations,
+          parameters.index_schema.get());
       result = predicate->Evaluate(evaluator);
     }
     return recompute(result);
   }
-  PredicateEvaluator evaluator(
-      records, parameters.filter_parse_results.query_operations);
+  PredicateEvaluator evaluator(records, /*text_index=*/nullptr, n.external_id,
+                               parameters.filter_parse_results.query_operations,
+                               parameters.index_schema.get());
   EvaluationResult result = predicate->Evaluate(evaluator);
   return recompute(result);
 }

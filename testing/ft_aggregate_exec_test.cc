@@ -1014,59 +1014,6 @@ TEST_F(AggregateExecTest, QuantileNegativeNumbersTest) {
   EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), 0.0, .001);
 }
 
-TEST_F(AggregateExecTest, QuantileCalculationCorrectnessProperty) {
-  std::cerr << "QuantileCalculationCorrectnessProperty\n";
-
-  // Test with 100 iterations of random datasets.
-  // Use std::mt19937 with a fixed seed for cross-platform reproducibility:
-  // std::rand() is implementation-defined and produces different sequences
-  // on libstdc++ vs libc++ for the same seed.
-  std::mt19937 rng(42);
-  std::uniform_int_distribution<size_t> dist_n(1, 50);
-  std::uniform_int_distribution<int> dist_q(0, 100);
-  std::uniform_int_distribution<int> dist_val(-500, 499);
-
-  for (int iteration = 0; iteration < 100; ++iteration) {
-    // Generate random dataset size (1 to 50 values)
-    size_t n = dist_n(rng);
-
-    // Generate random quantile (0.0 to 1.0)
-    double quantile = dist_q(rng) / 100.0;
-
-    // Generate random values
-    std::vector<double> values;
-    for (size_t i = 0; i < n; ++i) {
-      values.push_back(dist_val(rng));  // Values from -500 to 499
-    }
-
-    RecordSet records(nullptr);
-    for (auto val : values) {
-      auto rec = std::make_unique<Record>(2);
-      rec->fields_[0] = expr::Value(val);
-      rec->fields_[1] = expr::Value(1.0);
-      records.emplace_back(std::move(rec));
-    }
-
-    std::string query =
-        "groupby 1 @n2 reduce quantile 2 @n1 " + std::to_string(quantile);
-    auto param = MakeStages(query);
-    EXPECT_TRUE((param->stages_[0]->Execute(records)).ok());
-    EXPECT_EQ(records.size(), 1);
-    auto record = records.pop_front();
-
-    double actual_quantile = std::stod(std::to_string(quantile));
-    std::sort(values.begin(), values.end());
-    double expected = CalculateGKQuantile(values, actual_quantile);
-
-    EXPECT_TRUE(record->fields_.at(2).IsDouble())
-        << "Iteration " << iteration << ": quantile=" << quantile
-        << ", n=" << n;
-    EXPECT_NEAR(*(record->fields_.at(2).AsDouble()), expected, 0.001)
-        << "Iteration " << iteration << ": quantile=" << quantile
-        << ", n=" << n;
-  }
-}
-
 TEST_F(AggregateExecTest, QuantileRangeValidationProperty) {
   std::cerr << "QuantileRangeValidationProperty\n";
 
@@ -1711,6 +1658,48 @@ TEST_F(AggregateExecTest, QuantileMatchesRedisForUnsortedInput) {
       EXPECT_LE(QuantileRankError(sorted, result, std::stod(kQs[i])),
                 kQuantileEpsilon * kN)
           << tc.name << " q=" << kQs[i];
+    }
+  }
+}
+
+// The biased-quantile guarantee: the returned value's rank is within
+// ε·rank of the target rank, checked against exact ranks of the sorted input.
+// The +1 absorbs integer ranks where ε·rank < 1.
+TEST_F(AggregateExecTest, QuantileRankErrorWithinBiasedBound) {
+  const std::vector<double> kQs = {0, 0.001, 0.01, 0.1, 0.5, 0.9, 0.99, 1};
+  for (size_t n : {1000, 10000}) {
+    std::mt19937 rng(n);
+    std::vector<std::pair<const char *, std::vector<double>>> cases;
+    std::vector<double> v(n);
+    for (size_t i = 0; i < n; ++i) v[i] = i;
+    cases.emplace_back("ascending", v);
+    cases.emplace_back("descending", std::vector<double>(v.rbegin(), v.rend()));
+    std::shuffle(v.begin(), v.end(), rng);
+    cases.emplace_back("shuffled", v);
+    for (size_t i = 0; i < n; ++i) v[i] = i % 10;
+    std::shuffle(v.begin(), v.end(), rng);
+    cases.emplace_back("duplicates", v);
+
+    for (const auto &[name, values] : cases) {
+      std::vector<double> sorted = values;
+      std::sort(sorted.begin(), sorted.end());
+      for (double q : kQs) {
+        QuantileStats *stats = nullptr;
+        auto reducer = MakeQuantileReducer(q, stats);
+        auto instance = reducer->MakeInstance();
+        ArgVector args(1);
+        for (double x : values) {
+          args[0] = expr::Value(x);
+          instance->ProcessRecord(args);
+        }
+        ASSERT_GT(stats->flush_merge_count, 0) << name << " n=" << n;
+        auto result = instance->GetResult();
+        ASSERT_TRUE(result.IsDouble()) << name << " n=" << n << " q=" << q;
+        double target = std::max(1.0, std::ceil(q * n));
+        EXPECT_LE(QuantileRankError(sorted, *result.AsDouble(), q),
+                  kQuantileEpsilon * target + 1)
+            << name << " n=" << n << " q=" << q;
+      }
     }
   }
 }

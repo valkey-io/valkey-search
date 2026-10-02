@@ -757,24 +757,43 @@ class StabilityTests(parameterized.TestCase):
                 ),
             )
         for result in results.background_task_results:
+            # An unhandled exception is a defect regardless of the task, so it is
+            # checked before the BGSAVE allowance below: a task whose failures
+            # are tolerated still may not hide a crash. Tracebacks are in the
+            # test log.
+            self.assertEqual(
+                result.crashes,
+                0,
+                msg=(
+                    f"Background task {result.name} raised {result.crashes} "
+                    "unhandled exception(s); see the log for tracebacks"
+                ),
+            )
             self.assertGreater(
                 result.total_ops,
                 0,
                 msg=f"Expected positive total ops for background task {result.name}",
             )
-            # BGSAVE will fail if another is ongoing.
+            # BGSAVE failures are still tolerated here, but the count is now
+            # meaningful: periodic_bgsave_task no longer counts "Background save
+            # already in progress" (expected, since the interval is shorter than
+            # a save of this keyspace), so anything left is a real error. Kept
+            # tolerant for now because a node busy forking can also exceed the
+            # client's socket timeout under load; tighten to assertEqual(0) once
+            # a few clean runs confirm that does not happen.
             if result.name == "BGSAVE":
                 pass
-            elif config.failover_interval_sec > 0 and result.name in ["FT.CREATE", "FLUSHDB", "FT.DROPINDEX"]:
-                # Allow up to 3 failures per background task during failover testing. These are for the situation where the
-                # cluster information is not updated fast enough and causes a race condition in the check. This is a situation
-                # that can happen and we want to avoid catching failures like those because they are not true failures (they are expected)
-                self.assertLessEqual(
-                    result.failures,
-                    3,
-                    f"Expected at most 3 transient failures for background task {result.name} during failover, got {result.failures}",
-                )
             else:
+                # Zero failures is required even with failover enabled. The
+                # earlier allowance of 3 transient failures per task existed
+                # because the harness could send a command to a node it held
+                # stale information about. That is no longer expected: a node is
+                # excluded from the fan-out for as long as it is down (see
+                # failover_state['failed_ports']), the topology is re-read when
+                # that set changes, and each node's index state is tracked
+                # individually so a node that legitimately disagrees after
+                # rejoining is not counted. A failure here now means the cluster
+                # answered a command it should have been able to serve.
                 self.assertEqual(
                     result.failures,
                     0,

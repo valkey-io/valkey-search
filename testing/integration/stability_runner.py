@@ -26,6 +26,9 @@ class BackgroundTaskRunResult(NamedTuple):
     name: str
     total_ops: int
     failures: int
+    # Unhandled exceptions raised by the task. Always a defect, and checked
+    # separately from `failures` because some tasks tolerate failures.
+    crashes: int = 0
 
 
 class StabilityRunResult(NamedTuple):
@@ -120,12 +123,6 @@ class StabilityRunner:
                 intentionally_failed_ports=set(),
             )
 
-        # Drop existing index
-        try:
-            utils.drop_index(client=client, index_name=self.config.index_name)
-        except valkey.exceptions.ValkeyError:
-            pass
-
         # Create index attributes based on index type
         if self.config.index_type == "HNSW":
             attributes = {
@@ -171,24 +168,55 @@ class StabilityRunner:
         else:
             raise ValueError(f"Unknown index type: {self.config.index_type}")
         
-        utils.create_index(
-            client=client,
-            index_name=self.config.index_name,
-            store_data_type=utils.StoreDataType.HASH.name,
-            attributes=attributes,
+        # The index is created on, and later dropped from, every node the test
+        # queries. periodic_ftcreate_task/periodic_ftdrop_task decide how far to
+        # fan out: one rotating primary when the coordinator replicates the
+        # schema cluster-wide, every reachable primary when it does not. Reusing
+        # them here keeps setup and the background tasks on one code path, and
+        # seeds the per-node index state they rely on.
+        index_state = utils.IndexState(
+            index_lock=threading.Lock(),
+            ft_created=False,
+            ports=self.config.ports,
         )
 
-        threads: list[utils.RandomIntervalTask] = []
-        index_state = utils.IndexState(
-            index_lock=threading.Lock(), ft_created=True
+        # Clean up an index left over from an earlier run. A "not found" reply is
+        # expected on a fresh cluster and is not treated as a failure.
+        utils.periodic_ftdrop_task(
+            client,
+            self.config.index_name,
+            index_state,
+            use_coordinator=self.config.use_coordinator,
         )
-        # Pass failover_state to background tasks so they pause during failover
+
+        if not utils.periodic_ftcreate_task(
+            client,
+            self.config.index_name,
+            attributes,
+            index_state,
+            use_coordinator=self.config.use_coordinator,
+        ):
+            logging.error("Unable to create the index on the cluster")
+            return StabilityRunResult(
+                successful_run=False,
+                memtier_results=[],
+                background_task_results=[],
+                intentionally_failed_ports=set(),
+            )
+
+        threads: list[utils.RandomIntervalTask] = []
+        # Every background task sends its commands to the whole cluster. They get
+        # failover_state for two reasons: RandomIntervalTask uses it to pause
+        # while a failover is running, and the tasks themselves use it to leave
+        # the node that is down out of the fan-out until it has rejoined.
         if self.config.bgsave_interval_sec != 0:
             task = utils.RandomIntervalTask(
                 "BGSAVE",
                 self.config.bgsave_interval_sec,
                 self.config.randomize_bg_job_intervals,
-                lambda: utils.periodic_bgsave_task(client),
+                lambda: utils.periodic_bgsave_task(
+                    client, self.failover_state
+                ),
                 failover_state=self.failover_state,
             )
             task.run()
@@ -200,8 +228,12 @@ class StabilityRunner:
                 self.config.ftcreate_interval_sec,
                 self.config.randomize_bg_job_intervals,
                 lambda: utils.periodic_ftcreate_task(
-                    client, self.config.index_name, attributes, index_state, self.failover_state, 
-                    entry_point_port=self.config.ports[0]
+                    client,
+                    self.config.index_name,
+                    attributes,
+                    index_state,
+                    self.failover_state,
+                    use_coordinator=self.config.use_coordinator,
                 ),
                 failover_state=self.failover_state,
             )
@@ -214,8 +246,11 @@ class StabilityRunner:
                 self.config.ftdropindex_interval_sec,
                 self.config.randomize_bg_job_intervals,
                 lambda: utils.periodic_ftdrop_task(
-                    client, self.config.index_name, index_state, self.failover_state,
-                    entry_point_port=self.config.ports[0]
+                    client,
+                    self.config.index_name,
+                    index_state,
+                    self.failover_state,
+                    use_coordinator=self.config.use_coordinator,
                 ),
                 failover_state=self.failover_state,
             )
@@ -227,7 +262,12 @@ class StabilityRunner:
                 "FLUSHDB",
                 self.config.flushdb_interval_sec,
                 self.config.randomize_bg_job_intervals,
-                lambda: utils.periodic_flushdb_task(client, index_state, self.config.use_coordinator),
+                lambda: utils.periodic_flushdb_task(
+                    client,
+                    index_state,
+                    self.config.use_coordinator,
+                    self.failover_state,
+                ),
                 failover_state=self.failover_state,
             )
             task.run()
@@ -649,6 +689,7 @@ class StabilityRunner:
                     name=thread.name,
                     total_ops=thread.ops,
                     failures=thread.failures,
+                    crashes=thread.crashes,
                 )
                 for thread in threads
             ],

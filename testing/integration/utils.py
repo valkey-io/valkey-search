@@ -11,7 +11,16 @@ import shutil
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, List, NamedTuple, TextIO, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    TextIO,
+    Union,
+)
 import json
 import numpy as np
 from enum import Enum
@@ -650,12 +659,26 @@ def store_entry(
     return response
 
 
-def drop_index(client: valkey.ValkeyCluster, index_name: str):
+def drop_index(
+    client: valkey.ValkeyCluster,
+    index_name: str,
+    target_nodes=None,
+):
+    """Drops an index.
+
+    Args:
+      client:
+      index_name:
+      target_nodes: nodes to send FT.DROPINDEX to. Defaults to valkey-py's own
+        routing for search commands, which is the client's default node.
+    """
     args = [
         "FT.DROPINDEX",
         index_name,
     ]
-    client.execute_command(*args)
+    if target_nodes is None:
+        return client.execute_command(*args)
+    return client.execute_command(*args, target_nodes=target_nodes)
 
 
 def fetch_ft_info(client: valkey.ValkeyCluster, index_name: str):
@@ -884,6 +907,11 @@ class RandomIntervalTask:
         self.task = work_func
         self.ops = 0
         self.failures = 0
+        # Unhandled exceptions, tracked separately from `failures`. A task
+        # reporting False is an expected outcome the test may tolerate; an
+        # exception escaping the work function is always a defect, so it must not
+        # end up in a bucket that some tasks are allowed to ignore.
+        self.crashes = 0
         self.name = name
         self.failed_ports = set()  # Track intentionally failed ports (for failover)
         self.failover_state = failover_state
@@ -923,79 +951,290 @@ class RandomIntervalTask:
                         logging.debug("<%s> Skipping execution - failover in progress", self.name)
                         continue  # Skip this iteration, wait for next interval
                 
-                # Execute the task
-                if not self.task():
-                    self.failures += 1
+                # Execute the task. An unexpected exception is recorded and the
+                # loop carries on, rather than being allowed to kill the thread:
+                # a dead thread silently stops generating load for the rest of
+                # the run, and whether the test notices depends only on how many
+                # iterations happened to complete first. It is counted in
+                # `crashes` rather than `failures` so that it stays visible even
+                # for tasks whose ordinary failures are tolerated.
+                try:
+                    if not self.task():
+                        self.failures += 1
+                except Exception as e:  # pylint: disable=broad-except
+                    logging.exception(
+                        "<%s> Unhandled exception in background task: %s",
+                        self.name,
+                        e,
+                    )
+                    self.crashes += 1
                 self.ops += 1
 
 
-def periodic_bgsave_task(
-    client: valkey.ValkeyCluster,
+# ---------------------------------------------------------------------------
+# Failover-aware command fan-out
+# ---------------------------------------------------------------------------
+#
+# Background tasks send their commands to every node of the cluster, so the test
+# exercises the whole cluster rather than a single node. The only nodes left out
+# are the ones the failover task has deliberately taken down: those are tracked
+# in failover_state['failed_ports'] from just before the SHUTDOWN until the
+# restarted node has rejoined and the topology has converged. A skipped node is
+# therefore always a node that genuinely cannot answer.
+#
+# The node memtier is connected to (the entry point) is never selected as a
+# failover victim - see pick_primary_to_fail's exclude_port - so it always stays
+# part of the fan-out.
+
+# valkey-py's ValkeyCluster is not thread safe with respect to topology changes:
+# nodes_manager.initialize() rebuilds the internal node maps while other threads
+# may be iterating them, which surfaces as "RuntimeError: dictionary changed
+# size during iteration". All background tasks share one client, so topology
+# refreshes and node listings happen under this lock and the result is
+# snapshotted into a plain list before use.
+_TOPOLOGY_LOCK = threading.RLock()
+
+# The failed-port set observed by the last topology check. Used to re-discover
+# the topology only when a failover has actually changed it, instead of on every
+# task invocation.
+_last_seen_failed_ports: set = set()
+
+# Everything a per-node command can raise: unreachable nodes
+# (ConnectionError/TimeoutError/OSError), cluster-level problems
+# (ClusterDownError, SlotNotCoveredError, retry exhaustion) and plain command
+# errors. ValkeyClusterException is listed explicitly because it derives from
+# Exception, not from ValkeyError, so it would otherwise escape these handlers
+# and be recorded as a crash rather than as a task failure. Anything outside this
+# tuple really is unexpected and is meant to reach RandomIntervalTask's crash
+# counter.
+_NODE_ERRORS = (
+    valkey.exceptions.ValkeyError,
+    valkey.exceptions.ValkeyClusterException,
+    OSError,
+)
+
+
+def get_failed_ports(failover_state: dict | None) -> set:
+    """Snapshot the ports currently down because of a failover."""
+    if failover_state is None:
+        return set()
+    with failover_state["lock"]:
+        return set(failover_state["failed_ports"])
+
+
+def refresh_cluster_topology(
+    client: valkey.ValkeyCluster, task_name: str = ""
 ) -> bool:
+    """Re-discover the cluster topology, tolerating transient failures.
+
+    Returns True if the refresh succeeded. A failure is not fatal: the client
+    keeps its cached topology, which is usually still usable.
+    """
     try:
-        logging.info("<BGSAVE> Invoking background save")
-        client.bgsave(target_nodes=client.ALL_NODES)
-    except (
-        valkey.exceptions.ConnectionError,
-        valkey.exceptions.ResponseError,
-    ) as e:
-        logging.error("<BGSAVE> encountered error: %s", e)
+        with _TOPOLOGY_LOCK:
+            client.nodes_manager.initialize()
+        return True
+    except (RuntimeError, *_NODE_ERRORS) as e:
+        # Includes the "all slots are not covered" case that a cluster in the
+        # middle of a failover can report, which is why this is not fatal.
+        logging.warning(
+            "<%s> Failed to refresh cluster topology: %s", task_name, e
+        )
         return False
-    return True
 
 
-def periodic_bgsave(
+def refresh_topology_if_failover_changed(
     client: valkey.ValkeyCluster,
-    interval_sec: int,
-    randomize: bool,
-) -> RandomIntervalTask:
-    thread = RandomIntervalTask(
-        "BGSAVE", interval_sec, randomize, lambda: periodic_bgsave_task(client)
-    )
-    thread.run()
-    return thread
+    failover_state: dict | None,
+    task_name: str = "",
+) -> None:
+    """Refresh the cached topology when the set of failed ports changed.
+
+    A failover changes which nodes are primaries, so the cached view has to be
+    re-read when a node goes down and again once it has rejoined. Outside those
+    transitions the topology is stable and refreshing it would only add
+    contention on the shared client.
+    """
+    global _last_seen_failed_ports
+    failed_ports = get_failed_ports(failover_state)
+    with _TOPOLOGY_LOCK:
+        changed = failed_ports != _last_seen_failed_ports
+        _last_seen_failed_ports = failed_ports
+    if changed:
+        logging.info(
+            "<%s> Failed ports changed to %s, re-discovering topology",
+            task_name,
+            failed_ports or "{}",
+        )
+        refresh_cluster_topology(client, task_name)
+
+
+def get_healthy_nodes(
+    client: valkey.ValkeyCluster,
+    failover_state: dict | None = None,
+    primaries_only: bool = True,
+    task_name: str = "",
+) -> list:
+    """Nodes that commands may be sent to right now.
+
+    Everything except the ports currently down for a failover. Always returns a
+    concrete list of ClusterNode - never one of valkey-py's ALL_NODES/PRIMARIES
+    sentinels - so callers can address the nodes one at a time and attribute
+    successes and errors per node.
+    """
+    failed_ports = get_failed_ports(failover_state)
+    try:
+        with _TOPOLOGY_LOCK:
+            nodes = list(
+                client.get_primaries() if primaries_only else client.get_nodes()
+            )
+    except (RuntimeError, *_NODE_ERRORS) as e:
+        logging.error("<%s> Unable to read cluster topology: %s", task_name, e)
+        return []
+
+    healthy = [node for node in nodes if node.port not in failed_ports]
+    if failed_ports:
+        logging.debug(
+            "<%s> Targeting %d node(s), skipping failed ports %s",
+            task_name,
+            len(healthy),
+            failed_ports,
+        )
+    return healthy
+
+
+def describe_node(node) -> str:
+    return f"{node.host}:{node.port}"
 
 
 class IndexState:
+    """Whether the index is expected to exist, tracked per node.
 
-    def __init__(self, index_lock: threading.Lock, ft_created: bool):
+    A single cluster-wide boolean is not sufficient once index commands fan out:
+    a node that was down during a failover can legitimately disagree with the
+    rest of the cluster about whether the index exists. `ft_created` is kept as
+    the cluster-wide intent (what the last successful create/drop/flush asked
+    for) while `_index_on_node` records what was actually observed per port. A
+    port with no entry is "unknown" - typically one that just rejoined after a
+    restart, whose index set depends on what its RDB happened to hold - and both
+    "already exists" and "not found" are tolerated for it.
+
+    Every access happens while holding index_lock: FT.CREATE, FT.DROPINDEX and
+    FLUSHDB all serialize on it.
+    """
+
+    def __init__(
+        self,
+        index_lock: threading.Lock,
+        ft_created: bool,
+        ports: Iterable[int] = (),
+    ):
         self.index_lock = index_lock
         self.ft_created = ft_created
+        self._index_on_node: Dict[int, bool] = {
+            int(port): bool(ft_created) for port in ports
+        }
+        self._rotation = 0
+
+    def observe(self, port: int, present: bool) -> None:
+        """Record whether the node at `port` now holds the index."""
+        self._index_on_node[int(port)] = bool(present)
+
+    def observe_all(self, ports: Iterable[int], present: bool) -> None:
+        for port in ports:
+            self.observe(port, present)
+
+    def forget(self, port: int) -> None:
+        """Forget what we knew about a node, making its state unknown."""
+        self._index_on_node.pop(int(port), None)
+
+    def forget_all(self, ports: Iterable[int]) -> None:
+        for port in ports:
+            self.forget(port)
+
+    def has_index(self, port: int) -> bool | None:
+        """True/False when known for this port, None when unknown."""
+        return self._index_on_node.get(int(port))
+
+    def next_target(self, nodes: list):
+        """Pick the next node in round-robin order.
+
+        Used when one node is enough for the whole cluster (coordinator mode);
+        rotating keeps every node in the rotation instead of always loading the
+        same one.
+        """
+        node = nodes[self._rotation % len(nodes)]
+        self._rotation += 1
+        return node
 
 
-def get_available_nodes_excluding_failed(
+def index_command_targets(
     client: valkey.ValkeyCluster,
-    failed_ports: set
+    index_state: IndexState,
+    failover_state: dict | None,
+    task_name: str,
 ) -> list:
-    """Build a list of cluster node objects excluding failed ports.
-    
-    Returns:
-        List of ClusterNode objects that are not in the failed_ports set
+    """Primaries an index command should be sent to.
+
+    Also drops the remembered index state of every node that is currently down,
+    because a node that restarts comes back with whatever its RDB held, which
+    may or may not include the index.
     """
-    if not failed_ports:
-        # No failed ports, return all nodes
-        return client.ALL_NODES
-    
-    available_nodes = []
+    refresh_topology_if_failover_changed(client, failover_state, task_name)
+    failed_ports = get_failed_ports(failover_state)
+    if failed_ports:
+        index_state.forget_all(failed_ports)
+    return get_healthy_nodes(
+        client,
+        failover_state,
+        primaries_only=True,
+        task_name=task_name,
+    )
+
+
+def drop_index_on_node(
+    client: valkey.ValkeyCluster,
+    node,
+    index_name: str,
+    index_state: IndexState,
+) -> bool:
+    """FT.DROPINDEX against one node. Returns False on an unexpected error."""
     try:
-        # Get all nodes from the cluster
-        nodes = client.get_nodes()
-        for node in nodes:
-            # Extract port from the node
-            node_port = node.port
-            if node_port not in failed_ports:
-                available_nodes.append(node)
-        
-        if not available_nodes:
-            logging.warning("No available nodes found after excluding failed ports: %s", failed_ports)
-            # Fallback to ALL_NODES if somehow no nodes are available
-            return client.ALL_NODES
-        
-        logging.debug("Available nodes (excluding failed ports %s): %d nodes", failed_ports, len(available_nodes))
-        return available_nodes
-    except Exception as e:
-        logging.warning("Error building available nodes list: %s, falling back to ALL_NODES", e)
-        return client.ALL_NODES
+        drop_index(client, index_name, target_nodes=[node])
+        logging.info("<FT.DROPINDEX> Dropped index on %s", describe_node(node))
+        index_state.observe(node.port, False)
+        return True
+    except valkey.exceptions.ResponseError as e:
+        if "not found" in str(e):
+            # Expected while this node is not known to hold the index, which
+            # covers a node whose state is unknown because it just rejoined.
+            was_created = index_state.has_index(node.port) is True
+            index_state.observe(node.port, False)
+            if was_created:
+                logging.error(
+                    "<FT.DROPINDEX> %s reports the index is missing although it"
+                    " was created there: %s",
+                    describe_node(node),
+                    e,
+                )
+                return False
+            logging.debug(
+                "<FT.DROPINDEX> got expected error from %s: %s",
+                describe_node(node),
+                e,
+            )
+            return True
+        logging.error(
+            "<FT.DROPINDEX> got unexpected error from %s: %s",
+            describe_node(node),
+            e,
+        )
+        return False
+    except _NODE_ERRORS as e:
+        logging.error(
+            "<FT.DROPINDEX> %s failed: %s", describe_node(node), e
+        )
+        return False
 
 
 def periodic_ftdrop_task(
@@ -1003,40 +1242,38 @@ def periodic_ftdrop_task(
     index_name: str,
     index_state: IndexState,
     failover_state: dict | None = None,
-    entry_point_port: int | None = None,
+    use_coordinator: bool = False,
 ) -> bool:
-    
-    client.nodes_manager.initialize()
     with index_state.index_lock:
         logging.info("<FT.DROPINDEX> Invoking index drop")
-        try:
-            # Always use the entry point node if specified (protected from failover)
-            if entry_point_port is not None:
-                entry_point_node = client.get_node(host="localhost", port=entry_point_port)
-                if entry_point_node is not None:
-                    # Execute FT.DROPINDEX on the entry point node
-                    args = ["FT.DROPINDEX", index_name]
-                    client.execute_command(*args, target_nodes=[entry_point_node])
-                    logging.info("<FT.DROPINDEX> Successfully dropped index")
-                else:
-                    logging.warning("<FT.DROPINDEX> Entry point node at port %d not found, using default", entry_point_port)
-                    drop_index(client, index_name)
-            else:
-                # Fallback to original logic if entry_point_port not provided
-                drop_index(client, index_name)
-                logging.info("<FT.DROPINDEX> Successfully dropped index")
+        targets = index_command_targets(
+            client, index_state, failover_state, "FT.DROPINDEX"
+        )
+        if not targets:
+            logging.error(
+                "<FT.DROPINDEX> No reachable primary to drop the index on"
+            )
+            return False
+
+        healthy_ports = [node.port for node in targets]
+        if use_coordinator:
+            # The coordinator's metadata manager removes the index cluster-wide
+            # and FT.DROPINDEX only returns OK once the other reachable nodes
+            # agree, so one primary covers the whole cluster; the remaining ones
+            # would simply answer "not found". The target rotates so the load
+            # does not always land on the same node.
+            targets = [index_state.next_target(targets)]
+
+        succeeded = True
+        for node in targets:
+            if not drop_index_on_node(client, node, index_name, index_state):
+                succeeded = False
+
+        if succeeded:
+            if use_coordinator:
+                index_state.observe_all(healthy_ports, False)
             index_state.ft_created = False
-        except (
-            valkey.exceptions.ConnectionError,
-            valkey.exceptions.ResponseError,
-        ) as e:
-            error_str = str(e)
-            if not index_state.ft_created and "not found" in error_str:
-                logging.debug("<FT.DROPINDEX> got expected error: %s", e)
-            else:
-                logging.error("<FT.DROPINDEX> got unexpected error: %s", e)
-                return False
-    return True
+        return succeeded
 
 
 def periodic_ftdrop(
@@ -1045,15 +1282,79 @@ def periodic_ftdrop(
     random_interval: bool,
     index_name: str,
     index_state: IndexState,
+    failover_state: dict | None = None,
+    use_coordinator: bool = False,
 ) -> RandomIntervalTask:
     thread = RandomIntervalTask(
         "FT.DROPINDEX",
         interval_sec,
         random_interval,
-        lambda: periodic_ftdrop_task(client, index_name, index_state),
+        lambda: periodic_ftdrop_task(
+            client,
+            index_name,
+            index_state,
+            failover_state,
+            use_coordinator,
+        ),
+        failover_state=failover_state,
     )
     thread.run()
     return thread
+
+
+def create_index_on_node(
+    client: valkey.ValkeyCluster,
+    node,
+    index_name: str,
+    attributes: Dict[str, AttributeDefinition],
+    index_state: IndexState,
+) -> bool:
+    """FT.CREATE against one node. Returns False on an unexpected error."""
+    try:
+        create_index(
+            client=client,
+            store_data_type=StoreDataType.HASH.name,
+            index_name=index_name,
+            attributes=attributes,
+            target_nodes=[node],
+        )
+        logging.info("<FT.CREATE> Created index on %s", describe_node(node))
+        index_state.observe(node.port, True)
+        return True
+    except valkey.exceptions.ResponseError as e:
+        if "already exists" in str(e):
+            # Expected while this node is known to hold the index, and also
+            # while its state is unknown: a node that just rejoined may have
+            # reloaded the index from its RDB, and in coordinator mode the
+            # cluster may have re-created it there.
+            was_dropped = index_state.has_index(node.port) is False
+            index_state.observe(node.port, True)
+            if was_dropped:
+                logging.error(
+                    "<FT.CREATE> %s reports the index already exists although"
+                    " it was dropped there: %s",
+                    describe_node(node),
+                    e,
+                )
+                return False
+            logging.debug(
+                "<FT.CREATE> got expected error from %s: %s",
+                describe_node(node),
+                e,
+            )
+            return True
+        logging.error(
+            "<FT.CREATE> got unexpected error from %s: %s",
+            describe_node(node),
+            e,
+        )
+        return False
+    except _NODE_ERRORS as e:
+        logging.error(
+            "<FT.CREATE> %s failed: %s", describe_node(node), e
+        )
+        return False
+
 
 def periodic_ftcreate_task(
     client: valkey.ValkeyCluster,
@@ -1061,51 +1362,40 @@ def periodic_ftcreate_task(
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
     failover_state: dict | None = None,
-    entry_point_port: int | None = None,
+    use_coordinator: bool = False,
 ) -> bool:
     with index_state.index_lock:
-        try:
-            logging.info("<FT.CREATE> Invoking index creation")
-            
-            # Always use the entry point node if specified (protected from failover)
-            if entry_point_port is not None:
-                entry_point_node = client.get_node(host="localhost", port=entry_point_port)
-                if entry_point_node is not None:
-                    target_nodes = [entry_point_node]
-                    logging.info("<FT.CREATE> Using entry point node at port %d (always available)", entry_point_port)
-                else:
-                    logging.warning("<FT.CREATE> Entry point node at port %d not found, falling back to DEFAULT_NODE", entry_point_port)
-                    target_nodes = client.DEFAULT_NODE
-            else:
-                # Fallback to original logic if entry_point_port not provided
-                target_nodes = client.DEFAULT_NODE
-                if failover_state is not None:
-                    with failover_state['lock']:
-                        failed_ports = failover_state['failed_ports'].copy()
-                    
-                    if failed_ports:
-                        target_nodes = get_available_nodes_excluding_failed(client, failed_ports)
-                        logging.debug("<FT.CREATE> Using filtered nodes (excluding failed ports: %s)", failed_ports)
-                
-            create_index(
-                client=client, 
-                store_data_type=StoreDataType.HASH.name, 
-                index_name=index_name, 
-                attributes=attributes,
-                target_nodes=target_nodes
+        logging.info("<FT.CREATE> Invoking index creation")
+        targets = index_command_targets(
+            client, index_state, failover_state, "FT.CREATE"
+        )
+        if not targets:
+            logging.error(
+                "<FT.CREATE> No reachable primary to create the index on"
             )
-            logging.info("<FT.CREATE> Successfully created index")
+            return False
+
+        healthy_ports = [node.port for node in targets]
+        if use_coordinator:
+            # In coordinator mode the schema is a cluster-level object: the
+            # metadata manager replicates it to every node and FT.CREATE only
+            # returns OK once the other reachable nodes have converged. Sending
+            # it to the remaining primaries as well would only produce "already
+            # exists" from each of them, so one rotating target is used instead.
+            targets = [index_state.next_target(targets)]
+
+        succeeded = True
+        for node in targets:
+            if not create_index_on_node(
+                client, node, index_name, attributes, index_state
+            ):
+                succeeded = False
+
+        if succeeded:
+            if use_coordinator:
+                index_state.observe_all(healthy_ports, True)
             index_state.ft_created = True
-        except (
-            valkey.exceptions.ConnectionError,
-            valkey.exceptions.ResponseError,
-        ) as e:
-            if index_state.ft_created and "already exists" in str(e):
-                logging.debug("<FT.CREATE> got expected error: %s", e)
-            else:
-                logging.error("<FT.CREATE> got unexpected error: %s", e)
-                return False
-    return True
+        return succeeded
 
 
 def periodic_ftcreate(
@@ -1115,14 +1405,22 @@ def periodic_ftcreate(
     index_name: str,
     attributes: Dict[str, AttributeDefinition],
     index_state: IndexState,
+    failover_state: dict | None = None,
+    use_coordinator: bool = False,
 ) -> RandomIntervalTask:
     thread = RandomIntervalTask(
         "FT.CREATE",
         interval_sec,
         random_interval,
         lambda: periodic_ftcreate_task(
-            client, index_name, attributes, index_state
+            client,
+            index_name,
+            attributes,
+            index_state,
+            failover_state,
+            use_coordinator,
         ),
+        failover_state=failover_state,
     )
     thread.run()
     return thread
@@ -1132,22 +1430,40 @@ def periodic_flushdb_task(
     client: valkey.ValkeyCluster,
     index_state: IndexState,
     use_coordinator: bool,
+    failover_state: dict | None = None,
 ) -> bool:
     with index_state.index_lock:
         logging.info("<FLUSHDB> Invoking flush DB")
-        try:
-            client.flushdb()
-            if not use_coordinator:
-                index_state.ft_created = False
-        except (
-            valkey.exceptions.ConnectionError,
-            valkey.exceptions.ResponseError,
-        ) as e:
-            logging.error(
-                "<FLUSHDB> got unexpected error during FLUSHDB: %s", e
-            )
+        # FLUSHDB is a per-node operation on every primary (that is also
+        # valkey-py's default routing for it), minus the ones that are down.
+        targets = index_command_targets(
+            client, index_state, failover_state, "FLUSHDB"
+        )
+        if not targets:
+            logging.error("<FLUSHDB> No reachable primary to flush")
             return False
-    return True
+
+        succeeded = True
+        for node in targets:
+            try:
+                client.flushdb(target_nodes=[node])
+                logging.info("<FLUSHDB> Flushed %s", describe_node(node))
+                if not use_coordinator:
+                    # Without the coordinator, flushing a node also deletes its
+                    # index schemas. With the coordinator the module re-creates
+                    # them, since the schema is a cluster-level object.
+                    index_state.observe(node.port, False)
+            except _NODE_ERRORS as e:
+                logging.error(
+                    "<FLUSHDB> got unexpected error from %s: %s",
+                    describe_node(node),
+                    e,
+                )
+                succeeded = False
+
+        if succeeded and not use_coordinator:
+            index_state.ft_created = False
+        return succeeded
 
 
 def periodic_flushdb(
@@ -1156,12 +1472,77 @@ def periodic_flushdb(
     random_interval: bool,
     index_state: IndexState,
     use_coordinator: bool,
+    failover_state: dict | None = None,
 ) -> RandomIntervalTask:
     thread = RandomIntervalTask(
         "FLUSHDB",
         interval_sec,
         random_interval,
-        lambda: periodic_flushdb_task(client, index_state, use_coordinator),
+        lambda: periodic_flushdb_task(
+            client, index_state, use_coordinator, failover_state
+        ),
+        failover_state=failover_state,
+    )
+    thread.run()
+    return thread
+
+
+def periodic_bgsave_task(
+    client: valkey.ValkeyCluster,
+    failover_state: dict | None = None,
+) -> bool:
+    """BGSAVE on every reachable node, primaries and replicas alike."""
+    logging.info("<BGSAVE> Invoking background save")
+    refresh_topology_if_failover_changed(client, failover_state, "BGSAVE")
+    targets = get_healthy_nodes(
+        client, failover_state, primaries_only=False, task_name="BGSAVE"
+    )
+    if not targets:
+        logging.error("<BGSAVE> No reachable node to save")
+        return False
+
+    succeeded = True
+    for node in targets:
+        try:
+            client.bgsave(target_nodes=[node])
+        except valkey.exceptions.ResponseError as e:
+            # A save still running from a previous round is expected, not a
+            # defect: the interval is shorter than a save of a large keyspace.
+            # valkey-py sends BGSAVE SCHEDULE, and SCHEDULE only defers when the
+            # busy child is an AOF rewrite - with an RDB child already running
+            # the server answers "Background save already in progress". Any other
+            # response is counted, so the failure total stays meaningful.
+            if "already in progress" in str(e).lower():
+                logging.debug(
+                    "<BGSAVE> save already running on %s: %s",
+                    describe_node(node),
+                    e,
+                )
+                continue
+            logging.error(
+                "<BGSAVE> unexpected error on %s: %s", describe_node(node), e
+            )
+            succeeded = False
+        except _NODE_ERRORS as e:
+            logging.error(
+                "<BGSAVE> %s failed: %s", describe_node(node), e
+            )
+            succeeded = False
+    return succeeded
+
+
+def periodic_bgsave(
+    client: valkey.ValkeyCluster,
+    interval_sec: int,
+    randomize: bool,
+    failover_state: dict | None = None,
+) -> RandomIntervalTask:
+    thread = RandomIntervalTask(
+        "BGSAVE",
+        interval_sec,
+        randomize,
+        lambda: periodic_bgsave_task(client, failover_state),
+        failover_state=failover_state,
     )
     thread.run()
     return thread
@@ -1888,7 +2269,25 @@ def periodic_failover_task(
         True if failover sequence completed successfully, False otherwise
     """
     logging.info("<FAILOVER> Starting cluster failover sequence")
-    
+
+    def abort(reason: str) -> bool:
+        """Clear in_progress on an aborted failover and report the failure.
+
+        Leaving in_progress set would pause every background task and keep the
+        memtier processes killed for the remainder of the run, turning one
+        aborted failover into a silent stall. Ports already recorded in
+        failed_ports stay there: that node really is down, so the fan-out has to
+        keep skipping it.
+        """
+        logging.error("<FAILOVER> Aborting failover: %s", reason)
+        if failover_state is not None:
+            with failover_state['lock']:
+                failover_state['in_progress'] = False
+            logging.info(
+                "<FAILOVER> Cleared failover_state['in_progress'] after abort"
+            )
+        return False
+
     # Signal that failover is starting - this must happen BEFORE shutdown
     if failover_state is not None:
         with failover_state['lock']:
@@ -1898,16 +2297,14 @@ def periodic_failover_task(
     # Step 1: Get cluster topology
     primarys, replicas = get_cluster_nodes(client)
     if not primarys:
-        logging.error("<FAILOVER> No primarys found in cluster")
-        return False
+        return abort("no primarys found in cluster")
     
     logging.info("<FAILOVER> Found %d primarys and %d replicas", len(primarys), len(replicas))
     
     # Step 2: Pick a primary to fail (excluding entry point)
     victim = pick_primary_to_fail(primarys, replicas, exclude_port=entry_point_port)
     if not victim:
-        logging.error("<FAILOVER> No suitable primary found to fail")
-        return False
+        return abort("no suitable primary found to fail")
     
     logging.info("<FAILOVER> Selected victim: %s (node_id: %s)", victim.addr, victim.node_id)
     
@@ -1929,8 +2326,7 @@ def periodic_failover_task(
     
     # Step 3: Shut down the primary
     if not shutdown_node(victim.addr, password):
-        logging.error("<FAILOVER> Failed to shutdown node %s", victim.addr)
-        return False
+        return abort(f"failed to shutdown node {victim.addr}")
     
     # Give the node a moment to fully shut down
     time.sleep(2)
@@ -1940,13 +2336,11 @@ def periodic_failover_task(
         client, victim.node_id, victim.addr, timeout=30
     )
     if not promotion_success:
-        logging.error("<FAILOVER> Replica promotion did not complete in time Replica not promoted")
-        return False
+        return abort("replica promotion did not complete in time")
     
     # Step 5: Wait for cluster OK state
     if not wait_for_cluster_ok(client, timeout=30):
-        logging.error("<FAILOVER> Cluster did not reach OK state in time")
-        return False
+        return abort("cluster did not reach OK state in time")
     
     logging.info("<FAILOVER> Failover completed successfully - new primary: %s", new_primary_addr or "unknown")
     

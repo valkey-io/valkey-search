@@ -160,6 +160,12 @@ struct QuantileStats {
 std::unique_ptr<GroupBy::Reducer> MakeQuantileReducer(
     double quantile, QuantileStats*& stats_out);
 
+// Exposed for testing: populate Records from a neighbor list using the
+// registered record attributes in parameters.
+absl::Status CreateRecordsFromNeighbors(
+    std::vector<indexes::Neighbor>& neighbors, AggregateParameters& parameters,
+    size_t key_index, size_t scores_index, RecordSet& records);
+
 }  // namespace aggregate
 }  // namespace valkey_search
 

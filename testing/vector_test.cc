@@ -5,18 +5,24 @@
  *
  */
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <limits>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -25,10 +31,12 @@
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/synchronization/notification.h"
+#include "absl/time/time.h"
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
 #include "src/indexes/vector_hnsw.h"
@@ -819,6 +827,583 @@ TEST_F(RecomputeDistanceBf16, RecomputedDistancesRankTheSameWayTheIndexDoes) {
   RecomputedDistancesRankTheSameWayTheIndexDoes();
 }
 
+// Range search over every storage type, metric and algorithm. The expected
+// neighbors come from scoring each tracked key with IsWithinVectorRange
+// against the normalized query, the per-key evaluation the compound VR path
+// uses; keys and distances must match it bit for bit. A double-precision brute
+// force checks the same results away from the radius boundary. Named
+// instantiations rather than a TYPED_TEST, for the reason given at
+// RecomputeDistanceTest.
+template <typename T>
+class SearchRangeTest : public VectorIndexTest {
+ protected:
+  static constexpr int kDims = 16;
+  static constexpr int kVectors = 300;
+
+  static float Tolerance() {
+    if (std::is_same_v<T, float>) {
+      return 1e-4f;
+    }
+    return std::is_same_v<T, float16> ? 1e-2f : 5e-2f;
+  }
+
+  // Portable, seeded values in [-1, 1).
+  static std::vector<float> RandomVector(uint64_t &state) {
+    std::vector<float> v(kDims);
+    for (auto &x : v) {
+      state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+      x = static_cast<float>(state >> 40) / static_cast<float>(1 << 23) - 1.0f;
+    }
+    return v;
+  }
+
+  // The vector as stored (rounded to T), and its bytes.
+  static std::vector<float> Round(const std::vector<float> &v) {
+    std::vector<float> out;
+    out.reserve(v.size());
+    for (float x : v) {
+      out.push_back(static_cast<float>(static_cast<T>(x)));
+    }
+    return out;
+  }
+  static std::string Bytes(const std::vector<float> &v) {
+    std::vector<T> converted;
+    converted.reserve(v.size());
+    for (float x : v) {
+      converted.push_back(static_cast<T>(x));
+    }
+    return std::string(reinterpret_cast<const char *>(converted.data()),
+                       converted.size() * sizeof(T));
+  }
+
+  static double BruteDistance(data_model::DistanceMetric metric,
+                              const std::vector<float> &q,
+                              const std::vector<float> &v) {
+    double dot = 0, qq = 0, vv = 0, l2 = 0;
+    for (int i = 0; i < kDims; ++i) {
+      dot += double(q[i]) * v[i];
+      qq += double(q[i]) * q[i];
+      vv += double(v[i]) * v[i];
+      l2 += (double(q[i]) - v[i]) * (double(q[i]) - v[i]);
+    }
+    switch (metric) {
+      case data_model::DISTANCE_METRIC_L2:
+        return l2;
+      case data_model::DISTANCE_METRIC_IP:
+        return 1.0 - dot;
+      default:
+        return 1.0 - dot / std::sqrt(qq * vv);
+    }
+  }
+
+  std::shared_ptr<VectorBase> MakeIndex(bool hnsw,
+                                        data_model::DistanceMetric metric) {
+    if (hnsw) {
+      auto index = VectorHNSW<T>::Create(
+          CreateHNSWVectorIndexProto(kDims, metric, kVectors, kM, 200, 200),
+          this->attribute_identifier, this->attribute_data_type, 0);
+      EXPECT_TRUE(index.ok()) << index.status();
+      return index.ok() ? *index : nullptr;
+    }
+    // A small initial capacity so the FLAT store is resized while loading.
+    auto index = VectorFlat<T>::Create(
+        CreateFlatVectorIndexProto(kDims, metric, kVectors / 4, 50),
+        this->attribute_identifier, this->attribute_data_type, 0);
+    EXPECT_TRUE(index.ok()) << index.status();
+    return index.ok() ? *index : nullptr;
+  }
+
+  // Per-key reference: IsWithinVectorRange over the tracked keys.
+  static std::map<std::string, float> PerKeyReference(const VectorBase &index,
+                                                      absl::string_view query,
+                                                      float radius) {
+    std::string nq(query);
+    if (index.GetNormalize()) {
+      auto normalized = NormalizeVector(
+          query, index.GetVectorDataType(),
+          CalcReciprocalMagnitude(query, index.GetVectorDataType()));
+      nq.assign(normalized.data(), normalized.size());
+    }
+    std::map<std::string, float> out;
+    VMSDK_EXPECT_OK(index.ForEachTrackedKey(
+        [&](const InternedStringPtr &key) -> absl::Status {
+          auto within = index.IsWithinVectorRange(key, nq, radius);
+          EXPECT_TRUE(within.ok()) << within.status();
+          if (within.ok() && within->has_value()) {
+            out[std::string(key->Str())] = **within;
+          }
+          return absl::OkStatus();
+        }));
+    return out;
+  }
+
+  static std::map<std::string, float> ToMap(
+      const std::vector<Neighbor> &neighbors) {
+    std::map<std::string, float> out;
+    for (const auto &n : neighbors) {
+      EXPECT_TRUE(
+          out.emplace(std::string(n.external_id->Str()), n.distance).second)
+          << "duplicate " << n.external_id->Str();
+    }
+    return out;
+  }
+
+  void MatchesPerKeyReferenceAndBruteForce(bool hnsw)
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    // A fetch cap of 0 sends every HNSW range query to the exhaustive scan.
+    auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+    const auto saved_cap = fetch_cap.GetValue();
+    absl::Cleanup restore = [&] {
+      VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+    };
+    if (hnsw) {
+      VMSDK_EXPECT_OK(fetch_cap.SetValue(0));
+    }
+    for (auto metric :
+         {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
+          data_model::DISTANCE_METRIC_COSINE}) {
+      SCOPED_TRACE(absl::StrCat("metric ", static_cast<int>(metric)));
+      auto index = MakeIndex(hnsw, metric);
+      ASSERT_NE(index, nullptr);
+      uint64_t seed = 42;
+      std::map<std::string, std::vector<float>> live;
+      for (int i = 0; i < kVectors; ++i) {
+        auto v = RandomVector(seed);
+        VMSDK_EXPECT_OK(
+            testing_infra::AddVectorRecord(*index, IndexToKey(i), Bytes(v)));
+        live[std::string(IndexToKey(i)->Str())] = Round(v);
+      }
+      // Deletes move FLAT slots around (and leave HNSW tombstones); updates
+      // replace stored records in place.
+      for (int i = 0; i < kVectors; i += 7) {
+        VMSDK_EXPECT_OK(
+            index->RemoveRecord(IndexToKey(i), DeletionType::kRecord));
+        live.erase(std::string(IndexToKey(i)->Str()));
+      }
+      for (int i = 3; i < kVectors; i += 11) {
+        if (i % 7 == 0) {
+          continue;
+        }
+        auto v = RandomVector(seed);
+        VMSDK_EXPECT_OK(
+            testing_infra::ModifyVectorRecord(*index, IndexToKey(i), Bytes(v)));
+        live[std::string(IndexToKey(i)->Str())] = Round(v);
+      }
+
+      // Random queries, a stored vector (a cosine self-match) and a scaled
+      // copy of it (distance 0 under COSINE only after normalization).
+      std::vector<std::vector<float>> queries;
+      queries.reserve(6);
+      for (int i = 0; i < 4; ++i) {
+        queries.push_back(RandomVector(seed));
+      }
+      queries.push_back(live.begin()->second);
+      queries.push_back(live.begin()->second);
+      for (auto &x : queries.back()) {
+        x *= 3.0f;
+      }
+
+      for (const auto &raw_query : queries) {
+        const std::string query = Bytes(raw_query);
+        const auto q = Round(raw_query);
+        std::vector<double> sorted;
+        sorted.reserve(live.size());
+        for (const auto &[_, v] : live) {
+          sorted.push_back(BruteDistance(metric, q, v));
+        }
+        std::sort(sorted.begin(), sorted.end());
+        for (float radius :
+             {0.0f,
+              std::max(0.0f, static_cast<float>(sorted[19] + sorted[20]) / 2),
+              static_cast<float>(sorted.back()) + 1.0f}) {
+          SCOPED_TRACE(absl::StrCat("radius ", radius));
+          auto expected = PerKeyReference(*index, query, radius);
+          auto searched = index->SearchRange(query, radius, CancelNever());
+          ASSERT_TRUE(searched.ok()) << searched.status();
+          const auto found = ToMap(*searched);
+          EXPECT_EQ(found, expected);
+          const double tol = Tolerance();
+          for (const auto &[key, v] : live) {
+            const double d = BruteDistance(metric, q, v);
+            const double slack = tol * std::max(1.0, std::abs(d));
+            auto it = found.find(key);
+            if (std::abs(d - radius) > slack) {
+              EXPECT_EQ(it != found.end(), d <= radius)
+                  << key << " brute distance " << d;
+            }
+            if (it != found.end()) {
+              EXPECT_NEAR(it->second, d, slack) << key;
+            }
+          }
+          for (const auto &[key, _] : found) {
+            EXPECT_TRUE(live.contains(key)) << "untracked key " << key;
+          }
+        }
+      }
+    }
+  }
+};
+
+using SearchRangeFp32 = SearchRangeTest<float>;
+using SearchRangeFp16 = SearchRangeTest<float16>;
+using SearchRangeBf16 = SearchRangeTest<bfloat16>;
+
+TEST_F(SearchRangeFp32, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
+}
+TEST_F(SearchRangeFp16, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
+}
+TEST_F(SearchRangeBf16, MatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/false);
+}
+
+// The exhaustive scan an HNSW range search runs past the fetch cap answers
+// with the same per-key exactness.
+TEST_F(SearchRangeFp32, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
+}
+TEST_F(SearchRangeFp16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
+}
+TEST_F(SearchRangeBf16, HnswScanMatchesPerKeyReferenceAndBruteForce) {
+  MatchesPerKeyReferenceAndBruteForce(/*hnsw=*/true);
+}
+
+// HNSW range search fetches at most max-nonvector-search-results-fetched
+// candidates. Once they are all in range, the rest of the radius is covered by
+// an exhaustive scan, so every live key in range is returned.
+TEST_F(SearchRangeFp32, HnswReturnsEveryMatchPastTheFetchCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  for (auto metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
+        data_model::DISTANCE_METRIC_COSINE}) {
+    SCOPED_TRACE(absl::StrCat("metric ", static_cast<int>(metric)));
+    auto index = MakeIndex(/*hnsw=*/true, metric);
+    ASSERT_NE(index, nullptr);
+    uint64_t seed = 7;
+    for (int i = 0; i < kVectors; ++i) {
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+          *index, IndexToKey(i), Bytes(RandomVector(seed))));
+    }
+    for (int i = 0; i < kVectors; i += 5) {
+      VMSDK_EXPECT_OK(
+          index->RemoveRecord(IndexToKey(i), DeletionType::kRecord));
+    }
+    const std::string query = Bytes(RandomVector(seed));
+    std::vector<float> distances;
+    for (const auto &[_, distance] :
+         PerKeyReference(*index, query, std::numeric_limits<float>::max())) {
+      distances.push_back(distance);
+    }
+    ASSERT_EQ(distances.size(), 240u);
+    std::sort(distances.begin(), distances.end());
+    for (int cap : {0, 1, 50}) {
+      VMSDK_EXPECT_OK(fetch_cap.SetValue(cap));
+      for (float radius :
+           {(distances[99] + distances[100]) / 2, distances.back() + 1.0f}) {
+        SCOPED_TRACE(absl::StrCat("cap ", cap, " radius ", radius));
+        auto searched = index->SearchRange(query, radius, CancelNever());
+        ASSERT_TRUE(searched.ok()) << searched.status();
+        EXPECT_EQ(ToMap(*searched), PerKeyReference(*index, query, radius));
+      }
+    }
+  }
+}
+
+// A full HNSW fetch that holds a NaN or infinite distance also takes the
+// exhaustive scan, so a small cap cuts off no key in range and HNSW returns the
+// keys FLAT returns. Keys at a NaN or +inf distance are left out of the
+// comparison: whether they are in range is up to the distance rule, not to the
+// fetch.
+// DISABLED: inserting a NaN/Inf-component vector can hang forever in
+// HierarchicalNSW::addPoint's greedy descent (hnswalg.h `while (changed)`):
+// `d < curdist` isn't reliable under this build's -ffast-math, and
+// curdist/currObj were observed oscillating instead of converging (confirmed
+// live via gdb). Real bug, reachable via plain HSET. Not fixed here: HNSW
+// range search is an accepted RC1 stop-gap being replaced before GA (PR #985
+// issue 3); re-enable once the new algorithm's insert path is audited.
+TEST_F(SearchRangeFp32,
+       DISABLED_HnswMatchesFlatWithNonFiniteDistancesPastTheFetchCap)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  auto from_bits = [](uint32_t bits) {
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+  };
+  constexpr uint32_t kInfBits = 0x7f800000u;
+  const float kNaN = from_bits(0x7fc00000u);
+  const float kInf = from_bits(kInfBits);
+  const float kNegInf = from_bits(0xff800000u);
+  auto compared_keys = [](const std::vector<Neighbor> &neighbors) {
+    std::set<std::string> keys;
+    for (const auto &n : neighbors) {
+      uint32_t bits;
+      std::memcpy(&bits, &n.distance, sizeof(bits));
+      if (!scoring::IsNaN(n.distance) && bits != kInfBits) {
+        keys.insert(std::string(n.external_id->Str()));
+      }
+    }
+    return keys;
+  };
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  using Docs = std::vector<std::pair<std::string, std::vector<float>>>;
+  // Each query with its radii.
+  using Queries =
+      std::vector<std::pair<std::vector<float>, std::vector<float>>>;
+  auto compare = [&](data_model::DistanceMetric metric, const Docs &docs,
+                     const Queries &queries, const std::vector<int> &caps) {
+    SCOPED_TRACE(absl::StrCat("metric ", static_cast<int>(metric)));
+    auto hnsw = MakeIndex(/*hnsw=*/true, metric);
+    auto flat = MakeIndex(/*hnsw=*/false, metric);
+    ASSERT_NE(hnsw, nullptr);
+    ASSERT_NE(flat, nullptr);
+    for (const auto &[key, v] : docs) {
+      for (auto *index : {hnsw.get(), flat.get()}) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+            *index, StringInternStore::Intern(key), Bytes(v)));
+      }
+    }
+    for (int cap : caps) {
+      VMSDK_EXPECT_OK(fetch_cap.SetValue(cap));
+      for (size_t i = 0; i < queries.size(); ++i) {
+        const std::string query = Bytes(queries[i].first);
+        for (float radius : queries[i].second) {
+          SCOPED_TRACE(
+              absl::StrCat("cap ", cap, " query ", i, " radius ", radius));
+          auto from_hnsw = hnsw->SearchRange(query, radius, CancelNever());
+          auto from_flat = flat->SearchRange(query, radius, CancelNever());
+          ASSERT_TRUE(from_hnsw.ok()) << from_hnsw.status();
+          ASSERT_TRUE(from_flat.ok()) << from_flat.status();
+          EXPECT_EQ(compared_keys(*from_hnsw), compared_keys(*from_flat));
+        }
+      }
+    }
+  };
+
+  // With the query (1, 0, ...), a and b are at distance 0 and 1 (2 for L2),
+  // p is at -inf on IP, and every other distance is non-finite. With
+  // (inf, 0, ...), the IP distance of a and p is -inf, of m +inf, and of b
+  // and n NaN.
+  auto vec = [](float x, float y) {
+    std::vector<float> v(kDims, 0.0f);
+    v[0] = x;
+    v[1] = y;
+    return v;
+  };
+  const Docs few = {{"a", vec(1, 0)},
+                    {"b", vec(0, 1)},
+                    {"n", vec(kNaN, 0)},
+                    {"p", vec(kInf, 0)},
+                    {"m", vec(kNegInf, 0)}};
+  const std::vector<float> radii = {0.5f, 3.0f,
+                                    std::numeric_limits<float>::max()};
+  const std::vector<int> few_caps = {1, 2, 3,
+                                     4, 5, static_cast<int>(saved_cap)};
+  compare(data_model::DISTANCE_METRIC_L2, few, {{vec(1, 0), radii}}, few_caps);
+  compare(data_model::DISTANCE_METRIC_IP, few,
+          {{vec(1, 0), radii}, {vec(kInf, 0), radii}}, few_caps);
+  compare(data_model::DISTANCE_METRIC_COSINE, few, {{vec(1, 0), radii}},
+          few_caps);
+
+  // Random vectors, with every 10th one given a NaN, +inf or -inf component,
+  // so that non-finite candidates sit anywhere in a full fetch. The radii put
+  // about 10 and 100 finite vectors in range. Deterministic for a given
+  // toolchain: which candidates a full fetch holds depends on hnswlib's NaN
+  // ordering.
+  const float kNonFinite[] = {kNaN, kInf, kNegInf};
+  for (auto metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
+        data_model::DISTANCE_METRIC_COSINE}) {
+    uint64_t seed = 11;
+    Docs docs;
+    std::vector<std::vector<float>> finite;
+    for (int i = 0; i < kVectors; ++i) {
+      auto v = RandomVector(seed);
+      if (i % 10 == 0) {
+        v[i % kDims] = kNonFinite[i / 10 % 3];
+      } else {
+        finite.push_back(v);
+      }
+      docs.emplace_back(std::string(IndexToKey(i)->Str()), v);
+    }
+    Queries queries;
+    for (int i = 0; i < 4; ++i) {
+      auto q = RandomVector(seed);
+      std::vector<double> sorted;
+      sorted.reserve(finite.size());
+      for (const auto &v : finite) {
+        sorted.push_back(BruteDistance(metric, q, v));
+      }
+      std::sort(sorted.begin(), sorted.end());
+      queries.emplace_back(
+          q, std::vector<float>{
+                 std::max(0.0f, static_cast<float>(sorted[9] + sorted[10]) / 2),
+                 std::max(0.0f,
+                          static_cast<float>(sorted[99] + sorted[100]) / 2)});
+    }
+    compare(metric, docs, queries, {5, 20, 50});
+  }
+}
+
+// A token that reports cancelled once it has been polled `polls` times.
+class CancelAfter : public cancel::Base {
+ public:
+  explicit CancelAfter(int polls) : polls_(polls) {}
+  bool IsCancelled() override { return polls_-- <= 0; }
+  void Cancel() override { polls_ = 0; }
+
+ private:
+  int polls_;
+};
+
+// Counts its polls and never fires.
+class CountingToken : public cancel::Base {
+ public:
+  bool IsCancelled() override {
+    ++polls;
+    return false;
+  }
+  void Cancel() override {}
+  int polls = 0;
+};
+
+// Parks the scan at its first poll until released.
+class ParkingToken : public cancel::Base {
+ public:
+  bool IsCancelled() override {
+    if (!parked.HasBeenNotified()) {
+      parked.Notify();
+      release.WaitForNotification();
+    }
+    return false;
+  }
+  void Cancel() override {}
+  absl::Notification parked;
+  absl::Notification release;
+};
+
+// A cancelled range search stops early and returns what it found so far, not
+// an error: nothing when the token is already cancelled, everything when it
+// never fires, and a partial result in between. The exhaustive scan an HNSW
+// range search runs when the fetch cap is 0 behaves the same once the fetch,
+// which polls the token too, is over.
+TEST_F(VectorIndexTest, SearchRangeStopsWhenCancelled)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kDim = 4;
+  constexpr int kCount = 200;
+  auto flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2, kCount,
+                                 kBlockSize),
+      attribute_identifier, attribute_data_type, 0);
+  auto hnsw = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2, kCount,
+                                 kM, kEFConstruction, kEFRuntime),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(flat.ok() && hnsw.ok());
+  const std::vector<float> zero(kDim, 0.0f);
+  for (int i = 0; i < kCount; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat, IndexToKey(i),
+                                                   VectorToStr(zero)));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**hnsw, IndexToKey(i),
+                                                   VectorToStr(zero)));
+  }
+  const absl::string_view query = VectorToStr(zero);
+  auto check = [&](size_t size, int polls) {
+    if (polls == 0 || polls == kCount) {
+      EXPECT_EQ(size, static_cast<size_t>(polls));
+    } else {
+      EXPECT_GT(size, 0u);
+      EXPECT_LT(size, static_cast<size_t>(kCount));
+    }
+  };
+  for (int polls : {0, 1, 50, kCount}) {
+    SCOPED_TRACE(absl::StrCat("polls ", polls));
+    cancel::Token token = std::make_shared<CancelAfter>(polls);
+    auto res = (*flat)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    check(res->size(), polls);
+  }
+
+  auto &fetch_cap = options::GetMaxNonVectorSearchResultsFetched();
+  const auto saved_cap = fetch_cap.GetValue();
+  absl::Cleanup restore = [&] {
+    VMSDK_EXPECT_OK(fetch_cap.SetValue(saved_cap));
+  };
+  VMSDK_EXPECT_OK(fetch_cap.SetValue(0));
+  // The scan polls once per tracked key; whatever the fetch polled before it
+  // is the budget a token needs to reach the scan at all.
+  auto counting = std::make_shared<CountingToken>();
+  cancel::Token counting_token = counting;
+  auto scanned = (*hnsw)->SearchRange(query, 1.0f, counting_token);
+  ASSERT_TRUE(scanned.ok()) << scanned.status();
+  ASSERT_EQ(scanned->size(), static_cast<size_t>(kCount));
+  const int fetch_polls = counting->polls - kCount;
+  ASSERT_GT(fetch_polls, 0);
+  for (int polls : {0, 1, 50, kCount}) {
+    SCOPED_TRACE(absl::StrCat("scan polls ", polls));
+    cancel::Token token = std::make_shared<CancelAfter>(fetch_polls + polls);
+    auto res = (*hnsw)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    check(res->size(), polls);
+  }
+}
+
+// A FLAT range search in progress must not block another range search on the
+// same index, nor the tracked-key readers the main thread uses (IsTracked,
+// GetTrackedKeyCount). Searches already exclude index mutations through the
+// index schema's time-sliced mutex, so the scan takes no index lock.
+TEST_F(VectorIndexTest, FlatRangeSearchDoesNotBlockOtherReaders)
+ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  constexpr int kDim = 4;
+  constexpr int kCount = 50;
+  auto index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_L2, kCount,
+                                 kBlockSize),
+      attribute_identifier, attribute_data_type, 0);
+  ASSERT_TRUE(index.ok());
+  const std::vector<float> zero(kDim, 0.0f);
+  for (int i = 0; i < kCount; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                   VectorToStr(zero)));
+  }
+  const absl::string_view query = VectorToStr(zero);
+
+  auto parking = std::make_shared<ParkingToken>();
+  std::thread parked_scan([&]() {
+    cancel::Token token = parking;
+    auto res = (*index)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    EXPECT_EQ(res->size(), static_cast<size_t>(kCount));
+  });
+  parking->parked.WaitForNotification();
+
+  absl::Notification done;
+  std::thread other_reader([&]() {
+    cancel::Token token = std::make_shared<CancelAfter>(kCount + 1);
+    auto res = (*index)->SearchRange(query, 1.0f, token);
+    ASSERT_TRUE(res.ok()) << res.status();
+    EXPECT_EQ(res->size(), static_cast<size_t>(kCount));
+    EXPECT_TRUE((*index)->IsTracked(IndexToKey(0)));
+    EXPECT_EQ((*index)->GetTrackedKeyCount(), static_cast<size_t>(kCount));
+    done.Notify();
+  });
+  EXPECT_TRUE(done.WaitForNotificationWithTimeout(absl::Seconds(10)))
+      << "blocked behind the parked range search";
+  parking->release.Notify();
+  parked_scan.join();
+  other_reader.join();
+}
+
 TEST_F(RecomputeDistanceFp32, CosineSearchMatchesRecomputeExactly) {
   CosineSearchMatchesRecomputeExactly();
 }
@@ -1221,6 +1806,103 @@ TEST_F(VectorIndexTest, SaveAndLoadFlat) {
     }
     for (size_t i = 0; i < vectors.size(); ++i) {
       delete records[i];
+    }
+  }
+}
+
+// A key added after an RDB load must get a label that no loaded key holds.
+// A reused label makes the new vector overwrite the loaded key's slot, and
+// deleting the new key then removes the slot the loaded key still maps to.
+TEST_F(VectorIndexTest, SaveAndLoadFlatNewKeyGetsUnusedLabel) {
+  for (auto &distance_metric :
+       {data_model::DISTANCE_METRIC_COSINE, data_model::DISTANCE_METRIC_L2}) {
+    constexpr size_t kLoaded = 10;
+    FakeSafeRDB rdb;
+    // Scaled basis vectors: every vector's nearest neighbor is itself, under
+    // both metrics. The last one belongs to the key added after the load.
+    std::vector<std::vector<float>> vectors(kLoaded + 1,
+                                            std::vector<float>(kDimensions));
+    for (size_t i = 0; i < vectors.size(); ++i) {
+      vectors[i][i] = static_cast<float>(i + 1);
+    }
+    data_model::VectorIndex flat_proto = CreateFlatVectorIndexProto(
+        kDimensions, distance_metric, kInitialCap, kBlockSize);
+    {
+      auto index = VectorFlat<float>::Create(flat_proto, attribute_identifier,
+                                             attribute_data_type, 0);
+      VMSDK_EXPECT_OK(index);
+      for (size_t i = 0; i < kLoaded; ++i) {
+        VERIFY_ADD(index->get(), vectors, i, ExpectedResults::kSuccess);
+      }
+      VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+      VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+      flat_proto = (*index)->ToProto()->vector_index();
+    }
+    ValkeyModuleString *records[kLoaded];
+    for (size_t i = 0; i < kLoaded; ++i) {
+      records[i] = new ValkeyModuleString{
+          std::string((char *)&vectors[i][0], kDimensions * sizeof(float))};
+    }
+    EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+        .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+    EXPECT_CALL(*kMockValkeyModule,
+                HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                        testing::An<ValkeyModuleString **>(),
+                        testing::TypedEq<void *>(nullptr)))
+        .WillRepeatedly([&records](ValkeyModuleKey *key, int, const char *,
+                                   ValkeyModuleString **value_out, void *) {
+          auto key_str = absl::string_view(key->key);
+          CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+          int index;
+          CHECK(absl::SimpleAtoi(key_str, &index));
+          *value_out = records[index];
+          ValkeyModule_RetainString(nullptr, records[index]);
+          return VALKEYMODULE_OK;
+        });
+    auto index_pr = VectorFlat<float>::LoadFromRDB(
+        &fake_ctx_, &hash_attribute_data_type_, flat_proto,
+        "attribute_identifier_2", SupplementalContentChunkIter(&rdb), 0);
+    VMSDK_EXPECT_OK(index_pr);
+    auto index = std::move(index_pr.value());
+    VMSDK_EXPECT_OK(index->LoadTrackedKeys(&fake_ctx_,
+                                           &hash_attribute_data_type_,
+                                           SupplementalContentChunkIter(&rdb)));
+    VectorBase *base = index.get();
+    EXPECT_EQ(base->GetMaxLoadedLabel(), kLoaded - 1);
+
+    auto keys_of = [](const std::vector<Neighbor> &neighbors) {
+      std::vector<std::string> keys;
+      keys.reserve(neighbors.size());
+      for (const auto &neighbor : neighbors) {
+        keys.emplace_back(neighbor.external_id->Str());
+      }
+      return keys;
+    };
+    constexpr float kSelfRadius = 0.5f;
+    auto expect_self_matches = [&](size_t num_keys) {
+      for (size_t i = 0; i < num_keys; ++i) {
+        const std::vector<std::string> self = {
+            std::string(IndexToKey(i)->Str())};
+        absl::string_view query = VectorToStr(vectors[i]);
+        auto knn = index->Search(query, 1, CancelNever());
+        ASSERT_TRUE(knn.ok()) << knn.status();
+        EXPECT_EQ(keys_of(*knn), self) << "KNN, vector " << i;
+        auto range = index->SearchRange(query, kSelfRadius, CancelNever());
+        ASSERT_TRUE(range.ok()) << range.status();
+        EXPECT_EQ(keys_of(*range), self) << "SearchRange, vector " << i;
+      }
+    };
+    VERIFY_ADD(index.get(), vectors, kLoaded, ExpectedResults::kSuccess);
+    expect_self_matches(kLoaded + 1);
+    // With a shared label the delete below also drops a loaded key's slot,
+    // and the searches after it dereference that missing slot.
+    ASSERT_FALSE(HasFailure());
+    VMSDK_EXPECT_OK(
+        index->RemoveRecord(IndexToKey(kLoaded), DeletionType::kNone));
+    EXPECT_EQ(index->GetTrackedKeyCount(), kLoaded);
+    expect_self_matches(kLoaded);
+    for (auto *record : records) {
+      delete record;
     }
   }
 }
@@ -2392,6 +3074,313 @@ TEST_F(VectorIndexTest, ValidationDisabledBypassesChecks) {
   // Enabled: rejected. Disabled: loads (the self-loop is not memory-unsafe).
   EXPECT_FALSE(LoadGolden(golden, kGoldenMax, /*validate=*/true).ok());
   VMSDK_EXPECT_OK(LoadGolden(golden, kGoldenMax, /*validate=*/false));
+}
+
+// A vector's cosine distance to itself is 0 only up to rounding, and it is
+// reported as computed, bounded below at 0. So, as on Redis, radius 0 keeps
+// the self-match only when rounding does not make its distance positive; a
+// match it does keep is at exactly 0.
+TEST_F(VectorIndexTest, SearchRangeRadiusZeroCosineCompatibility) {
+  const int kDim = 8;
+  const int kVecCount = 5;
+  const int kInitCap = 64;
+
+  auto hnsw_index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 kInitCap, /*m=*/16, /*ef_construction=*/200,
+                                 /*ef_runtime=*/200),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(hnsw_index.ok());
+
+  auto flat_index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 kInitCap, /*block_size=*/64),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(flat_index.ok());
+
+  auto vectors = DeterministicallyGenerateVectors(kVecCount, kDim, 10.0);
+  for (int i = 0; i < kVecCount; ++i) {
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**hnsw_index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**flat_index, IndexToKey(i),
+                                                   VectorToStr(vectors[i])));
+  }
+
+  for (int i = 0; i < kVecCount; ++i) {
+    absl::string_view query = VectorToStr(vectors[i]);
+    for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                              static_cast<VectorBase *>(flat_index->get())}) {
+      auto zero = index->SearchRange(query, /*radius=*/0.0f, CancelNever());
+      ASSERT_TRUE(zero.ok()) << zero.status();
+      auto near = index->SearchRange(query, /*radius=*/1e-6f, CancelNever());
+      ASSERT_TRUE(near.ok()) << near.status();
+      ASSERT_EQ(near->size(), 1u) << "missed the self-match of vector " << i;
+      EXPECT_EQ((*near)[0].external_id->Str(), IndexToKey(i)->Str());
+      const float self_distance = (*near)[0].distance;
+      EXPECT_GE(self_distance, 0.0f);
+      EXPECT_EQ(zero->size(), self_distance == 0.0f ? 1u : 0u)
+          << "vector " << i << " self distance " << self_distance;
+    }
+  }
+}
+
+// COSINE VECTOR_RANGE reports distances as computed. A tolerance window of
+// dims * FLT_EPSILON around 0 (1.8e-4 at 1536 dims) reported both
+// near-duplicates below as 0, leaving which one ranks first to the key, and
+// kept the farther one at radius 5e-5.
+TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
+  const int kDim = 1536;
+  auto dot = [](const auto &a, const auto &b) {
+    double sum = 0.0;
+    for (size_t i = 0; i < a.size(); ++i) {
+      sum += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+    }
+    return sum;
+  };
+  // A unit vector q, and a unit vector w orthogonal to it.
+  std::vector<double> q(kDim);
+  std::vector<double> w(kDim);
+  for (int i = 0; i < kDim; ++i) {
+    q[i] = std::sin(0.37 * i + 1.0);
+    w[i] = std::cos(1.13 * i + 0.5);
+  }
+  const double q_norm = std::sqrt(dot(q, q));
+  for (auto &x : q) {
+    x /= q_norm;
+  }
+  const double w_on_q = dot(w, q);
+  for (int i = 0; i < kDim; ++i) {
+    w[i] -= w_on_q * q[i];
+  }
+  const double w_norm = std::sqrt(dot(w, w));
+  for (auto &x : w) {
+    x /= w_norm;
+  }
+  // (1 - d) q + sqrt(1 - (1 - d)^2) w is at cosine distance d from q.
+  auto at_distance = [&](double d) {
+    const double c = 1.0 - d;
+    const double s = std::sqrt(1.0 - c * c);
+    std::vector<float> v(kDim);
+    for (int i = 0; i < kDim; ++i) {
+      v[i] = static_cast<float>(c * q[i] + s * w[i]);
+    }
+    return v;
+  };
+  const std::vector<float> query_vec = at_distance(0.0);
+  absl::string_view query = VectorToStr(query_vec);
+  // Key 0 is the nearer near-duplicate, key 1 the farther one.
+  const std::vector<std::vector<float>> docs = {at_distance(2e-5),
+                                                at_distance(1.4e-4)};
+  auto true_distance = [&](int i) {
+    return 1.0 - dot(docs[i], query_vec) / std::sqrt(dot(docs[i], docs[i]) *
+                                                     dot(query_vec, query_vec));
+  };
+
+  auto hnsw_index = VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 /*initial_cap=*/16, /*m=*/16,
+                                 /*ef_construction=*/200, /*ef_runtime=*/200),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(hnsw_index.ok());
+  auto flat_index = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kDim, data_model::DISTANCE_METRIC_COSINE,
+                                 /*initial_cap=*/16, /*block_size=*/16),
+      "attribute_identifier_1",
+      data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  ASSERT_TRUE(flat_index.ok());
+
+  for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                            static_cast<VectorBase *>(flat_index->get())}) {
+    for (int i = 0; i < 2; ++i) {
+      VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                     VectorToStr(docs[i])));
+    }
+    auto both = index->SearchRange(query, /*radius=*/0.01f, CancelNever());
+    ASSERT_TRUE(both.ok()) << both.status();
+    ASSERT_EQ(both->size(), 2u);
+    for (const auto &n : *both) {
+      const int i = n.external_id->Str() == IndexToKey(0)->Str() ? 0 : 1;
+      EXPECT_NEAR(n.distance, true_distance(i), 1e-5) << "key " << i;
+    }
+    for (int i = 0; i < 2; ++i) {
+      auto within = index->IsWithinVectorRange(IndexToKey(i), query, 0.01f);
+      ASSERT_TRUE(within.ok()) << within.status();
+      ASSERT_TRUE(within->has_value()) << "key " << i;
+      EXPECT_NEAR(**within, true_distance(i), 1e-5) << "key " << i;
+    }
+
+    auto nearer = index->SearchRange(query, /*radius=*/5e-5f, CancelNever());
+    ASSERT_TRUE(nearer.ok()) << nearer.status();
+    ASSERT_EQ(nearer->size(), 1u);
+    EXPECT_EQ((*nearer)[0].external_id->Str(), IndexToKey(0)->Str());
+    for (int i = 0; i < 2; ++i) {
+      auto within = index->IsWithinVectorRange(IndexToKey(i), query, 5e-5f);
+      ASSERT_TRUE(within.ok()) << within.status();
+      EXPECT_EQ(within->has_value(), i == 0) << "key " << i;
+    }
+  }
+}
+
+// A NaN or infinite component in the stored or the query vector makes the
+// distance non-finite. As on Redis, a NaN or +inf distance is within no
+// radius, and neither is any non-finite COSINE distance, while an IP distance
+// of -inf is within every radius and reported as -inf. An infinite radius
+// reaches VectorBase as the largest float. Under -ffast-math the radius
+// comparison admitted NaN distances at every radius, and std::clamp turned a
+// non-finite COSINE distance into 0 or 2.
+TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
+  const int kDim = 4;
+  auto from_bits = [](uint32_t bits) {
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+  };
+  auto is_neg_inf = [](float f) {
+    uint32_t bits;
+    std::memcpy(&bits, &f, sizeof(bits));
+    return bits == 0xff800000u;
+  };
+  const float kNaN = from_bits(0x7fc00000u);
+  const float kNegNaN = from_bits(0xffc00000u);
+  const float kInf = from_bits(0x7f800000u);
+  const float kMaxFloat = from_bits(0x7f7fffffu);
+  // Keys 0 and 1 are at distance 0 and 1 (2 for L2) from {1, 0, 0, 0}. Every
+  // distance of keys 2 to 5 to it is non-finite; for IP, key 4 is at -inf and
+  // key 5 at +inf.
+  const std::vector<std::vector<float>> docs = {
+      {1, 0, 0, 0},       {0, 1, 0, 0},    {kNaN, 0, 0, 0},
+      {0, 1, 0, kNegNaN}, {kInf, 0, 0, 0}, {-kInf, 0, 0, 0}};
+  struct Case {
+    const char *name;
+    std::vector<float> query;
+    // Keys within the radius at a finite distance: key 0 always, key 1 when
+    // the radius exceeds 1.
+    bool finite_matches;
+    // Keys at an IP distance of -inf.
+    std::vector<int> ip_neg_inf;
+  };
+  // Every distance to the NaN query is NaN. To the infinite one, the IP
+  // distance of keys 0 and 4 is -inf, and every other distance is NaN or +inf.
+  const std::vector<Case> cases = {{"finite", {1, 0, 0, 0}, true, {4}},
+                                   {"nan", {1, 0, kNaN, 0}, false, {}},
+                                   {"inf", {kInf, 0, 0, 0}, false, {0, 4}}};
+  for (auto metric :
+       {data_model::DISTANCE_METRIC_L2, data_model::DISTANCE_METRIC_IP,
+        data_model::DISTANCE_METRIC_COSINE}) {
+    auto hnsw_index = VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(kDim, metric, /*initial_cap=*/16, /*m=*/16,
+                                   /*ef_construction=*/200,
+                                   /*ef_runtime=*/200),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(hnsw_index.ok());
+    auto flat_index = VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(kDim, metric, /*initial_cap=*/16,
+                                   /*block_size=*/16),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(flat_index.ok());
+    for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                              static_cast<VectorBase *>(flat_index->get())}) {
+      for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                       VectorToStr(docs[i])));
+      }
+      for (const auto &c : cases) {
+        absl::string_view query = VectorToStr(c.query);
+        for (float radius : {0.5f, 2.0f, kMaxFloat}) {
+          auto result = index->SearchRange(query, radius, CancelNever());
+          ASSERT_TRUE(result.ok()) << result.status();
+          absl::flat_hash_map<std::string, float> found;
+          for (const auto &n : *result) {
+            found[n.external_id->Str()] = n.distance;
+          }
+          for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
+            const bool neg_inf =
+                metric == data_model::DISTANCE_METRIC_IP &&
+                std::find(c.ip_neg_inf.begin(), c.ip_neg_inf.end(), i) !=
+                    c.ip_neg_inf.end();
+            const bool expected =
+                neg_inf ||
+                (c.finite_matches && (i == 0 || (i == 1 && radius > 1.0f)));
+            const std::string key(IndexToKey(i)->Str());
+            EXPECT_EQ(found.contains(key), expected)
+                << "metric " << metric << " query " << c.name << " radius "
+                << radius << " key " << i;
+            if (neg_inf && found.contains(key)) {
+              EXPECT_TRUE(is_neg_inf(found[key])) << found[key];
+            }
+            auto within =
+                index->IsWithinVectorRange(IndexToKey(i), query, radius);
+            ASSERT_TRUE(within.ok()) << within.status();
+            EXPECT_EQ(within->has_value(), expected)
+                << "metric " << metric << " query " << c.name << " radius "
+                << radius << " key " << i;
+            if (neg_inf && within->has_value()) {
+              EXPECT_TRUE(is_neg_inf(**within)) << **within;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// An exact antipode, -s * v, is at cosine distance 2, which rounding can
+// compute as just above 2. The distance is bounded to [0, 2], so radius 2
+// covers every vector, as it does on Redis.
+TEST_F(VectorIndexTest, SearchRangeCosineRadiusTwoKeepsAntipodes) {
+  const int kVecCount = 20;
+  for (int dim : {2, 3, 8, 16, 128, 384, 1536}) {
+    auto hnsw_index = VectorHNSW<float>::Create(
+        CreateHNSWVectorIndexProto(dim, data_model::DISTANCE_METRIC_COSINE,
+                                   kVecCount, /*m=*/16,
+                                   /*ef_construction=*/200,
+                                   /*ef_runtime=*/200),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(hnsw_index.ok());
+    auto flat_index = VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(dim, data_model::DISTANCE_METRIC_COSINE,
+                                   kVecCount, /*block_size=*/kVecCount),
+        "attribute_identifier_1",
+        data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+    ASSERT_TRUE(flat_index.ok());
+
+    std::vector<std::vector<float>> vectors(kVecCount, std::vector<float>(dim));
+    for (int i = 0; i < kVecCount; ++i) {
+      for (int j = 0; j < dim; ++j) {
+        vectors[i][j] = static_cast<float>(std::sin(0.7 * j + 1.3 * i + 0.1));
+      }
+    }
+    for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
+                              static_cast<VectorBase *>(flat_index->get())}) {
+      for (int i = 0; i < kVecCount; ++i) {
+        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(
+            *index, IndexToKey(i), VectorToStr(vectors[i])));
+      }
+      for (int i = 0; i < kVecCount; ++i) {
+        const float scale = 0.25f + 0.5f * static_cast<float>(i);
+        std::vector<float> antipode(dim);
+        for (int j = 0; j < dim; ++j) {
+          antipode[j] = -scale * vectors[i][j];
+        }
+        absl::string_view query = VectorToStr(antipode);
+        auto result = index->SearchRange(query, /*radius=*/2.0f, CancelNever());
+        ASSERT_TRUE(result.ok()) << result.status();
+        EXPECT_EQ(result->size(), static_cast<size_t>(kVecCount))
+            << "dim " << dim << " vector " << i;
+        auto within = index->IsWithinVectorRange(IndexToKey(i), query, 2.0f);
+        ASSERT_TRUE(within.ok()) << within.status();
+        ASSERT_TRUE(within->has_value()) << "dim " << dim << " vector " << i;
+        EXPECT_LE(**within, 2.0f);
+        EXPECT_NEAR(**within, 2.0f, 1e-6f);
+      }
+    }
+  }
 }
 
 }  // namespace

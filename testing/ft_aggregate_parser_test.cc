@@ -8,11 +8,19 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <map>
+#include <vector>
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/index_schema.pb.h"
+#include "src/indexes/vector_flat.h"
+#include "src/query/predicate.h"
 #include "src/valkey_search_options.h"
+#include "testing/common.h"
 #include "vmsdk/src/testing_infra/utils.h"
+#include "vmsdk/src/type_conversions.h"
 
 namespace {
 bool IsVerbose() {
@@ -614,6 +622,198 @@ TEST_F(AggregateTest, ExpressionDepthExceedsLimit) {
   auto result = expr::Expression::Compile(params, deep_expr);
   EXPECT_FALSE(result.ok());
   EXPECT_TRUE(absl::IsInvalidArgument(result.status()));
+}
+
+// ---------------------------------------------------------------------------
+// ParseCommand registration tests for VR score fields (task 3.2)
+// ---------------------------------------------------------------------------
+
+// Helper: build a 3-float (12-byte) blob string for dimension-3 vector indexes.
+static std::string MakeBlob3() {
+  std::vector<float> v = {0.1f, 0.2f, 0.3f};
+  return std::string(reinterpret_cast<const char *>(v.data()),
+                     v.size() * sizeof(float));
+}
+
+class ParseCommandRegistrationTest : public ValkeySearchTest {
+ protected:
+  // Creates a schema with one 3-dim flat vector field named `vec_alias`.
+  std::shared_ptr<MockIndexSchema> MakeSchemaWithVec(
+      absl::string_view vec_alias) {
+    auto schema = CreateIndexSchema("test_schema", &fake_ctx_).value();
+    EXPECT_CALL(*schema, GetIdentifier(::testing::_))
+        .Times(::testing::AnyNumber())
+        .WillRepeatedly([&schema](absl::string_view field) {
+          return schema->IndexSchema::GetIdentifier(field);
+        });
+    data_model::VectorIndex proto;
+    proto.set_dimension_count(3);
+    proto.set_initial_cap(100);
+    proto.set_vector_data_type(
+        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
+    auto flat = std::make_unique<data_model::FlatAlgorithm>();
+    flat->set_block_size(100);
+    proto.set_allocated_flat_algorithm(flat.release());
+    auto idx = indexes::VectorFlat<float>::Create(
+                   proto, std::string(vec_alias) + "_id",
+                   data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                   .value();
+    VMSDK_EXPECT_OK(schema->AddIndex(vec_alias, vec_alias, idx));
+    return schema;
+  }
+
+  // Runs ParseCommand on `params` and returns whether it succeeded.
+  bool RunParseCommand(AggregateParameters &params) {
+    vmsdk::ArgsIterator itr(nullptr, 0);
+    auto status = params.ParseCommand(itr);
+    if (!status.ok()) {
+      ADD_FAILURE() << "ParseCommand failed: " << status;
+      return false;
+    }
+    return true;
+  }
+
+  // Runs ParseCommand and returns the resulting status without adding a test
+  // failure on error — used to assert that a query is rejected.
+  absl::Status RunParseCommandStatus(AggregateParameters &params) {
+    vmsdk::ArgsIterator itr(nullptr, 0);
+    return params.ParseCommand(itr);
+  }
+};
+
+// Non-vector query with one VR predicate: score_as set to VR alias, only one
+// extra attribute registered at index 1.
+TEST_F(ParseCommandRegistrationTest, NonVectorOneVrPredicate) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string =
+      "@vec:[VECTOR_RANGE 0.5 $blob]=>{$yield_distance_as: my_dist}";
+  std::string blob = MakeBlob3();
+  params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
+
+  ASSERT_TRUE(RunParseCommand(params));
+
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "my_dist");
+
+  auto it = params.record_indexes_by_alias_.find("my_dist");
+  ASSERT_NE(it, params.record_indexes_by_alias_.end());
+  EXPECT_EQ(it->second, 1u);
+
+  EXPECT_EQ(params.vr_score_field_name_, "my_dist");
+}
+
+// Non-vector query with two VR predicates: rejected in the single-VR model.
+TEST_F(ParseCommandRegistrationTest, NonVectorTwoVrPredicatesRejected) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string =
+      "(@vec:[VECTOR_RANGE 0.5 $b1]=>{$yield_distance_as: d1} "
+      "@vec:[VECTOR_RANGE 1.0 $b2]=>{$yield_distance_as: d2})";
+  std::string b1 = MakeBlob3();
+  std::string b2 = MakeBlob3();
+  params.parse_vars.params["b1"] = {1, absl::string_view(b1)};
+  params.parse_vars.params["b2"] = {1, absl::string_view(b2)};
+
+  // More than one VECTOR_RANGE predicate is unsupported for RC1.
+  auto status = RunParseCommandStatus(params);
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(std::string(status.message()),
+              testing::HasSubstr("single VECTOR_RANGE predicate"));
+}
+
+// KNN query with one VR predicate in the filter: rejected in the single-VR
+// model (VECTOR_RANGE is not supported in a KNN pre-filter).
+TEST_F(ParseCommandRegistrationTest, KnnWithOneVrPredicateRejected) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string =
+      "@vec:[VECTOR_RANGE 0.5 $vrblob]=>{$yield_distance_as: vr_dist}"
+      "=>[KNN 5 @vec $kblob AS knn_dist]";
+  std::string vrblob = MakeBlob3();
+  std::string kblob = MakeBlob3();
+  params.parse_vars.params["vrblob"] = {1, absl::string_view(vrblob)};
+  params.parse_vars.params["kblob"] = {1, absl::string_view(kblob)};
+  params.parse_vars.score_as_string = "knn_dist";
+
+  auto status = RunParseCommandStatus(params);
+  EXPECT_FALSE(status.ok());
+  EXPECT_THAT(std::string(status.message()),
+              testing::HasSubstr("not supported in the filter of a KNN"));
+}
+
+// KNN query with no VR predicate: vr_score_field_name_ remains empty.
+TEST_F(ParseCommandRegistrationTest, KnnWithNoVrPredicate) {
+  auto schema = MakeSchemaWithVec("vec");
+  AggregateParameters params(0);
+  params.index_schema = schema;
+  params.parse_vars.query_string = "*=>[KNN 5 @vec $kblob AS knn_dist]";
+  std::string kblob = MakeBlob3();
+  params.parse_vars.params["kblob"] = {1, absl::string_view(kblob)};
+  params.parse_vars.score_as_string = "knn_dist";
+
+  ASSERT_TRUE(RunParseCommand(params));
+
+  EXPECT_EQ(vmsdk::ToStringView(params.score_as.get()), "knn_dist");
+  EXPECT_TRUE(params.vr_score_field_name_.empty());
+}
+
+// A NaN radius given as a $param is rejected like any other non-number, as
+// the literal form already is. SimpleAtod accepts "nan", and a NaN radius
+// matched every document. A -inf radius stays rejected as negative.
+TEST_F(ParseCommandRegistrationTest, VectorRangeNanRadiusParamRejected) {
+  auto schema = MakeSchemaWithVec("vec");
+  std::string blob = MakeBlob3();
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"nan", "VECTOR_RANGE radius 'nan' is not a valid number"},
+      {"-nan", "VECTOR_RANGE radius '-nan' is not a valid number"},
+      {"NaN", "VECTOR_RANGE radius 'NaN' is not a valid number"},
+      {"-inf", "VECTOR_RANGE radius must be non-negative"},
+      {"-1e400", "VECTOR_RANGE radius must be non-negative"}};
+  for (const auto &[radius, error] : cases) {
+    AggregateParameters params(0);
+    params.index_schema = schema;
+    params.parse_vars.query_string = "@vec:[VECTOR_RANGE $r $blob]";
+    params.parse_vars.params["r"] = {1, absl::string_view(radius)};
+    params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
+    auto status = RunParseCommandStatus(params);
+    EXPECT_FALSE(status.ok()) << radius;
+    EXPECT_THAT(std::string(status.message()), testing::HasSubstr(error))
+        << radius;
+  }
+}
+
+// An infinite radius, or one too large for a float, is stored as the largest
+// float, given as a literal or as a $param. It matches every finite distance
+// but not the +inf that stands for a non-finite one.
+TEST_F(ParseCommandRegistrationTest, VectorRangeInfiniteRadiusIsLargestFloat) {
+  auto schema = MakeSchemaWithVec("vec");
+  std::string blob = MakeBlob3();
+  const double kMaxFloat = std::numeric_limits<float>::max();
+  const std::vector<std::pair<std::string, double>> cases = {
+      {"inf", kMaxFloat}, {"1e400", kMaxFloat}, {"3.4e38", 3.4e38}};
+  for (const auto &[radius, expected] : cases) {
+    for (bool literal : {true, false}) {
+      const std::string query = literal
+                                    ? "@vec:[VECTOR_RANGE " + radius + " $blob]"
+                                    : "@vec:[VECTOR_RANGE $r $blob]";
+      AggregateParameters params(0);
+      params.index_schema = schema;
+      params.parse_vars.query_string = query;
+      if (!literal) {
+        params.parse_vars.params["r"] = {1, absl::string_view(radius)};
+      }
+      params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
+      ASSERT_TRUE(RunParseCommand(params)) << radius;
+      auto *vr = dynamic_cast<const query::VectorRangePredicate *>(
+          params.filter_parse_results.root_predicate.get());
+      ASSERT_NE(vr, nullptr) << radius;
+      EXPECT_EQ(vr->GetRadius(), expected)
+          << radius << (literal ? " literal" : " $param");
+    }
+  }
 }
 
 }  // namespace aggregate

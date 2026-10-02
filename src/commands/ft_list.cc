@@ -19,9 +19,6 @@ namespace valkey_search {
 
 absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                        int argc) {
-  if (argc > 1) {
-    return absl::InvalidArgumentError(vmsdk::WrongArity(kListCommand));
-  }
   absl::flat_hash_set<std::string> names =
       SchemaManager::Instance().GetIndexSchemasInDB(
           ValkeyModule_GetSelectedDb(ctx));

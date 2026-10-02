@@ -1031,6 +1031,12 @@ VALKEYMODULE_API void (*ValkeyModule_Free)(void *ptr) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void *(*ValkeyModule_Calloc)(size_t nmemb,
                                               size_t size)VALKEYMODULE_ATTR;
 VALKEYMODULE_API char *(*ValkeyModule_Strdup)(const char *str)VALKEYMODULE_ATTR;
+/* Account for memory allocated outside Valkey's allocator, for example via
+ * mmap(). These functions do not allocate or free memory themselves. */
+VALKEYMODULE_API int (*ValkeyModule_IncrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_DecrExternalMemory)(size_t bytes)
+    VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetApi)(const char *,
                                             void *) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_CreateCommand)(
@@ -1881,6 +1887,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(Free);
   VALKEYMODULE_GET_API(Realloc);
   VALKEYMODULE_GET_API(Strdup);
+  VALKEYMODULE_GET_API(IncrExternalMemory);
+  VALKEYMODULE_GET_API(DecrExternalMemory);
   VALKEYMODULE_GET_API(CreateCommand);
   VALKEYMODULE_GET_API(GetCommand);
   VALKEYMODULE_GET_API(CreateSubcommand);

@@ -30,6 +30,7 @@
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
+#include "src/index_schema.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/bfloat16.h"
 #include "src/indexes/fp16.h"
@@ -172,6 +173,52 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
+query::EvaluationResult PrefilterEvaluator::EvaluateFull(
+    const query::Predicate &predicate, const InternedStringPtr &key) {
+  key_ = &key;
+  auto res = predicate.Evaluate(*this);
+  key_ = nullptr;
+  return res;
+}
+
+query::EvaluationResult PrefilterEvaluator::EvaluateVectorRange(
+    const query::VectorRangePredicate &predicate) {
+  CHECK(key_);
+  auto query_vector = predicate.GetQueryVector();
+  if (query_vector.empty()) {
+    return query::EvaluationResult(false);
+  }
+  DCHECK(index_schema_)
+      << "PrefilterEvaluator requires a non-null index_schema "
+         "to evaluate VectorRange predicates";
+  if (!index_schema_) {
+    return query::EvaluationResult(false);
+  }
+  auto index = index_schema_->GetIndex(predicate.GetAlias());
+  if (!index.ok()) {
+    return query::EvaluationResult(false);
+  }
+  auto *vector_index = dynamic_cast<VectorBase *>(index->get());
+  if (!vector_index) {
+    return query::EvaluationResult(false);
+  }
+  auto within = vector_index->IsWithinVectorRange(
+      *key_, query_vector, static_cast<float>(predicate.GetRadius()));
+  if (!within.ok() || !within->has_value()) {
+    return query::EvaluationResult(false);
+  }
+  return query::EvaluationResult(true, within->value());
+}
+
+// ComputeDistanceFromRecord without query_magnitude — used by VR search path.
+absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+VectorBase::ComputeDistanceFromRecord(const InternedStringPtr &key,
+                                      absl::string_view query) const {
+  float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(query, GetVectorDataType()) : 1.0f;
+  return ComputeDistanceFromRecord(key, query, query_magnitude);
+}
+
 VectorBase::~VectorBase() {
   vmsdk::VerifyMainThread();
   VectorRegistry::Instance().RemoveIndexKeys(
@@ -217,11 +264,10 @@ absl::StatusOr<uint64_t> VectorBase::GetInternalIdDuringSearch(
 
 absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
     uint64_t internal_id) const {
-  auto it = key_by_internal_id_.find(internal_id);
-  if (it == key_by_internal_id_.end()) {
-    return absl::InvalidArgumentError("Record was not found");
+  if (const auto *key = FindKeyDuringSearch(internal_id)) {
+    return *key;
   }
-  return it->second;
+  return absl::InvalidArgumentError("Record was not found");
 }
 
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
@@ -464,7 +510,6 @@ absl::Status VectorBase::LoadTrackedKeys(
     auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
     save_vector = std::move(vector_record_with_size.vector_record);
   }
-  // Use max label from label_lookup_
   inc_id_ = GetMaxLoadedLabel() + 1;
   return absl::OkStatus();
 }
@@ -579,6 +624,34 @@ absl::Status VectorBase::ForEachTrackedKey(
 absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   return absl::OkStatus();
+}
+
+std::vector<Neighbor> VectorBase::SearchRangeExhaustive(
+    absl::string_view query, float radius, cancel::Token &cancellation_token,
+    hnswlib::BaseFilterFunctor *filter) const {
+  auto nq = NormalizeQueryIfNeeded(query);
+  const float query_magnitude =
+      normalize_ ? CalcReciprocalMagnitude(nq.view, GetVectorDataType())
+                 : kDefaultMagnitude;
+  std::vector<Neighbor> neighbors;
+  neighbors.reserve(kRangeReserve);
+  for (const auto &[key, metadata] : tracked_metadata_by_key_) {
+    if (cancellation_token->IsCancelled()) {
+      break;
+    }
+    if (filter && !(*filter)(metadata.internal_id)) {
+      continue;
+    }
+    const auto &vector_record = GetVectorLockFree(metadata.internal_id);
+    if (!vector_record) {
+      continue;
+    }
+    float distance = RangeDistance(nq.view, query_magnitude, vector_record);
+    if (distance <= radius) {
+      neighbors.emplace_back(key, distance);
+    }
+  }
+  return neighbors;
 }
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(

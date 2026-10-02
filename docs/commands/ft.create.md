@@ -110,7 +110,7 @@ This table shows the actual computation that Search uses when computing the dist
 | Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
 | :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
 | Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
-|   Euclidean    |                 L2                 |          sqrt(sum(x[i]-y[i])^2)           | sqrt(sum(x[i]-y[i])^2)                          |
+|   Euclidean    |                 L2                 |         sqrt(sum((x[i]-y[i])^2))          | sum((x[i]-y[i])^2)                              |
 |     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
 
 ### Field options

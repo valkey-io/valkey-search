@@ -87,6 +87,13 @@ class VectorFlat : public VectorType<T> {
       bool enable_partial_results = false) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // Lock-free search optimization, as for Search: reads the FLAT store and the
+  // tracked-key maps under the phase lock only.
+  absl::StatusOr<std::vector<Neighbor>> SearchRange(
+      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);
   absl::Status AddRecordImpl(uint64_t internal_id,
@@ -115,6 +122,7 @@ class VectorFlat : public VectorType<T> {
   // races can occur during the search phase.
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  uint64_t GetMaxLoadedLabel() const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  private:
   VectorFlat(int dimensions, data_model::DistanceMetric distance_metric,

@@ -9,6 +9,7 @@
 
 #include <netinet/in.h>
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -32,6 +33,7 @@
 #include "src/coordinator/coordinator.pb.h"
 #include "src/coordinator/search_converter.h"
 #include "src/coordinator/util.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/multi_search.h"
 #include "src/query/search.h"
@@ -157,6 +159,18 @@ struct SearchPartitionResultsTracker {
       indexes::Neighbor neighbor{
           StringInternStore::Intern(neighbor_entry->key()),
           neighbor_entry->distance(), std::move(attribute_contents)};
+      // Single-VR model: the VR distance is carried in Neighbor::distance
+      // above. Cluster merge concatenates per-shard matches; the merged set is
+      // ordered like any non-vector result.
+      // The wire format is unchanged; a compound-OR match with no VR distance
+      // is transmitted as a +inf distance, so reconstruct has_vr_distance from
+      // the bit pattern rather than adding a proto field. Only +inf is the
+      // marker, since no radius includes a +inf distance; an IP distance of
+      // -inf is a VR distance and is kept. Compare the bits: -ffast-math makes
+      // float comparisons with infinity unreliable.
+      neighbor.has_vr_distance =
+          std::bit_cast<uint32_t>(neighbor_entry->distance()) !=
+          std::bit_cast<uint32_t>(indexes::scoring::PositiveInf());
       neighbor.score = neighbor_entry->score();
       AddResult(neighbor);
     }

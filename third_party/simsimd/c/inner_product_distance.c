@@ -1,18 +1,16 @@
-// VALKEYSEARCH: Out-of-line definition of InnerProductDistanceSimsimd().
+// VALKEYSEARCH: Out-of-line fused COSINE distance kernels.
 //
-// The previous inline C++ wrapper called the simsimd_dot_f32() dispatcher and
+// The previous inline C++ wrappers called a simsimd_dot_*() dispatcher and
 // then scaled the result by the reciprocal-magnitude argument. Because that
 // argument had to survive a real call (all vector registers are caller-saved),
 // it was spilled to and reloaded from the stack on every distance evaluation,
 // and every evaluation went through three calls:
-//   fstdistfunc_ -> wrapper -> simsimd_dot_f32 dispatcher -> kernel.
+//   fstdistfunc_ -> wrapper -> simsimd_dot_* dispatcher -> kernel.
 //
-// Here, for every ISA SimSIMD dispatches f32 dot products to (Skylake/AVX-512,
-// Haswell/AVX2, SVE, NEON and serial), the kernel is inlined into a fused
-// function compiled with the same target, so the scaling happens in registers.
-// InnerProductDistanceSimsimd() itself only loads the fused variant selected
-// for the running CPU and tail-calls it, keeping nothing live across the call.
-// The arithmetic is identical to the previous wrapper.
+// Here, for every storage type and ISA SimSIMD dispatches to, the dot-product
+// kernel is inlined into a fused function compiled for the same target. The
+// scaling then stays in registers. Each exported wrapper loads a fused variant
+// selected once for the running CPU and tail-calls it.
 //
 // This translation unit disables dynamic dispatch so that it does not
 // re-define the simsimd_* dispatch symbols provided by lib.c. The target

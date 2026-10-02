@@ -1488,13 +1488,18 @@ absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
       return absl::OkStatus();
     }
     for (const auto &[index_name, _] : alias_it->second.epochs) {
-      claimants.push_back(index_name);
+      if (index_name != alias_it->second.owner) {
+        claimants.push_back(index_name);
+      }
     }
+    claimants.push_back(alias_it->second.owner);
   }
 
   // Coordinator mode: drop the alias from every claiming index proto, not
-  // just the owner's, so a losing claim cannot resurface later. NotFound
-  // (index deleted concurrently) is surfaced only if every claimant is gone.
+  // just the owner's, so a losing claim cannot resurface later. The owner goes
+  // last, so a failed write never leaves the alias resolving to a loser.
+  // NotFound (index deleted concurrently) is surfaced only if every claimant
+  // is gone.
   absl::Status result = absl::NotFoundError("Alias does not exist");
   for (const auto &index_name : claimants) {
     auto status = MutateIndexProtoInMetadata(
@@ -1541,10 +1546,13 @@ absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
         return absl::OkStatus();
       }
       for (const auto &[claimant, _] : alias_it->second.epochs) {
-        if (claimant != index_name) {
+        if (claimant != index_name && claimant != alias_it->second.owner) {
           other_claimants.push_back(claimant);
         }
       }
+      // The old owner goes last, so a failed removal plus rollback leaves the
+      // alias on the old owner rather than on a loser.
+      other_claimants.push_back(alias_it->second.owner);
     }
     // Reject if index_name is only an alias.
     if (alias_map.contains(index_name) &&

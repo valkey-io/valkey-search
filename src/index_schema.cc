@@ -2255,6 +2255,10 @@ void IndexSchema::MarkAsDestructing() {
     VectorRegistry::Instance().RemoveIndexKeys(
         db_num_, vb->GetInternedAttributeIdentifier(), keys);
   }
+  // Waits for background queries that already passed their dropped-index
+  // check to unblock their clients. They never take mutated_records_mutex_
+  // while holding this, so the nested order is safe.
+  absl::WriterMutexLock destructing_lock(destructing_mutex_.get());
   is_destructing_ = true;
 }
 

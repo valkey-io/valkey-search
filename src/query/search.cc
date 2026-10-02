@@ -2622,7 +2622,7 @@ absl::Status query::SearchParameters::PostParseQueryString() {
 }
 
 ContentProcessing SearchParameters::GetContentProcessing() const {
-  if (NoProcessingRequired()) {
+  if (NoProcessingRequired() || CanGenerateReplyInBackground()) {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.

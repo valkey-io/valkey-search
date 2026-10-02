@@ -102,8 +102,34 @@ class ValkeyServerUnderTest:
     def terminated(self):
         return self.process_handle.poll() is not None
 
+    def exit_code(self) -> int | None:
+        """Exit status, or None while still running.
+
+        Negative values are `-signum` (e.g. -11 for SIGSEGV, -6 for SIGABRT),
+        which is how a crashed node is distinguished from one that was asked to
+        shut down.
+        """
+        return self.process_handle.poll()
+
     def ping(self) -> Any:
         return valkey.Valkey(port=self.port).ping()
+
+
+def ports_still_listening(ports: Iterable[int]) -> List[int]:
+    """Subset of `ports` that still has something accepting connections.
+
+    Used to turn a leaked valkey-server into a visible, local error instead of
+    silent memory and CPU pressure on every subsequent test.
+    """
+    import socket
+
+    bound = []
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            if sock.connect_ex(("127.0.0.1", int(port))) == 0:
+                bound.append(int(port))
+    return bound
 
 
 def start_valkey_process(
@@ -245,7 +271,12 @@ class ValkeyClusterUnderTest:
                 iter(ValkeyClusterUnderTest.active_clusters), None
             )
         for server in self.servers:
-            server.terminate()
+            try:
+                server.terminate()
+            except Exception as e:  # pylint: disable=broad-except
+                logging.error(
+                    "Failed to terminate server on port %d: %s", server.port, e
+                )
         # Close all stdout files
         for stdout_file in self.stdout_files:
             try:
@@ -263,6 +294,24 @@ class ValkeyClusterUnderTest:
             if server.terminated():
                 result.append(server.port)
         return result
+
+    def get_ports(self) -> List[int]:
+        return [server.port for server in self.servers]
+
+    def get_crashed_servers(self) -> Dict[int, int]:
+        """Ports that died from a signal, mapped to the signal number.
+
+        A node killed by SIGSEGV/SIGABRT is a defect even when that port was
+        shut down on purpose earlier in the run, so this is reported separately
+        from get_terminated_servers(). Popen reports a signal death as a
+        negative exit code.
+        """
+        crashed = {}
+        for server in self.servers:
+            code = server.exit_code()
+            if code is not None and code < 0:
+                crashed[server.port] = -code
+        return crashed
 
     def ping_all(self):
         result = []
@@ -374,6 +423,16 @@ def start_valkey_cluster(
     """
     directory = get_worker_tmpdir(directory)
     stdout_directory = get_worker_stdoutdir(stdout_directory)
+    # Fail loudly if a previous test leaked a server on any of these ports.
+    # Otherwise the cluster-create below silently adopts the stale node and the
+    # test reports confusing index-state errors instead of the real problem.
+    already_bound = ports_still_listening(ports)
+    if already_bound:
+        raise RuntimeError(
+            "Ports already in use before starting the cluster, a previous test "
+            f"leaked a valkey-server: {already_bound}"
+        )
+
     cluster_args = dict(args)
     processes = []
     stdout_files = []
@@ -915,18 +974,57 @@ class RandomIntervalTask:
         self.name = name
         self.failed_ports = set()  # Track intentionally failed ports (for failover)
         self.failover_state = failover_state
+        # Set here so stop() on a task that was never run() is a no-op rather
+        # than an AttributeError.
+        self.thread = None
 
-    def stop(self):
+    def stop(self, timeout_sec: float = 180.0):
         if not self.thread:
             logging.error("Thread not running")
             return
-        with self.stop_condition:
-            self.stopped = True
-            self.stop_condition.notify()
-        self.thread.join()
+        # Set the flag WITHOUT holding stop_condition. loop() holds that lock for
+        # the whole duration of each task invocation, so acquiring it here would
+        # block for as long as the task runs -- up to ~80s for FAILOVER -- before
+        # the bounded join below could even be reached. A plain attribute write
+        # is sufficient: wait_for() re-tests `stopped` every time it wakes, so
+        # the loop exits at its next timeout even if the notify never lands.
+        self.stopped = True
+        if self.stop_condition.acquire(timeout=1.0):
+            try:
+                self.stop_condition.notify()
+            finally:
+                self.stop_condition.release()
+        # Bounded join, sized above the real worst case of the FAILOVER
+        # sequence. Adding up periodic_failover_task:
+        #     2s   post-shutdown settle
+        #   + 30s  wait_for_new_primary
+        #   + 30s  wait_for_cluster_ok
+        #   + 20s  recovery delay (interruptible, see stop_check)
+        #   + 10s  connect retries inside start_valkey_process
+        #   + 30s  wait_for_node_topology_convergence
+        #   + 5s   post-rejoin settle
+        #   = ~127s, before the replica-role verification that follows.
+        # 180s keeps the timeout from firing on the merely-slow path, because
+        # abandoning the thread mid-restart_node is worse than waiting: the
+        # restarted node would be registered after ValkeyClusterUnderTest has
+        # finished terminating, orphaning it. The step-boundary
+        # stop_check calls below mean a cancelled failover normally returns
+        # within one wait (~30s), so this ceiling is a backstop, not the norm.
+        self.thread.join(timeout=timeout_sec)
+        if self.thread.is_alive():
+            logging.warning(
+                "<%s> did not stop within %.0fs; abandoning it",
+                self.name,
+                timeout_sec,
+            )
 
     def run(self):
-        self.thread = threading.Thread(target=self.loop)
+        # daemon=True so a task that outlives its runner - because the test
+        # raised before reaching stop() - cannot keep the interpreter alive.
+        # The loop swallows exceptions to keep generating load, which means a
+        # leaked non-daemon thread would spin until the process was killed
+        # by hand rather than exiting with the test.
+        self.thread = threading.Thread(target=self.loop, daemon=True)
         self.thread.start()
 
     def loop(self):
@@ -1603,6 +1701,46 @@ class MemtierProcess:
         self.total_ops = 0
         self.avg_ops_sec = 0
 
+    def close(self, timeout_sec: float = 10.0):
+        """Stop this memtier process and release its OS resources.
+
+        Idempotent. kill() alone leaves the process unreaped and its two stdout/
+        stderr pipes open until the garbage collector happens to finalize them,
+        which is what surfaces as "ResourceWarning: unclosed file
+        <_io.BufferedReader ...>". Processes are killed and replaced on every
+        failover, so without this each failover abandons another pair of pipes
+        and another zombie.
+
+        Release-only on purpose: this must NOT call process_logs(). That would
+        route buffered lines through _add_line_to_stats, which increments
+        `failures` and can set `halted` -- letting a cleanup call turn a passing
+        run into a failing one. Any line still buffered when we get here was
+        already unread before this method existed, so dropping it keeps the
+        pass/fail behaviour identical to before.
+        """
+        try:
+            if self.process.poll() is None:
+                self.process.kill()
+            self.process.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            logging.warning(
+                "<%s> did not exit %.0fs after kill", self.name, timeout_sec
+            )
+        except OSError as e:
+            logging.warning("<%s> failed to reap: %s", self.name, e)
+        finally:
+            # Closed even if the wait above failed, so the descriptors are not
+            # held for the rest of the run.
+            for stream in (self.process.stdout, self.process.stderr):
+                if stream is not None and not stream.closed:
+                    try:
+                        stream.close()
+                    except OSError as e:
+                        logging.warning(
+                            "<%s> failed to close pipe: %s", self.name, e
+                        )
+            self.done = True
+
     def process_logs(self):
         for line in self._process_memtier_subprocess_output():
             is_acceptable_error = False
@@ -1680,7 +1818,7 @@ class MemtierProcess:
         try:
             parsed_lines = []
             while True:
-                if self.process.stderr is None:
+                if self.process.stderr is None or self.process.stderr.closed:
                     break
                 stderr = self.process.stderr.readline()
                 if stderr:
@@ -1695,7 +1833,7 @@ class MemtierProcess:
                 else:
                     break
             while True:
-                if self.process.stdout is None:
+                if self.process.stdout is None or self.process.stdout.closed:
                     break
                 stdout = self.process.stdout.readline()
                 if stdout:
@@ -2255,6 +2393,13 @@ def periodic_failover_task(
     failed_ports_tracker: set | None = None,
     failover_state: dict | None = None,
     entry_point_port: int | None = None,
+    # Must only ever be wired to a teardown signal -- currently
+    # `lambda: thread.stopped`, set solely by RandomIntervalTask.stop(), which is
+    # only called from StabilityRunner.cleanup() and the end of run(). See the
+    # cancelled() docstring below for what breaks if it is reused as a general
+    # pause/skip signal: the abandonment path deliberately does not restore
+    # cluster state.
+    stop_check: Callable[[], bool] | None = None,
 ) -> bool:
     """Execute a single cluster failover operation.
     
@@ -2269,6 +2414,34 @@ def periodic_failover_task(
         True if failover sequence completed successfully, False otherwise
     """
     logging.info("<FAILOVER> Starting cluster failover sequence")
+
+    def cancelled(step: str) -> bool:
+        """True if a stop was requested; logs where the sequence gave up.
+
+        The wait_for_* helpers below poll the cluster, not `stopped`, so they
+        always run to their own timeout. Checking at each step boundary bounds a
+        cancelled failover to roughly one wait (~30s) instead of the full ~127s
+        sequence, which is what keeps stop()'s join ceiling from being reached.
+
+        TEARDOWN ONLY -- this is an abandonment path, not a graceful one. It
+        clears `in_progress`, leaves the victim node down, leaves its port in
+        both failed_ports sets, and never sets `new_primary_connected`. That is
+        all correct when the process is going away and every node is about to be
+        killed. Wired to any other signal it would leave the cluster permanently
+        one node short with that state half-initialized, and the background
+        tasks would keep excluding a port that is never coming back.
+        (`new_primary_connected` currently has no readers, so today the
+        half-initialization is inert -- do not rely on that.)
+        """
+        if stop_check is None or not stop_check():
+            return False
+        logging.info(
+            "<FAILOVER> Stop requested; ending failover sequence at %s", step
+        )
+        if failover_state is not None:
+            with failover_state['lock']:
+                failover_state['in_progress'] = False
+        return True
 
     def abort(reason: str) -> bool:
         """Clear in_progress on an aborted failover and report the failure.
@@ -2337,10 +2510,18 @@ def periodic_failover_task(
     )
     if not promotion_success:
         return abort("replica promotion did not complete in time")
-    
+
+    # Cancellation is not a defect, so these return True rather than routing
+    # through abort() (which counts a failure). See the recovery-delay check.
+    if cancelled("after replica promotion"):
+        return True
+
     # Step 5: Wait for cluster OK state
     if not wait_for_cluster_ok(client, timeout=30):
         return abort("cluster did not reach OK state in time")
+
+    if cancelled("after cluster reached OK"):
+        return True
     
     logging.info("<FAILOVER> Failover completed successfully - new primary: %s", new_primary_addr or "unknown")
     
@@ -2361,7 +2542,24 @@ def periodic_failover_task(
             recovery_delay_sec,
             new_primary_addr or "unknown"
         )
-        time.sleep(recovery_delay_sec)
+        # Slept in short slices so teardown does not have to wait out the full
+        # delay. This is the longest stretch of the sequence that does not
+        # otherwise poll for cancellation.
+        for _ in range(recovery_delay_sec):
+            # True, not False: the run is being torn down, which is not a defect
+            # in the failover task. RandomIntervalTask turns a False into
+            # failures += 1, and stability_test asserts zero failures for every
+            # task, so reporting a cancellation as a failure would fail a test
+            # purely because teardown interrupted this sleep. (self.ops is still
+            # incremented, so a cancelled pass counts as one op -- harmless,
+            # since the only assertion on it is total_ops > 0.)
+            #
+            # This check must stay immediately BEFORE restart_node: it is what
+            # prevents a cancelled failover from starting a fresh valkey-server
+            # into a cluster that teardown is already tearing down.
+            if cancelled(f"recovery delay, skipping restart of {victim.addr}"):
+                return True
+            time.sleep(1)
         
         # Step 7: Restart the old primary as a replica
         logging.info("<FAILOVER> Now reconnecting old primary %s as replica", victim.addr)
@@ -2497,6 +2695,7 @@ def periodic_failover(
         failed_ports_tracker=thread.failed_ports,
         failover_state=failover_state,
         entry_point_port=entry_point_port,
+        stop_check=lambda: thread.stopped,
     )
     
     thread.run()

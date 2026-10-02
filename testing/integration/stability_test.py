@@ -20,11 +20,31 @@ class StabilityTests(parameterized.TestCase):
             level=logging.DEBUG,
         )
         self.valkey_cluster_under_test = None
+        self.stability_runner = None
 
     def tearDown(self):
-        if self.valkey_cluster_under_test:
-            self.valkey_cluster_under_test.terminate()
-        super().tearDown()
+        # try/finally so a failure while tearing one cluster down cannot skip
+        # super().tearDown(), and so the ports are always checked. Every test
+        # shares one process, so a leaked cluster keeps its ports bound and its
+        # index memory resident for every test that follows.
+        try:
+            # Before the servers go away, so background tasks are not left
+            # issuing commands against a cluster that is being torn down.
+            if self.stability_runner:
+                self.stability_runner.cleanup()
+            if self.valkey_cluster_under_test:
+                self.valkey_cluster_under_test.terminate()
+                leaked = utils.ports_still_listening(
+                    self.valkey_cluster_under_test.get_ports()
+                )
+                if leaked:
+                    logging.error(
+                        "Ports still bound after teardown, a valkey-server "
+                        "leaked and will affect later tests: %s",
+                        leaked,
+                    )
+        finally:
+            super().tearDown()
 
 
     @parameterized.named_parameters(
@@ -711,10 +731,29 @@ class StabilityTests(parameterized.TestCase):
         if not connected:
             self.fail("Failed to connect to valkey server")
 
-        results = stability_runner.StabilityRunner(config).run()
+        # Kept on self so tearDown can release the runner's background tasks and
+        # memtier processes even if run() or a later assertion raises.
+        self.stability_runner = stability_runner.StabilityRunner(config)
+        results = self.stability_runner.run()
 
         if results is None:
             self.fail("Failed to run stability test")
+
+        # A node killed by a signal is a defect even if that port was shut down
+        # on purpose earlier in the run, so this is checked before (and
+        # independently of) the intentional-shutdown allowance below. Without
+        # this, a segfault on a node that had already been a failover victim is
+        # excused as an intentional shutdown.
+        crashed = self.valkey_cluster_under_test.get_crashed_servers()
+        if crashed:
+            details = ", ".join(
+                f"port {port} killed by signal {sig}"
+                for port, sig in sorted(crashed.items())
+            )
+            self.fail(
+                f"Valkey servers crashed during test: {details}. "
+                "See the per-node *_stdout.txt logs for the bug report."
+            )
 
         # Check for unexpectedly terminated servers
         # During failover testing, only allow servers that were intentionally shut down

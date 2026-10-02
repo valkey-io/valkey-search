@@ -78,6 +78,10 @@ class StabilityRunner:
 
     def __init__(self, config: StabilityTestConfig):
         self.config = config
+        # Background tasks and memtier processes, tracked so cleanup() can
+        # release them if run() raises before its own cleanup.
+        self._threads = []
+        self._processes = []
         # Shared state for failover coordination
         self.failover_state = {
             'in_progress': False,
@@ -94,6 +98,28 @@ class StabilityRunner:
                 "%(asctime)s [%(levelname)s] (%(name)s) %(funcName)s: %(message)s"
             ),
         )
+
+    def cleanup(self):
+        """Stop background tasks and release memtier resources.
+
+        Idempotent, so it is safe to call from tearDown even after run()
+        completed normally and already did this. Needed because run() raising
+        (a memtier read error, an unexpected exception) skips its own cleanup,
+        and the background tasks swallow exceptions in order to keep generating
+        load - so a task left running spins for the remainder of the process.
+        """
+        for thread in self._threads:
+            try:
+                thread.stop()
+            except Exception as e:  # pylint: disable=broad-except
+                logging.warning("Failed to stop task %s: %s", thread.name, e)
+        for process in self._processes:
+            try:
+                process.close()
+            except Exception as e:  # pylint: disable=broad-except
+                logging.warning(
+                    "Failed to close memtier %s: %s", process.name, e
+                )
 
     def run(self) -> StabilityRunResult:
         """Runs the stability test, sending memtier commands and running background threads that perform valkey operations.
@@ -576,6 +602,13 @@ class StabilityRunner:
             "FT._LIST": ft_list_command,
         }
         
+        # Published so the test can clean up even when run() raises partway
+        # through: on that path the stop()/close() calls at the end of this
+        # method are skipped, leaving background tasks looping and memtier
+        # pipes open. See StabilityRunner.cleanup().
+        self._threads = threads
+        self._processes = processes
+
         test_start_time = time.time()
         timeout_start = time.time()
         processes_killed_for_failover = False
@@ -593,7 +626,10 @@ class StabilityRunner:
                 logging.info("Failover in progress - stopping all memtier processes")
                 for process in processes:
                     if not process.done:
-                        process.process.kill()
+                        # close() rather than kill(): these objects are about to
+                        # be replaced by restarted ones, so anything not released
+                        # here is leaked for the rest of the run.
+                        process.close()
                         logging.info("<%s> killed for failover", process.name)
                 processes_killed_for_failover = True
                 time_when_killed = elapsed
@@ -632,6 +668,7 @@ class StabilityRunner:
                         logging.info("<%s> restarted with %ds remaining", process.name, int(remaining_time))
                     
                     processes = new_processes
+                    self._processes = processes
                 else:
                     logging.warning(
                         "Not restarting processes - only %.1fs remaining (less than 5s minimum)",
@@ -658,20 +695,35 @@ class StabilityRunner:
             logging.info("killing processes...")
             for process in processes:
                 if not process.done:
-                    process.process.kill()
+                    process.close()
             logging.error("Processes killed")
 
-        # Collect intentionally failed ports from failover task BEFORE stopping threads
+        for thread in threads:
+            thread.stop()
+
+        # Snapshot AFTER stopping, not before. periodic_failover_task records the
+        # victim port before it issues SHUTDOWN, so a failover that begins in the
+        # window between the snapshot and stop() takes a node down whose port is
+        # missing from this set -- and the caller's "servers died unexpectedly"
+        # check then fails a test for a shutdown the harness performed itself.
+        # Once stop() has returned no new failover can start, so reading it here
+        # is race-free. Nothing in stop() mutates failed_ports; the only removal
+        # is on a successful restart.
         intentionally_failed_ports = set()
         for thread in threads:
             if thread.name == "FAILOVER":
                 intentionally_failed_ports = thread.failed_ports.copy()
                 logging.info("Collected intentionally failed ports: %s", intentionally_failed_ports)
                 break
-        
-        for thread in threads:
-            thread.stop()
-        
+
+        # Release the memtier pipes and reap the processes. Even on the normal
+        # path, where every process exited on its own, the two pipes per process
+        # stay open until the garbage collector finalizes them. close() is
+        # release-only and deliberately does not drain the pipes, so the stats
+        # read below are exactly what the polling loop already observed.
+        for process in processes:
+            process.close()
+
         return StabilityRunResult(
             successful_run=True,
             memtier_results=[

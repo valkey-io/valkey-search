@@ -195,15 +195,24 @@ TEST_F(FTHybridParserTest, EfRuntimeIsIndependentOfK) {
 }
 
 // ---------------------------------------------------------------------
-// SHARD_K_RATIO -- accepted and discarded
+// SHARD_K_RATIO
 // ---------------------------------------------------------------------
 
-TEST_F(FTHybridParserTest, ShardKRatioIsAcceptedAndDoesNotDisturbK) {
+TEST_F(FTHybridParserTest, ShardKRatioIsStoredAndDoesNotDisturbK) {
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                        "4", "K", "5", "SHARD_K_RATIO", "0.25"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ(VsimArm(**params).k, 5);
   EXPECT_FALSE(VsimArm(**params).ef.has_value());
+  ASSERT_TRUE(VsimArm(**params).shard_k_ratio.has_value());
+  EXPECT_DOUBLE_EQ(*VsimArm(**params).shard_k_ratio, 0.25);
+}
+
+TEST_F(FTHybridParserTest, ShardKRatioIsAbsentByDefault) {
+  auto params = Parse(
+      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K", "5"});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_FALSE(VsimArm(**params).shard_k_ratio.has_value());
 }
 
 TEST_F(FTHybridParserTest, ShardKRatioAloneStillLeavesTheKDefault) {
@@ -213,10 +222,52 @@ TEST_F(FTHybridParserTest, ShardKRatioAloneStillLeavesTheKDefault) {
   EXPECT_EQ(VsimArm(**params).k, 10);
 }
 
+// The reference engine accepts any value in (0, 1] in any float spelling; it
+// has no two-decimal limit despite its documentation.
+TEST_F(FTHybridParserTest, ShardKRatioAcceptsValuesInRange) {
+  for (const auto &[token, expected] :
+       std::vector<std::pair<std::string, double>>{{"1", 1.0},
+                                                   {"0.05", 0.05},
+                                                   {"0.125", 0.125},
+                                                   {"1e-1", 0.1},
+                                                   {".5", 0.5}}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "4", "K", "5", "SHARD_K_RATIO", token});
+    VMSDK_EXPECT_OK(params) << token;
+    if (params.ok()) {
+      EXPECT_DOUBLE_EQ(*VsimArm(**params).shard_k_ratio, expected) << token;
+    }
+  }
+}
+
+TEST_F(FTHybridParserTest, ShardKRatioRejectsValuesOutOfRange) {
+  for (const std::string token : {"0", "-0.5", "1.01", "inf", "-inf"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "4", "K", "5", "SHARD_K_RATIO", token});
+    ASSERT_FALSE(params.ok()) << token;
+    EXPECT_EQ(params.status().message(),
+              "Invalid shard k ratio value: Shard k ratio must be greater "
+              "than 0 and at most 1 (got " +
+                  token + ")");
+  }
+}
+
 TEST_F(FTHybridParserTest, ShardKRatioRejectsANonNumericValue) {
-  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "4", "K", "5", "SHARD_K_RATIO", "banana"});
-  EXPECT_FALSE(params.ok());
+  for (const std::string token : {"banana", "nan", "$r"}) {
+    auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                         "4", "K", "5", "SHARD_K_RATIO", token});
+    ASSERT_FALSE(params.ok()) << token;
+    EXPECT_EQ(params.status().message(),
+              "Invalid shard k ratio value '" + token + "'");
+  }
+}
+
+TEST_F(FTHybridParserTest, ShardKRatioRejectsADuplicate) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "6", "K",
+             "5", "SHARD_K_RATIO", "0.5", "SHARD_K_RATIO", "0.6"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "Duplicate SHARD_K_RATIO argument");
 }
 
 // ---------------------------------------------------------------------

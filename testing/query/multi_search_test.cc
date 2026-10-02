@@ -8,6 +8,8 @@
 #include "src/query/multi_search.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -16,6 +18,7 @@
 #include "absl/status/status.h"
 #include "gtest/gtest.h"
 #include "src/indexes/vector_base.h"
+#include "src/query/fanout.h"
 #include "src/query/search.h"
 #include "src/utils/string_interning.h"
 
@@ -249,6 +252,43 @@ TEST(MultiSearchTrackerTest, ConcurrentCompletions) {
     t.join();
   }
   EXPECT_EQ(finalize_count.load(), 1);
+}
+
+// Values measured against the reference engine on a three-shard cluster with
+// every document on one shard, so the reply size is the per-shard k.
+TEST(ShardKForRatioTest, MatchesTheReferenceEngine) {
+  struct Case {
+    uint32_t k;
+    double ratio;
+    uint32_t expected;
+  };
+  for (const auto& c : std::vector<Case>{
+           {10, 1.0, 10},
+           {10, 0.5, 5},
+           {10, 0.1, 4},
+           {100, 0.5, 50},
+           {100, 0.1, 34},
+           {7, 0.5, 4},
+           {1, 0.1, 1},
+           {2, 0.5, 1},
+           {100, 0.001, 34},
+           {100, 0.55, 56},  // 100 * 0.55 is 55.000000000000007 in double
+           {50, 0.56, 29},   // likewise 28.000000000000004
+       }) {
+    EXPECT_EQ(fanout::ShardKForRatio(c.k, 3, c.ratio), c.expected)
+        << "k=" << c.k << " ratio=" << c.ratio;
+  }
+}
+
+TEST(ShardKForRatioTest, OneShardIsAskedForAllOfK) {
+  EXPECT_EQ(fanout::ShardKForRatio(10, 1, 0.1), 10u);
+}
+
+TEST(ShardKForRatioTest, LargestKDoesNotOverflow) {
+  constexpr uint32_t kMax = std::numeric_limits<uint32_t>::max();
+  EXPECT_EQ(fanout::ShardKForRatio(kMax, 3, 1.0), kMax);
+  EXPECT_EQ(fanout::ShardKForRatio(kMax, 3, 0.5), 2147483648u);
+  EXPECT_EQ(fanout::ShardKForRatio(kMax, 1, 0.5), kMax);
 }
 
 }  // namespace

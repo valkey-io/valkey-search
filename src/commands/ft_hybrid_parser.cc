@@ -157,6 +157,23 @@ absl::Status VerifyEfRuntime(unsigned ef) {
   return absl::OkStatus();
 }
 
+// SHARD_K_RATIO accepts (0, 1], with the reference engine's messages. "nan" is
+// rejected by vmsdk::To<double>; the reference lets it through.
+absl::StatusOr<double> ParseShardKRatio(absl::string_view token) {
+  auto ratio = vmsdk::To<double>(token);
+  if (!ratio.ok()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Invalid shard k ratio value '", token, "'"));
+  }
+  if (!(*ratio > 0.0 && *ratio <= 1.0)) {
+    return absl::InvalidArgumentError(absl::StrCat(
+        "Invalid shard k ratio value: Shard k ratio must be greater than 0 "
+        "and at most 1 (got ",
+        token, ")"));
+  }
+  return *ratio;
+}
+
 // Reads a whole token as a non-negative integer.
 //
 // The shared `ParseParamValue` reaches `std::from_chars`, which consumes what
@@ -406,13 +423,12 @@ absl::Status ParseVsimClause(MultiSearchParameters &env,
         VMSDK_RETURN_IF_ERROR(VerifyEfRuntime(ef));
         arm->ef = ef;
       } else if (absl::EqualsIgnoreCase(kw, kShardKRatioKw)) {
-        // Parsed and discarded. It tunes how much of K each shard returns
-        // during a cluster fanout; this implementation does not use it, and
-        // the value does not change the result of a query, only how much work
-        // the shards do to produce it. Accepted so a command written for Redis
-        // is not rejected here.
-        double shard_k_ratio = 0.0;
-        VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(inner_itr, shard_k_ratio));
+        if (arm->shard_k_ratio.has_value()) {
+          return absl::InvalidArgumentError("Duplicate SHARD_K_RATIO argument");
+        }
+        VMSDK_ASSIGN_OR_RETURN(auto ratio_sv, inner_itr.GetStringView());
+        VMSDK_ASSIGN_OR_RETURN(arm->shard_k_ratio, ParseShardKRatio(ratio_sv));
+        inner_itr.Next();
       } else {
         return absl::InvalidArgumentError(
             absl::StrCat("Unknown VSIM KNN sub-arg: `", kw, "`"));

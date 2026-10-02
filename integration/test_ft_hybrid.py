@@ -726,11 +726,10 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         rows = [self._rec_to_dict(rec) for rec in result[1:]]
         assert sum(1 for d in rows if b"v" in d) == 10
 
-    def test_shard_k_ratio_is_accepted_and_ignored(self):
+    def test_shard_k_ratio_does_not_change_a_standalone_result(self):
         """SHARD_K_RATIO tunes how much of K each shard returns during a
-        fanout. This implementation does not use it, but a command written for
-        Redis must not be rejected -- and the value must not change the
-        result."""
+        cluster fanout. Without a fanout there is nothing to tune, so the
+        value must not change the result."""
         client = self.server.get_new_client()
         self.setup_index(client)
 
@@ -1573,6 +1572,49 @@ class TestFtHybridCluster(ValkeySearchClusterTestCase):
         )
         assert isinstance(result, list)
         assert result[0] == 5  # trimmed by LIMIT
+
+    def test_shard_k_ratio_limits_each_shard(self):
+        """SHARD_K_RATIO asks each shard for max(ceil(k / shards),
+        ceil(k * ratio)) of min(k, WINDOW). With every document on one shard
+        and a SEARCH arm that matches nothing, the reply holds exactly what
+        that one shard returned."""
+        cluster: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+        client.execute_command(
+            "FT.CREATE", "skew", "ON", "HASH", "PREFIX", "1", "skew:",
+            "SCHEMA", "title", "TEXT",
+            "vec", "VECTOR", "FLAT", "6",
+            "TYPE", "FLOAT32", "DIM", "4", "DISTANCE_METRIC", "L2",
+        )
+        # One hash tag puts all 30 documents on the same shard.
+        for i in range(30):
+            cluster.hset(f"skew:{{a}}{i}", mapping={
+                "title": "hello", "vec": _vec(float(i), 0.0, 0.0, 0.0)})
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT.SEARCH", "skew", "@title:hello",
+                "NOCONTENT", "LIMIT", "0", "0")[0] == 30,
+            timeout=15)
+
+        def vector_rows(knn, combine=("COMBINE", "RRF", "2", "WINDOW", "100")):
+            result = client.execute_command(
+                "FT.HYBRID", "skew", "SEARCH", "@title:nomatch",
+                "VSIM", "@vec", "$q", *knn, *combine,
+                "LIMIT", "0", "100",
+                "PARAMS", "2", "q", _vec(0.0, 0.0, 0.0, 0.0))
+            return len(result) - 1
+
+        assert vector_rows(("KNN", "2", "K", "10")) == 10
+        assert vector_rows(("KNN", "4", "K", "10", "SHARD_K_RATIO", "1")) == 10
+        assert vector_rows(
+            ("KNN", "4", "K", "10", "SHARD_K_RATIO", "0.5")) == 5
+        # The ratio asks for 1; the three-shard floor is ceil(10 / 3) = 4.
+        assert vector_rows(
+            ("KNN", "4", "K", "10", "SHARD_K_RATIO", "0.1")) == 4
+        # WINDOW 6 caps the base: ceil(6 / 3) = 2.
+        assert vector_rows(
+            ("KNN", "4", "K", "10", "SHARD_K_RATIO", "0.1"),
+            ("COMBINE", "RRF", "2", "WINDOW", "6")) == 2
 
     def test_localonly_routes_through_local_path(self):
         """With LOCALONLY, FT.HYBRID runs on the contacted shard's local data

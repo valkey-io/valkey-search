@@ -1431,7 +1431,7 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx,
 }
 
 std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto(
-    std::vector<std::string> aliases) const {
+    std::vector<data_model::IndexSchema::Alias> aliases) const {
   auto index_schema_proto = std::make_unique<data_model::IndexSchema>();
   index_schema_proto->set_name(this->name_);
   index_schema_proto->set_db_num(db_num_);
@@ -1447,7 +1447,8 @@ std::unique_ptr<data_model::IndexSchema> IndexSchema::ToProto(
   index_schema_proto->mutable_stop_words()->Assign(stop_words_.begin(),
                                                    stop_words_.end());
   index_schema_proto->set_skip_initial_scan(skip_initial_scan_);
-  std::sort(aliases.begin(), aliases.end());
+  std::sort(aliases.begin(), aliases.end(),
+            [](const auto &a, const auto &b) { return a.name() < b.name(); });
   index_schema_proto->mutable_aliases()->Assign(aliases.begin(), aliases.end());
   index_schema_proto->set_score(score_);
   if (score_field_.has_value()) {
@@ -1482,8 +1483,8 @@ static absl::Status SaveSupplementalSection(
   return write_section(RDBChunkOutputStream(rdb));
 }
 
-absl::Status IndexSchema::RDBSave(SafeRDB *rdb,
-                                  std::vector<std::string> aliases) const {
+absl::Status IndexSchema::RDBSave(
+    SafeRDB *rdb, std::vector<data_model::IndexSchema::Alias> aliases) const {
   // Drain mutation queue before save if configured and queue is non-empty.
   // In forked child (BGSave), the queue is a frozen snapshot that will never
   // drain, so skip it instead.

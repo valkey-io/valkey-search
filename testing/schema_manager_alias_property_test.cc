@@ -196,7 +196,7 @@ TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
     // Assign initial random aliases.
     auto initial_aliases = RandomAliases(rng);
     for (const auto &alias : initial_aliases) {
-      base_proto.add_aliases(alias);
+      base_proto.add_aliases()->set_name(alias);
     }
 
     // Create the index via coordinator path (triggers OnMetadataCallback
@@ -220,7 +220,7 @@ TEST_F(AliasOnlyChangeNoRebuildTest, PropertyAliasOnlyChangePreservesIndex) {
     mutated_proto.clear_aliases();
     auto new_aliases = RandomAliases(rng);
     for (const auto &alias : new_aliases) {
-      mutated_proto.add_aliases(alias);
+      mutated_proto.add_aliases()->set_name(alias);
     }
 
     // Optionally mutate stats field (random documents_count).
@@ -351,7 +351,7 @@ TEST_F(AliasOnlyChangeNoRebuildTest,
         *existing_schema_or.value()->ToProto();
     alias_proto.clear_aliases();
     for (const auto &alias : expected_aliases) {
-      alias_proto.add_aliases(alias);
+      alias_proto.add_aliases()->set_name(alias);
     }
 
     // Send alias-only update via CreateEntry (triggers OnMetadataCallback →
@@ -1605,7 +1605,7 @@ TEST_F(DuplicateAliasAddTest, PropertyDuplicateAddReturnsAlreadyExists) {
     // Count occurrences of the alias in the proto's aliases field.
     int alias_count = 0;
     for (int j = 0; j < stored_proto.aliases_size(); ++j) {
-      if (stored_proto.aliases(j) == alias) {
+      if (stored_proto.aliases(j).name() == alias) {
         ++alias_count;
       }
     }
@@ -1935,8 +1935,8 @@ TEST(AliasFingerprint, ComputeFingerprintIgnoresAliases) {
       std::string(kFingerprintTestProto), &proto_no_aliases));
 
   data_model::IndexSchema proto_with_aliases = proto_no_aliases;
-  proto_with_aliases.add_aliases("a");
-  proto_with_aliases.add_aliases("b");
+  proto_with_aliases.add_aliases()->set_name("a");
+  proto_with_aliases.add_aliases()->set_name("b");
 
   google::protobuf::Any any_base;
   any_base.PackFrom(proto_no_aliases);
@@ -2061,8 +2061,9 @@ TEST_F(StoredProtoRoundTripTest, StoredProtoMatchesToProto) {
   EXPECT_TRUE(differ.Compare(*live_proto, stored_proto));
 }
 
-// Cross-index alias conflict resolution: higher version wins, then
-// lexicographically greater index name breaks ties.
+// Cross-index alias conflict resolution: higher alias epoch wins, then
+// lexicographically greater index name breaks ties. Index metadata versions
+// play no part.
 class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
  public:
   void SetUp() override {
@@ -2145,17 +2146,21 @@ class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
   }
 
   void SimulateAliasCallback(const std::string &index_name,
-                             const std::vector<std::string> &aliases) {
+                             const std::vector<std::string> &aliases,
+                             uint64_t epoch = 1) {
     auto schema_or =
         SchemaManager::Instance().GetIndexSchema(kDbNum, index_name);
     ASSERT_TRUE(schema_or.ok()) << schema_or.status();
     auto proto = schema_or.value()->ToProto();
     proto->clear_aliases();
     for (const auto &alias : aliases) {
-      proto->add_aliases(alias);
+      auto *entry = proto->add_aliases();
+      entry->set_name(alias);
+      entry->set_epoch(epoch);
     }
     std::sort(proto->mutable_aliases()->begin(),
-              proto->mutable_aliases()->end());
+              proto->mutable_aliases()->end(),
+              [](const auto &a, const auto &b) { return a.name() < b.name(); });
 
     auto packed = std::make_unique<google::protobuf::Any>();
     packed->PackFrom(*proto);
@@ -2170,33 +2175,20 @@ class CrossIndexAliasConflictTest : public AliasPropertyTestBase {
   std::unique_ptr<coordinator::MockClientPool> mock_client_pool_;
 };
 
-TEST_F(CrossIndexAliasConflictTest, HigherVersionWins) {
-  // Use names where lexicographic tie-break would favor idx_z (idx_z > idx_a),
-  // but give idx_a the higher metadata version.  The higher version must win
-  // regardless of the name ordering.
+TEST_F(CrossIndexAliasConflictTest, HigherEpochWins) {
+  // idx_z would win the name tie-break, but idx_a holds the higher epoch.
   CreateIndex("idx_a");
   CreateIndex("idx_z");
 
-  // idx_z gets version 0 (one CreateEntry call).
-  SimulateAliasCallback("idx_z", {"shared_alias"});
-
-  // Bump idx_a to version 1 via intermediate update, then claim the alias.
-  // Without version-based resolution, idx_z would win the lexicographic
-  // tie-break at equal versions.
-  SimulateAliasCallback("idx_a", {"other_alias"});
-  SimulateAliasCallback("idx_a", {"shared_alias"});
+  SimulateAliasCallback("idx_z", {"shared_alias"}, /*epoch=*/1);
+  SimulateAliasCallback("idx_a", {"shared_alias"}, /*epoch=*/2);
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
   EXPECT_EQ(aliases[0].first, "shared_alias");
   EXPECT_EQ(aliases[0].second, "idx_a");
-
-  auto schema_z = SchemaManager::Instance().GetIndexSchema(kDbNum, "idx_z");
-  ASSERT_TRUE(schema_z.ok());
-  auto z_aliases =
-      SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_z");
-  EXPECT_TRUE(std::find(z_aliases.begin(), z_aliases.end(), "shared_alias") ==
-              z_aliases.end());
+  EXPECT_TRUE(
+      SchemaManager::Instance().GetAliasesForIndex(kDbNum, "idx_z").empty());
 }
 
 TEST_F(CrossIndexAliasConflictTest, EqualVersionLexicographicTieBreak) {
@@ -2248,39 +2240,36 @@ TEST_F(CrossIndexAliasConflictTest, LoserAliasVectorCleaned) {
   EXPECT_EQ(a_aliases[0], "only_a");
 }
 
-TEST_F(CrossIndexAliasConflictTest, VersionTakesPrecedenceOverName) {
+TEST_F(CrossIndexAliasConflictTest, EpochTakesPrecedenceOverVersion) {
   CreateIndex("idx_z");
   CreateIndex("idx_a");
 
-  SimulateAliasCallback("idx_z", {"shared_alias"});
+  SimulateAliasCallback("idx_z", {"shared_alias"}, /*epoch=*/2);
 
-  // Bump idx_a's version higher via intermediate updates.
+  // Raise idx_a's metadata version well above idx_z's before it claims the
+  // alias with a lower epoch. The version must not matter.
   SimulateAliasCallback("idx_a", {"other_alias"});
   SimulateAliasCallback("idx_a", {"other_alias2"});
-  SimulateAliasCallback("idx_a", {"shared_alias"});
+  SimulateAliasCallback("idx_a", {"shared_alias"}, /*epoch=*/1);
+
+  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(aliases.size(), 1);
+  EXPECT_EQ(aliases[0].first, "shared_alias");
+  EXPECT_EQ(aliases[0].second, "idx_z");
+}
+
+TEST_F(CrossIndexAliasConflictTest, LosingClaimTakesOverWhenOwnerReleases) {
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+
+  SimulateAliasCallback("idx_b", {"shared_alias"}, /*epoch=*/2);
+  SimulateAliasCallback("idx_a", {"shared_alias"}, /*epoch=*/1);
+  SimulateAliasCallback("idx_b", {});
 
   auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
   ASSERT_EQ(aliases.size(), 1);
   EXPECT_EQ(aliases[0].first, "shared_alias");
   EXPECT_EQ(aliases[0].second, "idx_a");
-}
-
-TEST_F(CrossIndexAliasConflictTest, LowerVersionLosesEvenIfCallbackLater) {
-  CreateIndex("idx_a");
-  CreateIndex("idx_b");
-
-  // Bump idx_b to version 2 (three CreateEntry calls).
-  SimulateAliasCallback("idx_b", {"temp_alias"});
-  SimulateAliasCallback("idx_b", {"temp_alias2"});
-  SimulateAliasCallback("idx_b", {"shared_alias"});
-
-  // idx_a claims at version 0 — loses.
-  SimulateAliasCallback("idx_a", {"shared_alias"});
-
-  auto aliases = SchemaManager::Instance().GetAllAliases(kDbNum);
-  ASSERT_EQ(aliases.size(), 1);
-  EXPECT_EQ(aliases[0].first, "shared_alias");
-  EXPECT_EQ(aliases[0].second, "idx_b");
 }
 
 TEST_F(CrossIndexAliasConflictTest, NoConflictDifferentAliasesCoexist) {
@@ -2380,8 +2369,8 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
  public:
   using AliasMap = std::vector<std::pair<std::string, std::string>>;
   // Encoded ObjName -> committed entries, in version order.
-  using History = std::map<std::string,
-                           std::vector<coordinator::GlobalMetadataEntry>>;
+  using History =
+      std::map<std::string, std::vector<coordinator::GlobalMetadataEntry>>;
 
   void SetUp() override {
     CrossIndexAliasConflictTest::SetUp();
@@ -2404,7 +2393,8 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
 
   // Appends every entry whose version is not yet in `history`.
   void Record(History &history) {
-    auto metadata = coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    auto metadata =
+        coordinator::MetadataManager::Instance().GetGlobalMetadata();
     auto type_it =
         metadata->type_namespace_map().find(kSchemaManagerMetadataTypeName);
     if (type_it == metadata->type_namespace_map().end()) {
@@ -2422,10 +2412,9 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
     for (const auto &[id, entries] : from) {
       auto &merged = into[id];
       for (const auto &entry : entries) {
-        auto pos = std::find_if(merged.begin(), merged.end(),
-                                [&](const auto &e) {
-                                  return e.version() >= entry.version();
-                                });
+        auto pos = std::find_if(
+            merged.begin(), merged.end(),
+            [&](const auto &e) { return e.version() >= entry.version(); });
         if (pos == merged.end() || pos->version() != entry.version()) {
           merged.insert(pos, entry);
         }
@@ -2459,7 +2448,8 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
         pick = (pick + 1) % streams.size();
       }
       auto status = coordinator::MetadataManager::Instance().TriggerCallbacks(
-          kSchemaManagerMetadataTypeName, coordinator::ObjName::Decode(ids[pick]),
+          kSchemaManagerMetadataTypeName,
+          coordinator::ObjName::Decode(ids[pick]),
           *streams[pick][cursor[pick]++]);
       ASSERT_TRUE(status.ok()) << status;
       --remaining;
@@ -2470,9 +2460,9 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
   // full sync or a healed partition does.
   void ReconcileLatest(const History &history) {
     coordinator::GlobalMetadata proposed;
-    auto *entries = (*proposed.mutable_type_namespace_map())[std::string(
-                                                         kSchemaManagerMetadataTypeName)]
-                        .mutable_entries();
+    auto *entries = (*proposed.mutable_type_namespace_map())
+                        [std::string(kSchemaManagerMetadataTypeName)]
+                            .mutable_entries();
     for (const auto &[id, versions] : history) {
       (*entries)[id] = versions.back();
     }

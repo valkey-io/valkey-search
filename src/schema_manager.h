@@ -40,6 +40,15 @@ class ObjName;
 }
 
 constexpr absl::string_view kSchemaManagerMetadataTypeName{"vs_index_schema"};
+// The claims on one alias, keyed by claiming index name, and the claimant
+// that owns it: highest epoch, then greater index name. A losing claim is
+// kept, so every node derives the same owner from the same index protos.
+struct AliasClaims {
+  absl::flat_hash_map<std::string, uint64_t> epochs;
+  std::string owner;
+};
+using AliasMap = absl::flat_hash_map<std::string, AliasClaims>;
+
 // Enum for attribute metrics
 enum class AttributeType : std::uint8_t { ALL, TEXT, TAG, NUMERIC, VECTOR };
 
@@ -183,21 +192,25 @@ class SchemaManager {
       int db_num, absl::string_view name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
-  // Rebuilds forward alias map entries for `index_name` from `proto`.
-  // Uses `incoming_version` for deterministic cross-index conflict resolution.
+  // Replaces the alias claims of `index_name` with those in `proto`.
   void RebuildAliasMapsForIndex(uint32_t db_num, absl::string_view index_name,
-                                const data_model::IndexSchema &proto,
-                                uint32_t incoming_version = 0)
+                                const data_model::IndexSchema &proto)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
-  // Erases all Forward_Alias_Map entries in db_num whose value equals
-  // index_name. Used by tombstone handling and RemoveIndexSchemaInternal.
+  // Drops every alias claim of `index_name` in db_num; an alias it owned
+  // passes to the next claimant, if any. Used by tombstone handling and
+  // RemoveIndexSchemaInternal.
   void EraseAliasesForIndex(uint32_t db_num, absl::string_view index_name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
   // Returns the sorted alias names owned by `index_name` in `db_num`, read
   // from the Forward_Alias_Map (the single source of truth for aliases).
   std::vector<std::string> GetAliasesForIndexInternal(
+      uint32_t db_num, absl::string_view index_name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  // Returns every alias claim of `index_name` in `db_num`, owned or not.
+  std::vector<data_model::IndexSchema::Alias> GetAliasClaimsForIndexInternal(
       uint32_t db_num, absl::string_view index_name) const
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
 
@@ -216,9 +229,9 @@ class SchemaManager {
       uint32_t, absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>
       db_to_index_schemas_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
 
-  // Forward alias map: db_num → {alias → index_name}
-  absl::flat_hash_map<uint32_t, absl::flat_hash_map<std::string, std::string>>
-      db_to_aliases_ ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
+  // Forward alias map: db_num → {alias → claims and owning index}
+  absl::flat_hash_map<uint32_t, AliasMap> db_to_aliases_
+      ABSL_GUARDED_BY(db_to_index_schemas_mutex_);
 
   // Staged changes to index schemas, to be applied on loading ended.
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<
@@ -227,8 +240,7 @@ class SchemaManager {
   // Staged aliases captured from loaded index protos, swapped into
   // db_to_aliases_ atomically on loading ended. IndexSchema does not carry
   // aliases, so the load path preserves them here (single source of truth).
-  vmsdk::MainThreadAccessGuard<absl::flat_hash_map<
-      uint32_t, absl::flat_hash_map<std::string, std::string>>>
+  vmsdk::MainThreadAccessGuard<absl::flat_hash_map<uint32_t, AliasMap>>
       staged_db_to_aliases_;
   absl::StatusOr<std::shared_ptr<IndexSchema>> LookupInternal(
       int db_num, absl::string_view name) const

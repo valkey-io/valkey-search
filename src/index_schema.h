@@ -278,8 +278,9 @@ class IndexSchema : public KeyspaceEventSubscription,
   int GetTextAttributeCount() const;
   int GetTextItemCount() const;
 
-  virtual absl::Status RDBSave(SafeRDB *rdb,
-                               std::vector<std::string> aliases = {}) const;
+  virtual absl::Status RDBSave(
+      SafeRDB *rdb,
+      std::vector<data_model::IndexSchema::Alias> aliases = {}) const;
   absl::Status SaveIndexExtension(RDBChunkOutputStream output) const;
   absl::Status LoadIndexExtension(ValkeyModuleCtx *ctx,
                                   RDBChunkInputStream input);
@@ -308,7 +309,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   // them. IndexSchema itself is unaware of aliases; SchemaManager is the
   // single source of truth.
   std::unique_ptr<data_model::IndexSchema> ToProto(
-      std::vector<std::string> aliases = {}) const;
+      std::vector<data_model::IndexSchema::Alias> aliases = {}) const;
 
   using MutatedAttributes = absl::flat_hash_map<std::string, AttributeData>;
   struct DocumentMutation {

@@ -1881,6 +1881,22 @@ absl::StatusOr<absl::string_view> SubstituteParam(
   }
 }
 
+absl::StatusOr<std::string> JsonToQueryVector(
+    absl::string_view json, const indexes::VectorBase &vector_index) {
+  json = absl::StripAsciiWhitespace(json);
+  if (!absl::StartsWith(json, "[") || !absl::EndsWith(json, "]")) {
+    return absl::InvalidArgumentError(
+        "JPARAMS query vector must be a JSON array of numbers.");
+  }
+  auto vector = vector_index.NormalizeStringAttribute(
+      vmsdk::MakeUniqueValkeyString(json));
+  if (!vector) {
+    return absl::InvalidArgumentError(
+        "JPARAMS query vector must be a JSON array of numbers.");
+  }
+  return std::string(vmsdk::ToStringView(vector.get()));
+}
+
 absl::Status ParseKnnInner(query::SearchParameters &parameters,
                            std::string_view filter) {
   absl::InlinedVector<absl::string_view, 8> params =
@@ -2103,6 +2119,12 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
                                          parameters.attribute_alias));
   auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
   CHECK(vector_index != nullptr);
+  auto vector_param = parameters.parse_vars.query_vector_string;
+  if (absl::ConsumePrefix(&vector_param, "$") &&
+      parameters.parse_vars.json_params.contains(vector_param)) {
+    VMSDK_ASSIGN_OR_RETURN(parameters.query,
+                           JsonToQueryVector(parameters.query, *vector_index));
+  }
   if (parameters.query.size() !=
       static_cast<size_t>(vector_index->GetVectorDataSize())) {
     return absl::InvalidArgumentError(

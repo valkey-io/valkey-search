@@ -40,6 +40,7 @@ constexpr absl::string_view kLimitParam{"LIMIT"};
 constexpr absl::string_view kLoadParam{"LOAD"};
 constexpr absl::string_view kMaxParam{"MAX"};
 constexpr absl::string_view kParamsParam{"PARAMS"};
+constexpr absl::string_view kJParamsParam{"JPARAMS"};
 constexpr absl::string_view kReduceParam{"REDUCE"};
 constexpr absl::string_view kSortByParam{"SORTBY"};
 constexpr absl::string_view kTimeoutParam{"TIMEOUT"};
@@ -246,11 +247,11 @@ ConstructLimitParser() {
       });
 }
 
-std::unique_ptr<vmsdk::ParamParser<AggregateParameters>>
-ConstructParamsParser() {
+std::unique_ptr<vmsdk::ParamParser<AggregateParameters>> ConstructParamsParser(
+    bool json) {
   return std::make_unique<vmsdk::ParamParser<AggregateParameters>>(
-      [](AggregateParameters &parameters,
-         vmsdk::ArgsIterator &itr) -> absl::Status {
+      [json](AggregateParameters &parameters,
+             vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
         for (auto i = 0; i < cnt; i += 2) {
@@ -263,8 +264,19 @@ ConstructParamsParser() {
                                "` contains an invalid character."));
             }
           }
-          parameters.parse_vars.params[vmsdk::ToStringView(name)] =
+          auto key = vmsdk::ToStringView(name);
+          // A name repeated within PARAMS keeps the last value, but a name
+          // defined by both PARAMS and JPARAMS is ambiguous.
+          if ((json || parameters.parse_vars.json_params.contains(key)) &&
+              parameters.parse_vars.params.contains(key)) {
+            return absl::InvalidArgumentError(
+                absl::StrCat("Parameter ", key, " is already defined."));
+          }
+          parameters.parse_vars.params[key] =
               std::make_pair(0, vmsdk::ToStringView(value));
+          if (json) {
+            parameters.parse_vars.json_params.insert(key);
+          }
         }
         DBG << "After params: " << parameters << "\n";
         return absl::OkStatus();
@@ -391,7 +403,8 @@ vmsdk::KeyValueParser<AggregateParameters> CreateAggregateParser() {
   parser.AddParamParser(kFilterParam, ConstructFilterParser());
   parser.AddParamParser(kGroupByParam, ConstructGroupByParser());
   parser.AddParamParser(kLimitParam, ConstructLimitParser());
-  parser.AddParamParser(kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(kParamsParam, ConstructParamsParser(false));
+  parser.AddParamParser(kJParamsParam, ConstructParamsParser(true));
   parser.AddParamParser(kSortByParam, ConstructSortByParser());
   parser.AddParamParser(kWithCursorParam, ConstructWithCursorParser());
   return parser;

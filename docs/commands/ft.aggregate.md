@@ -14,6 +14,7 @@ FT.AGGREGATE <index-name> <query>
     [INORDER]
     [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
+    [JPARAMS <count> <name> <value> [ <name> <value> ...]]
     [SLOP <slop>]
     [TIMEOUT <timeout>]
     [VERBATIM]
@@ -41,6 +42,7 @@ FT.AGGREGATE <index-name> <query>
 
   Honoring `AS` in the `LOAD` clause is a compatibility fix gated on `search.emulate-release` being `1.3.0` or greater; under an emulated release below that, `AS` is treated as an ordinary field name. Accepting a JSON path as `<field>` is not gated, since before it was supported such a load simply failed. See [COMPATIBILITY.md](../../COMPATIBILITY.md) for details.
 - `PARAMS <count> <name> <value> [<name> <value> ...]` (optional): `count` is of the number of arguments, i.e., twice the number of `name`/`value` pairs. `PARAMS` can be used in both the query string as well as within an expression context. See [Search - query language](../topics/search-query.md) for usage details.
+- `JPARAMS <count> <name> <value> [<name> <value> ...]` (optional): Like `PARAMS`, but each value is JSON. A query vector can be supplied as a JSON array of numbers, e.g. `"[0.1, 0.2, 0.3]"`, which is converted to the vector field's data type. A name may not be defined by both `PARAMS` and `JPARAMS`.
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.

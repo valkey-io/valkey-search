@@ -423,6 +423,57 @@ TEST_P(FTSearchParserTest, Parse) {
   }
 }
 
+class FTSearchJParamsTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    index_schema_ = SetupIndexSchemaForTestCase({}, &fake_ctx_);
+  }
+  void TearDown() override {
+    index_schema_.reset();
+    SchemaManager::InitInstance(nullptr);
+    ValkeySearchTest::TearDown();
+  }
+  // Parses `FT.SEARCH my_schema_name <query> <args...>`.
+  absl::StatusOr<std::unique_ptr<SearchCommand>> Parse(
+      absl::string_view query, const std::vector<std::string> &args) {
+    std::vector<vmsdk::UniqueValkeyString> owned;
+    std::vector<ValkeyModuleString *> argv;
+    for (const auto &arg : args) {
+      owned.push_back(vmsdk::MakeUniqueValkeyString(arg));
+      argv.push_back(owned.back().get());
+    }
+    auto command = std::make_unique<SearchCommand>(0);
+    command->index_schema_name = "my_schema_name";
+    command->index_schema = index_schema_;
+    command->parse_vars.query_string = query;
+    vmsdk::ArgsIterator itr{argv.data(), static_cast<int>(argv.size())};
+    VMSDK_RETURN_IF_ERROR(command->ParseCommand(itr));
+    return command;
+  }
+  std::shared_ptr<IndexSchema> index_schema_;
+};
+
+TEST_F(FTSearchJParamsTest, JParamsSuppliesVectorAndK) {
+  auto command = Parse("*=>[KNN $K @vec $BLOB]",
+                       {"JPARAMS", "4", "K", "5", "BLOB", "[0.1, 0.2, 0.3]"});
+  VMSDK_EXPECT_OK(command);
+  const std::vector<float> floats = {0.1, 0.2, 0.3};
+  EXPECT_EQ((*command)->query,
+            std::string(reinterpret_cast<const char *>(floats.data()),
+                        floats.size() * sizeof(float)));
+  EXPECT_EQ((*command)->k, 5);
+}
+
+TEST_F(FTSearchJParamsTest, NameInBothParamsAndJParamsIsRejected) {
+  auto command = Parse("*=>[KNN 5 @vec $BLOB]",
+                       {"PARAMS", "2", "BLOB", std::string(12, '\0'), "JPARAMS",
+                        "2", "BLOB", "[0.1, 0.2, 0.3]"});
+  ASSERT_FALSE(command.ok());
+  EXPECT_THAT(command.status().message(),
+              testing::HasSubstr("Parameter BLOB is already defined."));
+}
+
 class MaxTimeoutConfigTest : public vmsdk::ValkeyTest {};
 
 TEST_F(MaxTimeoutConfigTest, AppliesToSearchAndAggregate) {

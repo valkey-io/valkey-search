@@ -1290,6 +1290,82 @@ TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
 }
 
 // ---------------------------------------------------------------------
+// JPARAMS
+// ---------------------------------------------------------------------
+//
+// A JPARAMS value is JSON. Used as the query vector, a JSON array is converted
+// to the index's binary format.
+
+// A JSON array of kVectorDimensions numbers and the FLOAT32 blob it encodes.
+std::pair<std::string, std::string> JsonVectorAndBlob() {
+  std::vector<float> floats;
+  for (size_t i = 0; i < kVectorDimensions; ++i) {
+    floats.push_back(i * 0.5f);
+  }
+  return {absl::StrCat("[", absl::StrJoin(floats, ", "), "]"),
+          std::string(reinterpret_cast<const char *>(floats.data()),
+                      floats.size() * sizeof(float))};
+}
+
+TEST_F(FTHybridParserTest, JParamsSuppliesThePureVsimArmVector) {
+  auto [json, blob] = JsonVectorAndBlob();
+  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                            "JPARAMS", "2", "q", json});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).query, blob);
+}
+
+TEST_F(FTHybridParserTest, JParamsSuppliesTheFilteredVsimArmVector) {
+  // The FILTER rewrites the arm into a query string, so the vector is
+  // substituted inside PostParseQueryString instead.
+  auto [json, blob] = JsonVectorAndBlob();
+  auto params =
+      ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2",
+                  "K", "5", "FILTER", "@n:[0 3]", "JPARAMS", "2", "q", json});
+  VMSDK_EXPECT_OK(params);
+  EXPECT_EQ(VsimArm(**params).query, blob);
+}
+
+TEST_F(FTHybridParserTest, JParamsRejectsANonArrayVector) {
+  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                            "JPARAMS", "2", "q", "1, 2, 3"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "Error parsing vector similarity parameters: JPARAMS query vector "
+            "must be a JSON array of numbers.");
+}
+
+TEST_F(FTHybridParserTest, JParamsRejectsANonNumericElement) {
+  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                            "JPARAMS", "2", "q", "[1, \"a\", 3]"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "Error parsing vector similarity parameters: JPARAMS query vector "
+            "must be a JSON array of numbers.");
+}
+
+TEST_F(FTHybridParserTest, JParamsRejectsAWrongDimensionVector) {
+  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                            "JPARAMS", "2", "q", "[1, 2, 3]"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), BlobSizeError(3 * sizeof(float)));
+}
+
+TEST_F(FTHybridParserTest, NameInBothParamsAndJParamsIsRejected) {
+  auto [json, blob] = JsonVectorAndBlob();
+  for (const auto &args : std::vector<std::vector<std::string>>{
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "PARAMS", "2", "q",
+            blob, "JPARAMS", "2", "q", json},
+           {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "JPARAMS", "2", "q",
+            json, "PARAMS", "2", "q", blob}}) {
+    auto params = ParseExact(args);
+    ASSERT_FALSE(params.ok());
+    EXPECT_THAT(params.status().message(),
+                ::testing::HasSubstr("Parameter q is already defined."));
+  }
+}
+
+// ---------------------------------------------------------------------
 // SCORER
 // ---------------------------------------------------------------------
 //

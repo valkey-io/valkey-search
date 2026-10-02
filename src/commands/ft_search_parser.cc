@@ -115,6 +115,7 @@ absl::Status Verify(query::SearchParameters &parameters) {
     }
     parameters.parse_vars.params.erase(begin);
   }
+  parameters.parse_vars.json_params.clear();
   return absl::OkStatus();
 }
 
@@ -129,9 +130,11 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructLimitParser() {
       });
 }
 
-std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser(
+    bool json) {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
-      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+      [json](SearchCommand &parameters,
+             vmsdk::ArgsIterator &itr) -> absl::Status {
         unsigned count{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, count));
         if (count & 1) {
@@ -150,6 +153,9 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
           if (!inserted) {
             return absl::InvalidArgumentError(
                 absl::StrCat("Parameter ", key, " is already defined."));
+          }
+          if (json) {
+            parameters.parse_vars.json_params.insert(key);
           }
           count -= 2;
         }
@@ -289,7 +295,8 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
                         GENERATE_FLAG_PARSER(SearchCommand, with_scores));
   parser.AddParamParser(query::kReturnParam, ConstructReturnParser());
   parser.AddParamParser(query::kSortByParam, ConstructSortByParser());
-  parser.AddParamParser(query::kParamsParam, ConstructParamsParser());
+  parser.AddParamParser(query::kParamsParam, ConstructParamsParser(false));
+  parser.AddParamParser(query::kJParamsParam, ConstructParamsParser(true));
   parser.AddParamParser(query::kInorder,
                         GENERATE_FLAG_PARSER(SearchCommand, inorder));
   parser.AddParamParser(query::kVerbatim,
@@ -396,6 +403,7 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
     }
     parameters.parse_vars.params.erase(begin);
   }
+  parameters.parse_vars.json_params.clear();
   return absl::OkStatus();
 }
 

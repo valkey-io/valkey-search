@@ -128,6 +128,7 @@ bool IsTopLevelKeyword(absl::string_view tok) {
          absl::EqualsIgnoreCase(tok, "SORTBY") ||
          absl::EqualsIgnoreCase(tok, "LIMIT") ||
          absl::EqualsIgnoreCase(tok, "PARAMS") ||
+         absl::EqualsIgnoreCase(tok, "JPARAMS") ||
          absl::EqualsIgnoreCase(tok, "TIMEOUT") ||
          absl::EqualsIgnoreCase(tok, "FILTER") ||
          absl::EqualsIgnoreCase(tok, "DIALECT") ||
@@ -1092,6 +1093,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   for (size_t arm_index = 0; arm_index < env.arms.size(); ++arm_index) {
     auto &arm = env.arms[arm_index];
     arm->parse_vars.params = env.agg->parse_vars.params;
+    arm->parse_vars.json_params = env.agg->parse_vars.json_params;
     arm->timeout_ms = env.timeout_ms;
     arm->cancellation_token = env.cancellation_token;
     // Two paths:
@@ -1138,6 +1140,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
       // enable-partial-results turns an error into a silently empty arm.
       auto *vector_index = dynamic_cast<indexes::VectorBase *>(index.get());
       CHECK(vector_index != nullptr);
+      if (arm->parse_vars.json_params.contains(param_name)) {
+        VMSDK_ASSIGN_OR_RETURN(
+            arm->query, query::JsonToQueryVector(arm->query, *vector_index),
+            _.SetPrepend() << "Error parsing vector similarity parameters: ");
+      }
       if (arm->query.size() !=
           static_cast<size_t>(vector_index->GetVectorDataSize())) {
         return absl::InvalidArgumentError(absl::StrCat(

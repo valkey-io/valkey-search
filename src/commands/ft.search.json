@@ -139,6 +139,33 @@
         ]
       },
       {
+        "name": "JPARAMS",
+        "token": "JPARAMS",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "type": "integer"
+          },
+          {
+            "name": "parameters",
+            "type": "block",
+            "multiple": true,
+            "arguments": [
+              {
+                "name": "name",
+                "type": "string"
+              },
+              {
+                "name": "value",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      },
+      {
         "name": "RETURN",
         "token": "RETURN",
         "type": "block",

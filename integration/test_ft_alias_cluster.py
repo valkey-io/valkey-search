@@ -49,6 +49,21 @@ def _wait_for_alias_on_all_nodes(nodes, alias_name, expect_present=True):
     waiters.wait_for_true(check)
 
 
+def _wait_for_aliaslist_on_all_nodes(nodes, expected):
+    """Poll until FT.ALIASLIST equals `expected` on every node."""
+    def check():
+        return all(node.execute_command("FT.ALIASLIST") == expected
+                   for node in nodes)
+    waiters.wait_for_true(check, timeout=30)
+
+
+def _add_aliases_raising_version(node, index_name, count):
+    """Add `count` padding aliases to index_name, raising its metadata version."""
+    for i in range(count):
+        assert node.execute_command(
+            "FT.ALIASADD", f"pad{i}", index_name) == b"OK"
+
+
 class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
     """
     Verify that alias mutations on one primary propagate to all cluster nodes.
@@ -186,6 +201,53 @@ class TestFTAliasClusterPropagation(ValkeySearchClusterTestCase):
         ) == b"OK"
 
         self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME)
+
+    def test_aliasupdate_to_lower_version_index_propagates(self):
+        """FT.ALIASUPDATE to an index whose metadata version is lower than
+        the current owner's moves the alias on every node."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        _add_aliases_raising_version(node0, INDEX_NAME, 2)
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        assert node0.execute_command(
+            "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2) == b"OK"
+
+        _wait_for_aliaslist_on_all_nodes(
+            self._all_primaries(),
+            [ALIAS_NAME.encode(), INDEX_NAME_2.encode(),
+             b"pad0", INDEX_NAME.encode(),
+             b"pad1", INDEX_NAME.encode()])
+        self._verify_alias_on_all_nodes(ALIAS_NAME, INDEX_NAME_2)
+
+    def test_aliasupdate_back_and_forth_follows_last_target(self):
+        """Repeated FT.ALIASUPDATE leaves the alias on the last target on
+        every node, regardless of which index has the higher version."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        _add_aliases_raising_version(node0, INDEX_NAME_2, 3)
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        for node, target in ((node1, INDEX_NAME_2), (node0, INDEX_NAME),
+                             (node1, INDEX_NAME_2), (node0, INDEX_NAME)):
+            assert node.execute_command(
+                "FT.ALIASUPDATE", ALIAS_NAME, target) == b"OK"
+
+        _wait_for_aliaslist_on_all_nodes(
+            self._all_primaries(),
+            [ALIAS_NAME.encode(), INDEX_NAME.encode(),
+             b"pad0", INDEX_NAME_2.encode(),
+             b"pad1", INDEX_NAME_2.encode(),
+             b"pad2", INDEX_NAME_2.encode()])
 
     def test_aliasupdate_reassign_propagates(self):
         """ALIASUPDATE reassignment propagates the new target to all nodes."""
@@ -1229,6 +1291,31 @@ class TestFTAliasRDBPersistenceCluster(ValkeySearchClusterTestCaseDebugMode):
 
         waiters.wait_for_true(_search_ready, timeout=15)
 
+    def test_aliasupdate_to_lower_version_index_survives_restart(self):
+        """An alias moved to an index with a lower metadata version stays put
+        on every node, before and after a full cluster restart."""
+        node0 = self.new_client_for_primary(0)
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+
+        _add_aliases_raising_version(node0, INDEX_NAME, 2)
+        assert node0.execute_command(
+            "FT.ALIASADD", ALIAS_NAME, INDEX_NAME) == b"OK"
+        assert node0.execute_command(
+            "FT.ALIASUPDATE", ALIAS_NAME, INDEX_NAME_2) == b"OK"
+
+        expected = [ALIAS_NAME.encode(), INDEX_NAME_2.encode(),
+                    b"pad0", INDEX_NAME.encode(),
+                    b"pad1", INDEX_NAME.encode()]
+        _wait_for_aliaslist_on_all_nodes(self._all_primaries(), expected)
+
+        self._save_and_restart_all()
+        self._wait_for_index_on_all_nodes(INDEX_NAME)
+        self._wait_for_index_on_all_nodes(INDEX_NAME_2)
+        _wait_for_aliaslist_on_all_nodes(self._all_primaries(), expected)
+
 
 def _node_responsive(node):
     """Return True if a node responds to PING."""
@@ -2045,6 +2132,58 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
             alias_lists.add(str(node.execute_command("FT.ALIASLIST")))
         assert len(alias_lists) == 1, (
             f"FT.ALIASLIST inconsistent: {alias_lists}")
+
+    def test_concurrent_aliasupdate_then_delete_leaves_no_claim(self):
+        """Two nodes move one alias to different targets at once. All nodes
+        agree on one target; after FT.ALIASDEL, dropping that target does
+        not bring the alias back from the other claim."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+        index_name_3 = "alias_cluster_idx3"
+        create_3 = [c if c != INDEX_NAME_2 else index_name_3
+                    for c in CREATE_TAG_INDEX_2]
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert node0.execute_command(*create_3) == b"OK"
+        for name in (INDEX_NAME, INDEX_NAME_2, index_name_3):
+            self._wait_for_index_on_all_nodes(name)
+
+        alias_name = "concurrent_update_alias"
+        assert node0.execute_command(
+            "FT.ALIASADD", alias_name, INDEX_NAME) == b"OK"
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), alias_name, expect_present=True)
+
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
+        ) == b"OK"
+        for node, target in ((node0, INDEX_NAME_2), (node1, index_name_3)):
+            try:
+                node.execute_command("FT.ALIASUPDATE", alias_name, target)
+            except ResponseError:
+                pass
+        node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+
+        def _converged():
+            lists = {str(node.execute_command("FT.ALIASLIST"))
+                     for node in self._all_primaries()}
+            return len(lists) == 1
+        waiters.wait_for_true(_converged, timeout=30)
+
+        alias_list = node0.execute_command("FT.ALIASLIST")
+        assert len(alias_list) == 2, alias_list
+        assert alias_list[0] == alias_name.encode()
+        winner = alias_list[1]
+        assert winner in (INDEX_NAME_2.encode(), index_name_3.encode())
+
+        assert node0.execute_command("FT.ALIASDEL", alias_name) == b"OK"
+        _wait_for_aliaslist_on_all_nodes(self._all_primaries(), [])
+
+        assert node1.execute_command("FT.DROPINDEX", winner) == b"OK"
+        _wait_for_aliaslist_on_all_nodes(self._all_primaries(), [])
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), alias_name, expect_present=False)
 
 
 class TestFTAliasHashtagValidationCluster(ValkeySearchClusterTestCase):

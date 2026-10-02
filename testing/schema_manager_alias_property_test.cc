@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -2367,6 +2368,266 @@ TEST_F(CrossIndexAliasConflictTest, ShadowingIndexIsValidAliasTarget) {
     ASSERT_TRUE(resolved.ok()) << alias;
     EXPECT_EQ(resolved.value(), shadowing.value()) << alias;
   }
+}
+
+// Cross-node alias convergence. Alias commands run on an "origin" node, and
+// every metadata entry they commit is recorded. The entries are then delivered
+// to fresh "peer" nodes the way reconciliation can deliver them: any
+// interleaving across indexes, per-index versions in order, intermediate
+// versions possibly skipped, and without updating the peer's stored metadata
+// until the callbacks are done. Every peer must end with the same alias map.
+class AliasConvergenceTest : public CrossIndexAliasConflictTest {
+ public:
+  using AliasMap = std::vector<std::pair<std::string, std::string>>;
+  // Encoded ObjName -> committed entries, in version order.
+  using History = std::map<std::string,
+                           std::vector<coordinator::GlobalMetadataEntry>>;
+
+  void SetUp() override {
+    CrossIndexAliasConflictTest::SetUp();
+    ON_CALL(*kMockValkeyModule,
+            Call(testing::_, testing::StrEq("FT.INTERNAL_UPDATE"), testing::_,
+                 testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault(testing::Return(
+            reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
+  }
+
+  void ResetNode() {
+    SchemaManager::InitInstance(nullptr);
+    coordinator::MetadataManager::InitInstance(nullptr);
+    coordinator::MetadataManager::InitInstance(
+        std::make_unique<coordinator::MetadataManager>(&fake_ctx_,
+                                                       *mock_client_pool_));
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+  }
+
+  // Appends every entry whose version is not yet in `history`.
+  void Record(History &history) {
+    auto metadata = coordinator::MetadataManager::Instance().GetGlobalMetadata();
+    auto type_it =
+        metadata->type_namespace_map().find(kSchemaManagerMetadataTypeName);
+    if (type_it == metadata->type_namespace_map().end()) {
+      return;
+    }
+    for (const auto &[id, entry] : type_it->second.entries()) {
+      auto &entries = history[id];
+      if (entries.empty() || entries.back().version() < entry.version()) {
+        entries.push_back(entry);
+      }
+    }
+  }
+
+  static void Merge(History &into, const History &from) {
+    for (const auto &[id, entries] : from) {
+      auto &merged = into[id];
+      for (const auto &entry : entries) {
+        auto pos = std::find_if(merged.begin(), merged.end(),
+                                [&](const auto &e) {
+                                  return e.version() >= entry.version();
+                                });
+        if (pos == merged.end() || pos->version() != entry.version()) {
+          merged.insert(pos, entry);
+        }
+      }
+    }
+  }
+
+  // Delivers `history` to the current node through the metadata callbacks
+  // only. With `rng`, intermediate versions are dropped at random and indexes
+  // are interleaved at random; without it, everything is delivered in order.
+  void Deliver(const History &history, std::mt19937 *rng = nullptr) {
+    std::vector<std::vector<const coordinator::GlobalMetadataEntry *>> streams;
+    std::vector<std::string> ids;
+    for (const auto &[id, entries] : history) {
+      std::vector<const coordinator::GlobalMetadataEntry *> stream;
+      for (size_t i = 0; i < entries.size(); ++i) {
+        bool last = i + 1 == entries.size();
+        if (last || rng == nullptr || (*rng)() % 2 == 0) {
+          stream.push_back(&entries[i]);
+        }
+      }
+      streams.push_back(std::move(stream));
+      ids.push_back(id);
+    }
+    std::vector<size_t> cursor(streams.size(), 0);
+    size_t remaining = 0;
+    for (const auto &s : streams) remaining += s.size();
+    while (remaining > 0) {
+      size_t pick = rng ? (*rng)() % streams.size() : 0;
+      while (cursor[pick] == streams[pick].size()) {
+        pick = (pick + 1) % streams.size();
+      }
+      auto status = coordinator::MetadataManager::Instance().TriggerCallbacks(
+          kSchemaManagerMetadataTypeName, coordinator::ObjName::Decode(ids[pick]),
+          *streams[pick][cursor[pick]++]);
+      ASSERT_TRUE(status.ok()) << status;
+      --remaining;
+    }
+  }
+
+  // Delivers the latest entries as one ReconcileMetadata batch, the way a
+  // full sync or a healed partition does.
+  void ReconcileLatest(const History &history) {
+    coordinator::GlobalMetadata proposed;
+    auto *entries = (*proposed.mutable_type_namespace_map())[std::string(
+                                                         kSchemaManagerMetadataTypeName)]
+                        .mutable_entries();
+    for (const auto &[id, versions] : history) {
+      (*entries)[id] = versions.back();
+    }
+    proposed.mutable_version_header()->set_top_level_version(1);
+    VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().ReconcileMetadata(
+        proposed, "test"));
+  }
+
+  // Replays `history` onto many fresh peers and checks each one ends with
+  // `expected`.
+  void ExpectPeersConverge(const History &history, const AliasMap &expected) {
+    ResetNode();
+    Deliver(history);
+    EXPECT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum), expected)
+        << "in-order delivery";
+
+    ResetNode();
+    ReconcileLatest(history);
+    EXPECT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum), expected)
+        << "single reconcile batch";
+
+    std::mt19937 rng(20261002);
+    for (int trial = 0; trial < 50; ++trial) {
+      ResetNode();
+      Deliver(history, &rng);
+      ASSERT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum), expected)
+          << "random delivery, trial " << trial;
+    }
+  }
+};
+
+// Moving an alias to an index whose metadata version is lower than the old
+// owner's must not lose the alias, on the origin or on any peer.
+TEST_F(AliasConvergenceTest, UpdateToLowerVersionIndexKeepsAlias) {
+  History history;
+  CreateIndex("idx");
+  CreateIndex("idx2");
+  for (const auto *alias : {"p1", "p2", "p3"}) {
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, alias, "idx"));
+  }
+  Record(history);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx2"));
+  Record(history);
+
+  AliasMap expected = {{"p1", "idx2"}, {"p2", "idx"}, {"p3", "idx"}};
+  EXPECT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum), expected);
+  ExpectPeersConverge(history, expected);
+}
+
+// Moving an alias back and forth leaves it on the last target everywhere,
+// whatever the indexes' metadata versions are.
+TEST_F(AliasConvergenceTest, RepeatedUpdatesFollowLastTarget) {
+  History history;
+  CreateIndex("idx_a");
+  CreateIndex("idx_b");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "pad", "idx_b"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "pad2", "idx_b"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p", "idx_a"));
+  Record(history);
+  for (const auto *target : {"idx_b", "idx_a", "idx_b"}) {
+    VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p", target));
+    Record(history);
+  }
+
+  AliasMap expected = {{"p", "idx_b"}, {"pad", "idx_b"}, {"pad2", "idx_b"}};
+  EXPECT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum), expected);
+  ExpectPeersConverge(history, expected);
+}
+
+// Two nodes run FT.ALIASUPDATE on the same alias to different targets at the
+// same time. Every peer must pick the same single owner.
+TEST_F(AliasConvergenceTest, ConcurrentUpdatesConverge) {
+  auto start = [&](History &history) {
+    CreateIndex("idx");
+    CreateIndex("idx2");
+    CreateIndex("idx3");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx"));
+    Record(history);
+  };
+  History node_a;
+  start(node_a);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx2"));
+  Record(node_a);
+
+  ResetNode();
+  History node_b;
+  start(node_b);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx3"));
+  Record(node_b);
+
+  History merged = node_a;
+  Merge(merged, node_b);
+  ResetNode();
+  Deliver(merged);
+  auto reference = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(reference.size(), 1);
+  EXPECT_EQ(reference[0].first, "p1");
+  EXPECT_THAT(reference[0].second, testing::AnyOf("idx2", "idx3"));
+  ExpectPeersConverge(merged, reference);
+}
+
+// After concurrent updates, FT.ALIASDEL removes the alias for good: dropping
+// the index it resolved to must not bring it back through a stale claim.
+TEST_F(AliasConvergenceTest, DeleteAfterConcurrentUpdatesLeavesNoClaim) {
+  auto start = [&](History &history) {
+    CreateIndex("idx");
+    CreateIndex("idx2");
+    CreateIndex("idx3");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx"));
+    Record(history);
+  };
+  History node_a;
+  start(node_a);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx2"));
+  Record(node_a);
+  ResetNode();
+  History node_b;
+  start(node_b);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx3"));
+  Record(node_b);
+  History merged = node_a;
+  Merge(merged, node_b);
+
+  ResetNode();
+  ReconcileLatest(merged);
+  History after;
+  Record(after);
+  auto owner = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(owner.size(), 1);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveAlias(kDbNum, "p1"));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(kDbNum, owner[0].second));
+  Record(after);
+
+  EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
+  ExpectPeersConverge(after, {});
+}
+
+// Dropping the index an alias was moved to removes the alias on every peer;
+// the old owner's earlier claim must not resurface.
+TEST_F(AliasConvergenceTest, DropIndexAfterUpdateConverges) {
+  History history;
+  CreateIndex("idx");
+  CreateIndex("idx2");
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "pad", "idx"));
+  VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx"));
+  Record(history);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx2"));
+  Record(history);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(kDbNum, "idx2"));
+  Record(history);
+
+  AliasMap expected = {{"pad", "idx"}};
+  EXPECT_EQ(SchemaManager::Instance().GetAllAliases(kDbNum), expected);
+  ExpectPeersConverge(history, expected);
 }
 
 }  // namespace

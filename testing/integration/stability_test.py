@@ -24,6 +24,15 @@ class StabilityTests(parameterized.TestCase):
     def tearDown(self):
         if self.valkey_cluster_under_test:
             self.valkey_cluster_under_test.terminate()
+            # Logged, not asserted: raising in tearDown would mask whichever
+            # assertion actually failed.
+            wedged = self.valkey_cluster_under_test.get_servers_needing_sigkill()
+            if wedged:
+                logging.error(
+                    "Nodes ignored SIGTERM and had to be SIGKILLed, so "
+                    "their main thread was blocked at teardown: %s",
+                    wedged,
+                )
         super().tearDown()
 
 
@@ -681,8 +690,11 @@ class StabilityTests(parameterized.TestCase):
                 "loglevel": "debug",
                 "enable-debug-command": "yes",
                 "repl-diskless-load": config.repl_diskless_load,
-                # tripled, for slow machines
-                "cluster-node-timeout": "45000",
+                # Capped by the failover path: promotion needs at least
+                # cluster-node-timeout, and periodic_failover_task allows only
+                # 30s for it (wait_for_new_primary). Raise those timeouts first
+                # if this needs to go higher.
+                "cluster-node-timeout": "15000",
             },
             {
                 f"{valkey_search_path}": "--reader-threads 2 --writer-threads 5 --log-level notice"
@@ -715,6 +727,25 @@ class StabilityTests(parameterized.TestCase):
 
         if results is None:
             self.fail("Failed to run stability test")
+
+        # A wedged node never dies, so the termination check below cannot see
+        # it. Checked before the memtier and background-task assertions, which
+        # only see the errors it causes.
+        unresponsive = self.valkey_cluster_under_test.get_unresponsive_servers()
+        unexpected_unresponsive = [
+            port
+            for port in unresponsive
+            if port not in results.intentionally_failed_ports
+        ]
+        if unexpected_unresponsive:
+            self.fail(
+                "Valkey servers stopped responding to PING but are still "
+                f"running, ports: {unexpected_unresponsive}. This is a hang, "
+                "not a crash, so there is no bug report: check the last "
+                "main-thread line in each per-node *_stdout.txt (the "
+                "[THREAD_MNG] heartbeat is a different thread). "
+                f"Intentionally failed ports: {results.intentionally_failed_ports}"
+            )
 
         # Check for unexpectedly terminated servers
         # During failover testing, only allow servers that were intentionally shut down

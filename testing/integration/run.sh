@@ -30,7 +30,7 @@ Usage: test.sh [options...]
     --help | -h              Print this help message and exit.
     --clean                  Clean the current build configuration.
     --debug                  Build for debug version.
-    --test                   Specify the test name [stability|vector_search_integration]. Default all.
+    --test                   Specify the test name [stability|vector_search_integration|fork_suspend_wedge_integration]. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
     --tsan                   Build the TSan version of the module.
@@ -134,7 +134,9 @@ fi
 # Source the common.rc after we setup our environment variables
 . ${WORKSPACE_HOME}/scripts/common.rc
 
-if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]]; then
+# fork_suspend_wedge_integration is deliberately not part of "all": it is a
+# reproducer for the HNSW writer hang and is expected to fail until that is fixed.
+if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]] && [[ ! "${TEST}" == "fork_suspend_wedge_integration" ]]; then
     printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
     print_usage
     exit 1

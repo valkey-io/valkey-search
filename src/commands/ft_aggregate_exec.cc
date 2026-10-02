@@ -1199,6 +1199,20 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
+    // Write the single VR distance into its registered record attribute slot.
+    // In the single-VR model the matched distance is carried in
+    // Neighbor::distance; a non-VR OR-branch match outside the radius carries
+    // no VR distance (has_vr_distance == false) and is omitted. Gate on the
+    // flag, not the float: the build uses -ffast-math (-ffinite-math-only), so
+    // a float sentinel comparison is unreliable.
+    if (!parameters.vr_score_field_name_.empty() && n.has_vr_distance) {
+      auto it = parameters.record_indexes_by_alias_.find(
+          parameters.vr_score_field_name_);
+      if (it != parameters.record_indexes_by_alias_.end()) {
+        rec->fields_.at(it->second) = expr::Value(n.distance);
+      }
+    }
+
     if (n.attribute_contents.has_value() && !parameters.no_content) {
       bool should_drop_record = false;
 

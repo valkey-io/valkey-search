@@ -1466,6 +1466,68 @@ INSTANTIATE_TEST_SUITE_P(
           absl::StrCat(distance_metric, "_", std::get<1>(info.param).test_name);
       return test_name;
     });
+// ---------------------------------------------------------------------------
+// GetVrScoreFieldName tests (single-VR model)
+// ---------------------------------------------------------------------------
+
+// Helper: build a UnitTestSearchParameters whose filter_parse_results contains
+// a manually-constructed predicate tree and set has_vector_range accordingly.
+static UnitTestSearchParameters MakeParamsWithVrPredicates(
+    std::unique_ptr<query::Predicate> root) {
+  UnitTestSearchParameters params;
+  params.filter_parse_results.root_predicate = std::move(root);
+  params.has_vector_range =
+      query::CountVectorRangePredicates(
+          params.filter_parse_results.root_predicate.get()) > 0;
+  return params;
+}
+
+class GetVrScoreFieldNameTest : public vmsdk::ValkeyTest {};
+
+// Zero VR predicates → empty string.
+TEST_F(GetVrScoreFieldNameTest, ZeroVrPredicates) {
+  UnitTestSearchParameters params;
+  // No root predicate set; has_vector_range stays false.
+  EXPECT_TRUE(query::GetVrScoreFieldName(params).empty());
+}
+
+// One VR predicate without $yield_distance_as → "" (Redisearch parity: the VR
+// distance is surfaced ONLY under an explicit alias, never a default
+// "__<field>_score"). An empty name suppresses the field everywhere.
+TEST_F(GetVrScoreFieldNameTest, OneVrPredicateNoExplicitAlias) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob", std::nullopt, std::nullopt);
+  auto params = MakeParamsWithVrPredicates(std::move(vr));
+
+  EXPECT_TRUE(params.has_vector_range);
+  EXPECT_TRUE(query::GetVrScoreFieldName(params).empty());
+}
+
+// One VR predicate with explicit alias → "my_dist".
+TEST_F(GetVrScoreFieldNameTest, OneVrPredicateWithExplicitAlias) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob", std::optional<std::string>("my_dist"),
+      std::nullopt);
+  auto params = MakeParamsWithVrPredicates(std::move(vr));
+
+  EXPECT_EQ(query::GetVrScoreFieldName(params), "my_dist");
+}
+
+// Single VR predicate nested under a compound AND (single-VR compound) →
+// its alias is still found.
+TEST_F(GetVrScoreFieldNameTest, SingleVrUnderComposedAnd) {
+  auto vr = std::make_unique<query::VectorRangePredicate>(
+      "vec1", "vec1_id", 1.0, "blob1", std::optional<std::string>("dist"),
+      std::nullopt);
+  std::vector<std::unique_ptr<query::Predicate>> children;
+  children.push_back(std::move(vr));
+  auto root = std::make_unique<query::ComposedPredicate>(
+      query::LogicalOperator::kAnd, std::move(children));
+
+  auto params = MakeParamsWithVrPredicates(std::move(root));
+  EXPECT_TRUE(params.has_vector_range);
+  EXPECT_EQ(query::GetVrScoreFieldName(params), "dist");
+}
 
 class ScoreTextQueryTestBase : public ValkeySearchTest {
  protected:

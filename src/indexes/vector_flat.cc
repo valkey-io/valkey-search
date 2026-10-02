@@ -276,8 +276,6 @@ float VectorFlat<T>::ComputeDistance(absl::string_view query,
 
 // Linear scan of the contiguous FLAT store: the loop and distance kernel of
 // FLAT KNN (BruteforceSearch::searchKnn), resolving a key only for a match.
-// `epsilon` is accepted for interface uniformity with VectorHNSW and ignored:
-// the linear scan is already exhaustive.
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::SearchRange(
     absl::string_view query, float radius, cancel::Token &cancellation_token,

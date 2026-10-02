@@ -230,11 +230,13 @@ class VectorRangePredicate : public Predicate {
   double GetRadius() const { return radius_; }
   absl::string_view GetVectorParamName() const { return vector_param_name_; }
   const std::optional<std::string>& GetScoreAs() const { return score_as_; }
-  // epsilon widens the HNSW exploration shell to radius*(1+epsilon), bridging
-  // connectivity gaps near the ball boundary. Shell nodes are traversed but not
-  // emitted. Forwarded to VectorBase::SearchRange by SearchVectorRangeQuery.
-  // nullopt means "use the default" (0.01, matching RediSearch).
+  // nullopt when the query gives no $epsilon; kept as given so the predicate
+  // round-trips on the wire.
   std::optional<double> GetEpsilon() const { return epsilon_; }
+  // The HNSW traversal shell factor: $epsilon, or 0.01 as in RediSearch.
+  float GetSearchEpsilon() const {
+    return static_cast<float>(epsilon_.value_or(0.01));
+  }
 
   void SetQueryVector(std::string query);
   absl::string_view GetQueryVector() const { return query_vector_; }

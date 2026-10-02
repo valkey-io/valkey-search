@@ -154,11 +154,12 @@ class VectorHNSW : public VectorType<T> {
       bool enable_partial_results = false) override
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
+  // Lock-free for the same reason as Search.
   absl::StatusOr<std::vector<Neighbor>> SearchRange(
       absl::string_view query, float radius, cancel::Token &cancellation_token,
       float epsilon = 0.0f,
-      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr)
-      ABSL_LOCKS_EXCLUDED(resize_mutex_) override;
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) override
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
  protected:
   absl::Status ResizeIfFull() ABSL_LOCKS_EXCLUDED(resize_mutex_);

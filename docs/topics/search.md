@@ -64,6 +64,8 @@ Thus on reload a backfilling index must restart the backfill at the beginning. H
 
 Query commands operate by blocking the client and sending the query to the background threads to locate a set of keys. Then the client is unblocked and control resumes on the main thread which can access the database to generate the final result. If a key is modified by another client while a query is in progress then that key may or may not be included in the query result. In no case will a key be returned which does not satisfy the query expression.
 
+Queries rank the matching keys by a relevance score. See [Search - Scoring](search-scoring.md) for how scores are computed.
+
 ## Save/Restore
 
 A generated RDB file (either due to an explicit save or full-sync operation) contains index definitions (index metadata), any vector field indexes, and a list of the keys currently in the index. On a load operation, each index is recreated from the definitions, any vector field indexes are reloaded, and any non-vector fields are rebuilt from the loaded Valkey database using the list of keys. If the index had a backfill in progress at the time of the save, then on completion of a load a backfill will be initiated for it.

@@ -1202,6 +1202,27 @@ class TestNumericFormatGate(ValkeySearchTestCaseDebugMode):
             assert result == [1, b"nfg:1", sort_key,
                               [b"p", b"2.500"]], f"emulate-release {release}"
 
+        # The compatibility counter counts only legacy replies that carry a
+        # NUMERIC sort key or RETURN value.
+        def compat_count():
+            return int(client.info("search").get(
+                "search_compatibility-ft_search_numeric_format", 0))
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.2.1") == b"OK"
+        before = compat_count()
+        client.execute_command("FT.SEARCH", "nfg_idx", "*", "DIALECT", "2")
+        assert compat_count() == before
+        client.execute_command("FT.SEARCH", "nfg_idx", "*",
+                               "RETURN", "1", "p", "DIALECT", "2")
+        assert compat_count() == before + 1
+        client.execute_command(*query, "DIALECT", "2")
+        assert compat_count() == before + 2
+        assert client.execute_command(
+            "CONFIG", "SET", "search.emulate-release", "1.3.0") == b"OK"
+        client.execute_command("FT.SEARCH", "nfg_idx", "*",
+                               "RETURN", "1", "p", "DIALECT", "2")
+        assert compat_count() == before + 2
+
 
 class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
     """

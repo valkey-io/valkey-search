@@ -27,7 +27,7 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
-namespace {
+
 std::optional<double> ParseNumber(absl::string_view data) {
   double value;
   if (absl::AsciiStrToLower(data) == "nan" || !absl::SimpleAtod(data, &value)) {
@@ -35,7 +35,6 @@ std::optional<double> ParseNumber(absl::string_view data) {
   }
   return value;
 }
-}  // namespace
 
 Numeric::Numeric(const data_model::NumericIndex &numeric_index_proto)
     : IndexBase(IndexerType::kNumeric) {

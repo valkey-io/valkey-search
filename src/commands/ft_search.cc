@@ -19,12 +19,12 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/string_view.h"
 #include "absl/time/clock.h"
 #include "src/commands/commands.h"
 #include "src/commands/ft_search_parser.h"
 #include "src/indexes/index_base.h"
+#include "src/indexes/numeric.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
@@ -350,16 +350,20 @@ class CursorSearchResult : public Cursor {
   size_t end_;
 };
 
-// True when the RETURN attribute resolved to a NUMERIC schema attribute.
-bool IsReturnAttributeNumeric(const query::ReturnAttribute &ret_attr,
-                              const IndexSchema &index_schema) {
-  if (!ret_attr.attribute_alias) {
-    return false;
-  }
-  auto idx = index_schema.GetIndex(
-      vmsdk::ToStringView(ret_attr.attribute_alias.get()));
+// True when the schema declares the attribute NUMERIC; a synthesized distance
+// alias is not in the schema and so is never re-serialized.
+bool IsNumericAttribute(absl::string_view attribute,
+                        const IndexSchema &index_schema) {
+  auto idx = index_schema.GetIndex(attribute);
   return idx.ok() &&
          idx.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
+}
+
+bool IsReturnAttributeNumeric(const query::ReturnAttribute &ret_attr,
+                              const IndexSchema &index_schema) {
+  return ret_attr.attribute_alias &&
+         IsNumericAttribute(vmsdk::ToStringView(ret_attr.attribute_alias.get()),
+                            index_schema);
 }
 
 }  // namespace
@@ -384,20 +388,25 @@ SearchCommand::RowFormat SearchCommand::GetRowFormat() const {
         1, 3, 0, "ft_search_sortkey_nil", [&]() { return true; },
         [&]() { return false; });
   }
-  // Issue #1353 item 6, filter path only: the KNN path pre-fills NUMERIC
-  // content from the index on a worker thread and is handled separately.
+  // Issue #1353 item 6, filter path only. The gate runs only when a NUMERIC
+  // value reaches the reply, so its counter counts only replies that change.
   format.numeric_return_attrs.assign(return_attributes.size(), false);
   if (IsNonVectorQuery() && !no_content) {
-    const bool numeric_format = VALKEY_SEARCH_COMPATIBILITY_FIX(
-        1, 3, 0, "ft_search_numeric_format", [&]() { return true; },
-        [&]() { return false; });
-    format.numeric_sort_key =
-        numeric_format && with_sort_keys && IsSortByFieldNumeric(*this, false);
-    if (numeric_format) {
-      for (size_t i = 0; i < return_attributes.size(); ++i) {
-        format.numeric_return_attrs[i] =
-            IsReturnAttributeNumeric(return_attributes[i], *index_schema);
-      }
+    const bool sort_key_numeric =
+        with_sort_keys && sortby_parameter.has_value() &&
+        IsNumericAttribute(sortby_parameter->field, *index_schema);
+    std::vector<bool> return_numeric(return_attributes.size(), false);
+    bool any_numeric = sort_key_numeric;
+    for (size_t i = 0; i < return_attributes.size(); ++i) {
+      return_numeric[i] =
+          IsReturnAttributeNumeric(return_attributes[i], *index_schema);
+      any_numeric = any_numeric || return_numeric[i];
+    }
+    if (any_numeric && VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 3, 0, "ft_search_numeric_format",
+                           [&]() { return true; }, [&]() { return false; })) {
+      format.numeric_sort_key = sort_key_numeric;
+      format.numeric_return_attrs = std::move(return_numeric);
     }
   }
   if (IsVectorRangeQuery()) {
@@ -440,10 +449,10 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
     } else {
       value = GetSortKeyValue(neighbor, *this);
     }
-    double parsed;
-    if (value.has_value() && format.numeric_sort_key &&
-        absl::SimpleAtod(*value, &parsed)) {
-      value = expr::FormatDoubleLossless(parsed);
+    if (value.has_value() && format.numeric_sort_key) {
+      if (auto parsed = indexes::ParseNumber(*value)) {
+        value = expr::FormatNumericSortKey(*parsed);
+      }
     }
     if (!value.has_value() && format.nil_absent_sort_key) {
       ValkeyModule_ReplyWithNull(ctx);
@@ -508,13 +517,16 @@ size_t SearchCommand::ReplyRowElements(ValkeyModuleCtx *ctx,
       auto it = contents.find(ret_id);
       if (it != contents.end()) {
         ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-        double parsed;
-        if (format.numeric_return_attrs[ret_attr_idx] &&
-            absl::SimpleAtod(vmsdk::ToStringView(it->second.value.get()),
-                             &parsed)) {
+        std::optional<double> parsed;
+        if (format.numeric_return_attrs[ret_attr_idx]) {
+          parsed =
+              indexes::ParseNumber(vmsdk::ToStringView(it->second.value.get()));
+        }
+        if (parsed.has_value()) {
           ValkeyModule_ReplyWithString(
-              ctx,
-              vmsdk::MakeUniqueValkeyString(expr::FormatDouble(parsed)).get());
+              ctx, vmsdk::MakeUniqueValkeyString(
+                       expr::FormatNumericReturnValue(*parsed))
+                       .get());
         } else {
           ValkeyModule_ReplyWithString(ctx, it->second.value.get());
         }

@@ -34,7 +34,7 @@ class ExprTest : public vmsdk::ValkeyTest {
       if (itr != attrs.attrs.end()) {
         return itr->second;
       } else {
-        return Value{};
+        return Value::Missing();
       }
     }
   };
@@ -116,6 +116,14 @@ TEST_F(ExprTest, TypesTest) {
       {"exists(@notfound)", Value(false)},
       {"exists(@one)", Value(true)},
       {"exists(@xx)", std::nullopt},
+      {"case(1, 'true', 'false')", Value("true")},
+      {"case(0, 'true', 'false')", Value("false")},
+      {"case(@one == 1, @one, @two)", Value(1.0)},
+      {"case(@one == 2, @one, @two)", Value(2.0)},
+      {"case(@notfound, 1, 2)", Value::Missing()},
+      // The branch that is not selected must not propagate its missing field.
+      {"case(1, @one, @notfound)", Value(1.0)},
+      {"case(0, @notfound, @two)", Value(2.0)},
       {"log(1.0)", Value(0.0)},
       {"abs(-1.0)", Value(1.0)},
       {"sqrt(4.0)", Value(2.0)},
@@ -187,6 +195,15 @@ TEST_F(ExprTest, EmptyExpressionIsRejected) {
 
 TEST_F(ExprTest, NotOperatorRequiresOperand) {
   for (absl::string_view expr : {"!", "! ", "!()"}) {
+    auto compiled = Expression::Compile(cc, expr);
+    EXPECT_FALSE(compiled.ok())
+        << "Expression unexpectedly compiled: '" << expr << "'";
+  }
+}
+
+TEST_F(ExprTest, CaseRequiresExactlyThreeArguments) {
+  for (absl::string_view expr :
+       {"case()", "case(1)", "case(1, 2)", "case(1, 2, 3, 4)"}) {
     auto compiled = Expression::Compile(cc, expr);
     EXPECT_FALSE(compiled.ok())
         << "Expression unexpectedly compiled: '" << expr << "'";

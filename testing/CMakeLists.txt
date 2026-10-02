@@ -178,6 +178,7 @@ set(QUERY_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/query/multi_search_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/rank_fusion_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/query/response_generator_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/vector_range_predicate_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/search_converter_test.cc)
 
 add_executable(query_test ${QUERY_TEST_SOURCES})

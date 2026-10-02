@@ -675,6 +675,56 @@ def compute_data_sets(vector_data_type="FLOAT32"):
                     for z in vector_points
                 ]
 
+    #
+    # Two-vector dataset: designed for multi-VR predicate compatibility tests.
+    # Has two vector fields (v1 and v2) with asymmetric values so that distance
+    # ordering on v1 differs from v2.  Also includes numeric and tag fields.
+    #
+    data["two vectors"] = {}
+    two_vec_create_cmds = {
+        "hash": (
+            "FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: SCHEMA "
+            "v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "n1 NUMERIC t1 TAG"
+        ),
+        "json": (
+            "FT.CREATE json_idx1 ON JSON PREFIX 1 json: SCHEMA "
+            "$.v1 AS v1 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.v2 AS v2 VECTOR FLAT 6 DIM 3 TYPE FLOAT32 DISTANCE_METRIC L2 "
+            "$.n1 AS n1 NUMERIC $.t1 AS t1 TAG"
+        ),
+    }
+    # 6 documents with asymmetric v1/v2 placements:
+    #   doc:0  v1=(0,0,0)  v2=(0,0,0)   -- origin for both
+    #   doc:1  v1=(1,0,0)  v2=(3,0,0)   -- close on v1, far on v2
+    #   doc:2  v1=(3,0,0)  v2=(1,0,0)   -- far on v1, close on v2
+    #   doc:3  v1=(2,0,0)  v2=(2,0,0)   -- moderate both
+    #   doc:4  v1=(5,0,0)  v2=(5,0,0)   -- far both
+    #   doc:5  v1=(10,0,0) v2=(10,0,0)  -- very far both
+    two_vec_docs_template = [
+        ("0", [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], 0, "A"),
+        ("1", [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], 1, "B"),
+        ("2", [3.0, 0.0, 0.0], [1.0, 0.0, 0.0], 2, "A"),
+        ("3", [2.0, 0.0, 0.0], [2.0, 0.0, 0.0], 3, "B"),
+        ("4", [5.0, 0.0, 0.0], [5.0, 0.0, 0.0], 4, "A"),
+        ("5", [10.0, 0.0, 0.0], [10.0, 0.0, 0.0], 5, "B"),
+    ]
+    for key_type in ["hash", "json"]:
+        data["two vectors"][CREATES_KEY(key_type)] = [two_vec_create_cmds[key_type]]
+        data["two vectors"][SETS_KEY(key_type)] = [
+            (
+                f"{key_type}:{doc_id}",
+                {
+                    "v1": array_encode(key_type, v1),
+                    "v2": array_encode(key_type, v2),
+                    "n1": n1,
+                    "t1": t1,
+                },
+            )
+            for doc_id, v1, v2, n1, t1 in two_vec_docs_template
+        ]
+
     # Tag special characters data set. Comma separator so } and | are literal;
     # avoid '-' etc. (query operators) or the reference engine rejects the query.
     tag_special_base_tags = ["a}b", "a|b", "normal", "x}y}z",
@@ -1347,6 +1397,39 @@ def compute_alias_data():
             ]
     return data
 
+### VR + text (BM-25) scoring data set ###
+#
+# Fixture for the single-VR + text compound scoring cases
+# (generate.py test_vector_range_text_bm25_scoring). A schema with both a TEXT
+# field and a vector field lets us exercise `@body:text @vec:[VECTOR_RANGE...]`
+# with WITHSCORES and confirm whether/how the VR distance affects the BM-25
+# relevance score, matching the reference engine.
+VR_TEXT_DATA_SET = "vr text"
+
+
+def compute_vr_text_data_sets():
+    # Vectors chosen so distances to the [0,0,0] query vector differ per doc,
+    # while the text field drives the BM-25 score. VECTOR_DIM == 3.
+    def vec(x, y, z):
+        return struct.pack(f"<{VECTOR_DIM}f", x, y, z).hex()
+
+    docs = [
+        ("hash:vt1", {"body": "hello world", "v1": bytes.fromhex(vec(0.1, 0.0, 0.0))}),
+        ("hash:vt2", {"body": "hello there", "v1": bytes.fromhex(vec(0.2, 0.0, 0.0))}),
+        ("hash:vt3", {"body": "hello hello world", "v1": bytes.fromhex(vec(0.3, 0.0, 0.0))}),
+        ("hash:vt4", {"body": "goodbye world", "v1": bytes.fromhex(vec(0.4, 0.0, 0.0))}),
+    ]
+    return {
+        VR_TEXT_DATA_SET: {
+            SETS_KEY("hash"): docs,
+            CREATES_KEY("hash"): [
+                f"FT.CREATE hash_idx1 ON HASH PREFIX 1 hash: "
+                f"SCHEMA body TEXT v1 vector HNSW 6 DIM {VECTOR_DIM} "
+                f"TYPE FLOAT32 DISTANCE_METRIC L2"
+            ],
+        }
+    }
+
 
 def load_data(client, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
     # Auto-detect data source based on data_set name
@@ -1363,6 +1446,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data_source = "sortkey"
         elif data_set == RETURN_CLAUSE_DATA_SET:
             data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
         else:
             data_source = "vector"
 
@@ -1381,6 +1466,8 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             data = compute_sortkey_data_sets()
         case "return":
             data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
         case _:
             raise ValueError(f"Unknown data source: {data_source}")
 
@@ -1434,24 +1521,56 @@ def load_data(client, data_set, key_type, data_source=None, schema_type="default
             print(f"{s}:{load_list[s][0]}:  ", k)
     return load_list
 
-def load_data_cluster(cluster_client, test_case, data_set, key_type,
-                      vector_data_type="FLOAT32", schema_type="default"):
-    # Same corpus dispatch load_data does. Hardcoding the vector corpora here
-    # is what kept the text and hybrid answer files out of cluster replay:
-    # their data sets are not in that dictionary, so the lookup below raised.
-    match data_set:
+def load_data_cluster(cluster_client, test_case, data_set, key_type, data_source=None, schema_type="default", vector_data_type="FLOAT32"):
+    # Auto-detect data source based on data_set name (mirrors load_data). Without
+    # this, every dataset fell through to compute_data_sets(), which only knows
+    # the vector datasets — so a non-vector dataset (hybrid, vr_text, text,
+    # filter, sortkey, return) replayed in cluster mode raised KeyError on
+    # data[data_set].
+    if data_source is None:
+        if data_set == "alias":
+            data_source = "alias"
+        elif data_set in HYBRID_DATASETS:
+            data_source = "hybrid"
+        elif data_set in TEXT_DATASETS:
+            data_source = "text"
+        elif data_set in FILTER_DATASETS:
+            data_source = "filter"
+        elif data_set == SORTKEY_PREFIX_DATA_SET:
+            data_source = "sortkey"
+        elif data_set == RETURN_CLAUSE_DATA_SET:
+            data_source = "return"
+        elif data_set == VR_TEXT_DATA_SET:
+            data_source = "vr_text"
+        else:
+            data_source = "vector"
+
+    match data_source:
         case "alias":
             data = compute_alias_data()
-        case _ if data_set in HYBRID_DATASETS:
-            data = compute_hybrid_data_sets()
-        case _ if data_set in TEXT_DATASETS:
-            data = compute_text_data_sets(data_set, schema_type=schema_type)
-        case _:
+        case "vector":
             data = compute_data_sets(vector_data_type=vector_data_type)
+        case "text":
+            data = compute_text_data_sets(data_set, schema_type=schema_type)
+        case "hybrid":
+            data = compute_hybrid_data_sets()
+        case "filter":
+            data = compute_filter_data_sets(data_set)
+        case "sortkey":
+            data = compute_sortkey_data_sets()
+        case "return":
+            data = compute_return_data_sets()
+        case "vr_text":
+            data = compute_vr_text_data_sets()
+        case _:
+            raise ValueError(f"Unknown data source: {data_source}")
 
     primary0 = test_case.new_client_for_primary(0)
     for create_cmd in data[data_set][CREATES_KEY(key_type)]:
-        primary0.execute_command(create_cmd)
+        if isinstance(create_cmd, (list, tuple)):
+            primary0.execute_command(*create_cmd)
+        else:
+            primary0.execute_command(create_cmd)
 
     for key, fields in data[data_set][SETS_KEY(key_type)]:
         if key_type == "hash":

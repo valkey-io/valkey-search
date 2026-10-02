@@ -232,6 +232,10 @@ struct SearchParameters {
   uint64_t timeout_ms{0};
   bool no_content{false};
   FilterParseResults filter_parse_results;
+  // True when the filter tree contains a (single) VectorRangePredicate. In the
+  // single-VR model the matched distance is carried in Neighbor::distance;
+  // there is no per-predicate score-slot side channel.
+  bool has_vector_range{false};
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
@@ -277,8 +281,8 @@ struct SearchParameters {
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
   // Indicates whether the search requires complete results (neighbors/keys) to
   // be able to return correct results. An example of this is when sorting on a
-  // particular is needed on the results. This should be overridden in derived
-  // classes if needed. The default implementation returns false.
+  // particular field is needed on the results. This should be overridden in
+  // derived classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const {
     return sortby_parameter.has_value() || inkeys.has_value();
   }
@@ -384,6 +388,13 @@ size_t EvaluateFilterAsPrimary(
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters);
 
+// Vector Range query (no KNN): returns the keys matching the filter, with the
+// VR distance in Neighbor::distance, in key order. A query that is only the VR
+// predicate is answered by VectorBase::SearchRange; a compound one evaluates
+// the full predicate tree per fetched key.
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
+    const SearchParameters &parameters);
+
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
@@ -392,8 +403,28 @@ CalcBestMatchingPrefilteredKeys(
 
 bool QueryHasTextPredicate(const SearchParameters &parameters);
 
+// Returns the distance score field name for the single VR predicate in the
+// query: the $yield_distance_as (or AS) name if set, otherwise "" (empty).
+// Redisearch parity: a VECTOR_RANGE distance is surfaced ONLY under an explicit
+// alias — there is no default "__<alias>_score" field — so an empty name here
+// suppresses the field wherever emission is gated on a non-empty name. Also
+// returns "" when the query has no VR predicate.
+std::string GetVrScoreFieldName(const SearchParameters &parameters);
+
+// Count the number of VectorRangePredicate nodes in the predicate tree. Used
+// at parse time to reject unsupported multi-VR queries (single-VR only).
+// Returns 0 when predicate is null.
+size_t CountVectorRangePredicates(const Predicate *predicate);
+
 // Check if no results should be returned based on limit parameters
 bool ShouldReturnNoResults(const SearchParameters &parameters);
+
+// Increments the developer-visible "nonvector_results_fetched_limited_count"
+// INFO counter. The counter object is file-static to search.cc; this accessor
+// lets other translation units (e.g. the HNSW range search) report the same
+// "fetch hit the max-candidates cap" signal against the one shared counter,
+// rather than registering a duplicate field.
+void RecordNonVectorResultsFetchedLimited();
 
 // Scans for the vector filter delimiter `=>` that is followed by `[` (after
 // optional whitespace). Returns the position of `=>` or npos if not found.

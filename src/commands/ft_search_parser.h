@@ -54,6 +54,11 @@ struct SearchCommand : public QueryCommand {
   // effective
   bool return_no_fields{false};
 
+  // Returns true if this is a standalone vector range query (no KNN).
+  bool IsVectorRangeQuery() const {
+    return IsNonVectorQuery() && has_vector_range;
+  }
+
  private:
   // Settings shared by every row of a reply.
   struct RowFormat {
@@ -61,6 +66,9 @@ struct SearchCommand : public QueryCommand {
     bool sort_by_vec_score{false};
     bool nil_absent_sort_key{false};
     std::string sort_key_prefix;
+    // The single VR distance field name (query::GetVrScoreFieldName).
+    // Empty unless the query named the distance ($yield_distance_as or AS).
+    std::string vr_field;
   };
   RowFormat GetRowFormat() const;
   // Replies a document's elements: key, [score], [sort key], fields. Returns

@@ -12,11 +12,14 @@
 #include <string>
 #include <utility>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/status/status.h"
 #include "absl/strings/str_format.h"
 #include "gmock/gmock.h"
+#include "google/protobuf/any.pb.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/coordinator/metadata_manager.h"
 #include "testing/common.h"
 #include "testing/coordinator/common.h"
@@ -604,6 +607,160 @@ TEST_P(OnSwapDBCallbackTest, OnSwapDBCallback) {
   EXPECT_EQ(test_index_schema->db_num_, expected_dbnum != -1
                                             ? expected_dbnum
                                             : test_case.index_schema_db_num);
+}
+
+// Coordinator metadata (gossip / FT.INTERNAL_UPDATE) reaches the schema
+// manager through the MetadataManager update callback without ever passing
+// through the FT.CREATE argument parser. The configurable limits must still be
+// enforced on that path, so a definition FT.CREATE would reject is not
+// materialized just because it arrived as a proto.
+TEST_F(SchemaManagerTest, MetadataUpdateRejectsOverLimitSchema) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  // Lower the M limit below the fixture's m=240 to exercise the check without
+  // depending on the hard-cap default.
+  const auto saved_max_m = options::GetMaxM().GetValue();
+  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
+  absl::Cleanup restore = [saved_max_m] {
+    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
+  };
+
+  auto metadata = std::make_unique<google::protobuf::Any>();
+  metadata->PackFrom(test_index_schema_proto_);
+  auto status = coordinator::MetadataManager::Instance()
+                    .CreateEntry(kSchemaManagerMetadataTypeName,
+                                 coordinator::ObjName(db_num_, index_name_),
+                                 std::move(metadata))
+                    .status();
+
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  EXPECT_FALSE(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_).ok());
+}
+
+// The same proto within limits is created normally on the metadata path.
+TEST_F(SchemaManagerTest, MetadataUpdateAcceptsWithinLimitSchema) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  auto metadata = std::make_unique<google::protobuf::Any>();
+  metadata->PackFrom(test_index_schema_proto_);
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance()
+                      .CreateEntry(kSchemaManagerMetadataTypeName,
+                                   coordinator::ObjName(db_num_, index_name_),
+                                   std::move(metadata))
+                      .status());
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
+}
+
+// The limit check runs inside the reconciliation callback, so it only ever sees
+// entries ReconcileMetadata has already decided to apply under its
+// (version, encoding_version, fingerprint) rule. An over-limit entry that loses
+// that comparison is skipped before validation and cannot fail the import; one
+// that wins is validated and rejected.
+TEST_F(SchemaManagerTest, ReconcileOnlyValidatesEntriesItApplies) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+
+  // Materialize the fixture index (m=240) while the limit still allows it.
+  // Create it twice so the live entry sits at version 1 and an older (version
+  // 0) proposal is expressible without underflow.
+  for (int i = 0; i < 2; ++i) {
+    auto metadata = std::make_unique<google::protobuf::Any>();
+    metadata->PackFrom(test_index_schema_proto_);
+    ASSERT_TRUE(coordinator::MetadataManager::Instance()
+                    .CreateEntry(kSchemaManagerMetadataTypeName,
+                                 coordinator::ObjName(db_num_, index_name_),
+                                 std::move(metadata))
+                    .ok());
+  }
+  const auto encoded_id = coordinator::ObjName(db_num_, index_name_).Encode();
+  auto global = coordinator::MetadataManager::Instance().GetGlobalMetadata();
+  const auto &existing = global->type_namespace_map()
+                             .at(std::string(kSchemaManagerMetadataTypeName))
+                             .entries()
+                             .at(encoded_id);
+  const uint32_t existing_version = existing.version();
+  const uint64_t existing_fingerprint = existing.fingerprint();
+  const uint32_t existing_encoding = existing.encoding_version();
+  ASSERT_GE(existing_version, 1U);
+
+  const auto saved_max_m = options::GetMaxM().GetValue();
+  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
+  absl::Cleanup restore = [saved_max_m] {
+    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
+  };
+
+  auto make_proposed = [&](uint32_t version) {
+    coordinator::GlobalMetadata proposed;
+    auto &entries = (*proposed.mutable_type_namespace_map())[std::string(
+        kSchemaManagerMetadataTypeName)];
+    coordinator::GlobalMetadataEntry entry;
+    entry.set_version(version);
+    entry.set_fingerprint(existing_fingerprint + 1);
+    entry.set_encoding_version(existing_encoding);
+    entry.mutable_content()->PackFrom(test_index_schema_proto_);
+    (*entries.mutable_entries())[encoded_id] = entry;
+    proposed.mutable_version_header()->set_top_level_version(version);
+    return proposed;
+  };
+
+  // Older version: reconcile ignores the entry, so the over-limit content is
+  // never validated and the existing index is untouched.
+  VMSDK_EXPECT_OK(coordinator::MetadataManager::Instance().ReconcileMetadata(
+      make_proposed(existing_version - 1), "test"));
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
+
+  // Newer version: reconcile applies the entry, which now fails the limit
+  // check. The check runs before the installed schema is removed, so the
+  // rejected update leaves the existing index in place.
+  auto before = SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(before);
+  auto status = coordinator::MetadataManager::Instance().ReconcileMetadata(
+      make_proposed(existing_version + 1), "test");
+  EXPECT_EQ(status.code(), absl::StatusCode::kOutOfRange);
+  EXPECT_THAT(status.message(), testing::HasSubstr("M"));
+  auto after = SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(after);
+  EXPECT_EQ(after.value(), before.value());
+}
+
+// In coordinated mode FLUSHDB removes each live schema and re-materializes it
+// from its own ToProto(). That recreation must not be subject to the limit
+// check: a limit lowered after the index was created would otherwise turn a
+// flush into an index loss, even though the cluster metadata still holds it.
+TEST_F(SchemaManagerTest, FlushDBRecreatesIndexEvenIfNowOverLimit) {
+  coordinator::MetadataManager::InitInstance(std::move(test_metadata_manager_));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/true));
+  VMSDK_EXPECT_OK(SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status());
+  auto previous =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(previous);
+
+  // Lower max-vector-m below the fixture's m=240 after creation.
+  const auto saved_max_m = options::GetMaxM().GetValue();
+  VMSDK_EXPECT_OK(options::GetMaxM().SetValue(32));
+  absl::Cleanup restore = [saved_max_m] {
+    VMSDK_EXPECT_OK(options::GetMaxM().SetValue(saved_max_m));
+  };
+
+  SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_);
+
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+  auto recreated =
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+  VMSDK_EXPECT_OK(recreated);
+  EXPECT_NE(recreated.value(), previous.value());
 }
 
 }  // namespace valkey_search

@@ -1173,7 +1173,7 @@ absl::Status FilterParser::MaybeConsumeQMABlock(query::Predicate& predicate) {
 }
 
 // Parses a QMA block. Expects the parser position to be after `=> {`.
-// Parses `$weight:` followed by a positive float, expects closing `}`.
+// Parses `$weight:` followed by a non-negative float, expects closing `}`.
 // Returns the weight value on success.
 absl::StatusOr<double> FilterParser::ParseQMABlock() {
   // Parse attribute name starting with $
@@ -1206,7 +1206,7 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
     return absl::InvalidArgumentError("Missing value for QMA attribute name");
   }
   // Parse the number manually. Non-numeric input fails SimpleAtod below and
-  // non-positive values (including a leading '-') are caught by value <= 0.
+  // negative values (a leading '-') are caught by value < 0.
   std::string number_str;
   if (!IsEnd() && Peek() == '-') {
     number_str += expression_[pos_++];
@@ -1217,10 +1217,10 @@ absl::StatusOr<double> FilterParser::ParseQMABlock() {
   double value;
   if (!absl::SimpleAtod(number_str, &value)) {
     return absl::InvalidArgumentError(
-        "Invalid weight value: expected a positive number");
+        "Invalid weight value: expected a non-negative number");
   }
-  if (value <= 0.0) {
-    return absl::InvalidArgumentError("Weight must be a positive number");
+  if (value < 0.0) {
+    return absl::InvalidArgumentError("Weight must be a non-negative number");
   }
   // SetWeight narrows to float, so a value above FLT_MAX would become inf and
   // then produce a NaN score wherever it meets a zero document score. Reject it

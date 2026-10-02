@@ -1174,6 +1174,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
   // TODO: Will be fixed to work with RDB version 2
   void SetUp() override {
     ValkeySearchTest::SetUp();
+    SetDebugMode(true);
     auto &write_v2 =
         const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
     auto &read_v2 =
@@ -1189,6 +1190,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
     VMSDK_EXPECT_OK(write_v2.SetValue(true));
     VMSDK_EXPECT_OK(read_v2.SetValue(true));
+    SetDebugMode(false);
     ValkeySearchTest::TearDown();
   }
 };

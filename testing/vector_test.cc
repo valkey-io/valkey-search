@@ -579,6 +579,7 @@ TEST_F(VectorIndexTest, SaveAndLoadHnsw) {
 // Verify allow-replace-deleted replaces deleted HNSW elements
 TEST_F(VectorIndexTest, AllowReplaceDeletedNoLabelReuse)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
+  SetDebugMode(true);
   VMSDK_EXPECT_OK(options::GetHNSWAllowReplaceDeletedMutable().SetValue(true));
   EXPECT_TRUE(options::GetHNSWAllowReplaceDeleted().GetValue());
   auto index = VectorHNSW<float>::Create(
@@ -612,6 +613,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto search_result = (*index)->Search(query, 13, CancelNever());
   VMSDK_EXPECT_OK(search_result);
   EXPECT_EQ(search_result->size(), 13u);
+  VMSDK_EXPECT_OK(options::GetHNSWAllowReplaceDeletedMutable().SetValue(false));
+  SetDebugMode(false);
 }
 
 TEST_F(VectorIndexTest, SaveAndLoadFlat) {

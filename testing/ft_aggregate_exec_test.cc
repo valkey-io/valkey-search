@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/ft_aggregate_parser.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
@@ -620,6 +621,84 @@ TEST_F(AggregateExecTest, testHash) {
   }));
 }
 */
+// ---------------------------------------------------------------------------
+// CreateRecordsFromNeighbors tests (task 4.2)
+// ---------------------------------------------------------------------------
+
+class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
+ protected:
+  // Build an AggregateParameters with __key at 0, score_as at 1, and the
+  // single VR field registered at index 2 (KNN layout) or reusing the score
+  // column (non-vector layout). vr_name is the single VR distance field.
+  std::unique_ptr<AggregateParameters> MakeParams(
+      absl::string_view score_name, const std::string &vr_name,
+      bool register_vr_column = true) {
+    auto params = std::make_unique<AggregateParameters>(0);
+
+    auto schema = CreateIndexSchema("test_schema", &fake_ctx_).value();
+    params->index_schema = schema;
+
+    params->AddRecordAttribute("__key", "__key", "__key",
+                               indexes::IndexerType::kNone);
+    params->AddRecordAttribute(score_name, score_name, score_name,
+                               indexes::IndexerType::kNone);
+    if (register_vr_column && !vr_name.empty()) {
+      params->AddRecordAttribute(vr_name, vr_name, vr_name,
+                                 indexes::IndexerType::kNone);
+    }
+    params->vr_score_field_name_ = vr_name;
+    return params;
+  }
+
+  indexes::Neighbor MakeNeighbor(absl::string_view key, float distance) {
+    auto interned = StringInternStore::Intern(std::string(key));
+    return indexes::Neighbor(interned, distance);
+  }
+};
+
+// Single VR predicate, neighbor carries its distance in Neighbor::distance:
+// the registered VR record field is set to that distance.
+TEST_F(CreateRecordsFromNeighborsTest, SingleVrDistancePopulated) {
+  // Non-vector VR query layout: the VR field IS the score column, so it lives
+  // at index 1 and carries Neighbor::distance.
+  auto params = MakeParams("d1", "d1", /*register_vr_column=*/false);
+  // index layout: 0=__key, 1=d1 (== score column)
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", 1.5f));
+
+  RecordSet records(params.get());
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+
+  auto d1_idx = params->record_indexes_by_alias_.at("d1");
+  ASSERT_TRUE(rec->fields_.at(d1_idx).IsDouble());
+  EXPECT_FLOAT_EQ(static_cast<float>(*rec->fields_.at(d1_idx).AsDouble()),
+                  1.5f);
+}
+
+// A non-VR OR-branch match outside the radius carries no VR distance
+// (has_vr_distance == false); the VR record field is left nil.
+TEST_F(CreateRecordsFromNeighborsTest, UnmatchedVrLeavesFieldNil) {
+  auto params = MakeParams("__score", "d1");
+  // index layout: 0=__key, 1=__score, 2=d1
+
+  std::vector<indexes::Neighbor> neighbors;
+  neighbors.push_back(MakeNeighbor("k1", indexes::scoring::PositiveInf()));
+  neighbors.back().has_vr_distance = false;
+
+  RecordSet records(params.get());
+  VMSDK_EXPECT_OK(
+      CreateRecordsFromNeighbors(neighbors, *params, 0, 1, records));
+
+  ASSERT_EQ(records.size(), 1u);
+  auto &rec = records.front();
+  auto d1_idx = params->record_indexes_by_alias_.at("d1");
+  EXPECT_TRUE(rec->fields_.at(d1_idx).IsNil());
+}
 
 TEST_F(AggregateExecTest, FirstValueReducerTest) {
   struct Testcase {
@@ -1110,11 +1189,6 @@ TEST_F(AggregateExecTest, RandomSampleParseErrorsTest) {
 // ---------------------------------------------------------------------
 // The score column beats a stored field of the same name
 // ---------------------------------------------------------------------
-
-// Defined in src/commands/ft_aggregate_exec.cc.
-absl::Status CreateRecordsFromNeighbors(
-    std::vector<indexes::Neighbor> &neighbors, AggregateParameters &parameters,
-    size_t key_index, size_t scores_index, RecordSet &records);
 
 // StringInternStore::Intern and IndexSchema construction both need the
 // main-thread context this fixture establishes.

@@ -2381,7 +2381,13 @@ class AliasConvergenceTest : public CrossIndexAliasConflictTest {
             reinterpret_cast<ValkeyModuleCallReply *>(0xDEADBEEF)));
   }
 
+  void TearDown() override {
+    kMockValkeyModule->RunPendingOneShots();
+    CrossIndexAliasConflictTest::TearDown();
+  }
+
   void ResetNode() {
+    kMockValkeyModule->RunPendingOneShots();
     SchemaManager::InitInstance(nullptr);
     coordinator::MetadataManager::InitInstance(nullptr);
     coordinator::MetadataManager::InitInstance(
@@ -2636,6 +2642,45 @@ TEST_F(AliasConvergenceTest, DropWinnerAfterConcurrentUpdatesDeletesAlias) {
 
   EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
   ExpectPeersConverge(after, {});
+}
+
+// The winner is dropped from a node that never saw the losing claim. A peer
+// that holds both deletes the alias and strips the losing claim, so every
+// peer ends without the alias.
+TEST_F(AliasConvergenceTest, DropWinnerFromNodeMissingLoserDeletesAlias) {
+  auto start = [&](History &history) {
+    CreateIndex("idx");
+    CreateIndex("idx2");
+    CreateIndex("idx3");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx"));
+    Record(history);
+  };
+  History node_a;
+  start(node_a);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx2"));
+  Record(node_a);
+
+  ResetNode();
+  History node_b;
+  start(node_b);
+  // Equal epochs: idx3 wins on name.
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx3"));
+  Record(node_b);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().RemoveIndexSchema(kDbNum, "idx3"));
+  Record(node_b);
+  History merged = node_a;
+  Merge(merged, node_b);
+
+  // A peer that saw both claims before the tombstone.
+  History before_drop = merged;
+  before_drop[coordinator::ObjName(kDbNum, "idx3").Encode()].pop_back();
+  ResetNode();
+  ReconcileLatest(before_drop);
+  ReconcileLatest(merged);
+  EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
+  kMockValkeyModule->RunPendingOneShots();
+  Record(merged);
+  ExpectPeersConverge(merged, {});
 }
 
 // Dropping the index an alias was moved to removes the alias on every peer;

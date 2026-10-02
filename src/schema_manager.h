@@ -48,6 +48,9 @@ struct AliasClaims {
   std::string owner;
 };
 using AliasMap = absl::flat_hash_map<std::string, AliasClaims>;
+using LosingClaims =
+    absl::flat_hash_map<std::string,
+                        std::vector<std::pair<std::string, uint64_t>>>;
 
 // Enum for attribute metrics
 enum class AttributeType : std::uint8_t { ALL, TEXT, TAG, NUMERIC, VECTOR };
@@ -192,6 +195,17 @@ class SchemaManager {
   // dropping it, so those aliases are deleted rather than handed over.
   absl::Status DropLosingClaimsOfOwnedAliases(uint32_t db_num,
                                               absl::string_view index_name)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
+  // Maps each claimant to the (alias, owner epoch) pairs it loses on aliases
+  // owned by `index_name`.
+  LosingClaims CollectLosingClaimsOfOwnedAliases(
+      uint32_t db_num, absl::string_view index_name) const
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);
+
+  // Removes each listed claim whose epoch is at most the owner epoch.
+  absl::Status StripLosingClaims(uint32_t db_num,
+                                 const LosingClaims &losers_by_index)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
   absl::StatusOr<std::shared_ptr<IndexSchema>> RemoveIndexSchemaInternal(

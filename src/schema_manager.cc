@@ -572,32 +572,43 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   return result;
 }
 
-// Dropping an index deletes the aliases it owns. Losing claims are removed
-// before the tombstone, so no peer ever resolves the alias to a loser. A claim
-// with a higher epoch is a newer write and is kept.
-absl::Status SchemaManager::DropLosingClaimsOfOwnedAliases(
-    uint32_t db_num, absl::string_view index_name) {
-  absl::flat_hash_map<std::string,
-                      std::vector<std::pair<std::string, uint64_t>>>
-      losers_by_index;
-  {
-    absl::MutexLock lock(&db_to_index_schemas_mutex_);
-    auto db_alias_it = db_to_aliases_.find(db_num);
-    if (db_alias_it == db_to_aliases_.end()) {
-      return absl::OkStatus();
+LosingClaims SchemaManager::CollectLosingClaimsOfOwnedAliases(
+    uint32_t db_num, absl::string_view index_name) const {
+  LosingClaims losers_by_index;
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end()) {
+    return losers_by_index;
+  }
+  for (const auto &[alias, claims] : db_alias_it->second) {
+    if (claims.owner != index_name) {
+      continue;
     }
-    for (const auto &[alias, claims] : db_alias_it->second) {
-      if (claims.owner != index_name) {
-        continue;
-      }
-      uint64_t owner_epoch = claims.epochs.at(claims.owner);
-      for (const auto &[claimant, _] : claims.epochs) {
-        if (claimant != index_name) {
-          losers_by_index[claimant].emplace_back(alias, owner_epoch);
-        }
+    uint64_t owner_epoch = claims.epochs.at(claims.owner);
+    for (const auto &[claimant, _] : claims.epochs) {
+      if (claimant != index_name) {
+        losers_by_index[claimant].emplace_back(alias, owner_epoch);
       }
     }
   }
+  return losers_by_index;
+}
+
+// Dropping an index deletes the aliases it owns. The issuer removes the losing
+// claims it knows before the tombstone; every node strips the ones it knows
+// when the tombstone arrives (see OnMetadataCallback). A claim with a higher
+// epoch is a newer write and is kept.
+absl::Status SchemaManager::DropLosingClaimsOfOwnedAliases(
+    uint32_t db_num, absl::string_view index_name) {
+  LosingClaims losers_by_index;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    losers_by_index = CollectLosingClaimsOfOwnedAliases(db_num, index_name);
+  }
+  return StripLosingClaims(db_num, losers_by_index);
+}
+
+absl::Status SchemaManager::StripLosingClaims(
+    uint32_t db_num, const LosingClaims &losers_by_index) {
   for (const auto &[claimant, aliases] : losers_by_index) {
     auto status = MutateIndexProtoInMetadata(
         db_num, claimant, [&](data_model::IndexSchema &proto) {
@@ -789,6 +800,33 @@ absl::Status SchemaManager::OnMetadataCallback(
 
   // Tombstone: remove everything.
   if (metadata == nullptr) {
+    // The aliases the dropped index owned are deleted, not handed to a losing
+    // claim. The issuer may not have seen every losing claim, so each primary
+    // strips the ones it knows; the write runs after this callback returns.
+    auto losers = CollectLosingClaimsOfOwnedAliases(obj_name.GetDbNum(),
+                                                    obj_name.GetName());
+    auto db_alias_it = db_to_aliases_.find(obj_name.GetDbNum());
+    if (db_alias_it != db_to_aliases_.end()) {
+      absl::erase_if(db_alias_it->second, [&](const auto &entry) {
+        return entry.second.owner == obj_name.GetName();
+      });
+      if (db_alias_it->second.empty()) {
+        db_to_aliases_.erase(db_alias_it);
+      }
+    }
+    if (!losers.empty() && !vmsdk::IsReplica(detached_ctx_.get())) {
+      vmsdk::RunByMain(
+          [db_num = obj_name.GetDbNum(), losers = std::move(losers)]() {
+            auto status =
+                SchemaManager::Instance().StripLosingClaims(db_num, losers);
+            if (!status.ok()) {
+              VMSDK_LOG(WARNING, nullptr)
+                  << "Failed to strip alias claims of a dropped index: "
+                  << status.message();
+            }
+          },
+          /*force_async=*/true);
+    }
     auto status =
         RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
     if (!status.ok() && !absl::IsNotFound(status.status())) {

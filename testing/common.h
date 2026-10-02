@@ -463,9 +463,12 @@ class MockIndexSchema : public IndexSchema {
           IndexSchema::OnSwapDB(swap_db_info);
           return;
         });
-    ON_CALL(*this, RDBSave(testing::_)).WillByDefault([this](SafeRDB *rdb) {
-      return IndexSchema::RDBSave(rdb);
-    });
+    ON_CALL(*this, RDBSave(testing::_, testing::_))
+        .WillByDefault(
+            [this](SafeRDB *rdb,
+                   std::vector<data_model::IndexSchema::Alias> aliases) {
+              return IndexSchema::RDBSave(rdb, std::move(aliases));
+            });
     ON_CALL(*this, GetIdentifier(testing::_))
         .WillByDefault([](absl::string_view attribute_name) {
           return std::string(attribute_name);
@@ -474,7 +477,10 @@ class MockIndexSchema : public IndexSchema {
   MOCK_METHOD(void, OnLoadingEnded, (ValkeyModuleCtx * ctx), (override));
   MOCK_METHOD(void, OnSwapDB, (ValkeyModuleSwapDbInfo * swap_db_info),
               (override));
-  MOCK_METHOD(absl::Status, RDBSave, (SafeRDB * rdb), (const, override));
+  MOCK_METHOD(absl::Status, RDBSave,
+              (SafeRDB * rdb,
+               std::vector<data_model::IndexSchema::Alias> aliases),
+              (const, override));
   MOCK_METHOD(absl::StatusOr<std::string>, GetIdentifier,
               (absl::string_view attribute_name), (const, override));
 };

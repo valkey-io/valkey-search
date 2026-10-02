@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -27,6 +28,7 @@
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "google/protobuf/util/message_differencer.h"
 #include "highwayhash/arch_specific.h"
 #include "highwayhash/hh_types.h"
 #include "highwayhash/highwayhash.h"
@@ -45,6 +47,7 @@
 #include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/thread_pool.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
@@ -191,7 +194,81 @@ absl::Status SchemaManager::ImportIndexSchema(
   return absl::OkStatus();
 }
 
+absl::Status SchemaManager::MutateIndexProtoInMetadata(
+    uint32_t db_num, absl::string_view index_name,
+    absl::FunctionRef<void(data_model::IndexSchema &)> mutate) {
+  auto entry_or = coordinator::MetadataManager::Instance().GetEntryContent(
+      kSchemaManagerMetadataTypeName, coordinator::ObjName(db_num, index_name));
+  if (!entry_or.ok()) {
+    // Surface the raw status; callers decide how to treat NotFound.
+    return entry_or.status();
+  }
+
+  data_model::IndexSchema schema_proto;
+  if (!entry_or.value().UnpackTo(&schema_proto)) {
+    return absl::InternalError("Unable to unpack index schema proto");
+  }
+
+  // Normalize defaults to match what ToProto() produces, so an alias-only edit
+  // is not seen as a structural change by OnMetadataCallback.
+  NormalizeIndexSchemaProtoDefaults(schema_proto);
+
+  mutate(schema_proto);
+
+  auto any_proto = std::make_unique<google::protobuf::Any>();
+  any_proto->PackFrom(schema_proto);
+  return coordinator::MetadataManager::Instance()
+      .CreateEntry(kSchemaManagerMetadataTypeName,
+                   coordinator::ObjName(db_num, index_name),
+                   std::move(any_proto))
+      .status();
+}
+
 namespace {
+
+void ResolveAliasOwner(AliasClaims &claims) {
+  uint64_t best_epoch = 0;
+  claims.owner.clear();
+  for (const auto &[index_name, epoch] : claims.epochs) {
+    if (claims.owner.empty() || epoch > best_epoch ||
+        (epoch == best_epoch && index_name > claims.owner)) {
+      claims.owner = index_name;
+      best_epoch = epoch;
+    }
+  }
+}
+
+void ClaimAlias(AliasMap &aliases, absl::string_view alias,
+                absl::string_view index_name, uint64_t epoch) {
+  auto &claims = aliases[alias];
+  claims.epochs[index_name] = epoch;
+  ResolveAliasOwner(claims);
+}
+
+uint64_t NextAliasEpoch(const AliasMap &aliases, absl::string_view alias) {
+  uint64_t max_epoch = 0;
+  auto it = aliases.find(alias);
+  if (it != aliases.end()) {
+    for (const auto &[_, epoch] : it->second.epochs) {
+      max_epoch = std::max(max_epoch, epoch);
+    }
+  }
+  return max_epoch + 1;
+}
+
+void RemoveAliasFromProto(data_model::IndexSchema &proto,
+                          absl::string_view alias) {
+  auto *aliases = proto.mutable_aliases();
+  aliases->erase(
+      std::remove_if(aliases->begin(), aliases->end(),
+                     [&](const auto &entry) { return entry.name() == alias; }),
+      aliases->end());
+}
+
+void SortAliasesInProto(data_model::IndexSchema &proto) {
+  std::sort(proto.mutable_aliases()->begin(), proto.mutable_aliases()->end(),
+            [](const auto &a, const auto &b) { return a.name() < b.name(); });
+}
 
 // Two prefix lists can match a common key iff some prefix of one is a prefix
 // of the other. The empty prefix matches every key, so a list containing it
@@ -317,6 +394,32 @@ absl::Status ValidateNoConflictingVectorFieldTypes(
 
 }  // namespace
 
+// static
+void SchemaManager::NormalizeIndexSchemaProtoDefaults(
+    data_model::IndexSchema &proto) {
+  // Apply the same defaults that the IndexSchema constructor applies, so
+  // that the stored proto matches what ToProto() will produce later. This
+  // prevents MessageDifferencer from seeing spurious differences when
+  // comparing a fetched proto against a live index's ToProto() output.
+  if (proto.min_stem_size() == 0) {
+    proto.set_min_stem_size(4);
+  }
+  if (!proto.has_score()) {
+    proto.set_score(IndexSchema::kDefaultDocumentScore);
+  }
+  // Insert the default empty prefix when none are specified, matching the
+  // IndexSchema constructor behavior.
+  if (proto.subscribed_key_prefixes().empty()) {
+    proto.add_subscribed_key_prefixes("");
+  }
+  // Sort attributes by alias to match ToProto() output order.
+  std::sort(proto.mutable_attributes()->begin(),
+            proto.mutable_attributes()->end(),
+            [](const data_model::Attribute &a, const data_model::Attribute &b) {
+              return a.alias() < b.alias();
+            });
+}
+
 absl::Status SchemaManager::CreateIndexSchemaInternal(
     ValkeyModuleCtx *ctx, const data_model::IndexSchema &index_schema_proto) {
   int db_num = static_cast<int>(index_schema_proto.db_num());
@@ -324,6 +427,22 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
   auto existing_entry = LookupInternal(db_num, name);
   if (existing_entry.ok()) {
     return GenerateIndexAlreadyExistsError(db_num, index_schema_proto.name());
+  }
+
+  // If the name collides with an existing alias in this db, log a warning:
+  // GetIndexSchema resolves real indexes before aliases, so the alias becomes
+  // unreachable until it is dropped or reassigned. This mirrors AddAlias,
+  // which allows an alias to shadow a real index the same way with only a
+  // warning, so both directions of the collision are handled consistently.
+  {
+    auto db_alias_it = db_to_aliases_.find(db_num);
+    if (db_alias_it != db_to_aliases_.end() &&
+        db_alias_it->second.contains(name)) {
+      VMSDK_LOG(WARNING, detached_ctx_.get())
+          << "Index '" << name
+          << "' shadows an existing alias of the same name in db " << db_num
+          << "; the alias is unreachable until dropped or reassigned";
+    }
   }
 
   // Run unconditionally: the schema is also checked against itself, and a
@@ -343,6 +462,11 @@ absl::Status SchemaManager::CreateIndexSchemaInternal(
                           false, false));
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
+
+  // Populate forward alias map from the proto's aliases field.
+  for (const auto &alias : index_schema_proto.aliases()) {
+    ClaimAlias(db_to_aliases_[db_num], alias.name(), name, alias.epoch());
+  }
 
   // We delay subscription to the server events until the first index schema
   // is added.
@@ -374,12 +498,20 @@ SchemaManager::CreateIndexSchema(
           static_cast<int>(index_schema_proto.db_num()),
           index_schema_proto.name());
     }
+
+    // Normalize defaults so the stored proto matches what ToProto() would
+    // produce after the IndexSchema constructor applies its defaults. This
+    // prevents OnMetadataCallback from treating alias-only changes as
+    // structural changes due to proto round-trip mismatches.
+    data_model::IndexSchema normalized_proto = index_schema_proto;
+    NormalizeIndexSchemaProtoDefaults(normalized_proto);
+
     auto any_proto = std::make_unique<google::protobuf::Any>();
-    any_proto->PackFrom(index_schema_proto);
+    any_proto->PackFrom(normalized_proto);
     return coordinator::MetadataManager::Instance().CreateEntry(
         kSchemaManagerMetadataTypeName,
-        coordinator::ObjName(index_schema_proto.db_num(),
-                             index_schema_proto.name()),
+        coordinator::ObjName(normalized_proto.db_num(),
+                             normalized_proto.name()),
         std::move(any_proto));
   }
 
@@ -397,10 +529,21 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> SchemaManager::GetIndexSchema(
     int db_num, absl::string_view name) const {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
   auto existing_entry = LookupInternal(db_num, name);
-  if (!existing_entry.ok()) {
-    return GenerateIndexNotFoundError(db_num, name);
+  if (existing_entry.ok()) {
+    return existing_entry.value();
   }
-  return existing_entry.value();
+  // Try alias resolution: check if name is an alias.
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it != db_to_aliases_.end()) {
+    auto alias_it = db_alias_it->second.find(name);
+    if (alias_it != db_alias_it->second.end()) {
+      auto resolved = LookupInternal(db_num, alias_it->second.owner);
+      if (resolved.ok()) {
+        return resolved.value();
+      }
+    }
+  }
+  return GenerateIndexNotFoundError(db_num, name);
 }
 
 absl::StatusOr<std::shared_ptr<IndexSchema>>
@@ -414,6 +557,8 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   if (db_to_index_schemas_[db_num].empty()) {
     db_to_index_schemas_.erase(db_num);
   }
+  // Clean up any aliases pointing to this index.
+  EraseAliasesForIndex(db_num, name);
   // Mark the index schema as lame duck. Otherwise, if there is a large
   // backlog of mutations, they can keep the index schema alive and cause
   // unnecessary CPU and memory usage.
@@ -427,9 +572,70 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   return result;
 }
 
+LosingClaims SchemaManager::CollectLosingClaimsOfOwnedAliases(
+    uint32_t db_num, absl::string_view index_name) const {
+  LosingClaims losers_by_index;
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end()) {
+    return losers_by_index;
+  }
+  for (const auto &[alias, claims] : db_alias_it->second) {
+    if (claims.owner != index_name) {
+      continue;
+    }
+    uint64_t owner_epoch = claims.epochs.at(claims.owner);
+    for (const auto &[claimant, _] : claims.epochs) {
+      if (claimant != index_name) {
+        losers_by_index[claimant].emplace_back(alias, owner_epoch);
+      }
+    }
+  }
+  return losers_by_index;
+}
+
+// Dropping an index deletes the aliases it owns. The issuer removes the losing
+// claims it knows before the tombstone; every node strips the ones it knows
+// when the tombstone arrives (see OnMetadataCallback). A claim with a higher
+// epoch is a newer write and is kept.
+absl::Status SchemaManager::DropLosingClaimsOfOwnedAliases(
+    uint32_t db_num, absl::string_view index_name) {
+  LosingClaims losers_by_index;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    losers_by_index = CollectLosingClaimsOfOwnedAliases(db_num, index_name);
+  }
+  return StripLosingClaims(db_num, losers_by_index);
+}
+
+absl::Status SchemaManager::StripLosingClaims(
+    uint32_t db_num, const LosingClaims &losers_by_index) {
+  for (const auto &[claimant, claimant_aliases] : losers_by_index) {
+    const auto &aliases = claimant_aliases;
+    auto status = MutateIndexProtoInMetadata(
+        db_num, claimant, [&](data_model::IndexSchema &proto) {
+          auto *entries = proto.mutable_aliases();
+          entries->erase(
+              std::remove_if(entries->begin(), entries->end(),
+                             [&](const auto &entry) {
+                               return absl::c_any_of(
+                                   aliases, [&](const auto &loser) {
+                                     return entry.name() == loser.first &&
+                                            entry.epoch() <= loser.second;
+                                   });
+                             }),
+              entries->end());
+        });
+    if (!status.ok() && !absl::IsNotFound(status)) {
+      return status;
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status SchemaManager::RemoveIndexSchema(int db_num,
                                               const absl::string_view name) {
   if (coordinator_enabled_) {
+    VMSDK_RETURN_IF_ERROR(DropLosingClaimsOfOwnedAliases(db_num, name));
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(
@@ -490,6 +696,10 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   // the module is deployed fleet wide. When different versions are
   // deployed, metadata with the latest encoding version is guaranteed to be
   // prioritized by the metadata manager
+
+  // Exclude aliases from fingerprint so alias operations don't destabilize
+  // search consistency checks.
+  unpacked->clear_aliases();
   std::string serialized_entry;
   if (!unpacked->SerializeToString(&serialized_entry)) {
     return absl::InternalError(
@@ -503,42 +713,182 @@ absl::StatusOr<uint64_t> SchemaManager::ComputeFingerprint(
   return entry_fingerprint;
 }
 
+// O(n) scan over aliases in this db. Acceptable: alias counts are single-digit
+// per index, and this only runs on index removal or alias-only changes.
+void SchemaManager::EraseAliasesForIndex(uint32_t db_num,
+                                         absl::string_view index_name) {
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end()) {
+    return;
+  }
+  auto &alias_map = db_alias_it->second;
+  for (auto it = alias_map.begin(); it != alias_map.end();) {
+    auto current = it++;
+    auto &claims = current->second;
+    if (claims.epochs.erase(index_name) == 0) {
+      continue;
+    }
+    if (claims.epochs.empty()) {
+      alias_map.erase(current);
+    } else {
+      ResolveAliasOwner(claims);
+    }
+  }
+  if (alias_map.empty()) {
+    db_to_aliases_.erase(db_alias_it);
+  }
+}
+
+std::vector<std::string> SchemaManager::GetAliasesForIndexInternal(
+    uint32_t db_num, absl::string_view index_name) const {
+  std::vector<std::string> aliases;
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end()) {
+    return aliases;
+  }
+  for (const auto &[alias, claims] : db_alias_it->second) {
+    if (claims.owner == index_name) {
+      aliases.push_back(alias);
+    }
+  }
+  std::sort(aliases.begin(), aliases.end());
+  return aliases;
+}
+
+std::vector<data_model::IndexSchema::Alias>
+SchemaManager::GetAliasClaimsForIndexInternal(
+    uint32_t db_num, absl::string_view index_name) const {
+  std::vector<data_model::IndexSchema::Alias> aliases;
+  auto db_alias_it = db_to_aliases_.find(db_num);
+  if (db_alias_it == db_to_aliases_.end()) {
+    return aliases;
+  }
+  for (const auto &[alias, claims] : db_alias_it->second) {
+    auto claim = claims.epochs.find(index_name);
+    if (claim != claims.epochs.end()) {
+      auto &entry = aliases.emplace_back();
+      entry.set_name(alias);
+      entry.set_epoch(claim->second);
+    }
+  }
+  return aliases;
+}
+
+void SchemaManager::RebuildAliasMapsForIndex(
+    uint32_t db_num, absl::string_view index_name,
+    const data_model::IndexSchema &proto) {
+  EraseAliasesForIndex(db_num, index_name);
+  if (proto.aliases().empty()) {
+    return;
+  }
+  auto &alias_map = db_to_aliases_[db_num];
+  for (const auto &alias : proto.aliases()) {
+    ClaimAlias(alias_map, alias.name(), index_name, alias.epoch());
+    const auto &claims = alias_map[alias.name()];
+    if (claims.epochs.size() > 1) {
+      VMSDK_LOG(NOTICE, detached_ctx_.get())
+          << "Alias '" << alias.name() << "' is claimed by "
+          << claims.epochs.size() << " indexes in db " << db_num
+          << "; resolving to '" << claims.owner << "'";
+    }
+  }
+}
+
 absl::Status SchemaManager::OnMetadataCallback(
     const coordinator::ObjName &obj_name, const google::protobuf::Any *metadata,
     uint64_t fingerprint, uint32_t version) {
   absl::MutexLock lock(&db_to_index_schemas_mutex_);
-  auto old_schema =
-      RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
-  if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
-    return old_schema.status();
-  }
-  absl::Status result = absl::OkStatus();
+
+  // Tombstone: remove everything.
   if (metadata == nullptr) {
-    // Nothing to create — just clean up the old schema below.
-  } else {
-    auto proposed_schema = std::make_unique<data_model::IndexSchema>();
-    if (!metadata->UnpackTo(proposed_schema.get())) {
-      result = absl::InternalError(absl::StrCat(
-          "Unable to unpack metadata for index schema ", obj_name));
-    } else {
-      auto create_status =
-          CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema);
-      if (!create_status.ok()) {
-        result = create_status;
-      } else {
-        auto created_schema =
-            LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
-        CHECK(created_schema != nullptr);
-        created_schema->SetFingerprint(fingerprint);
-        created_schema->SetVersion(version);
+    // The aliases the dropped index owned are deleted, not handed to a losing
+    // claim. The issuer may not have seen every losing claim, so each primary
+    // strips the ones it knows; the write runs after this callback returns.
+    auto losers = CollectLosingClaimsOfOwnedAliases(obj_name.GetDbNum(),
+                                                    obj_name.GetName());
+    auto db_alias_it = db_to_aliases_.find(obj_name.GetDbNum());
+    if (db_alias_it != db_to_aliases_.end()) {
+      absl::erase_if(db_alias_it->second, [&](const auto &entry) {
+        return entry.second.owner == obj_name.GetName();
+      });
+      if (db_alias_it->second.empty()) {
+        db_to_aliases_.erase(db_alias_it);
       }
     }
+    if (!losers.empty() && !vmsdk::IsReplica(detached_ctx_.get())) {
+      vmsdk::RunByMain(
+          [db_num = obj_name.GetDbNum(), losers = std::move(losers)]() {
+            auto status =
+                SchemaManager::Instance().StripLosingClaims(db_num, losers);
+            if (!status.ok()) {
+              VMSDK_LOG(WARNING, nullptr)
+                  << "Failed to strip alias claims of a dropped index: "
+                  << status.message();
+            }
+          },
+          /*force_async=*/true);
+    }
+    auto status =
+        RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
+    if (!status.ok() && !absl::IsNotFound(status.status())) {
+      return status.status();
+    }
+    if (status.ok()) {
+      ValkeySearch::Instance().ScheduleUtilityTask(
+          [s = std::move(status.value())]() mutable { s.reset(); });
+    }
+    return absl::OkStatus();
   }
-  if (old_schema.ok()) {
-    ValkeySearch::Instance().ScheduleUtilityTask(
-        [s = std::move(old_schema.value())]() mutable { s.reset(); });
+
+  auto proposed_schema = std::make_unique<data_model::IndexSchema>();
+  if (!metadata->UnpackTo(proposed_schema.get())) {
+    return absl::InternalError(
+        absl::StrCat("Unable to unpack metadata for index schema ", obj_name));
   }
-  return result;
+
+  auto existing = LookupInternal(obj_name.GetDbNum(), obj_name.GetName());
+  if (existing.ok()) {
+    // Compare ignoring aliases and stats fields.
+    google::protobuf::util::MessageDifferencer differ;
+    const auto *descriptor = data_model::IndexSchema::descriptor();
+    differ.IgnoreField(descriptor->FindFieldByName("aliases"));
+    differ.IgnoreField(descriptor->FindFieldByName("stats"));
+    differ.TreatAsSet(descriptor->FindFieldByName("attributes"));
+
+    auto existing_proto = existing.value()->ToProto();
+    if (differ.Compare(*existing_proto, *proposed_schema)) {
+      // Alias-only change: rebuild the Forward_Alias_Map (the single source of
+      // truth) and bump fingerprint/version. IndexSchema stores no aliases.
+      RebuildAliasMapsForIndex(obj_name.GetDbNum(), obj_name.GetName(),
+                               *proposed_schema);
+      existing.value()->SetFingerprint(fingerprint);
+      existing.value()->SetVersion(version);
+      return absl::OkStatus();
+    }
+
+    // Structural change: full teardown + rebuild.
+    auto old_schema =
+        RemoveIndexSchemaInternal(obj_name.GetDbNum(), obj_name.GetName());
+    if (!old_schema.ok() && !absl::IsNotFound(old_schema.status())) {
+      return old_schema.status();
+    }
+    if (old_schema.ok()) {
+      ValkeySearch::Instance().ScheduleUtilityTask(
+          [s = std::move(old_schema.value())]() mutable { s.reset(); });
+    }
+  }
+
+  // First creation or structural change: create fresh.
+  VMSDK_RETURN_IF_ERROR(
+      CreateIndexSchemaInternal(detached_ctx_.get(), *proposed_schema));
+
+  auto created_schema =
+      LookupInternal(obj_name.GetDbNum(), obj_name.GetName()).value();
+  CHECK(created_schema != nullptr);
+  created_schema->SetFingerprint(fingerprint);
+  created_schema->SetVersion(version);
+
+  return absl::OkStatus();
 }
 
 uint64_t SchemaManager::GetNumberOfIndexSchemas() const {
@@ -677,11 +1027,42 @@ void SchemaManager::OnFlushDBEnded(ValkeyModuleCtx *ctx) {
         VMSDK_LOG(NOTICE, ctx)
             << "Recreating index schema on FLUSHDB of DB " << selected_db;
       });
-      auto to_add = old_schema.value()->ToProto();
       VMSDK_LOG(DEBUG, ctx)
           << "Recreating index schema " << vmsdk::config::RedactIfNeeded(name)
           << " on FLUSHDB of DB " << selected_db;
-      auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
+      // Fetch the authoritative stored proto from MetadataManager (includes
+      // aliases). We do NOT rely on ToProto() for alias data per requirement
+      // 6.3.
+      auto stored_proto_or =
+          coordinator::MetadataManager::Instance().GetEntryContent(
+              kSchemaManagerMetadataTypeName,
+              coordinator::ObjName(selected_db, name));
+      if (!stored_proto_or.ok()) {
+        if (absl::IsNotFound(stored_proto_or.status())) {
+          // Entry genuinely absent — fall back to ToProto().
+          auto to_add = old_schema.value()->ToProto();
+          auto add_status = CreateIndexSchemaInternal(ctx, *to_add);
+          if (!add_status.ok()) {
+            VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
+                                    << vmsdk::config::RedactIfNeeded(name)
+                                    << " on FLUSHDB of DB " << selected_db;
+          }
+        } else {
+          VMSDK_LOG(WARNING, ctx)
+              << "MetadataManager lookup failed for "
+              << vmsdk::config::RedactIfNeeded(name) << " on FLUSHDB of DB "
+              << selected_db << ": " << stored_proto_or.status().message();
+        }
+        continue;
+      }
+      data_model::IndexSchema stored_schema;
+      if (!stored_proto_or.value().UnpackTo(&stored_schema)) {
+        VMSDK_LOG(WARNING, ctx) << "Unable to unpack stored proto for "
+                                << vmsdk::config::RedactIfNeeded(name)
+                                << " on FLUSHDB of DB " << selected_db;
+        continue;
+      }
+      auto add_status = CreateIndexSchemaInternal(ctx, stored_schema);
       if (!add_status.ok()) {
         VMSDK_LOG(WARNING, ctx) << "Unable to recreate index schema "
                                 << vmsdk::config::RedactIfNeeded(name)
@@ -717,6 +1098,12 @@ void SchemaManager::OnSwapDB(ValkeyModuleSwapDbInfo *swap_db_info) {
     CursorTable::Instance().SwapDb(swap_db_info->dbnum_first,
                                    swap_db_info->dbnum_second);
   }
+  // Swap the forward alias map between the two databases.
+  db_to_aliases_.insert({static_cast<uint32_t>(swap_db_info->dbnum_first), {}});
+  db_to_aliases_.insert(
+      {static_cast<uint32_t>(swap_db_info->dbnum_second), {}});
+  std::swap(db_to_aliases_[swap_db_info->dbnum_first],
+            db_to_aliases_[swap_db_info->dbnum_second]);
   for (auto &schema : db_to_index_schemas_[swap_db_info->dbnum_first]) {
     schema.second->OnSwapDB(swap_db_info);
   }
@@ -757,6 +1144,11 @@ void SchemaManager::OnLoadingEnded(ValkeyModuleCtx *ctx) {
         uint32_t,
         absl::flat_hash_map<std::string, std::shared_ptr<IndexSchema>>>();
     staging_indices_due_to_repl_load_ = false;
+
+    // Swap in the aliases staged alongside the schemas (single source of
+    // truth); IndexSchema itself carries none.
+    db_to_aliases_ = staged_db_to_aliases_.Get();
+    staged_db_to_aliases_ = absl::flat_hash_map<uint32_t, AliasMap>();
   }
 
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
@@ -797,7 +1189,8 @@ absl::Status SchemaManager::SaveIndexes(ValkeyModuleCtx *ctx, SafeRDB *rdb,
                    "Saving aux metadata for SchemaManager to aux RDB");
   for (const auto &[db_num, inner_map] : db_to_index_schemas_) {
     for (const auto &[name, schema] : inner_map) {
-      VMSDK_RETURN_IF_ERROR(schema->RDBSave(rdb));
+      VMSDK_RETURN_IF_ERROR(
+          schema->RDBSave(rdb, GetAliasClaimsForIndexInternal(db_num, name)));
     }
   }
   return absl::OkStatus();
@@ -831,9 +1224,13 @@ absl::Status SchemaManager::LoadIndex(
         "Unexpected RDB section type passed to SchemaManager");
   }
 
-  // Load the index schema into memory
+  // Load the index schema into memory. Capture aliases from the proto before
+  // it is consumed by LoadFromRDB — IndexSchema does not store aliases, so the
+  // Forward_Alias_Map (the single source of truth) must be repopulated here.
   auto index_schema_pb = std::unique_ptr<data_model::IndexSchema>(
       section->release_index_schema_contents());
+  std::vector<data_model::IndexSchema::Alias> loaded_aliases(
+      index_schema_pb->aliases().begin(), index_schema_pb->aliases().end());
   VMSDK_ASSIGN_OR_RETURN(auto index_schema,
                          IndexSchema::LoadFromRDB(ctx, mutations_thread_pool_,
                                                   std::move(index_schema_pb),
@@ -850,6 +1247,11 @@ absl::Status SchemaManager::LoadIndex(
                            << vmsdk::config::RedactIfNeeded(name) << " (in db "
                            << db_num << ")";
     staged_db_to_index_schemas_.Get()[db_num][name] = std::move(index_schema);
+    // Stage aliases too; swapped into db_to_aliases_ on loading ended.
+    for (const auto &alias : loaded_aliases) {
+      ClaimAlias(staged_db_to_aliases_.Get()[db_num], alias.name(), name,
+                 alias.epoch());
+    }
 
     // Increment completed index counter for restore progress tracking
     Metrics::GetStats().rdb_restore_completed_indexes++;
@@ -878,6 +1280,11 @@ absl::Status SchemaManager::LoadIndex(
   }
 
   db_to_index_schemas_[db_num][name] = std::move(index_schema);
+
+  // Populate forward alias map from the aliases captured off the loaded proto.
+  for (const auto &alias : loaded_aliases) {
+    ClaimAlias(db_to_aliases_[db_num], alias.name(), name, alias.epoch());
+  }
 
   // Increment completed index counter for restore progress tracking
   Metrics::GetStats().rdb_restore_completed_indexes++;
@@ -1040,5 +1447,247 @@ static vmsdk::info_field::Integer total_active_write_threads(
       }
       return (unsigned long)0;
     }));
+
+absl::Status SchemaManager::AddAlias(uint32_t db_num, absl::string_view alias,
+                                     absl::string_view index_name) {
+  // For single-slot indexes (those with a {hashtag} in the name), the alias
+  // must contain the same hashtag so that cluster slot routing is consistent.
+  auto index_tag = vmsdk::ParseHashTag(index_name);
+  if (index_tag.has_value()) {
+    auto alias_tag = vmsdk::ParseHashTag(alias);
+    if (!alias_tag.has_value() || *alias_tag != *index_tag) {
+      return absl::InvalidArgumentError(
+          "Alias hashtag does not match index hashtag");
+    }
+  }
+
+  uint64_t epoch;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    static const AliasMap kNoAliases;
+    auto db_alias_it = db_to_aliases_.find(db_num);
+    const AliasMap &alias_map =
+        db_alias_it != db_to_aliases_.end() ? db_alias_it->second : kNoAliases;
+    // Reject if index_name is only an alias; a real index shadowing an alias
+    // of the same name is a valid target.
+    if (alias_map.contains(index_name) &&
+        !LookupInternal(db_num, index_name).ok()) {
+      return absl::InvalidArgumentError(
+          "Unknown index name or name is an alias");
+    }
+    if (alias_map.contains(alias)) {
+      return absl::AlreadyExistsError("Alias already exists");
+    }
+    epoch = NextAliasEpoch(alias_map, alias);
+
+    if (!coordinator_enabled_) {
+      if (!LookupInternal(db_num, index_name).ok()) {
+        return GenerateIndexNotFoundError(db_num, index_name);
+      }
+      ClaimAlias(db_to_aliases_[db_num], alias, index_name, epoch);
+      return absl::OkStatus();
+    }
+  }
+
+  // Coordinator mode: the lock is released before calling MetadataManager,
+  // which reenters through OnMetadataCallback. Both steps run on the main
+  // thread, so no local command interleaves. ALIASADDs racing on different
+  // nodes are settled by alias epochs (see AliasClaims).
+  auto status = MutateIndexProtoInMetadata(
+      db_num, index_name, [&](data_model::IndexSchema &schema_proto) {
+        auto *entry = schema_proto.add_aliases();
+        entry->set_name(std::string(alias));
+        entry->set_epoch(epoch);
+        SortAliasesInProto(schema_proto);
+      });
+  if (absl::IsNotFound(status)) {
+    return GenerateIndexNotFoundError(db_num, index_name);
+  }
+  return status;
+}
+
+absl::Status SchemaManager::RemoveAlias(uint32_t db_num,
+                                        absl::string_view alias) {
+  std::vector<std::string> claimants;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    auto db_alias_it = db_to_aliases_.find(db_num);
+    if (db_alias_it == db_to_aliases_.end()) {
+      return absl::NotFoundError("Alias does not exist");
+    }
+    auto alias_it = db_alias_it->second.find(alias);
+    if (alias_it == db_alias_it->second.end()) {
+      return absl::NotFoundError("Alias does not exist");
+    }
+    // Standalone: no competing claims and no global metadata to update.
+    if (!coordinator_enabled_) {
+      db_alias_it->second.erase(alias_it);
+      if (db_alias_it->second.empty()) {
+        db_to_aliases_.erase(db_alias_it);
+      }
+      return absl::OkStatus();
+    }
+    for (const auto &[index_name, _] : alias_it->second.epochs) {
+      if (index_name != alias_it->second.owner) {
+        claimants.push_back(index_name);
+      }
+    }
+    claimants.push_back(alias_it->second.owner);
+  }
+
+  // Coordinator mode: drop the alias from every claiming index proto, not
+  // just the owner's, so a losing claim cannot resurface later. The owner goes
+  // last, so a failed write never leaves the alias resolving to a loser.
+  // NotFound (index deleted concurrently) is surfaced only if every claimant
+  // is gone.
+  absl::Status result = absl::NotFoundError("Alias does not exist");
+  for (const auto &index_name : claimants) {
+    auto status = MutateIndexProtoInMetadata(
+        db_num, index_name, [&](data_model::IndexSchema &schema_proto) {
+          RemoveAliasFromProto(schema_proto, alias);
+        });
+    if (absl::IsNotFound(status)) {
+      continue;
+    }
+    if (!status.ok()) {
+      return status;
+    }
+    result = absl::OkStatus();
+  }
+  return result;
+}
+
+absl::Status SchemaManager::UpdateAlias(uint32_t db_num,
+                                        absl::string_view alias,
+                                        absl::string_view index_name) {
+  // For single-slot indexes (those with a {hashtag} in the name), the alias
+  // must contain the same hashtag so that cluster slot routing is consistent.
+  auto index_tag = vmsdk::ParseHashTag(index_name);
+  if (index_tag.has_value()) {
+    auto alias_tag = vmsdk::ParseHashTag(alias);
+    if (!alias_tag.has_value() || *alias_tag != *index_tag) {
+      return absl::InvalidArgumentError(
+          "Alias hashtag does not match index hashtag");
+    }
+  }
+
+  uint64_t epoch;
+  std::vector<std::string> other_claimants;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    static const AliasMap kNoAliases;
+    auto db_alias_it = db_to_aliases_.find(db_num);
+    const AliasMap &alias_map =
+        db_alias_it != db_to_aliases_.end() ? db_alias_it->second : kNoAliases;
+    auto alias_it = alias_map.find(alias);
+    if (alias_it != alias_map.end()) {
+      // Idempotent: alias already points to the target → OK.
+      if (alias_it->second.owner == index_name) {
+        return absl::OkStatus();
+      }
+      for (const auto &[claimant, _] : alias_it->second.epochs) {
+        if (claimant != index_name && claimant != alias_it->second.owner) {
+          other_claimants.push_back(claimant);
+        }
+      }
+      // The old owner goes last, so a failed removal plus rollback leaves the
+      // alias on the old owner rather than on a loser.
+      other_claimants.push_back(alias_it->second.owner);
+    }
+    // Reject if index_name is only an alias.
+    if (alias_map.contains(index_name) &&
+        !LookupInternal(db_num, index_name).ok()) {
+      return absl::InvalidArgumentError(
+          "Unknown index name or name is an alias");
+    }
+    epoch = NextAliasEpoch(alias_map, alias);
+
+    if (!coordinator_enabled_) {
+      if (!LookupInternal(db_num, index_name).ok()) {
+        return GenerateIndexNotFoundError(db_num, index_name);
+      }
+      db_to_aliases_[db_num][alias] = AliasClaims{
+          {{std::string(index_name), epoch}}, std::string(index_name)};
+      return absl::OkStatus();
+    }
+  }
+
+  // Coordinator mode. Step 1: claim the alias on the target with an epoch
+  // above every known claim, so the target owns it on every node as soon as
+  // this entry arrives, whatever order the other entries arrive in. A stale
+  // claim already on the target is refreshed. NotFound maps to the
+  // index-not-found error.
+  auto add_status = MutateIndexProtoInMetadata(
+      db_num, index_name, [&](data_model::IndexSchema &schema_proto) {
+        RemoveAliasFromProto(schema_proto, alias);
+        auto *entry = schema_proto.add_aliases();
+        entry->set_name(std::string(alias));
+        entry->set_epoch(epoch);
+        SortAliasesInProto(schema_proto);
+      });
+  if (!add_status.ok()) {
+    if (absl::IsNotFound(add_status)) {
+      return GenerateIndexNotFoundError(db_num, index_name);
+    }
+    return add_status;
+  }
+
+  // Step 2: drop the alias from every other claimant. A claimant deleted
+  // concurrently is fine — the alias has already moved to the target.
+  for (const auto &old_index : other_claimants) {
+    auto remove_status = MutateIndexProtoInMetadata(
+        db_num, old_index, [&](data_model::IndexSchema &old_schema_proto) {
+          RemoveAliasFromProto(old_schema_proto, alias);
+        });
+    if (remove_status.ok() || absl::IsNotFound(remove_status)) {
+      continue;
+    }
+
+    VMSDK_LOG(WARNING, nullptr)
+        << "UpdateAlias: failed to remove alias '" << alias
+        << "' from old index '" << old_index
+        << "' proto; rolling back add to target: " << remove_status.message();
+
+    // Roll back: remove the alias we already added to the target. Best
+    // effort; a NotFound here means the target is gone, which already
+    // satisfies the goal.
+    auto rollback_status = MutateIndexProtoInMetadata(
+        db_num, index_name, [&](data_model::IndexSchema &rollback_proto) {
+          RemoveAliasFromProto(rollback_proto, alias);
+        });
+    if (!rollback_status.ok() && !absl::IsNotFound(rollback_status)) {
+      VMSDK_LOG(WARNING, nullptr)
+          << "UpdateAlias: rollback of alias '" << alias
+          << "' from target index '" << index_name
+          << "' also failed: " << rollback_status.message();
+    }
+    return absl::InternalError(
+        "Failed to remove alias from old index; update rolled back");
+  }
+
+  return absl::OkStatus();
+}
+
+std::vector<std::pair<std::string, std::string>> SchemaManager::GetAllAliases(
+    uint32_t db_num) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  std::vector<std::pair<std::string, std::string>> result;
+  auto it = db_to_aliases_.find(db_num);
+  if (it == db_to_aliases_.end()) {
+    return result;
+  }
+  result.reserve(it->second.size());
+  for (const auto &[alias, claims] : it->second) {
+    result.emplace_back(alias, claims.owner);
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+std::vector<std::string> SchemaManager::GetAliasesForIndex(
+    uint32_t db_num, absl::string_view index_name) const {
+  absl::MutexLock lock(&db_to_index_schemas_mutex_);
+  return GetAliasesForIndexInternal(db_num, index_name);
+}
 
 }  // namespace valkey_search

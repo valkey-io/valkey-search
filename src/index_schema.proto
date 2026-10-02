@@ -14,6 +14,15 @@ enum Language {
 }
 
 message IndexSchema {
+  // An index's claim on an alias. When several indexes claim the same alias,
+  // the claim with the highest epoch owns it; ties go to the greater index
+  // name. FT.ALIASADD/FT.ALIASUPDATE write one more than the highest epoch
+  // known for the alias, so the most recent move wins on every node.
+  message Alias {
+    string name = 1;
+    uint64 epoch = 2;
+  }
+
   message Stats {
     // Total number of hash keys indexed
     uint32 documents_count = 1;
@@ -42,6 +51,7 @@ message IndexSchema {
   bool skip_initial_scan = 13;
   optional string score_field = 14;
   optional string filter = 15;
+  repeated Alias aliases = 16;
 }
 
 

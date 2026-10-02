@@ -131,6 +131,14 @@ class FTInfoParser:
         return self.parsed_data.get("attributes", [])
 
     @property
+    def aliases(self) -> List[str]:
+        """Get list of aliases for this index."""
+        raw = self.parsed_data.get("aliases", [])
+        if isinstance(raw, list):
+            return raw
+        return []
+
+    @property
     def num_docs(self) -> int:
         """Get the number of documents in the index."""
         return self.parsed_data.get("num_docs", 0)

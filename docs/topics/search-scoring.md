@@ -5,8 +5,9 @@ description: How Valkey Search computes relevance scores and uses them to order 
 
 A score is a number that Valkey Search computes for each key that matches a query.
 A higher score means a better match.
-`FT.SEARCH` uses the score to order the results of text, tag, and numeric queries.
-Vector queries order results by distance instead.
+By default, `FT.SEARCH` uses the score to order the results of text, tag, and numeric queries, and of KNN queries with a text filter.
+Other KNN queries order results by vector distance.
+A `SORTBY` clause overrides both orders.
 
 This page explains how Valkey Search scores each field type and how the scores of query clauses combine.
 It then gives recipes to tune the ranking and a worked example that you can check by hand.
@@ -43,7 +44,7 @@ The only supported value is `BM25STD`, which is also the default. Any other valu
 3. All other results are sorted by score, highest first. This includes a KNN query with a text filter, such as `(shoes)=>[KNN 10 @vec $v]`. The KNN clause selects the nearest keys, and the text score then orders them.
 
 The sort occurs before `LIMIT`.
-Thus `LIMIT 0 10` returns the 10 keys with the highest scores.
+Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
 The order of keys with equal scores is not defined, and it can change in a future release.
 A query that contains only numeric clauses gives every key a score of 0, so the order of its results is not defined.
 To get an order that does not change, see [Make the Order of Equal Scores Repeatable](#make-the-order-of-equal-scores-repeatable).
@@ -451,7 +452,9 @@ To get a repeatable order, sort by the score and then by a second field in `FT.A
 ```
 
 `p:2` and `p:3` have the same score, so `@__key ASC` puts `p:2` before `p:3`.
-Use the same sort when you page through results with `LIMIT`, so that a key cannot appear on two pages.
+Use the same sort when you page through results with `LIMIT`.
+If the index does not change between the requests, a key then cannot appear on two pages.
+A change to the index between requests can change scores and move keys to a different page.
 
 ## Combine Text Results with Vector Results
 

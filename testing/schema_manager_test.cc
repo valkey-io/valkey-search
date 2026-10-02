@@ -231,7 +231,7 @@ TEST_F(SchemaManagerTest, TestOnFlushDB) {
         SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
     VMSDK_EXPECT_OK(previous_schema_or);
     auto previous_schema = previous_schema_or.value();
-    SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_);
+    SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_, db_num_);
     if (!coordinator_enabled) {
       // Expect it to be flushed
       EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
@@ -245,6 +245,79 @@ TEST_F(SchemaManagerTest, TestOnFlushDB) {
       EXPECT_NE(new_schema, previous_schema);
     }
   }
+}
+
+TEST_F(SchemaManagerTest, TestOnFlushAllDBs) {
+  constexpr int kOtherDBNum = 1;
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kOtherDBNum))
+      .WillByDefault(testing::Return(VALKEYMODULE_OK));
+  for (bool coordinator_enabled : {true, false}) {
+    if (coordinator_enabled) {
+      coordinator::MetadataManager::InitInstance(
+          std::move(test_metadata_manager_));
+    }
+    SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+        &fake_ctx_, []() {}, nullptr, coordinator_enabled));
+    auto other_db_proto = test_index_schema_proto_;
+    other_db_proto.set_db_num(kOtherDBNum);
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                        .status());
+    VMSDK_EXPECT_OK(SchemaManager::Instance()
+                        .CreateIndexSchema(&fake_ctx_, other_db_proto)
+                        .status());
+    EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 2);
+    auto previous_schema_db0 =
+        SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+    VMSDK_EXPECT_OK(previous_schema_db0);
+    auto previous_schema_db1 =
+        SchemaManager::Instance().GetIndexSchema(kOtherDBNum, index_name_);
+    VMSDK_EXPECT_OK(previous_schema_db1);
+
+    SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_, -1);
+
+    if (!coordinator_enabled) {
+      // Expect both databases to be flushed
+      EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 0);
+    } else {
+      // Should be kept, but recreated, in both databases
+      EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 2);
+      auto new_schema_db0 =
+          SchemaManager::Instance().GetIndexSchema(db_num_, index_name_);
+      VMSDK_EXPECT_OK(new_schema_db0);
+      EXPECT_NE(new_schema_db0.value(), previous_schema_db0.value());
+      auto new_schema_db1 =
+          SchemaManager::Instance().GetIndexSchema(kOtherDBNum, index_name_);
+      VMSDK_EXPECT_OK(new_schema_db1);
+      EXPECT_NE(new_schema_db1.value(), previous_schema_db1.value());
+    }
+  }
+}
+
+TEST_F(SchemaManagerTest, TestOnFlushDBLeavesOtherDBs) {
+  constexpr int kOtherDBNum = 1;
+  ON_CALL(*kMockValkeyModule, SelectDb(testing::_, kOtherDBNum))
+      .WillByDefault(testing::Return(VALKEYMODULE_OK));
+  SchemaManager::InitInstance(std::make_unique<TestableSchemaManager>(
+      &fake_ctx_, []() {}, nullptr, /*coordinator_enabled=*/false));
+  auto other_db_proto = test_index_schema_proto_;
+  other_db_proto.set_db_num(kOtherDBNum);
+  VMSDK_EXPECT_OK(SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, test_index_schema_proto_)
+                      .status());
+  VMSDK_EXPECT_OK(SchemaManager::Instance()
+                      .CreateIndexSchema(&fake_ctx_, other_db_proto)
+                      .status());
+
+  SchemaManager::Instance().OnFlushDBEnded(&fake_ctx_, kOtherDBNum);
+  EXPECT_EQ(SchemaManager::Instance().GetNumberOfIndexSchemas(), 1);
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().GetIndexSchema(db_num_, index_name_));
+  EXPECT_EQ(SchemaManager::Instance()
+                .GetIndexSchema(kOtherDBNum, index_name_)
+                .status()
+                .code(),
+            absl::StatusCode::kNotFound);
 }
 
 TEST_F(SchemaManagerTest, TestOnShutdownCallback) {

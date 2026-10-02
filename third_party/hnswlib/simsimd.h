@@ -12,13 +12,21 @@
 #include "third_party/simsimd/include/simsimd/simsimd.h"
 #include "third_party/simsimd/include/simsimd/types.h"
 
-// Defined in c/inner_product_distance.c, which fuses the reciprocal magnitude
-// scaling into the best f32 dot-product kernel for the running CPU (Skylake,
-// Haswell, SVE, NEON or serial) to avoid a per-call stack spill.
+// Defined in c/inner_product_distance.c. Each function fuses reciprocal-
+// magnitude scaling into the best dot-product kernel for its storage type,
+// avoiding the per-call stack spill after SimSIMD dispatch.
 extern "C" float InnerProductDistanceSimsimd(const void *pVect1,
                                              const void *pVect2,
                                              const void *qty_ptr,
                                              float reciprocal_mag_product);
+extern "C" float InnerProductDistanceFP16Simsimd(const void *pVect1,
+                                                 const void *pVect2,
+                                                 const void *qty_ptr,
+                                                 float reciprocal_mag_product);
+extern "C" float InnerProductDistanceBF16Simsimd(const void *pVect1,
+                                                 const void *pVect2,
+                                                 const void *qty_ptr,
+                                                 float reciprocal_mag_product);
 
 inline float L2SqrSimsimd(const void *pVect1, const void *pVect2,
                           const void *qty_ptr,

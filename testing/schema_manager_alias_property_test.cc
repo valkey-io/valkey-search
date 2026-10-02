@@ -2601,6 +2601,43 @@ TEST_F(AliasConvergenceTest, DeleteAfterConcurrentUpdatesLeavesNoClaim) {
   ExpectPeersConverge(after, {});
 }
 
+// After concurrent updates, dropping the index the alias resolved to deletes
+// the alias everywhere instead of handing it to the losing claim.
+TEST_F(AliasConvergenceTest, DropWinnerAfterConcurrentUpdatesDeletesAlias) {
+  auto start = [&](History &history) {
+    CreateIndex("idx");
+    CreateIndex("idx2");
+    CreateIndex("idx3");
+    VMSDK_EXPECT_OK(SchemaManager::Instance().AddAlias(kDbNum, "p1", "idx"));
+    Record(history);
+  };
+  History node_a;
+  start(node_a);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx2"));
+  Record(node_a);
+
+  ResetNode();
+  History node_b;
+  start(node_b);
+  VMSDK_EXPECT_OK(SchemaManager::Instance().UpdateAlias(kDbNum, "p1", "idx3"));
+  Record(node_b);
+  History merged = node_a;
+  Merge(merged, node_b);
+
+  ResetNode();
+  ReconcileLatest(merged);
+  History after;
+  Record(after);
+  auto owner = SchemaManager::Instance().GetAllAliases(kDbNum);
+  ASSERT_EQ(owner.size(), 1);
+  VMSDK_EXPECT_OK(
+      SchemaManager::Instance().RemoveIndexSchema(kDbNum, owner[0].second));
+  Record(after);
+
+  EXPECT_TRUE(SchemaManager::Instance().GetAllAliases(kDbNum).empty());
+  ExpectPeersConverge(after, {});
+}
+
 // Dropping the index an alias was moved to removes the alias on every peer;
 // the old owner's earlier claim must not resurface.
 TEST_F(AliasConvergenceTest, DropIndexAfterUpdateConverges) {

@@ -2185,6 +2185,54 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
         _wait_for_alias_on_all_nodes(
             self._all_primaries(), alias_name, expect_present=False)
 
+    def test_concurrent_aliasupdate_then_drop_winner_deletes_alias(self):
+        """Two nodes move one alias to different targets at once. Dropping
+        the target all nodes agreed on deletes the alias instead of handing
+        it to the other claim."""
+        node0 = self.new_client_for_primary(0)
+        node1 = self.new_client_for_primary(1)
+        index_name_3 = "alias_cluster_idx3"
+        create_3 = [c if c != INDEX_NAME_2 else index_name_3
+                    for c in CREATE_TAG_INDEX_2]
+        assert node0.execute_command(*CREATE_TAG_INDEX) == b"OK"
+        assert node0.execute_command(*CREATE_TAG_INDEX_2) == b"OK"
+        assert node0.execute_command(*create_3) == b"OK"
+        for name in (INDEX_NAME, INDEX_NAME_2, index_name_3):
+            self._wait_for_index_on_all_nodes(name)
+
+        alias_name = "concurrent_drop_alias"
+        assert node0.execute_command(
+            "FT.ALIASADD", alias_name, INDEX_NAME) == b"OK"
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), alias_name, expect_present=True)
+
+        assert node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage yes"
+        ) == b"OK"
+        for node, target in ((node0, INDEX_NAME_2), (node1, index_name_3)):
+            try:
+                node.execute_command("FT.ALIASUPDATE", alias_name, target)
+            except ResponseError:
+                pass
+        node1.execute_command(
+            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+
+        def _converged():
+            lists = {str(node.execute_command("FT.ALIASLIST"))
+                     for node in self._all_primaries()}
+            return len(lists) == 1
+        waiters.wait_for_true(_converged, timeout=30)
+
+        alias_list = node0.execute_command("FT.ALIASLIST")
+        assert len(alias_list) == 2, alias_list
+        winner = alias_list[1]
+        assert winner in (INDEX_NAME_2.encode(), index_name_3.encode())
+
+        assert node1.execute_command("FT.DROPINDEX", winner) == b"OK"
+        _wait_for_aliaslist_on_all_nodes(self._all_primaries(), [])
+        _wait_for_alias_on_all_nodes(
+            self._all_primaries(), alias_name, expect_present=False)
+
 
 class TestFTAliasHashtagValidationCluster(ValkeySearchClusterTestCase):
     """Cluster tests for hashtag validation on aliases targeting single-slot indexes."""

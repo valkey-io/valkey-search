@@ -7,6 +7,8 @@
 
 #include "src/utils/cancel.h"
 
+#include <atomic>
+
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
@@ -35,8 +37,16 @@ struct TokenImpl : public Base {
   void Cancel() override { stop_source_.request_stop(); }
 
   bool IsCancelled() override {
-    if (++count_ > TimeoutPollFrequency.GetValue()) {
-      count_ = 0;
+    // Throttle the expensive checks (clock syscall, gRPC read) to one in every
+    // TimeoutPollFrequency polls. count_ is a per-token member, so the throttle
+    // resets for each query. It is atomic because one token is polled by
+    // concurrent threads (the fanout local responder and its remote callbacks,
+    // and both FT.HYBRID arms); a plain int would race (#1427). Relaxed is
+    // enough: a lost increment only shifts a poll by one, and cancellation
+    // itself rides on stop_source_, read unconditionally below.
+    if (count_.fetch_add(1, std::memory_order_relaxed) + 1 >
+        TimeoutPollFrequency.GetValue()) {
+      count_.store(0, std::memory_order_relaxed);
       if (!stop_source_.stop_requested()) {
         if (ValkeyModule_Milliseconds() >= deadline_ms_) {
           Cancel();
@@ -64,7 +74,7 @@ struct TokenImpl : public Base {
   std::stop_source stop_source_;
   long long deadline_ms_;
   grpc::CallbackServerContext *context_;
-  int count_{0};
+  std::atomic<int> count_{0};
 };
 
 Token Make(long long timeout_ms, grpc::CallbackServerContext *context) {

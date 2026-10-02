@@ -319,8 +319,8 @@ ConstructGroupByParser() {
          vmsdk::ArgsIterator &itr) -> absl::Status {
         auto groupby = std::make_unique<GroupBy>();
         uint32_t cnt{0};
+        // GROUPBY 0 puts every record into a single group, as in Redisearch.
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
-        // cnt == 0 is valid: means aggregate all records into single group
         for (auto i = 0; i < cnt; ++i) {
           VMSDK_ASSIGN_OR_RETURN(auto group_string, itr.PopNext());
           auto group_string_view = vmsdk::ToStringView(group_string);

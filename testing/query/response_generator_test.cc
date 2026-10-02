@@ -23,6 +23,7 @@
 #include "gtest/gtest.h"
 #include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
+#include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
 #include "src/indexes/vector_flat.h"
@@ -306,12 +307,12 @@ TEST_F(ResponseGeneratorTest, ProcessNeighborsForReplyContentLimits) {
 // When a document mutates between shard-side scoring and content fetch
 // (db_seq != sequence_number), VerifyFilter recomputes its relevance score
 // through the same Scorer seam ScoreTextQuery uses (search.cc
-// SingleDocumentScorer) and ProcessNeighborsForReply writes it to
+// RecomputeDocumentScore) and ProcessNeighborsForReply writes it to
 // Neighbor.score, then re-ranks the survivors. These tests exercise that
 // wiring end-to-end with weight leaves; the per-leaf scoring math (including
 // text via Scorer::ScoreLeaf and AND/OR composition) is covered by
-// ScoreNodeTest in search_test.cc, and SingleDocumentScorer reuses that exact
-// ScoreNode walk, so a matched leaf recomputes to the same value here.
+// ScoreNodeTest in search_test.cc, and RecomputeDocumentScore reuses that
+// exact ScoreNode walk, so a matched leaf recomputes to the same value here.
 
 namespace {
 // Builds a single-neighbor scenario, runs ProcessNeighborsForReply, and returns
@@ -338,7 +339,7 @@ void RunSingleNeighborRecompute(
   neighbors.push_back(indexes::Neighbor(id, initial_neighbor_score));
   neighbors.back().sequence_number = 0;
   // index_key_info_ must contain the key so GetIndexKeyInfoSize() (the corpus
-  // size SingleDocumentScorer sources) is non-zero, matching ScoreTextQuery.
+  // size the recompute sources) is non-zero, matching ScoreTextQuery.
   parameters.index_schema->SetIndexMutationSequenceNumber(id, 0);
   parameters.index_schema->SetDbMutationSequenceNumber(id, mutated ? 1 : 0);
 
@@ -579,11 +580,9 @@ TEST_F(ResponseGeneratorTest, VectorScoreOnlyArmRefreshesScoreWithDistance) {
 //
 // A document that mutated between shard-side scoring and content fetch is
 // re-checked by VerifyFilter, and a text predicate is re-checked against the
-// key's per-key TextIndex rather than the fetched records. That per-key index
-// shares its Postings objects with the per-index trees (text_index.h), so the
-// walk runs under the schema's time-sliced reader lock -- which must be
-// released again before the score recompute, because SingleDocumentScorer
-// acquires the same non-reentrant mutex itself.
+// text index rather than the fetched records, through a main-thread
+// ResolvedLeafCache that takes the writers' own short locks and never the
+// time-sliced mutex.
 
 namespace {
 // A schema with one TEXT field carrying a single document, ready for the reply
@@ -614,15 +613,17 @@ std::shared_ptr<MockIndexSchema> BuildSingleTextDocSchema(
 
 // Runs the reply path for one neighbor of that schema against `filter`.
 // Non-vector (no attribute alias, no vector identifier), so a surviving
-// mutated document also gets its relevance score recomputed -- i.e. the
-// recompute that must NOT run under the reader lock.
+// mutated document also gets its relevance score recomputed.
 void RunTextReplyPath(ValkeyModuleCtx *fake_ctx,
                       UnitTestSearchParameters &parameters,
                       MockAttributeDataType &data_type, const std::string &key,
                       const std::string &content, const std::string &filter,
                       bool mutated, float initial_neighbor_score,
-                      std::vector<indexes::Neighbor> &neighbors) {
-  parameters.index_schema = BuildSingleTextDocSchema(key, content, mutated);
+                      std::vector<indexes::Neighbor> &neighbors,
+                      bool reuse_schema = false) {
+  if (!reuse_schema) {
+    parameters.index_schema = BuildSingleTextDocSchema(key, content, mutated);
+  }
   ASSERT_NE(parameters.index_schema->GetTextIndexSchema(), nullptr);
 
   auto interned = StringInternStore::Intern(key);
@@ -666,10 +667,8 @@ void RunTextReplyPath(ValkeyModuleCtx *fake_ctx,
 
 // The matching half: a mutated document whose text predicate still matches
 // survives the revalidation and comes out with a freshly recomputed relevance
-// score. A match can only be produced by the text branch -- it is the only one
-// that hands the evaluator a per-key TextIndex and a target key -- so this also
-// says the branch ran with the reader lock held, and the non-zero score says
-// the lock was released again in time for SingleDocumentScorer to take it.
+// score. A match can only be produced by the text branch, so this also says the
+// evaluator was handed a cache.
 TEST_F(ResponseGeneratorTest, MutatedTextDocumentRevalidatedAndRescored) {
   ValkeyModuleCtx fake_ctx;
   EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
@@ -684,15 +683,109 @@ TEST_F(ResponseGeneratorTest, MutatedTextDocumentRevalidatedAndRescored) {
 
   ASSERT_EQ(neighbors.size(), 1u);
   EXPECT_EQ(neighbors[0].external_id->Str(), "k1");
-  // Rescored through SingleDocumentScorer, which runs after the reader lock is
-  // released: the stale 7.0 the shard carried is gone.
+  // Rescored: the stale 7.0 the shard carried is gone.
   EXPECT_NE(neighbors[0].score, 7.0f);
   EXPECT_GT(neighbors[0].score, 0.0f);
 }
 
+// The reply path runs on the main thread and must never wait on the
+// time-sliced mutex: here the revalidation and rescore complete while a writer
+// holds it for the whole call, which would deadlock the old lock protocol.
+TEST_F(ResponseGeneratorTest, MutatedTextDocumentRevalidatedUnderWriterLock) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  UnitTestSearchParameters parameters;
+  MockAttributeDataType data_type;
+  std::vector<indexes::Neighbor> neighbors;
+  parameters.index_schema = BuildSingleTextDocSchema("k1", "hello world",
+                                                     /*mutated=*/true);
+  vmsdk::WriterMutexLock writer(&parameters.index_schema->GetTimeSlicedMutex());
+  RunTextReplyPath(&fake_ctx, parameters, data_type, "k1", "hello world",
+                   "@text:hello", /*mutated=*/true,
+                   /*initial_neighbor_score=*/7.0f, neighbors,
+                   /*reuse_schema=*/true);
+
+  ASSERT_EQ(neighbors.size(), 1u);
+  EXPECT_NE(neighbors[0].score, 7.0f);
+  EXPECT_GT(neighbors[0].score, 0.0f);
+}
+
+// A mutated document's tags are read from the fetched record on both the
+// membership check and the rescore: a record that dropped the queried value is
+// dropped even though the index still lists it, and one that still carries it
+// is rescored from the record.
+TEST_F(ResponseGeneratorTest, MutatedTagDocumentFollowsRecord) {
+  ValkeyModuleCtx fake_ctx;
+  EXPECT_CALL(*kMockValkeyModule, GetExpire(testing::_))
+      .WillRepeatedly(testing::Return(VALKEYMODULE_NO_EXPIRE));
+
+  auto schema = BuildSingleTextDocSchema("k1", "hello world", /*mutated=*/true);
+  auto tag = std::make_shared<indexes::Tag>(
+      CreateTagIndexProto(/*separator=*/",", /*case_sensitive=*/false));
+  ASSERT_TRUE(schema->AddIndex("color", "color", tag).ok());
+  auto interned = StringInternStore::Intern("k1");
+  ASSERT_TRUE(
+      tag->AddRecord(interned,
+                     AttributeData(vmsdk::MakeUniqueValkeyString("red")))
+          .ok());
+
+  auto run = [&](const std::string &filter, const std::string &record_color) {
+    UnitTestSearchParameters parameters;
+    parameters.index_schema = schema;
+    auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
+    EXPECT_TRUE(parsed.ok()) << parsed.status();
+    parameters.filter_parse_results = std::move(parsed).value();
+
+    std::vector<indexes::Neighbor> neighbors;
+    neighbors.push_back(indexes::Neighbor(interned, 7.0f));
+    neighbors.back().sequence_number = 0;
+    MockAttributeDataType data_type;
+    EXPECT_CALL(data_type, ToProto())
+        .WillRepeatedly(testing::Return(
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH));
+    EXPECT_CALL(data_type, FetchAllAttributes(&fake_ctx, testing::_, testing::_,
+                                              testing::_, testing::_))
+        .WillRepeatedly([&record_color](
+                            ValkeyModuleCtx *,
+                            const std::optional<std::string> &,
+                            ValkeyModuleKey *, absl::string_view,
+                            const absl::flat_hash_set<absl::string_view> &)
+                            -> absl::StatusOr<RecordsMap> {
+          RecordsMap m;
+          m.emplace("text", RecordsMapValue(
+                                vmsdk::MakeUniqueValkeyString("text"),
+                                vmsdk::MakeUniqueValkeyString("hello world")));
+          m.emplace("color", RecordsMapValue(
+                                 vmsdk::MakeUniqueValkeyString("color"),
+                                 vmsdk::MakeUniqueValkeyString(record_color)));
+          return m;
+        });
+    query::ProcessNeighborsForReply(&fake_ctx, data_type, neighbors, parameters,
+                                    /*vector_identifier=*/std::nullopt);
+    return neighbors;
+  };
+
+  auto still_red = run("@text:hello @color:{red}", "red");
+  ASSERT_EQ(still_red.size(), 1u);
+  EXPECT_GT(still_red[0].score, 0.0f);
+  EXPECT_NE(still_red[0].score, 7.0f);
+  // The index still says red, but the record is authoritative.
+  EXPECT_TRUE(run("@text:hello @color:{red}", "blue").empty());
+
+  // Under an OR the filter stops at the text match and never parses the tags;
+  // the rescore must still credit the tag from the record.
+  auto or_red = run("@text:hello | @color:{red}", "red");
+  auto or_blue = run("@text:hello | @color:{red}", "blue");
+  ASSERT_EQ(or_red.size(), 1u);
+  ASSERT_EQ(or_blue.size(), 1u);
+  EXPECT_GT(or_red[0].score, or_blue[0].score);
+}
+
 // The non-matching half, and the teeth of the pair: the same mutated document
 // against a word it does not contain is dropped. That verdict can only come
-// from evaluating the predicate against the per-key text index, so the text
+// from evaluating the predicate against the text index, so the text
 // branch is provably executed rather than skipped.
 TEST_F(ResponseGeneratorTest, MutatedTextDocumentDroppedWhenItNoLongerMatches) {
   ValkeyModuleCtx fake_ctx;

@@ -12,8 +12,11 @@
 #include "gtest/gtest.h"
 #include "src/commands/filter_parser.h"
 #include "src/indexes/numeric.h"
+#include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/vector_base.h"
+#include "src/query/resolved_leaves.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
 namespace valkey_search {
@@ -90,6 +93,7 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       std::make_shared<IndexTeser<indexes::Tag, data_model::TagIndex>>(
           tag_case_insensitive_proto);
   VMSDK_EXPECT_OK(tag_field_case_insensitive->AddRecord("key1", "tag1"));
+  VMSDK_EXPECT_OK(tag_field_case_insensitive->AddRecord("key_utf8", "Straße"));
   VMSDK_EXPECT_OK(index_schema->AddIndex("tag_field_case_insensitive",
                                          "tag_field_case_insensitive",
                                          tag_field_case_insensitive));
@@ -149,23 +153,27 @@ TEST_P(FilterTest, ParseParams) {
   // Now evaluate all predicates, including text predicates
   if (test_case.evaluate_success.has_value()) {
     auto interned_key = StringInternStore::Intern(test_case.key);
+    const auto *text_index_schema = index_schema->GetTextIndexSchema().get();
+    const auto query_operations = parse_results.value().query_operations;
+    const auto &root = *parse_results.value().root_predicate;
 
-    // Set up text index for text predicate evaluation
-    if (index_schema->GetTextIndexSchema()) {
-      auto text_index = index_schema->GetTextIndexSchema()->GetPerKeyTextIndex(
-          interned_key, false);
-      indexes::PrefilterEvaluator evaluator(
-          text_index, parse_results.value().query_operations);
-      EXPECT_EQ(test_case.evaluate_success.value(),
-                evaluator.Evaluate(*parse_results.value().root_predicate,
-                                   interned_key));
-    } else {
-      indexes::PrefilterEvaluator evaluator(
-          nullptr, parse_results.value().query_operations);
-      EXPECT_EQ(test_case.evaluate_success.value(),
-                evaluator.Evaluate(*parse_results.value().root_predicate,
-                                   interned_key));
-    }
+    // Every case runs twice: walking the key's own tree, and answered from a
+    // query-scoped cache. Both must agree.
+    indexes::PrefilterEvaluator uncached(text_index_schema, nullptr,
+                                         query_operations);
+    EXPECT_EQ(test_case.evaluate_success.value(),
+              uncached.Evaluate(root, interned_key));
+
+    query::ResolvedLeafCache cache(
+        query::CorpusStats{.total_docs = 1},
+        indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
+    indexes::PrefilterEvaluator cached(text_index_schema, &cache,
+                                       query_operations);
+    EXPECT_EQ(test_case.evaluate_success.value(),
+              cached.Evaluate(root, interned_key));
+    // The cache is warm now; a second evaluation must not change the verdict.
+    EXPECT_EQ(test_case.evaluate_success.value(),
+              cached.Evaluate(root, interned_key));
   }
 }
 
@@ -698,6 +706,62 @@ INSTANTIATE_TEST_SUITE_P(
                                        "}\n",
         },
         {
+            .test_name = "tag_prefix_only",
+            .filter = "@tag_field_1:{ta*}",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
+        },
+        {
+            .test_name = "tag_prefix_no_match",
+            .filter = "@tag_field_1:{tb*}",
+            .create_success = true,
+            .evaluate_success = false,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
+        },
+        // Exact value misses, prefix carries the match.
+        {
+            .test_name = "tag_exact_miss_prefix_hit",
+            .filter = "@tag_field_1:{nope|ta*}",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
+        },
+        {
+            .test_name = "tag_exact_hit_prefix_miss",
+            .filter = "@tag_field_1:{tag1|zz*}",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "TAG(tag_field_1)\n",
+        },
+        // ASCII-only case folding on both sides: ß has no ASCII fold, so an
+        // upper-cased query must not match it either way.
+        {
+            .test_name = "tag_utf8_case_insensitive",
+            .filter = "@tag_field_case_insensitive:{STRAßE}",
+            .create_success = true,
+            .evaluate_success = true,
+            .key = "key_utf8",
+            .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
+        },
+        {
+            .test_name = "tag_utf8_no_fold",
+            .filter = "@tag_field_case_insensitive:{STRASSE}",
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key_utf8",
+            .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
+        },
+        // The key exists in the schema but carries no value for this field.
+        {
+            .test_name = "tag_key_missing_field",
+            .filter = "@tag_field_case_insensitive:{tag1}",
+            .create_success = true,
+            .evaluate_success = false,
+            .key = "key_pipe",
+            .expected_tree_structure = "TAG(tag_field_case_insensitive)\n",
+        },
+        {
             .test_name = "missing_closing_bracket",
             .filter = "@tag_field_with_space:{tag1 , tag 2",
             .create_success = false,
@@ -957,6 +1021,37 @@ INSTANTIATE_TEST_SUITE_P(
                                        "  TEXT-TERM(\"name\", field_mask=1)\n"
                                        "  TEXT-TERM(\"is\", field_mask=2)\n"
                                        "}\n",
+        },
+        // The prefilter skips text children of an AND unless the query carries
+        // a negation, so these force evaluation. Both terms are present; only
+        // the proximity check can reject, which guards against a cached leaf
+        // answering a bare verdict without handing back its iterator.
+        {
+            .test_name = "proximity_adjacent_evaluated",
+            .filter = "-@num_field_1.5:[5 6] @text_field1:\"my name\"",
+            .create_success = true,
+            .evaluate_success = true,
+            .expected_tree_structure = "AND{\n"
+                                       "  NOT{\n"
+                                       "    NUMERIC(num_field_1.5)\n"
+                                       "  }\n"
+                                       "  AND(slop=0, inorder=true){\n"
+                                       "    TEXT-TERM(\"my\", field_mask=1)\n"
+                                       "    TEXT-TERM(\"name\", field_mask=1)\n"
+                                       "  }\n"
+                                       "}\n",
+        },
+        {
+            .test_name = "proximity_far_apart",
+            .filter = "-@num_field_1.5:[5 6] @text_field1:\"hello doing\"",
+            .create_success = true,
+            .evaluate_success = false,
+        },
+        {
+            .test_name = "proximity_out_of_order",
+            .filter = "-@num_field_1.5:[5 6] @text_field1:\"name my\"",
+            .create_success = true,
+            .evaluate_success = false,
         },
         {
             .test_name = "default_field_text",

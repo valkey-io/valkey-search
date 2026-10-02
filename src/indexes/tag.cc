@@ -334,23 +334,43 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
   return std::nullopt;
 }
 
-bool Tag::ContainsKey(absl::string_view value,
-                      BorrowedInternedStringPtr key) const {
+vmsdk::info_field::Integer tag_value_lookups(
+    "tag", "tag_value_lookups", vmsdk::info_field::IntegerBuilder().Dev());
+
+std::optional<Tag::ValueHandle> Tag::LookupValue(
+    absl::string_view value) const {
   // Lock-free by the same read-side invariant GetValue relies on: the index is
   // not mutated while the time-sliced mutex is held in read mode.
+  tag_value_lookups.Increment();
   std::string norm = Normalize(value);
   void *slot = nullptr;
   if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
               norm.size(), &slot) != 1) {
-    return false;
+    return std::nullopt;
   }
-  // The slot's 8 bytes ARE the bag storage; adopt to test membership, then
-  // Release to leave the live storage planted in the rax slot (mirrors
-  // Tag::GetTagValueDocCount / Tag::Search).
-  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
-  bool found = bag.contains(key);
+  return ValueHandle(SlotToStorage(slot));
+}
+
+// Adopt to read, then Release so the live storage stays owned by the rax slot
+// (mirrors Tag::Search).
+bool Tag::ValueHandle::Contains(BorrowedInternedStringPtr key) const {
+  auto bag = BagOfInternedStringPtrs::Adopt(storage_);
+  const bool found = bag.contains(key);
   (void)bag.Release();
   return found;
+}
+
+size_t Tag::ValueHandle::DocCount() const {
+  auto bag = BagOfInternedStringPtrs::Adopt(storage_);
+  const size_t count = bag.size();
+  (void)bag.Release();
+  return count;
+}
+
+bool Tag::ContainsKey(absl::string_view value,
+                      BorrowedInternedStringPtr key) const {
+  auto handle = LookupValue(value);
+  return handle && handle->Contains(key);
 }
 
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
@@ -503,26 +523,21 @@ size_t Tag::GetUnTrackedKeyCount() const {
   return untracked_keys_.size();
 }
 
-size_t Tag::GetTagValueDocCount(absl::string_view value) const {
-  std::string norm = Normalize(value);
-  void *slot = nullptr;
-  if (raxFind(tree_, reinterpret_cast<unsigned char *>(norm.data()),
-              norm.size(), &slot) != 1) {
-    return 0;
-  }
-  // The slot's 8 bytes ARE the bag storage; adopt to read size, then Release to
-  // leave the live storage planted in the rax slot (mirrors Tag::Search).
-  auto bag = BagOfInternedStringPtrs::Adopt(SlotToStorage(slot));
-  size_t count = bag.size();
-  (void)bag.Release();
-  return count;
+size_t Tag::GetTagValueDocCount(absl::string_view value, bool lock) const {
+  std::optional<absl::MutexLock> guard;
+  if (lock) guard.emplace(&index_mutex_);
+  auto handle = LookupValue(value);
+  return handle ? handle->DocCount() : 0;
 }
 
 size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,
-                                   BorrowedInternedStringPtr key) const {
+                                   BorrowedInternedStringPtr key,
+                                   bool lock) const {
   if (prefix_value.empty() || prefix_value.back() != '*') return 0;
   const absl::string_view prefix =
       prefix_value.substr(0, prefix_value.size() - 1);
+  std::optional<absl::MutexLock> guard;
+  if (lock) guard.emplace(&index_mutex_);
 
   // Scan the doc's own tags rather than the prefix's rax subtree: a doc carries
   // a handful of tags while a prefix can match an unbounded slice of the index.

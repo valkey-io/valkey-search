@@ -26,6 +26,7 @@
 #include "src/cursor.h"
 #include "src/indexes/index_base.h"
 #include "src/query/response_generator.h"
+#include "src/utils/hyperloglog_counter.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
 #include "vmsdk/src/info.h"
@@ -837,6 +838,18 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
+class CountDistinctish : public GroupBy::ReducerInstance {
+  HyperLogLog hll_;
+  void ProcessRecord(const ArgVector &values) override {
+    if (!values[0].IsNil()) {
+      hll_.Add(values[0]);
+    }
+  }
+  expr::Value GetResult() const override {
+    return expr::Value(static_cast<double>(hll_.Estimate()));
+  }
+};
+
 template <typename T>
 struct BasicReducer : GroupBy::Reducer {
   // BasicReducer(std::string name) : GroupBy::Reducer(std::move(name)) {}
@@ -1010,6 +1023,7 @@ absl::flat_hash_map<std::string, GroupBy::ReducerInfo> GroupBy::reducerTable{
     {"AVG", &BasicReducerParser<Avg, 1, 1>},
     {"COUNT", &BasicReducerParser<Count, 0, 0>},
     {"COUNT_DISTINCT", &BasicReducerParser<CountDistinct, 1, 1>},
+    {"COUNT_DISTINCTISH", &BasicReducerParser<CountDistinctish, 1, 1>},
     {"FIRST_VALUE", &FirstValueReducerParser},
     {"MIN", &BasicReducerParser<Min, 1, 1>},
     {"MAX", &BasicReducerParser<Max, 1, 1>},

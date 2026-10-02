@@ -188,6 +188,12 @@ class SchemaManager {
       absl::FunctionRef<void(data_model::IndexSchema &)> mutate)
       ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
 
+  // Removes other indexes' claims on the aliases `index_name` owns, ahead of
+  // dropping it, so those aliases are deleted rather than handed over.
+  absl::Status DropLosingClaimsOfOwnedAliases(uint32_t db_num,
+                                              absl::string_view index_name)
+      ABSL_LOCKS_EXCLUDED(db_to_index_schemas_mutex_);
+
   absl::StatusOr<std::shared_ptr<IndexSchema>> RemoveIndexSchemaInternal(
       int db_num, absl::string_view name)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(db_to_index_schemas_mutex_);

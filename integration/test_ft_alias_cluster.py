@@ -2228,7 +2228,9 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
         winner = alias_list[1]
         assert winner in (INDEX_NAME_2.encode(), index_name_3.encode())
 
-        assert node1.execute_command("FT.DROPINDEX", winner) == b"OK"
+        # node0 holds its own claim and has seen node1's winning one; node1
+        # may not have applied node0's claim yet.
+        assert node0.execute_command("FT.DROPINDEX", winner) == b"OK"
         _wait_for_aliaslist_on_all_nodes(self._all_primaries(), [])
         _wait_for_alias_on_all_nodes(
             self._all_primaries(), alias_name, expect_present=False)

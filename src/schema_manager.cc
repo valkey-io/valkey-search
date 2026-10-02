@@ -15,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
@@ -571,9 +572,58 @@ SchemaManager::RemoveIndexSchemaInternal(int db_num, absl::string_view name) {
   return result;
 }
 
+// Dropping an index deletes the aliases it owns. Losing claims are removed
+// before the tombstone, so no peer ever resolves the alias to a loser. A claim
+// with a higher epoch is a newer write and is kept.
+absl::Status SchemaManager::DropLosingClaimsOfOwnedAliases(
+    uint32_t db_num, absl::string_view index_name) {
+  absl::flat_hash_map<std::string,
+                      std::vector<std::pair<std::string, uint64_t>>>
+      losers_by_index;
+  {
+    absl::MutexLock lock(&db_to_index_schemas_mutex_);
+    auto db_alias_it = db_to_aliases_.find(db_num);
+    if (db_alias_it == db_to_aliases_.end()) {
+      return absl::OkStatus();
+    }
+    for (const auto &[alias, claims] : db_alias_it->second) {
+      if (claims.owner != index_name) {
+        continue;
+      }
+      uint64_t owner_epoch = claims.epochs.at(claims.owner);
+      for (const auto &[claimant, _] : claims.epochs) {
+        if (claimant != index_name) {
+          losers_by_index[claimant].emplace_back(alias, owner_epoch);
+        }
+      }
+    }
+  }
+  for (const auto &[claimant, aliases] : losers_by_index) {
+    auto status = MutateIndexProtoInMetadata(
+        db_num, claimant, [&](data_model::IndexSchema &proto) {
+          auto *entries = proto.mutable_aliases();
+          entries->erase(
+              std::remove_if(entries->begin(), entries->end(),
+                             [&](const auto &entry) {
+                               return absl::c_any_of(
+                                   aliases, [&](const auto &loser) {
+                                     return entry.name() == loser.first &&
+                                            entry.epoch() <= loser.second;
+                                   });
+                             }),
+              entries->end());
+        });
+    if (!status.ok() && !absl::IsNotFound(status)) {
+      return status;
+    }
+  }
+  return absl::OkStatus();
+}
+
 absl::Status SchemaManager::RemoveIndexSchema(int db_num,
                                               const absl::string_view name) {
   if (coordinator_enabled_) {
+    VMSDK_RETURN_IF_ERROR(DropLosingClaimsOfOwnedAliases(db_num, name));
     // In coordinated mode, use the metadata_manager as the source of truth.
     // It will callback into us with the update.
     auto status = coordinator::MetadataManager::Instance().DeleteEntry(

@@ -5,8 +5,15 @@ description: Valkey Search Module INFO SEARCH Metrics
 
 # INFO SEARCH metrics
 
+Only Application metrics are listed here. These are kept compatible across releases. Developer metrics are hidden unless
+`search.info-developer-visible` is set to `yes`, and may change or be removed in any release without notice.
+
+Some metrics are reported only when they apply. The `coordinator_*` metrics appear only when the module is loaded with
+`--use-coordinator`. Metrics ending in `_latency_usec` additionally appear only after at least one sample has been recorded.
+
 | Metric Name                                                    |     Section      |     Unit     | Description                                                                                                                                                                       |
 | :------------------------------------------------------------- | :--------------: | :----------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| compatibility-invalid_data_drops_key                           |  compatibility   |    Count     | Count of keys kept in the index with a malformed field treated as missing, because `search.emulate-release` is below 1.3.0 (see below)                                            |
 | coordinator_bytes_in                                           |   coordinator    |    Bytes     | Total size (in bytes) of incoming gRPC response messages received by the coordinator client from remote nodes                                                                     |
 | coordinator_bytes_out                                          |   coordinator    |    Bytes     | Total size (in bytes) of outgoing gRPC request messages sent by the coordinator client to remote nodes                                                                            |
 | coordinator_client_get_global_metadata_failure_count           |   coordinator    |    Count     | Count of failed client requests to get global metadata                                                                                                                            |
@@ -29,6 +36,7 @@ description: Valkey Search Module INFO SEARCH Metrics
 | coordinator_threads_cpu_time_sec                               |   coordinator    |   Seconds    | Cumulative CPU time consumed by coordinator (gRPC) threads                                                                                                                        |
 | hnsw_add_exceptions_count                                      |     hnswlib      |    Count     | Count of exceptions during HNSW vector additions                                                                                                                                  |
 | hnsw_create_exceptions_count                                   |     hnswlib      |    Count     | Count of exceptions during HNSW vector creation                                                                                                                                   |
+| hnsw_duplicate_label_on_load_count                             |     hnswlib      |    Count     | Count of duplicate vector labels found while loading HNSW indexes from an RDB written by an older version; each is resolved to the live entry                                     |
 | hnsw_modify_exceptions_count                                   |     hnswlib      |    Count     | Count of exceptions during HNSW vector modifications                                                                                                                              |
 | hnsw_remove_exceptions_count                                   |     hnswlib      |    Count     | Count of exceptions during HNSW vector removals                                                                                                                                   |
 | hnsw_search_exceptions_count                                   |     hnswlib      |    Count     | Count of exceptions during HNSW vector searches                                                                                                                                   |
@@ -64,9 +72,16 @@ description: Valkey Search Module INFO SEARCH Metrics
 | writer_queue_size                                              |   thread-pool    |    Count     | Current size of the writer thread pool queue                                                                                                                                      |
 | writer_resumed_cnt                                             |   thread-pool    |    Count     | Number of times the writer worker thread pool was resumed                                                                                                                         |
 | writer_suspension_expired_cnt                                  |   thread-pool    |    Count     | Number of times writer suspension expired due to timeout                                                                                                                          |
-| vector_externing_deferred_entry_cnt                            | vector_externing |    Count     | Count of deferred entries in vector externalization                                                                                                                               |
-| vector_externing_entry_count                                   | vector_externing |    Count     | Total number of entries in the vector externalizer                                                                                                                                |
-| vector_externing_generated_value_cnt                           | vector_externing |    Count     | Count of generated values during vector externalization                                                                                                                           |
-| vector_externing_hash_extern_errors                            | vector_externing |    Count     | Count of errors during hash externalization                                                                                                                                       |
-| vector_externing_lru_promote_cnt                               | vector_externing |    Count     | Number of LRU promotions in vector externalization                                                                                                                                |
-| vector_externing_num_lru_entries                               | vector_externing |    Count     | Number of entries in the vector externalizer LRU cache                                                                                                                            |
+| vector_registry_dedup_cnt                                      | vector_registry  |    Count     | Count of vector updates that reused an already registered copy of an identical vector                                                                                             |
+| vector_registry_entry_cnt                                      | vector_registry  |    Count     | Number of vectors currently tracked by the vector registry                                                                                                                        |
+| vector_registry_pending_unshare_cnt                            | vector_registry  |    Count     | Number of vectors queued to stop being shared with the engine, after their index was dropped                                                                                      |
+| vector_registry_shared_externally_cnt                          | vector_registry  |    Count     | Count of vectors successfully shared with the engine's hash field, so only one copy is kept in memory                                                                             |
+| vector_registry_shared_externally_errors                       | vector_registry  |    Count     | Count of failed attempts to share a vector with the engine's hash field                                                                                                           |
+| vector_registry_sharing_active                                 | vector_registry  |   Boolean    | 1 if vector memory sharing with the engine is enabled, otherwise 0                                                                                                                |
+
+## Compatibility counters
+
+Each `compatibility-*` metric counts how often a legacy, incompatible behavior was used because `search.emulate-release` is set below
+the release that fixed it. See [Compatibility Defects](../../COMPATIBILITY.md#compatibility-defects) for the full list and what each one
+changes. `compatibility-invalid_data_drops_key` is always reported; the others appear in `INFO SEARCH` only after the code path is first
+reached.

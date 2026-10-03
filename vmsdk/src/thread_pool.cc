@@ -145,9 +145,14 @@ absl::Status ThreadPool::MarkForStop(StopMode stop_mode) {
   return absl::OkStatus();
 }
 
-ThreadPool::~ThreadPool() { JoinWorkers(); }
+ThreadPool::~ThreadPool() {
+  // Workers hold a pointer to this pool, so freeing it under a running worker
+  // would be a use-after-free.
+  CHECK(JoinWorkers())
+      << "ThreadPool destroyed while workers are still running";
+}
 
-void ThreadPool::JoinWorkers() {
+bool ThreadPool::JoinWorkers() {
   {
     absl::MutexLock lock(&queue_mutex_);
     if (!stop_mode_.has_value()) {
@@ -176,13 +181,16 @@ void ThreadPool::JoinWorkers() {
     VMSDK_LOG(WARNING, nullptr)
         << "ThreadPool shutdown timed out after 5s waiting for workers to exit;"
         << " hung threads: " << absl::StrJoin(hung, ", ");
-    CHECK(false) << "ThreadPool shutdown timeout: " << hung.size()
-                 << " worker(s) did not become joinable within 5s";
+    // A busy worker is slow, not deadlocked, so let the caller carry on with
+    // shutdown rather than abort the server. Reap the workers that did exit.
+    JoinTerminatedWorkers();
+    return false;
   }
   started_ = false;
   JoinTerminatedWorkers();
   CHECK(threads_.IsEmpty())
       << "threads_ not empty after JoinTerminatedWorkers in JoinWorkers";
+  return true;
 }
 
 void ThreadPool::JoinTerminatedWorkers() {

@@ -51,8 +51,10 @@ class ThreadPool {
   void StartWorkers();
 
   /// Notify all active workers to terminate and join them. In addition, this
-  /// method will internally call `JoinTerminatedWorkers`
-  void JoinWorkers();
+  /// method will internally call `JoinTerminatedWorkers`. Waits up to 5s; if a
+  /// worker is still running after that, logs it and returns false, leaving
+  /// that worker in the pool, which must then outlive it.
+  bool JoinWorkers();
 
   /// Reap any workers that have flagged themselves as joinable (e.g. after a
   /// pool resize). Acquires no locks while calling pthread_join.

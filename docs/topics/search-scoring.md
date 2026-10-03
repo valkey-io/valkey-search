@@ -9,8 +9,9 @@ By default, `FT.SEARCH` uses the score to order the results of text, tag, and nu
 Other KNN queries order results by vector distance.
 A `SORTBY` clause overrides both orders.
 
-This page explains how Valkey Search scores each field type and how the scores of query clauses combine.
-It then gives recipes to tune the ranking and a worked example that you can check by hand.
+This page first explains the scoring model, then how each query type is scored and ordered.
+It then describes the score modifiers and scoring in cluster mode.
+The last sections give recipes to tune the ranking and a worked example that you can check by hand.
 
 # Version Requirement
 
@@ -21,38 +22,9 @@ In earlier releases:
 - `FT.CREATE` rejects `SCORE_FIELD` and accepts only `SCORE 1.0`.
 - The `FT.HYBRID` command does not exist.
 
-# Where Scores Appear
+# Scoring Model
 
-These options return scores to the client:
-
-| Command | Option | Result |
-| :--- | :--- | :--- |
-| [`FT.SEARCH`](../commands/ft.search.md) | `WITHSCORES` | The score follows each key name in the reply. |
-| [`FT.AGGREGATE`](../commands/ft.aggregate.md) | `ADDSCORES` | Each record contains a `__score` field. Later stages can use it as `@__score`. |
-| [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Each record contains the fused score, under `__score` or under the alias that you name. |
-| `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
-
-`SCORER <scorer>` selects the scoring function.
-The only supported value is `BM25STD`, which is also the default. Any other value returns an error.
-
-# How Scores Order Results
-
-`FT.SEARCH` sorts results in this order:
-
-1. If the command has a `SORTBY` clause, the results are sorted by the `SORTBY` field.
-2. If the query is a KNN query and its filter has no text clause, the results are sorted by vector distance, nearest first. A KNN query without a filter is in this case.
-3. All other results are sorted by score, highest first. This includes a KNN query with a text filter, such as `(shoes)=>[KNN 10 @vec $v]`. The KNN clause selects the nearest keys, and the text score then orders them.
-
-The sort occurs before `LIMIT`.
-Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
-The order of keys with equal scores is not defined, and it can change in a future release.
-A query that contains only numeric clauses gives every key a score of 0, so the order of its results is not defined.
-To get an order that does not change, see [Make the Order of Equal Scores Repeatable](#make-the-order-of-equal-scores-repeatable).
-
-`FT.AGGREGATE` does not sort by score automatically.
-To sort its records by score, use `ADDSCORES` and `SORTBY 2 @__score DESC`.
-
-# What a Score Means
+## What a Score Means
 
 A `BM25STD` score is not a percentage.
 It has no upper limit, and its value depends on the contents of the index as well as on the key and the query.
@@ -60,7 +32,7 @@ Thus a score is useful to compare keys in the result of one query, but not to co
 
 The score of a key can change when the key itself does not change:
 
-- Another key is added, updated, or deleted. This changes the number of keys, the number of keys that contain each term, and the average key length. See [Text Fields](#text-fields) for how the formula uses them.
+- Another key is added, updated, or deleted. This changes the number of keys, the number of keys that contain each term, and the average key length. See [The BM25STD Formula](#the-bm25std-formula) for how the formula uses them.
 - The query changes. Each matched clause adds to the score, so a query with more clauses usually gives higher scores.
 - The query uses `$weight`, or the index uses `SCORE` or `SCORE_FIELD`.
 
@@ -107,24 +79,21 @@ There is no separate cleanup step.
 A fixed score threshold, for example "show only results with a score above 1.0", can behave differently for different queries and as the index changes.
 If you use a threshold, test it with the queries and the data that you expect.
 
-# Scores by Field Type
+## Where Scores Appear
 
-Each clause of a query contributes a score that depends on the type of the field that it matches:
+These options return scores to the client:
 
-| Field type | Contribution to the score |
-| :--- | :--- |
-| `TEXT` | A BM25 score for each matched term. |
-| `TAG` | A BM25 score for each matched tag value, with a term frequency of 1. |
-| `NUMERIC` | 0. A numeric clause filters keys. It does not change their order. |
-| `VECTOR` | 0. A vector clause has a distance, not a relevance score. |
+| Command | Option | Result |
+| :--- | :--- | :--- |
+| [`FT.SEARCH`](../commands/ft.search.md) | `WITHSCORES` | The score follows each key name in the reply. |
+| [`FT.AGGREGATE`](../commands/ft.aggregate.md) | `ADDSCORES` | Each record contains a `__score` field. Later stages can use it as `@__score`. |
+| [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Each record contains the fused score, under `__score` or under the alias that you name. |
+| `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
 
-A clause contributes 0 to the score in these cases:
+`SCORER <scorer>` selects the scoring function.
+The only supported value is `BM25STD`, which is also the default. Any other value returns an error.
 
-- The clause is a numeric range, a vector range, or a negation.
-- The clause is a tag clause and the index has no `TEXT` field.
-- The query is a pure KNN query. `WITHSCORES` then reports 0, and the distance is returned separately.
-
-## Text Fields
+## The BM25STD Formula
 
 The `BM25STD` scorer gives each matched term this score:
 
@@ -157,6 +126,57 @@ The formula has three effects:
 
 Stop words are not indexed, so they do not count in `dl`.
 See [Text Fields](search-data-formats.md#text-fields) for how Valkey Search splits text into words, removes stop words, and finds word stems.
+
+## How Clause Scores Combine
+
+A query is a tree of clauses.
+Valkey Search computes the score of a key from the bottom of the tree to the top:
+
+- An AND of clauses (`shoes @color:{red}`) adds the scores of all its clauses.
+- An OR of clauses (`shoes | jacket`) adds the scores of the clauses that match the key. A clause that does not match the key contributes nothing.
+- A negated clause (`-socks`) contributes 0.
+
+`$weight` and the document score then scale these sums.
+See [Score Modifiers](#score-modifiers).
+
+# Scores and Order by Query Type
+
+Each clause of a query contributes a score that depends on the type of the field that it matches:
+
+| Field type | Contribution to the score |
+| :--- | :--- |
+| `TEXT` | A BM25 score for each matched term. |
+| `TAG` | A BM25 score for each matched tag value, with a term frequency of 1. |
+| `NUMERIC` | 0. A numeric clause filters keys. It does not change their order. |
+| `VECTOR` | 0. A vector clause has a distance, not a relevance score. |
+
+A clause contributes 0 to the score in these cases:
+
+- The clause is a numeric range, a vector range, or a negation.
+- The clause is a tag clause and the index has no `TEXT` field.
+- The query is a pure KNN query. `WITHSCORES` then reports 0, and the distance is returned separately.
+
+## How Scores Order Results
+
+`FT.SEARCH` sorts results in this order:
+
+1. If the command has a `SORTBY` clause, the results are sorted by the `SORTBY` field.
+2. If the query is a KNN query and its filter has no text clause, the results are sorted by vector distance, nearest first. A KNN query without a filter is in this case.
+3. All other results are sorted by score, highest first. This includes a KNN query with a text filter, such as `(shoes)=>[KNN 10 @vec $v]`. The KNN clause selects the nearest keys, and the text score then orders them.
+
+The sort occurs before `LIMIT`.
+Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
+The order of keys with equal scores is not defined, and it can change in a future release.
+A query that contains only numeric clauses gives every key a score of 0, so the order of its results is not defined.
+To get an order that does not change, see [Make the Order of Equal Scores Repeatable](#make-the-order-of-equal-scores-repeatable).
+
+`FT.AGGREGATE` does not sort by score automatically.
+To sort its records by score, use `ADDSCORES` and `SORTBY 2 @__score DESC`.
+
+## Text Fields
+
+Each matched text term is scored with [the BM25STD formula](#the-bm25std-formula).
+The subsections that follow describe stemming, prefix and fuzzy terms, phrases, and the match-all query.
 
 ### Stemming Adds an Exact-Match Bonus
 
@@ -226,15 +246,22 @@ A KNN query can have a filter that contains a text clause, such as `(shoes)=>[KN
 A vector range clause (`@<field>:[VECTOR_RANGE ...]`) contributes 0 to the score.
 See [Vector Range Match](search-query.md#vector-range-match) for how to return its distance.
 
-# How Clause Scores Combine
+## Scores in Hybrid Search
 
-A query is a tree of clauses.
-Valkey Search computes the score of a key from the bottom of the tree to the top:
+The [`FT.HYBRID`](../commands/ft.hybrid.md) command runs two searches on one index: a text, tag, or numeric search and a vector search.
+It then fuses the two result lists into one list.
+The `SEARCH` arm computes scores as `FT.SEARCH` does, with the `BM25STD` scorer.
+The `VSIM` arm converts each vector distance into a similarity, so that a higher value is a better match in both arms.
 
-- An AND of clauses (`shoes @color:{red}`) adds the scores of all its clauses.
-- An OR of clauses (`shoes | jacket`) adds the scores of the clauses that match the key. A clause that does not match the key contributes nothing.
-- A negated clause (`-socks`) contributes 0.
-- The `$weight` attribute multiplies the score of the clause that it is attached to, for example `(shoes) => {$weight: 2.0}`. The weight must be greater than 0. A weight on a term is the `weight` in the term formula. A weight on a group multiplies the sum of the group.
+The `COMBINE` clause selects how the two arms fuse:
+
+- `RRF` (the default) uses the rank of a key in each arm, not its score. The two arms can use scores on different scales.
+- `LINEAR` adds the scores of the two arms with weights that you set.
+- `FUNCTION` computes the fused score with an expression that you write.
+
+See [Fusion methods](../commands/ft.hybrid.md#fusion-methods) for the formulas and the options.
+
+# Score Modifiers
 
 The final score is the score of the whole query tree, multiplied by the document score of the key.
 The document score is a number for each key that does not depend on the query:
@@ -243,6 +270,13 @@ $$
 \text{score} = \text{document score} \cdot \text{query score}
 $$
 
+## Query Weights
+
+The `$weight` attribute multiplies the score of the clause that it is attached to, for example `(shoes) => {$weight: 2.0}`.
+The weight must be greater than 0.
+A weight on a term is the `weight` in the term formula.
+A weight on a group multiplies the sum of the group.
+
 The query score already includes every `$weight` in the query.
 For example, the query `jacket (@color:{red}) => {$weight: 2.0}` gives this score.
 In this formula, the jacket score is the score of `jacket`, and the red score is the score of `@color:{red}`:
@@ -250,6 +284,8 @@ In this formula, the jacket score is the score of `jacket`, and the red score is
 $$
 \text{score} = \text{document score} \cdot \left(\text{jacket score} + 2 \cdot \text{red score}\right)
 $$
+
+## Document Score
 
 The document score comes from the index definition:
 
@@ -265,21 +301,6 @@ In cluster mode, each shard computes scores from its own keys.
 `N`, `n`, and `avgdl` are the values for the keys on that shard, not for the whole index.
 Thus the same key can get a different score in cluster mode than on a single node.
 The results from all shards are then sorted together by these scores, so keys whose scores come from different statistics are compared.
-
-# Scores in Hybrid Search
-
-The [`FT.HYBRID`](../commands/ft.hybrid.md) command runs two searches on one index: a text, tag, or numeric search and a vector search.
-It then fuses the two result lists into one list.
-The `SEARCH` arm computes scores as `FT.SEARCH` does, with the `BM25STD` scorer.
-The `VSIM` arm converts each vector distance into a similarity, so that a higher value is a better match in both arms.
-
-The `COMBINE` clause selects how the two arms fuse:
-
-- `RRF` (the default) uses the rank of a key in each arm, not its score. The two arms can use scores on different scales.
-- `LINEAR` adds the scores of the two arms with weights that you set.
-- `FUNCTION` computes the fused score with an expression that you write.
-
-See [Fusion methods](../commands/ft.hybrid.md#fusion-methods) for the formulas and the options.
 
 # Tune the Ranking
 
@@ -388,7 +409,7 @@ To rank some keys above others for every query, store a number in each key and n
 Valkey Search multiplies the query score of each key by this number.
 A key without the field gets the `SCORE` value of the index, which is 1.0 by default.
 Thus a value of 2 doubles the score of a key, and a value of 0.5 halves it.
-See [How Clause Scores Combine](#how-clause-scores-combine).
+See [Document Score](#document-score).
 
 Use this method when the value changes less often than the queries run, for example a product rating.
 

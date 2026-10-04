@@ -26,7 +26,15 @@ In earlier releases:
 
 ## What a Score Means
 
-A `BM25STD` score is not a percentage.
+A score is a value that shows how relevant a key is to a query.
+Valkey Search measures relevance in three ways:
+
+- For text and tag clauses, the `BM25STD` scorer gives a relevance score. A higher score is a better match.
+- For KNN queries, the vector distance measures relevance. A smaller distance is a better match. See [Vector Fields](#vector-fields).
+- `FT.HYBRID` fuses the results of a text search and a vector search into one score. See [Scores in Hybrid Search](#scores-in-hybrid-search).
+
+The rest of this section is about the `BM25STD` score.
+It compares a key with the other keys in the index.
 It has no upper limit, and its value depends on the contents of the index as well as on the key and the query.
 Thus a score is useful to compare keys in the result of one query, but not to compare results across queries.
 

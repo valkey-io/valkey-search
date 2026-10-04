@@ -111,6 +111,16 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
        parameters.filter_parse_results.filter_identifiers) {
     identifiers.insert(filter_identifier);
   }
+  auto key_str = vmsdk::MakeUniqueRedisString(key);
+  auto key_obj = vmsdk::MakeUniqueRedisOpenKey(
+      ctx, key_str.get(), REDISMODULE_OPEN_KEY_NOEFFECTS | REDISMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = RedisModule_GetExpire(key_obj.get());
+  if (expire != REDISMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
+  }
   VMSDK_ASSIGN_OR_RETURN(
       auto content, attribute_data_type.FetchAllRecords(ctx, vector_identifier,
                                                         key, identifiers));
@@ -151,6 +161,16 @@ absl::StatusOr<RecordsMap> GetContent(
          parameters.filter_parse_results.filter_identifiers) {
       identifiers.insert(filter_identifier);
     }
+  }
+  auto key_str = vmsdk::MakeUniqueRedisString(key);
+  auto key_obj = vmsdk::MakeUniqueRedisOpenKey(
+      ctx, key_str.get(), REDISMODULE_OPEN_KEY_NOEFFECTS | REDISMODULE_READ);
+  if (!key_obj) {
+    return absl::NotFoundError("Key not found");
+  }
+  mstime_t expire = RedisModule_GetExpire(key_obj.get());
+  if (expire != REDISMODULE_NO_EXPIRE && expire <= 0) {
+    return absl::NotFoundError("Key expired");
   }
   VMSDK_ASSIGN_OR_RETURN(
       auto content, attribute_data_type.FetchAllRecords(ctx, vector_identifier,

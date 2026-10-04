@@ -27,6 +27,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/vector_flat.h"
+#include "src/indexes/vector_hnsw.h"
 #include "src/query/search.h"
 #include "src/schema_manager.h"
 #include "testing/common.h"
@@ -70,8 +71,11 @@ struct FTSearchParserTestCase {  // NOLINT
   std::string attribute_alias = "vec";
   int k{-1};
   std::optional<int> ef;
+  query::HybridPolicy hybrid_policy{query::HybridPolicy::kAuto};
+  bool hnsw{false};
   std::string score_as;
   std::string expected_error_message;
+  bool require_exact_error_message{false};
   std::string return_str;
   std::unordered_map<std::string, std::string> return_attributes;
   bool no_content{false};
@@ -245,6 +249,7 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_EQ(search_params.value()->query, vector_str.c_str());
       EXPECT_EQ(search_params.value()->k, test_case.k);
       EXPECT_EQ(search_params.value()->ef, test_case.ef);
+      EXPECT_EQ(search_params.value()->hybrid_policy, test_case.hybrid_policy);
       EXPECT_EQ(search_params.value()->attribute_alias,
                 test_case.attribute_alias);
       auto score_as = vmsdk::MakeUniqueValkeyString(test_case.score_as);
@@ -311,8 +316,12 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
                 << "` Because: " << search_params.status().message() << "\n";
     }
     if (!test_case.expected_error_message.empty() &&
-        !search_params.status().message().starts_with(
-            test_case.expected_error_message)) {
+        test_case.require_exact_error_message) {
+      EXPECT_EQ(search_params.status().message(),
+                test_case.expected_error_message);
+    } else if (!test_case.expected_error_message.empty() &&
+               !search_params.status().message().starts_with(
+                   test_case.expected_error_message)) {
       if (!timeout_expected_success) {
         EXPECT_EQ(search_params.status().message(),
                   "TIMEOUT must be a positive integer greater than 0 and "
@@ -360,21 +369,28 @@ std::shared_ptr<IndexSchema> SetupIndexSchemaForTestCase(
           });
   if (test_case.vector_query) {
     // Vector index setup
-    data_model::VectorIndex vector_index_proto;
-    vector_index_proto.set_dimension_count(3);
-    vector_index_proto.set_initial_cap(100);
-    vector_index_proto.set_vector_data_type(
-        data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32);
-    auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
-    flat_algorithm_proto->set_block_size(100);
-    vector_index_proto.set_allocated_flat_algorithm(
-        flat_algorithm_proto.release());
-    auto index = indexes::VectorFlat<float>::Create(
-                     vector_index_proto, "attribute_identifier_1",
-                     data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
-                     .value();
+    std::shared_ptr<indexes::VectorBase> index;
+    if (test_case.hnsw) {
+      index = indexes::VectorHNSW<float>::Create(
+                  CreateHNSWVectorIndexProto(3, data_model::DISTANCE_METRIC_L2,
+                                             100, 16, 200, 10),
+                  "attribute_identifier_1",
+                  data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                  .value();
+    } else {
+      index = indexes::VectorFlat<float>::Create(
+                  CreateFlatVectorIndexProto(3, data_model::DISTANCE_METRIC_L2,
+                                             100, 100),
+                  "attribute_identifier_1",
+                  data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+                  .value();
+    }
     VMSDK_EXPECT_OK(
         index_schema->AddIndex(test_case.attribute_alias, "id1", index));
+    data_model::TagIndex tag_index_proto;
+    auto tag_index = std::make_shared<indexes::Tag>(tag_index_proto);
+    VMSDK_EXPECT_OK(
+        index_schema->AddIndex("attribute_identifier_2", "id2", tag_index));
   } else {
     // Non Vector index setup
     data_model::NumericIndex numeric_index_proto;
@@ -468,6 +484,104 @@ INSTANTIATE_TEST_SUITE_P(
             .filter_str = "*=>[KNN $K @vec $BLOB EF_RUNTIME $EF]",
             .k = 10,
             .ef = 150,
+        },
+        {
+            .test_name = "happy_path_hybrid_policy_batches",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str =
+                "@attribute_identifier_2:{electronics}=>[KNN 10 @vec $BLOB "
+                "HYBRID_POLICY BATCHES]",
+            .k = 10,
+            .hybrid_policy = query::HybridPolicy::kBatches,
+        },
+        {
+            .test_name = "pure_vector_inkeys_hybrid_policy_batches",
+            .success = true,
+            .params_str = " PARAMS 2",
+            .filter_str = "*=>[KNN 10 @vec $BLOB HYBRID_POLICY BATCHES]",
+            .k = 10,
+            .hybrid_policy = query::HybridPolicy::kBatches,
+            .search_parameters_str = "INKEYS 2 doc:3 doc:4",
+            .inkeys = absl::flat_hash_set<std::string>{"doc:3", "doc:4"},
+        },
+        {
+            .test_name = "happy_path_hybrid_policy_adhoc_bf_param",
+            .success = true,
+            .params_str = " PARAMS 4 POLICY adhoc_bf",
+            .filter_str =
+                "@attribute_identifier_2:{electronics}=>[KNN 10 @vec $BLOB "
+                "HYBRID_POLICY $POLICY]",
+            .k = 10,
+            .hybrid_policy = query::HybridPolicy::kAdHocBruteForce,
+        },
+        {
+            .test_name = "adhoc_bf_rejects_ef_runtime",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str =
+                "@attribute_identifier_2:{electronics}=>[KNN 10 @vec $BLOB "
+                "HYBRID_POLICY ADHOC_BF EF_RUNTIME 150]",
+            .hnsw = true,
+            .expected_error_message =
+                "EF_RUNTIME is irrelevant for the ADHOC_BF hybrid policy",
+        },
+        {
+            .test_name = "hybrid_policy_query_attribute_not_supported",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "@attribute_identifier_2:{electronics}=>[KNN 10 @vec "
+                          "$BLOB]=>{$HYBRID_POLICY: BATCHES}",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: `[KNN 10 @vec "
+                "$BLOB]=>{$HYBRID_POLICY: BATCHES}`. Expecting ']' got '}'",
+        },
+        {
+            .test_name = "invalid_hybrid_policy",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str =
+                "@attribute_identifier_2:{electronics}=>[KNN 10 @vec $BLOB "
+                "HYBRID_POLICY INVALID]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: invalid hybrid "
+                "policy was given",
+            .require_exact_error_message = true,
+        },
+        {
+            .test_name = "hybrid_policy_on_non_hybrid_query",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str = "*=>[KNN 10 @vec $BLOB HYBRID_POLICY BATCHES]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: hybrid query "
+                "attributes were sent for a non-hybrid query",
+            .require_exact_error_message = true,
+        },
+        {
+            .test_name = "missing_hybrid_policy_value",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str =
+                "@attribute_identifier_2:{electronics}=>[KNN 10 @vec $BLOB "
+                "HYBRID_POLICY]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: `[KNN 10 @vec "
+                "$BLOB HYBRID_POLICY]`. HYBRID_POLICY argument is missing",
+            .require_exact_error_message = true,
+        },
+        {
+            .test_name = "duplicate_hybrid_policy",
+            .success = false,
+            .params_str = " PARAMS 2",
+            .filter_str =
+                "@attribute_identifier_2:{electronics}=>[KNN 10 @vec $BLOB "
+                "HYBRID_POLICY BATCHES HYBRID_POLICY ADHOC_BF]",
+            .expected_error_message =
+                "Error parsing vector similarity parameters: `[KNN 10 @vec "
+                "$BLOB HYBRID_POLICY BATCHES HYBRID_POLICY ADHOC_BF]`. "
+                "HYBRID_POLICY was specified more than once",
+            .require_exact_error_message = true,
         },
         {
             .test_name = "happy_path_include_search_params_1",

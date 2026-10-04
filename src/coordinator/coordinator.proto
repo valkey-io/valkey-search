@@ -150,6 +150,12 @@ enum Scorer {
   SCORER_TFIDF = 1;
 }
 
+enum HybridPolicy {
+  HYBRID_POLICY_AUTO = 0;
+  HYBRID_POLICY_BATCHES = 1;
+  HYBRID_POLICY_ADHOC_BF = 2;
+}
+
 message SearchIndexPartitionRequest {
   uint32 db_num = 1;
   string index_schema_name = 2;
@@ -158,7 +164,7 @@ message SearchIndexPartitionRequest {
   bytes query = 5;
   uint32 dialect = 6;
   uint32 k = 7;
-  uint64 ef = 8;
+  optional uint64 ef = 8;
   LimitParameter limit = 9;
   uint64 timeout_ms = 10;
   bool no_content = 11;
@@ -184,6 +190,7 @@ message SearchIndexPartitionRequest {
   // it has to cross the wire.
   bool is_match_all = 22;
   optional InkeysFilter inkeys = 23;
+  HybridPolicy hybrid_policy = 24;
 }
 
 message InkeysFilter {

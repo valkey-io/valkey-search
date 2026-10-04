@@ -92,7 +92,7 @@ DEFINE_FUSED_F32_INNER_PRODUCT(neon, __attribute__((target("+simd"))))
 DEFINE_FUSED_HALF_INNER_PRODUCT(F16, f16, neon,
                                 __attribute__((target("+simd+fp16"))))
 DEFINE_FUSED_HALF_INNER_PRODUCT(BF16, bf16, neon_shift,
-                                __attribute__((target("+simd"))))
+                                __attribute__((target("arch=armv8.2-a+simd"))))
 #endif
 #if SIMSIMD_TARGET_NEON_FHM
 DEFINE_FUSED_HALF_INNER_PRODUCT(

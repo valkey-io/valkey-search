@@ -10,7 +10,9 @@ The fused list is then fed through the same processing stages as `FT.AGGREGATE`,
 FT.HYBRID <index-name>
     SEARCH <query> [SCORER <scorer>] [YIELD_SCORE_AS <alias>]
     VSIM <field> <vector> [KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <ratio>]]
-                          [FILTER <expression>] [YIELD_SCORE_AS <alias>]
+                          [FILTER [<count>] <expression>
+                            [POLICY (ADHOC | BATCHES [BATCH_SIZE <n>])]]
+                          [YIELD_SCORE_AS <alias>]
     [COMBINE
       ( RRF      <count> [CONSTANT <c>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
       | LINEAR   <count> [ALPHA <a> BETA <b>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
@@ -36,7 +38,7 @@ FT.HYBRID <index-name>
   - `YIELD_SCORE_AS <alias>` (optional): Emits this arm's score under `<alias>`, making it available to `COMBINE FUNCTION` and to the processing stages.
 - `VSIM <field> <vector>` (required): The vector arm. `<field>` is a declared vector attribute and `<vector>` is a binary blob, supplied through `PARAMS`.
   - `KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <ratio>]` (optional): The vector search parameters. `<count>` is a count of the arguments that follow within the block, not a count of parameters. `K` is the number of nearest neighbors to retrieve, between 1 and 10000, and defaults to 10. Omitting the whole block, or writing `KNN 0`, is the same as taking every default. `EF_RUNTIME` tunes HNSW's search breadth. `SHARD_K_RATIO` is accepted for compatibility and ignored.
-  - `FILTER <expression>` (optional): Restricts which documents the vector search considers. The filter decides membership only; this arm's score remains the vector distance. See [Search - query language](../topics/search-query.md)
+  - `FILTER [<count>] <expression> [POLICY ...]` (optional): Restricts which documents the vector search considers. The filter decides membership only; this arm's score remains the vector distance. Without `POLICY`, the existing count-optional form remains supported. A policy must be inside a counted FILTER block, where `<count>` includes the expression and every policy token. `POLICY ADHOC` forces exact filter-first execution. `POLICY BATCHES` forces vector-search-first execution with inline filtering. A wildcard expression (`FILTER 3 * POLICY ...`) has no restriction to apply, so both policies use standard unfiltered KNN, matching Redis. Policy values are literal command tokens, not `PARAMS` references. `EF_RUNTIME` is rejected with `ADHOC` and accepted with `BATCHES`. `BATCH_SIZE <n>` is accepted only after `POLICY BATCHES`; its value remains unsupported and is ignored. See [Search - query language](../topics/search-query.md)
   - `YIELD_SCORE_AS <alias>` (optional): As for the `SEARCH` arm.
 - `COMBINE` (optional): How the two arms' results are fused. Defaults to `RRF` with its own defaults when the clause is absent. In every form, `<count>` is a count of the arguments that follow within the clause, not a count of sub-arguments; sub-arguments may appear in any order. See [Fusion methods](#fusion-methods) below.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
@@ -133,6 +135,7 @@ The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` n
 # Notes
 
 - **`VSIM RANGE` is not implemented.** The clause parses, so a command written for another engine is checked rather than misread, but executing one returns an error. Use `KNN`.
-- **`POLICY` and `BATCH_SIZE` are accepted and ignored.** Both select how the vector search executes rather than what it answers, and this implementation does not expose that choice. Both belong to the `VSIM` clause and must sit outside the `KNN` block, after it; neither value is validated.
+- **`POLICY` is active inside a counted VSIM `FILTER`.** `ADHOC` forces exact filter-first execution and `BATCHES` forces vector-search-first execution with inline filtering. Other values, duplicate declarations, and placement outside the counted FILTER block are rejected.
+- **`BATCH_SIZE` is accepted but ignored.** It is valid only after `POLICY BATCHES`; fixed-size batch iteration is tracked separately.
 - **`NOCONTENT` is rejected.** `FT.HYBRID` always returns records; a query wanting keys only can ask for no `LOAD` clause.
 - **`FT.HYBRID` cannot run inside `MULTI`/`EXEC` or a Lua script**, and is unavailable when the reader thread pool is disabled. All three force synchronous execution, which cannot revalidate the two arms' results against concurrent writes.

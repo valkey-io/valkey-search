@@ -130,7 +130,6 @@ class TestAppMetrics(ValkeySearchTestCaseDebugMode):
             "coordinator_threads_cpu_time_sec",
             "hnsw_add_exceptions_count",
             "hnsw_create_exceptions_count",
-            "hnsw_duplicate_label_on_load_count",
             "hnsw_modify_exceptions_count",
             "hnsw_remove_exceptions_count",
             "hnsw_search_exceptions_count",

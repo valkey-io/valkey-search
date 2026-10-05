@@ -1156,6 +1156,11 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
             arm->query.size(), ") does not match index's expected size (",
             vector_index->GetVectorDataSize(), ")."));
       }
+      if (!vector_index->IsFiniteVector(arm->query)) {
+        return absl::InvalidArgumentError(
+            "Error parsing vector similarity parameters: query vector "
+            "contains NaN or infinite values.");
+      }
       // Default score_as if the user didn't YIELD_SCORE_AS.
       if (!arm->score_as) {
         auto schema_default =

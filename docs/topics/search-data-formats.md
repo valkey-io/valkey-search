@@ -136,6 +136,13 @@ Choosing a 2-byte type is lossy: each element is rounded to the target type when
 it is ingested, and the rounded value is what the index stores and compares. Recall
 may therefore differ slightly from the same data indexed as `FLOAT32`.
 
+Every element must be finite. A vector with a NaN or infinite element is invalid
+data and is not indexed; see [Compatibility](../../COMPATIBILITY.md) for how the
+rest of the key is treated. This includes a JSON value that is finite but too
+large for the index's type, such as `70000` for `FLOAT16`, because it rounds to
+infinity. A query vector with a non-finite element, for KNN or `VECTOR_RANGE`,
+is rejected with an error.
+
 The data type is specified as a required parameter in the [`FT.CREATE`](../commands/ft.create.md) command, and is reported back by [`FT.INFO`](../commands/ft.info.md) as the attribute's `data_type`:
 
 ```

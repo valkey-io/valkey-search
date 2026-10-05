@@ -12,12 +12,14 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -2688,6 +2690,273 @@ TEST_F(VectorIndexTest, HnswHandlesEmptyNeighborLists) {
   EXPECT_NO_THROW(algo.updatePoint(std::move(update), 1, 1.0));
 }
 
+// Non-finite vectors are built from IEEE bit patterns: -ffast-math makes
+// std::numeric_limits<float>::quiet_NaN() and std::isnan unreliable.
+constexpr uint32_t kFp32NaN = 0x7FC00000U;
+constexpr uint32_t kFp32PosInf = 0x7F800000U;
+constexpr uint32_t kFp32NegInf = 0xFF800000U;
+constexpr uint32_t kNonFiniteFp32[] = {kFp32NaN, kFp32PosInf, kFp32NegInf};
+
+template <typename Bits>
+std::string BitsToBytes(std::initializer_list<Bits> elements) {
+  std::string bytes;
+  for (Bits bits : elements) {
+    bytes.append(reinterpret_cast<const char *>(&bits), sizeof(bits));
+  }
+  return bytes;
+}
+
+std::string Fp32Bytes(const std::vector<float> &v) {
+  return std::string(reinterpret_cast<const char *>(v.data()),
+                     v.size() * sizeof(float));
+}
+
+std::string WithFp32Bits(std::string bytes, size_t index, uint32_t bits) {
+  std::memcpy(bytes.data() + index * sizeof(float), &bits, sizeof(bits));
+  return bytes;
+}
+
+TEST(IsFiniteVectorTest, Float32) {
+  constexpr auto kType = data_model::VECTOR_DATA_TYPE_FLOAT32;
+  // 0, -0, smallest subnormal, largest finite, -largest finite.
+  EXPECT_TRUE(IsFiniteVector(
+      BitsToBytes<uint32_t>(
+          {0x00000000U, 0x80000000U, 0x00000001U, 0x7F7FFFFFU, 0xFF7FFFFFU}),
+      kType));
+  EXPECT_TRUE(IsFiniteVector("", kType));
+  for (uint32_t bits :
+       {kFp32NaN, kFp32PosInf, kFp32NegInf, 0xFFC00000U, 0x7F800001U}) {
+    EXPECT_FALSE(
+        IsFiniteVector(BitsToBytes<uint32_t>({0x3F800000U, bits}), kType))
+        << std::hex << bits;
+  }
+}
+
+TEST(IsFiniteVectorTest, Float16) {
+  constexpr auto kType = data_model::VECTOR_DATA_TYPE_FLOAT16;
+  EXPECT_TRUE(IsFiniteVector(
+      BitsToBytes<uint16_t>({0x0000, 0x8000, 0x0001, 0x7BFF, 0xFBFF}), kType));
+  for (uint16_t bits : {0x7E00, 0x7C00, 0xFC00, 0x7C01}) {
+    EXPECT_FALSE(IsFiniteVector(BitsToBytes<uint16_t>({0x3C00, bits}), kType))
+        << std::hex << bits;
+  }
+}
+
+TEST(IsFiniteVectorTest, BFloat16) {
+  constexpr auto kType = data_model::VECTOR_DATA_TYPE_BFLOAT16;
+  EXPECT_TRUE(IsFiniteVector(
+      BitsToBytes<uint16_t>({0x0000, 0x8000, 0x0001, 0x7F7F, 0xFF7F}), kType));
+  for (uint16_t bits : {0x7FC0, 0x7F80, 0xFF80, 0x7F81}) {
+    EXPECT_FALSE(IsFiniteVector(BitsToBytes<uint16_t>({0x3F80, bits}), kType))
+        << std::hex << bits;
+  }
+}
+
+// The greedy descent through the upper HNSW layers decided whether to keep
+// walking from a flag set beside the `d < curdist` comparison. Under
+// -ffast-math GCC is free to evaluate that comparison as true, or as false for
+// the move but true for the flag, when `d` is NaN, so inserting or searching a
+// NaN vector could walk forever. Values are inserted straight into hnswlib,
+// below the ingest validation, so this exercises the loop itself.
+TEST_F(VectorIndexTest, HnswDescentTerminatesOnNaNDistances) {
+  constexpr int kDims = 4;
+  hnswlib::L2Space space{kDims};
+  VectorHNSW<float>::HNSWIndex algo(
+      &space, /*max_elements=*/32, /*normalized=*/false, /*m_value=*/4,
+      /*ef_construction=*/10, /*allow_replace_deleted=*/false);
+  auto query = [](absl::string_view bytes) {
+    return QueryVector(
+        VectorRecord::Construct(bytes, kDefaultMagnitude, nullptr),
+        bytes.size(), false, data_model::VECTOR_DATA_TYPE_FLOAT32);
+  };
+  for (int i = 0; i < 16; ++i) {
+    std::vector<float> v = {static_cast<float>(i), 1.0f, 2.0f, 3.0f};
+    // Level 2 for every element puts the upper layers above the NaN point's
+    // level 1, so its insertion takes the descent loops.
+    algo.addPoint(query(Fp32Bytes(v)), i, /*level=*/2);
+  }
+  const std::string nan_vector =
+      BitsToBytes<uint32_t>({kFp32NaN, kFp32NaN, kFp32NaN, kFp32NaN});
+  EXPECT_NO_THROW(algo.addPoint(query(nan_vector), 100, /*level=*/1));
+  EXPECT_LE(algo.searchKnn(query(nan_vector), 5).size(), 5u);
+}
+
+class NonFiniteVectorTest
+    : public VectorIndexTest,
+      public ::testing::WithParamInterface<
+          std::tuple<IndexerType, data_model::DistanceMetric>> {
+ protected:
+  static constexpr int kDims = 4;
+  static constexpr int kCount = 20;
+
+  std::shared_ptr<VectorBase> CreateIndex() {
+    const auto [indexer_type, metric] = GetParam();
+    if (indexer_type == IndexerType::kHNSW) {
+      return *VectorHNSW<float>::Create(
+          CreateHNSWVectorIndexProto(kDims, metric, kCount, kM, kEFConstruction,
+                                     kEFRuntime),
+          attribute_identifier, attribute_data_type, 0);
+    }
+    return *VectorFlat<float>::Create(
+        CreateFlatVectorIndexProto(kDims, metric, kCount, kBlockSize),
+        attribute_identifier, attribute_data_type, 0);
+  }
+
+  absl::StatusOr<std::shared_ptr<VectorBase>> LoadIndex(
+      const data_model::VectorIndex &proto, FakeSafeRDB &rdb) {
+    if (std::get<0>(GetParam()) == IndexerType::kHNSW) {
+      VMSDK_ASSIGN_OR_RETURN(
+          auto index,
+          VectorHNSW<float>::LoadFromRDB(
+              &fake_ctx_, &hash_attribute_data_type_, proto,
+              "loaded_identifier", SupplementalContentChunkIter(&rdb), 0));
+      return index;
+    }
+    VMSDK_ASSIGN_OR_RETURN(
+        auto index,
+        VectorFlat<float>::LoadFromRDB(&fake_ctx_, &hash_attribute_data_type_,
+                                       proto, "loaded_identifier",
+                                       SupplementalContentChunkIter(&rdb), 0));
+    return index;
+  }
+
+  static std::string FiniteVector(int i) {
+    return Fp32Bytes(
+        {static_cast<float>(i + 1), 1.0f, 0.5f, static_cast<float>(-i)});
+  }
+
+  void AddFiniteVectors(VectorBase &index) {
+    for (int i = 0; i < kCount; ++i) {
+      auto res =
+          testing_infra::AddVectorRecord(index, IndexToKey(i), FiniteVector(i));
+      ASSERT_TRUE(res.ok()) << res.status();
+      ASSERT_EQ(*res, RecordResult::kAdded);
+    }
+  }
+};
+
+TEST_P(NonFiniteVectorTest, AddRejectsNonFiniteVector) {
+  auto index = CreateIndex();
+  AddFiniteVectors(*index);
+  const auto bad_key = IndexToKey(kCount);
+  for (uint32_t bits : kNonFiniteFp32) {
+    auto res = testing_infra::AddVectorRecord(
+        *index, bad_key, WithFp32Bits(FiniteVector(0), 2, bits));
+    ASSERT_TRUE(res.ok()) << res.status();
+    EXPECT_EQ(*res, RecordResult::kInvalidData) << std::hex << bits;
+    EXPECT_FALSE(index->IsTracked(bad_key));
+  }
+  EXPECT_EQ(index->GetTrackedKeyCount(), kCount);
+  auto search = index->Search(FiniteVector(3), kCount, CancelNever());
+  ASSERT_TRUE(search.ok()) << search.status();
+  EXPECT_EQ(search->size(), kCount);
+}
+
+TEST_P(NonFiniteVectorTest, ModifyToNonFiniteVectorRemovesRecord) {
+  auto index = CreateIndex();
+  AddFiniteVectors(*index);
+  auto res = testing_infra::ModifyVectorRecord(
+      *index, IndexToKey(5), WithFp32Bits(FiniteVector(5), 0, kFp32NaN));
+  ASSERT_TRUE(res.ok()) << res.status();
+  EXPECT_EQ(*res, RecordResult::kInvalidData);
+  EXPECT_FALSE(index->IsTracked(IndexToKey(5)));
+  EXPECT_EQ(index->GetTrackedKeyCount(), kCount - 1);
+}
+
+TEST_P(NonFiniteVectorTest, SearchRejectsNonFiniteQuery) {
+  auto index = CreateIndex();
+  AddFiniteVectors(*index);
+  for (uint32_t bits : kNonFiniteFp32) {
+    auto res =
+        index->Search(WithFp32Bits(FiniteVector(1), 3, bits), 5, CancelNever());
+    ASSERT_FALSE(res.ok());
+    EXPECT_EQ(res.status().code(), absl::StatusCode::kInvalidArgument);
+    EXPECT_EQ(res.status().message(),
+              "Error parsing vector similarity query: query vector contains "
+              "NaN or infinite values.");
+  }
+}
+
+// A snapshot taken before ingest validation may hold a key whose vector is
+// non-finite. Load drops that key instead of restoring a poisoned vector.
+TEST_P(NonFiniteVectorTest, LoadDropsKeysWithNonFiniteVectors) {
+  constexpr int kBad = 7;
+  FakeSafeRDB rdb;
+  data_model::VectorIndex proto;
+  {
+    auto index = CreateIndex();
+    AddFiniteVectors(*index);
+    ASSERT_TRUE((index->SaveIndex(RDBChunkOutputStream(&rdb))).ok());
+    ASSERT_TRUE((index->SaveTrackedKeys(RDBChunkOutputStream(&rdb))).ok());
+    proto = index->ToProto()->vector_index();
+  }
+  std::vector<std::unique_ptr<ValkeyModuleString>> records;
+  for (int i = 0; i < kCount; ++i) {
+    std::string vector = FiniteVector(i);
+    if (i == kBad) {
+      vector = WithFp32Bits(std::move(vector), 1, kFp32NaN);
+    }
+    records.emplace_back(new ValkeyModuleString{vector});
+  }
+  EXPECT_CALL(*kMockValkeyModule, OpenKey(testing::_, testing::_, testing::_))
+      .WillRepeatedly(TestValkeyModule_OpenKeyDefaultImpl);
+  EXPECT_CALL(*kMockValkeyModule,
+              HashGet(testing::_, VALKEYMODULE_HASH_CFIELDS, testing::_,
+                      testing::An<ValkeyModuleString **>(),
+                      testing::TypedEq<void *>(nullptr)))
+      .WillRepeatedly([&records](ValkeyModuleKey *key, int, const char *,
+                                 ValkeyModuleString **value_out, void *) {
+        auto key_str = absl::string_view(key->key);
+        CHECK(absl::ConsumeSuffix(&key_str, "_key"));
+        int i;
+        CHECK(absl::SimpleAtoi(key_str, &i));
+        *value_out = records[i].get();
+        ValkeyModule_RetainString(nullptr, records[i].get());
+        return VALKEYMODULE_OK;
+      });
+
+  auto loaded = LoadIndex(proto, rdb);
+  ASSERT_TRUE(loaded.ok()) << loaded.status();
+  ASSERT_TRUE(
+      ((*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                  SupplementalContentChunkIter(&rdb)))
+          .ok());
+  EXPECT_FALSE((*loaded)->IsTracked(IndexToKey(kBad)));
+  EXPECT_EQ((*loaded)->GetTrackedKeyCount(), kCount - 1);
+
+  auto search = (*loaded)->Search(FiniteVector(kBad), kCount, CancelNever());
+  ASSERT_TRUE(search.ok()) << search.status();
+  EXPECT_EQ(search->size(), kCount - 1);
+  for (const auto &neighbor : *search) {
+    EXPECT_NE(neighbor.external_id, IndexToKey(kBad));
+  }
+  // The dropped key can be indexed again once its vector is finite.
+  auto readd = testing_infra::AddVectorRecord(**loaded, IndexToKey(kBad),
+                                              FiniteVector(kBad));
+  ASSERT_TRUE(readd.ok()) << readd.status();
+  EXPECT_EQ(*readd, RecordResult::kAdded);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    NonFiniteVectorTests, NonFiniteVectorTest,
+    ::testing::Combine(::testing::Values(IndexerType::kHNSW,
+                                         IndexerType::kFlat),
+                       ::testing::Values(data_model::DISTANCE_METRIC_COSINE,
+                                         data_model::DISTANCE_METRIC_IP,
+                                         data_model::DISTANCE_METRIC_L2)),
+    [](const auto &info) {
+      std::string name =
+          std::get<0>(info.param) == IndexerType::kHNSW ? "HNSW" : "Flat";
+      switch (std::get<1>(info.param)) {
+        case data_model::DISTANCE_METRIC_COSINE:
+          return name + "Cosine";
+        case data_model::DISTANCE_METRIC_IP:
+          return name + "IP";
+        default:
+          return name + "L2";
+      }
+    });
+
 TEST_F(VectorIndexTest, HnswCosineCollinearVectorsRemainReachable)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   constexpr int kDims = 4;
@@ -3224,13 +3493,14 @@ TEST_F(VectorIndexTest, SearchRangeCosineNearDuplicatesHighDims) {
   }
 }
 
-// A NaN or infinite component in the stored or the query vector makes the
-// distance non-finite. As on Redis, a NaN or +inf distance is within no
-// radius, and neither is any non-finite COSINE distance, while an IP distance
-// of -inf is within every radius and reported as -inf. An infinite radius
-// reaches VectorBase as the largest float. Under -ffast-math the radius
-// comparison admitted NaN distances at every radius, and std::clamp turned a
-// non-finite COSINE distance into 0 or 2.
+// A NaN or infinite component in the query vector makes the distance
+// non-finite. As on Redis, a NaN or +inf distance is within no radius, and
+// neither is any non-finite COSINE distance, while an IP distance of -inf is
+// within every radius and reported as -inf. An infinite radius reaches
+// VectorBase as the largest float. Under -ffast-math the radius comparison
+// admitted NaN distances at every radius, and std::clamp turned a non-finite
+// COSINE distance into 0 or 2. Stored vectors with a non-finite component are
+// rejected at ingest, so they are never in range.
 TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
   const int kDim = 4;
   auto from_bits = [](uint32_t bits) {
@@ -3285,9 +3555,16 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
     ASSERT_TRUE(flat_index.ok());
     for (VectorBase *index : {static_cast<VectorBase *>(hnsw_index->get()),
                               static_cast<VectorBase *>(flat_index->get())}) {
+      // Keys 2 to 5 hold a non-finite element and are rejected at ingest, so
+      // only the query-side cases reach a non-finite distance through them.
+      auto stored = [](int i) { return i < 2; };
       for (int i = 0; i < static_cast<int>(docs.size()); ++i) {
-        VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(*index, IndexToKey(i),
-                                                       VectorToStr(docs[i])));
+        auto added = testing_infra::AddVectorRecord(*index, IndexToKey(i),
+                                                    VectorToStr(docs[i]));
+        ASSERT_TRUE(added.ok()) << added.status();
+        EXPECT_EQ(*added,
+                  stored(i) ? RecordResult::kAdded : RecordResult::kInvalidData)
+            << "key " << i;
       }
       for (const auto &c : cases) {
         absl::string_view query = VectorToStr(c.query);
@@ -3304,8 +3581,9 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
                 std::find(c.ip_neg_inf.begin(), c.ip_neg_inf.end(), i) !=
                     c.ip_neg_inf.end();
             const bool expected =
-                neg_inf ||
-                (c.finite_matches && (i == 0 || (i == 1 && radius > 1.0f)));
+                stored(i) &&
+                (neg_inf ||
+                 (c.finite_matches && (i == 0 || (i == 1 && radius > 1.0f))));
             const std::string key(IndexToKey(i)->Str());
             EXPECT_EQ(found.contains(key), expected)
                 << "metric " << metric << " query " << c.name << " radius "
@@ -3315,6 +3593,10 @@ TEST_F(VectorIndexTest, SearchRangeNonFiniteDistance) {
             }
             auto within =
                 index->IsWithinVectorRange(IndexToKey(i), query, radius);
+            if (!stored(i)) {
+              EXPECT_FALSE(within.ok()) << "key " << i;
+              continue;
+            }
             ASSERT_TRUE(within.ok()) << within.status();
             EXPECT_EQ(within->has_value(), expected)
                 << "metric " << metric << " query " << c.name << " radius "

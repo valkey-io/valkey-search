@@ -6,7 +6,9 @@
 
 #include "src/commands/ft_aggregate_parser.h"
 
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -740,6 +742,27 @@ TEST_F(ParseCommandRegistrationTest, VectorRangeNanRadiusParamRejected) {
     EXPECT_FALSE(status.ok()) << radius;
     EXPECT_THAT(std::string(status.message()), testing::HasSubstr(error))
         << radius;
+  }
+}
+
+// A VECTOR_RANGE query vector with a NaN or infinite element is rejected, as
+// a KNN query vector is: every distance against it would be NaN. The bit
+// patterns are written directly because -ffast-math makes NaN literals
+// unreliable.
+TEST_F(ParseCommandRegistrationTest, VectorRangeNonFiniteQueryVectorRejected) {
+  auto schema = MakeSchemaWithVec("vec");
+  for (uint32_t bits : {0x7FC00000U, 0x7F800000U, 0xFF800000U}) {
+    std::string blob = MakeBlob3();
+    std::memcpy(blob.data() + sizeof(float), &bits, sizeof(bits));
+    AggregateParameters params(0);
+    params.index_schema = schema;
+    params.parse_vars.query_string = "@vec:[VECTOR_RANGE 0.5 $blob]";
+    params.parse_vars.params["blob"] = {1, absl::string_view(blob)};
+    auto status = RunParseCommandStatus(params);
+    EXPECT_FALSE(status.ok()) << std::hex << bits;
+    EXPECT_THAT(std::string(status.message()),
+                testing::HasSubstr("Vector blob contains NaN or infinite"))
+        << std::hex << bits;
   }
 }
 

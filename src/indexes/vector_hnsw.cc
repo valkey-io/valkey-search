@@ -332,6 +332,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
+  if (!this->IsFiniteVector(query)) {
+    return absl::InvalidArgumentError(
+        "Error parsing vector similarity query: query vector contains NaN or "
+        "infinite values.");
+  }
   float reciprocal_magnitude =
       normalize_ ? CalcReciprocalMagnitude(
                        reinterpret_cast<const T *>(query.data()), dimensions_)

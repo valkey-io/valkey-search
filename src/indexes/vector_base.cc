@@ -45,6 +45,7 @@
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/module_config.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -84,6 +85,38 @@ float CalcReciprocalMagnitude(absl::string_view record,
       return CalcReciprocalMagnitude(
           reinterpret_cast<const bfloat16 *>(record.data()),
           record.size() / sizeof(bfloat16));
+    default:
+      CHECK(false) << "unsupported vector data type";
+  }
+}
+
+namespace {
+
+// An IEEE value is NaN or +/-Inf exactly when all of its exponent bits are set.
+template <typename Bits, Bits kExponentMask>
+bool AllElementsFinite(absl::string_view record) {
+  const size_t count = record.size() / sizeof(Bits);
+  for (size_t i = 0; i < count; ++i) {
+    Bits bits;
+    std::memcpy(&bits, record.data() + i * sizeof(Bits), sizeof(Bits));
+    if ((bits & kExponentMask) == kExponentMask) {
+      return false;
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+bool IsFiniteVector(absl::string_view record,
+                    data_model::VectorDataType data_type) {
+  switch (data_type) {
+    case data_model::VECTOR_DATA_TYPE_FLOAT32:
+      return AllElementsFinite<uint32_t, 0x7F800000U>(record);
+    case data_model::VECTOR_DATA_TYPE_FLOAT16:
+      return AllElementsFinite<uint16_t, 0x7C00U>(record);
+    case data_model::VECTOR_DATA_TYPE_BFLOAT16:
+      return AllElementsFinite<uint16_t, 0x7F80U>(record);
     default:
       CHECK(false) << "unsupported vector data type";
   }
@@ -228,7 +261,8 @@ VectorBase::~VectorBase() {
 absl::StatusOr<RecordResult> VectorBase::AddRecord(const InternedStringPtr &key,
                                                    AttributeData &&data) {
   CHECK(data.IsVector());
-  if (!IsValidSizeVector(data.GetLength())) {
+  if (!IsValidSizeVector(data.GetLength()) ||
+      !IsFiniteVector(data.GetStringView())) {
     return RecordResult::kInvalidData;
   }
   auto vector_record = data.ConsumeVector();
@@ -273,7 +307,8 @@ absl::StatusOr<InternedStringPtr> VectorBase::GetKeyDuringSearch(
 absl::StatusOr<RecordResult> VectorBase::ModifyRecord(
     const InternedStringPtr &key, AttributeData &&data) {
   CHECK(data.IsVector());
-  if (!IsValidSizeVector(data.GetLength())) {
+  if (!IsValidSizeVector(data.GetLength()) ||
+      !IsFiniteVector(data.GetStringView())) {
     [[maybe_unused]] auto res =
         RemoveRecord(key, indexes::DeletionType::kRecord);
     return RecordResult::kInvalidData;
@@ -475,42 +510,76 @@ absl::Status VectorBase::SaveTrackedKeys(
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
-  absl::WriterMutexLock lock(&key_to_metadata_mutex_);
+  // Keys whose stored vector holds NaN/Inf. Their graph nodes are removed only
+  // after key_to_metadata_mutex_ is released: RemoveRecordImpl takes
+  // resize_mutex_, which elsewhere is acquired before key_to_metadata_mutex_.
+  std::vector<uint64_t> non_finite_ids;
+  {
+    absl::WriterMutexLock lock(&key_to_metadata_mutex_);
 
-  while (iter.HasNext()) {
-    VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
-                           _ << "Error loading metadata");
-    data_model::TrackedKeyMetadata tracked_key_metadata;
-    if (!tracked_key_metadata.ParseFromString(metadata_str->binary_content())) {
-      return absl::InvalidArgumentError("Error parsing metadata from proto");
-    }
-    auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
-    tracked_metadata_by_key_.insert(
-        {interned_key,
-         {.internal_id = tracked_key_metadata.internal_id(),
-          .magnitude = tracked_key_metadata.magnitude()}});
-    key_by_internal_id_.insert(
-        {tracked_key_metadata.internal_id(), interned_key});
+    while (iter.HasNext()) {
+      VMSDK_ASSIGN_OR_RETURN(auto metadata_str, iter.Next(),
+                             _ << "Error loading metadata");
+      data_model::TrackedKeyMetadata tracked_key_metadata;
+      if (!tracked_key_metadata.ParseFromString(
+              metadata_str->binary_content())) {
+        return absl::InvalidArgumentError("Error parsing metadata from proto");
+      }
+      auto interned_key = StringInternStore::Intern(tracked_key_metadata.key());
 
-    auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
-    auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
-        ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
-    CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
-                   << interned_key->Str();
-    auto attribute_status = attribute_data_type->GetAttribute(
-        ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
-    CHECK(attribute_status.ok());
-    auto attribute_val = std::move(attribute_status.value());
-    if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
-      attribute_val = NormalizeStringAttribute(std::move(attribute_val));
+      auto key = vmsdk::MakeUniqueValkeyString(interned_key->Str());
+      auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+          ctx, key.get(), VALKEYMODULE_OPEN_KEY_NOEFFECTS | VALKEYMODULE_READ);
+      CHECK(key_obj) << "Failed to open key during LoadTrackedKeys: "
+                     << interned_key->Str();
+      auto attribute_status = attribute_data_type->GetAttribute(
+          ctx, key_obj.get(), interned_key->Str(), attribute_identifier_);
+      CHECK(attribute_status.ok());
+      auto attribute_val = std::move(attribute_status.value());
+      if (attribute_data_type->AttributesProvidedAsString() && attribute_val) {
+        attribute_val = NormalizeStringAttribute(std::move(attribute_val));
+      }
+      auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
+      // Snapshots written before non-finite vectors were rejected at ingest
+      // may still carry them. Such a vector poisons every distance computed
+      // against it, so the key is dropped rather than restored. The schema
+      // re-ingests every loaded key once loading ends (index-extension replay
+      // or backfill), which applies the invalid-data policy to the rest of the
+      // key and counts it in hash_indexing_failures.
+      if (attribute_val) {
+        const auto attribute_view = vmsdk::ToStringView(attribute_val.get());
+        if (IsValidSizeVector(attribute_view) &&
+            !IsFiniteVector(attribute_view)) {
+          VMSDK_LOG(WARNING, ctx)
+              << "Dropping key with a NaN or infinite vector during load: "
+              << vmsdk::config::RedactIfNeeded(interned_key->Str());
+          // Tombstoning reads the stored vector, so give the slot a finite
+          // one.
+          save_vector =
+              VectorRecord::Construct(std::string(GetVectorDataSize(), '\0'),
+                                      kDefaultMagnitude, GetVectorAllocator());
+          non_finite_ids.push_back(tracked_key_metadata.internal_id());
+          continue;
+        }
+      }
+      tracked_metadata_by_key_.insert(
+          {interned_key,
+           {.internal_id = tracked_key_metadata.internal_id(),
+            .magnitude = tracked_key_metadata.magnitude()}});
+      key_by_internal_id_.insert(
+          {tracked_key_metadata.internal_id(), interned_key});
+
+      auto vector_record_with_size =
+          VectorRegistry::Instance().DedupOrConstruct(
+              interned_key, attribute_val.get(), attribute_data_type->ToProto(),
+              db_num_, this);
+      save_vector = std::move(vector_record_with_size.vector_record);
     }
-    auto vector_record_with_size = VectorRegistry::Instance().DedupOrConstruct(
-        interned_key, attribute_val.get(), attribute_data_type->ToProto(),
-        db_num_, this);
-    auto &save_vector = GetVectorLockFree(tracked_key_metadata.internal_id());
-    save_vector = std::move(vector_record_with_size.vector_record);
+    inc_id_ = GetMaxLoadedLabel() + 1;
   }
-  inc_id_ = GetMaxLoadedLabel() + 1;
+  for (uint64_t internal_id : non_finite_ids) {
+    VMSDK_RETURN_IF_ERROR(RemoveRecordImpl(internal_id));
+  }
   return absl::OkStatus();
 }
 

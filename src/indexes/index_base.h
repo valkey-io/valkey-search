@@ -63,8 +63,9 @@ enum class RecordResult {
                  // unchanged vector). Treated as if the field were absent.
   kInvalidData,  // The field value does not conform to the field's type (e.g.
                  // a NUMERIC field whose value is not a number, or a VECTOR
-                 // field with the wrong byte length). Redisearch drops the
-                 // entire key in this case; see COMPATIBILITY.md.
+                 // field with the wrong byte length or a NaN/Inf element).
+                 // Redisearch drops the entire key in this case; see
+                 // COMPATIBILITY.md.
 };
 
 const absl::NoDestructor<absl::flat_hash_map<absl::string_view, IndexerType>>

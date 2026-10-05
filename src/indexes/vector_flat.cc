@@ -239,6 +239,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
         query.size(), ") does not match index's expected size (",
         dimensions_ * GetDataTypeSize(), ")."));
   }
+  if (!this->IsFiniteVector(query)) {
+    return absl::InvalidArgumentError(
+        "Error parsing vector similarity query: query vector contains NaN or "
+        "infinite values.");
+  }
   try {
     CancelCondition canceler(cancellation_token);
     // The query stays raw and carries its reciprocal magnitude, applied in

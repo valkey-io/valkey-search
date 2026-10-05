@@ -1693,8 +1693,9 @@ class HierarchicalNSW
           EvaluateDistance(dataPoint, GetDataByInternalId(currObj));
       for (int level = maxLevel; level > dataPointLevel; level--) {
         bool changed = true;
-        while (changed) {
-          changed = false;
+        size_t steps_left = cur_element_count_.load(std::memory_order_relaxed);
+        while (changed && steps_left-- > 0) {
+          const tableint prevObj = currObj;
           unsigned int *data;
           std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
           data = get_linklist_at_level(currObj, level);
@@ -1716,9 +1717,15 @@ class HierarchicalNSW
             if (d < curdist) {
               curdist = d;
               currObj = cand;
-              changed = true;
             }
           }
+          // A NaN distance makes `d < curdist` meaningless under -ffast-math:
+          // depending on codegen it is false for the move but true for a
+          // flag set beside it, or true for both. Deriving progress from
+          // currObj ends the first case; steps_left ends the second, since an
+          // honest greedy step strictly lowers curdist and so can never take
+          // more steps than there are elements.
+          changed = currObj != prevObj;
         }
       }
     }
@@ -1847,8 +1854,10 @@ class HierarchicalNSW
             EvaluateDistance(data_point, GetDataByInternalId(currObj));
         for (int level = maxlevelcopy; level > curlevel; level--) {
           bool changed = true;
-          while (changed) {
-            changed = false;
+          size_t steps_left =
+              cur_element_count_.load(std::memory_order_relaxed);
+          while (changed && steps_left-- > 0) {
+            const tableint prevObj = currObj;
             unsigned int *data;
             std::unique_lock<std::mutex> lock(link_list_locks_[currObj]);
             data = get_linklist(currObj, level);
@@ -1864,9 +1873,10 @@ class HierarchicalNSW
               if (d < curdist) {
                 curdist = d;
                 currObj = cand;
-                changed = true;
               }
             }
+            // See repairConnectionsForUpdate for why this loop is bounded.
+            changed = currObj != prevObj;
           }
         }
       }
@@ -1943,8 +1953,9 @@ class HierarchicalNSW
 
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
-      while (changed) {
-        changed = false;
+      size_t steps_left = cur_element_count_.load(std::memory_order_relaxed);
+      while (changed && steps_left-- > 0) {
+        const tableint prevObj = currObj;
         unsigned int *data;
 
         data = (unsigned int *)get_linklist(currObj, level);
@@ -1961,9 +1972,10 @@ class HierarchicalNSW
           if (d < curdist) {
             curdist = d;
             currObj = cand;
-            changed = true;
           }
         }
+        // See repairConnectionsForUpdate for why this loop is bounded.
+        changed = currObj != prevObj;
       }
     }
 
@@ -2006,8 +2018,9 @@ class HierarchicalNSW
 
     for (int level = element_levels_[currObj]; level > 0; level--) {
       bool changed = true;
-      while (changed) {
-        changed = false;
+      size_t steps_left = cur_element_count_.load(std::memory_order_relaxed);
+      while (changed && steps_left-- > 0) {
+        const tableint prevObj = currObj;
         unsigned int *data;
 
         data = (unsigned int *)get_linklist(currObj, level);
@@ -2025,9 +2038,10 @@ class HierarchicalNSW
           if (d < curdist) {
             curdist = d;
             currObj = cand;
-            changed = true;
           }
         }
+        // See repairConnectionsForUpdate for why this loop is bounded.
+        changed = currObj != prevObj;
       }
     }
 

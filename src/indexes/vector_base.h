@@ -251,6 +251,13 @@ std::vector<char> NormalizeVector(absl::string_view record,
 float CalcReciprocalMagnitude(absl::string_view record,
                               data_model::VectorDataType data_type);
 
+// True iff no element of `record` is NaN or +/-Inf. Tests the IEEE exponent
+// bits directly because -ffast-math folds std::isfinite to true. A single
+// non-finite element makes every distance against the vector NaN, which HNSW
+// cannot order.
+bool IsFiniteVector(absl::string_view record,
+                    data_model::VectorDataType data_type);
+
 std::vector<char> NormalizeVector(absl::string_view record,
                                   data_model::VectorDataType data_type,
                                   float reciprocal_magnitude);
@@ -521,6 +528,14 @@ class VectorBase : public IndexBase {
   }
   bool IsValidSizeVector(absl::string_view record) const {
     return IsValidSizeVector(record.size());
+  }
+  bool IsFiniteVector(absl::string_view record) const {
+    return indexes::IsFiniteVector(record, GetVectorDataType());
+  }
+  // A vector is indexable when it has the index's byte size and holds only
+  // finite elements.
+  bool IsValidVector(absl::string_view record) const {
+    return IsValidSizeVector(record) && IsFiniteVector(record);
   }
   // Distance between `query` and the vector in `record`, where `record` is the
   // raw bytes just read back from the database rather than anything the index

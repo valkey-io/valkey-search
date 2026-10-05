@@ -13,6 +13,7 @@
 // visible in a reply.
 
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -1299,6 +1300,53 @@ TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsWrongSizedVectorBlob) {
   auto params = ParseExact(args);
   ASSERT_FALSE(params.ok());
   EXPECT_EQ(params.status().message(), BlobSizeError(kTooLong));
+}
+
+// A correctly sized FLOAT32 blob whose element `index` has the IEEE bit
+// pattern `bits` (e.g. NaN or +Inf). Built from bits because -ffast-math makes
+// std::numeric_limits<float>::quiet_NaN() unreliable to reason about.
+std::vector<std::string> ParamsWithNonFiniteBlob(uint32_t bits, size_t index) {
+  std::string blob(kVectorDimensions * sizeof(float), '\0');
+  std::memcpy(blob.data() + index * sizeof(float), &bits, sizeof(bits));
+  return {"PARAMS", "2", "q", blob};
+}
+
+constexpr uint32_t kNaNBits = 0x7FC00000U;
+constexpr uint32_t kPosInfBits = 0x7F800000U;
+constexpr absl::string_view kNonFiniteError =
+    "Error parsing vector similarity parameters: query vector contains NaN "
+    "or infinite values.";
+
+TEST_F(FTHybridParserTest, PureVsimArmRejectsNaNVectorBlob) {
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                                "KNN",    "2",         "K",    "5"};
+  auto extra = ParamsWithNonFiniteBlob(kNaNBits, kVectorDimensions - 1);
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kNonFiniteError);
+}
+
+TEST_F(FTHybridParserTest, PureVsimArmRejectsInfiniteVectorBlob) {
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
+                                "KNN",    "2",         "K",    "5"};
+  auto extra = ParamsWithNonFiniteBlob(kPosInfBits, 0);
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kNonFiniteError);
+}
+
+TEST_F(FTHybridParserTest, VsimArmWithFilterRejectsNaNVectorBlob) {
+  // Reaches PostParseVectorParameters, the check FT.SEARCH shares.
+  std::vector<std::string> args{"SEARCH", "@n:[0 10]", "VSIM",    "@vector",
+                                "$q",     "KNN",       "2",       "K",
+                                "5",      "FILTER",    "@n:[0 3]"};
+  auto extra = ParamsWithNonFiniteBlob(kNaNBits, 3);
+  args.insert(args.end(), extra.begin(), extra.end());
+  auto params = ParseExact(args);
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), kNonFiniteError);
 }
 
 // ---------------------------------------------------------------------

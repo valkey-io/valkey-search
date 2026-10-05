@@ -46,11 +46,12 @@ void VectorRegistry::Init(ValkeyModuleCtx *ctx) {
 }
 
 indexes::VectorRecordWithSize ConstructVectorRecord(
-    absl::string_view record, const indexes::VectorBase *vector_base) {
+    absl::string_view record, const indexes::VectorBase *vector_base,
+    bool is_valid) {
   if (record.empty()) {
     return {};
   }
-  if (!vector_base->IsValidSizeVector(record)) {
+  if (!is_valid) {
     return {
         .vector_record = indexes::VectorRecord::Construct(record, 0, nullptr),
         .size = record.size()};
@@ -79,14 +80,16 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
   }
 
   auto vector_str = vmsdk::ToStringView(vector);
-  if (!vector_base->IsValidSizeVector(vector_str)) {
+  // Checked once here: the finiteness scan is O(dimensions).
+  const bool is_valid = vector_base->IsValidVector(vector_str);
+  if (!is_valid) {
     if (IsEraseTrackedRecordSafe(
             db_num, key, vector_str,
             vector_base->GetInternedAttributeIdentifier()->Str(),
             attribute_data_type)) {
       EraseTrackedRecord(db_num, search_key);
     }
-    return ConstructVectorRecord(vector_str, vector_base);
+    return ConstructVectorRecord(vector_str, vector_base, is_valid);
   }
 
   indexes::VectorRecordWithSize result;
@@ -96,7 +99,7 @@ indexes::VectorRecordWithSize VectorRegistry::DedupOrConstruct(
     ++stats_.dedup_cnt;
     result = it->second;
   } else {
-    result = ConstructVectorRecord(vector_str, vector_base);
+    result = ConstructVectorRecord(vector_str, vector_base, is_valid);
     if (it != db_tracked.end()) {
       it->second = result;
     } else {

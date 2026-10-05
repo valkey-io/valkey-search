@@ -2548,6 +2548,10 @@ absl::Status PostParseVectorParameters(query::SearchParameters &parameters) {
                      ") does not match index's expected size (",
                      vector_index->GetVectorDataSize(), ")."));
   }
+  if (!vector_index->IsFiniteVector(parameters.query)) {
+    return absl::InvalidArgumentError(
+        "query vector contains NaN or infinite values.");
+  }
 
   if (!parameters.parse_vars.ef_string.empty()) {
     VMSDK_ASSIGN_OR_RETURN(
@@ -2630,6 +2634,10 @@ absl::Status PostParseVectorRangeParameters(
               absl::StrCat("Vector blob size (", resolved_blob.size(),
                            ") does not match index dimensions (",
                            vector_index->GetVectorDataSize(), ")"));
+        }
+        if (!vector_index->IsFiniteVector(resolved_blob)) {
+          return absl::InvalidArgumentError(
+              "Vector blob contains NaN or infinite values");
         }
 
         vr_pred->SetQueryVector(std::string(resolved_blob));

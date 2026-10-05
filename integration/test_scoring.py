@@ -233,6 +233,25 @@ TAG_PREFIX_DOCS = {
 
 # =====================================================================
 # Helpers
+# idxPolicy: HNSW so the planner has a choice to make. Stemming on and a
+# suffix trie so every text shape has a leaf; a tag so an AND can force the
+# per-candidate evaluator on the prefilter side. Bodies differ in length and
+# term placement so the shapes disagree on membership and score.
+IDX_POLICY = [
+    "FT.CREATE", "idxPolicy", "ON", "HASH", "PREFIX", "1", "p:",
+    "SCHEMA", "body", "TEXT", "WITHSUFFIXTRIE", "cat", "TAG",
+    "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "2",
+    "DISTANCE_METRIC", "L2",
+]
+POLICY_DOCS = {
+    "p:1": {"body": "hello world running fast", "cat": "a", "vec": _vec(0.0, 0.0)},
+    "p:2": {"body": "world hello runner", "cat": "a", "vec": _vec(1.0, 0.0)},
+    "p:3": {"body": "hello big wide world runs", "cat": "b", "vec": _vec(2.0, 0.0)},
+    "p:4": {"body": "world then hello runs", "cat": "a", "vec": _vec(3.0, 0.0)},
+    "p:5": {"body": "hello hello world", "cat": "b", "vec": _vec(4.0, 0.0)},
+    "p:6": {"body": "nothing to see", "cat": "a", "vec": _vec(5.0, 0.0)},
+}
+
 # =====================================================================
 
 def load(client, index, docs):
@@ -899,6 +918,67 @@ class TestScoring(ValkeySearchTestCaseBase):
                               *params)
         assert hybrid == pytest.approx(tag_only, abs=SCORE_ABS_TOL)
         assert keys == ["doc:1", "doc:2", "doc:3", "doc:4", "doc:5"]
+
+    # Group 16: the two hybrid strategies score alike. ADHOC_BF drains the
+    # filter's fetchers (a pure text filter is trusted from the iterator) and
+    # then ranks by distance; BATCHES walks HNSW and runs the full predicate
+    # through one PrefilterEvaluator per visited candidate. Same filter, same
+    # keys, same scores. K covers the corpus so recall is not a variable.
+    @pytest.mark.skip(reason=(
+        "https://github.com/valkey-io/valkey-search/issues/1424"
+        " -- the inline filter skips the text children of an AND, so BATCHES"
+        " admits every candidate for phrase, proximity and text+tag filters."
+        " The test is written to fail against that defect; unskip it when the"
+        " issue is fixed."))
+    def test_hybrid_policies_score_alike(self):
+        client = self.server.get_new_client()
+        client.execute_command("CONFIG", "SET",
+                               "search.info-developer-visible", "yes")
+        load(client, IDX_POLICY, POLICY_DOCS)
+        params = ("PARAMS", "2", "q", _vec(0.0, 0.0), "DIALECT", "2")
+
+        def strategy_counts():
+            info = client.info("search")
+            return (int(info.get("search_prefiltering_requests_count", 0)),
+                    int(info.get("search_inline_filtering_requests_count", 0)))
+
+        text_filters = [
+            ("@body:(hello|world)", ["INORDER"]),
+            ("@body:(hello world)", ["INORDER"]),
+            ("@body:(hello world)", ["SLOP", "0"]),
+            ("@body:(hello world)", ["SLOP", "2"]),
+            ("@body:(hel*|wor*)", ["INORDER"]),
+            ("@body:(*llo|*rld)", []),
+            ("@body:(%helo%|%wrld%)", []),
+            ("@body:running", []),
+            ("@body:hello", []),
+        ]
+        filters = text_filters + [
+            ("@cat:{a} " + f, args) for f, args in text_filters
+        ]
+        for filt, args in filters:
+            def run(policy):
+                before = strategy_counts()
+                keys, scores = search(
+                    client, IDX_POLICY,
+                    f"({filt})=>[KNN 6 @vec $q HYBRID_POLICY {policy}]",
+                    *args, *params)
+                return keys, scores, strategy_counts()
+            pre_before = strategy_counts()
+            adhoc_keys, adhoc_scores, after_adhoc = run("ADHOC_BF")
+            assert after_adhoc == (pre_before[0] + 1, pre_before[1]), filt
+            inline_keys, inline_scores, after_inline = run("BATCHES")
+            assert after_inline == (after_adhoc[0], after_adhoc[1] + 1), filt
+
+            assert inline_keys == adhoc_keys, filt
+            assert inline_scores == pytest.approx(adhoc_scores,
+                                                  abs=SCORE_ABS_TOL), filt
+            # The filter alone agrees too, so neither strategy drifted from
+            # the non-vector path.
+            plain_keys, plain_scores = search(client, IDX_POLICY, filt, *args)
+            assert set(plain_keys) == set(adhoc_keys), filt
+            assert plain_scores == pytest.approx(adhoc_scores,
+                                                 abs=SCORE_ABS_TOL), filt
 
 
 class TestScoringDisabled(ValkeySearchTestCaseDebugMode):

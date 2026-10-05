@@ -1404,6 +1404,20 @@ def _do_aliasdel(node, alias_name):
         return e
 
 
+def _resume_cluster_messages(node):
+    """Unpause cluster messages on node and wait for it to reconcile them."""
+    before = int(node.info("SEARCH")[
+        "search_coordinator_metadata_reconciliation_completed_count"])
+    node.execute_command(
+        "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+    waiters.wait_for_true(
+        lambda: int(node.info("SEARCH")[
+            "search_coordinator_metadata_reconciliation_completed_count"])
+        > before,
+        timeout=10,
+    )
+
+
 def _run_alias_pausepoint_reset(order, node0, node1):
     """
     Release pause points in a controlled order to test consistency retry.
@@ -1875,8 +1889,7 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
         except ResponseError as e:
             result1 = str(e)
 
-        node1.execute_command(
-            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        _resume_cluster_messages(node1)
 
         def _converged():
             alias_lists = set()
@@ -1959,8 +1972,7 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
         except ResponseError as e:
             result1 = str(e)
 
-        node1.execute_command(
-            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        _resume_cluster_messages(node1)
 
         def _converged():
             alias_lists = set()
@@ -2025,8 +2037,7 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
         except ResponseError as e:
             result1 = str(e)
 
-        node1.execute_command(
-            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        _resume_cluster_messages(node1)
 
         def _converged():
             alias_lists = set()
@@ -2085,8 +2096,7 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
         except ResponseError as e:
             result_drop = str(e)
 
-        node1.execute_command(
-            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        _resume_cluster_messages(node1)
 
         def _converged():
             states = []
@@ -2162,8 +2172,7 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
                 node.execute_command("FT.ALIASUPDATE", alias_name, target)
             except ResponseError:
                 pass
-        node1.execute_command(
-            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        _resume_cluster_messages(node1)
 
         def _converged():
             lists = {str(node.execute_command("FT.ALIASLIST"))
@@ -2214,8 +2223,7 @@ class TestFTAliasCollisionWithPausepoints(ValkeySearchClusterTestCaseDebugMode):
                 node.execute_command("FT.ALIASUPDATE", alias_name, target)
             except ResponseError:
                 pass
-        node1.execute_command(
-            "FT._DEBUG CONTROLLED_VARIABLE SET PauseHandleClusterMessage no")
+        _resume_cluster_messages(node1)
 
         def _converged():
             lists = {str(node.execute_command("FT.ALIASLIST"))

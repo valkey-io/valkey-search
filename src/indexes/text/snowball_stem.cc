@@ -15,6 +15,7 @@
 #include "absl/log/check.h"
 #include "libstemmer.h"
 #include "src/utils/scanner.h"
+#include "vmsdk/src/info.h"
 
 namespace valkey_search::indexes::text {
 
@@ -28,11 +29,33 @@ using StemmerPtr = std::unique_ptr<sb_stemmer, StemmerDeleter>;
 
 thread_local absl::flat_hash_map<data_model::Language, StemmerPtr> stemmers_;
 
+// INFO counter for the min_stem_size code-point compatibility defect (see
+// COMPATIBILITY.md). Statically constructed because stemming runs on worker
+// threads. Only counts words where the byte and code point lengths disagree.
+vmsdk::info_field::Integer min_stem_size_code_points_compat_counter(
+    "compatibility", "compatibility-min_stem_size_code_points",
+    vmsdk::info_field::IntegerBuilder().App());
+
+bool IsKnownAlgorithm(absl::string_view name) {
+  for (const char** algorithm = sb_stemmer_list(); *algorithm != nullptr;
+       ++algorithm) {
+    if (name == *algorithm) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 SnowballStemFilter::SnowballStemFilter(data_model::Language language,
                                        absl::string_view algorithm_name)
-    : language_(language), algorithm_name_(algorithm_name) {}
+    : language_(language), algorithm_name_(algorithm_name) {
+  // Fail when the language is registered, not on its first stem: the
+  // per-thread stemmer itself is still created lazily (see GetStemmer).
+  CHECK(IsKnownAlgorithm(algorithm_name_))
+      << "Unknown Snowball algorithm: " << algorithm_name_;
+}
 
 sb_stemmer* SnowballStemFilter::GetStemmer() const {
   auto it = stemmers_.find(language_);
@@ -49,10 +72,17 @@ sb_stemmer* SnowballStemFilter::GetStemmer() const {
 
 std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
                                                 sb_stemmer* stemmer,
-                                                uint32_t min_stem_size) const {
-  if (word.empty() ||
-      !utils::Scanner::AtLeastNCodepoints(word, min_stem_size)) {
+                                                uint32_t min_stem_size,
+                                                LengthUnit unit) const {
+  if (word.empty()) {
     return word;
+  }
+  if (!utils::Scanner::AtLeastNCodepoints(word, min_stem_size)) {
+    if (unit != LengthUnit::kBytes || word.size() < min_stem_size) {
+      return word;
+    }
+    // Long enough only when counted in bytes (1.2 behavior).
+    min_stem_size_code_points_compat_counter.Increment();
   }
   CHECK(stemmer) << "Stemmer is not initialized";
   const sb_symbol* stemmed = sb_stemmer_stem(
@@ -71,18 +101,20 @@ std::string_view SnowballStemFilter::DoStemming(absl::string_view word,
 }
 
 std::string SnowballStemFilter::GetStemRoot(absl::string_view token,
-                                            uint32_t min_stem_size) const {
+                                            uint32_t min_stem_size,
+                                            LengthUnit unit) const {
   sb_stemmer* stemmer = GetStemmer();
-  std::string_view stemmed = DoStemming(token, stemmer, min_stem_size);
+  std::string_view stemmed = DoStemming(token, stemmer, min_stem_size, unit);
   return std::string(stemmed);
 }
 
 void SnowballStemFilter::BuildStemMap(const std::vector<std::string>& tokens,
-                                      uint32_t min_stem_size,
+                                      uint32_t min_stem_size, LengthUnit unit,
                                       InProgressStemMap& stem_mappings) const {
   sb_stemmer* stemmer = GetStemmer();
   for (const auto& token : tokens) {
-    std::string_view stemmed_view = DoStemming(token, stemmer, min_stem_size);
+    std::string_view stemmed_view =
+        DoStemming(token, stemmer, min_stem_size, unit);
     if (stemmed_view != token) {
       auto it = stem_mappings.find(stemmed_view);
       if (it == stem_mappings.end()) {

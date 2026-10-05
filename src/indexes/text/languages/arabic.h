@@ -20,13 +20,24 @@
 
 namespace valkey_search::indexes::text {
 
-// Arabic: ASCII + Arabic-specific punctuation (no guillemets).
-// Punctuation characters sourced from Unicode CLDR Punctuation Exemplars (v46).
+// Arabic: ASCII + common typographic + Arabic comma, semicolon, question mark.
+// Language-specific characters come from the Unicode CLDR v46 punctuation
+// exemplars; the common typographic set is shared by every non-English
+// language.
 inline const std::string kArabicPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?"
-    "\xd8\x8c"   // ، U+060C ARABIC COMMA
-    "\xd8\x9b"   // ؛ U+061B ARABIC SEMICOLON
-    "\xd8\x9f";  // ؟ U+061F ARABIC QUESTION MARK
+    "\xe2\x80\x93"  // – U+2013 EN DASH
+    "\xe2\x80\x94"  // — U+2014 EM DASH
+    "\xe2\x80\xa6"  // … U+2026 HORIZONTAL ELLIPSIS
+    "\xe2\x80\x98"  // ' U+2018 LEFT SINGLE QUOTATION MARK
+    "\xe2\x80\x99"  // ' U+2019 RIGHT SINGLE QUOTATION MARK
+    "\xe2\x80\x9c"  // " U+201C LEFT DOUBLE QUOTATION MARK
+    "\xe2\x80\x9d"  // " U+201D RIGHT DOUBLE QUOTATION MARK
+    "\xc2\xab"      // « U+00AB LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+    "\xc2\xbb"      // » U+00BB RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+    "\xd8\x8c"      // ، U+060C ARABIC COMMA
+    "\xd8\x9b"      // ؛ U+061B ARABIC SEMICOLON
+    "\xd8\x9f";     // ؟ U+061F ARABIC QUESTION MARK
 
 // Arabic stop words (119 words) — sourced from Apache Lucene.
 inline const std::vector<std::string> kArabicStopWords{
@@ -50,22 +61,9 @@ class ArabicLanguage final : public SnowballLanguage {
   ArabicLanguage()
       : SnowballLanguage(data_model::LANGUAGE_ARABIC, kArabicPunctuation,
                          kArabicStopWords, NormalizationForm::NFKC, "",
-                         "arabic") {}
+                         "arabic", DelimiterScope::kUnicode) {}
 
-  data_model::Language Id() const override {
-    return data_model::LANGUAGE_ARABIC;
-  }
   absl::string_view Name() const override { return "arabic"; }
-  const std::string& GetDefaultPunctuation() const override {
-    return kArabicPunctuation;
-  }
-  const std::vector<std::string>& GetDefaultStopWords() const override {
-    return kArabicStopWords;
-  }
-  NormalizationForm GetNormalizationForm() const override {
-    return NormalizationForm::NFKC;
-  }
-  absl::string_view CaseFoldLocale() const override { return ""; }
   vmsdk::ValkeyVersion MinRequiredVersion() const override {
     return valkey_search::kRelease13;
   }

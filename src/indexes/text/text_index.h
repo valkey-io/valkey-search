@@ -97,7 +97,12 @@ class TextIndex {
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(std::shared_ptr<const Language> language, bool with_offsets,
+  // `language` is the shared instance for the index's LANGUAGE; `punctuation`
+  // and `stop_words` are the index's own settings (FT.CREATE overrides or the
+  // language defaults).
+  TextIndexSchema(std::shared_ptr<const Language> language,
+                  const std::string &punctuation,
+                  const std::vector<std::string> &stop_words, bool with_offsets,
                   uint32_t min_stem_size);
 
   absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
@@ -118,6 +123,9 @@ class TextIndexSchema {
   uint8_t GetNumTextFields() const { return num_text_fields_; }
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
   const Language &GetLanguage() const { return *language_; }
+  const TokenizerConfig &GetTokenizerConfig() const {
+    return tokenizer_config_;
+  }
 
   // Access to metadata for memory pool usage
   TextIndexMetadata &GetMetadata() { return metadata_; }
@@ -247,6 +255,7 @@ class TextIndexSchema {
   mutable std::mutex per_key_text_indexes_mutex_;
 
   std::shared_ptr<const Language> language_;
+  TokenizerConfig tokenizer_config_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a

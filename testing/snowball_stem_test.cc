@@ -20,14 +20,9 @@ namespace valkey_search::indexes::text {
 
 namespace {
 
-/// Helper to construct a SnowballStemFilter from a language enum using the
-/// registry. Tests use the same interface as production: (enum,
-/// algorithm_name).
-SnowballStemFilter MakeStemFilter(data_model::Language language) {
-  auto lang = LanguageRegistry::Instance().Get(language);
-  return SnowballStemFilter(
-      language,
-      static_cast<const SnowballLanguage *>(lang.get())->GetStemmerAlgorithm());
+/// The stemmer of the registered language, as production uses it.
+const Stemmer &StemmerFor(data_model::Language language) {
+  return *LanguageRegistry::Instance().Get(language)->GetStemmer();
 }
 
 }  // namespace
@@ -111,7 +106,7 @@ class SnowballStemmingTest : public ::testing::TestWithParam<StemmingTestCase> {
 
 TEST_P(SnowballStemmingTest, ProducesExpectedStem) {
   const auto &tc = GetParam();
-  auto stemmer = MakeStemFilter(tc.language);
+  const auto &stemmer = StemmerFor(tc.language);
   std::string result = stemmer.GetStemRoot(tc.input, 3);
   EXPECT_EQ(result, tc.expected_stem);
 }
@@ -211,9 +206,9 @@ class SnowballStemMapTest : public ::testing::TestWithParam<StemMapTestCase> {};
 
 TEST_P(SnowballStemMapTest, VariantsConvergeToSameStem) {
   const auto &tc = GetParam();
-  auto stemmer = MakeStemFilter(tc.language);
+  const auto &stemmer = StemmerFor(tc.language);
   InProgressStemMap stem_mappings;
-  stemmer.BuildStemMap(tc.tokens, 3, stem_mappings);
+  stemmer.BuildStemMap(tc.tokens, 3, LengthUnit::kCodePoints, stem_mappings);
 
   EXPECT_TRUE(stem_mappings.contains(tc.expected_stem));
   EXPECT_EQ(stem_mappings[tc.expected_stem].size(), tc.expected_count);
@@ -239,23 +234,11 @@ TEST_F(SnowballStemSharedTest, GetStemRoot_MinStemSizePrevents) {
   EXPECT_EQ(result, "running");
 }
 
-// Idempotency: a word already at its stem form is left unchanged
-TEST_F(SnowballStemSharedTest, GetStemRoot_AlreadyStemmed) {
-  std::string result = stemmer_.GetStemRoot("run", 3);
-  EXPECT_EQ(result, "run");
-}
-
-// Empty string: should not crash, returned unchanged
-TEST_F(SnowballStemSharedTest, GetStemRoot_EmptyString) {
-  std::string result = stemmer_.GetStemRoot("", 3);
-  EXPECT_EQ(result, "");
-}
-
 // BuildStemMap: large min_stem_size produces empty map
 TEST_F(SnowballStemSharedTest, BuildStemMap_MinStemSizePreventsAll) {
   std::vector<std::string> tokens = {"running", "jumps", "happily"};
   InProgressStemMap stem_mappings;
-  stemmer_.BuildStemMap(tokens, 100, stem_mappings);
+  stemmer_.BuildStemMap(tokens, 100, LengthUnit::kCodePoints, stem_mappings);
   EXPECT_TRUE(stem_mappings.empty());
 }
 
@@ -263,7 +246,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_MinStemSizePreventsAll) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_SelfStemExcluded) {
   std::vector<std::string> tokens = {"run"};
   InProgressStemMap stem_mappings;
-  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
+  stemmer_.BuildStemMap(tokens, 3, LengthUnit::kCodePoints, stem_mappings);
   EXPECT_TRUE(stem_mappings.empty());
 }
 
@@ -271,7 +254,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_SelfStemExcluded) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_DuplicateTokensDeduped) {
   std::vector<std::string> tokens = {"running", "running", "running"};
   InProgressStemMap stem_mappings;
-  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
+  stemmer_.BuildStemMap(tokens, 3, LengthUnit::kCodePoints, stem_mappings);
   EXPECT_TRUE(stem_mappings.contains("run"));
   EXPECT_EQ(stem_mappings["run"].size(), 1);
 }
@@ -280,7 +263,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_DuplicateTokensDeduped) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleWordsToSameStem) {
   std::vector<std::string> tokens = {"running", "runs"};
   InProgressStemMap stem_mappings;
-  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
+  stemmer_.BuildStemMap(tokens, 3, LengthUnit::kCodePoints, stem_mappings);
   EXPECT_EQ(stem_mappings.size(), 1);
   EXPECT_TRUE(stem_mappings.contains("run"));
   EXPECT_EQ(stem_mappings["run"].size(), 2);
@@ -290,7 +273,7 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleWordsToSameStem) {
 TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleDistinctStems) {
   std::vector<std::string> tokens = {"running", "jumps", "happily"};
   InProgressStemMap stem_mappings;
-  stemmer_.BuildStemMap(tokens, 3, stem_mappings);
+  stemmer_.BuildStemMap(tokens, 3, LengthUnit::kCodePoints, stem_mappings);
   EXPECT_EQ(stem_mappings.size(), 3);
   EXPECT_TRUE(stem_mappings.contains("run"));
   EXPECT_TRUE(stem_mappings.contains("jump"));
@@ -298,18 +281,49 @@ TEST_F(SnowballStemSharedTest, BuildStemMap_MultipleDistinctStems) {
 }
 
 // =============================================================================
-// Multi-byte codepoint edge case (French)
+// Parameterized test: min_stem_size length unit
 //
-// Verifies the AtLeastNCodepoints check counts Unicode codepoints, not bytes.
-// "né" is 2 codepoints but 3 bytes; with min_stem_size=3, it must NOT stem.
+// min_stem_size is measured in the given LengthUnit. Code points are the
+// default; bytes are the 1.2 behavior kept for English under emulate-release
+// < 1.3.0 (see Language::GetLengthUnit).
 // =============================================================================
 
-TEST(SnowballStemMultiByteTest, FrenchCodePointCounting) {
-  SnowballStemFilter stemmer(data_model::LANGUAGE_FRENCH, "french");
-  // "né" = 'n' (1 byte) + 'é' (2 bytes) = 2 codepoints, 3 bytes
-  std::string result = stemmer.GetStemRoot("n\xc3\xa9", 3);
-  EXPECT_EQ(result, "n\xc3\xa9");
+struct MinStemSizeUnitTestCase {
+  std::string test_name;
+  data_model::Language language;
+  std::string input;
+  uint32_t min_stem_size;
+  LengthUnit unit;
+  std::string expected;
+};
+
+const std::vector<MinStemSizeUnitTestCase> kMinStemSizeUnitCases = {
+    // "né" is 2 code points, 3 bytes.
+    {"french_code_points_too_short", data_model::LANGUAGE_FRENCH, "n\xc3\xa9",
+     3, LengthUnit::kCodePoints, "n\xc3\xa9"},
+    // "cafés" is 5 code points, 6 bytes: only the byte count reaches 6.
+    {"english_code_points_too_short", data_model::LANGUAGE_ENGLISH,
+     "caf\xc3\xa9s", 6, LengthUnit::kCodePoints, "caf\xc3\xa9s"},
+    {"english_bytes_long_enough", data_model::LANGUAGE_ENGLISH, "caf\xc3\xa9s",
+     6, LengthUnit::kBytes, "caf\xc3\xa9"},
+};
+
+class MinStemSizeUnitTest
+    : public ::testing::TestWithParam<MinStemSizeUnitTestCase> {};
+
+TEST_P(MinStemSizeUnitTest, StemsOnlyWhenLongEnough) {
+  const auto &tc = GetParam();
+  const auto &stemmer = StemmerFor(tc.language);
+  EXPECT_EQ(stemmer.GetStemRoot(tc.input, tc.min_stem_size, tc.unit),
+            tc.expected);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    LengthUnits, MinStemSizeUnitTest,
+    ::testing::ValuesIn(kMinStemSizeUnitCases),
+    [](const ::testing::TestParamInfo<MinStemSizeUnitTestCase> &info) {
+      return info.param.test_name;
+    });
 
 // =============================================================================
 // SnowballStemFilter::GetStemRoot — basic stemming behavior

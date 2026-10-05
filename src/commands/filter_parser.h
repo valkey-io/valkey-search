@@ -81,6 +81,9 @@ class FilterParser {
   const TextParsingOptions& options_;
   const IndexSchema& index_schema_;
   absl::string_view expression_;
+  // Set by Parse() after its upfront check. When true, no token can contain
+  // malformed UTF-8, so per-token sanitizing is skipped.
+  bool expression_valid_utf8_{false};
   size_t pos_{0};
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
@@ -154,9 +157,15 @@ class FilterParser {
   // On match, advances pos_ past the full codepoint and returns true.
   // On non-match or invalid UTF-8, does not advance and returns false.
   bool IsNonAsciiDelimiter(const indexes::text::PunctuationSet& punct);
-  // Appends the multi-byte codepoint at pos_ to dest and advances pos_.
-  // Caller must ensure pos_ points to a lead byte >= 0x80.
+  // Appends the raw bytes of the multi-byte codepoint at pos_ (or the single
+  // byte, if malformed) to dest and advances pos_. Caller must ensure pos_
+  // points to a byte >= 0x80.
   void ConsumeNonAsciiByte(std::string& dest);
+  // Normalizes a completed text token for `language`. A malformed token (only
+  // reachable under emulate-release < 1.3.0) is first sanitized the way 1.2
+  // did, by ICU's U+FFFD substitution.
+  void NormalizeTextToken(const indexes::text::Language& language,
+                          std::string& token) const;
 
   // Parses a QMA block after `=> {`. Returns the weight value on success.
   absl::StatusOr<double> ParseQMABlock();

@@ -440,6 +440,13 @@ class TestTextSearchCompatibility(BaseCompatibilityTest):
         exclude_all = True if key_type == "json" else False
         self._run_test(gen_escaped_word, "punctuation", key_type, dialect, schema_type, field='body', exclude_all=exclude_all)
 
+    def test_text_search_unicode_whitespace(self, key_type, dialect, schema_type):
+        """Query one word of a pair joined by non-ASCII whitespace (NBSP etc.).
+
+        Matches only if the engine splits on that character.
+        """
+        self._run_test(gen_whitespace_joined_half, "unicode whitespace", key_type, dialect, schema_type)
+
     # ========================================================================
     # fuzzy search
     # ========================================================================
@@ -497,6 +504,9 @@ def _compute_safe_fuzzy_vocab(vocab_by_field: dict, language: str) -> dict:
     be within distance 1 of a stem S, W must be within distance 2 of S (by
     triangle inequality). Therefore we conservatively exclude any word W where
     edit_distance(W, S) <= 2 for any stem S that differs from its original.
+
+    The Valkey side of this divergence is asserted outside the compatibility
+    suite, in TestDeliberateDivergences (test_multi_language_search.py).
 
     Returns a new vocab_by_field dict with only safe words per field.
     If a field has no safe words, it is omitted from the result.
@@ -667,6 +677,25 @@ class TestMultiLangTextSearchCompatibility(BaseCompatibilityTest):
             gen_fuzzy_1, dataset, key_type, dialect, schema_type,
             language, vocab_override=safe_vocab
         )
+
+    # ========================================================================
+    # Case folding — Turkish dotted and dotless I
+    # ========================================================================
+
+    def test_multilang_turkish_uppercase(self, key_type, dialect, schema_type, language):
+        """Query Turkish words in Turkish uppercase (i -> İ, ı -> I).
+
+        Excluded: Redis does not apply Turkish casing, so every such query
+        returns 0 results there (measured against redis:latest). Valkey
+        lowercases with the Turkish locale (I -> ı, İ -> i) and matches. The
+        Valkey side is asserted by Divergence #2 in TestDeliberateDivergences.
+        See known_differences.md §4.4.
+        """
+        if language != "turkish":
+            pytest.skip("Turkish casing only applies to the turkish dataset")
+        self._run_test(gen_turkish_uppercase_word, LANG_TO_DATASET[language],
+                       key_type, dialect, schema_type, language,
+                       exclude_all=True)
 
     # ========================================================================
     # Punctuation / escape tests — non-ASCII punct (mirrors English

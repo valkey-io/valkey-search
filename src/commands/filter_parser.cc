@@ -28,6 +28,7 @@
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/language.h"
+#include "src/indexes/text/unicode_normalizer.h"
 #include "src/query/predicate.h"
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"
@@ -448,7 +449,8 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   //   >= 1.3.0: reject the whole expression (all field types).
   //   <  1.3.0: 1.2 behavior — only TEXT tokens substitute U+FFFD (below);
   //             tag/numeric keep raw bytes for exact match.
-  if (!utils::Scanner::IsValidUtf8(expression_)) {
+  expression_valid_utf8_ = utils::Scanner::IsValidUtf8(expression_);
+  if (!expression_valid_utf8_) {
     VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
         1, 3, 0, "filter_parser_invalid_utf8_expression",
         []() -> absl::Status {
@@ -576,18 +578,21 @@ bool FilterParser::IsNonAsciiDelimiter(
 }
 
 void FilterParser::ConsumeNonAsciiByte(std::string& dest) {
-  // Append the full multi-byte sequence starting at pos_. If the sequence is
-  // malformed, substitute U+FFFD (legacy < 1.3.0 tolerate behavior — the
-  // upfront rejection in Parse() only fires for >= 1.3.0).
+  // Malformed bytes are kept raw here and sanitized per token in
+  // NormalizeTextToken, matching how 1.2 built and then case-folded a token.
   utils::Scanner s(expression_.substr(pos_));
-  utils::Scanner::Char cp = s.NextUtf8();
+  s.NextUtf8();
   uint8_t len = s.LastUtf8ByteLen();
-  if (cp == utils::Scanner::kInvalidCp) {
-    utils::Scanner::PushBackUtf8(dest, 0xFFFD);
-  } else {
-    dest.append(expression_.data() + pos_, len);
-  }
+  dest.append(expression_.data() + pos_, len);
   pos_ += len;
+}
+
+void FilterParser::NormalizeTextToken(const indexes::text::Language& language,
+                                      std::string& token) const {
+  if (!expression_valid_utf8_ && !utils::Scanner::IsValidUtf8(token)) {
+    token = indexes::text::UnicodeNormalizer::ReplaceInvalidUtf8(token);
+  }
+  language.NormalizeInPlace(token);
 }
 
 // Handles backslash escaping for both quoted and unquoted text
@@ -642,7 +647,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default, char delim) {
   const auto& language = text_index_schema->GetLanguage();
-  const auto& punct = language.GetPunctuationSet();
+  const auto& punct = text_index_schema->GetTokenizerConfig().punct_set;
   std::string processed_content;
 
   while (!IsEnd()) {
@@ -673,7 +678,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseQuotedTextToken(
   if (processed_content.empty()) {
     return FilterParser::TokenResult{nullptr, false};
   }
-  language.NormalizeInPlace(processed_content);
+  NormalizeTextToken(language, processed_content);
   FieldMaskPredicate field_mask;
   VMSDK_RETURN_IF_ERROR(
       SetupTextFieldConfiguration(field_mask, field_or_default, false));
@@ -700,7 +705,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     const std::optional<std::string>& field_or_default) {
   const auto& language = text_index_schema->GetLanguage();
-  const auto& punct = language.GetPunctuationSet();
+  const auto& punct = text_index_schema->GetTokenizerConfig().punct_set;
   std::string processed_content;
   bool starts_with_star = false;
   bool ends_with_star = false;
@@ -783,7 +788,7 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
     ++pos_;
   }
 
-  language.NormalizeInPlace(processed_content);
+  NormalizeTextToken(language, processed_content);
   FieldMaskPredicate field_mask;
 
   // Build predicate directly based on detected pattern
@@ -835,7 +840,8 @@ absl::StatusOr<FilterParser::TokenResult> FilterParser::ParseUnquotedTextToken(
   } else {
     // Term predicate handling:
     bool exact = options_.verbatim;
-    if (language.IsStopWord(processed_content) || processed_content.empty()) {
+    if (text_index_schema->GetTokenizerConfig().IsStopWord(processed_content) ||
+        processed_content.empty()) {
       // Skip stop words and empty words.
       return FilterParser::TokenResult{nullptr, break_on_query_syntax};
     }

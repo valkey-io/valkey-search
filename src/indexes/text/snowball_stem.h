@@ -34,11 +34,12 @@ class SnowballStemFilter : public Stemmer {
                      absl::string_view algorithm_name);
 
   /// Stemmer interface
-  std::string GetStemRoot(absl::string_view token,
-                          uint32_t min_stem_size = 0) const override;
+  std::string GetStemRoot(
+      absl::string_view token, uint32_t min_stem_size = 0,
+      LengthUnit unit = LengthUnit::kCodePoints) const override;
 
   void BuildStemMap(const std::vector<std::string>& tokens,
-                    uint32_t min_stem_size,
+                    uint32_t min_stem_size, LengthUnit unit,
                     InProgressStemMap& stem_mappings) const override;
 
  private:
@@ -47,7 +48,7 @@ class SnowballStemFilter : public Stemmer {
 
   sb_stemmer* GetStemmer() const;
   std::string_view DoStemming(absl::string_view word, sb_stemmer* stemmer,
-                              uint32_t min_stem_size) const;
+                              uint32_t min_stem_size, LengthUnit unit) const;
 };
 
 }  // namespace valkey_search::indexes::text

@@ -1638,8 +1638,8 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
 
     // Create text index with both proto and schema
     auto text_index_schema = std::make_shared<indexes::text::TextIndexSchema>(
-        indexes::text::CreateLanguage(language, punctuation, stop_words),
-        with_offsets, min_stem_size);
+        indexes::text::LanguageRegistry::Instance().Get(language), punctuation,
+        stop_words, with_offsets, min_stem_size);
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(with_suffix_trie, no_stem, 1.0),
         text_index_schema);
@@ -2727,11 +2727,10 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
     auto text_index = std::make_shared<indexes::Text>(
         CreateTextIndexProto(true, false, 1.0),
         std::make_shared<indexes::text::TextIndexSchema>(
-            indexes::text::CreateLanguage(
-                data_model::LANGUAGE_ENGLISH,
-                " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-                std::vector<std::string>{}),
-            true, 6));
+            indexes::text::LanguageRegistry::Instance().Get(
+                data_model::LANGUAGE_ENGLISH),
+            " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
+            std::vector<std::string>{}, true, 6));
     VMSDK_EXPECT_OK(
         index_schema->AddIndex("description", "desc_id", text_index));
 

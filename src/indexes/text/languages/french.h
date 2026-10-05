@@ -21,7 +21,9 @@
 namespace valkey_search::indexes::text {
 
 // French: ASCII + common typographic punctuation.
-// Punctuation characters sourced from Unicode CLDR Punctuation Exemplars (v46).
+// Language-specific characters come from the Unicode CLDR v46 punctuation
+// exemplars; the common typographic set is shared by every non-English
+// language.
 inline const std::string kFrenchPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?"
     "\xe2\x80\x93"  // – U+2013 EN DASH
@@ -67,23 +69,10 @@ class FrenchLanguage final : public SnowballLanguage {
  public:
   FrenchLanguage()
       : SnowballLanguage(data_model::LANGUAGE_FRENCH, kFrenchPunctuation,
-                         kFrenchStopWords, NormalizationForm::NFC, "",
-                         "french") {}
+                         kFrenchStopWords, NormalizationForm::NFC, "", "french",
+                         DelimiterScope::kUnicode) {}
 
-  data_model::Language Id() const override {
-    return data_model::LANGUAGE_FRENCH;
-  }
   absl::string_view Name() const override { return "french"; }
-  const std::string& GetDefaultPunctuation() const override {
-    return kFrenchPunctuation;
-  }
-  const std::vector<std::string>& GetDefaultStopWords() const override {
-    return kFrenchStopWords;
-  }
-  NormalizationForm GetNormalizationForm() const override {
-    return NormalizationForm::NFC;
-  }
-  absl::string_view CaseFoldLocale() const override { return ""; }
   vmsdk::ValkeyVersion MinRequiredVersion() const override {
     return valkey_search::kRelease13;
   }

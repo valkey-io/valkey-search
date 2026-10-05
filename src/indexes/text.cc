@@ -309,7 +309,8 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   auto expansion = indexes::text::FuzzySearch::Search(
-      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words);
+      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words,
+      GetLengthUnit());
   return std::make_unique<indexes::text::TermIterator>(
       std::move(expansion.key_iterators), field_mask, require_positions,
       /*stem_field_mask=*/0, /*has_original=*/false,

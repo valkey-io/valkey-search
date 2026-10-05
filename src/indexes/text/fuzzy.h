@@ -17,6 +17,7 @@
 #include "invasive_ptr.h"
 #include "posting.h"
 #include "rax_wrapper.h"
+#include "src/indexes/text/language.h"
 #include "src/utils/scanner.h"
 #include "text.h"
 
@@ -40,31 +41,30 @@ struct FuzzySearch {
         postings;
   };
 
-  // Returns matched terms for all words within edit distance <= max_distance.
-  // The DP matrix is sized by code point count (not bytes): é→è costs 1 edit.
+  // Returns matched terms for all words within edit distance <= max_distance,
+  // measured in `unit`: é→è costs 1 edit in code points, 2 in bytes.
   static Expansion Search(const Rax& tree, absl::string_view pattern,
-                          size_t max_distance, uint32_t max_words) {
+                          size_t max_distance, uint32_t max_words,
+                          LengthUnit unit) {
     Expansion result;
 
-    // Decode pattern to code points so the DP matrix is indexed per
-    // character. The pattern reaches here already well-formed UTF-8. Both
-    // entry points resolve malformed bytes upstream, compat-gated (>= 1.3.0
-    // rejects with InvalidArgumentError; < 1.3.0 substitutes U+FFFD so the
-    // term matches nothing): client queries via FilterParser::Parse's upfront
-    // gate, and inter-node requests via GRPCPredicateToPredicate in
-    // search_converter.cc. kInvalidCp is therefore unreachable here, and the
-    // CHECK is a contract assertion: if it fires, a caller delivered an
-    // unsanitized pattern, which is a programming error.
+    // Split the pattern into units so the DP matrix is indexed per unit.
+    // Query entry points reject malformed UTF-8 (emulate-release >= 1.3.0) or
+    // substitute U+FFFD (< 1.3.0) before reaching here. If a malformed pattern
+    // still arrives, kCodePoints cannot decode it and matches nothing rather
+    // than aborting; indexed terms are always valid UTF-8.
     Codepoints pattern_cps;
-    {
+    if (unit == LengthUnit::kBytes) {
+      for (char ch : pattern) {
+        pattern_cps.push_back(static_cast<uint8_t>(ch));
+      }
+    } else {
       utils::Scanner s(pattern);
       utils::Scanner::Char cp;
       while ((cp = s.NextUtf8()) != utils::Scanner::kEOF) {
-        CHECK(cp != utils::Scanner::kInvalidCp)
-            << "Fuzzy pattern contained invalid UTF-8 — the filter parser "
-               "should have rejected or substituted it at the query "
-               "boundary; "
-               "this indicates a code path bypass";
+        if (cp == utils::Scanner::kInvalidCp) {
+          return result;
+        }
         pattern_cps.push_back(cp);
       }
     }
@@ -86,9 +86,10 @@ struct FuzzySearch {
     // Start traversal from root to explore all words in the tree
     auto iter = tree.GetPathIterator("");
     uint32_t word_count = 0;
-    SearchRecursive(iter, pattern_cps, max_distance, "", 0 /*prev_tree_cp*/,
-                    0 /*new_word_cp_count*/, 0 /*dp_byte_pos*/, prev_prev, prev,
-                    curr, result, max_words, word_count);
+    SearchRecursive(iter, pattern_cps, max_distance, unit, "",
+                    0 /*prev_tree_cp*/, 0 /*new_word_cp_count*/,
+                    0 /*dp_byte_pos*/, prev_prev, prev, curr, result, max_words,
+                    word_count);
     return result;
   }
 
@@ -117,9 +118,10 @@ struct FuzzySearch {
   //                  required because radix-tree edges may split
   //                  mid-codepoint.
   //   - DP matrix columns = pattern_cps.size() + 1
+  // With LengthUnit::kBytes, every "code point" above is a single byte.
   static void SearchRecursive(
       Rax::PathIterator iter, const Codepoints& pattern_cps,
-      size_t max_distance,
+      size_t max_distance, LengthUnit unit,
       std::string word,          // Current word being built (raw bytes)
       uint32_t prev_tree_cp,     // Previous code point (for transposition)
       size_t new_word_cp_count,  // Code point count of word
@@ -158,12 +160,18 @@ struct FuzzySearch {
       // sequence so the missing bytes can join from the next edge.
       while (edge_dp_byte_pos < new_word.size()) {
         uint8_t b0 = static_cast<uint8_t>(new_word[edge_dp_byte_pos]);
-        uint8_t need = utils::Scanner::ExpectedLen(b0);
-        if (edge_dp_byte_pos + need > new_word.size()) {
-          break;  // Partial UTF-8 sequence — wait for next edge to complete
-                  // it.
+        uint32_t tree_cp;
+        if (unit == LengthUnit::kBytes) {
+          tree_cp = b0;
+          ++edge_dp_byte_pos;
+        } else {
+          uint8_t need = utils::Scanner::ExpectedLen(b0);
+          if (edge_dp_byte_pos + need > new_word.size()) {
+            break;  // Partial UTF-8 sequence — wait for next edge to complete
+                    // it.
+          }
+          tree_cp = DecodeAndAdvance(new_word, edge_dp_byte_pos);
         }
-        uint32_t tree_cp = DecodeAndAdvance(new_word, edge_dp_byte_pos);
         ++edge_word_cp_count;
 
         // curr[0] = cost of deleting all code points of new_word so far.
@@ -235,7 +243,7 @@ struct FuzzySearch {
 
         // Recurse into child's subtree
         if (child_iter.CanDescend()) {
-          SearchRecursive(child_iter, pattern_cps, max_distance, new_word,
+          SearchRecursive(child_iter, pattern_cps, max_distance, unit, new_word,
                           prev_tree_cp, edge_word_cp_count, edge_dp_byte_pos,
                           prev_prev, prev, curr, result, max_words, word_count);
         }

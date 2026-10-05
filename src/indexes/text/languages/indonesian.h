@@ -21,7 +21,9 @@
 namespace valkey_search::indexes::text {
 
 // Indonesian: ASCII + common typographic punctuation.
-// Punctuation characters sourced from Unicode CLDR Punctuation Exemplars (v46).
+// Language-specific characters come from the Unicode CLDR v46 punctuation
+// exemplars; the common typographic set is shared by every non-English
+// language.
 inline const std::string kIndonesianPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?"
     "\xe2\x80\x93"  // – U+2013 EN DASH
@@ -58,22 +60,10 @@ class IndonesianLanguage final : public SnowballLanguage {
   IndonesianLanguage()
       : SnowballLanguage(data_model::LANGUAGE_INDONESIAN,
                          kIndonesianPunctuation, kIndonesianStopWords,
-                         NormalizationForm::NFC, "", "indonesian") {}
+                         NormalizationForm::NFC, "", "indonesian",
+                         DelimiterScope::kUnicode) {}
 
-  data_model::Language Id() const override {
-    return data_model::LANGUAGE_INDONESIAN;
-  }
   absl::string_view Name() const override { return "indonesian"; }
-  const std::string& GetDefaultPunctuation() const override {
-    return kIndonesianPunctuation;
-  }
-  const std::vector<std::string>& GetDefaultStopWords() const override {
-    return kIndonesianStopWords;
-  }
-  NormalizationForm GetNormalizationForm() const override {
-    return NormalizationForm::NFC;
-  }
-  absl::string_view CaseFoldLocale() const override { return ""; }
   vmsdk::ValkeyVersion MinRequiredVersion() const override {
     return valkey_search::kRelease13;
   }

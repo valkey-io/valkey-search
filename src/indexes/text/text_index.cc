@@ -153,9 +153,13 @@ std::optional<std::reference_wrapper<const Rax>> TextIndex::GetSuffix() const {
 /*** TextIndexSchema ***/
 
 TextIndexSchema::TextIndexSchema(std::shared_ptr<const Language> language,
+                                 const std::string &punctuation,
+                                 const std::vector<std::string> &stop_words,
                                  bool with_offsets, uint32_t min_stem_size)
     : with_offsets_(with_offsets),
       language_(std::move(language)),
+      tokenizer_config_(
+          language_->MakeTokenizerConfig(punctuation, stop_words)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -173,10 +177,11 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
       std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
       stem_mappings_ptr = &in_progress_stem_mappings_[key];
     }
-    tokens = language_->TokenizeWithStemMap(data, min_stem_size_,
-                                            *stem_mappings_ptr);
+    tokens = language_->TokenizeWithStemMap(
+        data, tokenizer_config_, min_stem_size_, language_->GetLengthUnit(),
+        *stem_mappings_ptr);
   } else {
-    tokens = language_->Tokenize(data);
+    tokens = language_->Tokenize(data, tokenizer_config_);
   }
 
   if (!tokens.ok()) {
@@ -382,9 +387,10 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   if (!empty_words.empty() && stem_text_field_mask_) {
     auto *stem_filter = language_->GetStemmer();
     if (stem_filter) {
+      const LengthUnit unit = language_->GetLengthUnit();
       absl::WriterMutexLock stem_lock(&stem_tree_mutex_);
       for (const auto &word : empty_words) {
-        std::string stem = stem_filter->GetStemRoot(word, min_stem_size_);
+        std::string stem = stem_filter->GetStemRoot(word, min_stem_size_, unit);
         if (stem != word) {
           auto stem_remove_fn = CreateSimpleTargetMutateFn<StemParents>(
               [&word](InvasivePtr<StemParents> existing) {

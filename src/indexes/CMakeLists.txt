@@ -135,8 +135,6 @@ set(SRCS_TEXT ${CMAKE_CURRENT_LIST_DIR}/text/text_index.h
               ${CMAKE_CURRENT_LIST_DIR}/text/orproximity.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/term.h
-              ${CMAKE_CURRENT_LIST_DIR}/text/customized_language.cc
-              ${CMAKE_CURRENT_LIST_DIR}/text/customized_language.h
               ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.cc
               ${CMAKE_CURRENT_LIST_DIR}/text/language_registry.h
               ${CMAKE_CURRENT_LIST_DIR}/text/snowball_language.cc

@@ -42,13 +42,45 @@ struct PunctuationSet {
     if (utils::Scanner::IsAscii(cp)) return ascii[cp];
     return non_ascii.contains(cp);
   }
+
+  // True if every code point of the UTF-8 `text` is in the set.
+  bool ContainsAll(absl::string_view text) const {
+    utils::Scanner scanner(text);
+    utils::Scanner::Char cp;
+    while ((cp = scanner.NextUtf8()) != utils::Scanner::kEOF) {
+      if (!Contains(cp)) return false;
+    }
+    return true;
+  }
+
+  void Insert(uint32_t cp) {
+    if (utils::Scanner::IsAscii(cp)) {
+      ascii.set(cp);
+    } else {
+      non_ascii.insert(cp);
+    }
+  }
 };
 
+// Which word boundaries a language adds on top of its listed punctuation.
+//   kAscii:   ASCII whitespace and control characters only. This is the 1.2
+//             tokenization, and matches Redis, so languages available before
+//             1.3 (English) keep it.
+//   kUnicode: also Unicode White_Space (NBSP, U+3000, ...) and every code point
+//             that normalizes to punctuation in the set.
+enum class DelimiterScope { kAscii, kUnicode };
+
 // Build a PunctuationSet from a punctuation string. Iterates as code points
-// (not bytes) so multi-byte chars like U+060C are stored correctly.
-// ASCII whitespace/control characters and Unicode White_Space code points are
-// always included as word boundaries.
-inline PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
+// (not bytes) so multi-byte chars like U+060C are stored correctly; listed
+// characters are always honored, whatever the scope. ASCII whitespace/control
+// characters are always word boundaries. With DelimiterScope::kUnicode, so are
+// Unicode White_Space code points, and the set is closed under `form`: a code
+// point that normalizes to punctuation is punctuation too (e.g. under NFKC,
+// U+FF0C FULLWIDTH COMMA -> ','), so splitting raw text yields the same tokens
+// as normalizing first. Tokens can then be normalized one at a time.
+inline PunctuationSet BuildPunctuationSet(const std::string& punctuation,
+                                          NormalizationForm form,
+                                          DelimiterScope scope) {
   PunctuationSet result;
   // ASCII whitespace and control characters (0x00..0x7F).
   for (int i = 0; i < 128; ++i) {
@@ -56,6 +88,17 @@ inline PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
         std::iscntrl(static_cast<unsigned char>(i))) {
       result.ascii.set(i);
     }
+  }
+
+  // Language-specific punctuation characters from the punctuation string.
+  utils::Scanner scanner(punctuation);
+  utils::Scanner::Char cp;
+  while ((cp = scanner.NextUtf8()) != utils::Scanner::kEOF) {
+    result.Insert(cp);
+  }
+
+  if (scope == DelimiterScope::kAscii) {
+    return result;
   }
 
   // Non-ASCII Unicode White_Space code points (NBSP U+00A0, NNBSP U+202F,
@@ -69,25 +112,37 @@ inline PunctuationSet BuildPunctuationSet(const std::string& punctuation) {
   for (int32_t i = 0; i < ws.getRangeCount(); ++i) {
     UChar32 start = ws.getRangeStart(i);
     UChar32 end = ws.getRangeEnd(i);
-    for (UChar32 cp = start; cp <= end; ++cp) {
-      if (cp >= 0x80) {
-        result.non_ascii.insert(static_cast<uint32_t>(cp));
+    for (UChar32 ws_cp = start; ws_cp <= end; ++ws_cp) {
+      if (ws_cp >= 0x80) {
+        result.non_ascii.insert(static_cast<uint32_t>(ws_cp));
       }
     }
   }
 
-  // Language-specific punctuation characters from the punctuation string.
-  utils::Scanner scanner(punctuation);
-  utils::Scanner::Char cp;
-  while ((cp = scanner.NextUtf8()) != utils::Scanner::kEOF) {
-    if (utils::Scanner::IsAscii(cp)) {
-      result.ascii.set(cp);
-    } else {
-      result.non_ascii.insert(cp);
-    }
-  }
+  // Close under normalization. A normalized form is never itself changed by
+  // the form, so the code points added here cannot affect later checks.
+  UnicodeNormalizer::ForEachChangedByNormalization(
+      form, [&result](uint32_t cp, absl::string_view normalized) {
+        if (result.ContainsAll(normalized)) {
+          result.Insert(cp);
+        }
+      });
   return result;
 }
+
+// Per-index tokenization settings: the word boundaries and stop words from
+// FT.CREATE PUNCTUATION / STOPWORDS, or the language's defaults. Built by
+// Language::MakeTokenizerConfig, which applies the language's rules, and owned
+// by the text index. The Language itself is shared by every index using it.
+struct TokenizerConfig {
+  PunctuationSet punct_set;
+  absl::flat_hash_set<std::string> stop_words;  // Normalized by the language.
+
+  // `word` must already be normalized.
+  bool IsStopWord(absl::string_view word) const {
+    return stop_words.contains(word);
+  }
+};
 
 // Resolves a backslash escape at text[0..] (position AFTER the backslash).
 // Both the ingestion tokenizer (SegmentInternal) and the query filter parser
@@ -114,10 +169,17 @@ inline uint8_t ResolveBackslashEscape(absl::string_view text,
   utils::Scanner s(text);
   auto cp = s.NextUtf8();
   uint8_t len = s.LastUtf8ByteLen();
-  if (cp == utils::Scanner::kInvalidCp) return len;  // malformed → append raw
-  if (cp == '\\' || punct.Contains(static_cast<uint32_t>(cp))) return len;
+  // A malformed byte is treated as non-punctuation, same as 1.2.
+  if (cp != utils::Scanner::kInvalidCp &&
+      (cp == '\\' || punct.Contains(static_cast<uint32_t>(cp)))) {
+    return len;
+  }
   return punct.Contains(static_cast<unsigned char>('\\')) ? 0 : len;
 }
+
+// Unit in which word lengths are measured for MINSTEMSIZE and fuzzy edit
+// distance.
+enum class LengthUnit { kCodePoints, kBytes };
 
 constexpr size_t kInProgressStemVariantsInlineCapacity = 4;
 
@@ -137,15 +199,17 @@ class Stemmer {
   virtual ~Stemmer() = default;
 
   /// Compute the stem root of a token.
-  /// Returns the input unchanged if the word is too short to stem.
-  virtual std::string GetStemRoot(absl::string_view token,
-                                  uint32_t min_stem_size = 0) const = 0;
+  /// Returns the input unchanged if the word is shorter than min_stem_size,
+  /// measured in `unit`.
+  virtual std::string GetStemRoot(
+      absl::string_view token, uint32_t min_stem_size = 0,
+      LengthUnit unit = LengthUnit::kCodePoints) const = 0;
 
   /// Build stem map from already-processed tokens.
   /// For each token, if its stem differs from the original, adds the mapping
   /// stem_root -> original_token.
   virtual void BuildStemMap(const std::vector<std::string>& tokens,
-                            uint32_t min_stem_size,
+                            uint32_t min_stem_size, LengthUnit unit,
                             InProgressStemMap& stem_mappings) const = 0;
 };
 
@@ -155,6 +219,10 @@ class Stemmer {
 /// punctuation rules, stop words, normalization, stemming, and tokenization.
 /// Callers program against Language* — concrete type selection happens at
 /// index creation time.
+///
+/// Instances are shared (one per language, see LanguageRegistry) and hold no
+/// per-index state. Index-specific settings live in a TokenizerConfig that
+/// the index owns and passes to Tokenize.
 class Language {
  public:
   virtual ~Language() = default;
@@ -177,33 +245,36 @@ class Language {
   /// ICU locale for case folding. Empty string means generic Unicode folding.
   virtual absl::string_view CaseFoldLocale() const = 0;
 
-  /// Full ingestion pipeline: segment + normalize + stop word removal.
+  /// Builds an index's tokenization settings from its punctuation and stop
+  /// words, applying this language's rules (delimiter scope, normalization of
+  /// the stop words).
+  virtual TokenizerConfig MakeTokenizerConfig(
+      const std::string& punctuation,
+      const std::vector<std::string>& stop_words) const = 0;
+
+  /// Full ingestion pipeline: segment + normalize + stop word removal, using
+  /// the index's settings.
   virtual absl::StatusOr<std::vector<std::string>> Tokenize(
-      absl::string_view text) const = 0;
+      absl::string_view text, const TokenizerConfig& config) const = 0;
 
   /// Tokenize and build stem map in one pass (ingestion with stemming).
   virtual absl::StatusOr<std::vector<std::string>> TokenizeWithStemMap(
-      absl::string_view text, uint32_t min_stem_size,
+      absl::string_view text, const TokenizerConfig& config,
+      uint32_t min_stem_size, LengthUnit unit,
       InProgressStemMap& stem_mappings) const = 0;
-
-  /// Direct access to the punctuation set for hot-loop usage in the filter
-  /// parser. Avoids virtual dispatch per character.
-  virtual const PunctuationSet& GetPunctuationSet() const = 0;
 
   /// Unicode normalization + case fold on a single token in place.
   virtual void NormalizeInPlace(std::string& token) const = 0;
 
-  /// Returns true if the word is a stop word (input must be normalized).
-  virtual bool IsStopWord(absl::string_view word) const = 0;
-
   /// Returns the stemmer, or nullptr if this language has no stemming.
   virtual Stemmer* GetStemmer() const = 0;
 
-  /// Whether this language is usable with the current module version.
-  virtual bool IsSupported() const = 0;
-
   /// Minimum module version required to use this language.
   virtual vmsdk::ValkeyVersion MinRequiredVersion() const = 0;
+
+  /// Unit for MINSTEMSIZE and fuzzy edit distance under the current
+  /// search.emulate-release (see COMPATIBILITY.md).
+  virtual LengthUnit GetLengthUnit() const = 0;
 };
 
 }  // namespace valkey_search::indexes::text

@@ -38,6 +38,7 @@ from utils import (
 #   expected_outcome: "reject" (old module refuses RDB) or "accept" (loads fine)
 
 _compat_index = Index("compat_idx", [Text("t")])
+_compat_index_french = Index("compat_idx", [Text("t")], language="FRENCH")
 
 
 def _create_english_text_index(client):
@@ -46,10 +47,26 @@ def _create_english_text_index(client):
     _compat_index.load_data(client, 10)
 
 
+def _create_french_text_index(client):
+    """Create a French text index — stamps kRelease13."""
+    _compat_index_french.create(client, wait_for_backfill=True)
+    _compat_index_french.load_data(client, 10)
+
+
+# The stamp follows the features used, not the module version: the same
+# current module writes an RDB that 1.2.0 accepts (English) or rejects (French).
 CURRENT_RDB_ON_OLD_MODULE_CASES = [
     pytest.param(
         "1.0.0", _create_english_text_index, "reject",
         id="current_rdb_rejected_by_v1.0",
+    ),
+    pytest.param(
+        "1.2.0", _create_english_text_index, "accept",
+        id="english_rdb_accepted_by_v1.2",
+    ),
+    pytest.param(
+        "1.2.0", _create_french_text_index, "reject",
+        id="french_rdb_rejected_by_v1.2",
     ),
 ]
 

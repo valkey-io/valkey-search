@@ -28,6 +28,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -268,13 +269,33 @@ EvaluationResult InfixPredicate::Evaluate(
   return EvaluationResult(false);
 }
 
+// INFO counter for the fuzzy code-point distance compatibility defect (see
+// COMPATIBILITY.md). Statically constructed because predicates are also built
+// off the main thread (e.g. shard-side gRPC requests). Counts every fuzzy term
+// that uses byte distance: whether the result differs depends on the indexed
+// words, which a cheap check on the term cannot tell. Counted here, once per
+// term, because Search runs per key in Evaluate.
+static vmsdk::info_field::Integer fuzzy_code_point_distance_compat_counter(
+    "compatibility", "compatibility-fuzzy_code_point_distance",
+    vmsdk::info_field::IntegerBuilder().App());
+
+static indexes::text::LengthUnit FuzzyLengthUnit(
+    const indexes::text::TextIndexSchema &schema) {
+  auto unit = schema.GetLanguage().GetLengthUnit();
+  if (unit == indexes::text::LengthUnit::kBytes) {
+    fuzzy_code_point_distance_compat_counter.Increment();
+  }
+  return unit;
+}
+
 FuzzyPredicate::FuzzyPredicate(
     std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
     FieldMaskPredicate field_mask, std::string term, uint32_t distance)
     : text_index_schema_(text_index_schema),
       field_mask_(field_mask),
       term_(term),
-      distance_(distance) {}
+      distance_(distance),
+      length_unit_(FuzzyLengthUnit(*text_index_schema_)) {}
 
 EvaluationResult FuzzyPredicate::Evaluate(Evaluator &evaluator) const {
   return evaluator.EvaluateText(*this, false);
@@ -288,7 +309,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   // Get all KeyIterators for words within edit distance
   auto expansion = indexes::text::FuzzySearch::Search(
-      text_index.GetPrefix(), term_, distance_, max_words);
+      text_index.GetPrefix(), term_, distance_, max_words, length_unit_);
   // Filter to only include KeyIterators that match target_key and field_mask
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
                       indexes::text::kWordExpansionInlineCapacity>

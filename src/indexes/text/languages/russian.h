@@ -21,7 +21,9 @@
 namespace valkey_search::indexes::text {
 
 // Russian: ASCII + common typographic + low-9 quotation marks.
-// Punctuation characters sourced from Unicode CLDR Punctuation Exemplars (v46).
+// Language-specific characters come from the Unicode CLDR v46 punctuation
+// exemplars; the common typographic set is shared by every non-English
+// language.
 inline const std::string kRussianPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?"
     "\xe2\x80\x93"   // – U+2013 EN DASH
@@ -67,22 +69,9 @@ class RussianLanguage final : public SnowballLanguage {
   RussianLanguage()
       : SnowballLanguage(data_model::LANGUAGE_RUSSIAN, kRussianPunctuation,
                          kRussianStopWords, NormalizationForm::NFC, "",
-                         "russian") {}
+                         "russian", DelimiterScope::kUnicode) {}
 
-  data_model::Language Id() const override {
-    return data_model::LANGUAGE_RUSSIAN;
-  }
   absl::string_view Name() const override { return "russian"; }
-  const std::string& GetDefaultPunctuation() const override {
-    return kRussianPunctuation;
-  }
-  const std::vector<std::string>& GetDefaultStopWords() const override {
-    return kRussianStopWords;
-  }
-  NormalizationForm GetNormalizationForm() const override {
-    return NormalizationForm::NFC;
-  }
-  absl::string_view CaseFoldLocale() const override { return ""; }
   vmsdk::ValkeyVersion MinRequiredVersion() const override {
     return valkey_search::kRelease13;
   }

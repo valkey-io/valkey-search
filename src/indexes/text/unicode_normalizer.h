@@ -1,7 +1,10 @@
 #pragma once
+#include <bitset>
+#include <cstdint>
 #include <string>
 #include <vector>
 
+#include "absl/functional/function_ref.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 
@@ -36,6 +39,25 @@ class UnicodeNormalizer {
   /// @example Normalize("résumé", NormalizationForm::NFD) decomposes diacritics
   static std::string Normalize(absl::string_view text, NormalizationForm form);
 
+  /// In-place variant of Normalize for per-token use: leaves `text` untouched,
+  /// with no allocation, when it is already in `form` (the common case).
+  static void NormalizeInPlace(std::string& text, NormalizationForm form);
+
+  /// Returns `text` with malformed UTF-8 replaced by U+FFFD, one per maximal
+  /// invalid subsequence (ICU's UnicodeString::fromUTF8 policy). This is the
+  /// conversion 1.2 applied to every non-ASCII query term, so the < 1.3.0
+  /// tolerate path uses it to reproduce 1.2 exactly. Well-formed input is
+  /// returned unchanged.
+  static std::string ReplaceInvalidUtf8(absl::string_view text);
+
+  /// Calls `fn(cp, normalized)` for every code point that `form` changes, with
+  /// its normalized form as UTF-8. Lets a caller close a set of code points
+  /// under normalization. Enumerates only code points ICU marks as possibly
+  /// changing (the form's quick-check property), not all of Unicode.
+  static void ForEachChangedByNormalization(
+      NormalizationForm form,
+      absl::FunctionRef<void(uint32_t cp, absl::string_view normalized)> fn);
+
   // Planned multi-language support APIs (declared but not yet implemented).
   // These show reviewers exactly which ICU functionality later tasks will use.
 
@@ -62,10 +84,11 @@ class UnicodeNormalizer {
 
 /// Concrete normalizer: Unicode normalization + case folding.
 ///
-/// For ASCII-only tokens, applies simple ASCII lowercasing (unless a locale
-/// requires special handling, e.g. Turkish).
-/// For non-ASCII tokens, applies the configured normalization form followed
-/// by case folding (generic or locale-aware).
+/// Applies the configured normalization form followed by case folding
+/// (generic, or locale-aware when a locale is set). An ASCII token takes a
+/// fast path of plain ASCII lowercasing when that gives the same result, i.e.
+/// when it contains no ASCII character the locale lowercases differently
+/// (Turkish: `I` -> `ı`).
 class NormalizeCaseFoldFilter {
  public:
   explicit NormalizeCaseFoldFilter(
@@ -74,9 +97,17 @@ class NormalizeCaseFoldFilter {
 
   void NormalizeInPlace(std::string& token) const;
 
+  NormalizationForm GetNormalizationForm() const { return norm_form_; }
+  const std::string& GetLocale() const { return locale_; }
+
  private:
+  bool CanLowerAsAscii(absl::string_view token) const;
+
   NormalizationForm norm_form_;
   std::string locale_;
+  // ASCII characters whose lowercase under `locale_` differs from ASCII
+  // lowercasing. Derived from ICU at construction; empty without a locale.
+  std::bitset<128> locale_sensitive_ascii_;
 };
 
 }  // namespace valkey_search::indexes::text

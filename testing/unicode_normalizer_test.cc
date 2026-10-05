@@ -114,6 +114,49 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.name;
     });
 
+// ReplaceInvalidUtf8 substitutes one U+FFFD per maximal invalid subsequence,
+// the policy 1.2 got from ICU's UnicodeString::fromUTF8.
+constexpr absl::string_view kReplacement = "\xEF\xBF\xBD";
+
+struct ReplaceInvalidUtf8Case {
+  std::string name;
+  std::string input;
+  std::string expected;
+};
+
+class ReplaceInvalidUtf8Test
+    : public ::testing::TestWithParam<ReplaceInvalidUtf8Case> {};
+
+TEST_P(ReplaceInvalidUtf8Test, SubstitutesMaximalSubparts) {
+  const auto& c = GetParam();
+  EXPECT_EQ(UnicodeNormalizer::ReplaceInvalidUtf8(c.input), c.expected);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    UnicodeNormalizer, ReplaceInvalidUtf8Test,
+    ::testing::ValuesIn<ReplaceInvalidUtf8Case>({
+        {"valid_unchanged", std::string(kResumePrecomposed),
+         std::string(kResumePrecomposed)},
+        {"lone_lead_byte", "a\xC3", "a" + std::string(kReplacement)},
+        {"two_invalid_bytes", "\xFF\xFE",
+         std::string(kReplacement) + std::string(kReplacement)},
+        {"lead_then_ascii",
+         "\xE4"
+         "A",
+         std::string(kReplacement) + "A"},
+        // A truncated sequence whose leading bytes are valid is one subpart.
+        {"truncated_multi_byte", "\xE4\xB8", std::string(kReplacement)},
+        // Surrogate and overlong encodings are rejected byte by byte.
+        {"surrogate", "\xED\xA0\x80",
+         std::string(kReplacement) + std::string(kReplacement) +
+             std::string(kReplacement)},
+        {"overlong", "\xC0\x80",
+         std::string(kReplacement) + std::string(kReplacement)},
+    }),
+    [](const ::testing::TestParamInfo<ReplaceInvalidUtf8Case>& info) {
+      return info.param.name;
+    });
+
 // NFC reorders combining marks into canonical order. Input has the acute
 // (above, ccc=230) before the dot-below (below, ccc=220); canonical order puts
 // the lower-class mark first. This is distinct from simple composition.
@@ -170,61 +213,54 @@ TEST(CaseFoldInPlaceTest, TurkishDottedAndDotlessILocaleIndependent) {
 // Exercises NormalizeInPlace() across edge cases.
 // =============================================================================
 
-TEST(NormalizeCaseFoldFilterTest, EmptyString) {
-  NormalizeCaseFoldFilter filter;
-  std::string token;
+// NormalizeCaseFoldFilter: normalization + case folding. ASCII tokens take the
+// plain-lowercasing fast path only when the locale lowercases none of their
+// characters differently, so the Turkish rows cover both paths.
+struct CaseFoldFilterCase {
+  std::string name;
+  NormalizationForm form;
+  std::string locale;
+  std::string input;
+  std::string expected;
+};
+
+class NormalizeCaseFoldFilterTest
+    : public ::testing::TestWithParam<CaseFoldFilterCase> {};
+
+TEST_P(NormalizeCaseFoldFilterTest, NormalizesAndFolds) {
+  const auto& c = GetParam();
+  NormalizeCaseFoldFilter filter(c.form, c.locale);
+  std::string token = c.input;
   filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "");
+  EXPECT_EQ(token, c.expected);
 }
 
-TEST(NormalizeCaseFoldFilterTest, AsciiLowering) {
-  NormalizeCaseFoldFilter filter;
-  std::string token = "HELLO World";
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "hello world");
-}
-
-TEST(NormalizeCaseFoldFilterTest, WhitespaceOnly) {
-  NormalizeCaseFoldFilter filter;
-  std::string token = "   \t";
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "   \t");
-}
-
-TEST(NormalizeCaseFoldFilterTest, HighCodepointEmoji) {
-  NormalizeCaseFoldFilter filter;
-  std::string token = "\xf0\x9f\x99\x82";  // 🙂
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "\xf0\x9f\x99\x82");
-}
-
-TEST(NormalizeCaseFoldFilterTest, NfcComposition) {
-  NormalizeCaseFoldFilter filter(NormalizationForm::NFC);
-  std::string token = "CAFE\xcc\x81";  // CAFE + combining acute
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "caf\xc3\xa9");  // café precomposed, lowered
-}
-
-TEST(NormalizeCaseFoldFilterTest, NfkcDecomposesLigature) {
-  NormalizeCaseFoldFilter filter(NormalizationForm::NFKC);
-  std::string token = "\xef\xac\x81";  // ﬁ ligature
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "fi");
-}
-
-TEST(NormalizeCaseFoldFilterTest, TurkishLocale) {
-  NormalizeCaseFoldFilter filter(NormalizationForm::NFC, "tr");
-  std::string token = "I";
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "\xc4\xb1");  // ı (dotless i)
-}
-
-TEST(NormalizeCaseFoldFilterTest, GermanSzet) {
-  NormalizeCaseFoldFilter filter;
-  std::string token = "\xc3\x9f";  // ß
-  filter.NormalizeInPlace(token);
-  EXPECT_EQ(token, "ss");
-}
+INSTANTIATE_TEST_SUITE_P(
+    UnicodeNormalizer, NormalizeCaseFoldFilterTest,
+    ::testing::ValuesIn<CaseFoldFilterCase>({
+        {"empty", NormalizationForm::NFC, "", "", ""},
+        {"ascii_lowering", NormalizationForm::NFC, "", "HELLO World",
+         "hello world"},
+        {"whitespace_only", NormalizationForm::NFC, "", "   \t", "   \t"},
+        {"emoji_unchanged", NormalizationForm::NFC, "", "\xf0\x9f\x99\x82",
+         "\xf0\x9f\x99\x82"},  // 🙂
+        // CAFE + combining acute -> precomposed café, lowered.
+        {"nfc_composition", NormalizationForm::NFC, "", "CAFE\xcc\x81",
+         "caf\xc3\xa9"},
+        {"nfkc_fi_ligature", NormalizationForm::NFKC, "", "\xef\xac\x81", "fi"},
+        {"german_sharp_s", NormalizationForm::NFC, "", "\xc3\x9f", "ss"},
+        // Turkish: ASCII without `I` lowers as ASCII; `I` -> ı (U+0131) and
+        // İ (U+0130) -> i need the locale.
+        {"turkish_ascii_fast_path", NormalizationForm::NFC, "tr", "EV", "ev"},
+        {"turkish_dotless_i", NormalizationForm::NFC, "tr", "I", "\xc4\xb1"},
+        {"turkish_ascii_with_i", NormalizationForm::NFC, "tr", "IRMAK",
+         "\xc4\xb1rmak"},
+        {"turkish_dotted_capital_i", NormalizationForm::NFC, "tr",
+         "\xc4\xb0stanbul", "istanbul"},
+    }),
+    [](const ::testing::TestParamInfo<CaseFoldFilterCase>& info) {
+      return info.param.name;
+    });
 
 }  // namespace
 }  // namespace valkey_search::indexes::text

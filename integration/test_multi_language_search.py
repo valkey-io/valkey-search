@@ -29,25 +29,49 @@ class MultiLanguageTestCase(ValkeySearchTestCaseDebugMode):
 
 
 # =============================================================================
-# All languages accepted in FT.CREATE
+# LANGUAGE parsing in FT.CREATE
 # =============================================================================
 
-class TestMultiLanguageAllAccepted(MultiLanguageTestCase):
-    """All 12 Snowball languages can be specified in FT.CREATE."""
+ALL_LANGUAGES = [
+    "ENGLISH", "FRENCH", "GERMAN", "SPANISH", "ITALIAN", "PORTUGUESE",
+    "RUSSIAN", "SWEDISH", "TURKISH", "DUTCH", "INDONESIAN", "ARABIC",
+]
 
-    @pytest.mark.parametrize("language", [
-        "ENGLISH", "FRENCH", "GERMAN", "SPANISH", "ITALIAN",
-        "PORTUGUESE", "RUSSIAN", "SWEDISH", "TURKISH", "DUTCH",
-        "INDONESIAN", "ARABIC"
-    ])
-    def test_language_accepted(self, language):
+
+class TestLanguageParsing(MultiLanguageTestCase):
+    """FT.CREATE LANGUAGE parsing and its FT.INFO report, in one server."""
+
+    def test_language_parsing(self):
         client: Valkey = self.server.get_new_client()
-        result = client.execute_command(
-            "FT.CREATE", f"idx_{language.lower()}", "ON", "HASH",
-            "LANGUAGE", language,
+
+        # Every supported language is accepted and reported back.
+        for language in ALL_LANGUAGES:
+            index = f"idx_{language.lower()}"
+            assert client.execute_command(
+                "FT.CREATE", index, "ON", "HASH",
+                "LANGUAGE", language,
+                "SCHEMA", "content", "TEXT"
+            ) == b"OK"
+            parser = IndexingTestHelper.get_ft_info(client, index)
+            assert parser.language == language.lower(), (
+                f"{language}: FT.INFO reported {parser.language}"
+            )
+
+        # No LANGUAGE defaults to English.
+        assert client.execute_command(
+            "FT.CREATE", "idx_default", "ON", "HASH",
             "SCHEMA", "content", "TEXT"
-        )
-        assert result == b"OK"
+        ) == b"OK"
+        assert IndexingTestHelper.get_ft_info(client, "idx_default").language == "english"
+
+        # An unknown language is rejected and creates nothing.
+        with pytest.raises(ResponseError):
+            client.execute_command(
+                "FT.CREATE", "idx_unknown", "ON", "HASH",
+                "LANGUAGE", "KLINGON",
+                "SCHEMA", "content", "TEXT"
+            )
+        assert b"idx_unknown" not in client.execute_command("FT._LIST")
 
 
 # =============================================================================
@@ -63,9 +87,9 @@ LANGUAGE_STEMMING_DATA = {
         "description": "running -> run",
     },
     "FRENCH": {
-        "doc_text": "Les enfants continuent de jouer",
-        "stem_query": "continuent",
-        "description": "continuent/continuation share stem",
+        "doc_text": "Il parle continuellement",
+        "stem_query": "continuel",
+        "description": "continuellement -> continuel",
     },
     "GERMAN": {
         "doc_text": "Die Kinder laufenden schnell nach Hause",
@@ -169,11 +193,12 @@ class TestMultiLanguageSearch(MultiLanguageTestCase):
 
         # Non-stop word is findable
         assert client.execute_command("FT.SEARCH", "idx", "@content:maison")[0] == 1
-        # "dans" is a stop word -- searching "dans maison" only matches on
-        # "maison", not "dans", proving stop word filtering works
-        result = client.execute_command("FT.SEARCH", "idx", "@content:dans maison")
+        # "dans" is a stop word, so it is dropped from the query and only
+        # "voiture" is required. doc:2 does not contain "dans": without the
+        # filtering, the AND would match nothing.
+        result = client.execute_command("FT.SEARCH", "idx", "@content:dans voiture")
         assert result[0] == 1
-        assert result[1] == b"doc:1"
+        assert result[1] == b"doc:2"
 
     def test_nfc_normalization(self):
         """Precomposed and decomposed accented chars match after NFC."""
@@ -241,46 +266,6 @@ class TestMultiLanguageSearch(MultiLanguageTestCase):
 
 
 # =============================================================================
-# LANGUAGE in FT.INFO output
-# =============================================================================
-
-class TestLanguageInFTInfo(MultiLanguageTestCase):
-    """Verify that LANGUAGE field appears in FT.INFO output."""
-
-    def test_ft_info_reports_language(self):
-        """When LANGUAGE is specified in FT.CREATE, FT.INFO must report it."""
-        client: Valkey = self.server.get_new_client()
-        client.execute_command(
-            "FT.CREATE", "idx", "ON", "HASH",
-            "LANGUAGE", "FRENCH",
-            "SCHEMA", "content", "TEXT"
-        )
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-
-        parser = IndexingTestHelper.get_ft_info(client, "idx")
-        assert parser.language is not None, "FT.INFO should report the LANGUAGE field"
-        assert parser.language.upper() == "FRENCH", (
-            f"Expected FRENCH, got {parser.language}"
-        )
-
-    def test_ft_info_reports_default_language(self):
-        """When no LANGUAGE is specified, FT.INFO should report ENGLISH as default."""
-        client: Valkey = self.server.get_new_client()
-        client.execute_command(
-            "FT.CREATE", "idx", "ON", "HASH",
-            "SCHEMA", "content", "TEXT"
-        )
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-
-        parser = IndexingTestHelper.get_ft_info(client, "idx")
-        # Language may be absent (defaulting to English) or explicitly "ENGLISH"
-        if parser.language is not None:
-            assert parser.language.upper() == "ENGLISH", (
-                f"Expected ENGLISH or None, got {parser.language}"
-            )
-
-
-# =============================================================================
 # LANGUAGE persistence across save/restore
 # =============================================================================
 
@@ -294,45 +279,37 @@ class TestLanguageSaveRestore(MultiLanguageTestCase):
         return args
 
     def test_language_persists_across_restart(self):
-        """Create FRENCH index, ingest, save, restart, verify stemming works."""
+        """Create a RUSSIAN index, ingest, save, restart, verify stemming works.
+
+        Russian, because the English stemmer leaves Cyrillic untouched: if
+        LANGUAGE were dropped on load and the index fell back to English, the
+        stem-only query below could not match.
+        """
         client: Valkey = self.server.get_new_client()
         client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH",
-            "LANGUAGE", "FRENCH",
+            "LANGUAGE", "RUSSIAN",
             "SCHEMA", "content", "TEXT"
         )
-        # Ingest French text with stemming variants
-        client.execute_command("HSET", "doc:1", "content", "Les enfants continuent")
-        client.execute_command("HSET", "doc:2", "content", "La continuation est belle")
+        # "бегущий" is not in the document; it matches "бегущие" only through
+        # Russian stemming.
+        client.execute_command("HSET", "doc:1", "content", "Дети бегущие в парке")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
-
-        # Verify stemming works before save
-        result = client.execute_command("FT.SEARCH", "idx", "@content:continuent")
-        assert result[0] >= 1, "French stemming should work before save"
+        assert client.execute_command("FT.SEARCH", "idx", "@content:бегущий")[0] == 1
 
         # Save and restart
         client.execute_command("SAVE")
         os.environ["SKIPLOGCLEAN"] = "1"
         self.server.restart(remove_rdb=False)
         client = self.server.get_new_client()
-
-        # Wait for backfill to complete after restart
         waiters.wait_for_true(
             lambda: IndexingTestHelper.is_backfill_complete_on_node(client, "idx")
         )
 
-        # Verify stemming still works after restart
-        result = client.execute_command("FT.SEARCH", "idx", "@content:continuent")
-        assert result[0] >= 1, (
-            "French stemming should work after save/restart — LANGUAGE must persist in RDB"
+        assert IndexingTestHelper.get_ft_info(client, "idx").language == "russian"
+        assert client.execute_command("FT.SEARCH", "idx", "@content:бегущий")[0] == 1, (
+            "Russian stemming should work after save/restart; LANGUAGE must persist in RDB"
         )
-
-        # Also verify FT.INFO still reports the language
-        parser = IndexingTestHelper.get_ft_info(client, "idx")
-        if parser.language is not None:
-            assert parser.language.upper() == "FRENCH", (
-                f"FT.INFO should still report FRENCH after restart, got {parser.language}"
-            )
 
 
 # =============================================================================
@@ -343,52 +320,34 @@ class TestLanguageCrossContamination(MultiLanguageTestCase):
     """Two indexes with different languages must not cross-contaminate."""
 
     def test_no_cross_contamination(self):
-        """French and German indexes on same server produce independent results."""
+        """Russian and German indexes over the same keys apply their own language.
+
+        Both indexes see both documents, so a query that matches in one and not
+        the other can only be explained by that index's own stemmer. Each query
+        is a stem variant absent from the documents.
+        """
         client: Valkey = self.server.get_new_client()
-
-        # Create French index
-        client.execute_command(
-            "FT.CREATE", "idx_fr", "ON", "HASH",
-            "PREFIX", "1", "fr:",
-            "LANGUAGE", "FRENCH",
-            "SCHEMA", "content", "TEXT"
-        )
-        # Create German index
-        client.execute_command(
-            "FT.CREATE", "idx_de", "ON", "HASH",
-            "PREFIX", "1", "de:",
-            "LANGUAGE", "GERMAN",
-            "SCHEMA", "content", "TEXT"
-        )
-
-        # Ingest French doc into French index
-        client.execute_command("HSET", "fr:1", "content", "Les enfants continuent")
-        # Ingest German doc into German index
-        client.execute_command("HSET", "de:1", "content", "Die Kinder laufenden schnell")
-
-        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_fr")
+        for index, language in (("idx_ru", "RUSSIAN"), ("idx_de", "GERMAN")):
+            client.execute_command(
+                "FT.CREATE", index, "ON", "HASH",
+                "PREFIX", "1", "doc:",
+                "LANGUAGE", language,
+                "SCHEMA", "content", "TEXT"
+            )
+        client.execute_command("HSET", "doc:ru", "content", "Дети бегущие в парке")
+        client.execute_command("HSET", "doc:de", "content", "Die Kinder laufenden schnell")
+        IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_ru")
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx_de")
 
-        # French stem query should only hit French index
-        fr_result = client.execute_command("FT.SEARCH", "idx_fr", "@content:continuent")
-        assert fr_result[0] >= 1, "French stemming should work in French index"
+        # "бегущий" -> "бегущие" only through Russian stemming.
+        ru = client.execute_command("FT.SEARCH", "idx_ru", "@content:бегущий")
+        assert ru[0] == 1 and ru[1] == b"doc:ru"
+        assert client.execute_command("FT.SEARCH", "idx_de", "@content:бегущий")[0] == 0
 
-        # Same query on German index should NOT match
-        de_result = client.execute_command("FT.SEARCH", "idx_de", "@content:continuent")
-        assert de_result[0] == 0, (
-            "French stem query should not match in German index"
-        )
-
-        # German stem query should only hit German index
-        # "laufenden" stems to "laufend", and "laufende" also stems to "laufend"
-        de_result2 = client.execute_command("FT.SEARCH", "idx_de", "@content:laufende")
-        assert de_result2[0] >= 1, "German stemming should work in German index"
-
-        # Same German query on French index should NOT match
-        fr_result2 = client.execute_command("FT.SEARCH", "idx_fr", "@content:laufende")
-        assert fr_result2[0] == 0, (
-            "German stem query should not match in French index"
-        )
+        # "laufende" -> "laufenden" only through German stemming.
+        de = client.execute_command("FT.SEARCH", "idx_de", "@content:laufende")
+        assert de[0] == 1 and de[1] == b"doc:de"
+        assert client.execute_command("FT.SEARCH", "idx_ru", "@content:laufende")[0] == 0
 
 
 # =============================================================================

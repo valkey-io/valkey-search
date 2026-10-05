@@ -35,22 +35,9 @@ class EnglishLanguage final : public SnowballLanguage {
   EnglishLanguage()
       : SnowballLanguage(data_model::LANGUAGE_ENGLISH, kEnglishPunctuation,
                          kEnglishStopWords, NormalizationForm::NFC, "",
-                         "english") {}
+                         "english", DelimiterScope::kAscii) {}
 
-  data_model::Language Id() const override {
-    return data_model::LANGUAGE_ENGLISH;
-  }
   absl::string_view Name() const override { return "english"; }
-  const std::string& GetDefaultPunctuation() const override {
-    return kEnglishPunctuation;
-  }
-  const std::vector<std::string>& GetDefaultStopWords() const override {
-    return kEnglishStopWords;
-  }
-  NormalizationForm GetNormalizationForm() const override {
-    return NormalizationForm::NFC;
-  }
-  absl::string_view CaseFoldLocale() const override { return ""; }
   vmsdk::ValkeyVersion MinRequiredVersion() const override {
     return vmsdk::ValkeyVersion(0, 0, 0);
   }

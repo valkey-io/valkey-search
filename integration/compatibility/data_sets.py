@@ -112,6 +112,28 @@ TEXT_DATASETS = {
         }
     },
     # ,.<>{}[]"':;!@#$%^&*()-+=~
+    # Words joined by a Unicode (non-ASCII) whitespace character. Querying one
+    # half tells whether the engine splits on that character.
+    'unicode whitespace': {
+        'schema': TEXT_SCHEMA,
+        'field_values': {
+            'title': [
+                'apple\u00a0banana',   # U+00A0 NO-BREAK SPACE
+                'chair\u00a0desk',
+                'music\u2009movie',    # U+2009 THIN SPACE
+                'river\u202fmountain', # U+202F NARROW NO-BREAK SPACE
+                'castle\u3000garden',  # U+3000 IDEOGRAPHIC SPACE
+                'winter\u2028summer',  # U+2028 LINE SEPARATOR
+            ],
+            'body': [
+                'bright\u00a0morning',
+                'silver\u2009coin',
+                'green\u3000forest',
+            ],
+            'color': ['red', 'blue', 'green'],
+            'price': (0, 10)
+        }
+    },
     'punctuation': {
         'schema': TEXT_SCHEMA,
         'field_values': {
@@ -1158,6 +1180,7 @@ DATASET_LANGUAGE_MAP = {
     'pure text small': 'english',
     'numeric text': 'english',
     'punctuation': 'english',
+    'unicode whitespace': 'english',
     'french text': 'french',
     'german text': 'german',
     'spanish text': 'spanish',

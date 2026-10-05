@@ -21,7 +21,9 @@
 namespace valkey_search::indexes::text {
 
 // Italian: ASCII + common typographic punctuation.
-// Punctuation characters sourced from Unicode CLDR Punctuation Exemplars (v46).
+// Language-specific characters come from the Unicode CLDR v46 punctuation
+// exemplars; the common typographic set is shared by every non-English
+// language.
 inline const std::string kItalianPunctuation =
     ",.<>{}[]\"':;!@#$%^&*()-+=~/\\|?"
     "\xe2\x80\x93"  // – U+2013 EN DASH
@@ -89,22 +91,9 @@ class ItalianLanguage final : public SnowballLanguage {
   ItalianLanguage()
       : SnowballLanguage(data_model::LANGUAGE_ITALIAN, kItalianPunctuation,
                          kItalianStopWords, NormalizationForm::NFC, "",
-                         "italian") {}
+                         "italian", DelimiterScope::kUnicode) {}
 
-  data_model::Language Id() const override {
-    return data_model::LANGUAGE_ITALIAN;
-  }
   absl::string_view Name() const override { return "italian"; }
-  const std::string& GetDefaultPunctuation() const override {
-    return kItalianPunctuation;
-  }
-  const std::vector<std::string>& GetDefaultStopWords() const override {
-    return kItalianStopWords;
-  }
-  NormalizationForm GetNormalizationForm() const override {
-    return NormalizationForm::NFC;
-  }
-  absl::string_view CaseFoldLocale() const override { return ""; }
   vmsdk::ValkeyVersion MinRequiredVersion() const override {
     return valkey_search::kRelease13;
   }

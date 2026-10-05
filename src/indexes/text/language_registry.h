@@ -43,13 +43,6 @@ class LanguageRegistry {
       languages_;
 };
 
-/// Create a Language with custom punctuation/stop words (for FT.CREATE
-/// overrides and tests). When no overrides are needed, prefer
-/// LanguageRegistry::Instance().Get().
-std::shared_ptr<const Language> CreateLanguage(
-    data_model::Language language, const std::string& punctuation,
-    const std::vector<std::string>& stop_words);
-
 }  // namespace valkey_search::indexes::text
 
 #endif  // VALKEY_SEARCH_INDEXES_TEXT_LANGUAGE_REGISTRY_H_

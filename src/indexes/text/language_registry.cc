@@ -11,9 +11,7 @@
 #include <string>
 #include <vector>
 
-#include "absl/log/check.h"
 #include "src/index_schema.pb.h"
-#include "src/indexes/text/customized_language.h"
 #include "src/indexes/text/languages/arabic.h"
 #include "src/indexes/text/languages/dutch.h"
 #include "src/indexes/text/languages/english.h"
@@ -64,17 +62,6 @@ std::shared_ptr<const Language> LanguageRegistry::Get(
     return it->second;
   }
   return nullptr;
-}
-
-std::shared_ptr<const Language> CreateLanguage(
-    data_model::Language language, const std::string& punctuation,
-    const std::vector<std::string>& stop_words) {
-  auto lang = LanguageRegistry::Instance().Get(language);
-  CHECK(lang != nullptr) << "CreateLanguage called with unregistered language: "
-                         << data_model::Language_Name(language);
-  auto base = std::static_pointer_cast<const SnowballLanguage>(lang);
-  return std::make_shared<CustomizedLanguage>(std::move(base), punctuation,
-                                              stop_words);
 }
 
 }  // namespace valkey_search::indexes::text

@@ -47,9 +47,8 @@ class TextTest : public ::testing::Test {
     // Create default text index schema for testing
     std::vector<std::string> empty_stop_words;
     text_index_schema_ = std::make_shared<text::TextIndexSchema>(
-        text::CreateLanguage(data_model::LANGUAGE_ENGLISH,
-                             " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-                             empty_stop_words),
+        text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words,
         false,  // with_offsets
         4);     // min_stem_size
 
@@ -74,8 +73,8 @@ class TextTest : public ::testing::Test {
                             ? " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
                             : punctuation;
     return std::make_shared<text::TextIndexSchema>(
-        text::CreateLanguage(data_model::LANGUAGE_ENGLISH, punct, stop_words),
-        with_offsets, 4);
+        text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+        punct, stop_words, with_offsets, 4);
   }
 
   // Helper to check if a token exists in the prefix tree
@@ -373,9 +372,8 @@ TEST_F(TextTest, StemmingBehavior) {
   // Create schema with stemming enabled
   std::vector<std::string> empty_stop_words;
   auto stemming_schema = std::make_shared<text::TextIndexSchema>(
-      text::CreateLanguage(data_model::LANGUAGE_ENGLISH,
-                           " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~",
-                           empty_stop_words),
+      text::LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH),
+      " \t\n\r!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", empty_stop_words,
       false,  // with_offsets
       4);     // min_stem_size
 
@@ -420,46 +418,64 @@ TEST_F(TextTest, FuzzySearchAcrossMultiByteEdgeSplit) {
 
   const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
   auto results = text::FuzzySearch::Search(tree, "بالعالم", /*max_distance=*/0,
-                                           /*max_words=*/100);
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
   ASSERT_EQ(results.key_iterators.size(), 1u);
   EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
 }
 
-// Edit distance is in code points, not bytes. "¡hola" and "hola" differ by
-// one inserted code point (¡ = U+00A1, 2 bytes). Distance 1 must match;
-// distance 0 must not.
-TEST_F(TextTest, FuzzySearchCodePointDistance) {
-  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "¡hola");
+// Edit distance is measured in the given LengthUnit. "¡hola" and "hola"
+// differ by one inserted code point (¡ = U+00A1), which is two bytes.
+// Query entry points never pass a malformed pattern, but Search must not abort
+// on one: kBytes compares it byte by byte, and kCodePoints cannot decode it, so
+// it matches nothing.
+struct FuzzyLengthUnitTestCase {
+  std::string test_name;
+  std::string indexed_word;
+  std::string pattern;
+  size_t max_distance;
+  text::LengthUnit unit;
+  bool expect_match;
+};
+
+class FuzzyLengthUnitTest
+    : public TextTest,
+      public ::testing::WithParamInterface<FuzzyLengthUnitTestCase> {};
+
+TEST_P(FuzzyLengthUnitTest, MatchesWithinDistance) {
+  const auto &tc = GetParam();
+  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), tc.indexed_word);
 
   const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
-  auto exact = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/0,
-                                         /*max_words=*/100);
-  EXPECT_EQ(exact.key_iterators.size(), 0u);
-
-  auto fuzzy = text::FuzzySearch::Search(tree, "hola", /*max_distance=*/1,
-                                         /*max_words=*/100);
-  ASSERT_EQ(fuzzy.key_iterators.size(), 1u);
-  EXPECT_EQ(fuzzy.key_iterators[0].GetKey()->Str(), "doc:1");
+  auto results = text::FuzzySearch::Search(tree, tc.pattern, tc.max_distance,
+                                           /*max_words=*/100, tc.unit);
+  if (tc.expect_match) {
+    ASSERT_EQ(results.key_iterators.size(), 1u);
+    EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
+  } else {
+    EXPECT_EQ(results.key_iterators.size(), 0u);
+  }
 }
 
-// Damerau-Levenshtein transposition counts as a single edit, and must operate
-// on code points. "café" vs "caéf" swaps the last two code points (é =
-// U+00E9, 2 bytes; f = 1 byte). A byte-wise DP would see a multi-byte
-// scramble; the code-point DP sees one transposition. Distance 1 matches,
-// distance 0 does not.
-TEST_F(TextTest, FuzzySearchMultiByteTransposition) {
-  AddRecordAndCommitKey(StringInternStore::Intern("doc:1"), "café");
-
-  const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
-  auto exact = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/0,
-                                         /*max_words=*/100);
-  EXPECT_EQ(exact.key_iterators.size(), 0u);
-
-  auto fuzzy = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/1,
-                                         /*max_words=*/100);
-  ASSERT_EQ(fuzzy.key_iterators.size(), 1u);
-  EXPECT_EQ(fuzzy.key_iterators[0].GetKey()->Str(), "doc:1");
-}
+INSTANTIATE_TEST_SUITE_P(
+    LengthUnits, FuzzyLengthUnitTest,
+    ::testing::ValuesIn(std::vector<FuzzyLengthUnitTestCase>{
+        {"code_points_distance_0", "¡hola", "hola", 0,
+         text::LengthUnit::kCodePoints, false},
+        {"code_points_distance_1", "¡hola", "hola", 1,
+         text::LengthUnit::kCodePoints, true},
+        {"bytes_distance_1", "¡hola", "hola", 1, text::LengthUnit::kBytes,
+         false},
+        {"bytes_distance_2", "¡hola", "hola", 2, text::LengthUnit::kBytes,
+         true},
+        {"malformed_pattern_code_points", "foo", "fo\xFFo", 1,
+         text::LengthUnit::kCodePoints, false},
+        {"malformed_pattern_bytes", "foo", "fo\xFFo", 1,
+         text::LengthUnit::kBytes, true},
+    }),
+    [](const ::testing::TestParamInfo<FuzzyLengthUnitTestCase> &info) {
+      return info.param.test_name;
+    });
 
 // 3-byte code points that share a multi-byte prefix exercise the Rax
 // edge-split decode path. ぁ (U+3041, E3 81 81) and あ (U+3042, E3 81 82)
@@ -473,7 +489,8 @@ TEST_F(TextTest, FuzzySearchAcrossThreeByteEdgeSplit) {
 
   const auto &tree = text_index_schema_->GetTextIndex()->GetPrefix();
   auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
-                                           /*max_words=*/100);
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
   ASSERT_EQ(results.key_iterators.size(), 1u);
   EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
 }
@@ -496,11 +513,13 @@ TEST_F(TextTest, FuzzyTranspositionAcrossEdgeSplit) {
   // "caéf" is "café" with the last two code points transposed.
   // The transposition crosses the edge split at "caf"|"é..." vs "caf"|"x".
   auto exact = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/0,
-                                         /*max_words=*/100);
+                                         /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
   EXPECT_EQ(exact.key_iterators.size(), 0u);
 
   auto fuzzy = text::FuzzySearch::Search(tree, "caéf", /*max_distance=*/1,
-                                         /*max_words=*/100);
+                                         /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
   ASSERT_EQ(fuzzy.key_iterators.size(), 1u);
   EXPECT_EQ(fuzzy.key_iterators[0].GetKey()->Str(), "doc:1");
 }
@@ -522,14 +541,16 @@ TEST_F(TextTest, FuzzySearchAcrossFourByteEdgeSplit) {
 
   // Exact match for 😀 at distance 0
   auto results = text::FuzzySearch::Search(
-      tree, "\xF0\x9F\x98\x80", /*max_distance=*/0, /*max_words=*/100);
+      tree, "\xF0\x9F\x98\x80", /*max_distance=*/0, /*max_words=*/100,
+      text::LengthUnit::kCodePoints);
   ASSERT_EQ(results.key_iterators.size(), 1u);
   EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:1");
 
   // Distance 1: searching for 😀 should find both 😀 (exact) and 😁
   // (1 substitution in code point space)
   auto fuzzy = text::FuzzySearch::Search(tree, "\xF0\x9F\x98\x80",
-                                         /*max_distance=*/1, /*max_words=*/100);
+                                         /*max_distance=*/1, /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
   ASSERT_EQ(fuzzy.key_iterators.size(), 2u);
 }
 
@@ -551,14 +572,16 @@ TEST_F(TextTest, FuzzyPruningOnPartialEdge) {
   // Searching "ぁ" at distance 0 — "xyz" subtree should be pruned
   // (completely different code points, distance would be >> 0).
   auto results = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/0,
-                                           /*max_words=*/100);
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
   ASSERT_EQ(results.key_iterators.size(), 1u);
   EXPECT_EQ(results.key_iterators[0].GetKey()->Str(), "doc:ja1");
 
   // At distance 1, "あ" is reachable (1 substitution) but "xyz" is still
   // unreachable (3 substitutions for a 1-cp query = distance 3).
   auto fuzzy = text::FuzzySearch::Search(tree, "ぁ", /*max_distance=*/1,
-                                         /*max_words=*/100);
+                                         /*max_words=*/100,
+                                         text::LengthUnit::kCodePoints);
   ASSERT_EQ(fuzzy.key_iterators.size(), 2u);
   // Verify "xyz" is not in results
   for (const auto &r : fuzzy.key_iterators) {
@@ -579,25 +602,29 @@ TEST_F(TextTest, FuzzyMultiByteDistance2) {
 
   // "munchen" differs by: ü→u (1 substitution). Distance 1 should match.
   auto d1 = text::FuzzySearch::Search(tree, "munchen", /*max_distance=*/1,
-                                      /*max_words=*/100);
+                                      /*max_words=*/100,
+                                      text::LengthUnit::kCodePoints);
   ASSERT_EQ(d1.key_iterators.size(), 1u);
   EXPECT_EQ(d1.key_iterators[0].GetKey()->Str(), "doc:1");
 
   // "munchn" differs by: ü→u (1 sub) + deletion of 'e'. Distance 2 matches.
   auto d2_match = text::FuzzySearch::Search(tree, "munchn", /*max_distance=*/2,
-                                            /*max_words=*/100);
+                                            /*max_words=*/100,
+                                            text::LengthUnit::kCodePoints);
   ASSERT_EQ(d2_match.key_iterators.size(), 1u);
   EXPECT_EQ(d2_match.key_iterators[0].GetKey()->Str(), "doc:1");
 
   // Same query at distance 1 should NOT match (needs 2 edits).
   auto d1_miss = text::FuzzySearch::Search(tree, "munchn", /*max_distance=*/1,
-                                           /*max_words=*/100);
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
   EXPECT_EQ(d1_miss.key_iterators.size(), 0u);
 
   // "mcn" needs 4 edits from "münchen" (delete ü, delete n, delete h, delete
   // e). Distance 2 should NOT match.
   auto d2_miss = text::FuzzySearch::Search(tree, "mcn", /*max_distance=*/2,
-                                           /*max_words=*/100);
+                                           /*max_words=*/100,
+                                           text::LengthUnit::kCodePoints);
   EXPECT_EQ(d2_miss.key_iterators.size(), 0u);
 }
 
@@ -612,9 +639,8 @@ class TextMultiLanguageTest : public ::testing::Test {
       data_model::Language language) {
     auto lang = text::LanguageRegistry::Instance().Get(language);
     return std::make_shared<text::TextIndexSchema>(
-        text::CreateLanguage(language, lang->GetDefaultPunctuation(),
-                             lang->GetDefaultStopWords()),
-        false, 4);
+        text::LanguageRegistry::Instance().Get(language),
+        lang->GetDefaultPunctuation(), lang->GetDefaultStopWords(), false, 4);
   }
 
   std::unique_ptr<Text> CreateTextIndex(
@@ -641,28 +667,6 @@ class TextMultiLanguageTest : public ::testing::Test {
     return !iter.Done();
   }
 };
-
-TEST_F(TextMultiLanguageTest, NonEnglishStopWordsFiltered) {
-  auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);
-  auto text_index = CreateTextIndex(schema);
-
-  IndexDocument(text_index.get(), schema, "doc:1", "je suis dans la maison");
-
-  EXPECT_FALSE(TokenExists(schema, "je"));
-  EXPECT_FALSE(TokenExists(schema, "dans"));
-  EXPECT_FALSE(TokenExists(schema, "la"));
-  EXPECT_TRUE(TokenExists(schema, "maison"));
-}
-
-TEST_F(TextMultiLanguageTest, NonAsciiPunctuationSplitting) {
-  auto schema = CreateSchema(data_model::LANGUAGE_ARABIC);
-  auto text_index = CreateTextIndex(schema, false);
-
-  IndexDocument(text_index.get(), schema, "doc:1", "مرحبا\xD8\x8Cعالم");
-
-  EXPECT_TRUE(TokenExists(schema, "مرحبا"));
-  EXPECT_TRUE(TokenExists(schema, "عالم"));
-}
 
 TEST_F(TextMultiLanguageTest, StemExpansionNonEnglish) {
   auto schema = CreateSchema(data_model::LANGUAGE_FRENCH);

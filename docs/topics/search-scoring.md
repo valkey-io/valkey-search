@@ -31,6 +31,17 @@ Valkey Search measures relevance in three ways:
 - For KNN queries, the vector distance measures relevance. A smaller distance is a better match. See [Vector Fields](#vector-fields).
 - `FT.HYBRID` fuses the results of a text search and a vector search into one score. See [Score Fusion in FT.HYBRID](#score-fusion-in-fthybrid).
 
+The clauses of an `FT.SEARCH` query select which measure of relevance is used, and that measure sets the default sort order:
+
+| Query shape | Score measure | Default sort order |
+| :--- | :--- | :--- |
+| Text or tag clauses, with or without numeric clauses | `BM25STD` score | By score, highest first |
+| Only clauses that score 0: numeric, vector range, or tag in an index without a `TEXT` field | 0 for every key | Not defined |
+| KNN query without a filter | Vector distance. `WITHSCORES` reports 0. | By distance, nearest first |
+| KNN query with a text clause in its filter | `BM25STD` score of the filter | By score, highest first |
+| KNN query with only tag or numeric clauses in its filter | Vector distance. `WITHSCORES` reports 0. See [issue #1414](https://github.com/valkey-io/valkey-search/issues/1414). | By distance, nearest first |
+| Any of the above with `SORTBY` | Unchanged | By the `SORTBY` field |
+
 The rest of this section is about the relevance score.
 It compares a key with the other keys in the index.
 It has no upper limit, and its value depends on the contents of the index as well as on the key and the query.
@@ -225,16 +236,12 @@ The only supported value is `BM25STD`, which is also the default. Any other valu
 
 ## How Scores Order Results
 
-`FT.SEARCH` sorts results in this order:
-
-1. If the command has a `SORTBY` clause, the results are sorted by the `SORTBY` field.
-2. If the query is a KNN query and its filter has no text clause, the results are sorted by vector distance, nearest first. A KNN query without a filter is in this case.
-3. All other results are sorted by score, highest first. This includes a KNN query with a text filter, such as `(shoes)=>[KNN 10 @vec $v]`. The KNN clause selects the nearest keys, and the text score then orders them.
+For the default sort order of each query shape, see the table in [What Is a Score?](#what-is-a-score).
+In a KNN query with a text filter, such as `(shoes)=>[KNN 10 @vec $v]`, the KNN clause selects the nearest keys, and the text score then orders them.
 
 The sort occurs before `LIMIT`.
 Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
 The order of keys with equal scores is not defined, and it can change in a future release.
-A query that contains only numeric clauses gives every key a score of 0, so the order of its results is not defined.
 To get an order that does not change, see [Make the Order of Equal Scores Repeatable](#make-the-order-of-equal-scores-repeatable).
 
 `FT.AGGREGATE` does not sort by score automatically.

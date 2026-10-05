@@ -26,7 +26,7 @@ constexpr auto kModuleVersion = vmsdk::ValkeyVersion(1, 3, 0);
  * In unstable branch the status is always "dev".
  * During release process the status will be set to rc1,rc2...rcN.
  * When the version is released the status will be "ga". */
-#define MODULE_RELEASE_STAGE "dev"
+#define MODULE_RELEASE_STAGE "rc1"
 
 //
 // Set the minimum acceptable server version

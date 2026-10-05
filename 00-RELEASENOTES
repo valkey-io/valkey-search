@@ -1,16 +1,83 @@
-Hello! This file is just a placeholder, since this is the "main" branch
-of Valkey Search, the place where all the development happens.
+Valkey Search 1.3 release notes
+===============================
 
-There are no release notes for this branch, it gets forked into another branch
-every time there is a partial feature freeze in order to eventually create
-a new stable release.
+================================================================================
+Valkey Search 1.3.0 RC1 - Released Tue Oct 6th 2026
+================================================================================
 
-Usually "main" is stable enough for you to use it in development environments.
-However, you should never use it in production environments. It is possible
-to download the latest stable release here:
+This is the first release candidate of Valkey Search 1.3. It adds hybrid text
+and vector search with FT.HYBRID, BM25 relevance scoring for full-text
+queries, full-text search in 12 languages, vector range queries, cursors for
+paging through large result sets, and FLOAT16 and BFLOAT16 vector types.
+Vector data is now stored once and shared between Valkey and the search index
+instead of being duplicated, and the numeric and tag indexes use less memory.
+This release requires Valkey core 9.1.0 or higher.
 
-    https://github.com/valkey-io/valkey-search/releases
+Several compatibility fixes are breaking changes, so they are off by default;
+see Known Compatibility Defect Corrections
+(https://github.com/valkey-io/valkey-search/blob/main/COMPATIBILITY.md#known-compatibility-defect-corrections).
+Each legacy behavior still in use is counted by a compatibility-* INFO field.
+FT._DEBUG no longer requires debug mode; it is now an admin command in the
+@admin and @dangerous ACL categories, so restrict it with ACLs where needed.
 
-More information is available at https://valkey.io
+New Features
+============
+Major features:
+* FT.HYBRID: native text and vector hybrid search. The new command runs a text, tag or numeric SEARCH arm and a vector VSIM arm over one index, fuses the two ranked lists with RRF, LINEAR or a custom FUNCTION, and passes the result through the FT.AGGREGATE processing stages (#1083)
+* BM25STD text scoring: full-text results are ranked by relevance with BM25STD, including prefix, suffix, fuzzy, tag prefix and stemmed terms. Adds WITHSCORES, the SCORER option and the search.default-scorer config, $weight query attributes, ADDSCORES on FT.AGGREGATE, and per-document scores through the new SCORE_FIELD option on FT.CREATE; SCORE now accepts any value from 0.0 to 1.0 (#1287, #1350, #1354, #1345, #1400, #1008)
+* Shared vector memory: vectors in HASH documents are stored once and shared between Valkey and every index that uses them, instead of being duplicated in the search index, and RDB load takes vectors from the keyspace. HNSW ingestion and search throughput is on par with 1.2, and FLAT COSINE ingestion is faster. Enabled by default and controlled by search.enable-vector-sharing at module load; reported by the search_vector_registry_* INFO fields (#1168, #1232, #1316, #1325, #1487)
+* Search and aggregation cursors: WITHCURSOR [COUNT <count>] [MAXIDLE <ms>] on FT.SEARCH, FT.AGGREGATE and FT.HYBRID, and the new FT.CURSOR READ and FT.CURSOR DEL commands, for paging through large result sets. Limits are set by search.cursor-max-count and search.cursor-max-idle-ms, and open cursors are reported by search_num_cursors (#1394)
+* FLOAT16 and BFLOAT16 vectors: new vector element types for FLAT and HNSW indexes, across all distance metrics, for HASH and JSON documents, roughly halving the memory used per vector (#1001)
+* Multi-language full-text search: TEXT fields can be indexed in 12 Snowball stemmer languages, chosen per index with the LANGUAGE option on FT.CREATE: English, French, German, Spanish, Italian, Portuguese, Russian, Swedish, Turkish, Dutch, Indonesian and Arabic. Each language has its own tokenization, normalization, stop words and stemming (#1263)
+* Vector range queries: @field:[VECTOR_RANGE <radius> $blob] in FT.SEARCH and FT.AGGREGATE queries returns every document whose vector is within the given distance, optionally with that distance through $YIELD_DISTANCE_AS, and can be combined with other query clauses using AND, OR and negation (#985)
 
-Happy hacking!
+Other new features:
+* FILTER option on FT.CREATE: a boolean expression evaluated during ingestion so that only matching keys are indexed. FT.INFO reports the number of excluded keys as filter_rejected_keys (#984)
+* INKEYS option on FT.SEARCH to restrict results to a given set of keys (#967)
+* Filtered KNN queries can select their execution strategy instead of leaving it to the planner: HYBRID_POLICY ADHOC_BF evaluates the filter first and computes exact distances for the matching documents, and HYBRID_POLICY BATCHES searches the vector index first and applies the filter inline. Both are set inside the KNN clause of FT.SEARCH and FT.AGGREGATE queries; FT.HYBRID takes POLICY ADHOC or POLICY BATCHES inside a counted VSIM FILTER (#1460)
+* FT.AGGREGATE enhancements: the TOLIST, FIRST_VALUE and RANDOM_SAMPLE reducers; array values in expressions, with element-wise functions and arithmetic and the vectorlen, vectorat, isvector, makevector and flatten functions; GROUPBY over multi-value fields, bounded by search.max-group-key-expansion; and LOAD now accepts JSON paths and AS aliases (AS requires search.emulate-release 1.3.0) (#932, #946, #949, #893, #1271, #1084)
+* More RediSearch syntax is accepted: field-scoped groups such as @title:(hello | world), indexing one field under two aliases (for example as both TEXT and TAG), the NOHL and SORTABLE UNF options on FT.CREATE, and SORTBY on a KNN score alias in ascending order (#1218, #1196, #1395, #1267)
+* In cluster mode, FT.SEARCH and FT.AGGREGATE can run inside MULTI/EXEC and Lua scripts when the index is single-slot (hash-tagged) and the local node owns that slot (#866)
+* Compatibility framework: the new search.emulate-release config selects which release's behavior to emulate, so compatibility fixes can ship in minor and patch releases without changing default behavior. Each legacy behavior still in use is counted by a compatibility-* INFO field, and COMPATIBILITY.md documents the compatibility contract (#1063, #981, #1059, #1386)
+* Resource protection: queries are rejected before fan-out when the reader queue exceeds search.max-query-queue-depth (default 100000, 0 disables the check), and queries that are already cancelled are dropped before they run; search.max-timeout-ms caps the TIMEOUT a query may request (default and maximum 60000); and queued mutations reserve memory in proportion to their expected index size, so maxmemory checks account for pending ingestion (#1276, #1368, #934)
+* FT._DEBUG can be used without enabling debug mode, by users with the @admin and @dangerous ACL permissions (#914)
+* search.debug-mode can now be changed at runtime with CONFIG SET, so developer configs can be adjusted on a running server; developer configs in the config file are accepted at load regardless of debug mode (#1485)
+* The cluster coordinator supports IPv6 node addresses (#759)
+
+Optimizations
+=============
+* Reimplemented the numeric index as an order-statistic B+ tree, using up to 2.4x less memory for high-cardinality fields, with faster inserts, deletes and range counts (#1030)
+* Reimplemented the tag index on a radix (rax) tree, substantially reducing tag index memory (#1031)
+* FT.AGGREGATE reducers process each group's records as a batch; COUNT, for example, no longer increments once per record (#816)
+* FT.AGGREGATE queries that return no document content skip an unnecessary revalidation step on the main thread (#1400)
+
+Bug fixes
+=========
+* Fixed server crashes and hangs in FT.AGGREGATE expressions: APPLY of a string function (lower, upper, strlen, startswith, contains, substr, concat, timefmt, parsetime) on a missing value aborted the server, and timefmt could loop forever on a format that produces no output. A TEXT field is now also accepted as an APPLY operand (#1086, #1366)
+* Fixed memory corruption when an FT.AGGREGATE alias was re-used for a different field (#1273)
+* Fixed deadlocks and crashes around forks and thread pools: a permanent main-thread deadlock when FT.SEARCH drained the MULTI/EXEC mutation queue during BGSAVE, AOF rewrite or a replica full sync; a crash when a thread pool was resized during a fork; and a lock-ordering deadlock during index destruction (#1292, #1331, #967)
+* Fixed a crash on single-slot index queries when replica-only fanout is selected, and a crash in the latency sampler when histogram allocation fails under memory pressure (#1226, #1230)
+* Fixed HNSW issues: RDB load failing for a small index whose top level exceeds its element count; RDB load validation rejecting duplicate labels left behind by concurrent updates and deletes, which are now handled on load; insertion failures among deleted (tombstoned) nodes, including recovery from a deleted entry point; and prefetches that could read invalid neighbor ids from empty neighbor lists (#1349, #1283, #1362, #1320)
+* Keys whose name is the empty string are now indexed (#1171, #1310)
+* FT.SEARCH fixes: SORTBY with NOCONTENT now returns sorted results in standalone and cluster mode, a bare * query runs as a match-all search instead of failing with a syntax error, and PARAMS substitution now applies to the AS alias of a KNN score (#1217, #960, #1090)
+* FT.AGGREGATE fixes: fields referenced only by GROUPBY, REDUCE, SORTBY, APPLY or FILTER are now loaded automatically instead of silently evaluating as missing; numeric values keep full precision in GROUPBY keys and vector query results instead of being rounded to 6 significant digits; and GROUPBY 0 is now accepted, reducing all records into a single group as in Redis (#1341, #1264, #1464)
+* TAG values that are not valid UTF-8 are now treated as invalid data instead of being indexed (#1075)
+* Text tokenization fixes: a multi-byte character in PUNCTUATION, such as —, is now matched as a whole character instead of byte by byte, which also split words at unrelated characters sharing those bytes; and in English indexes, non-ASCII words are Unicode-normalized (NFC) before case folding, so composed and decomposed forms of the same accented letter match (#1263)
+* Cluster fixes: query results exclude keys in slots the node does not own, avoiding double counting during slot migration; HNSW KNN queries that omit EF_RUNTIME now use the index's EF_RUNTIME on remote shards too, instead of an EF of K that could lower recall; indexes in a non-zero database no longer fail with a slot fingerprint mismatch after an RDB load; and a node demoted to replica while fetching index metadata no longer applies it (#921, #1460, #1259, #1304)
+* search_number_of_indexes is now correct: a stale RDB restore counter no longer inflates it, and replicas report the right count after a full sync (#1312, #1265)
+* Fixed a memory leak on every RDB load, and index schemas are now freed asynchronously even when recreating them after FLUSHDB fails (#941, #1204)
+* Reworked the module's memory allocation so that the module and the libraries statically linked into it allocate through Valkey's allocator, removing a class of allocator-mismatch heap corruption; libstdc++ is now linked statically (#1360)
+* Fixed building on Alpine (musl) and musl-only crashes, including a crash in INFO and crashes during shutdown (#1402)
+* A startup log message emitted at WARNING for every INFO field is now logged at DEBUG (#1281)
+* Redis 8 compatibility fixes, enabled by setting search.emulate-release to 1.3.0 (#1155, #971, #1084, #1086, #1271, #1366, #1373, #1364, #1445, #1389, #1352, #1395, #1263):
+    ** A key with a malformed NUMERIC or VECTOR value is dropped from the index entirely, rather than only that field being skipped
+    ** FT.AGGREGATE: reducers without AS get Redis-style default names; LOAD honors AS; output columns of JSON indexes are named as written in the query; division by zero, the precedence of ^ and &&, empty strings, SUM, AVG, MIN and MAX over empty or non-numeric input, and references to missing fields all behave as in Redis; and a LIMIT next to SORTBY raises the SORTBY bound, so paging past the first 10 sorted rows works
+    ** FT.SEARCH: an unescaped ' delimits a phrase; WITHSORTKEYS prefixes string sort keys with $ and returns nil for documents without a sort key; and only the last RETURN clause applies
+    ** Expression functions: non-empty strings are truthy; lower and upper return nil for non-string arguments; numeric functions return NaN for non-numeric strings; month() rounds correctly; and parsetime, timefmt and the date functions return nil for invalid input
+    ** FT.INFO reports the configured SCORE and SCORE_FIELD of an index, and whether each attribute is SORTABLE and UNF
+    ** Text search: a query containing malformed UTF-8 is rejected; and on English indexes, MINSTEMSIZE and fuzzy edit distance count characters (Unicode code points) instead of bytes, as other languages always do
+* Improvements to tests and test infrastructure with no corresponding module code changes.
+
+Contributors
+============
+@adam-fowler, @Aksha1812, @alexey-temnikov, @AlexFilipImproving, @allenss-amazon, @bandalgomsu, @baswanth09, @BCathcart, @bluayer, @boda26, @bogdanp05, @Carol-ggg, @Frank-Gu-81, @hjkwon0, @JasonLi314, @KarthikSubbarao, @linbran5123, @mohanrajendran, @neerajr0, @Nivesh-01, @rileydes-improving, @Shikha-code36, @txchmechanicus, @VoletiRam, @yairgott, @zackcam, @zykovd

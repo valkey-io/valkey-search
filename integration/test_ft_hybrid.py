@@ -76,6 +76,73 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
 
     Q = _vec(1.0, 2.0, 3.0, 4.0)
 
+    def test_policy_controls_all_vector_query_commands(self):
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        assert client.execute_command(
+            "CONFIG", "SET", "search.info-developer-visible", "yes") == b"OK"
+
+        def strategy_counts():
+            info = client.info("search")
+            return (
+                int(info.get("search_prefiltering_requests_count", 0)),
+                int(info.get("search_inline_filtering_requests_count", 0)),
+            )
+
+        command_pairs = [
+            (
+                "FT.SEARCH",
+                ["FT.SEARCH", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY ADHOC_BF]",
+                 "NOCONTENT", "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+                ["FT.SEARCH", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY BATCHES]",
+                 "NOCONTENT", "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+            ),
+            (
+                "FT.AGGREGATE",
+                ["FT.AGGREGATE", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY ADHOC_BF]",
+                 "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+                ["FT.AGGREGATE", self.INDEX,
+                 "@category:{cat1}=>[KNN 3 @vec $q HYBRID_POLICY BATCHES]",
+                 "PARAMS", "2", "q", self.Q, "DIALECT", "2"],
+            ),
+            (
+                "FT.HYBRID",
+                ["FT.HYBRID", self.INDEX, "SEARCH", "@title:hello",
+                 "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                 "FILTER", "3", "@category:{cat1}", "POLICY", "ADHOC",
+                 "PARAMS", "2", "q", self.Q],
+                ["FT.HYBRID", self.INDEX, "SEARCH", "@title:hello",
+                 "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                 "FILTER", "3", "@category:{cat1}", "POLICY", "BATCHES",
+                 "PARAMS", "2", "q", self.Q],
+            ),
+        ]
+
+        for command, adhoc, batches in command_pairs:
+            before = strategy_counts()
+            client.execute_command(*adhoc)
+            after_adhoc = strategy_counts()
+            assert after_adhoc == (before[0] + 1, before[1]), command
+
+            client.execute_command(*batches)
+            after_batches = strategy_counts()
+            assert after_batches == (after_adhoc[0], after_adhoc[1] + 1), command
+
+        for policy in ["ADHOC", "BATCHES"]:
+            before = strategy_counts()
+            result = client.execute_command(
+                "FT.HYBRID", self.INDEX,
+                "SEARCH", "@title:hello",
+                "VSIM", "@vec", "$q", "KNN", "2", "K", "3",
+                "FILTER", "3", "*", "POLICY", policy,
+                "PARAMS", "2", "q", self.Q,
+            )
+            assert isinstance(result, list)
+            assert strategy_counts() == before, policy
+
     # ---------------------------------------------------------------------
     # Control-path coverage (local-only; cluster control paths are deferred
     # to the cluster-fixture suite below).
@@ -569,36 +636,28 @@ class TestFtHybridBase(ValkeySearchTestCaseBase):
         assert counts == {b"cat0": b"5", b"cat1": b"5"}
 
     # ---------------------------------------------------------------------
-    # POLICY tolerance (parser accepts and silently discards POLICY <value>).
+    # POLICY placement: Redis accepts it only inside a counted VSIM FILTER.
     # ---------------------------------------------------------------------
 
-    def test_policy_accepted_and_ignored(self):
+    def test_policy_requires_counted_vsim_filter(self):
         client = self.server.get_new_client()
         self.setup_index(client)
-        result = client.execute_command(
-            "FT.HYBRID", self.INDEX,
-            "SEARCH", "@title:hello",
-            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-            "POLICY", "any-value",
-            "PARAMS", "2", "q", self.Q,
-        )
-        assert isinstance(result, list)
-        assert result[0] == 10
-        # POLICY sits inside the VSIM clause, so the token after it still
-        # belongs to VSIM. This used to end the clause and leave
-        # YIELD_SCORE_AS to be read as a top-level keyword.
-        result = client.execute_command(
-            "FT.HYBRID", self.INDEX,
-            "SEARCH", "@title:hello",
-            "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
-            "POLICY", "BATCHES", "YIELD_SCORE_AS", "vs",
-            "PARAMS", "2", "q", self.Q,
-        )
-        assert isinstance(result, list)
-        assert result[0] == 10
-        # The 5 docs the vector arm returned carry the alias; the rest of the
-        # union came from the text arm alone and have no vector score.
-        assert sum(b"vs" in self._rec_to_dict(rec) for rec in result[1:]) == 5
+        invalid_policy_args = [
+            ["POLICY", "BATCHES"],
+            ["FILTER", "@category:{cat1}", "POLICY", "BATCHES"],
+        ]
+        for policy_args in invalid_policy_args:
+            with pytest.raises(
+                ResponseError,
+                match=r"POLICY is only supported inside a counted VSIM FILTER",
+            ):
+                client.execute_command(
+                    "FT.HYBRID", self.INDEX,
+                    "SEARCH", "@title:hello",
+                    "VSIM", "@vec", "$q", "KNN", "2", "K", "5",
+                    *policy_args,
+                    "PARAMS", "2", "q", self.Q,
+                )
 
     # ---------------------------------------------------------------------
     # Reserved-feature rejections.
@@ -1767,10 +1826,12 @@ class TestFtHybridAtomicValidation(ValkeySearchTestCaseDebugMode):
 #
 # A vector arm's distance becomes the similarity every fusion method reads, via
 # `1 / (1 + distance)`. Cosine distance is nominally in [0, 2], but for a
-# document whose vector matches the query it lands just below zero -- about
-# -1.6e-07 -- because the arithmetic does not cancel exactly. Every other
-# FT.HYBRID test in this file uses L2, where a distance is never negative, so
-# the sign is only exercised here.
+# document whose vector matches the query it lands within a float ulp of zero
+# because the arithmetic does not cancel exactly. Whether it lands just below
+# or just above zero depends on the build (release's -ffast-math vs debug's
+# -O0), so the tests check the fused scores against the distance actually
+# returned rather than assuming its sign. Every other FT.HYBRID test in this
+# file uses L2, where a distance is never negative.
 #
 # COMBINE FUNCTION is deliberately not covered: there the fused score is
 # whatever the user's expression returns, so there is no formula of ours to
@@ -1816,11 +1877,7 @@ class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
         return {r[b"__key"]: r for r in
                 (self._rec_to_dict(rec) for rec in result[1:])}
 
-    def test_the_distance_really_is_negative(self):
-        """The premise. Without this the two tests below would pass on an
-        index that never produced a negative distance at all."""
-        client = self.server.get_new_client()
-        self.setup_index(client)
+    def _distances(self, client: Valkey):
         result = client.execute_command(
             "FT.SEARCH", self.INDEX, "*=>[KNN 4 @vec $q AS d]",
             "RETURN", "1", "d", "DIALECT", "2", "PARAMS", "2", "q", self.Q)
@@ -1828,9 +1885,16 @@ class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
         for i in range(1, len(result), 2):
             fields = self._rec_to_dict(result[i + 1])
             by_key[result[i]] = float(fields[b"d"])
-        assert by_key[b"c:same"] < 0.0, \
-            f"expected a negative self-distance, got {by_key[b'c:same']}"
-        assert abs(by_key[b"c:same"]) < 1e-5  # negative, but only just
+        return by_key
+
+    def test_the_distance_is_near_zero(self):
+        """The premise: the self-distance is rounding noise around zero,
+        and its sign is build-dependent."""
+        client = self.server.get_new_client()
+        self.setup_index(client)
+        by_key = self._distances(client)
+        assert abs(by_key[b"c:same"]) < 1e-5, \
+            f"expected a near-zero self-distance, got {by_key[b'c:same']}"
         assert abs(by_key[b"c:orth"] - 1.0) < 1e-5
         assert abs(by_key[b"c:opposed"] - 2.0) < 1e-5
 
@@ -1844,15 +1908,17 @@ class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
         `1 / (1 + d)` mapping would give it."""
         client = self.server.get_new_client()
         self.setup_index(client)
+        d_same = self._distances(client)[b"c:same"]
         rows = self._rows(client, "RRF", "CONSTANT", "60")
 
         same = float(rows[b"c:same"][b"v"])
         orth = float(rows[b"c:orth"][b"v"])
         opposed = float(rows[b"c:opposed"][b"v"])
 
-        # The self-distance is slightly negative, so the similarity is slightly
-        # above 1 -- not clamped, and not 1 exactly.
-        assert 1.0 < same < 1.001, f"expected just above 1, got {same}"
+        # Follows the formula exactly, including when the self-distance is
+        # slightly negative -- not clamped to 1.
+        assert abs(same - (1.0 - d_same / 2)) < 1e-6, \
+            f"expected 1 - {d_same}/2, got {same}"
         assert abs(orth - 0.5) < 1e-5, f"orthogonal should be 0.5, got {orth}"
         # Opposed is distance 2, so similarity 0 to within float error.
         assert abs(opposed) < 1e-5, f"opposed should be 0, got {opposed}"
@@ -1865,12 +1931,13 @@ class TestFtHybridCosineNegativeDistance(ValkeySearchTestCaseBase):
     def test_linear_over_a_negative_distance(self):
         """LINEAR sums the two arms' scores with the given weights, so the
         fused score is reproducible from the aliases -- including for the
-        document whose distance was negative."""
+        document whose distance may be negative."""
         client = self.server.get_new_client()
         self.setup_index(client)
+        d_same = self._distances(client)[b"c:same"]
         rows = self._rows(client, "LINEAR", "ALPHA", "0.25", "BETA", "0.75")
 
-        assert float(rows[b"c:same"][b"v"]) > 1.0
+        assert abs(float(rows[b"c:same"][b"v"]) - (1.0 - d_same / 2)) < 1e-6
         for key, row in rows.items():
             expected = 0.25 * float(row[b"s"]) + 0.75 * float(row[b"v"])
             actual = float(row[b"h"])

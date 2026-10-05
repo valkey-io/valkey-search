@@ -82,6 +82,7 @@ target_link_libraries(rank_fusion PUBLIC scoring)
 target_link_libraries(rank_fusion PUBLIC string_interning)
 target_link_libraries(rank_fusion PUBLIC attribute_data_type)
 target_link_libraries(rank_fusion PUBLIC vmsdklib)
+target_link_libraries(rank_fusion PUBLIC expr)
 
 set(SRCS_MULTI_SEARCH ${CMAKE_CURRENT_LIST_DIR}/multi_search.cc
                       ${CMAKE_CURRENT_LIST_DIR}/multi_search.h)

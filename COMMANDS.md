@@ -207,9 +207,12 @@ Where:
 - **\<vector_field_name\>** The name of a vector field within the specified index.
 - **\<K\>** The number of nearest neighbor vectors to return.
 - **\<vector_parameter_name\>** A PARAM name whose corresponding value provides the query vector for the KNN algorithm. Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`), so its length must be `DIM * 4` bytes for FLOAT32 and `DIM * 2` bytes for the 16-bit types.
-- **\<query-modifiers\>** (Optional) A list of keyword/value pairs that modify this particular KNN search. Currently two keywords are supported:
-  - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created.
+- **\<query-modifiers\>** (Optional) A list of keyword/value pairs that modify this particular KNN search. Currently three keywords are supported:
+  - **EF_RUNTIME** This keyword is accompanied by an integer value which overrides the default value of **EF_RUNTIME** specified when the index was created. It is rejected when `HYBRID_POLICY ADHOC_BF` is selected because that exact filter-first path does not use the HNSW runtime candidate limit.
+  - **HYBRID_POLICY** For a filtered KNN query, `ADHOC_BF` forces exact filter-first execution and `BATCHES` forces vector-search-first execution with inline filtering. An explicit policy takes precedence when `INKEYS` is also supplied: `BATCHES` keeps the named keys in the inline filter, while `ADHOC_BF` uses filter-first execution. With no explicit policy, `INKEYS` uses filter-first execution. This keyword requires either a filter expression or `INKEYS`; it is rejected on an unrestricted `*=>[KNN ...]` query.
   - **AS** This keyword is accompanied by a string value which becomes the name of the score field in the result, overriding the default score field name generation algorithm.
+
+`HYBRID_POLICY` is supported only as an inline KNN modifier. Post-KNN query attributes such as `]=>{$HYBRID_POLICY: ADHOC_BF}` and the `BATCH_SIZE` modifier are not currently supported.
 
 **Filter Expression**
 

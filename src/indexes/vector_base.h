@@ -8,6 +8,8 @@
 #ifndef VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 #define VALKEYSEARCH_SRC_INDEXES_VECTOR_BASE_H_
 
+#include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -43,7 +45,8 @@
 
 namespace valkey_search {
 enum class QueryOperations : uint64_t;
-}
+class IndexSchema;
+}  // namespace valkey_search
 
 namespace valkey_search::query {
 class ResolvedLeafCache;
@@ -56,36 +59,154 @@ class TextIndexSchema;
 }  // namespace text
 
 constexpr float kDefaultMagnitude = 1.0f;
+// Initial capacity of a range search's result vector.
+constexpr size_t kRangeReserve = 128;
+
+inline constexpr size_t UpperBoundToMultipleOf64(size_t num) {
+  return (num + 63) & ~size_t(63);
+}
 
 class VectorRecord {
  public:
-  // Disallow copy and move because it is variable-sized and should only be
-  // managed via std::shared_ptr.
-  VectorRecord(const VectorRecord &) = delete;
-  VectorRecord &operator=(const VectorRecord &) = delete;
-  VectorRecord(VectorRecord &&) = delete;
-  VectorRecord &operator=(VectorRecord &&) = delete;
-  ~VectorRecord() = default;
+  struct Header {
+    mutable std::atomic<uint32_t> ref_count_{1};
+    const float reciprocal_magnitude_{1.0f};
+  };
 
-  // Static factory method to construct a VectorRecord managed by
-  // std::shared_ptr.
-  static std::shared_ptr<VectorRecord> Construct(
-      absl::string_view vector, float reciprocal_magnitude,
-      Allocator *allocator = nullptr);
+  static constexpr size_t kStorageHeaderSize = sizeof(Header);
+  static_assert(kStorageHeaderSize == 8,
+                "VectorRecord::Header must be exactly 8 bytes");
 
-  inline const char *GetRawVector() const { return data_; }
-  inline float GetReciprocalMagnitude() const { return reciprocal_magnitude_; }
+  VectorRecord() noexcept : data_(nullptr) {}
+  VectorRecord(std::nullptr_t) noexcept : data_(nullptr) {}
+
+  VectorRecord(const VectorRecord &other) noexcept
+      : data_(other.data_.load(std::memory_order_relaxed)) {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    if (ptr) {
+      GetHeader(ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
+  VectorRecord(VectorRecord &&other) noexcept
+      : data_(other.data_.exchange(nullptr, std::memory_order_relaxed)) {}
+
+  VectorRecord &operator=(const VectorRecord &other) noexcept {
+    if (this != &other) {
+      const char *new_ptr = other.data_.load(std::memory_order_relaxed);
+      if (new_ptr) {
+        GetHeader(new_ptr)->ref_count_.fetch_add(1, std::memory_order_relaxed);
+      }
+      const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
+      if (old_ptr) {
+        Release(old_ptr);
+      }
+    }
+    return *this;
+  }
+
+  VectorRecord &operator=(VectorRecord &&other) noexcept {
+    if (this != &other) {
+      const char *new_ptr =
+          other.data_.exchange(nullptr, std::memory_order_relaxed);
+      const char *old_ptr = data_.exchange(new_ptr, std::memory_order_acq_rel);
+      if (old_ptr) {
+        Release(old_ptr);
+      }
+    }
+    return *this;
+  }
+
+  VectorRecord &operator=(std::nullptr_t) noexcept {
+    reset();
+    return *this;
+  }
+
+  ~VectorRecord() noexcept {
+    const char *old_ptr = data_.exchange(nullptr, std::memory_order_relaxed);
+    if (old_ptr) {
+      Release(old_ptr);
+    }
+  }
+
+  void reset() noexcept {
+    const char *old_ptr = data_.exchange(nullptr, std::memory_order_acq_rel);
+    if (old_ptr) {
+      Release(old_ptr);
+    }
+  }
+
+  static VectorRecord Construct(absl::string_view vector,
+                                float reciprocal_magnitude,
+                                Allocator *allocator);
+
+  const char *GetRawVector() const noexcept {
+    return data_.load(std::memory_order_relaxed);
+  }
+
+  float GetReciprocalMagnitude() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    return ptr ? GetHeader(ptr)->reciprocal_magnitude_ : 1.0f;
+  }
+
+  // Reciprocal magnitude of the record whose (non-null) vector data starts at
+  // data_ptr. Lets hot loops that hold only the raw vector pointer read it.
+  static float ReciprocalMagnitudeOf(const char *data_ptr) noexcept {
+    return GetHeader(data_ptr)->reciprocal_magnitude_;
+  }
+
+  uint32_t RefCount() const noexcept {
+    const char *ptr = data_.load(std::memory_order_relaxed);
+    return ptr ? GetHeader(ptr)->ref_count_.load(std::memory_order_relaxed) : 0;
+  }
+
+  bool empty() const noexcept {
+    return data_.load(std::memory_order_relaxed) == nullptr;
+  }
+
+  explicit operator bool() const noexcept { return !empty(); }
+
+  bool operator==(const VectorRecord &other) const noexcept {
+    return data_.load(std::memory_order_relaxed) ==
+           other.data_.load(std::memory_order_relaxed);
+  }
+
+  bool operator!=(const VectorRecord &other) const noexcept {
+    return !(*this == other);
+  }
+
+  bool operator==(std::nullptr_t) const noexcept { return empty(); }
+  bool operator!=(std::nullptr_t) const noexcept { return !empty(); }
+
+  friend std::ostream &operator<<(std::ostream &os, const VectorRecord &r) {
+    return os << "VectorRecord("
+              << static_cast<const void *>(
+                     r.data_.load(std::memory_order_relaxed))
+              << ")";
+  }
 
  private:
-  // Constructor is private, called via placement new in Construct.
-  VectorRecord(absl::string_view vector, float reciprocal_magnitude);
+  static Header *GetHeader(const char *data_ptr) noexcept {
+    return const_cast<Header *>(reinterpret_cast<const Header *>(data_ptr) - 1);
+  }
 
-  const float reciprocal_magnitude_;
-  char data_[0];  // flexible array member
+  static void Release(const char *data_ptr) noexcept {
+    Header *h = GetHeader(data_ptr);
+    if (h->ref_count_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+      Allocator::Free(reinterpret_cast<char *>(h));
+    }
+  }
+
+  explicit VectorRecord(const char *data_ptr) noexcept : data_(data_ptr) {}
+
+  mutable std::atomic<const char *> data_{nullptr};
 };
 
+static_assert(sizeof(VectorRecord) == sizeof(void *),
+              "VectorRecord must be single pointer sized");
+
 struct VectorRecordWithSize {
-  std::shared_ptr<VectorRecord> vector_record;
+  VectorRecord vector_record;
   size_t size{0};
 
   bool operator==(const VectorRecordWithSize &other) const = default;
@@ -94,7 +215,7 @@ struct VectorRecordWithSize {
 
   bool operator==(absl::string_view bytes) const {
     return vector_record != nullptr && size == bytes.size() &&
-           std::memcmp(vector_record->GetRawVector(), bytes.data(), size) == 0;
+           std::memcmp(vector_record.GetRawVector(), bytes.data(), size) == 0;
   }
   bool operator!=(absl::string_view bytes) const { return !(*this == bytes); }
 };
@@ -160,30 +281,44 @@ struct Neighbor {
   float distance;
   float score;
   uint64_t sequence_number;
+  // False only for a compound VECTOR_RANGE match that carries no VR distance
+  // (e.g. a doc matched via the non-VR branch of an OR and lies outside the
+  // radius). The distance field then holds a sentinel; readers gate the
+  // yielded-distance field, sorting, and aggregate LOAD on this flag rather
+  // than inspecting the float, which is unreliable under -ffast-math.
+  bool has_vr_distance;
   std::optional<RecordsMap> attribute_contents;
-  Neighbor() : distance(0.0f), score(kDefaultScore), sequence_number(0) {}
+  Neighbor()
+      : distance(0.0f),
+        score(kDefaultScore),
+        sequence_number(0),
+        has_vr_distance(true) {}
   Neighbor(const InternedStringPtr &external_id, float distance)
       : external_id(external_id),
         distance(distance),
         score(distance),
-        sequence_number(0) {}
+        sequence_number(0),
+        has_vr_distance(true) {}
   Neighbor(const InternedStringPtr &external_id, float distance, float score)
       : external_id(external_id),
         distance(distance),
         score(score),
-        sequence_number(0) {}
+        sequence_number(0),
+        has_vr_distance(true) {}
   Neighbor(const InternedStringPtr &external_id, float distance,
            std::optional<RecordsMap> &&attribute_contents)
       : external_id(external_id),
         distance(distance),
         score(distance),
         sequence_number(0),
+        has_vr_distance(true),
         attribute_contents(std::move(attribute_contents)) {}
   Neighbor(Neighbor &&other) noexcept
       : external_id(std::move(other.external_id)),
         distance(other.distance),
         score(other.score),
         sequence_number(other.sequence_number),
+        has_vr_distance(other.has_vr_distance),
         attribute_contents(std::move(other.attribute_contents)) {}
   Neighbor &operator=(Neighbor &&other) noexcept {
     if (this != &other) {
@@ -191,6 +326,7 @@ struct Neighbor {
       distance = other.distance;
       score = other.score;
       sequence_number = other.sequence_number;
+      has_vr_distance = other.has_vr_distance;
       attribute_contents = std::move(other.attribute_contents);
     }
     return *this;
@@ -296,6 +432,12 @@ class VectorBase : public IndexBase {
   // races can occur during the search phase.
   absl::StatusOr<InternedStringPtr> GetKeyDuringSearch(
       uint64_t internal_id) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // Non-owning form of GetKeyDuringSearch: nullptr if the id is not tracked.
+  const InternedStringPtr *FindKeyDuringSearch(uint64_t internal_id) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS {
+    auto it = key_by_internal_id_.find(internal_id);
+    return it == key_by_internal_id_.end() ? nullptr : &it->second;
+  }
   bool AddPrefilteredKey(
       absl::string_view query, float query_magnitude,
       const InternedStringPtr &key, uint64_t count,
@@ -311,6 +453,48 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   size_t GetVectorDataSize() const { return GetDataTypeSize() * dimensions_; }
 
+  // Returns the neighbors within `radius` of `query`, unordered. FLAT scans
+  // every vector. HNSW runs an approximate KNN search for up to
+  // search.max-nonvector-search-results-fetched candidates, so it can miss
+  // keys; it falls back to SearchRangeExhaustive when the fetch fills the cap
+  // with the farthest candidate still in range.
+  virtual absl::StatusOr<std::vector<Neighbor>> SearchRange(
+      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      std::unique_ptr<hnswlib::BaseFilterFunctor> filter = nullptr) = 0;
+
+  // Distance and internal label for `key`, or an error if untracked. Backs
+  // IsWithinVectorRange. Search-phase only: lock-free, like
+  // GetVectorDuringSearch.
+  absl::StatusOr<std::pair<float, hnswlib::labeltype>>
+  ComputeDistanceFromRecord(const InternedStringPtr &key,
+                            absl::string_view query) const;
+
+  // Returns the distance from the stored vector for `key` to `query` if the
+  // distance is <= `radius`; returns std::nullopt if outside the radius;
+  // returns an error if the key is not tracked in this index.
+  absl::StatusOr<std::optional<float>> IsWithinVectorRange(
+      const InternedStringPtr &key, absl::string_view query,
+      float radius) const {
+    auto result = ComputeDistanceFromRecord(key, query);
+    if (!result.ok()) {
+      return result.status();
+    }
+    float distance = ClampCosineDistance(result->first);
+    if (distance > radius) {
+      return std::nullopt;
+    }
+    return distance;
+  }
+  // Range test for `record`, the raw vector bytes just read back from the
+  // database. Like RecomputeDistance it touches no index structure, so it is
+  // safe on the main thread outside the search phase, where
+  // IsWithinVectorRange is not.
+  bool IsRecordWithinVectorRange(absl::string_view record,
+                                 absl::string_view query, float radius) const {
+    auto distance = RecomputeDistance(record, query);
+    return distance.ok() && ClampCosineDistance(*distance) <= radius;
+  }
+  bool IsVectorIndex() const override { return true; }
   virtual uint64_t GetMaxLoadedLabel() const { return 0; }
   virtual size_t GetLabelCount() const { return 0; }
   FixedSizeAllocator *GetVectorAllocator() const {
@@ -384,7 +568,7 @@ class VectorBase : public IndexBase {
         ,
         vector_allocator_(CREATE_UNIQUE_PTR(
             FixedSizeAllocator,
-            sizeof(VectorRecord) + dimensions * element_size, true))
+            VectorRecord::kStorageHeaderSize + dimensions * element_size, true))
 #endif  // !SAN_BUILD
   {
   }
@@ -400,13 +584,72 @@ class VectorBase : public IndexBase {
 
   int RespondWithInfo(ValkeyModuleCtx *ctx) const override;
 
-  virtual absl::Status AddRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) = 0;
+  // Clamped distance for a range search; `query` from NormalizeQueryIfNeeded,
+  // `query_magnitude` its reciprocal magnitude (1 unless normalize_).
+  float RangeDistance(absl::string_view query, float query_magnitude,
+                      const VectorRecord &record) const {
+    if (normalize_) {
+      query_magnitude *= record.GetReciprocalMagnitude();
+    }
+    return ClampCosineDistance(ComputeDistance(query, record, query_magnitude));
+  }
+
+  // Every tracked key within `radius` of `query`, unordered, for FLAT/HNSW
+  // alike. Lock-free: phase-based locking keeps queries and mutations
+  // mutually exclusive, so key_to_metadata_mutex_ is not needed here.
+  std::vector<Neighbor> SearchRangeExhaustive(
+      absl::string_view query, float radius, cancel::Token &cancellation_token,
+      hnswlib::BaseFilterFunctor *filter = nullptr) const
+      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+
+  // Holds an optionally-normalized query vector. `view` is always valid and
+  // points either into `storage` (if normalization was applied) or into the
+  // original caller-owned buffer.
+  struct NormalizedQuery {
+    std::vector<char> storage;  // owns normalized data when normalize_ is true
+    absl::string_view view;     // always usable as the query input
+  };
+
+  // Returns a normalized copy of `query` when the index uses cosine distance,
+  // or a zero-copy view into the original buffer otherwise.
+  NormalizedQuery NormalizeQueryIfNeeded(absl::string_view query) const {
+    if (normalize_) {
+      float reciprocal_magnitude =
+          CalcReciprocalMagnitude(query, GetVectorDataType());
+      auto norm =
+          NormalizeVector(query, GetVectorDataType(), reciprocal_magnitude);
+      absl::string_view v(reinterpret_cast<const char *>(norm.data()),
+                          norm.size());
+      return {std::move(norm), v};
+    }
+    return {{}, query};
+  }
+
+  // Clamps a cosine distance to [0, 2]; no tolerance window, since one wide
+  // enough to absorb FP noise also swallows real near-duplicates/antipodes.
+  // Non-finite values are classified from their bits (-ffast-math breaks
+  // isnan/isfinite) and reported as +inf, outside every radius; an IP -inf
+  // is kept as-is, within every radius, matching Redis.
+  float ClampCosineDistance(float dist) const {
+    constexpr uint32_t kExponentMask = 0x7f800000u;
+    constexpr uint32_t kNegativeInfinity = 0xff800000u;
+    const auto bits = std::bit_cast<uint32_t>(dist);
+    if ((bits & kExponentMask) == kExponentMask) {
+      return !normalize_ && bits == kNegativeInfinity
+                 ? dist
+                 : std::bit_cast<float>(kExponentMask);
+    }
+    if (!normalize_) {
+      return dist;
+    }
+    return std::clamp(dist, 0.0f, 2.0f);
+  }
+
+  virtual absl::Status AddRecordImpl(uint64_t internal_id,
+                                     VectorRecord &&vector_record) = 0;
   virtual absl::Status RemoveRecordImpl(uint64_t internal_id) = 0;
-  virtual absl::Status ModifyRecordImpl(
-      uint64_t internal_id,
-      std::shared_ptr<const VectorRecord> &&vector_record) = 0;
+  virtual absl::Status ModifyRecordImpl(uint64_t internal_id,
+                                        VectorRecord &&vector_record) = 0;
   virtual int RespondWithInfoImpl(ValkeyModuleCtx *ctx) const = 0;
 
   virtual size_t GetDataTypeSize() const = 0;
@@ -415,10 +658,8 @@ class VectorBase : public IndexBase {
   virtual absl::Status SaveIndexImpl(
       RDBChunkOutputStream chunked_out) const = 0;
 
-  virtual std::shared_ptr<const VectorRecord> &GetVectorLockFree(
-      uint64_t internal_id) const = 0;
-  virtual std::shared_ptr<const VectorRecord> &GetVector(
-      uint64_t internal_id) const = 0;
+  virtual VectorRecord &GetVectorLockFree(uint64_t internal_id) const = 0;
+  virtual VectorRecord &GetVector(uint64_t internal_id) const = 0;
 
   int db_num_;
   int dimensions_;
@@ -428,7 +669,7 @@ class VectorBase : public IndexBase {
   data_model::AttributeDataType attribute_data_type_;
   data_model::DistanceMetric distance_metric_;
   virtual float ComputeDistance(absl::string_view query,
-                                const VectorRecord *vector_record,
+                                const VectorRecord &vector_record,
                                 float query_magnitude) const = 0;
   virtual std::optional<hnswlib::tableint> GetAlgoIdLockFree(
       uint64_t internal_id) const = 0;
@@ -442,7 +683,7 @@ class VectorBase : public IndexBase {
       const InternedStringPtr &key) ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::StatusOr<bool> IsVectorUnchanged(const InternedStringPtr &key,
                                          float magnitude,
-                                         const VectorRecord *vector_record)
+                                         const VectorRecord &vector_record)
       ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
   absl::StatusOr<uint64_t> GetInternalId(const InternedStringPtr &key) const
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
@@ -467,15 +708,23 @@ class VectorBase : public IndexBase {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
-  // Built once per query and reused across candidates.
+  // Built once per query and reused across candidates. index_schema is needed
+  // to resolve a VectorRange predicate's alias to its vector index.
   PrefilterEvaluator(const text::TextIndexSchema *text_index_schema,
                      query::ResolvedLeafCache &cache,
-                     QueryOperations query_operations)
+                     QueryOperations query_operations,
+                     const IndexSchema *index_schema)
       : query::Evaluator(query_operations),
         text_index_schema_(text_index_schema),
-        cache_(cache) {}
+        cache_(cache),
+        index_schema_(index_schema) {}
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
+  // Like Evaluate(), but returns the full EvaluationResult so that callers
+  // handling VectorRange queries can read the matched vr_distance without a
+  // side-channel.
+  query::EvaluationResult EvaluateFull(const query::Predicate &predicate,
+                                       const InternedStringPtr &key);
   const InternedStringPtr &GetTargetKey() const override {
     CHECK(key_);
     return *key_;
@@ -489,12 +738,15 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate &predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                        bool require_positions) override;
+  query::EvaluationResult EvaluateVectorRange(
+      const query::VectorRangePredicate &predicate) override;
   // The candidate's own tree, fetched on the first leaf that needs it. Many
   // predicates never do (tag/numeric, or text served from the cache).
   const text::TextIndex *PerKeyTextIndex();
 
   const text::TextIndexSchema *text_index_schema_;
   query::ResolvedLeafCache &cache_;
+  const IndexSchema *index_schema_;
   const InternedStringPtr *key_{nullptr};
   const text::TextIndex *per_key_index_{nullptr};
   bool per_key_index_fetched_{false};

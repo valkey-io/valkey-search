@@ -16,6 +16,8 @@
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_flat.h"
+#include "src/indexes/vector_hnsw.h"
 #include "src/query/resolved_leaves.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
@@ -123,6 +125,24 @@ void InitIndexSchema(MockIndexSchema *index_schema) {
       key1, AttributeData(vmsdk::MakeUniqueValkeyString(test_data))));
 
   text_index_schema->CommitKeyData(key1);
+
+  // Add a flat vector field for VECTOR_RANGE parser tests (4-dimensional).
+  auto vec_index = indexes::VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 100, 1024),
+      "vec_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0);
+  VMSDK_EXPECT_OK(vec_index);
+  VMSDK_EXPECT_OK(index_schema->AddIndex("vec", "vec", *vec_index));
+
+  // Add an HNSW vector field so VECTOR_RANGE parser tests can distinguish the
+  // HNSW-only $epsilon option (accepted, must be > 0) from FLAT (rejected).
+  auto vec_hnsw_index = indexes::VectorHNSW<float>::Create(
+      CreateHNSWVectorIndexProto(4, data_model::DISTANCE_METRIC_L2, 100, 16,
+                                 200, 10),
+      "vec_hnsw_id", data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH,
+      0);
+  VMSDK_EXPECT_OK(vec_hnsw_index);
+  VMSDK_EXPECT_OK(
+      index_schema->AddIndex("vec_hnsw", "vec_hnsw", *vec_hnsw_index));
 }
 
 TEST_P(FilterTest, ParseParams) {
@@ -161,7 +181,7 @@ TEST_P(FilterTest, ParseParams) {
         text_index_schema, query::CorpusStats{.total_docs = 1},
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
     indexes::PrefilterEvaluator evaluator(text_index_schema, cache,
-                                          query_operations);
+                                          query_operations, index_schema.get());
     EXPECT_EQ(test_case.evaluate_success.value(),
               evaluator.Evaluate(root, interned_key));
     // The cache is warm now; a second evaluation must not change the verdict.
@@ -1924,6 +1944,145 @@ INSTANTIATE_TEST_SUITE_P(
             .create_success = false,
             .create_expected_error_message =
                 "Empty brackets detected at Position: 14",
+        },
+        // =================================================================
+        // VECTOR_RANGE syntax error tests (unit tests per Allen's review)
+        // =================================================================
+        {
+            .test_name = "vector_range_happy_path",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_with_yield_distance_as",
+            .filter =
+                "@vec:[VECTOR_RANGE 1.5 $blob]=>{$yield_distance_as: dist}",
+            .create_success = true,
+        },
+        {
+            // $epsilon on a FLAT index is rejected, matching Redis (it is an
+            // HNSW-only option).
+            .test_name = "vector_range_epsilon_flat_rejected",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 0.1}",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid option (Error parsing vector similarity parameters)",
+        },
+        {
+            // $epsilon on an HNSW index with a positive value is accepted.
+            .test_name = "vector_range_epsilon_hnsw_accepted",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 0.1}",
+            .create_success = true,
+        },
+        {
+            // $epsilon must be strictly positive on HNSW; 0 is rejected like
+            // Redis.
+            .test_name = "vector_range_epsilon_hnsw_zero_rejected",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: 0}",
+            .create_success = false,
+            .create_expected_error_message =
+                "Invalid option (Error parsing vector similarity parameters)",
+        },
+        {
+            .test_name = "vector_range_with_both_query_attrs",
+            .filter = "@vec_hnsw:[VECTOR_RANGE 1.5 "
+                      "$blob]=>{$yield_distance_as: dist; "
+                      "$epsilon: 0.01}",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_non_vector_field",
+            .filter = "@num_field_1.5:[VECTOR_RANGE 1.0 $blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "'num_field_1.5' is not indexed as a vector field",
+        },
+        {
+            .test_name = "vector_range_missing_radius",
+            .filter = "@vec:[VECTOR_RANGE]",
+            .create_success = false,
+            .create_expected_error_message = "VECTOR_RANGE radius is missing",
+        },
+        {
+            .test_name = "vector_range_missing_blob_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE vector blob parameter is missing",
+        },
+        {
+            .test_name = "vector_range_missing_dollar_on_blob",
+            .filter = "@vec:[VECTOR_RANGE 1.5 blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE vector blob parameter is missing",
+        },
+        {
+            .test_name = "vector_range_negative_radius",
+            .filter = "@vec:[VECTOR_RANGE -1.5 $blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE radius must be non-negative",
+        },
+        {
+            .test_name = "vector_range_nan_radius",
+            .filter = "@vec:[VECTOR_RANGE nan $blob]",
+            .create_success = false,
+            .create_expected_error_message = "Invalid number: ",
+        },
+        {
+            .test_name = "vector_range_negative_inf_radius",
+            .filter = "@vec:[VECTOR_RANGE -inf $blob]",
+            .create_success = false,
+            .create_expected_error_message =
+                "VECTOR_RANGE radius must be non-negative",
+        },
+        {
+            .test_name = "vector_range_unknown_optional_param",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob UNKNOWN_PARAM]",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unexpected argument 'UNKNOWN_PARAM'",
+        },
+        {
+            .test_name = "vector_range_ef_runtime_ignored",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob EF_RUNTIME 100]",
+            .create_success = true,
+        },
+        {
+            .test_name = "vector_range_empty_yield_distance_as",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$yield_distance_as: }",
+            .create_success = false,
+            .create_expected_error_message =
+                "$yield_distance_as value is missing",
+        },
+        {
+            .test_name = "vector_range_invalid_epsilon",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: notanumber}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_negative_epsilon",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$epsilon: -0.5}",
+            .create_success = false,
+            .create_expected_error_message =
+                "$epsilon must be a valid non-negative number",
+        },
+        {
+            .test_name = "vector_range_unknown_query_attr",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob]=>{$unknown_attr: value}",
+            .create_success = false,
+            .create_expected_error_message =
+                "Unknown query attribute '$unknown_attr'",
+        },
+        {
+            .test_name = "vector_range_missing_closing_bracket",
+            .filter = "@vec:[VECTOR_RANGE 1.5 $blob",
+            .create_success = false,
+            .create_expected_error_message =
+                "Expected ']' got ''. Position: 28",
         },
     }),
     [](const TestParamInfo<FilterTestCase> &info) {

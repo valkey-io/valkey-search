@@ -80,6 +80,29 @@ indexes::scoring::ScorerType ScorerFromGRPC(Scorer scorer) {
   }
 }
 
+HybridPolicy HybridPolicyToGRPC(query::HybridPolicy hybrid_policy) {
+  switch (hybrid_policy) {
+    case query::HybridPolicy::kBatches:
+      return coordinator::HYBRID_POLICY_BATCHES;
+    case query::HybridPolicy::kAdHocBruteForce:
+      return coordinator::HYBRID_POLICY_ADHOC_BF;
+    case query::HybridPolicy::kAuto:
+      return coordinator::HYBRID_POLICY_AUTO;
+  }
+  return coordinator::HYBRID_POLICY_AUTO;
+}
+
+query::HybridPolicy HybridPolicyFromGRPC(HybridPolicy hybrid_policy) {
+  switch (hybrid_policy) {
+    case coordinator::HYBRID_POLICY_BATCHES:
+      return query::HybridPolicy::kBatches;
+    case coordinator::HYBRID_POLICY_ADHOC_BF:
+      return query::HybridPolicy::kAdHocBruteForce;
+    default:
+      return query::HybridPolicy::kAuto;
+  }
+}
+
 static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
     const Predicate& predicate, std::shared_ptr<IndexSchema> index_schema,
     absl::flat_hash_set<std::string>& attribute_identifiers);
@@ -245,6 +268,30 @@ static absl::StatusOr<std::unique_ptr<query::Predicate>> BuildPredicateFromGRPC(
           text_index_schema, predicate.fuzzy().field_mask(),
           predicate.fuzzy().content(), predicate.fuzzy().distance());
     }
+    case Predicate::kVectorRange: {
+      const auto& vr = predicate.vector_range();
+      VMSDK_ASSIGN_OR_RETURN(auto identifier,
+                             index_schema->GetIdentifier(vr.attribute_alias()));
+      attribute_identifiers.insert(identifier);
+      std::optional<std::string> score_as;
+      if (vr.has_score_as()) {
+        score_as = vr.score_as();
+      }
+      std::optional<double> epsilon;
+      if (vr.has_epsilon()) {
+        epsilon = vr.epsilon();
+      }
+      auto vr_predicate = std::make_unique<query::VectorRangePredicate>(
+          vr.attribute_alias(), identifier, vr.radius(), vr.vector_param_name(),
+          score_as, epsilon);
+      if (!vr.query_vector().empty()) {
+        vr_predicate->SetQueryVector(vr.query_vector());
+      }
+      if (!vr.radius_param_name().empty()) {
+        vr_predicate->SetRadiusParamName(vr.radius_param_name());
+      }
+      return vr_predicate;
+    }
     case Predicate::PREDICATE_NOT_SET:
       return absl::InvalidArgumentError("Predicate not set");
   }
@@ -272,7 +319,9 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->query = request.query();
   parameters->dialect = request.dialect();
   parameters->k = request.k();
-  parameters->ef = request.ef();
+  if (request.has_ef()) {
+    parameters->ef = request.ef();
+  }
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
   parameters->no_content = request.no_content();
@@ -296,6 +345,14 @@ absl::Status GRPCSearchRequestToParameters(
       static_cast<QueryOperations>(request.query_operations());
   parameters->filter_parse_results.is_match_all = request.is_match_all();
   parameters->sortby_parameter = SortByFromGRPC(request);
+  // Detect VectorRangePredicate nodes in the deserialized predicate tree so the
+  // search path can handle single-VR queries. Single-VR model: the matched
+  // distance is carried in Neighbor::distance, not a score-slot side channel.
+  if (parameters->filter_parse_results.root_predicate) {
+    parameters->has_vector_range =
+        query::CountVectorRangePredicates(
+            parameters->filter_parse_results.root_predicate.get()) > 0;
+  }
   parameters->scorer = ScorerFromGRPC(request.scorer());
   parameters->vector_score_only = request.vector_score_only();
   if (request.has_inkeys()) {
@@ -305,6 +362,7 @@ absl::Status GRPCSearchRequestToParameters(
       dest.insert(key);
     }
   }
+  parameters->hybrid_policy = HybridPolicyFromGRPC(request.hybrid_policy());
   return absl::OkStatus();
 }
 
@@ -431,6 +489,31 @@ static std::unique_ptr<Predicate> BuildGRPCPredicate(
     case query::PredicateType::kNone: {
       return nullptr;
     }
+    case query::PredicateType::kVectorRange: {
+      auto vr_predicate =
+          dynamic_cast<const query::VectorRangePredicate*>(&predicate);
+      auto proto = std::make_unique<Predicate>();
+      proto->mutable_vector_range()->set_attribute_alias(
+          std::string(vr_predicate->GetAlias()));
+      proto->mutable_vector_range()->set_radius(vr_predicate->GetRadius());
+      proto->mutable_vector_range()->set_vector_param_name(
+          std::string(vr_predicate->GetVectorParamName()));
+      if (vr_predicate->GetScoreAs().has_value()) {
+        proto->mutable_vector_range()->set_score_as(
+            vr_predicate->GetScoreAs().value());
+      }
+      if (vr_predicate->GetEpsilon().has_value()) {
+        proto->mutable_vector_range()->set_epsilon(
+            vr_predicate->GetEpsilon().value());
+      }
+      proto->mutable_vector_range()->set_query_vector(
+          std::string(vr_predicate->GetQueryVector()));
+      if (!vr_predicate->GetRadiusParamName().empty()) {
+        proto->mutable_vector_range()->set_radius_param_name(
+            std::string(vr_predicate->GetRadiusParamName()));
+      }
+      return proto;
+    }
   }
   CHECK(false);
 }
@@ -492,6 +575,7 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
       inkeys_filter->add_keys(key);
     }
   }
+  request->set_hybrid_policy(HybridPolicyToGRPC(parameters.hybrid_policy));
   return request;
 }
 

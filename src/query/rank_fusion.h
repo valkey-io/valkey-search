@@ -60,8 +60,8 @@ struct ArmInput {
 //
 // For each arm whose `score_alias` is set, the surviving fused neighbor's
 // `attribute_contents` map gains a key/value pair: alias -> that arm's raw
-// Neighbor::score (formatted as "%.12g"). Docs absent from a given arm have no
-// entry for that arm's alias.
+// Neighbor::score (formatted by expr::FormatDouble). Docs absent from a given
+// arm have no entry for that arm's alias.
 std::vector<indexes::Neighbor> RRF(std::vector<ArmInput> arms);
 
 // Linear combination: sum `weight_i * score_i` per doc over the arms, using

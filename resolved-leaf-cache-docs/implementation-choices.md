@@ -356,3 +356,27 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   Against the template every row is inside the A/A envelope. Against main every positional
   row is faster, by about the same margin the template showed before the split, so the PR's
   positional path carries no regression relative to the merge base.
+
+### Merge with main (#985 Vector Range)
+
+- **`SearchVectorRangeQuery` gets its own `ResolvedLeafCache`**, built in `Search()` and shared
+  by its prefilter drain and `ApplyRelevanceScore`, the same shape as `DoSearchNonVector`.
+  #985 added a third drain loop that builds a `PrefilterEvaluator` per key; the merge hoists
+  that evaluator as the other two loops do. The loop itself is not folded into
+  `EvaluatePrefilteredKeys` here because the VR distance rides on the `EvaluationResult` and
+  the appender there only sees the key; that is the one design change drain unification needs,
+  and it belongs with the existing `DoSearchNonVector` TODO in its own PR.
+- **`PrefilterEvaluator::Evaluate` now routes through `EvaluateFull`.** #985's `EvaluateFull`
+  set `key_` without clearing `per_key_index_fetched_`; harmless with a per-key evaluator,
+  wrong once the evaluator is hoisted: every later key would evaluate phrase/prefix/fuzzy
+  leaves against the first key's tree. Neither parent had the bug; the merge would have.
+  `EvaluateFullRefetchesPerKeyTreeForEachKey` (unit) and
+  `test_vector_range_and_negated_phrase` (integration) pin it.
+- **VR leaves still score 0.** `ScoreNode` is the scoring walk under `ScoreDocument` on both
+  the background (`ApplyRelevanceScore`) and main-thread (`RecomputeDocumentScore`) paths, and
+  #985's `kVectorRange → 0.0f` case merged into it. `ResolvedLeafCache::GetOrResolve` returns
+  `monostate` for a VR predicate but is never asked.
+- **Evaluator constructors take the union**: `(TextIndexSchema*, ResolvedLeafCache&,
+  QueryOperations, const IndexSchema*)`; the last is #985's and resolves a VR alias to its
+  vector index.
+

@@ -90,13 +90,15 @@ class PredicateEvaluator : public query::Evaluator {
   PredicateEvaluator(const RecordsMap &records, RecordTags &tags,
                      InternedStringPtr target_key,
                      const indexes::text::TextIndexSchema *text_index_schema,
-                     ResolvedLeafCache &cache, QueryOperations query_operations)
+                     ResolvedLeafCache &cache, QueryOperations query_operations,
+                     const valkey_search::IndexSchema *index_schema)
       : Evaluator(query_operations),
         records_(records),
         tags_(tags),
         target_key_(std::move(target_key)),
         text_index_schema_(text_index_schema),
-        cache_(cache) {}
+        cache_(cache),
+        index_schema_(index_schema) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
 
@@ -135,12 +137,53 @@ class PredicateEvaluator : public query::Evaluator {
                             });
   }
 
+  EvaluationResult EvaluateVectorRange(
+      const query::VectorRangePredicate &predicate) override {
+    if (!index_schema_) {
+      // No index schema available — cannot re-verify; pass through.
+      return EvaluationResult(true);
+    }
+    auto query_vector = predicate.GetQueryVector();
+    if (query_vector.empty()) {
+      return EvaluationResult(false);
+    }
+    auto index = index_schema_->GetIndex(predicate.GetAlias());
+    if (!index.ok()) {
+      return EvaluationResult(false);
+    }
+    auto *vector_index = dynamic_cast<indexes::VectorBase *>(index->get());
+    if (!vector_index) {
+      return EvaluationResult(false);
+    }
+    // Judges the vector as fetched into records_ (like the tag/numeric checks
+    // above), not via the index: this runs post-lock on the main thread, so
+    // the lock-free index accessors would race writer threads.
+    auto it = records_.find(predicate.GetIdentifier());
+    if (it == records_.end()) {
+      return EvaluationResult(false);
+    }
+    ValkeyModuleString *record = it->second.value.get();
+    // A JSON vector is fetched as text; convert it the way ingestion does.
+    vmsdk::UniqueValkeyString converted;
+    if (index_schema_->GetAttributeDataType().AttributesProvidedAsString()) {
+      converted = vector_index->NormalizeStringAttribute(
+          vmsdk::RetainUniqueValkeyString(record));
+      if (!converted) {
+        return EvaluationResult(false);
+      }
+      record = converted.get();
+    }
+    return EvaluationResult(vector_index->IsRecordWithinVectorRange(
+        vmsdk::ToStringView(record), query_vector, predicate.GetRadius()));
+  }
+
  private:
   const RecordsMap &records_;
   RecordTags &tags_;
   InternedStringPtr target_key_;
   const indexes::text::TextIndexSchema *text_index_schema_;
   ResolvedLeafCache &cache_;
+  const valkey_search::IndexSchema *index_schema_ = nullptr;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
@@ -191,7 +234,7 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   RecordTags record_tags(records);
   PredicateEvaluator evaluator(records, record_tags, n.external_id,
                                text_index_schema.get(), *cache,
-                               query_operations);
+                               query_operations, parameters.index_schema.get());
   EvaluationResult result = predicate->Evaluate(evaluator);
 
   // The document changed between shard-side scoring and this content fetch, so

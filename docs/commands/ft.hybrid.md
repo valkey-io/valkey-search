@@ -52,7 +52,13 @@ FT.HYBRID <index-name>
 
 ## Fusion methods
 
-Fusion sees each arm's results ranked best-first. The `VSIM` arm's distance is converted to a similarity before fusion. For `L2` the similarity is `1 / (1 + distance)`, and for `COSINE` it is `1 - distance / 2`, so a nearer document scores higher. For `IP` the similarity is `(1 + distance) / 2`, so a nearer document scores lower. `RRF` uses only the ranks and is not affected. `LINEAR` and `FUNCTION` use the similarity value directly, so on an `IP` index a positive `BETA` favors farther documents.
+Fusion sees each arm's results ranked best-first. The `VSIM` arm's distance is converted to a similarity before fusion:
+
+- `L2`: the similarity is `1 / (1 + distance)`, so a nearer document scores higher.
+- `COSINE`: the similarity is `1 - distance / 2`, so a nearer document scores higher.
+- `IP`: the similarity is `(1 + distance) / 2`, so a nearer document scores lower.
+
+`RRF` uses only the ranks and is not affected. `LINEAR` and `FUNCTION` use the similarity value directly, so on an `IP` index a positive `BETA` favors farther documents.
 
 ### RRF
 

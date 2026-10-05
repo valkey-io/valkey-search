@@ -64,7 +64,7 @@ Thus on reload a backfilling index must restart the backfill at the beginning. H
 
 Query commands operate by blocking the client and sending the query to the background threads to locate a set of keys. Then the client is unblocked and control resumes on the main thread which can access the database to generate the final result. If a key is modified by another client while a query is in progress then that key may or may not be included in the query result. In no case will a key be returned which does not satisfy the query expression.
 
-By default, queries rank the matching keys by a relevance score. KNN queries without a text filter rank keys by vector distance instead, and a `SORTBY` clause overrides both orders. See [Search - Scoring](search-scoring.md) for how scores are computed.
+By default, queries rank the matching keys by a relevance score. KNN queries without a text or tag filter rank keys by vector distance instead, and a `SORTBY` clause overrides both orders. See [Search - Scoring](search-scoring.md) for how scores are computed.
 
 ## Save/Restore
 

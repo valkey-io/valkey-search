@@ -241,15 +241,6 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
 KeyTermIterator::KeyTermIterator(FieldMaskPredicate query_field_mask)
     : query_field_mask_(query_field_mask) {}
 
-bool KeyTermIterator::DonePositions() const {
-  return !current_position_.has_value();
-}
-
-const PositionRange& KeyTermIterator::CurrentPosition() const {
-  CHECK(current_position_.has_value());
-  return current_position_.value();
-}
-
 // Helper function to advance position iterators and populate the heap with
 // valid iterators for the new position.
 void KeyTermIterator::InsertValidPositionIterator(size_t idx) {
@@ -334,11 +325,6 @@ bool KeyTermIterator::SeekForwardPosition(Position target_position) {
     current_pos_indices_.clear();
   }
   return FindMinimumValidPosition();
-}
-
-FieldMaskPredicate KeyTermIterator::CurrentFieldMask() const {
-  CHECK(current_field_mask_ != 0ULL);
-  return current_field_mask_;
 }
 
 void TermIterator::ClearKeyState() {

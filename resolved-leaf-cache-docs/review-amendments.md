@@ -193,7 +193,7 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     TextIterator
     ├── TermIterator                       entries fetcher, many keys
     │     key heap over Postings::KeyIterator[]; scoring (tf / doc_len off the cursors)
-    │     KeyTermIterator positions_;      by value, concrete type: direct calls, no extra hop
+    │     KeyTermIterator positions_;      by value, concrete type: direct calls (see result)
     │       on each new key: positions_.Reset(current_key, lambda yielding the active cursors' maps)
     │       the five TextIterator position methods forward to positions_
     └── KeyTermIterator (final)            per-key evaluation, one key
@@ -231,10 +231,25 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     baseline on the round-1 commit, refactor with `INORDER`/`SLOP` cases added to
     `MainThreadLockModesMatchBackground` (unreachable there before `LockAll` went), benchmark
     against the baseline, result noted on the PR. The harness is boda26's `search_benchmark.sh`
-    from the PR's perf comment. Result: refactor vs round-1 commit is inside the A/A noise
-    envelope on all eight scenarios; refactor vs the PR's merge base reproduces the comment
-    (pure text within noise, mixed queries +7% to +34%). Numbers in implementation-choices.md
-    §Verification (decision 29).
+    from the PR's perf comment, plus a positional scenario set (phrase, `INORDER`, `SLOP 0`,
+    `SLOP 2`, OR and prefix with `INORDER`, phrase+num+tag) since none of the eight original
+    queries reaches the position merge.
+
+    Result, in two parts. On the eight non-positional scenarios the split is inside the A/A
+    noise envelope against the round-1 commit, and against the PR's merge base it reproduces
+    the comment (pure text within noise, mixed queries +7% to +34%). On the positional set the
+    first build of the split was 1.7% to 6.6% slower than the round-1 commit. `perf stat`
+    showed +4.0% instructions at unchanged IPC, so extra code rather than layout: the
+    "direct calls" above were only half true. `TermIterator`'s position forwards called the
+    concrete `KeyTermIterator` method, but GCC compiled each forward to `add $0x1f68,%rdi; jmp
+    KeyTermIterator::X` with the body out of line in term.cc, so a proximity step went
+    virtual call → thunk → jump → body where the template went virtual call → body. The
+    follow-up commit defines `DonePositions`, `CurrentPosition` and `CurrentFieldMask` in the
+    class body so the forwards inline them (`NextPosition` and `SeekForwardPosition` are the
+    heap operations and stay in term.cc; the profile attributed the loss to the accessors).
+    After the fix: +1.0% instructions, within the A/A spread; every positional row is inside
+    the noise envelope against the round-1 commit and 1.5% to 6.4% faster than the merge base.
+    Tables and the per-run counters in implementation-choices.md §Verification (decision 29).
 
 ## Comment → resolution map
 

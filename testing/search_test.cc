@@ -2631,6 +2631,8 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
       {"-@rating:[500 600] @text:(cat fast)", slop0},
       {"-@rating:[500 600] @text:(cat fast)", slop2},
       {"-@rating:[500 600] @text:(run* fast)", inorder},
+      {"-@rating:[500 600] @text:(*ing fast)", inorder},
+      {"-@rating:[500 600] @text:(%cat% fast)", slop2},
       {"-@rating:[500 600] @text:(running | ran)", inorder},
   };
   for (const auto &[filter, options] : filters) {

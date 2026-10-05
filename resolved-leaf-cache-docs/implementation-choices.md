@@ -281,8 +281,12 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
 - **`MainThreadLockModesMatchBackground` rows all use the `-@rating:[500 600]` form.** The
   fixture's numeric index holds no records, so `@rating:[0 100]` never matches and the five
   rows that used it only ever compared scores of non-matching documents. With the negated range
-  19 of the 52 (filter, key) pairs are true verdicts, including the six new `INORDER`/`SLOP`
-  rows.
+  the positional rows (`INORDER`, `SLOP 0`/`2`, prefix, suffix and fuzzy with `INORDER`/`SLOP`,
+  OR with `INORDER`) produce true verdicts with scores to compare.
+- **`KeyTermIterator::GetScore` stays a constant stub with a comment**, not a `DCHECK(false)`:
+  nothing calls it today, but a per-key iterator is returned through `EvaluationResult` and a
+  composite asking its children for scores would crash rather than get the pre-scoring
+  fallback.
 
 #### Verification (decision 29)
 
@@ -311,7 +315,44 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   refactor vs template), so they do not equal the ratio of the displayed medians; refactor rps
   shown is from the refactor-vs-main run. Template vs main reproduces the PR comment (pure text
   within noise, mixed queries +8% to +36%). Refactor vs template is inside the A/A envelope on
-  every row. None of the eight queries is positional, so this measures the de-templated key
-  merge and the larger object, not `Reset`; the positional path is covered by the unit cases and
-  the revalidation integration test below. `libsearch.so` shrinks by 133 KB (one fewer
-  `TermIterator` instantiation).
+  every row. `libsearch.so` shrinks by 133 KB (one fewer `TermIterator` instantiation).
+
+  None of those eight queries is positional, so a second scenario set makes every text leaf
+  positional (`search_benchmark_pos.sh`, same method, `EXTRA_ARGS` per row for the command
+  flags). That set found a regression the first did not:
+
+  | Scenario | template rps | refactor rps | Δ vs template | Δ vs main |
+  |---|---|---|---|---|
+  | phrase `"apple banana"` | 4182 | 4002 | -4.7% | -3.0% |
+  | two words INORDER | 3839 | 3724 | -3.1% | +0.2% |
+  | two words SLOP 0 | 3089 | 2979 | -3.9% | -4.7% |
+  | two words SLOP 2 | 3505 | 3263 | -6.6% | -5.7% |
+  | OR of two INORDER | 6647 | 6441 | -1.8% | +2.0% |
+  | prefix+word INORDER | 4789 | 4699 | -1.7% | -4.1% |
+  | phrase+num+tag | 3862 | 3732 | -4.3% | -2.1% |
+
+  `perf stat` over the server threads for 200K phrase requests, three runs each: template
+  165.3G cycles / 554.3G instructions, refactor 173.5G / 576.3G. Instructions +4.0%, IPC
+  unchanged (3.35 vs 3.32), branch misses flat: extra code executing, not layout. The profile
+  showed the `ProximityIterator` methods up by 1-2 points each and a new
+  `TermIterator::DonePositions` at 1.1% self time. `TermIterator`'s position forwards had
+  compiled to `add $0x1f68,%rdi; jmp KeyTermIterator::X`, a thunk to the out-of-line body in
+  term.cc, so every proximity step paid virtual call → thunk → jump → body where the template
+  had virtual call → body. Fixed in the commit after the split by defining `DonePositions`,
+  `CurrentPosition` and `CurrentFieldMask` in the class body so the forwards inline them:
+  559.9G instructions (+1.0% vs template, within the A/A spread). Positional set after the fix,
+  same method, fresh runs against both baselines:
+
+  | Scenario | template rps | fixed rps | Δ vs template | main rps | fixed rps | Δ vs main |
+  |---|---|---|---|---|---|---|
+  | phrase `"apple banana"` | 4120 | 4120 | +0.3% | 4014 | 4168 | +4.8% |
+  | two words INORDER | 3865 | 3829 | -1.3% | 3749 | 3845 | +3.2% |
+  | two words SLOP 0 | 3130 | 3110 | +0.5% | 2990 | 3123 | +4.5% |
+  | two words SLOP 2 | 3450 | 3472 | +0.4% | 3363 | 3467 | +3.3% |
+  | OR of two INORDER | 6557 | 6683 | +1.5% | 6632 | 6672 | +1.5% |
+  | prefix+word INORDER | 4747 | 4849 | +0.6% | 4684 | 4889 | +4.0% |
+  | phrase+num+tag | 3840 | 3791 | -1.4% | 3662 | 3884 | +6.4% |
+
+  Against the template every row is inside the A/A envelope. Against main every positional
+  row is faster, by about the same margin the template showed before the split, so the PR's
+  positional path carries no regression relative to the merge base.

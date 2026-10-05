@@ -122,16 +122,27 @@ class KeyTermIterator final : public TextIterator {
     if (!done_ && *key_ < target_key) NextKey();
     return !done_;
   }
-  // Position-level iteration
-  bool DonePositions() const override;
-  const PositionRange& CurrentPosition() const override;
+  // Position-level iteration. The accessors are defined here so TermIterator's
+  // forwards inline them instead of compiling to a thunk plus a second jump on
+  // every proximity step.
+  bool DonePositions() const override { return !current_position_.has_value(); }
+  const PositionRange& CurrentPosition() const override {
+    CHECK(current_position_.has_value());
+    return current_position_.value();
+  }
   bool NextPosition() override;
   bool SeekForwardPosition(Position target_position) override;
-  FieldMaskPredicate CurrentFieldMask() const override;
+  FieldMaskPredicate CurrentFieldMask() const override {
+    CHECK(current_field_mask_ != 0ULL);
+    return current_field_mask_;
+  }
   bool IsIteratorValid() const override {
     return !done_ && current_position_.has_value() &&
            current_field_mask_ != 0ULL;
   }
+  // Unreachable from current callers: TermIterator scores from its own
+  // cursors and per-key evaluation scores through ResolvedLeafCache::Probe.
+  // The constant stub keeps the contract if a composite ever asks.
   float GetScore() const override { return done_ ? 0.0f : 1.0f; }
 
  private:

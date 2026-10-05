@@ -88,7 +88,8 @@ class HierarchicalNSW
 
   mutable std::mutex label_lookup_lock;  // lock for label_lookup_
   std::unordered_map<labeltype, tableint> label_lookup_;
-  labeltype max_loaded_label_{0};  // max label stamped on any slot at load time
+  std::atomic<labeltype> max_loaded_label_{
+      0};  // max label stamped on any slot at load time
 
   std::default_random_engine level_generator_;
   std::default_random_engine update_probability_generator_;
@@ -1327,7 +1328,7 @@ class HierarchicalNSW
         }
       }
     }
-    max_loaded_label_ = max_label;
+    max_loaded_label_.store(max_label, std::memory_order_relaxed);
     // --- Global graph-invariant pass (requires all element_levels_ loaded) ---
     // The entry point must be one of the tallest nodes (proven invariant:
     // maxlevel_ is only ever raised together with enterpoint_node_). The
@@ -1536,7 +1537,10 @@ class HierarchicalNSW
     // lock all operations with element by label
     std::unique_lock<std::mutex> lock_label(getLabelOpMutex(label));
     MutationScope mutation_scope(*this);
-    max_loaded_label_ = std::max(max_loaded_label_, label);
+    labeltype prev = max_loaded_label_.load(std::memory_order_relaxed);
+    while (prev < label && !max_loaded_label_.compare_exchange_weak(
+                               prev, label, std::memory_order_relaxed)) {
+    }
     if (!replace_deleted) {
       addPoint(std::move(data_point), label, -1);
       return;

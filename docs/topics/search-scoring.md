@@ -5,7 +5,7 @@ description: How Valkey Search computes relevance scores and uses them to order 
 
 A score is a number that Valkey Search computes for each key that matches a query.
 A higher score means a better match.
-By default, `FT.SEARCH` uses the score to order the results of text, tag, and numeric queries, and of KNN queries with a text filter.
+By default, `FT.SEARCH` uses the score to order the results of text, tag, and numeric queries, and of KNN queries with a text or tag clause in the filter.
 Other KNN queries order results by vector distance.
 A `SORTBY` clause overrides both orders.
 
@@ -28,7 +28,7 @@ A score is a value that shows how relevant a key is to a query.
 Valkey Search measures relevance in three ways:
 
 - Text and tag clauses get a relevance score. A higher score is a better match. See [Text Fields](#text-fields).
-- For KNN queries, the vector distance measures relevance. A smaller distance is a better match. See [Vector Fields](#vector-fields).
+- For KNN queries whose filter has no text or tag clause, the vector distance measures relevance. A smaller distance is a better match. See [Vector Fields](#vector-fields).
 - `FT.HYBRID` fuses the results of a text search and a vector search into one score. See [Score Fusion in FT.HYBRID](#score-fusion-in-fthybrid).
 
 The clauses of an `FT.SEARCH` query select which measure of relevance is used, and that measure sets the default sort order:
@@ -38,8 +38,8 @@ The clauses of an `FT.SEARCH` query select which measure of relevance is used, a
 | Text or tag clauses, with or without numeric clauses | `BM25STD` score | By score, highest first |
 | Only clauses that score 0: numeric, vector range, or tag in an index without a `TEXT` field | 0 for every key | Not defined |
 | KNN query without a filter | Vector distance. `WITHSCORES` reports 0. | By distance, nearest first |
-| KNN query with a text clause in its filter | `BM25STD` score of the filter | By score, highest first |
-| KNN query with only tag or numeric clauses in its filter | Vector distance. `WITHSCORES` reports 0. See [issue #1414](https://github.com/valkey-io/valkey-search/issues/1414). | By distance, nearest first |
+| KNN query with a text or tag clause in its filter | `BM25STD` score of the filter | By score, highest first |
+| KNN query with only numeric clauses in its filter | Vector distance. `WITHSCORES` reports 0. | By distance, nearest first |
 | Any of the above with `SORTBY` | Unchanged | By the `SORTBY` field |
 
 The rest of this section is about the relevance score.
@@ -102,8 +102,8 @@ Each clause of a query contributes a score that depends on the type of the field
 
 | Field type | Contribution to the score |
 | :--- | :--- |
-| `TEXT` | A BM25 score for each matched term. |
-| `TAG` | A BM25 score for each matched tag value, with a term frequency of 1. |
+| `TEXT` | A `BM25STD` score for each matched term. |
+| `TAG` | A `BM25STD` score for each matched tag value, with a term frequency of 1. |
 | `NUMERIC` | 0. A numeric clause filters keys. It does not change their order. |
 | `VECTOR` | 0. A vector clause has a distance, not a relevance score. |
 
@@ -157,6 +157,8 @@ Thus a key that contains the exact query word gets a higher score than a key tha
 Assume that `running` is the only indexed word with the stem `run`.
 Then a query for `running` scores twice as high as the same query with `VERBATIM`.
 
+A `$weight` on the term multiplies only part 1. Parts 2 and 3 use a weight of 1.
+
 A word that is its own stem, such as `jacket`, is never in part 3.
 For a query for `jacket`, a key that contains `jacket` gets part 1, and a key that contains `jackets` gets part 3.
 
@@ -202,11 +204,9 @@ A smaller distance is a better match.
 See [`FT.CREATE`](../commands/ft.create.md) for the distance formulas of `L2`, `IP`, and `COSINE`.
 
 A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the distance in the `__<field>_score` field.
-`WITHSCORES` reports 0 for each result of a KNN query whose filter has no text clause.
-This includes a filter with only tag or numeric clauses, such as `(@color:{red})=>[KNN ...]`.
+`WITHSCORES` reports 0 for each result of a KNN query whose filter has no text or tag clause, such as `(@price:[0 100])=>[KNN ...]`.
 The results of these queries stay sorted by distance.
-This behavior differs from Redis Search and is tracked as a bug in [issue #1414](https://github.com/valkey-io/valkey-search/issues/1414).
-A KNN query can have a filter that contains a text clause, such as `(shoes)=>[KNN ...]`.
+A KNN query can have a filter that contains a text or tag clause, such as `(shoes)=>[KNN ...]` or `(@color:{red})=>[KNN ...]`.
 `WITHSCORES` then reports the score of the filter, and the results are sorted by that score.
 
 A vector range clause (`@<field>:[VECTOR_RANGE ...]`) contributes 0 to the score.
@@ -218,7 +218,7 @@ A clause contributes 0 to the score in these cases:
 
 - The clause is a numeric range, a vector range, or a negation.
 - The clause is a tag clause and the index has no `TEXT` field.
-- The query is a KNN query and its filter has no text clause. `WITHSCORES` then reports 0, and the distance is returned separately.
+- The query is a KNN query and its filter has no text or tag clause. `WITHSCORES` then reports 0, and the distance is returned separately.
 
 # Where Scores Appear and How They Are Used
 
@@ -232,12 +232,12 @@ These options return scores to the client:
 | `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
 
 `SCORER <scorer>` selects the scoring function.
-The only supported value is `BM25STD`, which is also the default. Any other value returns an error.
+The only supported value now is `BM25STD`, which is also the default. Any other value returns an error.
 
 ## How Scores Order Results
 
 For the default sort order of each query shape, see the table in [What Is a Score?](#what-is-a-score).
-In a KNN query with a text filter, such as `(shoes)=>[KNN 10 @vec $v]`, the KNN clause selects the nearest keys, and the text score then orders them.
+In a KNN query with a text or tag clause in its filter, such as `(shoes)=>[KNN 10 @vec $v]`, the KNN clause selects the nearest keys, and the score of the filter then orders them.
 
 The sort occurs before `LIMIT`.
 Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
@@ -269,9 +269,10 @@ $$
 $$
 
 The `$weight` attribute multiplies the score of the clause that it is attached to.
-The weight must be greater than 0.
-A weight on a term is the `weight` in the term formula.
-A weight on a group multiplies the sum of the group.
+The weight must be 0 or greater. A clause with a weight of 0 still filters keys, but adds 0 to the score.
+A weight on a single term is the `weight` in the term formula for the word as written in the query.
+If the term is stemmed, the other forms of the word keep a weight of 1. See [Stemming Adds an Exact-Match Bonus](#stemming-adds-an-exact-match-bonus).
+A weight on a group of terms multiplies the sum of the group.
 
 ## Document Score
 
@@ -509,9 +510,8 @@ The scores of `p:2` and `p:3`, which have `jacket` only in the body, stay at 0.3
 
 A numeric clause contributes 0, so it filters keys without a change to their scores.
 A tag clause adds its own score, so it can change the order of the results.
-A `$weight` of 0 is not supported.
-
-To filter by a tag without a change to the scores, filter in an `FT.AGGREGATE` stage instead of in the query:
+To filter by a tag without a change to the scores, give the tag clause `$weight: 0`, for example `jacket (@color:{red}) => {$weight: 0}`.
+You can also filter in an `FT.AGGREGATE` stage instead of in the query:
 
 ```
 > FT.AGGREGATE p jacket ADDSCORES LOAD 2 @__key @color FILTER "@color == 'red'" SORTBY 2 @__score DESC

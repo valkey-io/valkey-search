@@ -194,6 +194,7 @@ A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the dista
 `WITHSCORES` reports 0 for each result of a KNN query whose filter has no text clause.
 This includes a filter with only tag or numeric clauses, such as `(@color:{red})=>[KNN ...]`.
 The results of these queries stay sorted by distance.
+This behavior differs from Redis Search and is tracked as a bug in [issue #1414](https://github.com/valkey-io/valkey-search/issues/1414).
 A KNN query can have a filter that contains a text clause, such as `(shoes)=>[KNN ...]`.
 `WITHSCORES` then reports the score of the filter, and the results are sorted by that score.
 

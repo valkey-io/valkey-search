@@ -380,10 +380,9 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
         auto key_iter = existing->GetKeyIterator();
         if (key_iter.SkipForwardKey(key) &&
             key_iter.ContainsFields(stem_text_field_mask_)) {
-          std::string stem =
-              stem_filter ? stem_filter->GetStemRoot(word_str, min_stem_size_,
-                                                     unit)
-                          : word_str;
+          std::string stem = stem_filter ? stem_filter->GetStemRoot(
+                                               word_str, min_stem_size_, unit)
+                                         : word_str;
           if (stem != word_str) {
             stem_roots.insert(std::move(stem));
           }

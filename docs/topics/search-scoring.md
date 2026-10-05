@@ -191,7 +191,9 @@ A smaller distance is a better match.
 See [`FT.CREATE`](../commands/ft.create.md) for the distance formulas of `L2`, `IP`, and `COSINE`.
 
 A KNN query (`*=>[KNN ...]`) sorts its results by distance and returns the distance in the `__<field>_score` field.
-`WITHSCORES` reports 0 for each result of a pure KNN query.
+`WITHSCORES` reports 0 for each result of a KNN query whose filter has no text clause.
+This includes a filter with only tag or numeric clauses, such as `(@color:{red})=>[KNN ...]`.
+The results of these queries stay sorted by distance.
 A KNN query can have a filter that contains a text clause, such as `(shoes)=>[KNN ...]`.
 `WITHSCORES` then reports the score of the filter, and the results are sorted by that score.
 
@@ -204,7 +206,7 @@ A clause contributes 0 to the score in these cases:
 
 - The clause is a numeric range, a vector range, or a negation.
 - The clause is a tag clause and the index has no `TEXT` field.
-- The query is a pure KNN query. `WITHSCORES` then reports 0, and the distance is returned separately.
+- The query is a KNN query and its filter has no text clause. `WITHSCORES` then reports 0, and the distance is returned separately.
 
 # Where Scores Appear and How They Are Used
 
@@ -214,7 +216,7 @@ These options return scores to the client:
 | :--- | :--- | :--- |
 | [`FT.SEARCH`](../commands/ft.search.md) | `WITHSCORES` | The score follows each key name in the reply. |
 | [`FT.AGGREGATE`](../commands/ft.aggregate.md) | `ADDSCORES` | Each record contains a `__score` field. Later stages can use it as `@__score`. |
-| [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Each record contains the fused score, under `__score` or under the alias that you name. |
+| [`FT.HYBRID`](../commands/ft.hybrid.md) | `COMBINE ... YIELD_SCORE_AS` | Without a `LOAD` clause, each record contains the fused score, under `__score` or under the alias that you name. With a `LOAD` clause, the fused score appears only if you name it with `YIELD_SCORE_AS` or load `@__score`. |
 | `FT.SEARCH` with a KNN query | `AS <name>` | Each result contains the vector distance, under `__<field>_score` or under `<name>`. A smaller distance is a better match. See [Vector Fields](#vector-fields). |
 
 `SCORER <scorer>` selects the scoring function.
@@ -287,7 +289,10 @@ Valkey Search computes the score of a key from the bottom of the tree to the top
 The [`FT.HYBRID`](../commands/ft.hybrid.md) command runs two searches on one index: a text, tag, or numeric search and a vector search.
 It then fuses the two result lists into one list.
 The `SEARCH` arm computes scores as `FT.SEARCH` does, with the `BM25STD` scorer.
-The `VSIM` arm converts each vector distance into a similarity, so that a higher value is a better match in both arms.
+The `VSIM` arm converts each vector distance into a similarity.
+For `L2` and `COSINE`, a higher similarity is a better match.
+For `IP`, the similarity is `(1 + distance) / 2`, so a higher value is a worse match.
+`RRF` uses ranks and is not affected, but `LINEAR` and `FUNCTION` use the value directly.
 
 The `COMBINE` clause selects how the two arms fuse:
 

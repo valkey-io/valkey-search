@@ -7,15 +7,20 @@
 
 #include "src/indexes/vector_hnsw.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <mutex>  // NOLINT(build/c++11)
 #include <optional>
+#include <queue>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
@@ -321,6 +326,66 @@ class CancelCondition : public hnswlib::BaseCancellationFunctor {
   cancel::Token &token_;
 };
 
+// Stop condition of the HNSW range traversal. A node is expanded while it is
+// within `shell` of the query or could still improve the `ef` nearest results,
+// so the walk first homes in on the query as an ef-bounded KNN search does,
+// whatever the radius, and then covers the ball. Results within the shell are
+// kept, at most `max_results` of the nearest; once that many are held, the walk
+// only looks for nearer ones.
+class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
+ public:
+  RangeStopCondition(float shell, size_t ef, size_t max_results)
+      : shell_(shell),
+        ef_(std::max<size_t>(ef, 1)),
+        max_results_(max_results) {}
+
+  void add_point_to_result(hnswlib::labeltype, const void *,
+                           float dist) override {
+    ++num_results_;
+    if (nearest_.size() < ef_) {
+      nearest_.push(dist);
+    } else if (dist < nearest_.top()) {
+      nearest_.pop();
+      nearest_.push(dist);
+    }
+  }
+  void remove_point_from_result(hnswlib::labeltype, const void *,
+                                float) override {
+    --num_results_;
+  }
+  bool should_stop_search(float candidate_dist, float lower_bound) override {
+    if (num_results_ >= max_results_ && candidate_dist > lower_bound) {
+      return true;
+    }
+    return candidate_dist > shell_ && candidate_dist > EfBound();
+  }
+  bool should_consider_candidate(float dist, float lower_bound) override {
+    if (num_results_ >= max_results_ && dist >= lower_bound) {
+      return false;
+    }
+    return dist <= shell_ || dist < EfBound();
+  }
+  bool should_remove_extra() override { return num_results_ > max_results_; }
+  void filter_results(
+      std::vector<std::pair<float, hnswlib::labeltype>> &results) override {
+    while (!results.empty() && results.back().first > shell_) {
+      results.pop_back();
+    }
+  }
+
+ private:
+  float EfBound() const {
+    return nearest_.size() < ef_ ? std::numeric_limits<float>::max()
+                                 : nearest_.top();
+  }
+
+  const float shell_;
+  const size_t ef_;
+  const size_t max_results_;
+  size_t num_results_{0};
+  std::priority_queue<float> nearest_;  // The ef nearest distances, max on top.
+};
+
 template <typename T>
 absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::Search(
     absl::string_view query, uint64_t count, cancel::Token &cancellation_token,
@@ -362,10 +427,16 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
   const size_t max_candidates = static_cast<size_t>(
       options::GetMaxNonVectorSearchResultsFetched().GetValue());
 
-  // cap=0 means "no limit, use exhaustive scan" — same as the original
-  // searchKnn path where cap=0 always fell back to SearchRangeExhaustive.
+  // A cap of 0 fills the fetch at once: scan exhaustively.
   if (max_candidates == 0) {
     query::RecordNonVectorResultsFetchedLimited();
+    return this->SearchRangeExhaustive(query, radius, cancellation_token,
+                                       filter.get());
+  }
+  // COSINE distances clamp into [0, 2], so radius 2 holds every key: scan,
+  // rather than walk the whole graph and depend on the shell reaching
+  // unclamped distances just above 2.
+  if (this->normalize_ && radius >= 2.0f) {
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                        filter.get());
   }
@@ -376,73 +447,50 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
           ? CalcReciprocalMagnitude(nq.view, this->GetVectorDataType())
           : kDefaultMagnitude;
 
-  // Use EpsilonSearchStopCondition with a shell of radius*(1+epsilon) so the
-  // HNSW beam search explores past the ball boundary (bridging connectivity
-  // gaps) but only emits vectors within the exact radius.
-  //
-  // Distance-space adjustments by metric:
-  //   L2   — hnswlib stores ‖q−v‖².  Shell threshold: (radius*(1+ε))².
-  //           Emit threshold: radius².  ClampCosineDistance is identity for L2.
-  //   IP/Cosine — hnswlib stores 1−dot (linear).  Shell threshold:
-  //   radius*(1+ε).
-  //           Emit threshold: radius.  ClampCosineDistance clamps [0,2] for
-  //           cosine-normalised vectors.
-  const bool is_l2 = (this->GetDistanceMetric() ==
-                      data_model::DistanceMetric::DISTANCE_METRIC_L2);
-  const float shell_radius =
-      is_l2 ? (radius * (1.0f + epsilon)) * (radius * (1.0f + epsilon))
-            : radius * (1.0f + epsilon);
-  const float emit_threshold = is_l2 ? radius * radius : radius;
-
+  // The traversal also expands nodes within radius * (1 + epsilon), so paths
+  // that leave the ball briefly near its boundary are still followed; only keys
+  // within the radius are emitted. Distances are in the radius's own space for
+  // every metric (squared for L2).
   QueryVector embedding(VectorRecord::Construct(nq.view, reciprocal_magnitude,
                                                 GetVectorAllocator()),
                         nq.view.size(), normalize_, GetVectorDataType());
-
   std::vector<std::pair<float, hnswlib::labeltype>> raw_results;
-  bool capped = false;
   try {
-    // min_num_candidates=ef ensures the beam traverses at least ef nodes
-    // before applying the epsilon cutoff, matching regular KNN exploration
-    // depth. Clamped to max_candidates to satisfy the stop_condition assert.
-    const size_t min_candidates = std::min(algo_->ef_, max_candidates);
-    hnswlib::EpsilonSearchStopCondition<float> stop_condition(
-        shell_radius,
-        /*min_num_candidates=*/min_candidates,
-        /*max_num_candidates=*/max_candidates);
-    raw_results = algo_->searchStopConditionClosest(embedding, stop_condition,
-                                                    filter.get());
-    // Capped when the stop condition hit max_num_candidates and the farthest
-    // collected result is still within the emit threshold — more in-radius
-    // docs may be unenumerated.
-    capped =
-        (raw_results.size() >= max_candidates) && !raw_results.empty() &&
-        this->ClampCosineDistance(raw_results.back().first) <= emit_threshold;
+    CancelCondition cancel_condition(cancellation_token);
+    RangeStopCondition stop_condition(radius * (1.0f + epsilon), algo_->ef_,
+                                      max_candidates);
+    raw_results = algo_->searchStopConditionClosest(
+        embedding, stop_condition, filter.get(), &cancel_condition);
   } catch (const std::exception &e) {
     Metrics::GetStats().hnsw_search_exceptions_cnt.fetch_add(
         1, std::memory_order_relaxed);
     return absl::InternalError(e.what());
   }
+  // A cancelled walk returns the keys in range it reached, as Search() and the
+  // scan do; the reply is a timeout error unless partial results are enabled.
+  const bool cancelled = cancellation_token->IsCancelled();
 
-  if (cancellation_token->IsCancelled()) {
-    return std::vector<Neighbor>{};
-  }
-
-  if (capped) {
+  // A full fetch whose farthest result is still in range may have left keys
+  // in range unvisited; scan exhaustively, as FLAT does.
+  if (!cancelled && raw_results.size() >= max_candidates &&
+      this->ClampCosineDistance(raw_results.back().first) <= radius) {
     query::RecordNonVectorResultsFetchedLimited();
     return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                        filter.get());
   }
 
-  // Emit only vectors within the exact radius.
   std::vector<Neighbor> neighbors;
   neighbors.reserve(raw_results.size());
   for (const auto &[dist, label] : raw_results) {
-    if (cancellation_token->IsCancelled()) {
-      break;
-    }
-    // NaN/Inf distances indicate a corrupted stored vector; fall back to the
-    // exhaustive scan so we don't silently drop in-range keys.
-    if (scoring::IsNaN(dist) || scoring::IsInf(dist)) {
+    // NaN breaks the traversal's ordering, and +inf can stand for an
+    // unnormalized infinite stored vector, so the walk cannot be trusted to
+    // have reached every key in range. An IP -inf is an ordinary distance,
+    // within every radius. IsNaN/IsInf/signbit read the bits, unaffected by
+    // -ffast-math.
+    if (scoring::IsNaN(dist) || (scoring::IsInf(dist) && !std::signbit(dist))) {
+      if (cancelled) {
+        continue;
+      }
       query::RecordNonVectorResultsFetchedLimited();
       return this->SearchRangeExhaustive(query, radius, cancellation_token,
                                          filter.get());

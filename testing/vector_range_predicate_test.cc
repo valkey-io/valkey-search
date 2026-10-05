@@ -74,6 +74,7 @@ TEST_F(VectorRangePredicateTest, ConstructionWithoutOptionalParameters) {
   EXPECT_EQ(pred.GetVectorParamName(), "vec_param");
   EXPECT_FALSE(pred.GetScoreAs().has_value());
   EXPECT_FALSE(pred.GetEpsilon().has_value());
+  EXPECT_FLOAT_EQ(pred.GetSearchEpsilon(), 0.01f);
 }
 
 TEST_F(VectorRangePredicateTest, ConstructionWithScoreAsOnly) {
@@ -93,6 +94,7 @@ TEST_F(VectorRangePredicateTest, ConstructionWithEpsilonOnly) {
   EXPECT_FALSE(pred.GetScoreAs().has_value());
   ASSERT_TRUE(pred.GetEpsilon().has_value());
   EXPECT_DOUBLE_EQ(pred.GetEpsilon().value(), 0.1);
+  EXPECT_FLOAT_EQ(pred.GetSearchEpsilon(), 0.1f);
 }
 
 TEST_F(VectorRangePredicateTest, ZeroRadius) {

@@ -184,7 +184,7 @@ class VectorRangeFetcher : public indexes::EntriesFetcherBase {
   class Iterator : public indexes::EntriesFetcherIteratorBase {
    public:
     explicit Iterator(const std::vector<indexes::Neighbor> &neighbors)
-        : neighbors_(neighbors) {}
+        : neighbors_(neighbors), idx_(0) {}
     bool Done() const override { return idx_ >= neighbors_.size(); }
     void Next() override { ++idx_; }
     const InternedStringPtr &operator*() const override {
@@ -193,7 +193,7 @@ class VectorRangeFetcher : public indexes::EntriesFetcherBase {
 
    private:
     const std::vector<indexes::Neighbor> &neighbors_;
-    size_t idx_{0};
+    size_t idx_;
   };
 
   std::vector<indexes::Neighbor> neighbors_;
@@ -498,13 +498,10 @@ size_t EvaluateFilterAsPrimary(
         auto *vector_index =
             dynamic_cast<indexes::VectorBase *>(index_result.value().get());
         if (vector_index != nullptr && !vr_pred->GetQueryVector().empty()) {
-          constexpr float kDefaultVrEpsilon = 0.01f;
-          const float epsilon =
-              vr_pred->GetEpsilon().value_or(kDefaultVrEpsilon);
           auto range_result = vector_index->SearchRange(
               vr_pred->GetQueryVector(),
               static_cast<float>(vr_pred->GetRadius()),
-              parameters.cancellation_token, epsilon);
+              parameters.cancellation_token, vr_pred->GetSearchEpsilon());
           if (range_result.ok()) {
             auto fetcher =
                 std::make_unique<VectorRangeFetcher>(std::move(*range_result));
@@ -815,16 +812,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
       auto *vector_index =
           dynamic_cast<indexes::VectorBase *>(index_result.value().get());
       if (vector_index != nullptr) {
-        // Forward epsilon to SearchRange so HNSW can expand its exploration
-        // shell past the ball boundary and bridge connectivity gaps.
-        // Default matches RediSearch's behaviour when the client omits EPSILON.
-        constexpr float kDefaultVrEpsilon = 0.01f;
-        const float epsilon = vr_pred->GetEpsilon().value_or(kDefaultVrEpsilon);
         VMSDK_ASSIGN_OR_RETURN(
             auto raw_neighbors,
             vector_index->SearchRange(vr_pred->GetQueryVector(),
                                       static_cast<float>(vr_pred->GetRadius()),
-                                      parameters.cancellation_token, epsilon));
+                                      parameters.cancellation_token,
+                                      vr_pred->GetSearchEpsilon()));
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
         std::sort(raw_neighbors.begin(), raw_neighbors.end(),
@@ -1037,9 +1030,7 @@ using ResolvedLeaves = absl::flat_hash_map<const Predicate *, ResolvedLeaf>;
 // to the `~0ULL` sentinel, so LookupKey skips the per-position scan. Field
 // numbers are dense from 0 (TextIndexSchema::AllocateTextFieldNumber).
 uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields) {
-  if (num_fields == 0 || num_fields >= 64) {
-    return field_mask;
-  }
+  if (num_fields == 0 || num_fields >= 64) return field_mask;
   const uint64_t all_fields = (1ULL << num_fields) - 1;
   return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
 }
@@ -1165,9 +1156,7 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // FindPostingsTarget; an absent word adds no group.
       auto add_word_group = [&](absl::string_view word, uint64_t field_mask) {
         auto postings = prefix.FindPostingsTarget(word);
-        if (!postings) {
-          return;
-        }
+        if (!postings) return;
         const uint32_t dt =
             std::min<uint32_t>(postings->GetKeyCount(), total_docs);
         TermGroup group;
@@ -1231,13 +1220,9 @@ void ResolveLeaves(const Predicate *predicate, uint32_t total_docs,
       // dynamic_cast guards against a non-TagPredicate kTag leaf (e.g. a test
       // mock), which resolves to an empty leaf and contributes 0.
       auto tag_pred = dynamic_cast<const TagPredicate *>(predicate);
-      if (!tag_pred || resolved.contains(tag_pred)) {
-        break;
-      }
+      if (!tag_pred || resolved.contains(tag_pred)) break;
       const indexes::Tag *tag_index = tag_pred->GetIndex();
-      if (tag_index == nullptr) {
-        break;
-      }
+      if (tag_index == nullptr) break;
 
       // A tag value is scored as a BM25 term with F ≡ 1: IDF over the number of
       // documents carrying that value (dt). Resolve dt + IDF once per value
@@ -1326,9 +1311,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
           sum += *child_score;
         }
       }
-      if (!matched) {
-        return std::nullopt;
-      }
+      if (!matched) return std::nullopt;
       return predicate->GetWeight() * sum;
     }
     case PredicateType::kText: {
@@ -1339,9 +1322,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // contribution rather than a non-match. This avoids a per-candidate
       // dynamic_cast.
       auto it = score_ctx.resolved.find(predicate);
-      if (it == score_ctx.resolved.end()) {
-        return 0.0f;
-      }
+      if (it == score_ctx.resolved.end()) return 0.0f;
 
       // Expansion leaf: contribute exactly ONE matched term's BM25 (its own IDF
       // + own F), never the sum. Pick the first expansion term whose posting
@@ -1363,9 +1344,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       }
 
       const auto &leaf = std::get<TermLeaf>(it->second);
-      if (leaf.groups.empty()) {
-        return std::nullopt;
-      }
+      if (leaf.groups.empty()) return std::nullopt;
 
       // A stemmed term sums several independent BM25 leaves, each with its own
       // IDF and its own F (term frequency summed across that group's postings).
@@ -1417,9 +1396,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // A tag leaf is always resolved (unlike non-scored text predicates), but
       // guard defensively: an unresolved or index-less leaf contributes 0
       // without rejecting the already-admitted candidate.
-      if (it == score_ctx.resolved.end()) {
-        return 0.0f;
-      }
+      if (it == score_ctx.resolved.end()) return 0.0f;
       const auto &leaf = std::get<TagLeaf>(it->second);
       if (leaf.tag_index == nullptr ||
           (leaf.tag_values.empty() && leaf.tag_prefixes.empty())) {
@@ -1474,17 +1451,13 @@ void ScoreTextQuery(const IndexSchema &index_schema,
                     const indexes::scoring::Scorer *scorer,
                     std::vector<indexes::BorrowedNeighbor> &candidates) {
   CHECK(scorer != nullptr);
-  if (candidates.empty() || options::IsScoringDisabled()) {
-    return;
-  }
+  if (candidates.empty() || options::IsScoringDisabled()) return;
 
   const uint32_t total_docs = index_schema.GetIndexKeyInfoSize();
   // Candidates came from this index, so total_docs should be > 0; degrade to
   // "no scores" rather than aborting if the invariant ever breaks (mirrors
   // SingleDocumentScorer). Candidates keep their initial 0.0 score.
-  if (total_docs == 0) {
-    return;
-  }
+  if (total_docs == 0) return;
 
   // Resolve each term leaf's posting list and per-term weight once; the
   // per-document walk below then only does the cheap per-key lookup. A

@@ -15,7 +15,6 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/strings/ascii.h"
-#include "absl/synchronization/mutex.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/fuzzy.h"
@@ -32,10 +31,11 @@ uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields) {
   return (field_mask & all_fields) == all_fields ? ~0ULL : field_mask;
 }
 
-ResolvedLeafCache::ResolvedLeafCache(CorpusStats stats,
-                                     const indexes::scoring::Scorer *scorer,
-                                     LockMode mode)
-    : stats_(stats),
+ResolvedLeafCache::ResolvedLeafCache(
+    const indexes::text::TextIndexSchema *text_index_schema, CorpusStats stats,
+    const indexes::scoring::Scorer *scorer, LockMode mode)
+    : text_index_schema_(text_index_schema),
+      stats_(stats),
       scorer_(scorer),
       mode_(mode),
       needs_doc_len_(scorer->NeedsDocumentLength()),
@@ -44,18 +44,17 @@ ResolvedLeafCache::ResolvedLeafCache(CorpusStats stats,
                              static_cast<float>(stats.total_docs)
                        : 0.0f) {}
 
-size_t KeyCount(const WordPostings &word) {
-  std::optional<absl::MutexLock> lock;
-  if (word.lock != nullptr) lock.emplace(word.lock);
-  return word.postings->GetKeyCount();
+size_t ResolvedLeafCache::KeyCount(const WordPostings &word) const {
+  return text_index_schema_->WithWordLock(
+      word.word, MainThread(), [&] { return word.postings->GetKeyCount(); });
 }
 
-std::optional<indexes::text::PostingDocStats> ProbeDocStats(
+std::optional<indexes::text::PostingValue> ResolvedLeafCache::Probe(
     const WordPostings &word, BorrowedInternedStringPtr key,
-    uint64_t field_mask) {
-  std::optional<absl::MutexLock> lock;
-  if (word.lock != nullptr) lock.emplace(word.lock);
-  return word.postings->GetPostingDocStats(key, field_mask);
+    uint64_t field_mask) const {
+  return text_index_schema_->WithWordLock(word.word, MainThread(), [&] {
+    return word.postings->LookupKey(key, field_mask);
+  });
 }
 
 float ResolvedLeafCache::Idf(size_t dt) const {
@@ -64,19 +63,13 @@ float ResolvedLeafCache::Idf(size_t dt) const {
        static_cast<uint32_t>(std::min<size_t>(dt, stats_.total_docs))});
 }
 
-WordPostings ResolvedLeafCache::Lookup(
-    const indexes::text::TextIndexSchema &schema,
-    absl::string_view word) const {
-  WordPostings result{std::string(word), nullptr};
-  if (mode_ == LockMode::kBackground) {
-    result.postings =
-        schema.GetTextIndex()->GetPrefix().FindPostingsTarget(word);
-    return result;
-  }
-  result.postings = schema.LookupGlobalPostings(word);
-  if (mode_ == LockMode::kMainThread)
-    result.lock = &schema.GetWordLocks().Get(word);
-  return result;
+WordPostings ResolvedLeafCache::Lookup(absl::string_view word) const {
+  return {
+      std::string(word),
+      MainThread()
+          ? text_index_schema_->LookupGlobalPostings(word)
+          : text_index_schema_->GetTextIndex()->GetPrefix().FindPostingsTarget(
+                word)};
 }
 
 ResolvedLeaf &ResolvedLeafCache::GetOrResolve(const Predicate *predicate) {
@@ -109,10 +102,10 @@ float ResolvedLeafCache::OfferExpansionTerm(ExpansionLeaf &leaf,
   return leaf.representative->idf;
 }
 
-std::optional<WordPostings> FindExpansionMatch(
+std::optional<WordPostings> ResolvedLeafCache::FindExpansionMatch(
     const TextPredicate &predicate, ExpansionLeaf::Kind kind,
-    const indexes::text::TextIndex &per_key_index, const InternedStringPtr &key,
-    indexes::text::RaxTargetMutexPool *word_locks) {
+    const indexes::text::TextIndex &per_key_index,
+    const InternedStringPtr &key) const {
   const uint64_t field_mask = predicate.GetFieldMask();
   const uint32_t max_words = options::GetMaxTermExpansions().GetValue();
   std::optional<WordPostings> found;
@@ -121,15 +114,11 @@ std::optional<WordPostings> FindExpansionMatch(
       [&](absl::string_view word,
           indexes::text::InvasivePtr<indexes::text::Postings> postings) {
         if (!postings) return false;
-        absl::Mutex *bucket = word_locks ? &word_locks->Get(word) : nullptr;
-        std::optional<absl::MutexLock> lock;
-        if (bucket != nullptr) lock.emplace(bucket);
-        auto key_iter = postings->GetKeyIterator();
-        if (!key_iter.SkipForwardKey(key) ||
-            !key_iter.ContainsFields(field_mask)) {
+        WordPostings candidate{std::string(word), std::move(postings)};
+        if (!Probe(candidate, BorrowedInternedStringPtr(key), field_mask)) {
           return false;
         }
-        found = WordPostings{std::string(word), std::move(postings), bucket};
+        found = std::move(candidate);
         return true;
       };
   const absl::string_view term = predicate.GetTextString();
@@ -158,13 +147,14 @@ std::optional<WordPostings> FindExpansionMatch(
       break;
     }
     case ExpansionLeaf::Kind::kFuzzy: {
-      auto expansion = indexes::text::FuzzySearch::Search(
+      indexes::text::FuzzySearch::Search(
           per_key_index.GetPrefix(), term,
           static_cast<const FuzzyPredicate &>(predicate).GetDistance(),
-          max_words, /*words_only=*/true);
-      for (size_t i = 0; i < expansion.postings.size(); ++i) {
-        if (probe(expansion.words[i], std::move(expansion.postings[i]))) break;
-      }
+          max_words,
+          [&](absl::string_view word,
+              indexes::text::InvasivePtr<indexes::text::Postings> postings) {
+            return !probe(word, std::move(postings));
+          });
       break;
     }
   }
@@ -177,7 +167,7 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
   // pays a dynamic_cast. Infix is unimplemented (its Evaluate CHECKs), so it
   // never reaches this point; a stray one resolves to monostate.
   auto text_index_schema = predicate->GetTextIndexSchema();
-  CHECK(text_index_schema != nullptr);
+  CHECK(text_index_schema.get() == text_index_schema_);
   const uint8_t num_text_fields = text_index_schema->GetNumTextFields();
 
   auto expansion = [&](ExpansionLeaf::Kind kind) {
@@ -206,7 +196,7 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
   // adds no group.
   auto add_word_group = [&](absl::string_view word, uint64_t field_mask,
                             TermGroup::Kind kind) {
-    WordPostings found = Lookup(*text_index_schema, word);
+    WordPostings found = Lookup(word);
     if (!found.postings) return;
     TermGroup group;
     group.kind = kind;
@@ -233,35 +223,34 @@ ResolvedLeaf ResolvedLeafCache::ResolveText(
     // Parents of the stem root: every surface word that stems to it with
     // surface != root (a self-stemming word is never added to the stem tree,
     // so the root literal is not among them). Includes the query word.
-    absl::InlinedVector<absl::string_view,
-                        indexes::text::kStemVariantsInlineCapacity>
-        stem_variants;
-    uint32_t stem_distinct_docs = 0;
-    const std::string stemmed = text_index_schema->GetAllStemVariants(
-        word, stem_variants, stem_field_mask, /*lock_needed=*/true,
-        &stem_distinct_docs);
+    text_index_schema->WithStemParents(
+        word, MainThread(),
+        [&](const std::string &stemmed, absl::Span<const std::string> parents,
+            uint32_t distinct_docs) {
+          // Leaf 2: the stem root literal, only when it differs from the query
+          // word (else it is Leaf 1) and is itself indexed.
+          if (stemmed != word) {
+            add_word_group(stemmed,
+                           ScoringFieldMask(stem_field_mask, num_text_fields),
+                           TermGroup::Kind::kStemRoot);
+          }
 
-    // Leaf 2: the stem root literal, only when it differs from the query word
-    // (else it is Leaf 1) and is itself indexed.
-    if (stemmed != word) {
-      add_word_group(stemmed,
-                     ScoringFieldMask(stem_field_mask, num_text_fields),
-                     TermGroup::Kind::kStemRoot);
-    }
-
-    // Leaf 3: the stem inflection group. F sums the per-doc frequencies of
-    // every inflection; dt is the distinct doc count counted at ingestion.
-    TermGroup stem;
-    stem.kind = TermGroup::Kind::kInflections;
-    for (const auto &variant : stem_variants) {
-      WordPostings found = Lookup(*text_index_schema, variant);
-      if (found.postings) stem.words.push_back(std::move(found));
-    }
-    if (!stem.words.empty()) {
-      stem.idf = Idf(stem_distinct_docs);
-      stem.field_mask = ScoringFieldMask(stem_field_mask, num_text_fields);
-      leaf.groups.push_back(std::move(stem));
-    }
+          // Leaf 3: the stem inflection group. F sums the per-doc frequencies
+          // of every inflection; dt is the distinct doc count counted at
+          // ingestion.
+          TermGroup stem;
+          stem.kind = TermGroup::Kind::kInflections;
+          for (const auto &parent : parents) {
+            WordPostings found = Lookup(parent);
+            if (found.postings) stem.words.push_back(std::move(found));
+          }
+          if (!stem.words.empty()) {
+            stem.idf = Idf(distinct_docs);
+            stem.field_mask =
+                ScoringFieldMask(stem_field_mask, num_text_fields);
+            leaf.groups.push_back(std::move(stem));
+          }
+        });
   }
   return leaf;
 }
@@ -298,8 +287,8 @@ ResolvedLeaf ResolvedLeafCache::ResolveTag(const Predicate *predicate) const {
     TagLeaf::Value resolved{value};
     size_t dt = 0;
     if (mode_ == LockMode::kBackground) {
-      resolved.handle = tag_index->LookupValue(value);
-      if (resolved.handle) dt = resolved.handle->DocCount();
+      resolved.bag = tag_index->LookupValue(value);
+      if (resolved.bag) dt = resolved.bag->size();
     } else {
       dt = tag_index->GetTagValueDocCount(value, /*lock=*/true);
     }
@@ -314,8 +303,8 @@ EvaluationResult EvaluateTagLeaf(const TagPredicate &predicate,
                                  const TagLeaf &leaf,
                                  const InternedStringPtr &key) {
   for (const TagLeaf::Value &value : leaf.tag_values) {
-    CHECK(value.handle.has_value()) << "tag bags are background-only";
-    if (value.handle->Contains(BorrowedInternedStringPtr(key))) {
+    CHECK(value.bag.has_value()) << "tag bags are background-only";
+    if (value.bag->contains(BorrowedInternedStringPtr(key))) {
       return EvaluationResult(true);
     }
   }
@@ -325,7 +314,8 @@ EvaluationResult EvaluateTagLeaf(const TagPredicate &predicate,
   return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
 }
 
-EvaluationResult EvaluateTermLeaf(const TermPredicate &predicate,
+EvaluationResult EvaluateTermLeaf(const ResolvedLeafCache &cache,
+                                  const TermPredicate &predicate,
                                   const TermLeaf &leaf,
                                   const InternedStringPtr &key,
                                   bool require_positions) {
@@ -334,9 +324,7 @@ EvaluationResult EvaluateTermLeaf(const TermPredicate &predicate,
   const uint64_t field_mask = predicate.GetFieldMask();
   const uint64_t stem_field_mask =
       field_mask & predicate.GetTextIndexSchema()->GetStemTextFieldMask();
-  absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                      indexes::text::kWordExpansionInlineCapacity>
-      key_iterators;
+  indexes::text::KeyTermIterator::KeyIterators key_postings;
   bool found_original = false;
   // Groups are stored in the order TermPredicate::Evaluate probes (original,
   // stem root, inflections), which TermIterator relies on to partition them.
@@ -344,23 +332,16 @@ EvaluationResult EvaluateTermLeaf(const TermPredicate &predicate,
     const bool original = group.kind == TermGroup::Kind::kOriginal;
     const uint64_t mask = original ? field_mask : stem_field_mask;
     for (const WordPostings &word : group.words) {
-      // A retained iterator would outlive a per-word lock; positional queries
-      // run under LockMode::kMainThreadWordLocksHeld, where `lock` is unset.
-      CHECK(word.lock == nullptr || !require_positions);
-      std::optional<absl::MutexLock> lock;
-      if (word.lock != nullptr) lock.emplace(word.lock);
-      auto key_iter = word.postings->GetKeyIterator();
-      if (!key_iter.SkipForwardKey(key) || !key_iter.ContainsFields(mask)) {
-        continue;
-      }
+      auto value = cache.Probe(word, BorrowedInternedStringPtr(key), mask);
+      if (!value) continue;
       if (!require_positions) return EvaluationResult(true);
       found_original |= original;
-      key_iterators.emplace_back(std::move(key_iter));
+      key_postings.emplace_back(key, *value);
     }
   }
-  if (key_iterators.empty()) return EvaluationResult(false);
-  auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, require_positions, stem_field_mask,
+  if (key_postings.empty()) return EvaluationResult(false);
+  auto iterator = std::make_unique<indexes::text::KeyTermIterator>(
+      std::move(key_postings), field_mask, require_positions, stem_field_mask,
       found_original);
   if (!iterator->IsIteratorValid()) return EvaluationResult(false);
   return {true, std::move(iterator)};
@@ -372,13 +353,13 @@ EvaluationResult EvaluateTextLeaf(
     absl::FunctionRef<const indexes::text::TextIndex *()> per_key_index) {
   if (const auto *term =
           std::get_if<TermLeaf>(&cache.GetOrResolve(&predicate))) {
-    return EvaluateTermLeaf(static_cast<const TermPredicate &>(predicate),
+    return EvaluateTermLeaf(cache,
+                            static_cast<const TermPredicate &>(predicate),
                             *term, key, require_positions);
   }
   const auto *index = per_key_index();
   if (index == nullptr) return EvaluationResult(false);
-  return predicate.Evaluate(*index, key, require_positions,
-                            cache.WalkLocks(*predicate.GetTextIndexSchema()));
+  return predicate.Evaluate(*index, key, require_positions, cache.MainThread());
 }
 
 }  // namespace valkey_search::query

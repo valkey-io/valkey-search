@@ -459,43 +459,30 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
 }
 
-std::string TextIndexSchema::GetAllStemVariants(
-    absl::string_view search_term,
-    absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-        &words_to_search,
-    uint64_t stem_enabled_mask, bool lock_needed, uint32_t *out_distinct_docs) {
-  // Stem the search term
-  std::string stemmed(search_term);
+void TextIndexSchema::WithStemParents(
+    absl::string_view word, bool lock,
+    absl::FunctionRef<void(const std::string &, absl::Span<const std::string>,
+                           uint32_t)>
+        fn) const {
+  std::string stemmed(word);
   lexer_.StemWordInPlace(stemmed, lexer_.GetStemmer());
 
   std::optional<absl::ReaderMutexLock> stem_guard;
-  if (lock_needed) {
-    stem_guard.emplace(&stem_tree_mutex_);
-  }
+  if (lock) stem_guard.emplace(&stem_tree_mutex_);
 
+  absl::Span<const std::string> parents;
+  uint32_t distinct_docs = 0;
   auto stem_iter = stem_tree_.GetWordIterator(stemmed);
-  // GetWordIterator positions at the first word with this prefix, check if
-  // exact match
   if (!stem_iter.Done() && stem_iter.GetWord() == stemmed) {
-    const auto &parents_ptr = stem_iter.GetStemParentsTarget();
-    if (parents_ptr) {
-      const auto &parents = parents_ptr->parents;
-      // The whole group's df, even when max_expansions truncates the words.
-      if (out_distinct_docs != nullptr) {
-        *out_distinct_docs = parents_ptr->distinct_docs;
-      }
-      uint32_t max_expansions = options::GetMaxTermExpansions().GetValue();
-      uint32_t count = 0;
-      for (const auto &parent : parents) {
-        if (++count > max_expansions) {
-          break;  // Limit parent words added
-        }
-        words_to_search.push_back(parent);  // Views to tree-owned strings
-      }
+    if (const auto &target = stem_iter.GetStemParentsTarget()) {
+      // The whole group's df, even when max expansions truncates the words.
+      distinct_docs = target->distinct_docs;
+      parents = absl::MakeConstSpan(target->parents);
+      parents = parents.first(std::min<size_t>(
+          parents.size(), options::GetMaxTermExpansions().GetValue()));
     }
   }
-
-  return stemmed;  // Caller owns this and will add view to words_to_search
+  fn(stemmed, parents, distinct_docs);
 }
 
 const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,

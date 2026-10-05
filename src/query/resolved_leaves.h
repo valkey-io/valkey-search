@@ -18,7 +18,6 @@
 #include "absl/container/node_hash_map.h"
 #include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
-#include "absl/synchronization/mutex.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/posting.h"
@@ -38,13 +37,10 @@ uint64_t ScoringFieldMask(uint64_t field_mask, uint8_t num_fields);
 
 // A word's shared posting list. Every tree (global and per-key) hands back the
 // same Postings object for a word, so one lookup answers for every candidate.
-// `lock` is the word's RaxTargetMutexPool bucket, set only when probes must be
-// serialized against ingestion (LockMode::kMainThread); the bucket is what
-// every writer of the postings holds.
+// The word names the bucket a main-thread probe takes (WithWordLock).
 struct WordPostings {
   std::string word;
   indexes::text::InvasivePtr<indexes::text::Postings> postings;
-  absl::Mutex *lock = nullptr;
 };
 
 // One BM25 term: tf is summed across its postings, scored with one IDF.
@@ -83,15 +79,15 @@ struct ExpansionLeaf {
 // Tag leaf: each matched tag value is a BM25 term with tf = 1.
 struct TagLeaf {
   const indexes::Tag *tag_index = nullptr;
-  // Query values present in the index. The handle answers membership and dt
-  // with one bag probe per candidate, replacing a per-candidate parse of the
-  // document's tag string.
+  // Query values present in the index. The bag answers membership and dt with
+  // one probe per candidate, replacing a per-candidate parse of the document's
+  // tag string.
   struct Value {
     std::string value;
     // Borrowed from the rax slot, so only held while ingestion is excluded
     // (LockMode::kBackground); the main thread reads membership from the
     // fetched record instead.
-    std::optional<indexes::Tag::ValueHandle> handle;
+    std::optional<BorrowedBagOfInternedStringPtrs> bag;
     float idf = 0.0f;
   };
   absl::InlinedVector<Value, 4> tag_values;
@@ -113,11 +109,6 @@ enum class LockMode {
   // Global lookups under the tree lock, each posting probe under its word's
   // bucket, tag counts under the tag index's mutex.
   kMainThread,
-  // As kMainThread, but the caller already holds every word bucket
-  // (RaxTargetMutexPool::LockAll), which positional evaluation needs because it
-  // keeps probes open across words that may share a bucket. Tree lookups still
-  // take the tree lock: writers take bucket then tree, so the order is safe.
-  kMainThreadWordLocksHeld,
 };
 
 // Corpus-wide scoring inputs, read once per query.
@@ -136,7 +127,10 @@ struct CorpusStats {
 // one task, and the main-thread reply loop builds its own.
 class ResolvedLeafCache {
  public:
-  ResolvedLeafCache(CorpusStats stats, const indexes::scoring::Scorer *scorer,
+  // `text_index_schema` may be null when the index has no TEXT field; no text
+  // leaf can then reach the cache.
+  ResolvedLeafCache(const indexes::text::TextIndexSchema *text_index_schema,
+                    CorpusStats stats, const indexes::scoring::Scorer *scorer,
                     LockMode mode = LockMode::kBackground);
   ResolvedLeafCache(const ResolvedLeafCache &) = delete;
   ResolvedLeafCache &operator=(const ResolvedLeafCache &) = delete;
@@ -150,13 +144,22 @@ class ResolvedLeafCache {
   // current one. Returns the IDF to score `term` with either way.
   float OfferExpansionTerm(ExpansionLeaf &leaf, const WordPostings &term) const;
 
-  // Buckets a per-key walk must lock around each probe; null when no per-probe
-  // locking is needed.
-  indexes::text::RaxTargetMutexPool *WalkLocks(
-      const indexes::text::TextIndexSchema &schema) const {
-    return mode_ == LockMode::kMainThread ? &schema.GetWordLocks() : nullptr;
-  }
-  bool MainThread() const { return mode_ != LockMode::kBackground; }
+  // Postings reads, under the word's bucket in kMainThread.
+  size_t KeyCount(const WordPostings &word) const;
+  std::optional<indexes::text::PostingValue> Probe(
+      const WordPostings &word, BorrowedInternedStringPtr key,
+      uint64_t field_mask) const;
+
+  // Walks `per_key_index` for the first of the expansion's matching words that
+  // `key` carries in the predicate's fields. Which match is unspecified (tree
+  // order). `per_key_index` must be the document's own tree, where the walk is
+  // bounded.
+  std::optional<WordPostings> FindExpansionMatch(
+      const TextPredicate &predicate, ExpansionLeaf::Kind kind,
+      const indexes::text::TextIndex &per_key_index,
+      const InternedStringPtr &key) const;
+
+  bool MainThread() const { return mode_ == LockMode::kMainThread; }
 
   const indexes::scoring::Scorer *Scorer() const { return scorer_; }
   const CorpusStats &Stats() const { return stats_; }
@@ -168,10 +171,10 @@ class ResolvedLeafCache {
   ResolvedLeaf Resolve(const Predicate *predicate) const;
   ResolvedLeaf ResolveText(const TextPredicate *predicate) const;
   ResolvedLeaf ResolveTag(const Predicate *predicate) const;
-  WordPostings Lookup(const indexes::text::TextIndexSchema &schema,
-                      absl::string_view word) const;
+  WordPostings Lookup(absl::string_view word) const;
   float Idf(size_t dt) const;
 
+  const indexes::text::TextIndexSchema *text_index_schema_;
   CorpusStats stats_;
   const indexes::scoring::Scorer *scorer_;
   LockMode mode_;
@@ -180,29 +183,13 @@ class ResolvedLeafCache {
   absl::node_hash_map<const Predicate *, ResolvedLeaf> leaves_;
 };
 
-// The word's document count, under its bucket when one is set.
-size_t KeyCount(const WordPostings &word);
-// Probes `word` for `key`, under its bucket when one is set.
-std::optional<indexes::text::PostingDocStats> ProbeDocStats(
-    const WordPostings &word, BorrowedInternedStringPtr key,
-    uint64_t field_mask);
-
-// Walks `per_key_index` for the first of the expansion's matching words that
-// `key` carries in the predicate's fields. Which match is unspecified (tree
-// order). `per_key_index` must be the document's own tree, where the walk is
-// bounded. `word_locks` are taken per probe when given, and the result carries
-// its bucket so later probes take it too.
-std::optional<WordPostings> FindExpansionMatch(
-    const TextPredicate &predicate, ExpansionLeaf::Kind kind,
-    const indexes::text::TextIndex &per_key_index, const InternedStringPtr &key,
-    indexes::text::RaxTargetMutexPool *word_locks);
-
 // Filters `key` against a cached term leaf, producing exactly what
 // TermPredicate::Evaluate would, minus the tree lookups. Under
 // `require_positions` that includes the TermIterator the enclosing AND/OR needs
 // for its proximity check: a bare verdict there would silently drop the check
 // and turn a phrase query into a conjunction.
-EvaluationResult EvaluateTermLeaf(const TermPredicate &predicate,
+EvaluationResult EvaluateTermLeaf(const ResolvedLeafCache &cache,
+                                  const TermPredicate &predicate,
                                   const TermLeaf &leaf,
                                   const InternedStringPtr &key,
                                   bool require_positions);

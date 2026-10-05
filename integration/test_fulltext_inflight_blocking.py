@@ -1,6 +1,8 @@
 """Integration tests for full-text query blocking on in-flight mutations."""
 
 import struct
+
+import pytest
 import time
 from valkey.client import Valkey
 from valkey.cluster import ValkeyCluster
@@ -190,6 +192,72 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
 
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
+
+    def test_revalidation_matches_steady_state(self):
+        """A document mutated while its query is in flight is re-evaluated on
+        the main thread against the live text index. Positional, expansion and
+        stem queries take their own paths there; each must agree with the same
+        query run after the mutation has been indexed."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
+            "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE"
+        )
+        original = "hello world running fast"
+        client.execute_command("HSET", "doc:1", "content", original)
+        client.execute_command("HSET", "doc:2", "content", "world hello runner")
+        client.execute_command("HSET", "doc:3", "content", "hello big wide world runs")
+        IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+
+        # doc:1 keeps matching the OR, the expansions and the stem, and stops
+        # matching the ordered and adjacent phrases.
+        mutated = "world then hello runs"
+        queries = [
+            ["@content:(hello|world)", "INORDER"],
+            ["@content:(hello world)", "INORDER"],
+            ["@content:(hello world)", "SLOP", "0"],
+            ["@content:(hello world)", "SLOP", "2"],
+            ["@content:(hel*|wor*)", "INORDER"],
+            ["@content:(*llo|*rld)"],
+            ["@content:(%helo%|%wrld%)"],
+            ["@content:running"],
+        ]
+        # NOCONTENT (and RETURN 0) skip revalidation, so fetch one field.
+        reply_args = ["WITHSCORES", "RETURN", "1", "content"]
+
+        def by_key(reply):
+            # [count, key, score, fields, key, score, fields, ...]
+            return {reply[i]: float(reply[i + 1]) for i in range(1, len(reply), 3)}
+
+        for query in queries:
+            client.execute_command("HSET", "doc:1", "content", original)
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            assert b"doc:1" in by_key(client.execute_command("FT.SEARCH", "idx", *query, *reply_args))
+
+            before = int(client.info("SEARCH")["search_predicate_revalidation"])
+            client.execute_command("FT._DEBUG PAUSEPOINT SET background_search_completing")
+            search_thread, search_res, search_err = run_in_thread(
+                lambda: self.server.get_new_client().execute_command(
+                    "FT.SEARCH", "idx", *query, *reply_args
+                )
+            )
+            waiters.wait_for_true(
+                lambda: client.execute_command("FT._DEBUG PAUSEPOINT TEST background_search_completing") > 0
+            )
+            client.execute_command("HSET", "doc:1", "content", mutated)
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
+            client.execute_command("FT._DEBUG PAUSEPOINT RESET background_search_completing")
+            search_thread.join()
+            assert search_err[0] is None, query
+            assert int(client.info("SEARCH")["search_predicate_revalidation"]) > before, query
+
+            revalidated = by_key(search_res[0])
+            steady = by_key(client.execute_command("FT.SEARCH", "idx", *query, *reply_args))
+            assert revalidated.keys() == steady.keys(), query
+            # Only the mutated document is rescored; the others keep the score
+            # computed over the corpus as it was.
+            if b"doc:1" in steady:
+                assert revalidated[b"doc:1"] == pytest.approx(steady[b"doc:1"], abs=1e-4), query
 
     def test_dropindex_with_blocked_queries(self):
         """

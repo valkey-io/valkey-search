@@ -168,3 +168,97 @@ follows directly from the amendments is not repeated.
   re-search through revalidation; scores monotone and sane, mutated tag doc
   dropped from `@color:{red}`, no CHECK failures in the server log.
 - Single signed-off commit `116989c` on `brennan-caching-and-locking-improvement`.
+
+### Review round 1
+
+Cleanups from the PR #1472 review that are not design decisions. The design decisions are in
+[review-amendments.md](review-amendments.md), which wins over this section.
+
+- **`PrefilterEvaluator` contract change is decision 28** in review-amendments.md, not here.
+  Mechanical consequences recorded for the implementer: `cache_` becomes a reference, the
+  `dynamic_cast` in `ResolveTag` stays (it is the one-time resolve, not the per-key path), and
+  `EvaluateTextLeaf`'s `FunctionRef` for the per-key index is unchanged.
+- **`ResolvedLeafCache` in `DoSearchNonVector` is built lazily** (search.cc:1086): when
+  `score_in_drain` is true the drain scores through the `TermIterator` and the cache is never
+  touched, yet it was constructed eagerly on the pure-text hot path. Reverses the "constructed
+  unconditionally, gating would save nothing" bullet in §Background filtering for this one site;
+  the perf analysis on the PR measured the eager construction as a real (if small) cost.
+  `DoSearchVector` (search.cc:1267) stays eager: the vector path always filters through it.
+- **Comment fixes.** text_index.h:172-176 takes the suggested framing ("we avoid stalling the
+  main thread ... and instead take the same short locks the writers take" — a design choice, not
+  a constraint); only the `GetWordLocks()` reference changes, to `WithWordLock`, per decision 20.
+  tag.cc:354 takes the suggested wording verbatim. tag.h:199 per decision 26. The two fuzzy.h
+  comments are deleted with the field they describe (decision 25).
+- **Not done here:** `-falign-functions=64` in `cmake/Modules/valkey_search.cmake` (benchmark
+  reproducibility across code-size shifts), and the `Borrowed*` → `*View` rename. Both are
+  follow-up PRs.
+
+#### Choices made while implementing decisions 20-28
+
+- **`WordPostings::word` is kept** (decision 24 says it goes). On the main thread the scorer
+  probes a cached leaf's `Postings` per candidate, and `WithWordLock` needs the word to pick the
+  bucket. The lock went (decision 20); the name stays.
+- **The main-thread reader also nests `stem_tree_mutex_` (reader) → word bucket**, not only
+  stem → `text_index_mutex_` as decision 24's lock table says: `ResolveText` does its `Lookup`s
+  and `KeyCount`s inside `WithStemParents`' callback. Deadlock-free by the same argument:
+  writers take the stem lock only after releasing both the bucket and the tree lock. The lock
+  table in review-amendments.md is left for its author to amend.
+- **Per-key `TextPredicate::Evaluate` uses the single-key source in both modes.** The overrides
+  build a `KeyTermIterator` over copied `PostingValue`s in the background too, so there is one
+  per-key probe path instead of a `KeyIterator` variant beside it. The entries-fetcher path
+  (`BuildTextIterator`) keeps its multi-key `TermIterator`; `TermIteratorT<KeyIt>` is the one
+  template behind both aliases.
+- **`lock` is a plain `bool`** on `WithWordLock`, `WithStemParents` and `TextPredicate::Evaluate`,
+  following `GetKeyDocLen(key, lock)` / `GetPerKeyTextIndex(key, lock)` /
+  `GetTagValueDocCount(value, lock)`. No default, so every caller states its mode.
+- **`WithStemParents` is a non-template taking `absl::FunctionRef`** (one call per leaf resolve);
+  `WithWordLock` is a template (per-probe path). The unused `stem_enabled_mask` parameter of
+  `GetAllStemVariants` has no counterpart.
+- **`ResolveText` `CHECK`s the predicate's schema is the cache's.** The cache now owns the schema
+  pointer for `WithWordLock`; a predicate from another schema would silently probe the wrong
+  trees.
+- **Decision 23 is a comment, not a `DCHECK`.** FT.HYBRID arm `SearchParameters` report
+  `kNoContent` because the contention check ran on the enclosing `ArmGate`, so the parameters
+  passed to `VerifyFilter` cannot assert it.
+- **The fuzzy sink is a callable, not a struct with `Add`**: `sink(word, postings) -> bool`, so
+  lambdas pass straight through and `Expansion` just gets an `operator()`. `Expansion::postings`
+  is deleted with `words`: it served the pre-cache scoring path and nothing read it.
+- **`PrefilterEvaluator::EvaluateTags` is `std::get<TagLeaf>`**, no monostate fallback: a
+  `TagPredicate` with an index always resolves to a `TagLeaf`, and `TagPredicate::Evaluate` is
+  the only caller. `ResolveTag`'s monostate stays for a `kTag` predicate that is not a
+  `TagPredicate` (a mock), which the scorer skips.
+- **`PredicateEvaluator` (response_generator.cc) takes `ResolvedLeafCache&` too.** Its
+  null-cache branch was the main-thread twin of the one decision 28 removes, reachable only for
+  a text predicate on an index without a text schema, which the parser never produces.
+- **`DoSearchVector` builds the cache before the no-predicate branch.** `ReadCorpusStats` is a
+  few atomic reads; gating it there would be noise. `DoSearchNonVector` gates on
+  `!score_in_drain`, which implies `!requires_prefilter_evaluation`, so neither
+  `EvaluatePrefilteredKeys` nor `ScoreTextQuery` runs without it.
+- **`filter_test`'s equivalence check** compares the cache path against a direct
+  `TextPredicate::Evaluate(per_key_index, key, false, /*lock=*/false)` only when the root is a
+  `TextPredicate`; composed roots keep the warm-cache re-evaluation assertion. A composed walk
+  would need a second evaluator, which is what decision 28 deletes.
+
+#### Verification (review round 1)
+
+- Unit tests: all 21 host binaries pass (`.build-debug`, host gcc).
+- Repro, committed as `test_revalidation_matches_steady_state` in
+  `test_fulltext_inflight_blocking.py` (one server, one mutation, eight queries): a document
+  mutated while the query sits at `background_search_completing` is revalidated on the main
+  thread (`search_predicate_revalidation` asserted to increment) for OR + `INORDER`, `INORDER`
+  and `SLOP` phrases, prefix/suffix/fuzzy ORs and a stem query; keys and the mutated document's
+  `WITHSCORES` value equal the steady-state query. Passes on the debug build and on a fresh
+  `--asan` build (`halt_on_error=1`, no sanitizer output), which covers decision 24's
+  use-after-free; the stem add/delete race itself has no deterministic hook, so ASAN is its
+  check.
+- `KeyPosting` holds `const Key*`, not a `Key`: the target key outlives every per-key
+  iterator, and a copy would cost an atomic pair per retained match.
+- Integration (devcontainer, `-k` over cancel, fulltext, scoring, stale_score_after_mutation,
+  non_vector, filter_expressions, ft_hybrid, vector_mutation_rescore, postfilter,
+  untracked_key_in_reply, query_parser, aggregate_addscores, inflight, text): 250 passed, 10
+  skipped, 3 failed, the same `TestFtHybridCosineNegativeDistance` rounding residue as before.
+- clang-format (devcontainer, `--dry-run --Werror`) clean on every changed file. clang-tidy on
+  the touched TUs reports only the findings recorded under Task 7 plus brace style the file
+  already uses.
+- Not run: the full integration suite and the C++ `testing/integration` harness. The known tag
+  rescore gap (#1439, PR #1491) is out of scope and follows this PR.

@@ -385,14 +385,14 @@ size_t EvaluateFilterAsPrimary(
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters,
-    ResolvedLeafCache *cache = nullptr);
+    ResolvedLeafCache &cache);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries,
-    ResolvedLeafCache *cache = nullptr);
+    ResolvedLeafCache &cache);
 
 bool QueryHasTextPredicate(const SearchParameters &parameters);
 
@@ -413,13 +413,12 @@ CorpusStats ReadCorpusStats(const IndexSchema &index_schema, LockMode mode);
 // For each TermPredicate leaf, looks up each candidate's term frequency
 // and feeds the scorer. Writes scores into candidates in-place. Sorting and
 // trimming to the requested limit happen later in SearchResult::TrimResults.
-// `cache` lets the caller share leaves already resolved while filtering; when
-// null a query-scoped one is built here.
+// `cache` is the query's, so leaves resolved while filtering are reused here.
 void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
-                    ResolvedLeafCache *cache = nullptr);
+                    ResolvedLeafCache &cache);
 
 // A revalidated document's own tags, parsed from the fetched record on first
 // use per field. The index may not reflect the mutation yet, so main-thread

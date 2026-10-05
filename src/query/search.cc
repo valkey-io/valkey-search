@@ -116,7 +116,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   InlineVectorFilter(
       query::Predicate *filter_predicate, indexes::VectorBase *vector_index,
       const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
-      query::ResolvedLeafCache *cache, QueryOperations query_operations,
+      query::ResolvedLeafCache &cache, QueryOperations query_operations,
       const std::optional<absl::flat_hash_set<std::string>> &inkeys)
       : filter_predicate_(filter_predicate),
         vector_index_(vector_index),
@@ -151,7 +151,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
 };
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters,
-    query::ResolvedLeafCache *cache) {
+    query::ResolvedLeafCache &cache) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   // Fold INKEYS into candidate selection so in-set docs outside global top-K
   // aren't silently dropped by post-filtering.
@@ -447,7 +447,7 @@ void EvaluatePrefilteredKeys(
                             absl::flat_hash_set<const char *> &)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit,
-    query::ResolvedLeafCache *cache) {
+    query::ResolvedLeafCache &cache) {
   // If there was a union operation, we need to handle deduplication.
   // This implementation skips deduplication (flat_hash_set usage) if not needed
   // for performance.
@@ -520,7 +520,7 @@ CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     indexes::VectorBase *vector_index, size_t qualified_entries,
-    query::ResolvedLeafCache *cache) {
+    query::ResolvedLeafCache &cache) {
   std::priority_queue<std::pair<float, hnswlib::labeltype>> results;
   float query_magnitude = indexes::kDefaultMagnitude;
   if (vector_index->GetNormalize()) {
@@ -804,11 +804,12 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // and F. doc_len is co-located in the matched posting entry.
       if (auto *expansion = std::get_if<ExpansionLeaf>(&resolved)) {
         if (expansion->representative) {
-          if (auto entry = ProbeDocStats(expansion->representative->term, key,
-                                         expansion->field_mask)) {
-            return score_ctx.ScoreLeaf(expansion->representative->idf,
-                                       entry->tf, entry->doc_len,
-                                       predicate->GetWeight());
+          if (auto entry =
+                  score_ctx.cache.Probe(expansion->representative->term, key,
+                                        expansion->field_mask)) {
+            return score_ctx.ScoreLeaf(
+                expansion->representative->idf, entry->doc_stats.tf,
+                entry->doc_stats.doc_len, predicate->GetWeight());
           }
         }
         // The document passed the filter, so it carries some other matched
@@ -816,15 +817,15 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         const auto *per_key_index = score_ctx.PerKeyTextIndex(key);
         if (per_key_index == nullptr) return std::nullopt;
         const auto &text_pred = *static_cast<const TextPredicate *>(predicate);
-        auto match = FindExpansionMatch(
-            text_pred, expansion->kind, *per_key_index, score_ctx.per_key.key,
-            score_ctx.cache.WalkLocks(*text_pred.GetTextIndexSchema()));
+        auto match = score_ctx.cache.FindExpansionMatch(
+            text_pred, expansion->kind, *per_key_index, score_ctx.per_key.key);
         if (!match) return std::nullopt;
         const float idf =
             score_ctx.cache.OfferExpansionTerm(*expansion, *match);
-        auto entry = ProbeDocStats(*match, key, expansion->field_mask);
+        auto entry = score_ctx.cache.Probe(*match, key, expansion->field_mask);
         if (!entry) return std::nullopt;
-        return score_ctx.ScoreLeaf(idf, entry->tf, entry->doc_len,
+        return score_ctx.ScoreLeaf(idf, entry->doc_stats.tf,
+                                   entry->doc_stats.doc_len,
                                    predicate->GetWeight());
       }
 
@@ -837,7 +838,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // the group's mask admits (all TEXT fields share one posting tree, so
       // presence alone is not occurrence in a queried field). doc_len is
       // co-located in the posting entry (identical across postings for one
-      // key), so the same GetPostingDocStats that yields tf yields it — no
+      // key), so the same probe that yields tf yields it — no
       // separate per-key scoring-map probe. avg_doc_len is corpus-wide
       // (precomputed in ScoreContext); both length inputs are 0 for a
       // length-agnostic scorer, which ScoreLeaf treats as a degenerate corpus
@@ -848,9 +849,9 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       for (const TermGroup &group : leaf.groups) {
         uint32_t tf = 0;
         for (const auto &word : group.words) {
-          if (auto entry = ProbeDocStats(word, key, group.field_mask)) {
-            tf += entry->tf;
-            doc_len = entry->doc_len;
+          if (auto entry = score_ctx.cache.Probe(word, key, group.field_mask)) {
+            tf += entry->doc_stats.tf;
+            doc_len = entry->doc_stats.doc_len;
           }
         }
         if (tf == 0) continue;
@@ -900,7 +901,7 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       }
       const bool case_sensitive = leaf->tag_index->IsCaseSensitive();
       auto carries = [&](const TagLeaf::Value &value) {
-        if (doc_tags == nullptr) return value.handle->Contains(key);
+        if (doc_tags == nullptr) return value.bag->contains(key);
         for (absl::string_view tag : *doc_tags) {
           if (case_sensitive ? tag == value.value
                              : absl::EqualsIgnoreCase(tag, value.value)) {
@@ -973,22 +974,15 @@ void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
                     std::vector<indexes::BorrowedNeighbor> &candidates,
-                    ResolvedLeafCache *cache) {
+                    ResolvedLeafCache &cache) {
   CHECK(scorer != nullptr);
   if (candidates.empty() || options::IsScoringDisabled()) return;
 
-  // Leaves resolve lazily on first visit, so a match-all (`*`) query, which
-  // has no predicate, never touches the cache.
-  std::optional<ResolvedLeafCache> own_cache;
-  if (cache == nullptr) {
-    cache = &own_cache.emplace(
-        ReadCorpusStats(index_schema, LockMode::kBackground), scorer);
-  }
   // Candidates came from this index, so total_docs should be > 0; degrade to
   // "no scores" rather than aborting if the invariant ever breaks. Candidates
   // keep their initial 0.0 score.
-  if (cache->Stats().total_docs == 0) return;
-  ScoreContext score_ctx{index_schema, *cache};
+  if (cache.Stats().total_docs == 0) return;
+  ScoreContext score_ctx{index_schema, cache};
 
   std::vector<indexes::BorrowedNeighbor> scored;
   scored.reserve(candidates.size());
@@ -1025,7 +1019,7 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 // their score.
 void ApplyHybridTextScore(const SearchParameters &parameters,
                           std::vector<indexes::Neighbor> &neighbors,
-                          ResolvedLeafCache *cache) {
+                          ResolvedLeafCache &cache) {
   if (parameters.vector_score_only || !QueryHasTextPredicate(parameters) ||
       neighbors.empty()) {
     return;
@@ -1081,13 +1075,6 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
       index_schema ? index_schema->GetTextIndexSchema() : nullptr;
 
   const auto *scorer = indexes::scoring::GetScorer(parameters.scorer);
-  // Shared by the prefilter walk and the extra-step scoring below, so a leaf
-  // either phase resolves is a hash hit for the other.
-  ResolvedLeafCache cache(
-      index_schema ? ReadCorpusStats(*index_schema, LockMode::kBackground)
-                   : CorpusStats{},
-      scorer);
-
   // In-iterator scoring captures only the text iterator's score/weight, so it
   // is valid solely for genuinely pure-text queries. Any query that also
   // contains a numeric, tag, or negation predicate -- including mixed OR
@@ -1107,6 +1094,17 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
                               !has_non_text_predicate && text_index_schema &&
                               text_index_schema->GetTrackedKeyCount() > 0 &&
                               !parameters.filter_parse_results.is_match_all;
+  // Shared by the prefilter walk and the extra-step scoring below, so a leaf
+  // either phase resolves is a hash hit for the other. The drain-scored path
+  // uses neither.
+  std::optional<ResolvedLeafCache> cache;
+  if (!score_in_drain) {
+    cache.emplace(text_index_schema.get(),
+                  index_schema
+                      ? ReadCorpusStats(*index_schema, LockMode::kBackground)
+                      : CorpusStats{},
+                  scorer);
+  }
 
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = 0;
@@ -1223,7 +1221,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
     // for pure text queries.
     EvaluatePrefilteredKeys(parameters, entries_fetchers,
                             std::move(results_appender), qualified_entries,
-                            /*stop_on_fetch_limit=*/true, &cache);
+                            /*stop_on_fetch_limit=*/true, *cache);
   }
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
@@ -1234,7 +1232,7 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   if (!borrowed.empty() && !score_in_drain) {
     ScoreTextQuery(*parameters.index_schema,
                    parameters.filter_parse_results.root_predicate.get(), scorer,
-                   borrowed, &cache);
+                   borrowed, *cache);
   }
   return borrowed;
 }
@@ -1251,6 +1249,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
         absl::StrCat(parameters.attribute_alias, " is not a Vector index "));
   }
 
+  ResolvedLeafCache cache(
+      parameters.index_schema->GetTextIndexSchema().get(),
+      ReadCorpusStats(*parameters.index_schema, LockMode::kBackground),
+      indexes::scoring::GetScorer(parameters.scorer));
   if (!parameters.filter_parse_results.root_predicate) {
     if (parameters.inkeys.has_value()) {
       ++Metrics::GetStats().query_prefiltering_requests_cnt;
@@ -1258,15 +1260,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
           CalcBestMatchingInkeys(parameters, vector_index);
       return vector_index->CreateReply(results);
     }
-    return PerformVectorSearch(vector_index, parameters, nullptr);
+    return PerformVectorSearch(vector_index, parameters, cache);
   }
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters, parameters.filter_parse_results.root_predicate.get(),
       entries_fetchers, false);
-  ResolvedLeafCache cache(
-      ReadCorpusStats(*parameters.index_schema, LockMode::kBackground),
-      indexes::scoring::GetScorer(parameters.scorer));
 
   // With INKEYS, prefer pre-filtering to ensure exact K nearest within the
   // restricted set (inline filter with HNSW approximation might miss them).
@@ -1279,18 +1278,17 @@ absl::StatusOr<std::vector<indexes::Neighbor>> DoSearchVector(
     ++Metrics::GetStats().query_prefiltering_requests_cnt;
     std::priority_queue<std::pair<float, hnswlib::labeltype>> results =
         CalcBestMatchingPrefilteredKeys(parameters, entries_fetchers,
-                                        vector_index, qualified_entries,
-                                        &cache);
+                                        vector_index, qualified_entries, cache);
 
     VMSDK_ASSIGN_OR_RETURN(auto neighbors, vector_index->CreateReply(results));
-    ApplyHybridTextScore(parameters, neighbors, &cache);
+    ApplyHybridTextScore(parameters, neighbors, cache);
     return neighbors;
   }
   ++Metrics::GetStats().query_inline_filtering_requests_cnt;
   lock.SetMayProlong();
   VMSDK_ASSIGN_OR_RETURN(auto neighbors,
-                         PerformVectorSearch(vector_index, parameters, &cache));
-  ApplyHybridTextScore(parameters, neighbors, &cache);
+                         PerformVectorSearch(vector_index, parameters, cache));
+  ApplyHybridTextScore(parameters, neighbors, cache);
   return neighbors;
 }
 

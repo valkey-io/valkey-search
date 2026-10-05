@@ -114,13 +114,12 @@ struct Postings {
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
 
-  // Look up the posting entry (tf + doc_len) for a specific key in one find,
-  // only used in extra-step scoring. Returns nullopt if the key is absent.
-  // One Postings is shared by every TEXT field, so key presence alone does not
-  // mean the term occurred in a requested field: nullopt unless it falls in
-  // `field_mask`. `~0ULL` means any field and skips the per-position scan.
-  std::optional<PostingDocStats> GetPostingDocStats(
-      BorrowedInternedStringPtr key, uint64_t field_mask) const;
+  // One find for `key`'s posting entry; nullopt if absent. One Postings is
+  // shared by every TEXT field, so key presence alone does not mean the term
+  // occurred in a requested field: nullopt unless it falls in `field_mask`.
+  // `~0ULL` means any field and skips the per-position scan.
+  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key,
+                                        uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -170,9 +169,38 @@ struct Postings {
  private:
   // Cache tf in PostingValue to avoid a map lookup
   // PostValue should be removed and restored if no extra-step
-  // Transparent comparator so GetPostingDocStats() can probe with a borrowed
-  // key.
+  // Transparent comparator so LookupKey() can probe with a borrowed key.
   absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
+};
+
+// One key's posting as copied out by Postings::LookupKey, offering the
+// KeyIterator interface over that single key. A per-key evaluation builds its
+// TermIterator from these so no btree iterator is held once the word's lock is
+// released: writers of other keys rebalance the btree, but the FlatPositionMap
+// stays put until the key itself is removed. `key` is the evaluation's target
+// key, which outlives the iterator.
+class KeyPosting {
+ public:
+  KeyPosting(const Key& key, PostingValue value) : key_(&key), value_(value) {}
+
+  bool IsValid() const { return valid_; }
+  void NextKey() { valid_ = false; }
+  bool SkipForwardKey(const Key& key) {
+    valid_ = valid_ && !(*key_ < key);
+    return valid_ && *key_ == key;
+  }
+  const Key& GetKey() const { return *key_; }
+  bool ContainsFields(uint64_t field_mask) const;
+  PositionIterator GetPositionIterator() const {
+    return PositionIterator(*value_.map);
+  }
+  size_t GetTermFrequency() const { return value_.doc_stats.tf; }
+  uint32_t GetDocLen() const { return value_.doc_stats.doc_len; }
+
+ private:
+  const Key* key_;
+  PostingValue value_;
+  bool valid_ = true;
 };
 
 }  // namespace valkey_search::indexes::text

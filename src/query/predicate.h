@@ -199,14 +199,13 @@ class TextPredicate : public Predicate {
  public:
   TextPredicate() : Predicate(PredicateType::kText) {}
   ~TextPredicate() override = default;
-  // Walks `text_index` (the document's own tree) for `target_key`. Each
-  // matched word's shared Postings is probed under its bucket from
-  // `word_locks` when given; the main thread must pass them, since it runs
-  // outside the time-sliced read phase that otherwise excludes writers.
+  // Walks `text_index` (the document's own tree) for `target_key`. `lock` is
+  // for the main thread, which runs outside the time-sliced read phase and
+  // probes each matched word's shared Postings under its bucket instead.
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions,
-      indexes::text::RaxTargetMutexPool* word_locks = nullptr) const = 0;
+      bool lock) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -246,7 +245,7 @@ class TermPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions,
-      indexes::text::RaxTargetMutexPool* word_locks) const override;
+      bool lock) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,
@@ -276,7 +275,7 @@ class PrefixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions,
-      indexes::text::RaxTargetMutexPool* word_locks) const override;
+      bool lock) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,
@@ -304,7 +303,7 @@ class SuffixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions,
-      indexes::text::RaxTargetMutexPool* word_locks) const override;
+      bool lock) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,
@@ -332,7 +331,7 @@ class InfixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions,
-      indexes::text::RaxTargetMutexPool* word_locks) const override;
+      bool lock) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,
@@ -361,7 +360,7 @@ class FuzzyPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key, bool require_positions,
-      indexes::text::RaxTargetMutexPool* word_locks) const override;
+      bool lock) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const std::shared_ptr<indexes::text::TextIndex>& text_index,
       FieldMaskPredicate field_mask, bool require_positions,

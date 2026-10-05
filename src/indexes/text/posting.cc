@@ -92,9 +92,12 @@ namespace {
 // Does any position for this key fall in a field in `field_mask`?
 // Maintain an overall field mask per position map on ingestion to skip this
 // iteration if perf regression is large
-bool PositionsContainFields(const FlatPositionMap& flat_map,
-                            uint64_t field_mask) {
-  PositionIterator iter(flat_map);
+bool ContainsFields(const PostingValue& value, uint64_t field_mask) {
+  CHECK(value.map != nullptr)
+      << "Posting list contains a key with no FlatPositionMap";
+  // Every key present has >=1 position, so "any field" needs no scan.
+  if (field_mask == ~0ULL) return true;
+  PositionIterator iter(*value.map);
   while (iter.IsValid()) {
     if ((iter.GetFieldMask() & field_mask) != 0) {
       return true;
@@ -106,22 +109,18 @@ bool PositionsContainFields(const FlatPositionMap& flat_map,
 
 }  // namespace
 
-std::optional<PostingDocStats> Postings::GetPostingDocStats(
-    BorrowedInternedStringPtr key, uint64_t field_mask) const {
+std::optional<PostingValue> Postings::LookupKey(BorrowedInternedStringPtr key,
+                                                uint64_t field_mask) const {
   auto it = key_to_positions_.find(key);
-  if (it == key_to_positions_.end()) {
+  if (it == key_to_positions_.end() ||
+      !text::ContainsFields(it->second, field_mask)) {
     return std::nullopt;
   }
-  // Every key present has >=1 position, so "any field" needs no scan.
-  if (field_mask == ~0ULL) {
-    return it->second.doc_stats;
-  }
-  CHECK(it->second.map != nullptr)
-      << "Posting list contains a key with no FlatPositionMap";
-  if (!PositionsContainFields(*it->second.map, field_mask)) {
-    return std::nullopt;
-  }
-  return it->second.doc_stats;
+  return it->second;
+}
+
+bool KeyPosting::ContainsFields(uint64_t field_mask) const {
+  return text::ContainsFields(value_, field_mask);
 }
 
 // Defragment posting list
@@ -154,15 +153,7 @@ void Postings::KeyIterator::NextKey() {
 bool Postings::KeyIterator::ContainsFields(uint64_t field_mask) const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
-
-  CHECK(current_->second.map != nullptr)
-      << "Posting list contains a key with no FlatPositionMap";
-
-  // When querying all fields (~0ULL), any non-zero position mask will match,
-  // and every key in the posting list has at least one position entry.
-  if (field_mask == ~0ULL) return true;
-
-  return PositionsContainFields(*current_->second.map, field_mask);
+  return text::ContainsFields(current_->second, field_mask);
 }
 
 bool Postings::KeyIterator::SkipForwardKey(const Key& key) {

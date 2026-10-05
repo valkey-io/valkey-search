@@ -337,7 +337,7 @@ std::optional<absl::flat_hash_set<absl::string_view>> Tag::GetValue(
 vmsdk::info_field::Integer tag_value_lookups(
     "tag", "tag_value_lookups", vmsdk::info_field::IntegerBuilder().Dev());
 
-std::optional<Tag::ValueHandle> Tag::LookupValue(
+std::optional<BorrowedBagOfInternedStringPtrs> Tag::LookupValue(
     absl::string_view value) const {
   // Lock-free by the same read-side invariant GetValue relies on: the index is
   // not mutated while the time-sliced mutex is held in read mode.
@@ -348,29 +348,13 @@ std::optional<Tag::ValueHandle> Tag::LookupValue(
               norm.size(), &slot) != 1) {
     return std::nullopt;
   }
-  return ValueHandle(SlotToStorage(slot));
-}
-
-// Adopt to read, then Release so the live storage stays owned by the rax slot
-// (mirrors Tag::Search).
-bool Tag::ValueHandle::Contains(BorrowedInternedStringPtr key) const {
-  auto bag = BagOfInternedStringPtrs::Adopt(storage_);
-  const bool found = bag.contains(key);
-  (void)bag.Release();
-  return found;
-}
-
-size_t Tag::ValueHandle::DocCount() const {
-  auto bag = BagOfInternedStringPtrs::Adopt(storage_);
-  const size_t count = bag.size();
-  (void)bag.Release();
-  return count;
+  return BorrowedBagOfInternedStringPtrs(SlotToStorage(slot));
 }
 
 bool Tag::ContainsKey(absl::string_view value,
                       BorrowedInternedStringPtr key) const {
-  auto handle = LookupValue(value);
-  return handle && handle->Contains(key);
+  auto bag = LookupValue(value);
+  return bag && bag->contains(key);
 }
 
 // -- Search / EntriesFetcher / EntriesFetcherIterator --------------------
@@ -526,8 +510,8 @@ size_t Tag::GetUnTrackedKeyCount() const {
 size_t Tag::GetTagValueDocCount(absl::string_view value, bool lock) const {
   std::optional<absl::MutexLock> guard;
   if (lock) guard.emplace(&index_mutex_);
-  auto handle = LookupValue(value);
-  return handle ? handle->DocCount() : 0;
+  auto bag = LookupValue(value);
+  return bag ? bag->size() : 0;
 }
 
 size_t Tag::GetPrefixMatchDocCount(absl::string_view prefix_value,

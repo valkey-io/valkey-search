@@ -59,14 +59,20 @@ struct TermScoringParams {
   absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
 };
 
-class TermIterator : public TextIterator {
+// `KeyIt` is the per-word key source: Postings::KeyIterator over a whole
+// posting list for the entries-fetcher path, KeyPosting over one copied-out key
+// for per-key evaluation. Same interface, so one implementation serves both.
+template <class KeyIt>
+class TermIteratorT : public TextIterator {
  public:
-  TermIterator(
-      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
-          key_iterators,
-      const FieldMaskPredicate query_field_mask, const bool require_positions,
-      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
-      const TermScoringParams& scoring = {});
+  using KeyIterators = absl::InlinedVector<KeyIt, kWordExpansionInlineCapacity>;
+
+  TermIteratorT(KeyIterators&& key_iterators,
+                const FieldMaskPredicate query_field_mask,
+                const bool require_positions,
+                const FieldMaskPredicate stem_field_mask = 0,
+                bool has_original = false,
+                const TermScoringParams& scoring = {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -98,13 +104,11 @@ class TermIterator : public TextIterator {
  private:
   const FieldMaskPredicate query_field_mask_;
   const FieldMaskPredicate stem_field_mask_;
-  absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
-      key_iterators_;
+  KeyIterators key_iterators_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
       pos_iterators_;
-  // Raw pointer to the current key in the underlying btree_map. Safe to use
-  // because the map is immutable while the reader lock is held (no inserts or
-  // deletes during search).
+  // Raw pointer to the current key, owned by its KeyIt: a btree_map entry
+  // (immutable while the reader lock is held) or a KeyPosting's copy.
   const Key* current_key_{nullptr};
   std::optional<PositionRange> current_position_;
   FieldMaskPredicate current_field_mask_;
@@ -164,6 +168,9 @@ class TermIterator : public TextIterator {
   void ClearKeyState();
   void ClearPositionState();
 };
+
+using TermIterator = TermIteratorT<Postings::KeyIterator>;
+using KeyTermIterator = TermIteratorT<KeyPosting>;
 
 }  // namespace valkey_search::indexes::text
 

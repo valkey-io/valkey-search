@@ -209,26 +209,28 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
 
   // Get stem variants if not exact term search
   if (!IsExact() && stem_field_mask != 0) {
-    // Collect stem variant words (words that also stem to the same form)
-    absl::InlinedVector<absl::string_view,
-                        indexes::text::kStemVariantsInlineCapacity>
-        stem_variants;
-    // Stem leaf dt: distinct docs over the variants, counted at ingestion.
-    std::string stemmed = GetTextIndexSchema()->GetAllStemVariants(
-        text_string, stem_variants, stem_field_mask, true,
-        &stem_num_doc_contain_term);
-    // Stem root literal: its own BM25 leaf with its own dt (industry-standard
-    // leaf 2).
-    if (stemmed != text_string) {
-      has_root = TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators,
-                                       &root_num_doc_contain_term);
-    }
-    // Stem inflection group: variants should all exist from ingestion.
-    for (const auto &variant : stem_variants) {
-      bool found =
-          TryAddWordKeyIterator(text_index.get(), variant, key_iterators);
-      CHECK(found) << "Word in stem tree not found in index - ingestion issue";
-    }
+    GetTextIndexSchema()->WithStemParents(
+        text_string, /*lock=*/false,
+        [&](const std::string &stemmed, absl::Span<const std::string> parents,
+            uint32_t distinct_docs) {
+          // Stem leaf dt: distinct docs over the variants, counted at
+          // ingestion.
+          stem_num_doc_contain_term = distinct_docs;
+          // Stem root literal: its own BM25 leaf with its own dt
+          // (industry-standard leaf 2).
+          if (stemmed != text_string) {
+            has_root =
+                TryAddWordKeyIterator(text_index.get(), stemmed, key_iterators,
+                                      &root_num_doc_contain_term);
+          }
+          // Stem inflection group: variants should all exist from ingestion.
+          for (const auto &parent : parents) {
+            bool found =
+                TryAddWordKeyIterator(text_index.get(), parent, key_iterators);
+            CHECK(found)
+                << "Word in stem tree not found in index - ingestion issue";
+          }
+        });
   }
 
   // TermIterator will use query_field_mask when has_original is true,
@@ -326,8 +328,9 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     float or_weight_multiplier) const {
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  auto expansion = indexes::text::FuzzySearch::Search(
-      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words);
+  indexes::text::FuzzySearch::Expansion expansion;
+  indexes::text::FuzzySearch::Search(text_index->GetPrefix(), GetTextString(),
+                                     GetDistance(), max_words, expansion);
   return std::make_unique<indexes::text::TermIterator>(
       std::move(expansion.key_iterators), field_mask, require_positions,
       /*stem_field_mask=*/0, /*has_original=*/false,

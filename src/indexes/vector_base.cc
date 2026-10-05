@@ -166,15 +166,10 @@ const text::TextIndex *PrefilterEvaluator::PerKeyTextIndex() {
 
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
-  if (cache_ != nullptr) {
-    if (const auto *leaf =
-            std::get_if<query::TagLeaf>(&cache_->GetOrResolve(&predicate))) {
-      return query::EvaluateTagLeaf(predicate, *leaf, *key_);
-    }
-  }
-  bool case_sensitive = true;
-  auto tags = predicate.GetIndex()->GetValue(*key_, case_sensitive);
-  return predicate.Evaluate(tags ? &*tags : nullptr, case_sensitive);
+  CHECK(key_);
+  return query::EvaluateTagLeaf(
+      predicate, std::get<query::TagLeaf>(cache_.GetOrResolve(&predicate)),
+      *key_);
 }
 
 query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
@@ -187,14 +182,8 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  auto per_key_index = [this] { return PerKeyTextIndex(); };
-  if (cache_ == nullptr) {
-    const auto *index = per_key_index();
-    if (index == nullptr) return query::EvaluationResult(false);
-    return predicate.Evaluate(*index, *key_, require_positions);
-  }
-  return query::EvaluateTextLeaf(*cache_, predicate, *key_, require_positions,
-                                 per_key_index);
+  return query::EvaluateTextLeaf(cache_, predicate, *key_, require_positions,
+                                 [this] { return PerKeyTextIndex(); });
 }
 
 VectorBase::~VectorBase() {

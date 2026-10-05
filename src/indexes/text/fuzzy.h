@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/container/inlined_vector.h"
 #include "absl/strings/string_view.h"
@@ -23,28 +22,26 @@ namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
-  // Matched terms within the edit distance, index-aligned across all three
-  // vectors so scoring can use one matched term's own dt.
+  // The sink for an entries fetcher: one key iterator and one dt per matched
+  // term, index-aligned so TermIterator scores a document on the matched
+  // term's own dt.
   struct Expansion {
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
         key_iterators;
     absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
-    // Used only by the extra-step scoring path, which does per-key LookupKey
-    // instead of forward iteration.
-    absl::InlinedVector<InvasivePtr<Postings>, kWordExpansionInlineCapacity>
-        postings;
-    // Filled instead of key_iterators when `words_only` is set, for callers
-    // that must probe each posting under its word's RaxTargetMutexPool bucket
-    // (a key iterator reads the btree, so it cannot be opened here unlocked).
-    std::vector<std::string> words;
+
+    bool operator()(absl::string_view, const InvasivePtr<Postings> &postings) {
+      per_term_dt.push_back(postings->GetKeyCount());
+      key_iterators.emplace_back(postings->GetKeyIterator());
+      return true;
+    }
   };
 
-  // Returns matched terms for all words within edit distance <= max_distance
-  static Expansion Search(const Rax &tree, absl::string_view pattern,
-                          size_t max_distance, uint32_t max_words,
-                          bool words_only = false) {
-    Expansion result;
-
+  // Calls `sink(word, postings)` for each word within edit distance
+  // <= max_distance, at most max_words times or until the sink returns false.
+  template <class Sink>
+  static void Search(const Rax &tree, absl::string_view pattern,
+                     size_t max_distance, uint32_t max_words, Sink &&sink) {
     // Dynamic Programming matrix rows for Damerau-Levenshtein algorithm
     // Row i-2 (for transposition)
     absl::InlinedVector<size_t, 32> prev_prev(pattern.length() + 1);
@@ -63,12 +60,13 @@ struct FuzzySearch {
     auto iter = tree.GetPathIterator("");
     uint32_t word_count = 0;
     SearchRecursive(iter, pattern, max_distance, "", '\0', prev_prev, prev,
-                    curr, result, max_words, word_count, words_only);
-    return result;
+                    curr, sink, max_words, word_count);
   }
 
  private:
-  static void SearchRecursive(
+  // Returns false once the walk should stop.
+  template <class Sink>
+  static bool SearchRecursive(
       Rax::PathIterator iter, absl::string_view pattern, size_t max_distance,
       std::string word,   // Current word being built
       char prev_tree_ch,  // Previous character (for transposition detection)
@@ -78,10 +76,9 @@ struct FuzzySearch {
           &prev,  // Row i-1 of DP matrix (previous row)
       absl::InlinedVector<size_t, 32>
           &curr,  // Row i of DP matrix (current row being computed)
-      Expansion &result, uint32_t max_words, uint32_t &word_count,
-      bool words_only) {
+      Sink &sink, uint32_t max_words, uint32_t &word_count) {
     // Iterate over children at current tree level
-    while (!iter.Done() && word_count < max_words) {
+    while (!iter.Done()) {
       absl::string_view edge = iter.GetChildEdge();
       std::string new_word = word;
       // Minimum edit distance in the current DP row after processing the edge.
@@ -162,25 +159,18 @@ struct FuzzySearch {
         // The edit distance is in prev row now as we did the row swap
         // in loop above
         if (child_iter.IsWord() && prev[pattern.length()] <= max_distance) {
-          auto postings = child_iter.GetPostingsTarget();
-          if (words_only) {
-            result.words.push_back(new_word);
-          } else {
-            result.per_term_dt.push_back(postings->GetKeyCount());
-            result.key_iterators.emplace_back(postings->GetKeyIterator());
-          }
-          result.postings.push_back(std::move(postings));
-          ++word_count;
-          if (word_count >= max_words) {
-            return;
+          if (!sink(new_word, child_iter.GetPostingsTarget()) ||
+              ++word_count >= max_words) {
+            return false;
           }
         }
 
         // Recurse into child's subtree
-        if (child_iter.CanDescend()) {
-          SearchRecursive(child_iter, pattern, max_distance, new_word,
-                          prev_tree_ch, prev_prev, prev, curr, result,
-                          max_words, word_count, words_only);
+        if (child_iter.CanDescend() &&
+            !SearchRecursive(child_iter, pattern, max_distance, new_word,
+                             prev_tree_ch, prev_prev, prev, curr, sink,
+                             max_words, word_count)) {
+          return false;
         }
       }
 
@@ -192,6 +182,7 @@ struct FuzzySearch {
 
       iter.NextChild();
     }
+    return true;
   }
 };
 

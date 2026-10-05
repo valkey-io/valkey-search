@@ -467,10 +467,9 @@ class VectorBase : public IndexBase {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
-  // Built once per query and reused across candidates. `cache` may be null,
-  // in which case every text leaf walks the candidate's own tree.
+  // Built once per query and reused across candidates.
   PrefilterEvaluator(const text::TextIndexSchema *text_index_schema,
-                     query::ResolvedLeafCache *cache,
+                     query::ResolvedLeafCache &cache,
                      QueryOperations query_operations)
       : query::Evaluator(query_operations),
         text_index_schema_(text_index_schema),
@@ -495,7 +494,7 @@ class PrefilterEvaluator : public query::Evaluator {
   const text::TextIndex *PerKeyTextIndex();
 
   const text::TextIndexSchema *text_index_schema_;
-  query::ResolvedLeafCache *cache_;
+  query::ResolvedLeafCache &cache_;
   const InternedStringPtr *key_{nullptr};
   const text::TextIndex *per_key_index_{nullptr};
   bool per_key_index_fetched_{false};

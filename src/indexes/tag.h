@@ -174,24 +174,14 @@ class Tag : public IndexBase {
   size_t GetTagValueDocCount(absl::string_view value, bool lock = false) const
       ABSL_LOCKS_EXCLUDED(index_mutex_);
 
-  // A resolved tag value: the bits stored at the value's rax slot, which are
-  // the storage of its posting bag. Lets a query do one lookup per value and
-  // then answer every candidate with a bag probe. Borrowed, not owned, so valid
-  // only while the index is not mutated, i.e. for the span of one time-sliced
-  // read phase.
-  class ValueHandle {
-   public:
-    bool Contains(BorrowedInternedStringPtr key) const;
-    size_t DocCount() const;
-
-   private:
-    friend class Tag;
-    explicit ValueHandle(uintptr_t storage) : storage_(storage) {}
-    uintptr_t storage_;
-  };
-  // nullopt if no document carries `value`.
-  std::optional<ValueHandle> LookupValue(absl::string_view value) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  // The bag of documents carrying `value`, so a query does one lookup per
+  // value and answers every candidate with a bag probe; nullopt if none does.
+  // The bag is borrowed from the rax slot: lock-free only under the background
+  // read-side invariant (no mutation during the time-sliced read phase), so
+  // the main thread, which runs outside that phase, does not use it and takes
+  // index_mutex_ for its lookups instead.
+  std::optional<BorrowedBagOfInternedStringPtrs> LookupValue(
+      absl::string_view value) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Document count (dt) of the first value on `key` matching prefix query value
   // `prefix_value` (must end in '*') -- the value a tag prefix is scored on,

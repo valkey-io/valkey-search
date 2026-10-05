@@ -157,23 +157,27 @@ TEST_P(FilterTest, ParseParams) {
     const auto query_operations = parse_results.value().query_operations;
     const auto &root = *parse_results.value().root_predicate;
 
-    // Every case runs twice: walking the key's own tree, and answered from a
-    // query-scoped cache. Both must agree.
-    indexes::PrefilterEvaluator uncached(text_index_schema, nullptr,
-                                         query_operations);
-    EXPECT_EQ(test_case.evaluate_success.value(),
-              uncached.Evaluate(root, interned_key));
-
     query::ResolvedLeafCache cache(
-        query::CorpusStats{.total_docs = 1},
+        text_index_schema, query::CorpusStats{.total_docs = 1},
         indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std));
-    indexes::PrefilterEvaluator cached(text_index_schema, &cache,
-                                       query_operations);
+    indexes::PrefilterEvaluator evaluator(text_index_schema, cache,
+                                          query_operations);
     EXPECT_EQ(test_case.evaluate_success.value(),
-              cached.Evaluate(root, interned_key));
+              evaluator.Evaluate(root, interned_key));
     // The cache is warm now; a second evaluation must not change the verdict.
     EXPECT_EQ(test_case.evaluate_success.value(),
-              cached.Evaluate(root, interned_key));
+              evaluator.Evaluate(root, interned_key));
+    // A text leaf answered from the cache must agree with a walk of the key's
+    // own tree, which is what the cache replaces.
+    if (auto *text = dynamic_cast<const query::TextPredicate *>(&root)) {
+      const auto *per_key_index =
+          text_index_schema->GetPerKeyTextIndex(interned_key, /*lock=*/false);
+      EXPECT_EQ(test_case.evaluate_success.value(),
+                per_key_index != nullptr &&
+                    text->Evaluate(*per_key_index, interned_key,
+                                   /*require_positions=*/false, /*lock=*/false)
+                        .matches);
+    }
   }
 }
 

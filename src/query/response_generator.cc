@@ -20,7 +20,6 @@
 #include "src/attribute_data_type.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/tag.h"
-#include "src/indexes/text/rax_target_mutex_pool.h"
 #include "src/indexes/text/text_index.h"
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
@@ -91,7 +90,7 @@ class PredicateEvaluator : public query::Evaluator {
   PredicateEvaluator(const RecordsMap &records, RecordTags &tags,
                      InternedStringPtr target_key,
                      const indexes::text::TextIndexSchema *text_index_schema,
-                     ResolvedLeafCache *cache, QueryOperations query_operations)
+                     ResolvedLeafCache &cache, QueryOperations query_operations)
       : Evaluator(query_operations),
         records_(records),
         tags_(tags),
@@ -126,10 +125,7 @@ class PredicateEvaluator : public query::Evaluator {
 
   EvaluationResult EvaluateText(const query::TextPredicate &predicate,
                                 bool require_positions) override {
-    if (cache_ == nullptr) {
-      return EvaluationResult(false);
-    }
-    return EvaluateTextLeaf(*cache_, predicate, target_key_, require_positions,
+    return EvaluateTextLeaf(cache_, predicate, target_key_, require_positions,
                             [this] {
                               // The map lock guards the find; the tree itself
                               // is stable because a revalidated key has no
@@ -144,11 +140,17 @@ class PredicateEvaluator : public query::Evaluator {
   RecordTags &tags_;
   InternedStringPtr target_key_;
   const indexes::text::TextIndexSchema *text_index_schema_;
-  ResolvedLeafCache *cache_;
+  ResolvedLeafCache &cache_;
 };
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
 
+// Contract: a query with a text predicate reaches here only after the key
+// contention check (GetContentProcessing() == kContentionCheckRequired for
+// FT.SEARCH, ArmGate for FT.HYBRID), so `n` has no in-flight mutation. That is
+// what lets the text walk read the key's own tree unlocked and use a
+// PostingValue after its word's bucket is released: only a mutation of this
+// key could free either.
 FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 const RecordsMap &records,
                                 const indexes::Neighbor &n,
@@ -179,26 +181,17 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   const auto query_operations =
       parameters.filter_parse_results.query_operations;
   // One cache per reply: leaves resolve on the first mutated document and are
-  // reused for the rest. A positional query keeps probes open across several
-  // words at once, so it holds every word bucket for the whole evaluation
-  // instead of locking per probe.
-  const bool positional =
-      query_operations & QueryOperations::kContainsProximity;
+  // reused for the rest.
   if (!cache) {
     cache = std::make_unique<ResolvedLeafCache>(
+        text_index_schema.get(),
         ReadCorpusStats(index_schema, LockMode::kMainThread),
-        indexes::scoring::GetScorer(parameters.scorer),
-        positional ? LockMode::kMainThreadWordLocksHeld
-                   : LockMode::kMainThread);
-  }
-  std::optional<indexes::text::RaxTargetMutexPool::LockAll> word_locks;
-  if (positional && text_index_schema) {
-    word_locks.emplace(text_index_schema->GetWordLocks());
+        indexes::scoring::GetScorer(parameters.scorer), LockMode::kMainThread);
   }
   RecordTags record_tags(records);
-  PredicateEvaluator evaluator(
-      records, record_tags, n.external_id, text_index_schema.get(),
-      text_index_schema ? cache.get() : nullptr, query_operations);
+  PredicateEvaluator evaluator(records, record_tags, n.external_id,
+                               text_index_schema.get(), *cache,
+                               query_operations);
   EvaluationResult result = predicate->Evaluate(evaluator);
 
   // The document changed between shard-side scoring and this content fetch, so

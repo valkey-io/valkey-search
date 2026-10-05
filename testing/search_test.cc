@@ -2668,15 +2668,16 @@ TEST_F(ScoreTextQueryTestBase, TermLeavesWalkTreesOncePerQuery) {
 }
 
 // A hoisted evaluator fetches the per-key tree lazily, so both entry points
-// must drop the previous key's tree. A phrase under negation reaches that tree
-// (term leaves are answered from the cache), and the two documents disagree on
-// it, so a stale tree flips one verdict.
+// must drop the previous key's tree. Only an expansion leaf reaches that
+// tree, and a leftover tree is wrong only when the key matches through a word
+// the previous key lacks: d0 has no gam* word, so d1 evaluated against d0's
+// tree misses "gamma".
 TEST_F(ScoreTextQueryTestBase, EvaluateFullRefetchesPerKeyTreeForEachKey) {
   auto schema = BuildTextTagSchema(
       {{"d0", "alpha beta", ""}, {"d1", "alpha beta gamma", ""}});
   const auto *scorer =
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
-  const std::string filter = "-@text:\"beta gamma\"";
+  const std::string filter = "-@text:gam*";
   auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
   ASSERT_TRUE(parsed.ok()) << parsed.status();
   query::ResolvedLeafCache cache(

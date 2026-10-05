@@ -367,11 +367,19 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   the appender there only sees the key; that is the one design change drain unification needs,
   and it belongs with the existing `DoSearchNonVector` TODO in its own PR.
 - **`PrefilterEvaluator::Evaluate` now routes through `EvaluateFull`.** #985's `EvaluateFull`
-  set `key_` without clearing `per_key_index_fetched_`; harmless with a per-key evaluator,
-  wrong once the evaluator is hoisted: every later key would evaluate phrase/prefix/fuzzy
-  leaves against the first key's tree. Neither parent had the bug; the merge would have.
-  `EvaluateFullRefetchesPerKeyTreeForEachKey` (unit) and
-  `test_vector_range_and_negated_phrase` (integration) pin it.
+  set `key_` without clearing `per_key_index_fetched_`; `Evaluate` had its own reset.
+  Harmless with #985's per-key evaluator, wrong once the merge hoisted the evaluator in
+  `SearchVectorRangeQuery`, the only `EvaluateFull` caller: every later candidate of a
+  compound VR query would evaluate expansion leaves (prefix/suffix/fuzzy) against the first
+  candidate's tree. Terms, and phrases of terms, are answered from the shared postings and
+  never reach that tree. A stale tree is wrong only when the key matches through a word the
+  first key lacks, since the tree's words are probed against the shared postings
+  (`ProbePostings` → `LookupKey`); a first draft of the tests used one shared matching word
+  and passed against the bug for that reason. Neither parent had the bug; the merge would
+  have. The reset now lives in `EvaluateFull` and protects both entry points.
+  `EvaluateFullRefetchesPerKeyTreeForEachKey` (unit) and `test_vector_range_and_prefix`
+  (integration, one matching word per candidate, VR + negated prefix) both fail without it
+  and pass with it.
 - **VR leaves still score 0.** `ScoreNode` is the scoring walk under `ScoreDocument` on both
   the background (`ApplyRelevanceScore`) and main-thread (`RecomputeDocumentScore`) paths, and
   #985's `kVectorRange → 0.0f` case merged into it. `ResolvedLeafCache::GetOrResolve` returns

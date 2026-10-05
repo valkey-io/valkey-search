@@ -470,8 +470,7 @@ float VectorHNSW<T>::ComputeDistance(absl::string_view query,
 // which are absent from label_lookup_). Used to seed inc_id_ on load.
 template <typename T>
 uint64_t VectorHNSW<T>::GetMaxLoadedLabel() const {
-  return static_cast<uint64_t>(
-      algo_->max_loaded_label_.load(std::memory_order_relaxed));
+  return static_cast<uint64_t>(algo_->max_loaded_label_);
 }
 
 template <typename T>

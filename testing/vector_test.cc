@@ -2254,8 +2254,7 @@ TEST_F(VectorIndexTest, LoadDuplicateLabelRebuildsLiveMapping) {
     for (size_t t : c.tombstones) {
       EXPECT_TRUE(algo.isMarkedDeleted(t));
     }
-    EXPECT_EQ(algo.max_loaded_label_.load(std::memory_order_relaxed),
-              live_slot);
+    EXPECT_EQ(algo.max_loaded_label_, live_slot);
 
     // Reusing a tombstone for a fresh label must not disturb the live slot.
     absl::string_view new_v(

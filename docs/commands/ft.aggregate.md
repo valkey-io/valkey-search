@@ -2,7 +2,7 @@ The `FT.AGGREGATE` command extends the query capabilities of the `FT.SEARCH` com
 
 The first step of the command is to use the index name and query string to locate a list of Valkey keys. This process is identical to the `FT.SEARCH` command.
 
-The second step is executed once for each key found in the first step. The contents of the key are extracted as directed by the `LOAD` clause, resulting in a set of name/value pairs which are collected into a record. Thus the output of this step is the working set of records, one record for each key found in the first step. If the query is a pure vector or hybrid vector then the initial working set will be sorted by distance, otherwise the working set will be in no particular order.
+The second step is executed once for each key found in the first step. The contents of the key are extracted as directed by the `LOAD` clause, resulting in a set of name/value pairs which are collected into a record. Thus the output of this step is the working set of records, one record for each key found in the first step. If the query is a KNN query then the initial working set will be sorted by distance, otherwise the working set will be in no particular order.
 
 The next steps are to execute the list of stages provided on the command, sequentially one at a time. Each step takes as input the working set of records and performs some transformation on it, i.e., the output of one stage is fed into the input of the next stage.
 
@@ -17,6 +17,7 @@ FT.AGGREGATE <index-name> <query>
     [SLOP <slop>]
     [TIMEOUT <timeout>]
     [VERBATIM]
+    [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
@@ -43,6 +44,7 @@ FT.AGGREGATE <index-name> <query>
 - `SLOP <slop>` (Optional): Specifies a slop value for proximity matching of terms.
 - `TIMEOUT <timeout>` (optional): Lets you set a timeout value for the search command. This must be an integer in milliseconds.
 - `VERBATIM` (Optional): If specified stemming is not applied to term searches.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere after the query, including between stages. If it is given more than once, the last one is used.
 
 - `APPLY <expression> as <field>` (optional): An expression is computed and insert into the record. See [APPLY Stage](#apply-stage) below. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
 - `FILTER <expression>` (optional): The filter expression is applied, see [FILTER Stage](#filter-stage) for more details. See [Search - expressions](../topics/search-expressions.md) for details on the expression syntax.
@@ -55,6 +57,8 @@ FT.AGGREGATE <index-name> <query>
 The output is an array. The first element of this array is a scalar number with no particular meaning and should be ignored. The remainder of the array is one element for each record output by the final processing stage.
 
 Each record is represented by an array which contains the field/value pairs of each record.
+
+If `WITHCURSOR` is specified the output is a two element array. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created.
 
 # Processing Stages
 

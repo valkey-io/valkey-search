@@ -10,7 +10,9 @@ The fused list is then fed through the same processing stages as `FT.AGGREGATE`,
 FT.HYBRID <index-name>
     SEARCH <query> [SCORER <scorer>] [YIELD_SCORE_AS <alias>]
     VSIM <field> <vector> [KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <ratio>]]
-                          [FILTER <expression>] [YIELD_SCORE_AS <alias>]
+                          [FILTER [<count>] <expression>
+                            [POLICY (ADHOC | BATCHES [BATCH_SIZE <n>])]]
+                          [YIELD_SCORE_AS <alias>]
     [COMBINE
       ( RRF      <count> [CONSTANT <c>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
       | LINEAR   <count> [ALPHA <a> BETA <b>] [WINDOW <w>] [YIELD_SCORE_AS <alias>]
@@ -20,6 +22,7 @@ FT.HYBRID <index-name>
     [LOAD * | LOAD <count> <field> [AS <alias>] [<field> [AS <alias>] ...]]
     [PARAMS <count> <name> <value> [ <name> <value> ...]]
     [TIMEOUT <timeout>]
+    [WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]]
     (
       | APPLY <expression> AS <field>
       | FILTER <expression>
@@ -35,13 +38,14 @@ FT.HYBRID <index-name>
   - `YIELD_SCORE_AS <alias>` (optional): Emits this arm's score under `<alias>`, making it available to `COMBINE FUNCTION` and to the processing stages.
 - `VSIM <field> <vector>` (required): The vector arm. `<field>` is a declared vector attribute and `<vector>` is a binary blob, supplied through `PARAMS`.
   - `KNN <count> [K <k>] [EF_RUNTIME <ef>] [SHARD_K_RATIO <ratio>]` (optional): The vector search parameters. `<count>` is a count of the arguments that follow within the block, not a count of parameters. `K` is the number of nearest neighbors to retrieve, between 1 and 10000, and defaults to 10. Omitting the whole block, or writing `KNN 0`, is the same as taking every default. `EF_RUNTIME` tunes HNSW's search breadth. `SHARD_K_RATIO` is accepted for compatibility and ignored.
-  - `FILTER <expression>` (optional): Restricts which documents the vector search considers. The filter decides membership only; this arm's score remains the vector distance. See [Search - query language](../topics/search-query.md)
+  - `FILTER [<count>] <expression> [POLICY ...]` (optional): Restricts which documents the vector search considers. The filter decides membership only; this arm's score remains the vector distance. Without `POLICY`, the existing count-optional form remains supported. A policy must be inside a counted FILTER block, where `<count>` includes the expression and every policy token. `POLICY ADHOC` forces exact filter-first execution. `POLICY BATCHES` forces vector-search-first execution with inline filtering. A wildcard expression (`FILTER 3 * POLICY ...`) has no restriction to apply, so both policies use standard unfiltered KNN, matching Redis. Policy values are literal command tokens, not `PARAMS` references. `EF_RUNTIME` is rejected with `ADHOC` and accepted with `BATCHES`. `BATCH_SIZE <n>` is accepted only after `POLICY BATCHES`; its value remains unsupported and is ignored. See [Search - query language](../topics/search-query.md)
   - `YIELD_SCORE_AS <alias>` (optional): As for the `SEARCH` arm.
 - `COMBINE` (optional): How the two arms' results are fused. Defaults to `RRF` with its own defaults when the clause is absent. In every form, `<count>` is a count of the arguments that follow within the clause, not a count of sub-arguments; sub-arguments may appear in any order. See [Fusion methods](#fusion-methods) below.
 - `DIALECT <dialect>` (optional): Specifies your dialect. The only supported dialect is 2.
 - `LOAD * | LOAD <count> <field> [AS <alias>] [...]` (optional): Which fields of the matched keys are loaded into the working set, exactly as for `FT.AGGREGATE`. Without a `LOAD` clause the result carries the key, the fused score, and any per-arm scores that were named. `AS <alias>` requires `search.emulate-release` to be at least `1.3.0`; below that the `AS` keyword is read as another field name and the load fails.
 - `PARAMS <count> <name> <value> [...]` (optional): `<count>` is the number of arguments, i.e. twice the number of name/value pairs. Used to supply the `VSIM` query vector. A `$name` reference inside either arm's query text is not substituted — the same limitation `FT.SEARCH` and `FT.AGGREGATE` have.
 - `TIMEOUT <timeout>` (optional): A timeout for the command, in milliseconds, between 1 and 60000.
+- `WITHCURSOR [COUNT <count>] [MAXIDLE <maxidle>]` (optional): Returns at most `<count>` records and saves the remaining records in a cursor, which is read with [`FT.CURSOR`](ft.cursor.md), exactly as for [`FT.AGGREGATE`](ft.aggregate.md). `<count>` must be between 1 and `search.cursor-max-count`, the default is 1000. `<maxidle>` is the number of milliseconds the cursor may go unread before it is destroyed; it must be between 1 and `search.cursor-max-idle-ms`, the default is 300000. `WITHCURSOR` may appear anywhere among the clauses that follow `SEARCH`, `VSIM` and `COMBINE`, and ends any of those three clauses the way `LOAD` does. If it is given more than once, the last one is used. A cursor is no exception to the cancellation rules: a query cancelled by its `TIMEOUT` is an error, as it is without `WITHCURSOR`.
 - `APPLY`, `FILTER`, `GROUPBY`, `LIMIT`, `SORTBY` (optional): The `FT.AGGREGATE` processing stages, applied to the fused list in the order written. See [FT.AGGREGATE](ft.aggregate.md#processing-stages) for what each stage does.
 
 # Result
@@ -49,6 +53,8 @@ FT.HYBRID <index-name>
 The output is an array. The first element is a scalar that repeats the number of records returned and carries no other information — in particular it is not the total number of matches. The remainder is one element per record.
 
 Each record is an array of field/value pairs. Without a `LOAD` clause every record carries `__key` and the fused score, under `__score` or under the alias given by `COMBINE ... YIELD_SCORE_AS`. A `LOAD` clause replaces those two implicit columns with the fields it names: load `@__key` to keep the key, and name the fused score with `COMBINE ... YIELD_SCORE_AS` to keep it. Per-arm scores appear under their own `YIELD_SCORE_AS` aliases either way.
+
+If `WITHCURSOR` is specified the output is a two element array, as for `FT.AGGREGATE`. The first element is an array whose first element is the number of records returned, followed by one element for each returned record. The second element is the cursor id to pass to [`FT.CURSOR READ`](ft.cursor.md), or 0 if all records were returned, in which case no cursor is created. The cursor pages through the records the command would have returned without `WITHCURSOR`, so the default `LIMIT` of 10 described below still applies.
 
 Unlike `FT.AGGREGATE`, which returns every record, `FT.HYBRID` returns at most 10 records when the command writes no `LIMIT` clause. An explicit `LIMIT` stays where it is written in the pipeline; only the default is appended, so it runs after every other stage.
 
@@ -129,6 +135,7 @@ The fused score is emitted under `__score` unless `COMBINE ... YIELD_SCORE_AS` n
 # Notes
 
 - **`VSIM RANGE` is not implemented.** The clause parses, so a command written for another engine is checked rather than misread, but executing one returns an error. Use `KNN`.
-- **`POLICY` and `BATCH_SIZE` are accepted and ignored.** Both select how the vector search executes rather than what it answers, and this implementation does not expose that choice. Both belong to the `VSIM` clause and must sit outside the `KNN` block, after it; neither value is validated.
+- **`POLICY` is active inside a counted VSIM `FILTER`.** `ADHOC` forces exact filter-first execution and `BATCHES` forces vector-search-first execution with inline filtering. Other values, duplicate declarations, and placement outside the counted FILTER block are rejected.
+- **`BATCH_SIZE` is accepted but ignored.** It is valid only after `POLICY BATCHES`; fixed-size batch iteration is tracked separately.
 - **`NOCONTENT` is rejected.** `FT.HYBRID` always returns records; a query wanting keys only can ask for no `LOAD` clause.
 - **`FT.HYBRID` cannot run inside `MULTI`/`EXEC` or a Lua script**, and is unavailable when the reader thread pool is disabled. All three force synchronous execution, which cannot revalidate the two arms' results against concurrent writes.

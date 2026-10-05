@@ -79,14 +79,12 @@ int Reply(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
 void Free([[maybe_unused]] ValkeyModuleCtx *ctx, void *privdata) {
   auto *parameters = static_cast<QueryCommand *>(privdata);
+  if (parameters->adopted_by_cursor) {
+    return;  // Now owned by the cursor table.
+  }
   // Some things can only be cleaned up on the main thread.
   // We need to do this here.
-  parameters->index_schema = nullptr;
-  // return_attributes holds ValkeyModuleStrings retained from client argv.
-  // Must be freed here (main thread) to avoid racing with freeClientArgv().
-  parameters->return_attributes.clear();
-  // Cleanup of score_as
-  parameters->score_as = nullptr;
+  parameters->ReleaseMainThreadState();
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [parameters]() { delete parameters; });
 }
@@ -236,6 +234,14 @@ absl::Status ExecuteCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
   return status;
 }
 
+void QueryCommand::ReleaseMainThreadState() {
+  index_schema = nullptr;
+  // return_attributes holds ValkeyModuleStrings retained from client argv.
+  // Must be freed on the main thread to avoid racing with freeClientArgv().
+  return_attributes.clear();
+  score_as = nullptr;
+}
+
 // ----- Static hooks on QueryCommand consumed by ExecuteCommand -----
 
 absl::Status QueryCommand::ParseAfterIndex(QueryCommand &cmd,
@@ -262,6 +268,10 @@ absl::Status QueryCommand::ExecuteSyncLocal(ValkeyModuleCtx *ctx,
     return absl::OkStatus();
   }
   cmd->SendReply(ctx, cmd->search_result);
+  if (cmd->adopted_by_cursor) {
+    cmd.release();  // Now owned by the cursor table.
+    return absl::OkStatus();
+  }
   ValkeySearch::Instance().ScheduleSearchResultCleanup(
       [neighbors = std::move(cmd->search_result.neighbors)]() mutable {
         // destructor runs when lambda completes

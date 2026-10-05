@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "absl/base/thread_annotations.h"
+#include "absl/cleanup/cleanup.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
 #include "absl/log/log.h"
@@ -1280,6 +1281,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
     VMSDK_EXPECT_OK(enable_sharing.SetValue(false));
     ValkeySearchTest::SetUp();
+    SetDebugMode(true);
     auto &write_v2 =
         const_cast<vmsdk::config::Boolean &>(options::GetRdbWriteV2());
     auto &read_v2 =
@@ -1295,6 +1297,7 @@ class IndexSchemaRDBTest : public ValkeySearchTest {
         const_cast<vmsdk::config::Boolean &>(options::GetRdbReadV2());
     VMSDK_EXPECT_OK(write_v2.SetValue(true));
     VMSDK_EXPECT_OK(read_v2.SetValue(true));
+    SetDebugMode(false);
     auto &enable_sharing =
         const_cast<vmsdk::config::Boolean &>(options::GetEnableVectorSharing());
     VMSDK_EXPECT_OK(enable_sharing.SetValue(true));
@@ -2011,6 +2014,12 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
 
   // Test 7: Different weight config values
   {
+    SetDebugMode(true);
+    // Restore defaults even if an ASSERT below returns early.
+    absl::Cleanup restore = [] {
+      VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(130));
+      SetDebugMode(false);
+    };
     VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(200));
     std::string data(400, 'v');  // 400 bytes
     auto key7 = StringInternStore::Intern("weighted_key_7");
@@ -2025,8 +2034,6 @@ TEST_F(IndexSchemaFriendTest, WeightedBuffer) {
       // 400 * 200 / 100 = 800
       EXPECT_EQ(itr->second.weighted_buffer.size(), 800);
     }
-    // Restore default
-    VMSDK_EXPECT_OK(options::GetMutationWeightVector().SetValue(130));
   }
 }
 
@@ -2142,13 +2149,13 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
         index_schema->ConsumeTrackedMutatedAttribute(key, true);
     ASSERT_TRUE(consumed_data.has_value());
     ASSERT_FALSE(consumed_data->empty());
-    std::shared_ptr<const indexes::VectorRecord> consumed_vector;
+    indexes::VectorRecord consumed_vector;
     absl::string_view data_view;
     if (!data_ptr.empty()) {
       EXPECT_TRUE(consumed_data->begin()->second.IsVector());
       consumed_vector = consumed_data->begin()->second.ConsumeVector();
       ASSERT_NE(consumed_vector, nullptr);
-      data_view = absl::string_view(consumed_vector->GetRawVector(),
+      data_view = absl::string_view(consumed_vector.GetRawVector(),
                                     dimensions * sizeof(float));
     } else {
       EXPECT_TRUE(consumed_data->begin()->second.IsNull());
@@ -2183,7 +2190,7 @@ ABSL_NO_THREAD_SAFETY_ANALYSIS {
       EXPECT_TRUE(consumed_data->begin()->second.IsVector());
       auto consumed_vector2 = consumed_data->begin()->second.ConsumeVector();
       ASSERT_NE(consumed_vector2, nullptr);
-      absl::string_view data_view2(consumed_vector2->GetRawVector(),
+      absl::string_view data_view2(consumed_vector2.GetRawVector(),
                                    dimensions * sizeof(float));
       EXPECT_EQ(data_view2, track_after_consumption_data_ptr);
     }

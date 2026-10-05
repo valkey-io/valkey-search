@@ -204,40 +204,63 @@
                 "token": "FILTER"
               },
               {
+                "name": "vsim_filter_count",
+                "type": "integer",
+                "optional": true
+              },
+              {
                 "name": "vsim_filter_expression",
                 "type": "string"
-              }
-            ]
-          },
-          {
-            "name": "vsim_policy",
-            "type": "block",
-            "optional": true,
-            "arguments": [
-              {
-                "name": "vsim_policy_token",
-                "type": "pure-token",
-                "token": "POLICY"
               },
               {
-                "name": "vsim_policy_value",
-                "type": "string"
-              }
-            ]
-          },
-          {
-            "name": "vsim_batch_size",
-            "type": "block",
-            "optional": true,
-            "arguments": [
-              {
-                "name": "vsim_batch_size_token",
-                "type": "pure-token",
-                "token": "BATCH_SIZE"
-              },
-              {
-                "name": "vsim_batch_size_value",
-                "type": "integer"
+                "name": "vsim_policy",
+                "type": "block",
+                "optional": true,
+                "arguments": [
+                  {
+                    "name": "vsim_policy_token",
+                    "type": "pure-token",
+                    "token": "POLICY"
+                  },
+                  {
+                    "name": "vsim_policy_value",
+                    "type": "oneof",
+                    "arguments": [
+                      {
+                        "name": "adhoc",
+                        "type": "pure-token",
+                        "token": "ADHOC"
+                      },
+                      {
+                        "name": "batches",
+                        "type": "block",
+                        "arguments": [
+                          {
+                            "name": "batches_token",
+                            "type": "pure-token",
+                            "token": "BATCHES"
+                          },
+                          {
+                            "name": "vsim_batch_size",
+                            "type": "block",
+                            "optional": true,
+                            "arguments": [
+                              {
+                                "name": "vsim_batch_size_token",
+                                "type": "pure-token",
+                                "token": "BATCH_SIZE"
+                              },
+                              {
+                                "name": "vsim_batch_size_value",
+                                "type": "integer"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           },
@@ -465,22 +488,6 @@
                 ]
               }
             ]
-          }
-        ]
-      },
-      {
-        "name": "policy_block",
-        "type": "block",
-        "optional": true,
-        "arguments": [
-          {
-            "name": "policy_token",
-            "type": "pure-token",
-            "token": "POLICY"
-          },
-          {
-            "name": "policy_value",
-            "type": "string"
           }
         ]
       },
@@ -743,6 +750,26 @@
           }
         ],
         "multiple_token": true
+      },
+      {
+        "name": "WITHCURSOR",
+        "token": "WITHCURSOR",
+        "type": "block",
+        "optional": true,
+        "arguments": [
+          {
+            "name": "count",
+            "token": "COUNT",
+            "type": "integer",
+            "optional": true
+          },
+          {
+            "name": "maxidle",
+            "token": "MAXIDLE",
+            "type": "integer",
+            "optional": true
+          }
+        ]
       }
     ]
   }

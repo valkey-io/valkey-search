@@ -81,6 +81,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   AggregateParameters(int db_num) : QueryCommand(db_num){};
   absl::Status ParseCommand(vmsdk::ArgsIterator& itr) override;
   void SendReply(ValkeyModuleCtx* ctx, query::SearchResult& result) override;
+  // Replies [count, row...] with the first `count` records, removing them.
+  void ReplyRecords(ValkeyModuleCtx* ctx, RecordSet& records, size_t count);
   bool loadall_{false};
   // A record column the pipeline needs but the reply must not carry.
   // FT.HYBRID registers its fused score as a column so SORTBY/APPLY/FILTER
@@ -226,8 +228,14 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     IndexInterface* index_interface_;
 
   } parse_vars_;
+  // Populated by ParseCommand: the single VR predicate's distance field name —
+  // the name given by $yield_distance_as (or AS), or empty when no name was
+  // given (Redisearch parity: no default "__<alias>_score" field) or the query
+  // has no VR predicate. Cleared by ClearAtEndOfParse.
+  std::string vr_score_field_name_;
   void ClearAtEndOfParse() {
     parse_vars_.index_interface_ = nullptr;
+    vr_score_field_name_.clear();
     parse_vars.ClearAtEndOfParse();
   }
 

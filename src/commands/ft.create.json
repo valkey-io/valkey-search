@@ -54,6 +54,12 @@
         ]
       },
       {
+        "name": "FILTER",
+        "token": "FILTER",
+        "type": "string",
+        "optional": true
+      },
+      {
         "name": "SCORE",
         "token": "SCORE",
         "type": "string",
@@ -93,6 +99,12 @@
         "token": "MINSTEMSIZE",
         "type": "integer",
         "optional": true
+      },
+      {
+        "name": "NOHL",
+        "type": "pure-token",
+        "optional": true,
+        "token": "NOHL"
       },
       {
         "name": "offsets",
@@ -285,6 +297,16 @@
                                 "name": "float32",
                                 "type": "pure-token",
                                 "token": "FLOAT32"
+                              },
+                              {
+                                "name": "float16",
+                                "type": "pure-token",
+                                "token": "FLOAT16"
+                              },
+                              {
+                                "name": "bfloat16",
+                                "type": "pure-token",
+                                "token": "BFLOAT16"
                               }
                             ]
                           },
@@ -346,16 +368,29 @@
                 ]
               },
               {
-                "name": "SORTABLE",
+                "name": "sortable",
+                "type": "block",
                 "optional": true,
-                "type": "pure-token",
-                "token": "SORTABLE"
+                "arguments": [
+                  {
+                    "name": "SORTABLE",
+                    "type": "pure-token",
+                    "token": "SORTABLE"
+                  },
+                  {
+                    "name": "UNF",
+                    "type": "pure-token",
+                    "optional": true,
+                    "token": "UNF"
+                  }
+                ]
               }
             ]
           }
         ]
       }
     ],
+    "arity": -5,
     "complexity": "Construction time O(N log N), where N is the number of indexed items",
     "group": "search",
     "module_since": "1.0.0",

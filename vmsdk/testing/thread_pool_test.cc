@@ -61,7 +61,8 @@ class ThreadPoolShutdownTest : public vmsdk::ValkeyTest {};
 
 TEST_F(ThreadPoolShutdownTest,
        JoinWorkersReturnsFalseWhenWorkerOutlivesDeadline) {
-  ThreadPool thread_pool("test-pool", 2);
+  ThreadPool thread_pool("test-pool", 2, /*sample_queue_size=*/100,
+                         /*join_timeout=*/absl::Milliseconds(10));
   thread_pool.StartWorkers();
   absl::Notification started;
   absl::Notification release;

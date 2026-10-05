@@ -16,6 +16,7 @@
 #include "src/valkey_search.h"
 #include "src/vector_registry.h"
 #include "vmsdk/src/debug.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -89,7 +90,13 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   if (CursorTable::HasInstance()) {
     CursorTable::Instance().Clear();
   }
-  ValkeySearch::Instance().JoinAllThreadPools();
+  if (!ValkeySearch::Instance().JoinAllThreadPools()) {
+    // A worker may still use schemas and the vector registry, so skip teardown
+    // and let the process exit with the worker still running.
+    VMSDK_LOG(WARNING, ctx)
+        << "Skipping index teardown on shutdown: search workers still running";
+    return;
+  }
   vmsdk::MarkAsShuttingDown();
   vmsdk::DrainPendingMainCallbacks();
   SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);

@@ -23,6 +23,7 @@
 #include "absl/functional/any_invocable.h"
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/time/time.h"
 #include "gtest/gtest_prod.h"
 #include "vmsdk/src/thread_monitoring.h"
 #include "vmsdk/src/thread_safe_vector.h"
@@ -42,7 +43,8 @@ struct TaskWithTime {
 class ThreadPool {
  public:
   ThreadPool(const std::string& name, size_t num_threads,
-             size_t sample_queue_size = 100);
+             size_t sample_queue_size = 100,
+             absl::Duration join_timeout = absl::Seconds(5));
   // This type is neither copyable nor movable.
   ThreadPool(const ThreadPool&) = delete;
   ThreadPool& operator=(const ThreadPool&) = delete;
@@ -51,9 +53,9 @@ class ThreadPool {
   void StartWorkers();
 
   /// Notify all active workers to terminate and join them. In addition, this
-  /// method will internally call `JoinTerminatedWorkers`. Waits up to 5s; if a
-  /// worker is still running after that, logs it and returns false, leaving
-  /// that worker in the pool, which must then outlive it.
+  /// method will internally call `JoinTerminatedWorkers`. Waits up to the join
+  /// timeout; returns false if a worker is still running after that, leaving it
+  /// in the pool. The pool must then outlive that worker.
   bool JoinWorkers();
 
   /// Reap any workers that have flagged themselves as joinable (e.g. after a
@@ -172,6 +174,7 @@ class ThreadPool {
     return priority_tasks_[static_cast<int>(priority)];
   }
   size_t initial_thread_count_ = 0;
+  absl::Duration join_timeout_;
   ThreadSafeVector<std::shared_ptr<Thread>> threads_;
   mutable absl::Mutex queue_mutex_;
   absl::CondVar condition_ ABSL_GUARDED_BY(queue_mutex_);

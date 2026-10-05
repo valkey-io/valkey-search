@@ -75,8 +75,9 @@ void *RunWorkerThread(void *arg) {
 namespace vmsdk {
 
 ThreadPool::ThreadPool(const std::string &name_prefix, size_t num_threads,
-                       size_t sample_queue_size)
+                       size_t sample_queue_size, absl::Duration join_timeout)
     : initial_thread_count_(num_threads),
+      join_timeout_(join_timeout),
       priority_tasks_(static_cast<int>(ThreadPool::Priority::kMax) + 1),
       name_prefix_(name_prefix),
       sample_queue_size_(sample_queue_size),
@@ -145,12 +146,7 @@ absl::Status ThreadPool::MarkForStop(StopMode stop_mode) {
   return absl::OkStatus();
 }
 
-ThreadPool::~ThreadPool() {
-  // Workers hold a pointer to this pool, so freeing it under a running worker
-  // would be a use-after-free.
-  CHECK(JoinWorkers())
-      << "ThreadPool destroyed while workers are still running";
-}
+ThreadPool::~ThreadPool() { JoinWorkers(); }
 
 bool ThreadPool::JoinWorkers() {
   {
@@ -162,8 +158,7 @@ bool ThreadPool::JoinWorkers() {
     suspend_workers_ = false;
   }
 
-  // Wait up to 5s for every worker in threads_ to flag itself joinable.
-  const absl::Time deadline = absl::Now() + absl::Seconds(5);
+  const absl::Time deadline = absl::Now() + join_timeout_;
   auto count_unjoinable = [this]() {
     return threads_.CountIf(
         [](const std::shared_ptr<Thread> &t) { return !t->IsJoinable(); });
@@ -179,10 +174,8 @@ bool ThreadPool::JoinWorkers() {
       }
     });
     VMSDK_LOG(WARNING, nullptr)
-        << "ThreadPool shutdown timed out after 5s waiting for workers to exit;"
+        << "ThreadPool shutdown timed out waiting for workers to exit;"
         << " hung threads: " << absl::StrJoin(hung, ", ");
-    // A busy worker is slow, not deadlocked, so let the caller carry on with
-    // shutdown rather than abort the server. Reap the workers that did exit.
     JoinTerminatedWorkers();
     return false;
   }

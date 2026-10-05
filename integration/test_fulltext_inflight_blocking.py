@@ -193,26 +193,27 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
         client.execute_command("FT._DEBUG PAUSEPOINT RESET mutation_processing")
         hset_thread.join()
 
-    def test_revalidation_matches_steady_state(self):
-        """A document mutated while its query is in flight is re-evaluated on
-        the main thread against the live text index. Positional, expansion and
-        stem queries take their own paths there; each must agree with the same
-        query run after the mutation has been indexed."""
+    def test_revalidation_complex_text_queries_match_steady_state(self):
+        """Revalidation must return the same results and scores as a normal
+        search for positional (INORDER, SLOP, OR + INORDER), expansion (prefix,
+        suffix, fuzzy) and stem queries. Each shape runs alone, where the
+        background answers from the text iterator, and under an AND with a
+        tag, where the background evaluates the predicate per candidate."""
         client: Valkey = self.server.get_new_client()
         client.execute_command(
             "FT.CREATE", "idx", "ON", "HASH", "PREFIX", "1", "doc:",
-            "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE"
+            "SCHEMA", "content", "TEXT", "WITHSUFFIXTRIE", "kind", "TAG"
         )
         original = "hello world running fast"
-        client.execute_command("HSET", "doc:1", "content", original)
-        client.execute_command("HSET", "doc:2", "content", "world hello runner")
-        client.execute_command("HSET", "doc:3", "content", "hello big wide world runs")
+        client.execute_command("HSET", "doc:1", "content", original, "kind", "a")
+        client.execute_command("HSET", "doc:2", "content", "world hello runner", "kind", "a")
+        client.execute_command("HSET", "doc:3", "content", "hello big wide world runs", "kind", "a")
         IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
 
         # doc:1 keeps matching the OR, the expansions and the stem, and stops
         # matching the ordered and adjacent phrases.
         mutated = "world then hello runs"
-        queries = [
+        text_queries = [
             ["@content:(hello|world)", "INORDER"],
             ["@content:(hello world)", "INORDER"],
             ["@content:(hello world)", "SLOP", "0"],
@@ -221,6 +222,9 @@ class TestFullTextInFlightBlockingCMD(ValkeySearchTestCaseDebugMode):
             ["@content:(*llo|*rld)"],
             ["@content:(%helo%|%wrld%)"],
             ["@content:running"],
+        ]
+        queries = text_queries + [
+            ["@kind:{a} " + q[0], *q[1:]] for q in text_queries
         ]
         # NOCONTENT (and RETURN 0) skip revalidation, so fetch one field.
         reply_args = ["WITHSCORES", "RETURN", "1", "content"]

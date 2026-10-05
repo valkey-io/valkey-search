@@ -242,7 +242,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
 #### Verification (review round 1)
 
 - Unit tests: all 21 host binaries pass (`.build-debug`, host gcc).
-- Repro, committed as `test_revalidation_matches_steady_state` in
+- Repro, committed as `test_revalidation_complex_text_queries_match_steady_state` in
   `test_fulltext_inflight_blocking.py` (one server, one mutation, eight queries): a document
   mutated while the query sits at `background_search_completing` is revalidated on the main
   thread (`search_predicate_revalidation` asserted to increment) for OR + `INORDER`, `INORDER`

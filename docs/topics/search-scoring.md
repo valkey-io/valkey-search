@@ -36,7 +36,7 @@ The clauses of an `FT.SEARCH` query select which measure of relevance is used, a
 | Query shape | Score measure | Default sort order |
 | :--- | :--- | :--- |
 | Text or tag clauses, with or without numeric clauses | `BM25STD` score | By score, highest first |
-| Only clauses that score 0: numeric, vector range, or tag in an index without a `TEXT` field | 0 for every key | Not defined |
+| Only clauses that score 0: numeric, vector range, or tag in an index without a `TEXT` field | 0 for every key | By key name |
 | KNN query without a filter | Vector distance. `WITHSCORES` reports 0. | By distance, nearest first |
 | KNN query with a text or tag clause in its filter | `BM25STD` score of the filter | By score, highest first |
 | KNN query with only numeric clauses in its filter | Vector distance. `WITHSCORES` reports 0. | By distance, nearest first |
@@ -241,8 +241,9 @@ In a KNN query with a text or tag clause in its filter, such as `(shoes)=>[KNN 1
 
 The sort occurs before `LIMIT`.
 Thus, when results are sorted by score, `LIMIT 0 10` returns the 10 keys with the highest scores.
-The order of keys with equal scores is not defined, and it can change in a future release.
-To get an order that does not change, see [Make the Order of Equal Scores Repeatable](#make-the-order-of-equal-scores-repeatable).
+Keys with equal scores are sorted by key name, in byte order. For example, `doc:10` sorts before `doc:2`.
+Redis Search sorts keys with equal scores in the order in which they were added, so the two can return ties in a different order.
+To order ties by another field, or to get the same order in `FT.AGGREGATE`, see [Make the Order of Equal Scores Repeatable](#make-the-order-of-equal-scores-repeatable).
 
 `FT.AGGREGATE` does not sort by score automatically.
 To sort its records by score, use `ADDSCORES` and `SORTBY 2 @__score DESC`.
@@ -583,8 +584,8 @@ The logarithm keeps a large sales value from hiding the score.
 
 ### Make the Order of Equal Scores Repeatable
 
-The order of keys with equal scores is not defined.
-To get a repeatable order, sort by the score and then by a second field in `FT.AGGREGATE`:
+`FT.AGGREGATE` does not sort records by score automatically, so it does not order keys with equal scores.
+To get a repeatable order, sort by the score and then by a second field:
 
 ```
 > FT.AGGREGATE p jacket ADDSCORES LOAD 1 @__key SORTBY 4 @__score DESC @__key ASC

@@ -324,25 +324,20 @@ EvaluationResult EvaluateTermLeaf(const ResolvedLeafCache &cache,
   const uint64_t field_mask = predicate.GetFieldMask();
   const uint64_t stem_field_mask =
       field_mask & predicate.GetTextIndexSchema()->GetStemTextFieldMask();
-  indexes::text::KeyTermIterator::KeyIterators key_postings;
-  bool found_original = false;
-  // Groups are stored in the order TermPredicate::Evaluate probes (original,
-  // stem root, inflections), which TermIterator relies on to partition them.
+  indexes::text::KeyTermIterator::PositionMaps maps;
   for (const TermGroup &group : leaf.groups) {
-    const bool original = group.kind == TermGroup::Kind::kOriginal;
-    const uint64_t mask = original ? field_mask : stem_field_mask;
+    const uint64_t mask =
+        group.kind == TermGroup::Kind::kOriginal ? field_mask : stem_field_mask;
     for (const WordPostings &word : group.words) {
       auto value = cache.Probe(word, BorrowedInternedStringPtr(key), mask);
       if (!value) continue;
       if (!require_positions) return EvaluationResult(true);
-      found_original |= original;
-      key_postings.emplace_back(key, *value);
+      maps.push_back(value->map);
     }
   }
-  if (key_postings.empty()) return EvaluationResult(false);
-  auto iterator = std::make_unique<indexes::text::KeyTermIterator>(
-      std::move(key_postings), field_mask, require_positions, stem_field_mask,
-      found_original);
+  if (maps.empty()) return EvaluationResult(false);
+  auto iterator =
+      std::make_unique<indexes::text::KeyTermIterator>(key, maps, field_mask);
   if (!iterator->IsIteratorValid()) return EvaluationResult(false);
   return {true, std::move(iterator)};
 }

@@ -61,10 +61,9 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     be in flight for a revalidated key (decision 23). What is *not* safe after unlocking is a
     `Postings::KeyIterator`, which holds btree iterators (posting.h:163-167). So on the main
     thread every probe seeks the target key inside `WithWordLock` and copies out its
-    `PostingValue`; no `KeyIterator` is retained. Positional revalidation builds its
-    `TermIterator` from a single-key source over those copied `PostingValue`s, which is all the
-    three accessors it uses need (`GetPositionIterator`, `GetTermFrequency`, `GetDocLen`,
-    term.cc). The background path keeps its multi-key `KeyIterator`s unchanged. This deletes
+    `PostingValue`; no `KeyIterator` is retained. Positional revalidation builds a
+    `KeyTermIterator` over the copied `PostingValue`s' position maps (decision 29). The
+    entries-fetcher path keeps its multi-key `KeyIterator`s unchanged. This deletes
     `RaxTargetMutexPool::LockAll`, `LockMode::kMainThreadWordLocksHeld`, the positional branch in
     `VerifyFilter` (response_generator.cc:181-197), and the `CHECK` at resolved_leaves.cc:349.
     **Reverses decision 16.** Decision 12's non-nesting rule for the word path is unchanged:
@@ -174,6 +173,69 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     same null-cache branch (reachable only for a text predicate on an index without a text
     schema, which the parser never produces) and takes `ResolvedLeafCache&` too.
 
+29. **`TermIterator` is split in two, not templated** (*decided 2026-10-05, after the round-1
+    commit*). The first implementation of decision 21 made `TermIterator` a template
+    `TermIteratorT<KeyIt>` instantiated over `Postings::KeyIterator` (entries fetcher) and over a
+    new `KeyPosting`, one copied-out `PostingValue` wearing the multi-key cursor interface
+    (`NextKey` → done, `SkipForwardKey` → compare). It worked and the diff was small, but it
+    compiles two full copies of term.cc's key merge, position merge and scoring, on the path whose
+    code layout already moved the pure-text benchmark in this PR; and on the per-key side the key
+    heap always has every cursor on the same key and `GetScore` is never called (per-key
+    evaluation scores through `ResolvedLeafCache::Probe`). The single-key case is the many-key
+    case degenerate, so running it through the general machinery is pure overhead, and the only
+    thing that genuinely differs between the two paths is the cursor type (live btree iterators
+    vs. a copied value), which no non-template merge can span without a branch per step.
+
+    Instead, the position merge becomes the per-key iterator, and the entries-fetcher iterator
+    composes it:
+
+    ```
+    TextIterator
+    ├── TermIterator                       entries fetcher, many keys
+    │     key heap over Postings::KeyIterator[]; scoring (tf / doc_len off the cursors)
+    │     KeyTermIterator positions_;      by value, concrete type: direct calls, no extra hop
+    │       on each new key: positions_.Reset(current_key, lambda yielding the active cursors' maps)
+    │       the five TextIterator position methods forward to positions_
+    └── KeyTermIterator (final)            per-key evaluation, one key
+          const Key* key_; bool done_;     trivial key API
+          position heap over PositionIterator[]: today's seven position methods, moved verbatim
+          Reset(key, maps); field mask fixed at construction
+    ```
+
+    Rules: `KeyTermIterator` is `final`; the field mask is a constructor argument (it never
+    changes; `InsertValidPositionIterator` filters on it alone); `Reset` reuses the inlined
+    vectors it already clears today and takes the maps through a template producer callback,
+    not a span, so `TermIterator` hands over its active cursors' maps without an intermediate
+    array (a 1.6 KB scratch member cost -3% to -5% on the pure-text benchmark before it was
+    removed; see implementation-choices.md) and the pure-text path allocates exactly as it does
+    now;
+    `TermIterator::IsIteratorValid` consults `positions_` only when `require_positions_` is set,
+    since `Reset` is never called otherwise. `KeyTermIterator` is only ever built positional
+    (every per-key `Evaluate` returns a plain bool first when positions are not required), so it
+    drops `require_positions`, `stem_field_mask` and `has_original`: those drove key-level mask
+    selection and leaf partitioning for scoring, and `ProbePostings` already applied the mask via
+    `LookupKey`. `KeyPosting` is deleted; `ProbePostings` and `EvaluateTermLeaf` collect
+    `PostingValue::map` pointers. `TermIterator`'s constructor and interface are unchanged, so
+    text.cc, search.cc and the tests do not move. Churn: ~115 lines of term.cc re-homed to the
+    other class, ~95 added, ~85 deleted; the only new logic is the map gather in
+    `FindMinimumValidKey` step 4 and `KeyTermIterator::Reset`.
+
+    Why not the alternatives: a runtime key-source variant adds a branch per key step on the hot
+    path; a shared abstract base implementing the position half is the same footprint but leaves
+    the per-key path holding a half-iterator nobody can hand out; wrapping through the
+    `TextIterator` interface (holding the inner by pointer) adds a virtual hop per position step
+    on the proximity path. Why now rather than a follow-up: the template has not been reviewed
+    yet, and showing the reviewer one design beats showing the template and then replacing it.
+
+    Lands as its own commit after the round-1 commit so a benchmark shift is attributable:
+    baseline on the round-1 commit, refactor with `INORDER`/`SLOP` cases added to
+    `MainThreadLockModesMatchBackground` (unreachable there before `LockAll` went), benchmark
+    against the baseline, result noted on the PR. The harness is boda26's `search_benchmark.sh`
+    from the PR's perf comment. Result: refactor vs round-1 commit is inside the A/A noise
+    envelope on all eight scenarios; refactor vs the PR's merge base reproduces the comment
+    (pure text within noise, mixed queries +7% to +34%). Numbers in implementation-choices.md
+    §Verification (decision 29).
+
 ## Comment → resolution map
 
 Every review thread on #1472 as of 2026-10-04, once. See §Review scope above for what has not
@@ -216,6 +278,8 @@ Dependencies, not a task list. Each step compiles and passes the existing suites
 9. Verification per plan-amendments.md decision 10 plus the two repros above, then
    `WITHSCORES` spot checks on the main-thread positional path (phrase, `INORDER`, `SLOP` with a
    mutated document), since that path's iterator source is new.
+10. Decision 29 (`TermIterator` / `KeyTermIterator` split), second commit: benchmark baseline on
+    the round-1 commit first, then the refactor, then benchmark again.
 
 ## Superseded
 
@@ -223,6 +287,8 @@ Dependencies, not a task list. Each step compiles and passes the existing suites
   to "nests only stem → tree"); §Stemming "the cache copies them" (24); §Phase 4 table row
   "`GetPostingDocStats` / `GetKeyCount` on a `Postings`" guard column now reads "via
   `WithWordLock`" (20); decision 14's "planning docs stay untracked" (27).
+- Decision 21's "single-key source" sentence as first implemented (`TermIteratorT<KeyIt>` +
+  `KeyPosting`): replaced by 29.
 - implementation-choices.md §Expansion representative, the `collect_words` bullet (25);
   §Background filtering, the "a null cache is allowed and means walk everything" bullet (28);
   §Tag bags, the `ValueHandle` placement bullet (26).

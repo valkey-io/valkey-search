@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/types/span.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/text.h"
 #include "src/indexes/text/flat_position_map.h"
@@ -39,7 +40,9 @@ returns true. Through this process, it "merges" multiple posting iterators.
 search for positions in asc order across all the required words within the same
 key and same field. Once no more positions are found, DonePositions returns
 true. Thus, position iteration is a union of all position iterators obtained
-from all the posting iterators that are on the current key and field mask.
+from all the posting iterators that are on the current key and field mask. This
+half lives in KeyTermIterator, which TermIterator embeds and re-targets at each
+key, and which per-key evaluation uses on its own over one copied-out key.
 
 */
 
@@ -59,20 +62,114 @@ struct TermScoringParams {
   absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
 };
 
-// `KeyIt` is the per-word key source: Postings::KeyIterator over a whole
-// posting list for the entries-fetcher path, KeyPosting over one copied-out key
-// for per-key evaluation. Same interface, so one implementation serves both.
-template <class KeyIt>
-class TermIteratorT : public TextIterator {
+// The union of the words' positions within one key: the position half of the
+// TermIterator contract over a fixed key. Per-key evaluation (filter
+// revalidation, prefilter candidates) hands it the position maps that
+// Postings::LookupKey copied out and uses it as the leaf TextIterator directly;
+// TermIterator embeds one and re-targets it at each key the merge lands on.
+// Never scores: per-key callers score through ResolvedLeafCache::Probe.
+class KeyTermIterator final : public TextIterator {
  public:
-  using KeyIterators = absl::InlinedVector<KeyIt, kWordExpansionInlineCapacity>;
+  using PositionMaps =
+      absl::InlinedVector<const FlatPositionMap*, kWordExpansionInlineCapacity>;
 
-  TermIteratorT(KeyIterators&& key_iterators,
-                const FieldMaskPredicate query_field_mask,
-                const bool require_positions,
-                const FieldMaskPredicate stem_field_mask = 0,
-                bool has_original = false,
-                const TermScoringParams& scoring = {});
+  // Primes at the first position of `key` that falls in `query_field_mask`.
+  // `key` must outlive the iterator; `maps` is only read.
+  KeyTermIterator(const Key& key, absl::Span<const FlatPositionMap* const> maps,
+                  FieldMaskPredicate query_field_mask)
+      : query_field_mask_(query_field_mask) {
+    Reset(key, [maps](auto&& fn) {
+      for (const FlatPositionMap* map : maps) fn(*map);
+    });
+  }
+  // Empty iterator for embedding; Reset() before use.
+  explicit KeyTermIterator(FieldMaskPredicate query_field_mask);
+
+  // Re-targets the iterator at `key`. `for_each_map(fn)` must call
+  // `fn(const FlatPositionMap&)` once per word on `key`; a template so the
+  // entries-fetcher hot path passes a lambda over its active cursors with no
+  // intermediate array and no indirect call. Reuses the inlined storage, so a
+  // reset allocates only when the word expansion exceeds the inline capacity.
+  template <class ForEachMap>
+  void Reset(const Key& key, ForEachMap&& for_each_map) {
+    ClearPositionState();
+    key_ = &key;
+    done_ = false;
+    for_each_map([this](const FlatPositionMap& map) {
+      pos_iterators_.emplace_back(map);
+      // Populate the position heap.
+      InsertValidPositionIterator(pos_iterators_.size() - 1);
+    });
+    KeyTermIterator::NextPosition();
+  }
+
+  /* Implementation of TextIterator APIs */
+  FieldMaskPredicate QueryFieldMask() const override {
+    return query_field_mask_;
+  }
+  // Key-level iteration: a single key.
+  bool DoneKeys() const override { return done_; }
+  const Key& CurrentKey() const override {
+    CHECK(!done_);
+    return *key_;
+  }
+  bool NextKey() override {
+    ClearPositionState();
+    done_ = true;
+    return false;
+  }
+  bool SeekForwardKey(const Key& target_key) override {
+    if (!done_ && *key_ < target_key) NextKey();
+    return !done_;
+  }
+  // Position-level iteration
+  bool DonePositions() const override;
+  const PositionRange& CurrentPosition() const override;
+  bool NextPosition() override;
+  bool SeekForwardPosition(Position target_position) override;
+  FieldMaskPredicate CurrentFieldMask() const override;
+  bool IsIteratorValid() const override {
+    return !done_ && current_position_.has_value() &&
+           current_field_mask_ != 0ULL;
+  }
+  float GetScore() const override { return done_ ? 0.0f : 1.0f; }
+
+ private:
+  const FieldMaskPredicate query_field_mask_;
+  const Key* key_{nullptr};
+  bool done_{true};
+  absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
+      pos_iterators_;
+  std::optional<PositionRange> current_position_;
+  FieldMaskPredicate current_field_mask_{0ULL};
+  // Pending queue: heap of valid iterators not currently being processed.
+  // Provides O(1) access to the minimum position and O(log K) extraction.
+  valkey_search::InlinedPriorityQueue<std::pair<uint32_t, size_t>,
+                                      kWordExpansionInlineCapacity>
+      pos_set_;
+  // Indices of iterators at current_position_ (active, not in pos_set_)
+  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
+      current_pos_indices_;
+
+  bool FindMinimumValidPosition();
+  void InsertValidPositionIterator(size_t idx);
+  void ClearPositionState();
+};
+
+// Merges the words' posting lists into one lexically ordered key stream and
+// scores each key; the positions within the current key come from the embedded
+// KeyTermIterator. Entries-fetcher path only (multi-key).
+class TermIterator : public TextIterator {
+ public:
+  using KeyIterators =
+      absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>;
+
+  TermIterator(KeyIterators&& key_iterators,
+               const FieldMaskPredicate query_field_mask,
+               const bool require_positions,
+               const FieldMaskPredicate stem_field_mask = 0,
+               bool has_original = false,
+               const TermScoringParams& scoring = {});
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -80,18 +177,23 @@ class TermIteratorT : public TextIterator {
   const Key& CurrentKey() const override;
   bool NextKey() override;
   bool SeekForwardKey(const Key& target_key) override;
-  // Position-level iteration
-  bool DonePositions() const override;
-  const PositionRange& CurrentPosition() const override;
-  bool NextPosition() override;
-  bool SeekForwardPosition(Position target_position) override;
-  FieldMaskPredicate CurrentFieldMask() const override;
+  // Position-level iteration, delegated to positions_ (statically bound).
+  bool DonePositions() const override { return positions_.DonePositions(); }
+  const PositionRange& CurrentPosition() const override {
+    return positions_.CurrentPosition();
+  }
+  bool NextPosition() override { return positions_.NextPosition(); }
+  bool SeekForwardPosition(Position target_position) override {
+    return positions_.SeekForwardPosition(target_position);
+  }
+  FieldMaskPredicate CurrentFieldMask() const override {
+    return positions_.CurrentFieldMask();
+  }
   // Returns true if iterator is at a valid state with current key, position,
-  // and field.
+  // and field. positions_ is only reset when positions are required.
   bool IsIteratorValid() const override {
     if (require_positions_) {
-      return current_key_ && current_position_.has_value() &&
-             current_field_mask_ != 0ULL;
+      return current_key_ && positions_.IsIteratorValid();
     }
     return current_key_ != nullptr;
   }
@@ -105,13 +207,10 @@ class TermIteratorT : public TextIterator {
   const FieldMaskPredicate query_field_mask_;
   const FieldMaskPredicate stem_field_mask_;
   KeyIterators key_iterators_;
-  absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>
-      pos_iterators_;
-  // Raw pointer to the current key, owned by its KeyIt: a btree_map entry
-  // (immutable while the reader lock is held) or a KeyPosting's copy.
+  // Raw pointer to the current key's btree_map entry, immutable while the
+  // reader lock is held.
   const Key* current_key_{nullptr};
-  std::optional<PositionRange> current_position_;
-  FieldMaskPredicate current_field_mask_;
+  KeyTermIterator positions_;
   const bool require_positions_;
   const bool has_original_;
   // Whether a stem root literal iterator is present (index has_original_?1:0).
@@ -149,28 +248,14 @@ class TermIteratorT : public TextIterator {
   valkey_search::InlinedPriorityQueue<valkey_search::PriorityQueueEntry<Key>,
                                       kWordExpansionInlineCapacity>
       key_set_;
-  // Pending queue: heap of valid iterators not currently being processed.
-  // Provides O(1) access to the minimum position and O(log K) extraction.
-  valkey_search::InlinedPriorityQueue<std::pair<uint32_t, size_t>,
-                                      kWordExpansionInlineCapacity>
-      pos_set_;
   // Indices of iterators at current_key_ (active, not in key_set_)
   absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
       current_key_indices_;
-  // Indices of iterators at current_position_ (active, not in pos_set_)
-  absl::InlinedVector<size_t, kWordExpansionInlineCapacity>
-      current_pos_indices_;
 
   bool FindMinimumValidKey();
   void InsertValidKeyIterator(size_t idx);
-  bool FindMinimumValidPosition();
-  void InsertValidPositionIterator(size_t idx);
   void ClearKeyState();
-  void ClearPositionState();
 };
-
-using TermIterator = TermIteratorT<Postings::KeyIterator>;
-using KeyTermIterator = TermIteratorT<KeyPosting>;
 
 }  // namespace valkey_search::indexes::text
 

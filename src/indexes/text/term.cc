@@ -15,18 +15,15 @@
 
 namespace valkey_search::indexes::text {
 
-template <class KeyIt>
-TermIteratorT<KeyIt>::TermIteratorT(KeyIterators&& key_iterators,
-                                    const FieldMaskPredicate query_field_mask,
-                                    const bool require_positions,
-                                    const FieldMaskPredicate stem_field_mask,
-                                    bool has_original,
-                                    const TermScoringParams& scoring)
+TermIterator::TermIterator(KeyIterators&& key_iterators,
+                           const FieldMaskPredicate query_field_mask,
+                           const bool require_positions,
+                           const FieldMaskPredicate stem_field_mask,
+                           bool has_original, const TermScoringParams& scoring)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
       key_iterators_(std::move(key_iterators)),
-      current_position_(std::nullopt),
-      current_field_mask_(0ULL),
+      positions_(query_field_mask),
       require_positions_(require_positions),
       has_original_(has_original),
       has_root_(scoring.has_root),
@@ -73,12 +70,11 @@ TermIteratorT<KeyIt>::TermIteratorT(KeyIterators&& key_iterators,
   }
   // Prime the first key and position if they exist.
   if (!key_set_.empty()) {
-    TermIteratorT::NextKey();
+    TermIterator::NextKey();
   }
 }
 
-template <class KeyIt>
-float TermIteratorT<KeyIt>::GetScore() const {
+float TermIterator::GetScore() const {
   if (DoneKeys()) {
     return 0.0f;
   }
@@ -140,28 +136,24 @@ float TermIteratorT<KeyIt>::GetScore() const {
   return score;
 }
 
-template <class KeyIt>
-FieldMaskPredicate TermIteratorT<KeyIt>::QueryFieldMask() const {
+FieldMaskPredicate TermIterator::QueryFieldMask() const {
   return query_field_mask_;
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::DoneKeys() const {
+bool TermIterator::DoneKeys() const {
   // O(1) check: current_key_ is nullified when FindMinimumValidKey exhausts all
   // iterators.
   return !current_key_;
 }
 
-template <class KeyIt>
-const InternedStringPtr& TermIteratorT<KeyIt>::CurrentKey() const {
+const InternedStringPtr& TermIterator::CurrentKey() const {
   CHECK(current_key_);
   return *current_key_;
 }
 
 // Helper function to advance key iterators and populate the heap with valid
 // iterators for the new key.
-template <class KeyIt>
-void TermIteratorT<KeyIt>::InsertValidKeyIterator(size_t idx) {
+void TermIterator::InsertValidKeyIterator(size_t idx) {
   auto& key_iter = key_iterators_[idx];
   // Use query_field_mask for the original word (idx 0) or if no stem mask is
   // provided.
@@ -178,8 +170,7 @@ void TermIteratorT<KeyIt>::InsertValidKeyIterator(size_t idx) {
   }
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::FindMinimumValidKey() {
+bool TermIterator::FindMinimumValidKey() {
   // 1. If the heap is empty, all underlying iterators are exhausted.
   // Note: This can be due to three cases:
   //   a) Initialization: No valid keys were found across any
@@ -206,19 +197,16 @@ bool TermIteratorT<KeyIt>::FindMinimumValidKey() {
   }
   // 4. Initialize position iteration for the specific new key if required.
   if (require_positions_) {
-    ClearPositionState();
-    for (size_t idx : current_key_indices_) {
-      pos_iterators_.emplace_back(key_iterators_[idx].GetPositionIterator());
-      // Populate the position heap.
-      InsertValidPositionIterator(pos_iterators_.size() - 1);
-    }
-    TermIteratorT::NextPosition();
+    positions_.Reset(*current_key_, [this](auto&& fn) {
+      for (size_t idx : current_key_indices_) {
+        fn(key_iterators_[idx].GetPositionMap());
+      }
+    });
   }
   return true;
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::NextKey() {
+bool TermIterator::NextKey() {
   if (current_key_) {
     // Advance all iterators that contributed to the current key.
     for (size_t idx : current_key_indices_) {
@@ -230,8 +218,7 @@ bool TermIteratorT<KeyIt>::NextKey() {
   return FindMinimumValidKey();
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::SeekForwardKey(const InternedStringPtr& target_key) {
+bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   if (current_key_ && *current_key_ >= target_key) return true;
   // Drain laggards from the heap that are behind the target.
   while (!key_set_.empty() && *key_set_.min().key < target_key) {
@@ -251,21 +238,21 @@ bool TermIteratorT<KeyIt>::SeekForwardKey(const InternedStringPtr& target_key) {
   return FindMinimumValidKey();
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::DonePositions() const {
+KeyTermIterator::KeyTermIterator(FieldMaskPredicate query_field_mask)
+    : query_field_mask_(query_field_mask) {}
+
+bool KeyTermIterator::DonePositions() const {
   return !current_position_.has_value();
 }
 
-template <class KeyIt>
-const PositionRange& TermIteratorT<KeyIt>::CurrentPosition() const {
+const PositionRange& KeyTermIterator::CurrentPosition() const {
   CHECK(current_position_.has_value());
   return current_position_.value();
 }
 
 // Helper function to advance position iterators and populate the heap with
 // valid iterators for the new position.
-template <class KeyIt>
-void TermIteratorT<KeyIt>::InsertValidPositionIterator(size_t idx) {
+void KeyTermIterator::InsertValidPositionIterator(size_t idx) {
   auto& pos_iter = pos_iterators_[idx];
   // Skip positions that don't match the query field mask.
   while (pos_iter.IsValid() &&
@@ -278,8 +265,7 @@ void TermIteratorT<KeyIt>::InsertValidPositionIterator(size_t idx) {
 }
 
 // Position Logic follows the same Heap pattern as Key logic.
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::FindMinimumValidPosition() {
+bool KeyTermIterator::FindMinimumValidPosition() {
   // 1. If the heap is empty, we have exhausted all positions for the current
   // key.
   // Note: This can be due to three cases:
@@ -316,8 +302,7 @@ bool TermIteratorT<KeyIt>::FindMinimumValidPosition() {
   return true;
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::NextPosition() {
+bool KeyTermIterator::NextPosition() {
   if (current_position_.has_value()) {
     for (size_t idx : current_pos_indices_) {
       pos_iterators_[idx].NextPosition();
@@ -328,8 +313,7 @@ bool TermIteratorT<KeyIt>::NextPosition() {
   return FindMinimumValidPosition();
 }
 
-template <class KeyIt>
-bool TermIteratorT<KeyIt>::SeekForwardPosition(Position target_position) {
+bool KeyTermIterator::SeekForwardPosition(Position target_position) {
   if (current_position_.has_value() &&
       current_position_.value().start >= target_position) {
     return true;
@@ -352,30 +336,26 @@ bool TermIteratorT<KeyIt>::SeekForwardPosition(Position target_position) {
   return FindMinimumValidPosition();
 }
 
-template <class KeyIt>
-FieldMaskPredicate TermIteratorT<KeyIt>::CurrentFieldMask() const {
+FieldMaskPredicate KeyTermIterator::CurrentFieldMask() const {
   CHECK(current_field_mask_ != 0ULL);
   return current_field_mask_;
 }
 
-template <class KeyIt>
-void TermIteratorT<KeyIt>::ClearKeyState() {
+void TermIterator::ClearKeyState() {
   current_key_ = nullptr;
   key_set_.clear();
   current_key_indices_.clear();
-  ClearPositionState();
+  if (require_positions_) {
+    positions_.NextKey();
+  }
 }
 
-template <class KeyIt>
-void TermIteratorT<KeyIt>::ClearPositionState() {
+void KeyTermIterator::ClearPositionState() {
   pos_iterators_.clear();
   pos_set_.clear();
   current_pos_indices_.clear();
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
 }
-
-template class TermIteratorT<Postings::KeyIterator>;
-template class TermIteratorT<KeyPosting>;
 
 }  // namespace valkey_search::indexes::text

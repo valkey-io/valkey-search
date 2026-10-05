@@ -203,11 +203,11 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   and `KeyCount`s inside `WithStemParents`' callback. Deadlock-free by the same argument:
   writers take the stem lock only after releasing both the bucket and the tree lock. The lock
   table in review-amendments.md is left for its author to amend.
-- **Per-key `TextPredicate::Evaluate` uses the single-key source in both modes.** The overrides
-  build a `KeyTermIterator` over copied `PostingValue`s in the background too, so there is one
-  per-key probe path instead of a `KeyIterator` variant beside it. The entries-fetcher path
-  (`BuildTextIterator`) keeps its multi-key `TermIterator`; `TermIteratorT<KeyIt>` is the one
-  template behind both aliases.
+- **Per-key `TextPredicate::Evaluate` uses the single-key iterator in both modes.** The
+  overrides build a `KeyTermIterator` over the copied-out position maps in the background too,
+  so there is one per-key probe path instead of a `KeyIterator` variant beside it. The
+  entries-fetcher path (`BuildTextIterator`) keeps its multi-key `TermIterator`, which embeds a
+  `KeyTermIterator` for the positions of the current key (decision 29).
 - **`lock` is a plain `bool`** on `WithWordLock`, `WithStemParents` and `TextPredicate::Evaluate`,
   following `GetKeyDocLen(key, lock)` / `GetPerKeyTextIndex(key, lock)` /
   `GetTagValueDocCount(value, lock)`. No default, so every caller states its mode.
@@ -251,7 +251,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   `--asan` build (`halt_on_error=1`, no sanitizer output), which covers decision 24's
   use-after-free; the stem add/delete race itself has no deterministic hook, so ASAN is its
   check.
-- `KeyPosting` holds `const Key*`, not a `Key`: the target key outlives every per-key
+- `KeyTermIterator` holds `const Key*`, not a `Key`: the target key outlives every per-key
   iterator, and a copy would cost an atomic pair per retained match.
 - Integration (devcontainer, `-k` over cancel, fulltext, scoring, stale_score_after_mutation,
   non_vector, filter_expressions, ft_hybrid, vector_mutation_rescore, postfilter,
@@ -262,3 +262,56 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   already uses.
 - Not run: the full integration suite and the C++ `testing/integration` harness. The known tag
   rescore gap (#1439, PR #1491) is out of scope and follows this PR.
+
+#### Choices made while implementing decision 29
+
+- **`Reset` takes a producer, not a span.** The first cut gathered the active cursors' maps into
+  a `PositionMaps` member of `TermIterator` and passed it as a span; that added an
+  `InlinedVector<ptr, 200>` (1.6 KB) to every `TermIterator`, which is zero-filled per query,
+  and the pure-text benchmark moved -3% to -5% against the template commit. `Reset(key,
+  for_each_map)` is a template over a callable that yields `const FlatPositionMap&`; the
+  entries-fetcher path passes a lambda over `current_key_indices_` and the per-key constructor a
+  lambda over its span. No array, no indirect call; `sizeof(TermIterator)` is 29,792 bytes
+  against 29,760 at the template commit.
+- **`Postings::KeyIterator::GetPositionMap()`** is the new primitive; `GetPositionIterator()`
+  wraps it. `textinfocmd.cc` and `posting_test.cc` still use the latter.
+- **`KeyTermIterator::NextKey` clears position state** so a per-key iterator that is advanced
+  reports `DonePositions()` like an exhausted `TermIterator`. `TermIterator::ClearKeyState`
+  calls it only when positions were required; otherwise `positions_` was never reset.
+- **`MainThreadLockModesMatchBackground` rows all use the `-@rating:[500 600]` form.** The
+  fixture's numeric index holds no records, so `@rating:[0 100]` never matches and the five
+  rows that used it only ever compared scores of non-matching documents. With the negated range
+  19 of the 52 (filter, key) pairs are true verdicts, including the six new `INORDER`/`SLOP`
+  rows.
+
+#### Verification (decision 29)
+
+- Unit tests: all 21 host binaries pass (`.build-debug`).
+- Benchmark: boda26's `search_benchmark.sh` (the method behind the PR's perf comment), release
+  builds in the devcontainer, both sides compiled with `-falign-functions=64 -falign-loops=32`
+  as the comment did, 1000 docs, 500 connections, median of 7 interleaved paired runs, server
+  pinned to one core, client to two others, nothing else running. Three binaries: `main`
+  (cc6cb5e, the PR's merge base), `template` (7595926, round-1 commit), `refactor` (this
+  commit's text/query files on 7595926). An A/A run of `template` against itself gives the
+  noise floor on this host: rps -2.0% to +0.1%, with the candidate side consistently low (it
+  runs second in each pair).
+
+  | Scenario | main rps | template rps | Δ | refactor rps | Δ vs main | Δ vs template |
+  |---|---|---|---|---|---|---|
+  | single word | 9707 | 9846 | +0.9% | 9878 | +1.3% | -0.3% |
+  | two words (AND) | 5890 | 6081 | +1.6% | 5986 | +1.8% | -1.8% |
+  | three words (AND) | 3886 | 4011 | +3.0% | 4010 | +2.9% | +0.6% |
+  | OR of two | 6514 | 6556 | +2.3% | 6612 | +0.3% | -0.7% |
+  | OR of three | 4732 | 4814 | +3.1% | 4791 | +1.5% | -1.4% |
+  | text+num+tag | 6270 | 6915 | +10.6% | 6768 | +8.9% | -0.3% |
+  | 2w AND+num+tag | 4694 | 5007 | +7.6% | 4975 | +7.2% | -1.2% |
+  | 2w OR+num+tag | 1868 | 2539 | +35.9% | 2560 | +34.2% | +1.5% |
+
+  Δ columns are the median paired delta of their own run (template vs main, refactor vs main,
+  refactor vs template), so they do not equal the ratio of the displayed medians; refactor rps
+  shown is from the refactor-vs-main run. Template vs main reproduces the PR comment (pure text
+  within noise, mixed queries +8% to +36%). Refactor vs template is inside the A/A envelope on
+  every row. None of the eight queries is positional, so this measures the de-templated key
+  merge and the larger object, not `Reset`; the positional path is covered by the unit cases and
+  the revalidation integration test below. `libsearch.so` shrinks by 133 KB (one fewer
+  `TermIterator` instantiation).

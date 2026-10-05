@@ -119,10 +119,6 @@ std::optional<PostingValue> Postings::LookupKey(BorrowedInternedStringPtr key,
   return it->second;
 }
 
-bool KeyPosting::ContainsFields(uint64_t field_mask) const {
-  return text::ContainsFields(value_, field_mask);
-}
-
 // Defragment posting list
 Postings* Postings::Defrag() { return this; }
 
@@ -172,12 +168,14 @@ const Key& Postings::KeyIterator::GetKey() const {
   return current_->first;
 }
 
-PositionIterator Postings::KeyIterator::GetPositionIterator() const {
+const FlatPositionMap& Postings::KeyIterator::GetPositionMap() const {
   CHECK(key_map_ != nullptr && current_ != end_)
       << "KeyIterator is invalid or exhausted";
+  return *current_->second.map;
+}
 
-  FlatPositionMap* flat_map = current_->second.map;
-  return PositionIterator(*flat_map);
+PositionIterator Postings::KeyIterator::GetPositionIterator() const {
+  return {GetPositionMap()};
 }
 
 size_t Postings::KeyIterator::GetTermFrequency() const {

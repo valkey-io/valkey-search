@@ -2610,18 +2610,31 @@ TEST_F(ScoreTextQueryTestBase, MainThreadLockModesMatchBackground) {
       indexes::scoring::GetScorer(indexes::scoring::ScorerType::kBm25Std);
   auto *text_schema = schema->GetTextIndexSchema().get();
   // Tag leaves are excluded: main-thread tag membership comes from the fetched
-  // record, exercised through VerifyFilter.
-  const std::vector<std::string> filters = {
-      "@text:running @rating:[0 100]",
-      "@text:run @rating:[0 100]",
-      "@text:cat* @rating:[0 100]",
-      "@text:*ing @rating:[0 100]",
-      "@text:%cat% @rating:[0 100]",
-      "-@rating:[500 600] @text:\"cat ran\"",
-      "-@rating:[500 600] @text:\"ran cat\"",
+  // record, exercised through VerifyFilter. The numeric index holds no records,
+  // so the negated range is what lets the verdict be true. INORDER and SLOP
+  // make every text leaf positional, so they also cover the per-key position
+  // merge on both paths.
+  const TextParsingOptions plain{};
+  const TextParsingOptions inorder{.inorder = true};
+  const TextParsingOptions slop0{.slop = 0};
+  const TextParsingOptions slop2{.slop = 2};
+  const std::vector<std::pair<std::string, TextParsingOptions>> filters = {
+      {"-@rating:[500 600] @text:running", plain},
+      {"-@rating:[500 600] @text:run", plain},
+      {"-@rating:[500 600] @text:cat*", plain},
+      {"-@rating:[500 600] @text:*ing", plain},
+      {"-@rating:[500 600] @text:%cat%", plain},
+      {"-@rating:[500 600] @text:\"cat ran\"", plain},
+      {"-@rating:[500 600] @text:\"ran cat\"", plain},
+      {"-@rating:[500 600] @text:(cat ran)", inorder},
+      {"-@rating:[500 600] @text:(ran cat)", inorder},
+      {"-@rating:[500 600] @text:(cat fast)", slop0},
+      {"-@rating:[500 600] @text:(cat fast)", slop2},
+      {"-@rating:[500 600] @text:(run* fast)", inorder},
+      {"-@rating:[500 600] @text:(running | ran)", inorder},
   };
-  for (const auto &filter : filters) {
-    auto parsed = FilterParser(*schema, filter, TextParsingOptions{}).Parse();
+  for (const auto &[filter, options] : filters) {
+    auto parsed = FilterParser(*schema, filter, options).Parse();
     ASSERT_TRUE(parsed.ok()) << parsed.status();
     query::ResolvedLeafCache background(
         text_schema,

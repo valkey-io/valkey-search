@@ -16,29 +16,15 @@
 #include "invasive_ptr.h"
 #include "posting.h"
 #include "rax_wrapper.h"
-#include "text.h"
 
 namespace valkey_search::indexes::text {
 
 // Fuzzy search using Damerau-Levenshtein distance on RadixTree
 struct FuzzySearch {
-  // The sink for an entries fetcher: one key iterator and one dt per matched
-  // term, index-aligned so TermIterator scores a document on the matched
-  // term's own dt.
-  struct Expansion {
-    absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
-        key_iterators;
-    absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
-
-    bool operator()(absl::string_view, const InvasivePtr<Postings> &postings) {
-      per_term_dt.push_back(postings->GetKeyCount());
-      key_iterators.emplace_back(postings->GetKeyIterator());
-      return true;
-    }
-  };
-
   // Calls `sink(word, postings)` for each word within edit distance
   // <= max_distance, at most max_words times or until the sink returns false.
+  // Used by both the entries fetcher and per-key evaluators which require
+  // different data to be collected.
   template <class Sink>
   static void Search(const Rax &tree, absl::string_view pattern,
                      size_t max_distance, uint32_t max_words, Sink &&sink) {

@@ -326,19 +326,29 @@ std::unique_ptr<indexes::text::TextIterator> FuzzyPredicate::BuildTextIterator(
     const std::shared_ptr<indexes::text::TextIndex> &text_index,
     FieldMaskPredicate field_mask, bool require_positions,
     float or_weight_multiplier) const {
+  absl::InlinedVector<indexes::text::Postings::KeyIterator,
+                      indexes::text::kWordExpansionInlineCapacity>
+      key_iterators;
+  absl::InlinedVector<uint32_t, indexes::text::kWordExpansionInlineCapacity>
+      per_term_dt;
   // Limit the number of term word expansions
   uint32_t max_words = options::GetMaxTermExpansions().GetValue();
-  indexes::text::FuzzySearch::Expansion expansion;
-  indexes::text::FuzzySearch::Search(text_index->GetPrefix(), GetTextString(),
-                                     GetDistance(), max_words, expansion);
+  indexes::text::FuzzySearch::Search(
+      text_index->GetPrefix(), GetTextString(), GetDistance(), max_words,
+      [&](absl::string_view,
+          const indexes::text::InvasivePtr<indexes::text::Postings> &postings) {
+        per_term_dt.push_back(postings->GetKeyCount());
+        key_iterators.emplace_back(postings->GetKeyIterator());
+        return true;
+      });
   return std::make_unique<indexes::text::TermIterator>(
-      std::move(expansion.key_iterators), field_mask, require_positions,
+      std::move(key_iterators), field_mask, require_positions,
       /*stem_field_mask=*/0, /*has_original=*/false,
       indexes::text::TermScoringParams{
           .leaf_weight = GetWeight() * or_weight_multiplier,
           .text_index_schema = GetTextIndexSchema().get(),
           .scorer = GetScorer(),
-          .per_term_dt = std::move(expansion.per_term_dt)});
+          .per_term_dt = std::move(per_term_dt)});
 }
 
 /*

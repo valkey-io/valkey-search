@@ -66,7 +66,7 @@ The following four fields are only present when the index has at least one `TEXT
 
 The following field is always present:
 
-- `language` (string) The index's `LANGUAGE`. Currently always `english`.
+- `language` (string) The index's `LANGUAGE`, reported in lowercase (for example, `english`). `english` if the index was created without `LANGUAGE`.
 
 ### NUMERIC Field Type Extension
 

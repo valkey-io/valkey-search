@@ -235,6 +235,25 @@ TEST_F(AggregateExecTest, ApplyTest) {
   EXPECT_EQ(*records[1], *r1);
 }
 
+// An evaluation error fails the query, as in Redisearch, from 1.3.0 on.
+TEST_F(AggregateExecTest, EvaluationErrorFailsTheStage) {
+  const auto saved = options::GetEmulateRelease().GetValue();
+  for (absl::string_view stage :
+       {"APPLY strlen(@n1) AS x", "FILTER strlen(@n1)"}) {
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 3, 0}));
+    auto records = MakeData(2);
+    auto status = MakeStages(stage)->stages_[0]->Execute(records);
+    EXPECT_EQ(status.code(), absl::StatusCode::kInvalidArgument) << stage;
+    EXPECT_NE(status.message().find("strlen"), absl::string_view::npos)
+        << status;
+
+    VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue({1, 2, 0}));
+    records = MakeData(2);
+    VMSDK_EXPECT_OK(MakeStages(stage)->stages_[0]->Execute(records));
+  }
+  VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
+}
+
 TEST_F(AggregateExecTest, SortTest) {
   struct Testcase {
     std::string text_;

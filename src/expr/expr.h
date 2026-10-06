@@ -25,6 +25,18 @@ class Expression {
  public:
   virtual ~Expression() = default;
   //
+  // The type of value an expression produces, known at compile time. The
+  // compiler uses it to choose a type-specific operator -- `@f < 5` compares
+  // numbers, `@f < '5'` compares strings -- instead of deciding from the
+  // runtime Values. A Nil can stand in for a value of any of these types.
+  //
+  enum class Type {
+    kNumber,
+    kString,
+    kArray,   // TOLIST and RANDOM_SAMPLE results
+    kVector,  // a VECTOR field: a blob on HASH, JSON text on JSON
+  };
+  //
   // These objects are provided at evaluation time.
   //
   // Callers extend EvalContext with information to aid run-time
@@ -43,6 +55,7 @@ class Expression {
    public:
     virtual ~AttributeReference() = default;
     virtual Value GetValue(EvalContext& ctx, const Record& record) const = 0;
+    virtual Type GetResultType() const = 0;
     virtual void Dump(std::ostream& os) const = 0;
     friend std::ostream& operator<<(std::ostream& os,
                                     const AttributeReference* p) {
@@ -66,12 +79,17 @@ class Expression {
     // resulting kUNORDERED as equal for == and as not-less for >=, and so
     // would answer such a comparison true.
     virtual bool UseFilterComparisonSemantics() const = 0;
+    // True for a command that shipped before 1.3.0, whose expressions must
+    // reproduce the release search.emulate-release names. Commands new in
+    // 1.3.0 (FT.CREATE FILTER, FT.HYBRID) have no older behavior to keep.
+    virtual bool HonorsEmulateRelease() const = 0;
   };
 
   // The two basic operations for Expression(s).
   static absl::StatusOr<std::unique_ptr<Expression>> Compile(
       CompileContext& ctx, absl::string_view s);
   virtual Value Evaluate(EvalContext& ctx, const Record& record) const = 0;
+  virtual Type GetResultType() const = 0;
   virtual void Dump(std::ostream& os) const = 0;
 
   friend std::ostream& operator<<(std::ostream& os, const Expression& e) {

@@ -40,17 +40,20 @@ static bool MissingPropagates() {
 }
 
 struct Constant : Expression {
-  Constant(std::string constant) : constant_(std::move(constant)) {}
-  Constant(double constant) : constant_(constant) {}
+  Constant(std::string constant)
+      : constant_(std::move(constant)), type_(Type::kString) {}
+  Constant(double constant) : constant_(constant), type_(Type::kNumber) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return constant_;
   }
+  Type GetResultType() const override { return type_; }
   void Dump(std::ostream &os) const override {
     os << "Constant(" << constant_ << ")";
   }
 
  private:
   Value constant_;
+  Type type_;
 };
 
 struct Parameter : Expression {
@@ -59,6 +62,8 @@ struct Parameter : Expression {
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return value_;
   }
+  // PARAMS values always arrive as strings.
+  Type GetResultType() const override { return Type::kString; }
   void Dump(std::ostream &os) const override {
     os << "$" << name_ << "(" << value_ << ")";
   }
@@ -75,6 +80,7 @@ struct AttributeValue : Expression {
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return ref_->GetValue(ctx, record);
   }
+  Type GetResultType() const override { return ref_->GetResultType(); }
   void Dump(std::ostream &os) const override { os << '@' << identifier_; }
 
  private:
@@ -86,6 +92,10 @@ struct Not : Expression {
   explicit Not(ExprPtr &&p) : expr_(std::move(p)) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto value = expr_->Evaluate(ctx, record);
+    // An error is not a falsy value: negating it must not turn it into true.
+    if (value.IsError()) {
+      return value;
+    }
     // No FILTER special case here: a missing field already made its
     // comparison false (FilterFunc* in value.cc), so negating it gives true,
     // which is what Redisearch answers for `!(@absent == 'x')`.
@@ -99,6 +109,7 @@ struct Not : Expression {
     // always engaged; the dereference is safe.
     return Value(!*value.AsBool());
   }
+  Type GetResultType() const override { return Type::kNumber; }
   void Dump(std::ostream &os) const override {
     os << '!';
     expr_->Dump(os);
@@ -108,17 +119,23 @@ struct Not : Expression {
   ExprPtr expr_;
 };
 
+struct FunctionTableEntry;
+
 struct FunctionCall : Expression {
   using Func = Value (*)(EvalContext &ctx, const Record &record,
                          const absl::InlinedVector<ExprPtr, 4> &params);
-  static absl::StatusOr<Func> LookUpAndValidate(
+  static absl::StatusOr<const FunctionTableEntry *> LookUpAndValidate(
       const std::string &name, const absl::InlinedVector<ExprPtr, 4> &params);
-  FunctionCall(std::string name, Func func,
+  FunctionCall(std::string name, Func func, Type type,
                absl::InlinedVector<ExprPtr, 4> params)
-      : name_(std::move(name)), func_(func), params_(std::move(params)) {}
+      : name_(std::move(name)),
+        func_(func),
+        type_(type),
+        params_(std::move(params)) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     return (*func_)(ctx, record, params_);
   }
+  Type GetResultType() const override { return type_; }
   void Dump(std::ostream &os) const override {
     os << name_ << '(';
     for (auto &p : params_) {
@@ -133,8 +150,17 @@ struct FunctionCall : Expression {
  private:
   std::string name_;
   Func func_;
+  Type type_;
   absl::InlinedVector<ExprPtr, 4> params_;
 };
+
+// An error in any argument is the call's result, ahead of everything else.
+template <typename... Values>
+static const Value *FirstError(const Values &...values) {
+  const Value *error = nullptr;
+  ((error = error ? error : (values.IsError() ? &values : nullptr)), ...);
+  return error;
+}
 
 // Redisearch drops a record whose expression reached for a field the key does
 // not have, so a missing argument short-circuits the whole call. exists() is
@@ -148,6 +174,9 @@ Value MonadicFunctionProxy(
     const absl::InlinedVector<expr::ExprPtr, 4> &params) {
   CHECK(params.size() == 1);
   auto value = params[0]->Evaluate(ctx, record);
+  if (value.IsError()) {
+    return value;
+  }
   if (!pass_missing && value.IsMissing() && MissingPropagates()) {
     return Value::Missing();
   }
@@ -161,6 +190,9 @@ Value DyadicFunctionProxy(Expression::EvalContext &ctx,
   CHECK(params.size() == 2);
   auto l = params[0]->Evaluate(ctx, record);
   auto r = params[1]->Evaluate(ctx, record);
+  if (auto error = FirstError(l, r)) {
+    return *error;
+  }
   if ((l.IsMissing() || r.IsMissing()) && MissingPropagates()) {
     return Value::Missing();
   }
@@ -175,6 +207,9 @@ Value TriadicFunctionProxy(
   auto l = params[0]->Evaluate(ctx, record);
   auto m = params[1]->Evaluate(ctx, record);
   auto r = params[2]->Evaluate(ctx, record);
+  if (auto error = FirstError(l, m, r)) {
+    return *error;
+  }
   if ((l.IsMissing() || m.IsMissing() || r.IsMissing()) &&
       MissingPropagates()) {
     return Value::Missing();
@@ -186,7 +221,8 @@ using Func = Value (*)(Expression::EvalContext &ctx,
                        const Expression::Record &record,
                        const absl::InlinedVector<ExprPtr, 4> &params);
 
-Value FuncExists(const Value &o) { return Value(!o.IsNil()); }
+// A null is a value, so it exists.
+Value FuncExists(const Value &o) { return Value(!o.IsNil() || o.IsNull()); }
 
 Value ProxyConcat(Expression::EvalContext &ctx,
                   const Expression::Record &record,
@@ -194,6 +230,9 @@ Value ProxyConcat(Expression::EvalContext &ctx,
   absl::InlinedVector<Value, 4> values;
   for (auto &p : params) {
     values.emplace_back(p->Evaluate(ctx, record));
+    if (values.back().IsError()) {
+      return values.back();
+    }
   }
   return FuncConcat(values);
 }
@@ -207,6 +246,9 @@ Value ProxyTimefmt(Expression::EvalContext &ctx,
     fmt = params[1]->Evaluate(ctx, record);
   }
   auto value = params[0]->Evaluate(ctx, record);
+  if (auto error = FirstError(value, fmt)) {
+    return *error;
+  }
   if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
     return Value::Missing();
   }
@@ -222,6 +264,9 @@ Value ProxyParsetime(Expression::EvalContext &ctx,
     fmt = params[1]->Evaluate(ctx, record);
   }
   auto value = params[0]->Evaluate(ctx, record);
+  if (auto error = FirstError(value, fmt)) {
+    return *error;
+  }
   if ((value.IsMissing() || fmt.IsMissing()) && MissingPropagates()) {
     return Value::Missing();
   }
@@ -232,42 +277,62 @@ struct FunctionTableEntry {
   size_t min_argc;
   size_t max_argc;
   Func function;
+  Expression::Type result;
+  // The function as Redisearch has it, when that differs: it never turns a
+  // number argument into a string.
+  Func typed_function = nullptr;
 };
+
+constexpr auto kNum = Expression::Type::kNumber;
+constexpr auto kStr = Expression::Type::kString;
 
 static std::map<std::string, FunctionTableEntry> function_table{
-    {"exists", {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>}},
+    {"exists",
+     {1, 1, &MonadicFunctionProxy<FuncExists, kMissingIsAnArgument>, kNum}},
 
-    {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>}},
-    {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>}},
-    {"exp", {1, 1, &MonadicFunctionProxy<FuncExp>}},
-    {"floor", {1, 1, &MonadicFunctionProxy<FuncFloor>}},
-    {"log", {1, 1, &MonadicFunctionProxy<FuncLog>}},
-    {"log2", {1, 1, &MonadicFunctionProxy<FuncLog2>}},
-    {"sqrt", {1, 1, &MonadicFunctionProxy<FuncSqrt>}},
+    {"abs", {1, 1, &MonadicFunctionProxy<FuncAbs>, kNum}},
+    {"ceil", {1, 1, &MonadicFunctionProxy<FuncCeil>, kNum}},
+    {"exp", {1, 1, &MonadicFunctionProxy<FuncExp>, kNum}},
+    {"floor", {1, 1, &MonadicFunctionProxy<FuncFloor>, kNum}},
+    {"log", {1, 1, &MonadicFunctionProxy<FuncLog>, kNum}},
+    {"log2", {1, 1, &MonadicFunctionProxy<FuncLog2>, kNum}},
+    {"sqrt", {1, 1, &MonadicFunctionProxy<FuncSqrt>, kNum}},
 
-    {"startswith", {2, 2, &DyadicFunctionProxy<FuncStartswith>}},
-    {"lower", {1, 1, &MonadicFunctionProxy<FuncLower>}},
-    {"upper", {1, 1, &MonadicFunctionProxy<FuncUpper>}},
-    {"strlen", {1, 1, &MonadicFunctionProxy<FuncStrlen>}},
-    {"substr", {3, 3, &TriadicFunctionProxy<FuncSubstr>}},
-    {"contains", {2, 2, &DyadicFunctionProxy<FuncContains>}},
-    {"concat", {0, 50, &ProxyConcat}},
+    {"startswith",
+     {2, 2, &DyadicFunctionProxy<FuncStartswith>, kNum,
+      &DyadicFunctionProxy<FuncStartswithTyped>}},
+    {"lower",
+     {1, 1, &MonadicFunctionProxy<FuncLower>, kStr,
+      &MonadicFunctionProxy<FuncLowerTyped>}},
+    {"upper",
+     {1, 1, &MonadicFunctionProxy<FuncUpper>, kStr,
+      &MonadicFunctionProxy<FuncUpperTyped>}},
+    {"strlen",
+     {1, 1, &MonadicFunctionProxy<FuncStrlen>, kNum,
+      &MonadicFunctionProxy<FuncStrlenTyped>}},
+    {"substr",
+     {3, 3, &TriadicFunctionProxy<FuncSubstr>, kStr,
+      &TriadicFunctionProxy<FuncSubstrTyped>}},
+    {"contains",
+     {2, 2, &DyadicFunctionProxy<FuncContains>, kNum,
+      &DyadicFunctionProxy<FuncContainsTyped>}},
+    {"concat", {0, 50, &ProxyConcat, kStr}},
 
-    {"dayofweek", {1, 1, &MonadicFunctionProxy<FuncDayofweek>}},
-    {"dayofmonth", {1, 1, &MonadicFunctionProxy<FuncDayofmonth>}},
-    {"dayofyear", {1, 1, &MonadicFunctionProxy<FuncDayofyear>}},
-    {"monthofyear", {1, 1, &MonadicFunctionProxy<FuncMonthofyear>}},
-    {"year", {1, 1, &MonadicFunctionProxy<FuncYear>}},
-    {"minute", {1, 1, &MonadicFunctionProxy<FuncMinute>}},
-    {"hour", {1, 1, &MonadicFunctionProxy<FuncHour>}},
-    {"day", {1, 1, &MonadicFunctionProxy<FuncDay>}},
-    {"month", {1, 1, &MonadicFunctionProxy<FuncMonth>}},
+    {"dayofweek", {1, 1, &MonadicFunctionProxy<FuncDayofweek>, kNum}},
+    {"dayofmonth", {1, 1, &MonadicFunctionProxy<FuncDayofmonth>, kNum}},
+    {"dayofyear", {1, 1, &MonadicFunctionProxy<FuncDayofyear>, kNum}},
+    {"monthofyear", {1, 1, &MonadicFunctionProxy<FuncMonthofyear>, kNum}},
+    {"year", {1, 1, &MonadicFunctionProxy<FuncYear>, kNum}},
+    {"minute", {1, 1, &MonadicFunctionProxy<FuncMinute>, kNum}},
+    {"hour", {1, 1, &MonadicFunctionProxy<FuncHour>, kNum}},
+    {"day", {1, 1, &MonadicFunctionProxy<FuncDay>, kNum}},
+    {"month", {1, 1, &MonadicFunctionProxy<FuncMonth>, kNum}},
 
-    {"timefmt", {1, 2, &ProxyTimefmt}},
-    {"parsetime", {1, 2, &ProxyParsetime}},
+    {"timefmt", {1, 2, &ProxyTimefmt, kStr}},
+    {"parsetime", {1, 2, &ProxyParsetime, kNum}},
 };
 
-absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
+absl::StatusOr<const FunctionTableEntry *> FunctionCall::LookUpAndValidate(
     const std::string &name, const absl::InlinedVector<ExprPtr, 4> &params) {
   auto it = function_table.find(name);
   if (it == function_table.end()) {
@@ -283,7 +348,7 @@ absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
         "Function ", name, " expects no more than ", it->second.max_argc,
         " arguments, but ", params.size(), " were found."));
   }
-  return it->second.function;
+  return &it->second;
 }
 
 //
@@ -299,14 +364,35 @@ absl::StatusOr<Func> FunctionCall::LookUpAndValidate(
 
 struct Dyadic : Expression {
   using ValueFunc = Value (*)(const Value &, const Value &);
-  Dyadic(ExprPtr lexpr, ExprPtr rexpr, ValueFunc func, absl::string_view name)
+  Dyadic(ExprPtr lexpr, ExprPtr rexpr, ValueFunc func, absl::string_view name,
+         bool short_circuit = false)
       : lexpr_(std::move(lexpr)),
         rexpr_(std::move(rexpr)),
         func_(func),
-        name_(name) {}
+        name_(name),
+        short_circuit_(short_circuit) {}
   Value Evaluate(EvalContext &ctx, const Record &record) const override {
     auto lvalue = lexpr_->Evaluate(ctx, record);
+    if (lvalue.IsError()) {
+      return lvalue;
+    }
+    // Redisearch evaluates the right side of && and || only when the left
+    // side does not decide the answer, so an error there goes unnoticed:
+    // `0 && (@n < 'abc')` is 0. AsBool always has a result, and reads a nil
+    // as false.
+    if (short_circuit_) {
+      const bool left = *lvalue.AsBool();
+      if (name_ == "&&" && !left) {
+        return Value(false);
+      }
+      if (name_ == "||" && left) {
+        return Value(true);
+      }
+    }
     auto rvalue = rexpr_->Evaluate(ctx, record);
+    if (rvalue.IsError()) {
+      return rvalue;
+    }
     // Redisearch drops a record whose APPLY expression reached for a field the
     // key does not have, however deep in the expression that reference sat.
     // Without this the operator manufactures its own reason ("Add requires
@@ -326,6 +412,9 @@ struct Dyadic : Expression {
     }
     return (*func_)(lvalue, rvalue);
   }
+  // Every dyadic operator yields a number: arithmetic, and the 0/1 of a
+  // comparison or a logical operator.
+  Type GetResultType() const override { return Type::kNumber; }
   void Dump(std::ostream &os) const override {
     os << '(';
     lexpr_->Dump(os);
@@ -339,6 +428,7 @@ struct Dyadic : Expression {
   ExprPtr rexpr_;
   ValueFunc func_;
   absl::string_view name_;
+  bool short_circuit_;
 };
 
 bool IsIdentifierChar(int c) {
@@ -360,35 +450,63 @@ struct Compiler {
 
   using ParseFunc = absl::StatusOr<ExprPtr> (Compiler::*)(CompileContext &ctx);
 
-  using DyadicOp = std::pair<absl::string_view, Dyadic::ValueFunc>;
+  // An operator's spelling and implementation. A comparison also carries
+  // type-specific implementations; the operand types pick one of them.
+  struct DyadicOp {
+    absl::string_view name;
+    Dyadic::ValueFunc func;
+    Dyadic::ValueFunc number_func = nullptr;  // either operand is a number
+    Dyadic::ValueFunc string_func = nullptr;  // either operand is a string
+  };
+
+  static Dyadic::ValueFunc SelectFunc(const DyadicOp &op, Expression::Type l,
+                                      Expression::Type r) {
+    using Type = Expression::Type;
+    if (op.number_func && (l == Type::kNumber || r == Type::kNumber)) {
+      return op.number_func;
+    }
+    if (op.string_func && (l == Type::kString || r == Type::kString)) {
+      return op.string_func;
+    }
+    return op.func;
+  }
 
   absl::StatusOr<ExprPtr> DoDyadic(CompileContext &ctx, ParseFunc func,
                                    const std::vector<DyadicOp> &ops) {
     utils::Scanner s = s_;
-    DBG << "Start Dyadic: " << ops[0].first << " Remaining: '"
+    DBG << "Start Dyadic: " << ops[0].name << " Remaining: '"
         << s_.GetUnscanned() << "'\n";
     VMSDK_ASSIGN_OR_RETURN(auto lvalue, (this->*func)(ctx));
     if (!lvalue) {
-      DBG << "Dyadic Failed first: " << ops[0].first << "\n";
+      DBG << "Dyadic Failed first: " << ops[0].name << "\n";
       return nullptr;
     }
     while (s_.SkipWhiteSpacePeekByte() != EOF) {
       s = s_;
       bool found = false;
       for (auto &op : ops) {
-        DBG << "Dyadic looking for " << op.first
+        DBG << "Dyadic looking for " << op.name
             << " Remaining: " << s_.GetUnscanned() << "\n";
-        if (s_.SkipWhiteSpacePopWord(op.first)) {
-          DBG << "Found " << op.first << "\n";
+        if (s_.SkipWhiteSpacePopWord(op.name)) {
+          DBG << "Found " << op.name << "\n";
           VMSDK_ASSIGN_OR_RETURN(auto rvalue, (this->*func)(ctx));
           if (!rvalue) {
             // Error.
             return absl::InvalidArgumentError("Invalid or missing expression");
           } else {
-            DBG << "Dyadic: " << lvalue << ' ' << op.first << ' ' << rvalue
+            DBG << "Dyadic: " << lvalue << ' ' << op.name << ' ' << rvalue
                 << " Remaining: '" << s_.GetUnscanned() << "'\n";
-            lvalue = std::make_unique<Dyadic>(
-                std::move(lvalue), std::move(rvalue), op.second, op.first);
+            auto func = SelectFunc(op, lvalue->GetResultType(),
+                                   rvalue->GetResultType());
+            const bool short_circuit =
+                (op.name == "&&" || op.name == "||") &&
+                (!ctx.HonorsEmulateRelease() ||
+                 VALKEY_SEARCH_COMPATIBILITY_FIX(
+                     1, 3, 0, "expr_short_circuit", [] { return true; },
+                     [] { return false; }));
+            lvalue =
+                std::make_unique<Dyadic>(std::move(lvalue), std::move(rvalue),
+                                         func, op.name, short_circuit);
             s = s_;
             found = true;
             break;
@@ -501,11 +619,19 @@ struct Compiler {
           << s_.GetUnscanned() << "\n";
       s_.SkipWhiteSpace();
       if (s_.PopByte(')')) {
-        VMSDK_ASSIGN_OR_RETURN(auto func,
+        VMSDK_ASSIGN_OR_RETURN(auto entry,
                                FunctionCall::LookUpAndValidate(name, params));
         DBG << "After function call: '" << s_.GetUnscanned() << "'\n";
-        return std::make_unique<FunctionCall>(std::move(name), *func,
-                                              std::move(params));
+        auto func = entry->function;
+        if (entry->typed_function &&
+            (!ctx.HonorsEmulateRelease() ||
+             VALKEY_SEARCH_COMPATIBILITY_FIX(
+                 1, 3, 0, "expr_string_fn_types", [] { return true; },
+                 [] { return false; }))) {
+          func = entry->typed_function;
+        }
+        return std::make_unique<FunctionCall>(std::move(name), func,
+                                              entry->result, std::move(params));
       } else if (!params.empty() && !s_.PopByte(',')) {
         DBG << "func_call found comma\n";
         return absl::NotFoundError(
@@ -587,14 +713,33 @@ struct Compiler {
     return DoDyadic(ctx, &Compiler::CmpOp, ops);
   }
   absl::StatusOr<ExprPtr> CmpOp(CompileContext &ctx) {
-    static std::vector<DyadicOp> apply_ops{{"<=", &FuncLe}, {"<", &FuncLt},
-                                           {"==", &FuncEq}, {"!=", &FuncNe},
-                                           {">=", &FuncGe}, {">", &FuncGt}};
+    static std::vector<DyadicOp> apply_ops{
+        {"<=", &FuncLe, &FuncNumLe, &FuncStrLe},
+        {"<", &FuncLt, &FuncNumLt, &FuncStrLt},
+        {"==", &FuncEq, &FuncNumEq, &FuncStrEq},
+        {"!=", &FuncNe, &FuncNumNe, &FuncStrNe},
+        {">=", &FuncGe, &FuncNumGe, &FuncStrGe},
+        {">", &FuncGt, &FuncNumGt, &FuncStrGt}};
     static std::vector<DyadicOp> filter_ops{
-        {"<=", &FilterFuncLe}, {"<", &FilterFuncLt},  {"==", &FilterFuncEq},
-        {"!=", &FilterFuncNe}, {">=", &FilterFuncGe}, {">", &FilterFuncGt}};
-    auto &ops = ctx.UseFilterComparisonSemantics() ? filter_ops : apply_ops;
-    return DoDyadic(ctx, &Compiler::AddOp, ops);
+        {"<=", &FilterFuncLe, &FilterFuncNumLe, &FilterFuncStrLe},
+        {"<", &FilterFuncLt, &FilterFuncNumLt, &FilterFuncStrLt},
+        {"==", &FilterFuncEq, &FilterFuncNumEq, &FilterFuncStrEq},
+        {"!=", &FilterFuncNe, &FilterFuncNumNe, &FilterFuncStrNe},
+        {">=", &FilterFuncGe, &FilterFuncNumGe, &FilterFuncStrGe},
+        {">", &FilterFuncGt, &FilterFuncNumGt, &FilterFuncStrGt}};
+    // Pre-1.3.0 comparisons decide numeric vs string from the runtime Values.
+    static std::vector<DyadicOp> legacy_apply_ops{
+        {"<=", &FuncLe}, {"<", &FuncLt},  {"==", &FuncEq},
+        {"!=", &FuncNe}, {">=", &FuncGe}, {">", &FuncGt}};
+    if (ctx.UseFilterComparisonSemantics()) {
+      return DoDyadic(ctx, &Compiler::AddOp, filter_ops);
+    }
+    const bool typed = !ctx.HonorsEmulateRelease() ||
+                       VALKEY_SEARCH_COMPATIBILITY_FIX(
+                           1, 3, 0, "expr_typed_comparison",
+                           [] { return true; }, [] { return false; });
+    return DoDyadic(ctx, &Compiler::AddOp,
+                    typed ? apply_ops : legacy_apply_ops);
   }
   absl::StatusOr<ExprPtr> AddOp(CompileContext &ctx) {
     static std::vector<DyadicOp> ops{{"+", &FuncAdd}, {"-", &FuncSub}};

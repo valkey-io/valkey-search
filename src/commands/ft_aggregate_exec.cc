@@ -11,6 +11,7 @@
 #include <limits>
 #include <queue>
 #include <random>
+#include <type_traits>
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/log/check.h"
@@ -184,6 +185,10 @@ absl::Status Apply::Execute(RecordSet &records) const {
     }
     auto r = records.pop_front();
     auto value = expr_->Evaluate(ctx, *r);
+    // Redisearch fails the whole query on an evaluation error.
+    if (value.IsError()) {
+      return absl::InvalidArgumentError(value.GetNil().GetReason());
+    }
     if (value.IsMissing() && ApplyDropsMissingField()) {
       continue;
     }
@@ -206,6 +211,9 @@ absl::Status Filter::Execute(RecordSet &records) const {
     }
     auto r = records.pop_front();
     auto result = expr_->Evaluate(ctx, *r);
+    if (result.IsError()) {
+      return absl::InvalidArgumentError(result.GetNil().GetReason());
+    }
     if (result.IsTrue()) {
       filtered.push_back(std::move(r));
     }
@@ -834,6 +842,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> RandomSampleReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      expr::Expression::Type::kArray;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -903,6 +913,9 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> BasicReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      std::is_same_v<T, ToList> ? expr::Expression::Type::kArray
+                                : expr::Expression::Type::kNumber;
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 
@@ -1003,6 +1016,8 @@ absl::StatusOr<std::unique_ptr<GroupBy::Reducer>> FirstValueReducerParser(
         std::unique_ptr<Attribute>(dynamic_cast<Attribute *>(output.release()));
   }
 
+  parameters.record_info_by_index_[r->output_->record_index_].result_type_ =
+      r->args_[0]->GetResultType();
   return std::unique_ptr<GroupBy::Reducer>(std::move(r));
 }
 

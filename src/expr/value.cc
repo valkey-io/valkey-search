@@ -13,6 +13,7 @@
 #include <sstream>
 #include <system_error>
 
+#include "absl/strings/str_cat.h"
 #include "src/utils/scanner.h"
 #include "src/valkey_search_options.h"  // VALKEY_SEARCH_COMPATIBILITY_FIX
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
@@ -51,6 +52,16 @@ bool Value::IsNil() const { return std::get_if<Nil>(&value_); }
 bool Value::IsMissing() const {
   auto nil = std::get_if<Nil>(&value_);
   return nil && nil->IsMissing();
+}
+
+bool Value::IsError() const {
+  auto nil = std::get_if<Nil>(&value_);
+  return nil && nil->IsError();
+}
+
+bool Value::IsNull() const {
+  auto nil = std::get_if<Nil>(&value_);
+  return nil && nil->IsNull();
 }
 
 bool Value::IsBool() const { return std::get_if<bool>(&value_); }
@@ -619,6 +630,12 @@ Value FuncGt(const Value& l, const Value& r) { return Value(l > r); }
 
 Value FuncGe(const Value& l, const Value& r) { return Value(l >= r); }
 
+// FT.CREATE FILTER compiles the type-specific FilterFuncNum* / FilterFuncStr*
+// further below whenever an operand is a number or a string, which is almost
+// always; these generic versions remain for vector operands. The typed ones
+// differ in one respect measured since: a failed number conversion is an
+// error that rejects the document, even under a negation.
+//
 // Filter comparison semantics (matches Redisearch FT.CREATE FILTER): a
 // comparison that involves a missing field is FALSE, not "unknown". The
 // document is simply not admitted, and a negation of that comparison is true
@@ -727,6 +744,109 @@ Value FilterFuncGe(const Value& l, const Value& r) {
   }
   return Value(l >= r);
 }
+
+// The type-specific comparisons, which the compiler picks when an operand's
+// type decides how to compare: as numbers when either operand is a number,
+// else as strings. Redisearch semantics, measured on Redis 8:
+//
+//  - Neither operand is converted to a string for a numeric comparison. A
+//    string that does not convert to a number is an error for < <= > >=
+//    ("Error converting string"), and answers == false and != true.
+//  - A null -- lower() of a number -- orders below every other value and
+//    equals another null.
+//  - A missing field, or an expression that evaluated to nothing, keeps the
+//    generic answers: false under FILTER, an unordered compare under APPLY.
+//
+// An array keeps the generic comparison: Redisearch compares only its first
+// element, which is a known difference (known_differences.md).
+static bool IsLt(Ordering o) { return o == Ordering::kLESS; }
+static bool IsLe(Ordering o) { return o != Ordering::kGREATER; }
+static bool IsEq(Ordering o) {
+  return o == Ordering::kEQUAL || o == Ordering::kUNORDERED;
+}
+static bool IsNe(Ordering o) {
+  return o == Ordering::kLESS || o == Ordering::kGREATER;
+}
+static bool IsGt(Ordering o) { return o == Ordering::kGREATER; }
+static bool IsGe(Ordering o) { return o != Ordering::kLESS; }
+
+// The answer to a numeric comparison with an operand that is not a number.
+enum class Mismatch { kError, kFalse, kTrue };
+
+static std::optional<Ordering> CompareNulls(const Value& l, const Value& r) {
+  if (l.IsNull() && r.IsNull()) {
+    return Ordering::kEQUAL;
+  }
+  if (l.IsNull()) {
+    return Ordering::kLESS;
+  }
+  if (r.IsNull()) {
+    return Ordering::kGREATER;
+  }
+  return std::nullopt;
+}
+
+template <bool filter, bool numeric, bool (*holds)(Ordering), Mismatch mismatch>
+static Value TypedCompare(const Value& l, const Value& r) {
+  const bool l_nothing = l.IsNil() && !l.IsNull();
+  const bool r_nothing = r.IsNil() && !r.IsNull();
+  if (l_nothing || r_nothing) {
+    if (filter) {
+      return Value(false);
+    }
+    return Value(holds(l_nothing && r_nothing ? Ordering::kEQUAL
+                                              : Ordering::kUNORDERED));
+  }
+  if (auto ordering = CompareNulls(l, r)) {
+    return Value(holds(*ordering));
+  }
+  if (!numeric) {
+    return Value(holds(CompareStrings(*l.AsStringView(), *r.AsStringView())));
+  }
+  if (l.IsArray() || r.IsArray()) {
+    return Value(holds(Compare(l, r)));
+  }
+  auto ld = l.AsDouble();
+  auto rd = r.AsDouble();
+  if (!ld || !rd) {
+    switch (mismatch) {
+      case Mismatch::kError:
+        return Value::Error("Error converting string");
+      case Mismatch::kFalse:
+        return Value(false);
+      case Mismatch::kTrue:
+        return Value(true);
+    }
+  }
+  return Value(holds(CompareDoubles(*ld, *rd)));
+}
+
+#define TYPED_COMPARISONS(prefix, filter, kind, numeric)                \
+  Value prefix##kind##Lt(const Value& l, const Value& r) {              \
+    return TypedCompare<filter, numeric, IsLt, Mismatch::kError>(l, r); \
+  }                                                                     \
+  Value prefix##kind##Le(const Value& l, const Value& r) {              \
+    return TypedCompare<filter, numeric, IsLe, Mismatch::kError>(l, r); \
+  }                                                                     \
+  Value prefix##kind##Eq(const Value& l, const Value& r) {              \
+    return TypedCompare<filter, numeric, IsEq, Mismatch::kFalse>(l, r); \
+  }                                                                     \
+  Value prefix##kind##Ne(const Value& l, const Value& r) {              \
+    return TypedCompare<filter, numeric, IsNe, Mismatch::kTrue>(l, r);  \
+  }                                                                     \
+  Value prefix##kind##Gt(const Value& l, const Value& r) {              \
+    return TypedCompare<filter, numeric, IsGt, Mismatch::kError>(l, r); \
+  }                                                                     \
+  Value prefix##kind##Ge(const Value& l, const Value& r) {              \
+    return TypedCompare<filter, numeric, IsGe, Mismatch::kError>(l, r); \
+  }
+
+TYPED_COMPARISONS(Func, false, Num, true)
+TYPED_COMPARISONS(Func, false, Str, false)
+TYPED_COMPARISONS(FilterFunc, true, Num, true)
+TYPED_COMPARISONS(FilterFunc, true, Str, false)
+
+#undef TYPED_COMPARISONS
 
 Value FuncLor(const Value& l, const Value& r) {
   DBG << "FuncLor: " << l << " || " << r << "\n";
@@ -948,6 +1068,63 @@ Value FuncSubstr(const Value& l, const Value& m, const Value& r) {
   } else {
     return Value(Value::Nil("substr requires numbers for offset and length"));
   }
+}
+
+// Versions of the string functions that, like Redisearch, never turn a number
+// into a string: a number where a string belongs is an error that fails the
+// query, except that lower() and upper() answer null. substr() also rejects a
+// string where its offset and length belong.
+static bool IsNumber(const Value& v) { return v.IsDouble() || v.IsBool(); }
+
+static Value NotA(const char* expected, size_t index, const char* fname) {
+  return Value::Error(absl::StrCat("Invalid type for argument ", index,
+                                   " in function '", fname, "': expected ",
+                                   expected));
+}
+
+Value FuncStrlenTyped(const Value& o) {
+  return IsNumber(o) ? NotA("a string", 0, "strlen") : FuncStrlen(o);
+}
+
+Value FuncStartswithTyped(const Value& l, const Value& r) {
+  if (IsNumber(l)) {
+    return NotA("a string", 0, "startswith");
+  }
+  if (IsNumber(r)) {
+    return NotA("a string", 1, "startswith");
+  }
+  return FuncStartswith(l, r);
+}
+
+Value FuncContainsTyped(const Value& l, const Value& r) {
+  if (IsNumber(l)) {
+    return NotA("a string", 0, "contains");
+  }
+  if (IsNumber(r)) {
+    return NotA("a string", 1, "contains");
+  }
+  return FuncContains(l, r);
+}
+
+Value FuncSubstrTyped(const Value& l, const Value& m, const Value& r) {
+  if (IsNumber(l)) {
+    return NotA("a string", 0, "substr");
+  }
+  if (m.IsString()) {
+    return NotA("a number", 1, "substr");
+  }
+  if (r.IsString()) {
+    return NotA("a number", 2, "substr");
+  }
+  return FuncSubstr(l, m, r);
+}
+
+Value FuncLowerTyped(const Value& o) {
+  return IsNumber(o) ? Value::Null() : FuncLower(o);
+}
+
+Value FuncUpperTyped(const Value& o) {
+  return IsNumber(o) ? Value::Null() : FuncUpper(o);
 }
 
 Value FuncLower(const Value& o) {

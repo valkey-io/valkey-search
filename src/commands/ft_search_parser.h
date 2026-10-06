@@ -9,6 +9,8 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FT_SEARCH_PARSER_H_
 
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "src/commands/commands.h"
 #include "src/query/search.h"
@@ -66,6 +68,9 @@ struct SearchCommand : public QueryCommand {
     bool sort_by_vec_score{false};
     bool nil_absent_sort_key{false};
     std::string sort_key_prefix;
+    // NUMERIC sort key / RETURN values re-serialized from the parsed double.
+    bool numeric_sort_key{false};
+    std::vector<bool> numeric_return_attrs;
     // The single VR distance field name (query::GetVrScoreFieldName).
     // Empty unless the query named the distance ($yield_distance_as or AS).
     std::string vr_field;

@@ -131,6 +131,41 @@ std::string FormatDouble(double d) {
   return {storage, output_chars};
 }
 
+// gated change for 1.3.0
+std::string FormatNumericReturnValue(double d) {
+  if (IsNan(d)) {
+    return std::signbit(d) ? "-nan" : "nan";
+  }
+  // Text-level: -ffast-math (no-signed-zeros) may fold a double-level -0 fix.
+  if (d == 0.0) {
+    return "0";
+  }
+  char storage[32];
+  // 2^63 is exact as a double; everything in [-2^63, 2^63) fits storage.
+  constexpr double kIntegerBound = static_cast<double>(1ULL << 63);
+  if (!IsInf(d) && d >= -kIntegerBound && d < kIntegerBound &&
+      d == std::floor(d)) {
+    auto [ptr, ec] = std::to_chars(storage, storage + sizeof(storage), d,
+                                   std::chars_format::fixed, 0);
+    CHECK(ec == std::errc()) << "to_chars failed formatting integral double "
+                             << d << ": " << std::make_error_code(ec).message();
+    return {storage, ptr};
+  }
+  size_t output_chars = snprintf(storage, sizeof(storage), "%.12g", d);
+  CHECK(output_chars < sizeof(storage))
+      << "FormatNumericReturnValue overflowed formatting " << d;
+  return {storage, output_chars};
+}
+
+// gated change for 1.3.0
+std::string FormatNumericSortKey(double d) {
+  char storage[32];
+  size_t output_chars = snprintf(storage, sizeof(storage), "%.17g", d);
+  CHECK(output_chars < sizeof(storage))
+      << "FormatNumericSortKey overflowed formatting " << d;
+  return {storage, output_chars};
+}
+
 std::optional<bool> Value::AsBool() const {
   if (auto result = std::get_if<bool>(&value_)) {
     return *result;

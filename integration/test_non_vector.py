@@ -1087,6 +1087,49 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_tag_and_negate_queries(client)
 
+class TestJsonTagWildcardGate(ValkeySearchTestCaseDebugMode):
+    """
+        A JSON TAG field on a wildcard path indexes each array element as its
+        own tag, and null elements are skipped, matching Redisearch. Gated on
+        search.emulate-release: pre-1.3.0 the whole JSON array text was split
+        on the separator, so elements kept their quotes and never matched.
+        debug-mode is required to set emulate-release at the module version.
+    """
+
+    def test_json_tag_wildcard_gate(self):
+        client: Valkey = self.server.get_new_client()
+        for release, fixed in (("1.2.1", False), ("1.3.0", True)):
+            assert client.execute_command(
+                "CONFIG", "SET", "search.emulate-release", release) == b"OK"
+            index = f"jtw_idx_{release}"
+            prefix = f"jtw_{release}:"
+            assert client.execute_command(
+                "FT.CREATE", index, "ON", "JSON", "PREFIX", "1", prefix,
+                "SCHEMA", "$.address[*].city", "AS", "city", "TAG") == b"OK"
+            assert client.execute_command(
+                "JSON.SET", f"{prefix}1", "$",
+                '{"address":[{"city":"Seoul"},{"city":"New York"},'
+                '{"city":"Seoul"},{"city":""}]}') == b"OK"
+            assert client.execute_command(
+                "JSON.SET", f"{prefix}2", "$",
+                '{"address":[{"city":"Busan"}]}') == b"OK"
+            assert client.execute_command(
+                "JSON.SET", f"{prefix}3", "$",
+                '{"address":[{"city":"Daegu"},{"city":null}]}') == b"OK"
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, index)
+
+            def search(city):
+                return client.execute_command(
+                    "FT.SEARCH", index, f"@city:{{{city}}}", "NOCONTENT",
+                    "DIALECT", "2")
+
+            # A single-element array is unaffected by the gate.
+            assert search("Busan") == [1, f"{prefix}2".encode()]
+            for city, key in (("Seoul", 1), ("New York", 1), ("Daegu", 3)):
+                expected = [1, f"{prefix}{key}".encode()] if fixed else [0]
+                assert search(city) == expected, f"emulate-release {release}"
+
+
 class TestSortKeyPrefixGate(ValkeySearchTestCaseDebugMode):
     """
         The WITHSORTKEYS sort-key prefix ('#' for NUMERIC, '$' otherwise;
@@ -1199,7 +1242,6 @@ class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
             for i in range(1, len(result)):
                 row = dict(zip(result[i][::2], result[i][1::2]))
                 assert alias in row, f"{release}: expected {alias} in {list(row)}"
-
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):

@@ -25,10 +25,10 @@
 namespace valkey_search::indexes::text {
 namespace {
 
-// Tokenizer settings built from the language's own default punctuation and
-// stop words, as for an index created without PUNCTUATION or STOPWORDS.
-TokenizerConfig DefaultConfig(const Language& language) {
-  return language.MakeTokenizerConfig(language.GetDefaultPunctuation(),
+// The language's shared default settings, as used by an index created
+// without PUNCTUATION or STOPWORDS.
+const TokenizerConfig& DefaultConfig(const Language& language) {
+  return *language.TokenizerConfigFor(language.GetDefaultPunctuation(),
                                       language.GetDefaultStopWords());
 }
 
@@ -246,7 +246,7 @@ TEST_P(TokenizerConfigTest, TokenizesWithIndexSettings) {
   const auto& tc = GetParam();
   const Language& english = Registered(data_model::LANGUAGE_ENGLISH);
   auto result = english.Tokenize(
-      tc.input, english.MakeTokenizerConfig(tc.punctuation, tc.stop_words));
+      tc.input, *english.TokenizerConfigFor(tc.punctuation, tc.stop_words));
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(*result, tc.expected);
 }
@@ -272,6 +272,25 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<TokenizerConfigCase>& info) {
       return info.param.test_name;
     });
+
+// The default settings are built once and shared, and the shared instance is
+// the same as one built from those settings: listing the default stop words in
+// another order bypasses sharing but yields equal settings.
+TEST(TokenizerConfigForTest, SharedDefaultMatchesPrivateBuild) {
+  const Language& french = Registered(data_model::LANGUAGE_FRENCH);
+  const auto& punctuation = french.GetDefaultPunctuation();
+  std::vector<std::string> stop_words = french.GetDefaultStopWords();
+
+  auto shared = french.TokenizerConfigFor(punctuation, stop_words);
+  EXPECT_EQ(shared, french.TokenizerConfigFor(punctuation, stop_words));
+
+  std::reverse(stop_words.begin(), stop_words.end());
+  auto built = french.TokenizerConfigFor(punctuation, stop_words);
+  EXPECT_NE(built, shared);
+  EXPECT_EQ(built->punct_set.ascii, shared->punct_set.ascii);
+  EXPECT_EQ(built->punct_set.non_ascii, shared->punct_set.non_ascii);
+  EXPECT_EQ(built->stop_words, shared->stop_words);
+}
 
 // --- IsStopWord ---
 

@@ -124,7 +124,7 @@ class TextIndexSchema {
   std::shared_ptr<TextIndex> GetTextIndex() const { return text_index_; }
   const Language &GetLanguage() const { return *language_; }
   const TokenizerConfig &GetTokenizerConfig() const {
-    return tokenizer_config_;
+    return *tokenizer_config_;
   }
 
   // Access to metadata for memory pool usage
@@ -257,7 +257,9 @@ class TextIndexSchema {
   mutable std::mutex per_key_text_indexes_mutex_;
 
   std::shared_ptr<const Language> language_;
-  TokenizerConfig tokenizer_config_;
+  // Shared with the language when the index uses its default punctuation and
+  // stop words; owned by this index otherwise.
+  std::shared_ptr<const TokenizerConfig> tokenizer_config_;
 
   // Key updates are fanned out to each attribute's IndexBase object. Since text
   // indexing operates at the schema-level, any new text data to insert for a

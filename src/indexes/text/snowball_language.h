@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/base/call_once.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -38,7 +39,7 @@ class SnowballLanguage : public Language {
   NormalizationForm GetNormalizationForm() const override;
   absl::string_view CaseFoldLocale() const override;
 
-  TokenizerConfig MakeTokenizerConfig(
+  std::shared_ptr<const TokenizerConfig> TokenizerConfigFor(
       const std::string& punctuation,
       const std::vector<std::string>& stop_words) const override;
 
@@ -63,6 +64,10 @@ class SnowballLanguage : public Language {
                    DelimiterScope delimiter_scope);
 
  private:
+  TokenizerConfig MakeTokenizerConfig(
+      const std::string& punctuation,
+      const std::vector<std::string>& stop_words) const;
+
   /// Splits `text` into normalized tokens, dropping stop words, and appends
   /// them to `tokens`. Returns false if `text` is not valid UTF-8.
   bool Segment(absl::string_view text, const TokenizerConfig& config,
@@ -74,6 +79,8 @@ class SnowballLanguage : public Language {
   DelimiterScope delimiter_scope_;
   NormalizeCaseFoldFilter normalizer_;
   std::unique_ptr<SnowballStemFilter> stemmer_;
+  mutable absl::once_flag default_config_once_;
+  mutable std::shared_ptr<const TokenizerConfig> default_config_;
 };
 
 }  // namespace valkey_search::indexes::text

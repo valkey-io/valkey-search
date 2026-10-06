@@ -134,6 +134,20 @@ bool SnowballLanguage::Segment(absl::string_view text,
   return true;
 }
 
+std::shared_ptr<const TokenizerConfig> SnowballLanguage::TokenizerConfigFor(
+    const std::string& punctuation,
+    const std::vector<std::string>& stop_words) const {
+  if (punctuation != punctuation_ || stop_words != stop_words_) {
+    return std::make_shared<const TokenizerConfig>(
+        MakeTokenizerConfig(punctuation, stop_words));
+  }
+  absl::call_once(default_config_once_, [this] {
+    default_config_ = std::make_shared<const TokenizerConfig>(
+        MakeTokenizerConfig(punctuation_, stop_words_));
+  });
+  return default_config_;
+}
+
 absl::StatusOr<std::vector<std::string>> SnowballLanguage::Tokenize(
     absl::string_view text, const TokenizerConfig& config) const {
   std::vector<std::string> tokens;

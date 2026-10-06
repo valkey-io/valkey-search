@@ -115,6 +115,31 @@ TEST_F(TextIndexSchemaTest, StemDistinctDocsDecrementsOnDelete) {
 
 // Concurrent CommitKeyData calls with overlapping words must
 //  not crash or corrupt the index.
+// Indexes using the language defaults share one TokenizerConfig owned by the
+// language; an index with custom settings builds its own.
+TEST_F(TextIndexSchemaTest, DefaultTokenizerConfigIsShared) {
+  auto language =
+      LanguageRegistry::Instance().Get(data_model::LANGUAGE_ENGLISH);
+  auto make = [&](const std::string &punctuation,
+                  const std::vector<std::string> &stop_words) {
+    return std::make_shared<TextIndexSchema>(language, punctuation, stop_words,
+                                             false, 4);
+  };
+  auto a =
+      make(language->GetDefaultPunctuation(), language->GetDefaultStopWords());
+  auto b =
+      make(language->GetDefaultPunctuation(), language->GetDefaultStopWords());
+  auto custom = make(" ,", {});
+
+  EXPECT_EQ(&a->GetTokenizerConfig(),
+            language
+                ->TokenizerConfigFor(language->GetDefaultPunctuation(),
+                                     language->GetDefaultStopWords())
+                .get());
+  EXPECT_EQ(&a->GetTokenizerConfig(), &b->GetTokenizerConfig());
+  EXPECT_NE(&custom->GetTokenizerConfig(), &a->GetTokenizerConfig());
+}
+
 TEST_F(TextIndexSchemaTest, ConcurrentCommitKeyData) {
   auto schema = CreateSchema();
   data_model::TextIndex proto;

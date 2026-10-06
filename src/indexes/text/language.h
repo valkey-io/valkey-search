@@ -10,6 +10,7 @@
 
 #include <bitset>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -131,9 +132,9 @@ inline PunctuationSet BuildPunctuationSet(const std::string& punctuation,
 }
 
 // Per-index tokenization settings: the word boundaries and stop words from
-// FT.CREATE PUNCTUATION / STOPWORDS, or the language's defaults. Built by
-// Language::MakeTokenizerConfig, which applies the language's rules, and owned
-// by the text index. The Language itself is shared by every index using it.
+// FT.CREATE PUNCTUATION / STOPWORDS, or the language's defaults. Obtained from
+// Language::TokenizerConfigFor, which applies the language's rules; indexes
+// using the defaults share one instance.
 struct TokenizerConfig {
   PunctuationSet punct_set;
   absl::flat_hash_set<std::string> stop_words;  // Normalized by the language.
@@ -245,10 +246,11 @@ class Language {
   /// ICU locale for case folding. Empty string means generic Unicode folding.
   virtual absl::string_view CaseFoldLocale() const = 0;
 
-  /// Builds an index's tokenization settings from its punctuation and stop
-  /// words, applying this language's rules (delimiter scope, normalization of
-  /// the stop words).
-  virtual TokenizerConfig MakeTokenizerConfig(
+  /// Settings for an index with this punctuation and these stop words,
+  /// applying this language's rules (delimiter scope, normalization of the
+  /// stop words). Returns a shared instance, built on first use, when they
+  /// equal this language's defaults.
+  virtual std::shared_ptr<const TokenizerConfig> TokenizerConfigFor(
       const std::string& punctuation,
       const std::vector<std::string>& stop_words) const = 0;
 

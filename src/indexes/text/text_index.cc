@@ -159,8 +159,7 @@ TextIndexSchema::TextIndexSchema(std::shared_ptr<const Language> language,
                                  bool with_offsets, uint32_t min_stem_size)
     : with_offsets_(with_offsets),
       language_(std::move(language)),
-      tokenizer_config_(
-          language_->MakeTokenizerConfig(punctuation, stop_words)),
+      tokenizer_config_(language_->TokenizerConfigFor(punctuation, stop_words)),
       stem_tree_(FreeStemParentsCallback),
       min_stem_size_(min_stem_size),
       rax_target_mutex_pool_(options::GetRaxTargetMutexPoolSize().GetValue()) {}
@@ -179,10 +178,10 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
       stem_mappings_ptr = &in_progress_stem_mappings_[key];
     }
     tokens = language_->TokenizeWithStemMap(
-        data, tokenizer_config_, min_stem_size_, language_->GetLengthUnit(),
+        data, *tokenizer_config_, min_stem_size_, language_->GetLengthUnit(),
         *stem_mappings_ptr);
   } else {
-    tokens = language_->Tokenize(data, tokenizer_config_);
+    tokens = language_->Tokenize(data, *tokenizer_config_);
   }
 
   if (!tokens.ok()) {

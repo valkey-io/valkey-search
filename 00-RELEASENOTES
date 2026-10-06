@@ -5,12 +5,13 @@ Valkey Search 1.3 release notes
 Valkey Search 1.3.0 RC1 - Released Tue Oct 6th 2026
 ================================================================================
 
-This is the first release candidate of Valkey Search 1.3. It adds hybrid text
-and vector search with FT.HYBRID, BM25STD relevance scoring for full-text
-queries, full-text search in 12 languages, vector range queries, cursors for
-paging through large result sets, and FLOAT16 and BFLOAT16 vector types.
-Vectors in HASH documents are now stored once and shared between Valkey and 
-the search index instead of being duplicated, and the numeric and tag 
+This is the first release candidate of Valkey Search 1.3. It adds BM25STD
+relevance scoring for full-text queries; FT.HYBRID, which runs a full-text
+search and a vector search over one index and fuses their rankings into a single
+result list; full-text search in 12 additional languages; vector range queries;
+cursors for paging through large result sets; and FLOAT16 and BFLOAT16 vector
+types. Vectors in HASH documents are now stored once and shared between Valkey
+and the search index instead of being duplicated, and the numeric and tag
 indexes use less memory. This release requires Valkey core 9.1.0 or higher.
 
 Several compatibility fixes are breaking changes, so they are off by default;
@@ -23,8 +24,8 @@ FT._DEBUG no longer requires debug mode; it is now an admin command in the
 New Features
 ============
 Major features:
-* FT.HYBRID: native text and vector hybrid search. The new command runs a text, tag or numeric SEARCH arm and a vector VSIM arm over one index, fuses the two ranked lists with RRF, LINEAR or a custom FUNCTION, and passes the result through the FT.AGGREGATE processing stages (#1083)
 * BM25STD text scoring: full-text results are ranked by relevance with BM25STD, including prefix, suffix, fuzzy, tag prefix and stemmed terms. Adds WITHSCORES, the SCORER option and the search.default-scorer config, $weight query attributes, ADDSCORES on FT.AGGREGATE, and per-document scores through the new SCORE_FIELD option on FT.CREATE; SCORE now accepts any value from 0.0 to 1.0 (#1287, #1350, #1354, #1345, #1400, #1008)
+* FT.HYBRID score fusion: the new FT.HYBRID command runs two searches over one index, a SEARCH arm (a text, tag or numeric query, scored for relevance as in FT.SEARCH) and a VSIM arm (a vector similarity search, scored by distance), ranks each independently, and fuses the two ranked lists into one with RRF, LINEAR or a custom FUNCTION. Unlike a filtered vector query in FT.SEARCH, where the text, tag or numeric clauses only narrow the KNN results, both arms contribute to the final ranking: documents found by both are ranked higher, and the COMBINE clause controls how the two arms' scores are weighed. The fused results pass through the FT.AGGREGATE processing stages (#1083)
 * Shared vector memory: vectors in HASH documents are stored once and shared between Valkey and every index that uses them, instead of being duplicated in the search index, and RDB load takes vectors from the keyspace. HNSW ingestion and search throughput is on par with 1.2, and FLAT COSINE ingestion is faster. Enabled by default and controlled by search.enable-vector-sharing at module load; reported by the search_vector_registry_* INFO fields (#1168, #1232, #1316, #1325, #1487)
 * Search and aggregation cursors: WITHCURSOR [COUNT <count>] [MAXIDLE <ms>] on FT.SEARCH, FT.AGGREGATE and FT.HYBRID, and the new FT.CURSOR READ and FT.CURSOR DEL commands, for paging through large result sets. Limits are set by search.cursor-max-count and search.cursor-max-idle-ms, and open cursors are reported by search_num_cursors (#1394)
 * FLOAT16 and BFLOAT16 vectors: new vector element types for FLAT and HNSW indexes, across all distance metrics, for HASH and JSON documents, roughly halving the memory used per vector (#1001)

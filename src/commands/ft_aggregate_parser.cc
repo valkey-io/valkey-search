@@ -432,13 +432,15 @@ AggregateParameters::MakeReference(const absl::string_view name, bool create) {
   if (identifier.ok()) {
     // DBG << "Adding Record Attribute: " << name << " with alias "
     //     << identifier.value() << "\n";
-    new_index = AddRecordAttribute(*identifier, name,
-                                   OutputNameFor(name, *identifier), fieldType);
+    new_index =
+        AddRecordAttribute(*identifier, name, OutputNameFor(name, *identifier),
+                           fieldType, ResultTypeFor(fieldType));
   } else {
     // DBG << "Adding Record Attribute: " << name
     //     << " with synthetic alias (no index schema)\n";
     new_index =
-        AddRecordAttribute(name, name, name, indexes::IndexerType::kNone);
+        AddRecordAttribute(name, name, name, indexes::IndexerType::kNone,
+                           expr::Expression::Type::kString);
   }
   return std::make_unique<Attribute>(
       name, new_index, record_info_by_index_[new_index].result_type_);

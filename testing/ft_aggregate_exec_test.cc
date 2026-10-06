@@ -107,10 +107,12 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
     // params->attr_record_indexes_["n1"] = 0;
     // params->attr_record_indexes_["n2"] = 1;
@@ -136,13 +138,16 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     auto params = std::make_unique<AggregateParameters>(0);
     params->parse_vars_.index_interface_ = &fakeIndex;
     EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               0);
     EXPECT_EQ(params->AddRecordAttribute("n2", "n2", "n2",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               1);
     EXPECT_EQ(params->AddRecordAttribute("n3", "n3", "n3",
-                                         indexes::IndexerType::kNumeric),
+                                         indexes::IndexerType::kNumeric,
+                                         expr::Expression::Type::kNumber),
               2);
 
     auto parser = CreateAggregateParser();
@@ -166,8 +171,10 @@ struct AggregateExecTest : public vmsdk::ValkeyTest {
     AggregateParameters params(0);
     params.parse_vars_.index_interface_ = &fakeIndex;
     // Two numeric columns so the parsed stages can resolve both @n1 and @n2.
-    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric);
-    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric);
+    params.AddRecordAttribute("n1", "n1", "n1", indexes::IndexerType::kNumeric,
+                              expr::Expression::Type::kNumber);
+    params.AddRecordAttribute("n2", "n2", "n2", indexes::IndexerType::kNumeric,
+                              expr::Expression::Type::kNumber);
 
     auto parser = CreateAggregateParser();
     auto status = parser.Parse(params, itr);
@@ -515,12 +522,14 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   params->parse_vars_.index_interface_ = &fakeIndex;
 
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   // Re-using the output name n1 for a different field resolves to the column
   // already emitting that name; no second n1 column is created.
   EXPECT_EQ(params->AddRecordAttribute("n2", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   EXPECT_EQ(params->record_info_by_index_.size(), 1);
   ASSERT_TRUE(params->record_indexes_by_alias_.contains("n1"));
@@ -531,7 +540,8 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
   // record_info_by_index_ -- what records are sized by -- stays the count of
   // columns actually emitted.
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "alias_of_n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             1);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
   EXPECT_EQ(params->record_info_by_index_[1].identifier_, "n1");
@@ -539,7 +549,8 @@ TEST_F(AggregateExecTest, OutputNameReuseCollapsesOntoOneColumn) {
 
   // Re-adding a pair currently in effect is idempotent -- no new column.
   EXPECT_EQ(params->AddRecordAttribute("n1", "n1", "n1",
-                                       indexes::IndexerType::kNumeric),
+                                       indexes::IndexerType::kNumeric,
+                                       expr::Expression::Type::kNumber),
             0);
   EXPECT_EQ(params->record_info_by_index_.size(), 2);
 }
@@ -658,12 +669,15 @@ class CreateRecordsFromNeighborsTest : public ValkeySearchTest {
     params->index_schema = schema;
 
     params->AddRecordAttribute("__key", "__key", "__key",
-                               indexes::IndexerType::kNone);
+                               indexes::IndexerType::kNone,
+                               expr::Expression::Type::kString);
     params->AddRecordAttribute(score_name, score_name, score_name,
-                               indexes::IndexerType::kNone);
+                               indexes::IndexerType::kNone,
+                               expr::Expression::Type::kNumber);
     if (register_vr_column && !vr_name.empty()) {
       params->AddRecordAttribute(vr_name, vr_name, vr_name,
-                                 indexes::IndexerType::kNone);
+                                 indexes::IndexerType::kNone,
+                                 expr::Expression::Type::kNumber);
     }
     params->vr_score_field_name_ = vr_name;
     return params;
@@ -756,9 +770,11 @@ TEST_F(AggregateExecTest, FirstValueReducerTest) {
       auto params = std::make_unique<AggregateParameters>(0);
       params->parse_vars_.index_interface_ = &fakeIndex;
       params->AddRecordAttribute("n1", "n1", "n1",
-                                 indexes::IndexerType::kNumeric);
+                                 indexes::IndexerType::kNumeric,
+                                 expr::Expression::Type::kNumber);
       params->AddRecordAttribute("n2", "n2", "n2",
-                                 indexes::IndexerType::kNumeric);
+                                 indexes::IndexerType::kNumeric,
+                                 expr::Expression::Type::kNumber);
       auto parser = CreateAggregateParser();
       auto result = parser.Parse(*params, itr);
       EXPECT_FALSE(result.ok()) << tc.text_ << ": expected parse failure";
@@ -1246,10 +1262,12 @@ TEST_F(NeighborRecordTest, LoadAllDoesNotOverwriteTheScoreColumn) {
   params.loadall_ = true;
   params.no_content = false;
   ASSERT_EQ(params.AddRecordAttribute("__key", "__key", "__key",
-                                      indexes::IndexerType::kNone),
+                                      indexes::IndexerType::kNone,
+                                      expr::Expression::Type::kString),
             AggregateParameters::kKeyColumn);
   ASSERT_EQ(params.AddRecordAttribute("__score", "__score", "__score",
-                                      indexes::IndexerType::kNone),
+                                      indexes::IndexerType::kNone,
+                                      expr::Expression::Type::kNumber),
             AggregateParameters::kScoreColumn);
 
   std::vector<indexes::Neighbor> neighbors;

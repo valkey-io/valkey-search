@@ -150,15 +150,15 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         record_index = params.AddRecordAttribute(
             *schema_identifier, identifier,
             renamed ? alias : OutputNameFor(alias, *schema_identifier),
-            indexer_type);
+            indexer_type, AggregateParameters::ResultTypeFor(indexer_type));
       } else {
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(identifier),
             .attribute_alias = vmsdk::UniqueValkeyString(),
             .alias = vmsdk::MakeUniqueValkeyString(alias)});
-        record_index = params.AddRecordAttribute(identifier, identifier,
-                                                 renamed ? alias : identifier,
-                                                 indexes::IndexerType::kNone);
+        record_index = params.AddRecordAttribute(
+            identifier, identifier, renamed ? alias : identifier,
+            indexes::IndexerType::kNone, expr::Expression::Type::kString);
       }
       if (renamed) {
         apply_rename(record_index);
@@ -195,12 +195,12 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   }
   // Ensure that key is first value if it gets included...
   CHECK(AddRecordAttribute("__key", "__key", "__key",
-                           indexes::IndexerType::kNone) == kKeyColumn);
+                           indexes::IndexerType::kNone,
+                           expr::Expression::Type::kString) == kKeyColumn);
   auto score_sv = vmsdk::ToStringView(score_as.get());
   CHECK(AddRecordAttribute(score_sv, score_sv, score_sv,
-                           indexes::IndexerType::kNone) == kScoreColumn);
-  record_info_by_index_[kScoreColumn].result_type_ =
-      expr::Expression::Type::kNumber;
+                           indexes::IndexerType::kNone,
+                           expr::Expression::Type::kNumber) == kScoreColumn);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {

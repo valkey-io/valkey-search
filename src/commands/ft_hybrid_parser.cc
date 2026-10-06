@@ -839,19 +839,19 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // here are the backstop, and they report rather than abort so no future
     // alias path can take the server down.
     if (env.agg->AddRecordAttribute("__key", "__key", "__key",
-                                    indexes::IndexerType::kNone) !=
+                                    indexes::IndexerType::kNone,
+                                    expr::Expression::Type::kString) !=
         aggregate::AggregateParameters::kKeyColumn) {
       return absl::InternalError("FT.HYBRID could not seed the `__key` column");
     }
     auto score_sv = vmsdk::ToStringView(env.agg->score_as.get());
     if (env.agg->AddRecordAttribute(score_sv, score_sv, score_sv,
-                                    indexes::IndexerType::kNone) !=
+                                    indexes::IndexerType::kNone,
+                                    expr::Expression::Type::kNumber) !=
         aggregate::AggregateParameters::kScoreColumn) {
       return absl::InternalError(absl::StrCat("FT.HYBRID could not seed the `",
                                               score_sv, "` score column"));
     }
-    env.agg->record_info_by_index_[aggregate::AggregateParameters::kScoreColumn]
-        .result_type_ = expr::Expression::Type::kNumber;
   }
   // The aggregate parser uses parse_vars_.index_interface_ during expression
   // compilation (APPLY/FILTER/REDUCE) to resolve @<field> references. Stack

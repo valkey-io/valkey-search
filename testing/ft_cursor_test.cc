@@ -340,9 +340,13 @@ TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {
 
   VMSDK_EXPECT_OK(background.SetValue(true));
   destroyed.store(false);
+  // Park the utility worker so the queued cleanup cannot run before the check.
+  auto *utility = ValkeySearch::Instance().GetUtilityThreadPool();
+  VMSDK_EXPECT_OK(utility->SuspendWorkers());
   CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
   EXPECT_FALSE(destroyed);
-  WaitWorkerTasksAreCompleted(*ValkeySearch::Instance().GetUtilityThreadPool());
+  VMSDK_EXPECT_OK(utility->ResumeWorkers());
+  WaitWorkerTasksAreCompleted(*utility);
   EXPECT_TRUE(destroyed);
 
   VMSDK_EXPECT_OK(background.SetValue(saved));

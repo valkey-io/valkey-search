@@ -114,13 +114,12 @@ struct Postings {
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
 
-  // Look up the posting entry (tf + doc_len) for a specific key in one find,
-  // only used in extra-step scoring. Returns nullopt if the key is absent.
-  // One Postings is shared by every TEXT field, so key presence alone does not
-  // mean the term occurred in a requested field: nullopt unless it falls in
-  // `field_mask`. `~0ULL` means any field and skips the per-position scan.
-  std::optional<PostingDocStats> GetPostingDocStats(
-      BorrowedInternedStringPtr key, uint64_t field_mask) const;
+  // One find for `key`'s posting entry; nullopt if absent. One Postings is
+  // shared by every TEXT field, so key presence alone does not mean the term
+  // occurred in a requested field: nullopt unless it falls in `field_mask`.
+  // `~0ULL` means any field and skips the per-position scan.
+  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key,
+                                        uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -150,6 +149,9 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // The current key's position map (what GetPositionIterator walks).
+    const FlatPositionMap& GetPositionMap() const;
+
     // get tf for the current key, only used in iterator scoring
     size_t GetTermFrequency() const;
 
@@ -170,8 +172,7 @@ struct Postings {
  private:
   // Cache tf in PostingValue to avoid a map lookup
   // PostValue should be removed and restored if no extra-step
-  // Transparent comparator so GetPostingDocStats() can probe with a borrowed
-  // key.
+  // Transparent comparator so LookupKey() can probe with a borrowed key.
   absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
 };
 

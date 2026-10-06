@@ -26,8 +26,10 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
+#include "absl/functional/function_ref.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 #include "rax/rax.h"
 #include "src/index_schema.pb.h"
 #include "src/indexes/text/invasive_ptr.h"
@@ -169,14 +171,39 @@ class TextIndexSchema {
   // Access stem tree for word expansion during search
   const Rax &GetStemTree() const { return stem_tree_; }
 
-  // Get stem root and all stem parents for a search term. out_distinct_docs, if
-  // set, receives StemParents::distinct_docs (untouched if the root is absent).
-  std::string GetAllStemVariants(
-      absl::string_view search_term,
-      absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>
-          &words_to_search,
-      uint64_t stem_enabled_mask, bool lock_needed,
-      uint32_t *out_distinct_docs = nullptr);
+  // We avoid stalling the main thread waiting on the time-slice mutex and
+  // instead take the same short locks the writers take. The lookup holds the
+  // tree lock only for the find; the returned Postings is then probed under its
+  // word's bucket via WithWordLock, never with the tree lock still held
+  // (writers take bucket first, tree second).
+  InvasivePtr<Postings> LookupGlobalPostings(absl::string_view word) const
+      ABSL_LOCKS_EXCLUDED(text_index_mutex_) {
+    absl::ReaderMutexLock lock(&text_index_mutex_);
+    return text_index_->GetPrefix().FindPostingsTarget(word);
+  }
+
+  // Runs `fn` under `word`'s bucket, the lock every writer of its Postings
+  // holds, when `lock` is set (main thread); directly otherwise (the
+  // time-sliced read phase already excludes writers). The bucket covers only
+  // the btree access: nothing that reads the btree may outlive `fn`.
+  template <class Fn>
+  auto WithWordLock(absl::string_view word, bool lock, Fn &&fn) const {
+    std::optional<absl::MutexLock> guard;
+    if (lock) guard.emplace(&rax_target_mutex_pool_.Get(word));
+    return fn();
+  }
+
+  // Runs `fn(stemmed, parents, distinct_docs)` for `word`'s stem root: the
+  // parents are the indexed words stemming to it (capped at max expansions,
+  // empty if the root is absent) and distinct_docs is their document count.
+  // The parents are tree-owned, so `fn` runs under the stem tree lock when
+  // `lock` is set (main thread); the time-sliced read phase covers the rest.
+  void WithStemParents(
+      absl::string_view word, bool lock,
+      absl::FunctionRef<void(const std::string &stemmed,
+                             absl::Span<const std::string> parents,
+                             uint32_t distinct_docs)>
+          fn) const ABSL_LOCKS_EXCLUDED(stem_tree_mutex_);
 
   // Get the minimum stem size across all fields
   uint32_t GetMinStemSize() const { return min_stem_size_; }
@@ -218,7 +245,7 @@ class TextIndexSchema {
   mutable absl::Mutex stem_tree_mutex_;
 
   // Per-word bucket locks for concurrent Rax target updates.
-  RaxTargetMutexPool rax_target_mutex_pool_;
+  mutable RaxTargetMutexPool rax_target_mutex_pool_;
 
   //
   // To support the Delete record and the post-filtering case, there is a
@@ -311,7 +338,7 @@ class TextIndexSchema {
   // Helper function to lookup text index for a key.
   // Locking needs to be true if called outside of read phase of time sliced
   // mutex.
-  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock);
+  const TextIndex *GetPerKeyTextIndex(const Key &key, bool lock) const;
 };
 
 }  // namespace valkey_search::indexes::text

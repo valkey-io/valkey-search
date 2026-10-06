@@ -28,9 +28,15 @@
 #include "src/query/predicate.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
+#include "vmsdk/src/info.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::indexes {
+
+// Counts tag value lookups (raxFind). Queries resolve each value once and reuse
+// the handle per candidate, so this stays flat as the candidate count grows;
+// tests assert on it.
+extern vmsdk::info_field::Integer tag_value_lookups;
 
 // Tag index backed by an in-tree vs_rax radix tree.
 //
@@ -163,16 +169,27 @@ class Tag : public IndexBase {
   // `value` is normalized (lowercased unless case-sensitive) before lookup, so
   // callers pass the raw query value. Feeds the BM25 IDF document frequency
   // (dt) for tag scoring. O(1) rax lookup plus a bag size read.
-  size_t GetTagValueDocCount(absl::string_view value) const
+  // `lock` is for the main thread, which is outside the time-sliced read
+  // phase and instead takes the index's own mutex for the lookup.
+  size_t GetTagValueDocCount(absl::string_view value, bool lock = false) const
       ABSL_LOCKS_EXCLUDED(index_mutex_);
+
+  // The bag of documents carrying `value`, so a query does one lookup per
+  // value and answers every candidate with a bag probe; nullopt if none does.
+  // The bag is borrowed from the rax slot: lock-free only under the background
+  // read-side invariant (no mutation during the time-sliced read phase), so
+  // the main thread, which runs outside that phase, does not use it and takes
+  // index_mutex_ for its lookups instead.
+  std::optional<BorrowedBagOfInternedStringPtrs> LookupValue(
+      absl::string_view value) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
 
   // Document count (dt) of the first value on `key` matching prefix query value
   // `prefix_value` (must end in '*') -- the value a tag prefix is scored on,
   // since a prefix credits ONE matched value, never the sum. 0 if none matches.
   // Lock-free like GetValue/ContainsKey (read-side invariant).
-  size_t GetPrefixMatchDocCount(absl::string_view prefix_value,
-                                BorrowedInternedStringPtr key) const
-      ABSL_NO_THREAD_SAFETY_ANALYSIS;
+  size_t GetPrefixMatchDocCount(
+      absl::string_view prefix_value, BorrowedInternedStringPtr key,
+      bool lock = false) const ABSL_NO_THREAD_SAFETY_ANALYSIS;
   static absl::StatusOr<absl::flat_hash_set<absl::string_view>> ParseSearchTags(
       absl::string_view data, char separator);
   static absl::flat_hash_set<absl::string_view> ParseRecordTags(

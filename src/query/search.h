@@ -24,12 +24,14 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "src/attribute_data_type.h"
 #include "src/commands/filter_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/indexes/scoring/scorer.h"
 #include "src/indexes/vector_base.h"
 #include "src/query/predicate.h"
+#include "src/query/resolved_leaves.h"
 #include "src/utils/cancel.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -396,20 +398,22 @@ size_t EvaluateFilterAsPrimary(
 
 // Defined in the header to support testing
 absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
-    indexes::VectorBase *vector_index, const SearchParameters &parameters);
+    indexes::VectorBase *vector_index, const SearchParameters &parameters,
+    ResolvedLeafCache &cache);
 
 // Vector Range query (no KNN): returns the keys matching the filter, with the
 // VR distance in Neighbor::distance, in key order. A query that is only the VR
 // predicate is answered by VectorBase::SearchRange; a compound one evaluates
 // the full predicate tree per fetched key.
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
-    const SearchParameters &parameters);
+    const SearchParameters &parameters, ResolvedLeafCache &cache);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
-    indexes::VectorBase *vector_index, size_t qualified_entries);
+    indexes::VectorBase *vector_index, size_t qualified_entries,
+    ResolvedLeafCache &cache);
 
 bool QueryHasTextPredicate(const SearchParameters &parameters);
 
@@ -441,54 +445,50 @@ void RecordNonVectorResultsFetchedLimited();
 // Exposed for testing.
 size_t FindVectorDelimiter(absl::string_view expr);
 
+// Corpus-wide scoring inputs for a ResolvedLeafCache. kBackground requires
+// the time-sliced mutex held in read mode; kMainThread takes the short locks
+// each field's writer takes.
+CorpusStats ReadCorpusStats(const IndexSchema &index_schema, LockMode mode);
+
 // Scores admitted candidate documents by walking the predicate tree.
 // For each TermPredicate leaf, looks up each candidate's term frequency
 // and feeds the scorer. Writes scores into candidates in-place. Sorting and
 // trimming to the requested limit happen later in SearchResult::TrimResults.
+// `cache` is the query's, so leaves resolved while filtering are reused here.
 void ScoreTextQuery(const IndexSchema &index_schema,
                     const Predicate *root_predicate,
                     const indexes::scoring::Scorer *scorer,
-                    std::vector<indexes::BorrowedNeighbor> &candidates);
+                    std::vector<indexes::BorrowedNeighbor> &candidates,
+                    ResolvedLeafCache &cache);
 
-// Recomputes composed relevance scores for single already-matched documents by
-// walking the predicate tree through the exact same Scorer seam ScoreTextQuery
-// uses: ResolveLeaves (dt/IDF) -> ScoreNode (per-leaf ScoreLeaf / weight +
-// AND/OR composition) -> Scorer::ComposeDocumentScore. Every input
-// (total_docs, avg_doc_len, per-term IDF, term frequency, doc_len, document
-// score) is sourced IDENTICALLY to ScoreTextQuery, so values returned here are
-// on the same scale as shard-side scores and rank correctly against
-// non-recomputed neighbors.
-//
-// All document-independent inputs (posting lists, per-term IDF, corpus stats)
-// are resolved ONCE at construction, so scoring N mutated documents in a reply
-// costs one resolve instead of N. Construct lazily on the first document that
-// needs a recompute and reuse for the rest of the reply.
-//
-// The constructor and Score() each acquire the index reader lock internally,
-// so callers must NOT already hold it: TimeSlicedMRMWMutex is non-reentrant
-// and a nested acquire can deadlock in SwitchWithWait() when the inverse mode
-// is waiting and the time quota is exceeded. Used by the main-thread
-// content-fetch revalidation path (response_generator.cc VerifyFilter) where a
-// document mutated between scoring and fetch needs a fresh, scale-consistent
-// score. Score() returns
-// nullopt for an empty corpus or when ScoreNode reports a non-match (mirroring
-// ScoreTextQuery's per-candidate result); callers treat nullopt as "score 0",
-// never a drop.
-class SingleDocumentScorer {
+// A revalidated document's own tags, parsed from the fetched record on first
+// use per field. The index may not reflect the mutation yet, so main-thread
+// membership is read from here rather than from the index, for filtering and
+// scoring alike.
+class RecordTags {
  public:
-  SingleDocumentScorer(const IndexSchema &index_schema,
-                       const Predicate *root_predicate,
-                       const indexes::scoring::Scorer *scorer);
-  ~SingleDocumentScorer();
-  SingleDocumentScorer(const SingleDocumentScorer &) = delete;
-  SingleDocumentScorer &operator=(const SingleDocumentScorer &) = delete;
-
-  std::optional<float> Score(const InternedStringPtr &key) const;
+  explicit RecordTags(const RecordsMap &records) : records_(records) {}
+  // nullptr when the record has no such field or it does not parse.
+  const absl::flat_hash_set<absl::string_view> *Get(
+      absl::string_view identifier, char separator);
 
  private:
-  struct State;
-  std::unique_ptr<State> state_;
+  const RecordsMap &records_;
+  absl::flat_hash_map<absl::string_view,
+                      std::optional<absl::flat_hash_set<absl::string_view>>>
+      parsed_;
 };
+
+// Main-thread rescoring of one revalidated document, through the same ScoreNode
+// walk ScoreTextQuery runs so the result is on the shard-side scale. `cache`
+// must be in a main-thread LockMode: this runs outside any time-sliced read
+// phase and never acquires that mutex. nullopt when ScoreNode re-derives a
+// non-match; callers score 0 rather than drop the document.
+std::optional<float> RecomputeDocumentScore(const IndexSchema &index_schema,
+                                            const Predicate *root_predicate,
+                                            const InternedStringPtr &key,
+                                            ResolvedLeafCache &cache,
+                                            RecordTags &record_tags);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

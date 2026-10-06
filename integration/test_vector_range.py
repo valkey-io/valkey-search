@@ -409,6 +409,48 @@ class TestVectorRange(ValkeySearchTestCaseBase):
         keys = parse_result_keys(result)
         assert keys == {"doc:0", "doc:2"}
 
+    def test_vector_range_and_negated_phrase(self):
+        """
+        Vector Range combined with a negated phrase. The phrase is evaluated
+        against each candidate's own text tree (a term would be answered from
+        the shared postings), and the negation keeps the prefilter from
+        trusting the entries fetcher, so every matched key goes through the
+        per-key path. Documents disagree on the phrase, so an evaluator that
+        kept a previous key's tree would flip verdicts.
+        """
+        client = self.server.get_new_client()
+        self._create_hnsw_index(client, extra_fields=["body", "TEXT"])
+        extra = {
+            "doc:0": {"body": "alpha beta"},
+            "doc:1": {"body": "alpha beta gamma"},
+            "doc:2": {"body": "beta gamma delta"},
+            "doc:3": {"body": "alpha"},
+            "doc:4": {"body": "gamma beta"},
+        }
+        self._load_vector_data(client, extra_data=extra)
+
+        query_blob = float_to_bytes(QUERY_VEC)
+        # radius=5 matches doc:0,1,2; the phrase "beta gamma" matches doc:1,2
+        # (doc:4 has the words out of order), so the negation leaves doc:0.
+        result = self._search(
+            client, "idx",
+            '@vec:[VECTOR_RANGE 5 $blob] -@body:"beta gamma"',
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert result[0] == 1
+        assert parse_result_keys(result) == {"doc:0"}
+
+        # And the positive phrase, so both verdict directions are covered.
+        result = self._search(
+            client, "idx",
+            '@vec:[VECTOR_RANGE 5 $blob] @body:"beta gamma"',
+            "PARAMS", "2", "blob", query_blob,
+            "NOCONTENT",
+        )
+        assert result[0] == 2
+        assert parse_result_keys(result) == {"doc:1", "doc:2"}
+
     # =================================================================
     # 6. Vector Range AND numeric filter
     # =================================================================

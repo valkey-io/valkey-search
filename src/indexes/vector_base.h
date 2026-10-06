@@ -48,7 +48,15 @@ enum class QueryOperations : uint64_t;
 class IndexSchema;
 }  // namespace valkey_search
 
+namespace valkey_search::query {
+class ResolvedLeafCache;
+}
+
 namespace valkey_search::indexes {
+namespace text {
+class TextIndex;
+class TextIndexSchema;
+}  // namespace text
 
 constexpr float kDefaultMagnitude = 1.0f;
 // Initial capacity of a range search's result vector.
@@ -700,12 +708,15 @@ class VectorBase : public IndexBase {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
-  explicit PrefilterEvaluator(
-      const valkey_search::indexes::text::TextIndex *text_index,
-      QueryOperations query_operations,
-      const valkey_search::IndexSchema *index_schema)
+  // Built once per query and reused across candidates. index_schema is needed
+  // to resolve a VectorRange predicate's alias to its vector index.
+  PrefilterEvaluator(const text::TextIndexSchema *text_index_schema,
+                     query::ResolvedLeafCache &cache,
+                     QueryOperations query_operations,
+                     const IndexSchema *index_schema)
       : query::Evaluator(query_operations),
-        text_index_(text_index),
+        text_index_schema_(text_index_schema),
+        cache_(cache),
         index_schema_(index_schema) {}
   bool Evaluate(const query::Predicate &predicate,
                 const InternedStringPtr &key);
@@ -729,9 +740,16 @@ class PrefilterEvaluator : public query::Evaluator {
                                        bool require_positions) override;
   query::EvaluationResult EvaluateVectorRange(
       const query::VectorRangePredicate &predicate) override;
-  const valkey_search::indexes::text::TextIndex *text_index_;
+  // The candidate's own tree, fetched on the first leaf that needs it. Many
+  // predicates never do (tag/numeric, or text served from the cache).
+  const text::TextIndex *PerKeyTextIndex();
+
+  const text::TextIndexSchema *text_index_schema_;
+  query::ResolvedLeafCache &cache_;
+  const IndexSchema *index_schema_;
   const InternedStringPtr *key_{nullptr};
-  const valkey_search::IndexSchema *index_schema_{nullptr};
+  const text::TextIndex *per_key_index_{nullptr};
+  bool per_key_index_fetched_{false};
 };
 
 }  // namespace valkey_search::indexes

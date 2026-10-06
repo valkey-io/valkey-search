@@ -202,10 +202,15 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // `record_indexes_by_alias_` can hold a name a column used to be emitted
   // under before a rename, so a hit is only a match when the column still
   // emits that name.
+  //
+  // `result_type` is the type of the values the column holds: ResultTypeFor
+  // the field's type for a field column. A synthetic column -- __key, the
+  // score -- states its own.
   size_t AddRecordAttribute(absl::string_view identifier,
                             absl::string_view alias,
                             absl::string_view output_name,
-                            indexes::IndexerType data_type) {
+                            indexes::IndexerType data_type,
+                            expr::Expression::Type result_type) {
     if (auto itr = record_indexes_by_alias_.find(output_name);
         itr != record_indexes_by_alias_.end() &&
         record_info_by_index_[itr->second].output_name_ == output_name) {
@@ -222,7 +227,7 @@ struct AggregateParameters : public expr::Expression::CompileContext,
                             .alias_ = std::string(alias),
                             .output_name_ = std::string(output_name),
                             .data_type_ = data_type,
-                            .result_type_ = ResultTypeFor(data_type)});
+                            .result_type_ = result_type});
     return new_index;
   }
 

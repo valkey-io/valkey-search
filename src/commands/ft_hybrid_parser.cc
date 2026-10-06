@@ -736,6 +736,12 @@ absl::Status ParseCombineClause(MultiSearchParameters &env,
       }
       VMSDK_ASSIGN_OR_RETURN(env.combine_function,
                              expr::Expression::Compile(cctx, expr_sv));
+      // The result is the document's fused score, so it must be a number.
+      if (env.combine_function->GetResultType() !=
+          expr::Expression::Type::kNumber) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "COMBINE FUNCTION `", expr_sv, "` does not produce a number"));
+      }
       saw_expr = true;
     } else {
       return absl::InvalidArgumentError(
@@ -800,6 +806,7 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   //    embedded AggregateParameters in env.agg.
   if (env.agg == nullptr) {
     env.agg = std::make_unique<aggregate::AggregateParameters>(env.db_num);
+    env.agg->hybrid_ = true;
     env.agg->index_schema = env.index_schema;
     env.agg->index_schema_name = env.index_schema_name;
     env.agg->dialect = 2;
@@ -832,13 +839,15 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     // here are the backstop, and they report rather than abort so no future
     // alias path can take the server down.
     if (env.agg->AddRecordAttribute("__key", "__key", "__key",
-                                    indexes::IndexerType::kNone) !=
+                                    indexes::IndexerType::kNone,
+                                    expr::Expression::Type::kString) !=
         aggregate::AggregateParameters::kKeyColumn) {
       return absl::InternalError("FT.HYBRID could not seed the `__key` column");
     }
     auto score_sv = vmsdk::ToStringView(env.agg->score_as.get());
     if (env.agg->AddRecordAttribute(score_sv, score_sv, score_sv,
-                                    indexes::IndexerType::kNone) !=
+                                    indexes::IndexerType::kNone,
+                                    expr::Expression::Type::kNumber) !=
         aggregate::AggregateParameters::kScoreColumn) {
       return absl::InternalError(absl::StrCat("FT.HYBRID could not seed the `",
                                               score_sv, "` score column"));

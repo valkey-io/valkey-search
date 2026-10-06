@@ -168,6 +168,40 @@ Measured against Redis 8:
   `search.cursor-max-count` / `search.cursor-max-idle-ms` configs; out of range
   values are an error rather than being clamped.
 
+### 1.7 What counts as a number in a comparison
+
+A comparison with a numeric operand converts the other operand without falling
+back to comparing strings, and fails the query when it cannot ("Error
+converting string"). Redis's conversion is stricter than valkey-search's
+(`Value::AsDouble`, which uses `strtod`): Redis rejects leading whitespace and
+hex, so `5 < ' 7'` and `5 < '0x10'` are errors on Redis 8 and compare as
+numbers on valkey-search.
+
+### 1.8 Arithmetic on a non-number
+
+`'abc' + 4` and `lower(@n) + 1` (a null) fail the query on Redis 8 ("Invalid
+numeric value"). valkey-search answers nil and keeps the record.
+
+### 1.9 Chained comparisons
+
+Redis comparisons do not chain: `@a < @b < @c` and `@a == @b == @c` are syntax
+errors. valkey-search parses them left to right, as `(@a < @b) < @c`.
+`test_aggregate_numeric_triadic_operators` produces 36 such commands per key
+type; the harness reports each as a permissiveness warning, not a failure.
+
+### 1.10 An array against a scalar
+
+A comparison between an array (TOLIST, RANDOM_SAMPLE) and a number or string
+keeps valkey-search's generic comparison, which reads the array as the empty
+string. Redis compares the array's first element (see 1.5).
+
+### 1.11 Error messages
+
+Where both engines fail a query on an evaluation error, the messages differ:
+valkey-search's string-function errors name the argument and the expected
+type, but not in Redis's `VALIDATE_ARG__STRING` form. The harness compares only
+that both engines raised.
+
 ## 2. Where the two reference engines disagree
 
 These are not valkey-search defects. They are places where `redis:latest` and
@@ -193,6 +227,10 @@ group answers the reducer's identity. redis-stack reads such an input as `0`.
 redis-stack.
 
 ## 3. Notes on the harness and the reference engine
+
+* **An FT.CREATE FILTER over constants alone crashes Redis 8.** `FILTER
+  "'10' < 9"` takes the server down, so the filter generators never list an
+  expression without a field reference.
 
 * **`contains()` with a vector needle hangs Redis.** `contains(<any
   string-valued operand>, @v1)` never returns and pins the server at 100% CPU:

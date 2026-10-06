@@ -103,8 +103,16 @@ struct AggregateParameters : public expr::Expression::CompileContext,
 
   absl::StatusOr<std::unique_ptr<expr::Expression::AttributeReference>>
   MakeReference(const absl::string_view s, bool create) override;
+  // True when the pipeline sees field `name` as its raw string, not as the
+  // number its NUMERIC schema type would make it.
+  bool LoadsRawString(absl::string_view name) const;
 
   bool UseFilterComparisonSemantics() const override { return false; }
+
+  // Set by FT.HYBRID, which embeds these parameters for its pipeline. Unlike
+  // FT.AGGREGATE it is new in 1.3.0, so it has no older release to emulate.
+  bool hybrid_{false};
+  bool HonorsEmulateRelease() const override { return !hybrid_; }
 
   absl::StatusOr<expr::Value> GetParam(
       const absl::string_view s) const override {
@@ -143,7 +151,21 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     // rename overrides it with the requested alias.
     std::string output_name_;
     indexes::IndexerType data_type_;
+    // The type of the values the column holds, as of the stage being parsed.
+    // A stage that writes the column (APPLY ... AS, a reducer) replaces it.
+    expr::Expression::Type result_type_;
   };
+
+  // The type ProcessFieldValue gives a value read from a field of this type.
+  static expr::Expression::Type ResultTypeFor(indexes::IndexerType type) {
+    if (type == indexes::IndexerType::kNumeric) {
+      return expr::Expression::Type::kNumber;
+    }
+    if (indexes::IsVectorIndex(type)) {
+      return expr::Expression::Type::kVector;
+    }
+    return expr::Expression::Type::kString;
+  }
 
   friend std::ostream& operator<<(std::ostream& os,
                                   const AttributeRecordInfo& info) {
@@ -180,10 +202,15 @@ struct AggregateParameters : public expr::Expression::CompileContext,
   // `record_indexes_by_alias_` can hold a name a column used to be emitted
   // under before a rename, so a hit is only a match when the column still
   // emits that name.
+  //
+  // `result_type` is the type of the values the column holds: ResultTypeFor
+  // the field's type for a field column. A synthetic column -- __key, the
+  // score -- states its own.
   size_t AddRecordAttribute(absl::string_view identifier,
                             absl::string_view alias,
                             absl::string_view output_name,
-                            indexes::IndexerType data_type) {
+                            indexes::IndexerType data_type,
+                            expr::Expression::Type result_type) {
     if (auto itr = record_indexes_by_alias_.find(output_name);
         itr != record_indexes_by_alias_.end() &&
         record_info_by_index_[itr->second].output_name_ == output_name) {
@@ -199,7 +226,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
         AttributeRecordInfo{.identifier_ = std::string(identifier),
                             .alias_ = std::string(alias),
                             .output_name_ = std::string(output_name),
-                            .data_type_ = data_type});
+                            .data_type_ = data_type,
+                            .result_type_ = result_type});
     return new_index;
   }
 
@@ -269,15 +297,20 @@ class Stage {
 };
 
 struct Attribute : expr::Expression::AttributeReference {
-  Attribute(absl::string_view name, size_t ix)
+  Attribute(absl::string_view name, size_t ix, expr::Expression::Type type)
       : expr::Expression::AttributeReference(),
         name_(name),
-        record_index_(ix) {}
+        record_index_(ix),
+        type_(type) {}
   std::string name_;
   size_t record_index_;
+  // The column's type when this reference was compiled. A later stage may
+  // write the column with a different type; this reference does not see it.
+  expr::Expression::Type type_;
   void Dump(std::ostream& os) const override { os << name_; }
   expr::Value GetValue(expr::Expression::EvalContext& ctx,
                        const expr::Expression::Record& record) const override;
+  expr::Expression::Type GetResultType() const override { return type_; }
 };
 
 class Limit : public Stage {

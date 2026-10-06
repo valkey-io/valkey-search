@@ -1039,7 +1039,6 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                 f"ft.aggregate {key_type}_idx1  * load 3 @__key @n1 @n2 apply @n1{op}@n2 as nn"
             )
 
-    @pytest.mark.skip(reason="Requires a large change to the underlying comparison operations and changes to many existing tests")
     def test_aggregate_numeric_triadic_operators(self, key_type, dialect, vector_data_type):
         self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
         dyadic = ["+", "-", "*", "/", "^"]
@@ -1156,6 +1155,40 @@ class TestAggregateCompatibility(BaseCompatibilityTest):
                         "as",
                         "nn",
                 )
+
+    # Type-sensitive expressions, measured on Redis 8 (see the typed comparison
+    # block in src/expr/value.cc). A number is never turned into a string: a
+    # comparison with a string that does not convert is an error for < <= > >=,
+    # string functions reject numbers, lower()/upper() of a number is null, and
+    # && / || evaluate their right side only when needed. A field named by
+    # LOAD is a number; LOAD * on HASH hands the pipeline the raw string.
+    # check() also runs each command over queries that match nothing, where an
+    # evaluation error must not surface.
+    TYPED_EXPRESSIONS = [
+        "@n1 < 5", "@n1 < '5'", "@n1 < @n2", "@t1 < 'one.one2'", "@t1 < 5",
+        "@n1 < @t1", "@n1 == 'abc'", "@n1 != 'abc'", "@n1 < 'abc'",
+        "(@n1 < 'abc') + 1", "!(@n1 < 'abc')", "exists(@n1 < 'abc')",
+        "1 || (@n1 < 'abc')", "0 && (@n1 < 'abc')", "(@n1 < 'abc') || 1",
+        "strlen(@n1)", "strlen(@t1)", "startswith(@n1, '1')",
+        "contains(@t1, 1)", "substr(@t1, '0', 1)", "lower(@n1)",
+        "lower(@n1) < 5", "lower(@n1) < 'a'", "lower(@n1) == lower(@n2)",
+        "exists(lower(@n1))", "upper(@t1)",
+    ]
+
+    @pytest.mark.parametrize("load", [["4", "@__key", "@n1", "@n2", "@t1"],
+                                      ["*"]], ids=["explicit", "star"])
+    def test_aggregate_typed_expressions(self, key_type, dialect, load,
+                                         vector_data_type):
+        if vector_data_type != "FLOAT32":
+            pytest.skip("independent of the vector type")
+        if key_type == "json" and load == ["*"]:
+            pytest.skip("JSON's LOAD * exposes no fields to the pipeline")
+        self.setup_data("hard numbers", key_type, vector_data_type=vector_data_type)
+        for expr in self.TYPED_EXPRESSIONS:
+            self.check(dialect, "ft.aggregate", f"{key_type}_idx1", "*",
+                       "load", *load, "apply", expr, "as", "r")
+            self.check(dialect, "ft.aggregate", f"{key_type}_idx1", "*",
+                       "load", *load, "filter", expr)
 
     def test_search_sortby(self, key_type, dialect, vector_data_type):
         self.setup_data("sortable numbers", key_type)

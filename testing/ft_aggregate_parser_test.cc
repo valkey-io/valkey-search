@@ -440,6 +440,51 @@ TEST_F(AggregateTest, DefaultReducerAliasFollowsEmulateRelease) {
   VMSDK_EXPECT_OK(options::GetEmulateRelease().SetValue(saved));
 }
 
+// Every column knows the type of the values it holds, so an expression that
+// reads it can be typed at compile time. A stage that writes a column sets its
+// type from what it writes; a reference keeps the type the column had when the
+// reference was compiled.
+TEST_F(AggregateTest, ColumnResultTypes) {
+  using Type = expr::Expression::Type;
+  fake_index.fields_["t1"] = indexes::IndexerType::kTag;
+  fake_index.fields_["v1"] = indexes::IndexerType::kHNSW;
+  auto argv = vmsdk::ToValkeyStringVector(
+      "APPLY @n1 AS a APPLY lower(@t1) AS b APPLY @v1 AS v "
+      "APPLY @a AS before APPLY lower(@t1) AS a APPLY @a AS after "
+      "GROUPBY 2 @b @before REDUCE COUNT 0 AS cnt REDUCE SUM 1 @before AS s "
+      "REDUCE TOLIST 1 @b AS tl REDUCE RANDOM_SAMPLE 2 @b 3 AS rs "
+      "REDUCE FIRST_VALUE 1 @b AS fv APPLY @cnt+1 AS c1");
+  vmsdk::ArgsIterator itr(argv.data(), argv.size());
+  AggregateParameters params(0);
+  params.timeout_ms = 0;
+  params.parse_vars_.index_interface_ = &fake_index;
+  auto parser = CreateAggregateParser();
+  auto status = parser.Parse(params, itr);
+  ASSERT_TRUE(status.ok()) << status;
+  auto type_of = [&](const std::string &name) {
+    return params
+        .record_info_by_index_[params.record_indexes_by_alias_.at(name)]
+        .result_type_;
+  };
+  EXPECT_EQ(type_of("n1"), Type::kNumber);
+  EXPECT_EQ(type_of("t1"), Type::kString);
+  EXPECT_EQ(type_of("v1"), Type::kVector);
+  EXPECT_EQ(type_of("b"), Type::kString);
+  EXPECT_EQ(type_of("v"), Type::kVector);
+  EXPECT_EQ(type_of("a"), Type::kString);  // rewritten by APPLY lower(@t1) AS a
+  EXPECT_EQ(type_of("before"), Type::kNumber);
+  EXPECT_EQ(type_of("after"), Type::kString);
+  EXPECT_EQ(type_of("cnt"), Type::kNumber);
+  EXPECT_EQ(type_of("s"), Type::kNumber);
+  EXPECT_EQ(type_of("tl"), Type::kArray);
+  EXPECT_EQ(type_of("rs"), Type::kArray);
+  EXPECT_EQ(type_of("fv"), Type::kString);
+  EXPECT_EQ(type_of("c1"), Type::kNumber);
+  for (auto arg : argv) {
+    ValkeyModule_FreeString(nullptr, arg);
+  }
+}
+
 TEST_F(AggregateTest, EmptyApplyAndFilterExpressionsAreRejected) {
   for (absl::string_view test_case :
        {"FILTER ''", "FILTER ' '", "APPLY '' AS r", "APPLY ' ' AS r"}) {

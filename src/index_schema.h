@@ -465,6 +465,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   MakeReference(absl::string_view name, bool create) override;
   absl::StatusOr<expr::Value> GetParam(absl::string_view s) const override;
   bool UseFilterComparisonSemantics() const override { return true; }
+  // FT.CREATE FILTER is new in 1.3.0.
+  bool HonorsEmulateRelease() const override { return false; }
 
   // Returns attributes sorted by alias (map key) for deterministic ordering.
   // Use this instead of iterating attributes_ directly in any serialization

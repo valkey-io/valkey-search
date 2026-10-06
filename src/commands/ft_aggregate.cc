@@ -199,6 +199,8 @@ absl::Status AggregateParameters::ParseCommand(vmsdk::ArgsIterator &itr) {
   auto score_sv = vmsdk::ToStringView(score_as.get());
   CHECK(AddRecordAttribute(score_sv, score_sv, score_sv,
                            indexes::IndexerType::kNone) == kScoreColumn);
+  record_info_by_index_[kScoreColumn].result_type_ =
+      expr::Expression::Type::kNumber;
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*this, itr, true));
   if (itr.DistanceEnd() > 0) {

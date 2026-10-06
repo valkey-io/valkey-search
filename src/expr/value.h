@@ -38,26 +38,34 @@ class Value {
     // field from the reply. Getting it wrong the other way shows up as an
     // extra nil field, which the compatibility tests catch.
     static constexpr absl::string_view kMissing{"missing"};
-    // Written out rather than defaulted, and missing_ initialised here rather
+    // Written out rather than defaulted, and kind_ initialised here rather
     // than in place: a default member initialiser inside a nested class is not
     // parsed until the enclosing Value is complete, so a defaulted Nil() reads
     // as deleted when Value declares its std::variant member.
-    Nil() : missing_(false) {}
+    Nil() : kind_(Kind::kNothing) {}
     explicit Nil(std::string reason)
-        : missing_(false), reason_(std::move(reason)) {}
+        : kind_(Kind::kNothing), reason_(std::move(reason)) {}
     std::string GetReason() const {
-      return missing_ ? std::string(kMissing) : reason_;
+      return kind_ == Kind::kMissing ? std::string(kMissing) : reason_;
     }
-    bool IsMissing() const { return missing_; }
+    bool IsMissing() const { return kind_ == Kind::kMissing; }
+    bool IsError() const { return kind_ == Kind::kError; }
+    bool IsNull() const { return kind_ == Kind::kNull; }
 
    private:
     friend class Value;
-    static Nil MakeMissing() {
-      Nil nil;
-      nil.missing_ = true;
+    enum class Kind {
+      kNothing,  // an expression that evaluated to nothing
+      kMissing,  // a field the key never had
+      kError,    // an evaluation error that fails the query (see Value::Error)
+      kNull,     // a Redisearch null (see Value::Null)
+    };
+    static Nil Make(Kind kind, std::string reason = {}) {
+      Nil nil(std::move(reason));
+      nil.kind_ = kind;
       return nil;
     }
-    bool missing_;
+    Kind kind_;
     std::string reason_;
   };
   using Array = std::shared_ptr<std::vector<Value>>;
@@ -66,7 +74,17 @@ class Value {
   explicit Value(Nil n) : value_(n) {}
   // A field the key never had. Record slots start out this way; anything else
   // without a value carries a reason instead.
-  static Value Missing() { return Value(Nil::MakeMissing()); }
+  static Value Missing() { return Value(Nil::Make(Nil::Kind::kMissing)); }
+  // An evaluation error. Redisearch fails the whole query with `reason` (an
+  // FT.CREATE FILTER instead rejects the document), so operators and
+  // functions hand an error operand straight back rather than evaluating it.
+  static Value Error(std::string reason) {
+    return Value(Nil::Make(Nil::Kind::kError, std::move(reason)));
+  }
+  // The Redisearch null, which lower() and upper() return for a number. It is
+  // a value in its own right: it orders below every other value, equals
+  // another null, and exists() is true for it.
+  static Value Null() { return Value(Nil::Make(Nil::Kind::kNull, "null")); }
   explicit Value(bool b) : value_(b) {}
   explicit Value(int i) : value_(double(i)) {}
   explicit Value(double d);
@@ -89,6 +107,8 @@ class Value {
   // Nil because the key never had this field, rather than because something
   // evaluated to nothing.
   bool IsMissing() const;
+  bool IsError() const;
+  bool IsNull() const;
   bool IsBool() const;
   bool IsDouble() const;
   bool IsString() const;
@@ -233,6 +253,37 @@ Value FilterFuncNe(const Value &l, const Value &r);
 Value FilterFuncLt(const Value &l, const Value &r);
 Value FilterFuncLe(const Value &l, const Value &r);
 
+// Type-specific versions of the comparisons above, chosen by the compiler from
+// the operand types: Num* when either operand is a number, Str* when either is
+// a string. They follow Redisearch, not the generic versions: a numeric
+// comparison never falls back to comparing strings (an operand that is not a
+// number makes < <= > >= an error), and a null orders below everything. See
+// the block comment in value.cc.
+Value FuncNumGt(const Value &l, const Value &r);
+Value FuncNumGe(const Value &l, const Value &r);
+Value FuncNumEq(const Value &l, const Value &r);
+Value FuncNumNe(const Value &l, const Value &r);
+Value FuncNumLt(const Value &l, const Value &r);
+Value FuncNumLe(const Value &l, const Value &r);
+Value FuncStrGt(const Value &l, const Value &r);
+Value FuncStrGe(const Value &l, const Value &r);
+Value FuncStrEq(const Value &l, const Value &r);
+Value FuncStrNe(const Value &l, const Value &r);
+Value FuncStrLt(const Value &l, const Value &r);
+Value FuncStrLe(const Value &l, const Value &r);
+Value FilterFuncNumGt(const Value &l, const Value &r);
+Value FilterFuncNumGe(const Value &l, const Value &r);
+Value FilterFuncNumEq(const Value &l, const Value &r);
+Value FilterFuncNumNe(const Value &l, const Value &r);
+Value FilterFuncNumLt(const Value &l, const Value &r);
+Value FilterFuncNumLe(const Value &l, const Value &r);
+Value FilterFuncStrGt(const Value &l, const Value &r);
+Value FilterFuncStrGe(const Value &l, const Value &r);
+Value FilterFuncStrEq(const Value &l, const Value &r);
+Value FilterFuncStrNe(const Value &l, const Value &r);
+Value FilterFuncStrLt(const Value &l, const Value &r);
+Value FilterFuncStrLe(const Value &l, const Value &r);
+
 // Logical Functions
 Value FuncLor(const Value &l, const Value &r);
 Value FuncLand(const Value &l, const Value &r);
@@ -253,6 +304,15 @@ Value FuncContains(const Value &l, const Value &r);
 Value FuncStartswith(const Value &l, const Value &r);
 Value FuncSubstr(const Value &l, const Value &m, const Value &r);
 Value FuncConcat(const absl::InlinedVector<Value, 4> &values);
+
+// The string functions above as Redisearch has them: a number argument is an
+// error (Value::Error), or a null for lower and upper.
+Value FuncStrlenTyped(const Value &o);
+Value FuncStartswithTyped(const Value &l, const Value &r);
+Value FuncContainsTyped(const Value &l, const Value &r);
+Value FuncSubstrTyped(const Value &l, const Value &m, const Value &r);
+Value FuncLowerTyped(const Value &o);
+Value FuncUpperTyped(const Value &o);
 
 Value FuncTimefmt(const Value &t, const Value &fmt);
 std::string FormatDouble(double d);

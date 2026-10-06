@@ -346,23 +346,29 @@ TEST_F(FTHybridParserTest, VsimFilterAcceptsAnOptionalCount) {
   EXPECT_EQ(VsimArm(**without).k, VsimArm(**with).k);
 }
 
-TEST_F(FTHybridParserTest, VsimFilterCountSwallowsItsPolicyOptions) {
-  // POLICY and BATCH_SIZE tune how the pre-filter runs rather than what it
-  // answers, so they are consumed and discarded. The count is a raw token
-  // count, as on the reference engine.
+TEST_F(FTHybridParserTest, VsimFilterPolicySetsBatches) {
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
                        "2", "K", "5", "FILTER", "5", "@n:[0 3]", "POLICY",
                        "BATCHES", "BATCH_SIZE", "10"});
   VMSDK_EXPECT_OK(params);
   EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(VsimArm(**params).hybrid_policy, HybridPolicy::kBatches);
 }
 
-TEST_F(FTHybridParserTest, VsimFilterAcceptsPolicyWithoutACount) {
+TEST_F(FTHybridParserTest, VsimFilterPolicySetsAdHoc) {
   auto params =
       Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
-             "5", "FILTER", "@n:[0 3]", "POLICY", "ADHOC_BF"});
+             "5", "FILTER", "3", "@n:[0 3]", "POLICY", "ADHOC"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(VsimArm(**params).hybrid_policy, HybridPolicy::kAdHocBruteForce);
+}
+
+TEST_F(FTHybridParserTest, VsimFilterRejectsPolicyOutsideItsCount) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "2", "K", "5", "FILTER", "@n:[0 3]", "POLICY", "ADHOC"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "POLICY is only supported inside a counted VSIM FILTER");
 }
 
 TEST_F(FTHybridParserTest, VsimFilterCountCannotRunPastTheArguments) {
@@ -1033,61 +1039,67 @@ TEST_F(FTHybridParserTest, TimeoutAtTheMaxIsAccepted) {
 }
 
 // ---------------------------------------------------------------------
-// POLICY / BATCH_SIZE inside the VSIM clause
-//
-// Both tune how the vector search runs rather than what it answers, so the
-// value is read and discarded. What matters here is that reading it does not
-// end the VSIM clause -- the token after it still belongs to VSIM.
+// POLICY / BATCH_SIZE inside the counted VSIM FILTER block
 // ---------------------------------------------------------------------
 
-TEST_F(FTHybridParserTest, PolicyInsideVsimDoesNotSwallowTheNextToken) {
+TEST_F(FTHybridParserTest, PolicyOutsideVsimFilterIsRejected) {
   auto params =
       Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
              "5", "POLICY", "BATCHES", "YIELD_SCORE_AS", "vs"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
-  EXPECT_EQ(vmsdk::ToStringView(VsimArm(**params).score_as.get()), "vs");
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "POLICY is only supported inside a counted VSIM FILTER");
 }
 
-TEST_F(FTHybridParserTest, BatchSizeInsideVsimDoesNotSwallowTheNextToken) {
+TEST_F(FTHybridParserTest, BatchSizeOutsideVsimFilterIsRejected) {
   auto params =
       Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
              "5", "BATCH_SIZE", "10", "YIELD_SCORE_AS", "vs"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
-  EXPECT_EQ(vmsdk::ToStringView(VsimArm(**params).score_as.get()), "vs");
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "BATCH_SIZE is only supported inside a counted VSIM FILTER");
 }
 
-TEST_F(FTHybridParserTest, PolicyInsideVsimWithNoValueIsRejected) {
-  // Parsed without the usual PARAMS suffix: with one, the clause would read
-  // `PARAMS` as POLICY's value.
-  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
-                            "KNN", "2", "K", "5", "POLICY"});
+TEST_F(FTHybridParserTest, PolicyInsideFilterWithNoValueIsRejected) {
+  auto params =
+      ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2",
+                  "K", "5", "FILTER", "2", "@n:[0 3]", "POLICY"});
   ASSERT_FALSE(params.ok());
   EXPECT_EQ(params.status().message(), "POLICY requires a value");
 }
 
-TEST_F(FTHybridParserTest, BatchSizeInsideVsimWithNoValueIsRejected) {
-  auto params = ParseExact({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q",
-                            "KNN", "2", "K", "5", "BATCH_SIZE"});
+TEST_F(FTHybridParserTest, InvalidPolicyValueIsRejected) {
+  auto params =
+      Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN", "2", "K",
+             "5", "FILTER", "3", "@n:[0 3]", "POLICY", "ADHOC_BF"});
   ASSERT_FALSE(params.ok());
-  EXPECT_EQ(params.status().message(), "BATCH_SIZE requires a value");
+  EXPECT_EQ(params.status().message(), "Invalid POLICY value `ADHOC_BF`");
 }
 
-TEST_F(FTHybridParserTest, PolicyWithNoModeBlockStillParses) {
-  // The regression guard for the spelling that reaches POLICY with no KNN
-  // block at all: the clause has to accept it and keep the default K.
-  auto params = Parse(
-      {"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "POLICY", "local"});
-  VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 10);
-}
-
-TEST_F(FTHybridParserTest, PolicyBeforeAnAggregateStageStillParses) {
+TEST_F(FTHybridParserTest, DuplicatePolicyIsRejected) {
   auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
-                       "2", "K", "5", "POLICY", "local", "LIMIT", "0", "5"});
+                       "2", "K", "5", "FILTER", "5", "@n:[0 3]", "POLICY",
+                       "BATCHES", "POLICY", "ADHOC"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(), "POLICY was specified more than once");
+}
+
+TEST_F(FTHybridParserTest, AdHocPolicyRejectsEfRuntime) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "5", "EF_RUNTIME", "10", "FILTER", "3",
+                       "@n:[0 3]", "POLICY", "ADHOC"});
+  ASSERT_FALSE(params.ok());
+  EXPECT_EQ(params.status().message(),
+            "EF_RUNTIME is irrelevant for POLICY ADHOC");
+}
+
+TEST_F(FTHybridParserTest, BatchesPolicyAcceptsEfRuntime) {
+  auto params = Parse({"SEARCH", "@n:[0 10]", "VSIM", "@vector", "$q", "KNN",
+                       "4", "K", "5", "EF_RUNTIME", "10", "FILTER", "3",
+                       "@n:[0 3]", "POLICY", "BATCHES"});
   VMSDK_EXPECT_OK(params);
-  EXPECT_EQ(VsimArm(**params).k, 5);
+  EXPECT_EQ(VsimArm(**params).hybrid_policy, HybridPolicy::kBatches);
+  EXPECT_EQ(VsimArm(**params).ef, 10);
 }
 
 TEST_F(FTHybridParserTest, PolicyInsideTheSearchClauseIsRejected) {

@@ -8,7 +8,7 @@ Valkey Search 1.3.0 RC1 - Released Tue Oct 6th 2026
 This is the first release candidate of Valkey Search 1.3. It adds BM25STD
 relevance scoring for full-text queries; FT.HYBRID, which runs a full-text
 search and a vector search over one index and fuses their rankings into a single
-result list; full-text search in 12 additional languages; vector range queries;
+result list; full-text search in 11 additional languages; vector range queries;
 cursors for paging through large result sets; and FLOAT16 and BFLOAT16 vector
 types. Vectors in HASH documents are now stored once and shared between Valkey
 and the search index instead of being duplicated, and the numeric and tag

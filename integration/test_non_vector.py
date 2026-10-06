@@ -1200,6 +1200,26 @@ class TestAggregateReducerAlias(ValkeySearchTestCaseDebugMode):
                 row = dict(zip(result[i][::2], result[i][1::2]))
                 assert alias in row, f"{release}: expected {alias} in {list(row)}"
 
+    def test_default_reducer_alias_counter_counts_every_reducer(self):
+        client: Valkey = self.server.get_new_client()
+        create_indexes(client)
+        for doc in hash_docs:
+            assert client.execute_command(*doc) == 5
+        assert client.execute_command("CONFIG", "SET", "search.emulate-release", "1.2.1") == b"OK"
+        field = "search_compatibility-aggregate_reducer_default_alias"
+        before = client.info("search_compatibility").get(field, 0)
+        for reduce in (("COUNT", "0"),
+                       ("COUNT_DISTINCT", "1", "@rating"),
+                       ("RANDOM_SAMPLE", "2", "@rating", "1")):
+            result = client.execute_command(
+                "FT.AGGREGATE", "products", "@price:[1 1000]",
+                "LOAD", "2", "rating", "category",
+                "GROUPBY", "1", "@category",
+                "REDUCE", *reduce
+            )
+            assert result[0] >= 1
+        assert client.info("search_compatibility")[field] == before + 3
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):

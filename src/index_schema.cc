@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <format>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1831,8 +1830,8 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::LoadFromRDB(
   // Select the DB number in the context for subsequent usage.
   int db_num = static_cast<int>(index_schema_proto->db_num());
   if (ValkeyModule_SelectDb(ctx, db_num) != VALKEYMODULE_OK) {
-    return absl::InternalError(std::format(
-        "Unable to select DB {} for loading index schema {}", db_num,
+    return absl::InternalError(absl::StrFormat(
+        "Unable to select DB %d for loading index schema %s", db_num,
         vmsdk::config::RedactIfNeeded(index_schema_proto->name()).data()));
   }
 

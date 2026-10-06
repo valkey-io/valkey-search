@@ -45,7 +45,7 @@ Where:
   - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
   - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
   - When omitted, Valkey Search chooses the path using its existing planner heuristic.
-- `AS <name>` (optional): Overrides the default naming of the output distance field. By default this field is constructed by appending the string "\_\_score" to the name of the vector field.
+- `AS <name>` (optional): Overrides the default naming of the output distance field; the supplied name is used as-is. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
 
 For example, this query forces exact filter-first execution for documents tagged `electronics`:
 

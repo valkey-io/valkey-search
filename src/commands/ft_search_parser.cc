@@ -7,6 +7,7 @@
 
 #include "src/commands/ft_search_parser.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -159,6 +160,16 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructParamsParser() {
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        if (parameters.sortby_parameter.has_value()) {
+          VMSDK_RETURN_IF_ERROR(VALKEY_SEARCH_COMPATIBILITY_FIX(
+              1, 3, 0, "ft_search_multiple_sortby",
+              [&]() {
+                return absl::InvalidArgumentError(
+                    "Multiple SORTBY steps are not allowed");
+              },
+              // Legacy: the last SORTBY wins.
+              [&]() { return absl::OkStatus(); }));
+        }
         vmsdk::UniqueValkeyString field;
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, field));
         query::SortByParameter sortbyparams;
@@ -209,6 +220,7 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
         if (cnt == 0) {
           return absl::OkStatus();
         }
+        const size_t clause_start = parameters.return_attributes.size();
         for (uint32_t i = 0; i < cnt; ++i) {
           vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
@@ -221,6 +233,20 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
             if (i > cnt) {
               return absl::InvalidArgumentError("Unexpected parameter `AS` ");
             }
+          }
+          const auto output_name = vmsdk::ToStringView(as_property.get());
+          const bool duplicate_output_name = std::any_of(
+              parameters.return_attributes.begin() + clause_start,
+              parameters.return_attributes.end(),
+              [&](const query::ReturnAttribute &earlier) {
+                return vmsdk::ToStringView(earlier.alias.get()) == output_name;
+              });
+          // The first entry with a given output name wins.
+          if (duplicate_output_name &&
+              VALKEY_SEARCH_COMPATIBILITY_FIX(
+                  1, 3, 0, "ft_search_return_duplicate_field",
+                  [&]() { return true; }, [&]() { return false; })) {
+            continue;
           }
           auto schema_identifier = parameters.index_schema->GetIdentifier(
               vmsdk::ToStringView(identifier.get()));

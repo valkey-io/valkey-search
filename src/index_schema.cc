@@ -1705,16 +1705,20 @@ absl::Status IndexSchema::SaveIndexExtension(RDBChunkOutputStream out) const {
   // treats a key missing from the map as a no-op.
   std::vector<Key> live_multi_keys;
   live_multi_keys.reserve(multi_mutations_keys_.Get().size());
+  size_t orphan_keys_skipped = 0;
   for (const auto &key : multi_mutations_keys_.Get()) {
     if (ABSL_PREDICT_FALSE(tracked_mutated_records_.find(key) ==
                            tracked_mutated_records_.end())) {
-      rdb_save_multi_exec_orphans_skipped.Increment();
-      VMSDK_LOG(WARNING, nullptr)
-          << "Skipping orphan multi/exec key not present in mutation map: "
-          << vmsdk::config::RedactIfNeeded(key->Str());
+      ++orphan_keys_skipped;
       continue;
     }
     live_multi_keys.push_back(key);
+  }
+  if (orphan_keys_skipped != 0) {
+    rdb_save_multi_exec_orphans_skipped.Increment(orphan_keys_skipped);
+    VMSDK_LOG(WARNING, nullptr)
+        << "Skipped " << orphan_keys_skipped
+        << " orphan multi/exec keys not present in mutation map";
   }
   VMSDK_RETURN_IF_ERROR(out.SaveObject<size_t>(live_multi_keys.size()));
   rdb_save_multi_exec_entries.Increment(live_multi_keys.size());

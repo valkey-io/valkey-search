@@ -527,6 +527,13 @@ class TestMutationQueue(ValkeySearchTestCaseDebugMode):
         assert info["search_rdb_save_multi_exec_entries"] == 0
         assert self.client.exists(key)
 
+        self.server.restart(remove_rdb=False)
+        waiters.wait_for_true(
+            lambda: non_vector_index.backfill_complete(self.client)
+        )
+        search_results = do_search(self.client, non_vector_index, "@n:[1 1]")
+        assert key.encode() in search_results
+
     def test_saverestore_backfill(self):
         #
         # Delay the backfill and ensure that with new format we will trigger the backfill....

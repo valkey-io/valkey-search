@@ -2165,3 +2165,129 @@ class TestVectorRangeCluster(ValkeySearchClusterTestCase):
         flat = range_distances(primaries[0], flat_index, "v", query, radius)
         assert flat.keys() == expected
         assert hnsw == pytest.approx(flat)
+
+
+class TestVectorRangeTimeout(ValkeySearchTestCaseDebugMode):
+    """A VECTOR_RANGE query cancelled mid-traversal honours the partial
+    results setting, as KNN does. Debug mode exposes the ForceTimeout control
+    that cancels the walk at the first poll."""
+
+    def _force_timeout(self, client, enabled):
+        assert client.execute_command(
+            "FT._DEBUG", "CONTROLLED_VARIABLE", "SET", "ForceTimeout",
+            "yes" if enabled else "no") == b"OK"
+        if enabled:
+            assert client.execute_command(
+                "FT._DEBUG", "CONTROLLED_VARIABLE", "SET",
+                "timeoutpollfrequency", "1") == b"OK"
+
+    def _range(self, client, index, field, query, radius, partial):
+        """VECTOR_RANGE on `field` around `query`. Returns the raw reply, or
+        raises on the timeout error. The long TIMEOUT leaves the cancellation
+        to ForceTimeout so slow (sanitizer) builds count a forced cancel."""
+        return client.execute_command(
+            "FT.SEARCH", index,
+            f"@{field}:[VECTOR_RANGE {radius} $BLOB]",
+            "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
+            "NOCONTENT", "LIMIT", "0", str(2 * SCALE_KEYS), "TIMEOUT", "10000",
+            "SOMESHARDS" if partial else "ALLSHARDS",
+        )
+
+    def test_hnsw_range_timeout_mid_traversal(self):
+        """
+        An HNSW VECTOR_RANGE query cancelled mid-traversal replies with the
+        timeout error when partial results are disabled, and with a subset of
+        the complete result (never a key outside it) when they are enabled.
+        A FLAT scan, cancelled the same way, behaves identically.
+        """
+        client = self.server.get_new_client()
+        assert client.execute_command(
+            "CONFIG", "SET", "search.info-developer-visible", "yes") == b"OK"
+        rng = np.random.default_rng(46)
+        flat_index, hnsw_index = create_range_indexes(client, "L2")
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+
+        query = scale_queries(rng, vectors, "L2", count=1)[0]
+        # A radius wide enough that a complete walk and the scan return many
+        # keys, so a cancelled run can be strictly smaller.
+        radius = knn_radii(client, flat_index, "v", query, sizes=(200,))[0][1]
+        complete = {
+            index: parse_result_keys(
+                self._range(client, index, "v", query, radius, False))
+            for index in (flat_index, hnsw_index)}
+        assert complete[flat_index] and complete[hnsw_index]
+
+        self._force_timeout(client, True)
+        try:
+            cancels = "search_test-counter-ForceCancels"
+            before = client.info("search").get(cancels, 0)
+            # Partial results off: every cancelled query is the timeout error.
+            for index in (flat_index, hnsw_index):
+                with pytest.raises(ResponseError,
+                                   match="cancelled due to timeout"):
+                    self._range(client, index, "v", query, radius, False)
+            assert client.info("search").get(cancels, 0) == before + 2
+            # Partial results on: a subset of the complete result, no stray
+            # key, and strictly fewer than a complete run returned.
+            for index in (flat_index, hnsw_index):
+                keys = parse_result_keys(
+                    self._range(client, index, "v", query, radius, True))
+                assert keys <= complete[index], index
+                assert len(keys) < len(complete[index]), index
+            assert client.info("search").get(cancels, 0) == before + 4
+        finally:
+            self._force_timeout(client, False)
+        assert client.ping()
+
+
+class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):
+    """Small-radius VECTOR_RANGE on HNSW against FLAT: the walk must match
+    FLAT's recall and must not cost more than FLAT's exact scan. This is the
+    PR's motivation -- a small-radius range query no longer runs a full-index
+    beam."""
+
+    def test_small_radius_hnsw_not_slower_than_flat(self):
+        """
+        Over 10k 16-d vectors, small-radius (~1, ~10 keys) HNSW range queries
+        match FLAT key-for-key at MIN_RECALL and the HNSW median latency is no
+        worse than FLAT's. Prints the before/after latencies and recall.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(47)
+        flat_index, hnsw_index = create_range_indexes(client, "L2")
+        vectors = clustered_vectors(rng, SCALE_KEYS)
+        write_vectors(client, range(SCALE_KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index))
+        queries = scale_queries(rng, vectors, "L2", count=SCALE_QUERIES)
+
+        def timed(index, query, radius):
+            """(latency in seconds, result key set) for one range query."""
+            start = time.perf_counter()
+            got = range_distances(client, index, "v", query, radius)
+            return time.perf_counter() - start, got.keys()
+
+        flat_latencies, hnsw_latencies, recalls = [], [], []
+        for query in queries:
+            for _, radius in knn_radii(client, flat_index, "v", query,
+                                       sizes=(1, 10)):
+                flat_dt, flat_keys = timed(flat_index, query, radius)
+                hnsw_dt, hnsw_keys = timed(hnsw_index, query, radius)
+                assert hnsw_keys <= flat_keys, (radius, hnsw_keys - flat_keys)
+                flat_latencies.append(flat_dt)
+                hnsw_latencies.append(hnsw_dt)
+                recalls.append(len(hnsw_keys) / max(len(flat_keys), 1))
+
+        flat_median = sorted(flat_latencies)[len(flat_latencies) // 2]
+        hnsw_median = sorted(hnsw_latencies)[len(hnsw_latencies) // 2]
+        recall = sum(recalls) / len(recalls)
+        print(f"\nVECTOR_RANGE small-radius latency over {len(recalls)} "
+              f"queries: FLAT median {flat_median * 1e3:.3f} ms, "
+              f"HNSW median {hnsw_median * 1e3:.3f} ms, HNSW recall {recall:.3f}")
+        assert recall >= MIN_RECALL, recall
+        # The walk must not cost more than the exact scan it replaces. A
+        # generous factor absorbs scheduler jitter on a shared CI host while
+        # still catching a walk that regressed to a full-index beam.
+        assert hnsw_median <= flat_median * 3.0 + 2e-3, (
+            hnsw_median, flat_median)

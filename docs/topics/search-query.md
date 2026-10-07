@@ -53,7 +53,7 @@ For example, this query forces exact filter-first execution for documents tagged
 FT.SEARCH products "@category:{electronics}=>[KNN 10 @embedding $query_vector HYBRID_POLICY ADHOC_BF]" PARAMS 2 query_vector "<vector blob>" DIALECT 2
 ```
 
-`HYBRID_POLICY` is accepted only inside the KNN brackets. Post-KNN query-attribute syntax is not supported; for example, the following form returns an error:
+`HYBRID_POLICY` is accepted only inside the KNN brackets. Query-attribute syntax after the KNN brackets is not supported; for example, the following form returns an error:
 
 ```
 @category:{electronics}=>[KNN 10 @embedding $query_vector]=>{$HYBRID_POLICY: ADHOC_BF}

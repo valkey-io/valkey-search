@@ -156,7 +156,10 @@ It can be combined with other matchers using AND, OR and negation.
 ```
 
 - `field-name` (required): A `VECTOR` field of the index.
-- `radius` (required): A non-negative floating point number, or `$<name>` to take it from `PARAMS`. A key matches when its distance to the query vector is less than or equal to the radius, which can be `inf`. The distance depends on the `DISTANCE_METRIC` of the field, see [FT.CREATE](../commands/ft.create.md). For `COSINE`, use a small positive radius rather than 0 to match identical vectors.
+- `radius` (required): A non-negative floating point number, or `$<name>` to take it from `PARAMS`. A key matches when its distance to the query vector is less than or equal to the radius, which can be `inf`. The radius is compared with the distance as computed for the `DISTANCE_METRIC` of the field, see [FT.CREATE](../commands/ft.create.md):
+  - `L2`: the distance is the squared Euclidean distance, so to match keys within a Euclidean distance `d`, use the radius `d^2`, for example 0.25 for 0.5.
+  - `IP`: the distance is `1 - dot(X,Y)`, which is negative when the dot product is greater than 1, as it can be for unnormalized vectors. A radius of 0 matches every key whose dot product with the query vector is at least 1.
+  - `COSINE`: because of floating-point rounding, the distance between identical vectors can be slightly greater than 0. To match identical vectors, for example to find duplicates, use a small positive radius rather than 0.
 - `parameter` (required): A `PARAMS` name whose value is the query vector, encoded as for a KNN query (see above).
 - `EF_RUNTIME <ef>` (optional): Parsed and ignored.
 - `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.

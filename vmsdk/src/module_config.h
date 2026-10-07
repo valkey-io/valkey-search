@@ -44,6 +44,8 @@ enum Flags {
 /// Return true if debug mode is enabled. "search.debug-mode == yes"
 constexpr absl::string_view kDebugMode{"debug-mode"};
 bool IsDebugModeEnabled();
+/// Return true while Valkey applies the config file during module load.
+bool IsLoadingConfigFile();
 
 /// Return true if user data should be hidden from logs.
 /// "search.hide-user-data-from-log == yes"
@@ -215,7 +217,8 @@ class ConfigBase : public Registerable {
   }
 
   virtual absl::Status Validate(T val) const {
-    if (IsDeveloperConfig() && !IsDebugModeEnabled()) {
+    if (IsDeveloperConfig() && !IsDebugModeEnabled() &&
+        !IsLoadingConfigFile() && val != GetValue()) {
       return absl::PermissionDeniedError(
           absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
                           GetName(), kDebugMode));
@@ -544,10 +547,9 @@ class ConfigBuilder {
   }
 
   /// This configuration setting is restricted to developer use only. It can be
-  /// modified exclusively when `search.debug-mode` is set to `yes` (the default
-  /// setting is `no`). When a configuration entry is marked as `Dev()`, it
-  /// becomes both `Hidden` and `Immutable` if `search.debug-mode` is set to
-  /// `no`, preventing any runtime modifications.
+  /// modified only while `search.debug-mode` is `yes` (default `no`). Attempts
+  /// to modify it otherwise are rejected by `Validate()`. `debug-mode` itself
+  /// can be toggled at runtime via `CONFIG SET search.debug-mode`.
   auto &Dev() {
     config_->SetDeveloperConfig(true);
     return *this;

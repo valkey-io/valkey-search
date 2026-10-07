@@ -101,12 +101,6 @@ See [Numeric Field Format](../topics/search-data-formats.md#numeric-fields) for 
   - `EF_RUNTIME <number>` (optional): controls the number of vectors to be examined during a query operation. The default is 10, and the max is 4096\. You can set this parameter value for each query you run. Higher values increase query times, but improve query recall.
   - `DISTANCE_METRIC [L2 | IP | COSINE]` (required): Specifies the distance algorithm.
 
-The distance between two vectors depends on the `DISTANCE_METRIC` of the field:
-
-- `L2`: the **squared** Euclidean distance.
-- `IP`: `1 - dot(a, b)`, which is negative when the dot product is greater than 1.
-- `COSINE`: `1 - cos(a, b)`, between 0 and 2. Because of floating-point rounding, the distance between identical vectors can be slightly greater than 0.
-
 See [Vector Field Format](../topics/search-data-formats.md#vector-fields) for more details and examples.
 
 The KNN search algorithm operates to locate vectors that are the nearest to the query vector, i.e., looking for the smallest distance value.
@@ -116,7 +110,7 @@ This table shows the actual computation that Search uses when computing the dist
 | Classical Name | Valkey Search Distance Metric Name |   Classical Distance Formula Definition   | Valkey Search Distance Formula                  |
 | :------------: | :--------------------------------: | :---------------------------------------: | :---------------------------------------------- |
 | Inner Product  |                 IP                 |                 dot(X,Y)                  | 1 - dot(X,Y)                                    |
-|   Euclidean    |                 L2                 |          sqrt(sum(x[i]-y[i])^2)           | sqrt(sum(x[i]-y[i])^2)                          |
+|   Euclidean    |                 L2                 |         sqrt(sum((x[i]-y[i])^2))          | sum((x[i]-y[i])^2)                              |
 |     Cosine     |               COSINE               | dot(x,y) / (magnitude(X) \* magnitude(Y)) | 1 - (dot(X,Y) / (magnitude(X) \* magnitude(Y))) |
 
 ### Field options

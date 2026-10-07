@@ -16,7 +16,7 @@ indexes use less memory. This release requires Valkey core 9.1.0 or higher.
 
 Several compatibility fixes are breaking changes, so they are off by default;
 see Known Compatibility Defect Corrections
-(https://github.com/valkey-io/valkey-search/blob/main/COMPATIBILITY.md#known-compatibility-defect-corrections).
+(https://github.com/valkey-io/valkey-search/blob/1.3/COMPATIBILITY.md#known-compatibility-defect-corrections).
 Each legacy behavior still in use is counted by a compatibility-* INFO field.
 FT._DEBUG no longer requires debug mode; it is now an admin command in the
 @admin and @dangerous ACL categories, so restrict it with ACLs where needed.
@@ -35,7 +35,7 @@ Major features:
 Other new features:
 * FILTER option on FT.CREATE: a boolean expression evaluated during ingestion so that only matching keys are indexed. FT.INFO reports the number of excluded keys as filter_rejected_keys (#984)
 * INKEYS option on FT.SEARCH to restrict results to a given set of keys (#967)
-* Filtered KNN queries can select their execution strategy instead of leaving it to the planner: HYBRID_POLICY ADHOC_BF evaluates the filter first and computes exact distances for the matching documents, and HYBRID_POLICY BATCHES searches the vector index first and applies the filter inline. Both are set inside the KNN clause of FT.SEARCH and FT.AGGREGATE queries; FT.HYBRID takes POLICY ADHOC or POLICY BATCHES inside a counted VSIM FILTER (#1460)
+* Filtered KNN execution strategy: a KNN query with a filter can now select how the filter and the vector search are combined, instead of leaving it to the planner. The option keeps its RediSearch name, HYBRID_POLICY, but it only controls filtered KNN execution and is unrelated to FT.HYBRID score fusion. HYBRID_POLICY ADHOC_BF evaluates the filter first and computes exact distances for the matching documents, and HYBRID_POLICY BATCHES searches the vector index first and applies the filter inline. Both are set inside the KNN clause of FT.SEARCH and FT.AGGREGATE queries; FT.HYBRID takes POLICY ADHOC or POLICY BATCHES inside a counted VSIM FILTER, where it applies to the VSIM arm's filter (#1460)
 * FT.AGGREGATE enhancements: the TOLIST, FIRST_VALUE and RANDOM_SAMPLE reducers; array values in expressions, with element-wise functions and arithmetic and the vectorlen, vectorat, isvector, makevector and flatten functions; GROUPBY over multi-value fields, bounded by search.max-group-key-expansion; and LOAD now accepts JSON paths and AS aliases (AS requires search.emulate-release 1.3.0) (#932, #946, #949, #893, #1271, #1084)
 * More RediSearch syntax is accepted: field-scoped groups such as @title:(hello | world), indexing one field under two aliases (for example as both TEXT and TAG), the NOHL and SORTABLE UNF options on FT.CREATE, and SORTBY on a KNN score alias in ascending order (#1218, #1196, #1395, #1267)
 * In cluster mode, FT.SEARCH and FT.AGGREGATE can run inside MULTI/EXEC and Lua scripts when the index is single-slot (hash-tagged) and the local node owns that slot (#866)

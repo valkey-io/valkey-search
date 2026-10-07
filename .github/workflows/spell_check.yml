@@ -27,3 +27,24 @@ jobs:
 
       - name: Spell check
         run: typos --config=./.config/typos.toml
+
+  docs:
+    name: Documentation spellcheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+
+      - name: Download Valkey documentation dictionary
+        run: |
+          mkdir -p .cache
+          curl --fail --silent --show-error --location --retry 3 \
+            https://raw.githubusercontent.com/valkey-io/valkey-doc/main/wordlist \
+            --output .cache/valkey-doc-wordlist.txt
+
+      - name: Check published documentation
+        uses: tbroadley/spellchecker-cli-action@v1
+        with:
+          files: "docs/commands/ft.*.md docs/topics/search*.md"
+          config: .github/spellcheckerrc.yml

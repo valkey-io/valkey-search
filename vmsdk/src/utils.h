@@ -111,6 +111,13 @@ inline std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
 //
 std::optional<absl::string_view> ParseHashTag(absl::string_view);
 
+// Cluster hash slot of a key, computed exactly as the server does it
+// (CRC16-XMODEM of the hash tag, or of the whole key when there is none,
+// masked to 16384 slots). Unlike ValkeyModule_ClusterKeySlot it needs no
+// ValkeyModuleString, so it is safe to call on any thread and allocates
+// nothing.
+uint16_t KeyHashSlot(absl::string_view key);
+
 bool IsRealUserClient(ValkeyModuleCtx *ctx);
 bool MultiOrLua(ValkeyModuleCtx *ctx);
 

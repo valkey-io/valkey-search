@@ -47,8 +47,11 @@
 #include "src/query/predicate.h"
 #include "src/utils/string_interning.h"
 #include "testing/common.h"
+#include "testing/coordinator/common.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/testing_infra/module.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 
 namespace valkey_search {
 
@@ -802,6 +805,332 @@ TEST_F(ValkeySearchTest, HybridQueryRanksByTextScoreNotVectorDistance) {
   // confirming distance is not the ranking key.
   EXPECT_GT(neighbors[0].score, neighbors[1].score);
   EXPECT_GT(neighbors[0].distance, neighbors[1].distance);
+}
+
+// Minimal CLUSTER SLOTS reply: this node owns [0, 8191], another primary owns
+// [8192, 16383]. Keys are given hash tags whose slots fall on a known side.
+ValkeyModuleCallReply *BuildTwoShardClusterSlotsReply(
+    const std::string &my_node_id, const std::string &other_node_id) {
+  auto node = [](const std::string &ip, long long port,
+                 const std::string &node_id) {
+    CallReplyArray arr;
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyString(ip)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(port)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyString(node_id)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyArray{}));
+    return arr;
+  };
+  auto range = [](long long start, long long end, CallReplyArray primary) {
+    CallReplyArray arr;
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(start)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(end)));
+    arr.push_back(CreateValkeyModuleCallReply(std::move(primary)));
+    return arr;
+  };
+  CallReplyArray slots;
+  slots.push_back(CreateValkeyModuleCallReply(
+      range(0, 8191, node("127.0.0.1", 7000, my_node_id))));
+  slots.push_back(CreateValkeyModuleCallReply(
+      range(8192, 16383, node("127.0.0.2", 7001, other_node_id))));
+  auto *reply = new ValkeyModuleCallReply();
+  reply->type = VALKEYMODULE_REPLY_ARRAY;
+  reply->val = std::move(slots);
+  return reply;
+}
+
+// Same as above but with slot 8192 uncovered, so CheckClusterMapFull fails and
+// the map is marked inconsistent while this node's owned ranges are still
+// present. Used to prove the filter fails open rather than dropping every hit.
+ValkeyModuleCallReply *BuildInconsistentClusterSlotsReply(
+    const std::string &my_node_id, const std::string &other_node_id) {
+  auto node = [](const std::string &ip, long long port,
+                 const std::string &node_id) {
+    CallReplyArray arr;
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyString(ip)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(port)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyString(node_id)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyArray{}));
+    return arr;
+  };
+  auto range = [](long long start, long long end, CallReplyArray primary) {
+    CallReplyArray arr;
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(start)));
+    arr.push_back(CreateValkeyModuleCallReply(CallReplyInteger(end)));
+    arr.push_back(CreateValkeyModuleCallReply(std::move(primary)));
+    return arr;
+  };
+  CallReplyArray slots;
+  slots.push_back(CreateValkeyModuleCallReply(
+      range(0, 8191, node("127.0.0.1", 7000, my_node_id))));
+  // Gap at slot 8192.
+  slots.push_back(CreateValkeyModuleCallReply(
+      range(8193, 16383, node("127.0.0.2", 7001, other_node_id))));
+  auto *reply = new ValkeyModuleCallReply();
+  reply->type = VALKEYMODULE_REPLY_ARRAY;
+  reply->val = std::move(slots);
+  return reply;
+}
+
+// Cluster-mode ownership-filter tests. SetUp builds the schema and documents;
+// each test then installs the cluster-map snapshot variant it needs via one of
+// the Install* helpers, so the gates (no coordinator, not cluster, missing or
+// inconsistent map) can be exercised independently.
+class SlotOwnershipSearchTest : public ValkeySearchTest {
+ protected:
+  void SetUp() override {
+    ValkeySearchTest::SetUp();
+    schema_ = CreateIndexSchema(kIndexSchemaName).value();
+    EXPECT_CALL(*schema_, GetIdentifier(_)).Times(testing::AnyNumber());
+    vector_index_ =
+        indexes::VectorFlat<float>::Create(
+            CreateFlatVectorIndexProto(
+                kVectorDimensions, data_model::DISTANCE_METRIC_L2, 1000, 250),
+            "vector_attribute_identifier",
+            data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH, 0)
+            .value();
+    VMSDK_EXPECT_OK(schema_->AddIndex(kVectorAttributeAlias,
+                                      kVectorAttributeAlias, vector_index_));
+    schema_->CreateTextIndexSchema();
+    auto text_schema = schema_->GetTextIndexSchema();
+    text_index_ = std::make_shared<indexes::Text>(
+        CreateTextIndexProto(/*with_suffix_trie=*/true, /*no_stem=*/true, 1.0),
+        text_schema);
+    VMSDK_EXPECT_OK(schema_->AddIndex("text", "text", text_index_));
+    // The unowned key is the closest vector, so dropping it is visible in the
+    // KNN order and not just in the count.
+    AddDoc(kUnownedKey, 1.0f);
+    AddDoc(kOwnedKey1, 2.0f);
+    AddDoc(kOwnedKey2, 3.0f);
+  }
+
+  void TearDown() override {
+    // The schema unsubscribes from the KeyspaceEventManager on destruction,
+    // so it must go before the base fixture tears that manager down.
+    text_index_.reset();
+    vector_index_.reset();
+    schema_.reset();
+    ValkeySearchTest::TearDown();
+  }
+
+  // Marks the module as a cluster node (IsCluster() reads the flags of the
+  // background context, which the test instance leaves at 0 by default).
+  void EnableCluster() {
+    EXPECT_CALL(*kMockValkeyModule, GetContextFlags(nullptr))
+        .WillRepeatedly(testing::Return(VALKEYMODULE_CTX_FLAGS_CLUSTER));
+  }
+
+  void EnableCoordinator() {
+    ValkeySearch::Instance().SetCoordinatorServer(
+        std::make_unique<coordinator::MockServer>());
+  }
+
+  // Mocks CLUSTER SLOTS to return `reply` and wires the reply accessors, then
+  // populates the stored cluster-map snapshot that DropUnownedSlotHits reads.
+  std::shared_ptr<vmsdk::cluster_map::ClusterMap> InstallClusterMap(
+      ValkeyModuleCallReply *reply) {
+    EXPECT_CALL(*kMockValkeyModule,
+                Call(&fake_ctx_, testing::StrEq("CLUSTER"), testing::StrEq("c"),
+                     testing::StrEq("SLOTS")))
+        .WillOnce(testing::Return(reply));
+    EXPECT_CALL(*kMockValkeyModule, FreeCallReply(reply))
+        .WillOnce([](ValkeyModuleCallReply *r) { delete r; });
+    EXPECT_CALL(*kMockValkeyModule, CallReplyType(_))
+        .WillRepeatedly(&TestValkeyModule_CallReplyTypeImpl);
+    EXPECT_CALL(*kMockValkeyModule, CallReplyLength(_))
+        .WillRepeatedly([](ValkeyModuleCallReply *r) -> size_t {
+          return std::get<CallReplyArray>(r->val).size();
+        });
+    EXPECT_CALL(*kMockValkeyModule, CallReplyArrayElement(_, _))
+        .WillRepeatedly(&TestValkeyModule_CallReplyArrayElementImpl);
+    EXPECT_CALL(*kMockValkeyModule, CallReplyInteger(_))
+        .WillRepeatedly(&TestValkeyModule_CallReplyIntegerImpl);
+    EXPECT_CALL(*kMockValkeyModule, CallReplyStringPtr(_, _))
+        .WillRepeatedly(&TestValkeyModule_CallReplyStringPtrImpl);
+    EXPECT_CALL(*kMockValkeyModule, GetMyClusterID())
+        .WillRepeatedly(testing::Return(my_node_id_.c_str()));
+    return ValkeySearch::Instance().GetOrRefreshClusterMap(&fake_ctx_);
+  }
+
+  // The common case: cluster + coordinator + a consistent map in which this
+  // node owns the lower half of the slot space.
+  void InstallConsistentCoordinatorMap() {
+    EnableCluster();
+    EnableCoordinator();
+    auto cluster_map = InstallClusterMap(
+        BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_));
+    ASSERT_NE(cluster_map, nullptr);
+    ASSERT_TRUE(cluster_map->IsConsistent());
+    ASSERT_TRUE(cluster_map->IOwnSlot(vmsdk::KeyHashSlot(kOwnedKey1)));
+    ASSERT_TRUE(cluster_map->IOwnSlot(vmsdk::KeyHashSlot(kOwnedKey2)));
+    ASSERT_FALSE(cluster_map->IOwnSlot(vmsdk::KeyHashSlot(kUnownedKey)));
+  }
+
+  void AddDoc(absl::string_view key, float vec_value) {
+    auto interned = StringInternStore::Intern(key);
+    std::vector<float> vec(kVectorDimensions, vec_value);
+    std::string raw_vec((char *)vec.data(), vec.size() * sizeof(float));
+    VMSDK_EXPECT_OK(vector_index_->AddRecord(
+        interned,
+        testing_infra::MakeVectorAttributeData(
+            interned, StringInternStore::Intern(kVectorAttributeAlias),
+            raw_vec)));
+    VMSDK_EXPECT_OK(text_index_->AddRecord(
+        interned, AttributeData(vmsdk::MakeUniqueValkeyString("cat"))));
+    schema_->GetTextIndexSchema()->CommitKeyData(interned);
+    schema_->SetIndexMutationSequenceNumber(interned, 0);
+  }
+
+  std::vector<std::string> SearchKeys(UnitTestSearchParameters &params) {
+    params.index_schema_name = kIndexSchemaName;
+    params.index_schema = schema_;
+    params.dialect = kDialect;
+    VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
+    std::vector<std::string> keys;
+    for (const auto &neighbor : params.search_result.neighbors) {
+      keys.emplace_back(neighbor.external_id->Str());
+    }
+    return keys;
+  }
+
+  // Slots 5061 and 866 are owned; 12182 is not.
+  static constexpr absl::string_view kOwnedKey1 = "doc:{bar}";
+  static constexpr absl::string_view kOwnedKey2 = "doc:{hello}";
+  static constexpr absl::string_view kUnownedKey = "doc:{foo}";
+  const std::string my_node_id_ = std::string(VALKEYMODULE_NODE_ID_LEN, 'a');
+  const std::string other_node_id_ = std::string(VALKEYMODULE_NODE_ID_LEN, 'b');
+  std::shared_ptr<MockIndexSchema> schema_;
+  std::shared_ptr<indexes::VectorFlat<float>> vector_index_;
+  std::shared_ptr<indexes::Text> text_index_;
+};
+
+// A NOCONTENT KNN completes on the reader thread and never reaches the
+// main-thread ownership check, so Search() itself must drop the unowned hit
+// from both the neighbors and total_count.
+TEST_F(SlotOwnershipSearchTest, KnnDropsUnownedSlotBeforeCounting) {
+  InstallConsistentCoordinatorMap();
+  UnitTestSearchParameters params;
+  params.attribute_alias = kVectorAttributeAlias;
+  params.score_as = vmsdk::MakeUniqueValkeyString(kScoreAs);
+  params.k = 3;
+  params.ef = kEfRuntime;
+  params.no_content = true;
+  std::vector<float> query_vector(kVectorDimensions, 1.0f);
+  params.query = VectorToStr(query_vector);
+
+  EXPECT_THAT(SearchKeys(params), testing::ElementsAre(kOwnedKey1, kOwnedKey2));
+  EXPECT_EQ(params.search_result.total_count, 2u);
+}
+
+// Same for the non-vector path, whose total_count is the size of the raw hit
+// set and feeds LIMIT 0 0 directly; with content requested the content fetch
+// would re-check ownership for the page but not fix the count.
+TEST_F(SlotOwnershipSearchTest, NonVectorDropsUnownedSlotBeforeCounting) {
+  InstallConsistentCoordinatorMap();
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 10};
+  params.no_content = false;
+  TextParsingOptions options{};
+  FilterParser parser(*schema_, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  EXPECT_THAT(SearchKeys(params),
+              testing::UnorderedElementsAre(kOwnedKey1, kOwnedKey2));
+  EXPECT_EQ(params.search_result.total_count, 2u);
+}
+
+// LIMIT 0 0 returns only the count; it must be the count of owned hits.
+TEST_F(SlotOwnershipSearchTest, CountOnlyExcludesUnownedSlot) {
+  InstallConsistentCoordinatorMap();
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 0};
+  TextParsingOptions options{};
+  FilterParser parser(*schema_, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  EXPECT_THAT(SearchKeys(params), testing::IsEmpty());
+  EXPECT_EQ(params.search_result.total_count, 2u);
+}
+
+// A VECTOR_RANGE query runs through the same Search() path and must have its
+// unowned hit dropped before counting.
+TEST_F(SlotOwnershipSearchTest, VectorRangeExcludesUnownedSlot) {
+  InstallConsistentCoordinatorMap();
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 10};
+  params.no_content = true;
+  // All three docs lie within the radius of a query at the origin (distances
+  // 1*dim, 4*dim, 9*dim for vec values 1,2,3), so only ownership trims them.
+  auto predicate = std::make_unique<query::VectorRangePredicate>(
+      kVectorAttributeAlias, "vector_attribute_identifier", 1e9, "blob_param",
+      std::nullopt, std::nullopt);
+  std::vector<float> query_vector(kVectorDimensions, 0.0f);
+  predicate->SetQueryVector(std::string(VectorToStr(query_vector)));
+  params.filter_parse_results.root_predicate = std::move(predicate);
+  params.has_vector_range = true;
+
+  EXPECT_THAT(SearchKeys(params),
+              testing::UnorderedElementsAre(kOwnedKey1, kOwnedKey2));
+  EXPECT_EQ(params.search_result.total_count, 2u);
+}
+
+// Gate: an inconsistent snapshot can be missing the local shard's ranges
+// entirely, so the filter must fail open and keep every hit rather than drop
+// all of them. The fan-out merge's dedup covers correctness in this window.
+TEST_F(SlotOwnershipSearchTest, InconsistentMapKeepsAllHits) {
+  EnableCluster();
+  EnableCoordinator();
+  auto cluster_map = InstallClusterMap(
+      BuildInconsistentClusterSlotsReply(my_node_id_, other_node_id_));
+  ASSERT_NE(cluster_map, nullptr);
+  ASSERT_FALSE(cluster_map->IsConsistent());
+
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 0};
+  TextParsingOptions options{};
+  FilterParser parser(*schema_, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  EXPECT_THAT(SearchKeys(params), testing::IsEmpty());
+  EXPECT_EQ(params.search_result.total_count, 3u);
+}
+
+// Gate: without the coordinator the snapshot is not kept fresh, so the filter
+// is skipped and the main-thread check remains the authority. A valid map is
+// installed so only the coordinator gate can keep the unowned hit.
+TEST_F(SlotOwnershipSearchTest, NoCoordinatorSkipsFilter) {
+  EnableCluster();  // Cluster, but no coordinator server installed.
+  auto cluster_map = InstallClusterMap(
+      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_));
+  ASSERT_NE(cluster_map, nullptr);
+  ASSERT_TRUE(cluster_map->IsConsistent());
+  ASSERT_FALSE(ValkeySearch::Instance().UsingCoordinator());
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 0};
+  TextParsingOptions options{};
+  FilterParser parser(*schema_, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  EXPECT_THAT(SearchKeys(params), testing::IsEmpty());
+  EXPECT_EQ(params.search_result.total_count, 3u);
+}
+
+// Gate: in standalone mode (not a cluster) the filter never runs, even with a
+// coordinator and a map present.
+TEST_F(SlotOwnershipSearchTest, StandaloneSkipsFilter) {
+  EnableCoordinator();  // Coordinator present, but not a cluster.
+  auto cluster_map = InstallClusterMap(
+      BuildTwoShardClusterSlotsReply(my_node_id_, other_node_id_));
+  ASSERT_NE(cluster_map, nullptr);
+  ASSERT_TRUE(cluster_map->IsConsistent());
+  ASSERT_FALSE(ValkeySearch::Instance().IsCluster());
+  UnitTestSearchParameters params;
+  params.limit = {.first_index = 0, .number = 0};
+  TextParsingOptions options{};
+  FilterParser parser(*schema_, "@text:cat", options);
+  params.filter_parse_results = std::move(parser.Parse().value());
+
+  EXPECT_THAT(SearchKeys(params), testing::IsEmpty());
+  EXPECT_EQ(params.search_result.total_count, 3u);
 }
 
 struct FetchFilteredKeysTestCase {

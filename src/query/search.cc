@@ -65,6 +65,7 @@
 #include "vmsdk/src/thread_pool.h"
 #include "vmsdk/src/time_sliced_mrmw_mutex.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search::query {
@@ -118,6 +119,47 @@ DEV_INTEGER_COUNTER(query_stats, query_text_proximity_count);
 DEV_INTEGER_COUNTER(query_stats, query_numeric_count);
 DEV_INTEGER_COUNTER(query_stats, query_tag_count);
 DEV_INTEGER_COUNTER(query_stats, nonvector_results_fetched_limited_count);
+DEV_INTEGER_COUNTER(query_stats, unowned_slot_results_dropped_count);
+
+// Drops the hits whose slot this node does not own, in place and preserving
+// order. Runs on the reader thread against the lock-free cluster-map snapshot,
+// so it covers the reply modes that never reach the main-thread content fetch
+// (NOCONTENT, LIMIT 0 0, indexed RETURN, FT.AGGREGATE) and corrects total_count
+// before it is read. Gated on the coordinator because only that configuration
+// keeps the snapshot fresh and has a fan-out merge to back it up.
+template <typename NeighborT>
+void DropUnownedSlotHits(std::vector<NeighborT> &hits) {
+  if (hits.empty() || !ValkeySearch::Instance().UsingCoordinator() ||
+      !ValkeySearch::Instance().IsCluster()) {
+    return;
+  }
+  auto cluster_map = ValkeySearch::Instance().GetClusterMap();
+  // Fail open on a missing or inconsistent snapshot. An inconsistent map can
+  // lack the local shard's ranges entirely (ProcessSlotRange returns before
+  // marking owned slots when a node in the range fails to parse), so filtering
+  // against it would drop every local hit. The fan-out merge's by-key dedup
+  // covers what is skipped here; GetOrRefreshClusterMap rebuilds inconsistent
+  // maps, so the main-thread CheckSlotOwnership remains exact.
+  if (!cluster_map || !cluster_map->IsConsistent()) {
+    return;
+  }
+  auto key_of = [](const NeighborT &hit) -> absl::string_view {
+    if constexpr (std::is_same_v<NeighborT, indexes::BorrowedNeighbor>) {
+      return hit.key.Str();
+    } else {
+      return hit.external_id->Str();
+    }
+  };
+  auto unowned =
+      std::remove_if(hits.begin(), hits.end(), [&](const NeighborT &hit) {
+        return !cluster_map->IOwnSlot(vmsdk::KeyHashSlot(key_of(hit)));
+      });
+  if (unowned == hits.end()) {
+    return;
+  }
+  unowned_slot_results_dropped_count.Increment(hits.end() - unowned);
+  hits.erase(unowned, hits.end());
+}
 
 class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
  public:
@@ -2065,6 +2107,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
     if (parameters.has_vector_range) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                              SearchVectorRangeQuery(parameters));
+      DropUnownedSlotHits(neighbors);
       // The VR leaf scores 0 (ScoreNode), a plain VR query scores 0, a
       // compound one takes its other leaves' relevance, as Redis reports.
       ApplyRelevanceScore(parameters, neighbors);
@@ -2073,6 +2116,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
           SearchResult(total_count, std::move(neighbors), parameters);
     } else {
       VMSDK_ASSIGN_OR_RETURN(auto borrowed, DoSearchNonVector(parameters));
+      DropUnownedSlotHits(borrowed);
       size_t total_count = borrowed.size();
       parameters.search_result =
           SearchResult(total_count, std::move(borrowed), parameters);
@@ -2080,6 +2124,7 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   } else {
     VMSDK_ASSIGN_OR_RETURN(auto neighbors,
                            DoSearchVector(parameters, search_mode, lock));
+    DropUnownedSlotHits(neighbors);
     VMSDK_ASSIGN_OR_RETURN(
         auto result, MaybeAddIndexedContent(std::move(neighbors), parameters));
     size_t total_count = result.size();

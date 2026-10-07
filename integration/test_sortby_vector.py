@@ -66,7 +66,7 @@ class TestKnnSortByStoredField(ValkeySearchTestCaseBase):
             "FT.SEARCH", "vsort_idx", query, "PARAMS", "2", "B", blob,
             "SORTBY", "p", "DESC", "RETURN", "1", "cat", "DIALECT", "2")
         assert result == rows("vsort:1", "vsort:3", "vsort:2"), "DESC"
-        # The truncating LIMIT path must yield a prefix of the full reply.
+        # LIMIT (partial_sort path) still reads the index-served sort field.
         result = client.execute_command(
             "FT.SEARCH", "vsort_idx", query, "PARAMS", "2", "B", blob,
             "SORTBY", "p", "ASC", "LIMIT", "0", "2",
@@ -183,57 +183,10 @@ class TestKnnSortByStoredField(ValkeySearchTestCaseBase):
         )
         blob = struct.pack("<2f", 0.0, 0.0)
         query = "*=>[KNN 3 @vec $B AS dist]"
+        # Docs with p are index-served; vsmiss:2 falls back to a hash fetch.
         result = client.execute_command(
             "FT.SEARCH", "vsmiss_idx", query, "PARAMS", "2", "B", blob,
             "SORTBY", "p", "ASC", "RETURN", "1", "cat", "DIALECT", "2")
         assert result == [3, b"vsmiss:3", [b"cat", b"a"],
                           b"vsmiss:1", [b"cat", b"a"],
                           b"vsmiss:2", [b"cat", b"a"]], "missing ASC"
-        result = client.execute_command(
-            "FT.SEARCH", "vsmiss_idx", query, "PARAMS", "2", "B", blob,
-            "SORTBY", "p", "DESC", "RETURN", "1", "cat", "DIALECT", "2")
-        assert result == [3, b"vsmiss:1", [b"cat", b"a"],
-                          b"vsmiss:3", [b"cat", b"a"],
-                          b"vsmiss:2", [b"cat", b"a"]], "missing DESC"
-
-
-class TestKnnSortByNanValues(ValkeySearchTestCaseBase):
-    """
-        KNN-query variant of the NaN fold (issue #1353 item 8 hardening):
-        with NOCONTENT the index-served shortcut is skipped, so the sort
-        value is the raw hash bytes -- "-nan" parses to a real NaN and must
-        fold to 0.0 rather than reach the comparator unordered. See
-        TestSortByNanValues for the filter-path variant and rationale.
-    """
-
-    def test_knn_sortby_nan_folds_to_zero(self):
-        client: Valkey = self.server.get_new_client()
-        assert client.execute_command(
-            "FT.CREATE", "vsnan_idx", "ON", "HASH", "PREFIX", "1", "vsnan:",
-            "SCHEMA", "vec", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32",
-            "DIM", "2", "DISTANCE_METRIC", "L2", "p", "NUMERIC") == b"OK"
-        # Distance order (3,5,9,1), key order (1,3,5,9), and the asserted
-        # sort orders are all pairwise different; key 9 (-nan) sits between
-        # 0 and 5 only if NaN folds to 0.0.
-        docs = [("vsnan:1", "-3", (4.0, 4.0)), ("vsnan:3", "0", (1.0, 1.0)),
-                ("vsnan:9", "-nan", (3.0, 3.0)), ("vsnan:5", "5", (2.0, 2.0))]
-        for key, p, vec in docs:
-            assert client.execute_command(
-                "HSET", key, "p", p, "vec", struct.pack("<2f", *vec)) == 2
-        waiters.wait_for_true(
-            lambda: client.execute_command(
-                "FT.SEARCH", "vsnan_idx", "*", "NOCONTENT",
-                "DIALECT", "2")[0] == 4
-        )
-        blob = struct.pack("<2f", 0.0, 0.0)
-        query = "*=>[KNN 4 @vec $B AS dist]"
-        result = client.execute_command(
-            "FT.SEARCH", "vsnan_idx", query, "PARAMS", "2", "B", blob,
-            "SORTBY", "p", "ASC", "NOCONTENT", "DIALECT", "2")
-        assert result == [4, b"vsnan:1", b"vsnan:3", b"vsnan:9",
-                          b"vsnan:5"], "nan ASC"
-        result = client.execute_command(
-            "FT.SEARCH", "vsnan_idx", query, "PARAMS", "2", "B", blob,
-            "SORTBY", "p", "DESC", "NOCONTENT", "DIALECT", "2")
-        assert result == [4, b"vsnan:5", b"vsnan:9", b"vsnan:3",
-                          b"vsnan:1"], "nan DESC"

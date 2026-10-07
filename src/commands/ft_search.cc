@@ -170,8 +170,8 @@ void PerformSortingOnRelevantPortion(std::vector<indexes::Neighbor> &neighbors,
 
 }  // namespace
 
-// Apply deterministic (but unstable) sorting to neighbors based on attribute
-// values in attribute_contents
+// Apply sorting to neighbors based on attribute values in attribute_contents,
+// breaking ties by document key
 void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
                   const SearchCommand &parameters) {
   if (!parameters.sortby_parameter.has_value() || neighbors.empty()) {
@@ -223,8 +223,8 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
 
   // WARNING: this tie_breaker should only be used if both values are 1)
   // present and equal, or 2) both missing. Never call on mixed pair as it can
-  // create a comparison cycle which will result in undefined behavior in
-  // std::sort
+  // create a comparison cycle which will result in undefined behavior in the
+  // sort
   auto tie_breaker = [&](const indexes::Neighbor &a,
                          const indexes::Neighbor &b) -> bool {
     // external id is unique in keyspace so they will never tie

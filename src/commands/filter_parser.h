@@ -9,13 +9,14 @@
 #define VALKEYSEARCH_SRC_COMMANDS_FILTER_PARSER_H_
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.h"
-#include "src/indexes/text/lexer.h"
+#include "src/indexes/text/language.h"
 #include "src/query/predicate.h"
 #include "vmsdk/src/module_config.h"
 
@@ -43,6 +44,7 @@ enum class QueryOperations : uint64_t {
   kContainsTextPrefix = 1 << 9,
   kContainsTextSuffix = 1 << 10,
   kContainsTextFuzzy = 1 << 11,
+  kContainsVectorRange = 1 << 12,
 };
 
 inline QueryOperations operator|(QueryOperations a, QueryOperations b) {
@@ -80,13 +82,14 @@ class FilterParser {
   const TextParsingOptions& options_;
   const IndexSchema& index_schema_;
   absl::string_view expression_;
+  // Set by Parse() after its upfront check. When true, no token can contain
+  // malformed UTF-8, so per-token sanitizing is skipped.
+  bool expression_valid_utf8_{false};
   size_t pos_{0};
   size_t node_count_{0};
   absl::flat_hash_set<std::string> filter_identifiers_;
   QueryOperations query_operations_{QueryOperations::kNone};
 
-  absl::StatusOr<bool> HandleBackslashEscape(const indexes::text::Lexer& lexer,
-                                             std::string& processed_content);
   struct TokenResult {
     std::unique_ptr<query::TextPredicate> predicate;
     bool break_on_query_syntax;
@@ -98,6 +101,7 @@ class FilterParser {
   absl::StatusOr<TokenResult> ParseUnquotedTextToken(
       std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema,
       const std::optional<std::string>& field_or_default);
+
   absl::Status SetupTextFieldConfiguration(
       FieldMaskPredicate& field_mask,
       const std::optional<std::string>& field_name, bool with_suffix);
@@ -122,12 +126,24 @@ class FilterParser {
   ParseNumericPredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TagPredicate>> ParseTagPredicate(
       const std::string& attribute_alias);
+  struct VectorRangeQueryAttributes {
+    std::optional<std::string> yield_distance_as;
+    std::optional<double> epsilon;
+  };
+
+  absl::StatusOr<VectorRangeQueryAttributes> ParseVectorRangeQueryAttributes();
+  absl::StatusOr<std::unique_ptr<query::VectorRangePredicate>>
+  ParseVectorRangePredicate(const std::string& attribute_alias);
   absl::StatusOr<std::unique_ptr<query::TextPredicate>> ParseTextPredicate(
       const std::string& field_name);
   void SkipWhitespace();
 
-  char Peek() const { return expression_[pos_]; }
+  // Handles backslash escaping for both quoted and unquoted text.
+  absl::StatusOr<bool> HandleBackslashEscape(
+      const indexes::text::PunctuationSet& punct,
+      std::string& processed_content);
 
+  char Peek() const { return expression_[pos_]; }
   bool IsEnd() const { return pos_ >= expression_.length(); }
   bool Match(char expected, bool skip_whitespace = true);
   bool MatchInsensitive(const std::string& expected);
@@ -137,6 +153,11 @@ class FilterParser {
 
   absl::StatusOr<absl::string_view> ParseTagString();
 
+  // Reads a non-whitespace token, stopping at whitespace or any character in
+  // stop_chars. Returns an error with error_msg if the token is empty.
+  absl::StatusOr<std::string> ParseToken(absl::string_view stop_chars,
+                                         absl::string_view error_msg);
+
   absl::StatusOr<std::unique_ptr<query::Predicate>> WrapPredicate(
       std::unique_ptr<query::Predicate> prev_predicate,
       std::unique_ptr<query::Predicate> predicate, bool& negate,
@@ -144,6 +165,22 @@ class FilterParser {
       bool not_rightmost_bracket);
   void FlagNestedComposedPredicate(
       std::unique_ptr<query::Predicate>& predicate);
+
+  // Returns true if the byte at pos_ starts a multi-byte UTF-8 sequence
+  // that the language considers a query delimiter (non-ASCII punctuation).
+  // On match, advances pos_ past the full codepoint and returns true.
+  // On non-match or invalid UTF-8, does not advance and returns false.
+  bool IsNonAsciiDelimiter(const indexes::text::PunctuationSet& punct);
+  // Appends the raw bytes of the multi-byte codepoint at pos_ (or the single
+  // byte, if malformed) to dest and advances pos_. Caller must ensure pos_
+  // points to a byte >= 0x80.
+  void ConsumeNonAsciiByte(std::string& dest);
+  // Normalizes a completed text token for `language`. A malformed token (only
+  // reachable under emulate-release < 1.3.0) is first sanitized the way 1.2
+  // did, by ICU's U+FFFD substitution.
+  void NormalizeTextToken(const indexes::text::Language& language,
+                          std::string& token) const;
+
   // Parses a QMA block after `=> {`. Returns the weight value on success.
   absl::StatusOr<double> ParseQMABlock();
   // If the parser is positioned at a `=> { ... }` QMA block, consumes it and

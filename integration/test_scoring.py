@@ -6,7 +6,7 @@ NOSTEM so query terms match raw tokens and the verified tables apply directly;
 idxStem (Group 15) enables stemming to cover stem-family scoring.
 
 WITHSCORES reply layout: [count, key, score_str, attrs, key, score_str, ...]
-where score_str is formatted "%.12g".
+where score_str is formatted by expr::FormatDouble.
 """
 
 import struct

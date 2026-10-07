@@ -40,7 +40,7 @@ struct AllocatorChunk;
 class Allocator {
  public:
   virtual char *Allocate(size_t size) = 0;
-  static bool Free(char *ptr);
+  static void Free(char *ptr);
   virtual ~Allocator() = default;
   virtual size_t ChunkSize() const = 0;
 

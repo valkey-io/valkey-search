@@ -7,6 +7,7 @@ The query of the `FT.SEARCH` and `FT.AGGREGATE` commands identifies a subset of 
 The syntax and semantics of the query string is identical for both commands.
 
 A query has three different formats: pure-vector, hybrid-vector and non-vector.
+A non-vector query can also select keys by vector distance, with the [vector range matcher](#vector-range-match).
 
 # Pure Vector Queries
 
@@ -21,7 +22,7 @@ A pure-vector query performs a K Nearest Neighbors (KNN) query of a single vecto
 A hybrid query adds a filter expression to indicate which keys within the index are candidates for results.
 
 ```
-<filter>=>[ KNN <K> @<field> $<parameter> [EF_RUNTIME <ef-value>] [AS <name>] ]
+<filter>=>[ KNN <K> @<field> $<parameter> [EF_RUNTIME <ef-value>] [HYBRID_POLICY <policy>] [AS <name>] ]
 ```
 
 # Non-vector Query
@@ -39,8 +40,26 @@ Where:
 - `field` (required): The name of a vector field within the specified index.
 - `parameter` (required): A `PARAM` name whose corresponding value provides the query vector for the KNN algorithm.
   Note that this parameter must be encoded in little-endian byte order using the element type declared by the index (`TYPE FLOAT32`, `FLOAT16` or `BFLOAT16`); see [Supported Data Types](search-data-formats.md#supported-data-types). Its length must therefore be `DIM * 4` bytes for `FLOAT32` and `DIM * 2` bytes for the 16-bit types.
-- `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created.
-- `AS <name>` (optional): Overrides the default naming of the output distance field. By default this field is constructed by appending the string "\_\_score" to the name of the vector field.
+- `EF_RUNTIME <ef-value>` (optional): Overrides the default value of `EF_RUNTIME` specified when the index was created. `EF_RUNTIME` is valid with the automatic policy and `HYBRID_POLICY BATCHES`. It is rejected with `HYBRID_POLICY ADHOC_BF`, which performs an exact search over the filtered candidates and does not use the HNSW runtime candidate limit.
+- `HYBRID_POLICY <policy>` (optional; requires a filter expression or `INKEYS`): Overrides the automatic choice between the two filtered-vector execution paths:
+  - `ADHOC_BF` evaluates the filter first, then computes exact distances for the matching vectors.
+  - `BATCHES` searches the vector index first and applies the filter while traversing vector candidates. An explicit `BATCHES` also takes precedence when `INKEYS` is supplied; the named keys remain part of the inline candidate filter. With the automatic policy, `INKEYS` uses filter-first execution.
+  - When omitted, Valkey Search chooses the path using its existing planner heuristic.
+- `AS <name>` (optional): Overrides the default naming of the output distance field; the supplied name is used as-is. By default this field is named `__<field>_score`, where `<field>` is the field named in `@<field>` (the attribute's `AS` alias from `FT.CREATE`, if it has one). For example, `@vec` produces `__vec_score`.
+
+For example, this query forces exact filter-first execution for documents tagged `electronics`:
+
+```
+FT.SEARCH products "@category:{electronics}=>[KNN 10 @embedding $query_vector HYBRID_POLICY ADHOC_BF]" PARAMS 2 query_vector "<vector blob>" DIALECT 2
+```
+
+`HYBRID_POLICY` is accepted only inside the KNN brackets. Post-KNN query-attribute syntax is not supported; for example, the following form returns an error:
+
+```
+@category:{electronics}=>[KNN 10 @embedding $query_vector]=>{$HYBRID_POLICY: ADHOC_BF}
+```
+
+`BATCH_SIZE` is not currently supported.
 
 ## Filter Expression
 
@@ -64,6 +83,7 @@ The BNF for a filter is:
                   | <term-match>
                   | <phrase-match>
                   | <fuzzy-match>
+                  | <vector-range-match>
                   | "(" <logical-or> ")"
 
 ```
@@ -140,6 +160,49 @@ Examples of numeric matchers
 @price:[(10 100.5]        10 < field ≤ 100.5
 @price:[-inf (1e2]        price < 100
 ```
+
+### Vector Range Match
+
+The vector range matcher selects the keys whose vector field is within a given distance, the radius, of a query vector.
+Unlike a KNN query it has no result count: every key within the radius matches.
+It can be combined with other matchers using AND, OR and negation.
+
+```
+@<field-name>:[VECTOR_RANGE <radius> $<parameter> [EF_RUNTIME <ef>] [AS <name>]]
+@<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$YIELD_DISTANCE_AS: <name>}
+@<field-name>:[VECTOR_RANGE <radius> $<parameter>]=>{$YIELD_DISTANCE_AS: <name>; $EPSILON: <epsilon>}
+```
+
+- `field-name` (required): A `VECTOR` field of the index.
+- `radius` (required): A non-negative floating point number, or `$<name>` to take it from `PARAMS`. A key matches when its distance to the query vector is less than or equal to the radius, which can be `inf`. The radius is compared with the distance as computed for the `DISTANCE_METRIC` of the field, see [FT.CREATE](../commands/ft.create.md):
+  - `L2`: the distance is the squared Euclidean distance, so to match keys within a Euclidean distance `d`, use the radius `d^2`, for example 0.25 for 0.5.
+  - `IP`: the distance is `1 - dot(X,Y)`, which is negative when the dot product is greater than 1, as it can be for unnormalized vectors. A radius of 0 matches every key whose dot product with the query vector is at least 1.
+  - `COSINE`: because of floating-point rounding, the distance between identical vectors can be slightly greater than 0. To match identical vectors, for example to find duplicates, use a small positive radius rather than 0.
+- `parameter` (required): A `PARAMS` name whose value is the query vector, encoded as for a KNN query (see above).
+- `EF_RUNTIME <ef>` (optional): Parsed and ignored.
+- `AS <name>` or `$YIELD_DISTANCE_AS: <name>` (optional): Returns the distance of each key within the radius under `<name>`. Without it, no distance is returned. When `RETURN` is used, the distance is returned only if `RETURN` lists `<name>`. `<name>` can be used by `SORTBY`, and as `@<name>` by the stages of `FT.AGGREGATE`. `FT.SEARCH` rejects a name that is an attribute of the index; `FT.AGGREGATE` accepts it, and `@<name>` then refers to the distance, not the attribute.
+- `$EPSILON: <epsilon>` (optional): Currently accepted on `HNSW` fields and ignored. It must be greater than 0. It is an error on `FLAT` fields.
+
+The keyword and the attribute names are case-insensitive.
+
+Restrictions:
+
+- A query can contain at most one vector range matcher, and a vector range matcher cannot be used in the filter of a KNN query.
+- The attributes must directly follow the closing `]`, so `(@v:[VECTOR_RANGE 0.2 $vec])=>{$YIELD_DISTANCE_AS: dist}` is an error. Attribute values are not substituted from `PARAMS`.
+- `$weight` is not supported.
+
+Order and scores: a vector range query is a non-vector query, so its results are not sorted by distance, and `WITHSCORES` reports the relevance score of the other matchers of the query (0 if there are none).
+To get the closest keys first, yield the distance and sort on it, for example `SORTBY <name> ASC`.
+
+Non-finite distances: a NaN or `+inf` distance, from a NaN or infinite vector component, is within no radius, not even `inf`; a `-inf` distance, which only `IP` can produce, is within every radius.
+
+`HNSW` fields: the search examines at most `search.max-nonvector-search-results-fetched` (default 100000) candidates, so the result is approximate, as for a KNN query, and can miss keys within the radius; a query that matches at least that many keys is answered by scanning the whole index. `FLAT` fields are always searched exhaustively. In a cluster, each shard applies the setting to its own keys.
+
+OR: when a key matches through another branch of a `|` (OR), its distance is still computed. It is returned under `<name>` only if the key is within the radius.
+
+Limitation: when a query combines a vector range matcher with other matchers using `|` (OR), and it matches more keys than `search.max-nonvector-search-results-fetched`, some of the matching keys can be missing from the result.
+
+For examples, see [Example Vector Range Queries](#example-vector-range-queries).
 
 ## Text Search Operators
 
@@ -337,4 +400,52 @@ that are published between 2015 and 2024:
 ```
 -@genre:{comedy} @year:[2015 2024]
 
+```
+
+## Example Vector Range Queries
+
+For these examples, the following index and data are used. The commands are entered at the `valkey-cli` prompt, which decodes the `\x` escapes of the vectors. The vectors of `p1`, `p2` and `p3` are (1, 0), (0, 2) and (3, 4), and the query vector is (0, 0), so the `L2` distances are 1, 4 and 25.
+
+```
+FT.CREATE idx SCHEMA category TAG v VECTOR HNSW 6 TYPE FLOAT32 DIM 2 DISTANCE_METRIC L2
+HSET p1 category shoes v "\x00\x00\x80?\x00\x00\x00\x00"
+HSET p2 category shirts v "\x00\x00\x00\x00\x00\x00\x00@"
+HSET p3 category shoes v "\x00\x00@@\x00\x00\x80@"
+```
+
+The keys within distance 5, closest first, with their distance:
+
+```
+FT.SEARCH idx "@v:[VECTOR_RANGE 5 $vec]=>{$YIELD_DISTANCE_AS: dist}" PARAMS 2 vec "\x00\x00\x00\x00\x00\x00\x00\x00" SORTBY dist RETURN 1 dist DIALECT 2
+1) (integer) 2
+2) "p1"
+3) 1) "dist"
+   2) "1"
+4) "p2"
+5) 1) "dist"
+   2) "4"
+```
+
+A vector range matcher combined with a tag matcher, with the radius given as a parameter:
+
+```
+FT.SEARCH idx "@category:{shoes} @v:[VECTOR_RANGE $r $vec]" PARAMS 4 r 30 vec "\x00\x00\x00\x00\x00\x00\x00\x00" NOCONTENT DIALECT 2
+1) (integer) 2
+2) "p1"
+3) "p3"
+```
+
+The closest distance per category:
+
+```
+FT.AGGREGATE idx "@v:[VECTOR_RANGE 30 $vec]=>{$YIELD_DISTANCE_AS: dist}" PARAMS 2 vec "\x00\x00\x00\x00\x00\x00\x00\x00" GROUPBY 1 @category REDUCE MIN 1 @dist AS closest SORTBY 2 @closest ASC DIALECT 2
+1) (integer) 2
+2) 1) category
+   2) "shoes"
+   3) closest
+   4) "1"
+3) 1) category
+   2) "shirts"
+   3) closest
+   4) "4"
 ```

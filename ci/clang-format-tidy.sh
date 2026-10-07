@@ -72,7 +72,7 @@ if [ "$UPDATE" = true ]; then
     fi
     
     echo "================================================================================"
-    local extra_args=()
+    extra_args=()
     if [ "$FORMAT_ONLY" = true ]; then
       extra_args+=("--format-only")
     fi

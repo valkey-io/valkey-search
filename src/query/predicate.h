@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "absl/strings/string_view.h"
+#include "src/indexes/text/language.h"
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
@@ -435,6 +436,9 @@ class FuzzyPredicate : public TextPredicate {
   }
   absl::string_view GetTextString() const { return term_; }
   uint32_t GetDistance() const { return distance_; }
+  // Unit for the edit distance, resolved from the index language when the
+  // predicate is built. See COMPATIBILITY.md.
+  indexes::text::LengthUnit GetLengthUnit() const { return length_unit_; }
   EvaluationResult Evaluate(Evaluator& evaluator) const override;
   // Evaluate against per-key TextIndex
   EvaluationResult Evaluate(
@@ -453,6 +457,7 @@ class FuzzyPredicate : public TextPredicate {
   FieldMaskPredicate field_mask_;
   std::string term_;
   uint32_t distance_;
+  indexes::text::LengthUnit length_unit_;
 };
 
 enum class LogicalOperator { kAnd, kOr };

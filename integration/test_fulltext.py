@@ -2386,6 +2386,7 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
             IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
             before = client.info("SEARCH")[counter]
             client.execute_command("HSET", "doc:1", "category", b"invalid\xc3")
+            IndexingTestHelper.wait_for_indexing_complete_on_node(client, "idx")
             info_data = IndexingTestHelper.get_ft_info(client, "idx").parsed_data
             assert info_data["hash_indexing_failures"] == 1 - expected, release
             assert info_data["num_records"] == expected, release

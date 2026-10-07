@@ -63,7 +63,7 @@ EvaluationResult TermPredicate::Evaluate(Evaluator &evaluator) const {
 
 namespace {
 
-using PositionMaps = indexes::text::KeyTermIterator::PositionMaps;
+using PositionMaps = indexes::text::SingleKeyTermIterator::PositionMaps;
 
 // Probes `postings` for `target_key` in `field_mask`; the key's position map
 // is read under the word's bucket and retained for `require_positions`. It
@@ -75,8 +75,8 @@ bool ProbePostings(const indexes::text::TextIndexSchema &schema,
                    uint64_t field_mask, bool require_positions, bool lock,
                    PositionMaps &maps) {
   auto value = schema.WithWordLock(word, lock, [&] {
-    return postings.LookupKey(BorrowedInternedStringPtr(target_key),
-                              field_mask);
+    return postings.GetPostingValue(BorrowedInternedStringPtr(target_key),
+                                    field_mask);
   });
   if (!value) return false;
   if (require_positions) maps.push_back(value->map);
@@ -141,7 +141,7 @@ EvaluationResult TermPredicate::Evaluate(
   if (maps.empty()) {
     return EvaluationResult(false);
   }
-  auto iterator = std::make_unique<indexes::text::KeyTermIterator>(
+  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
       target_key, maps, field_mask);
   return BuildTextEvaluationResult(std::move(iterator));
 }
@@ -186,7 +186,7 @@ EvaluationResult PrefixPredicate::Evaluate(
   if (!require_positions) {
     return EvaluationResult(true);
   }
-  auto iterator = std::make_unique<indexes::text::KeyTermIterator>(
+  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
       target_key, maps, field_mask);
   return BuildTextEvaluationResult(std::move(iterator));
 }
@@ -241,7 +241,7 @@ EvaluationResult SuffixPredicate::Evaluate(
   if (!require_positions) {
     return EvaluationResult(true);
   }
-  auto iterator = std::make_unique<indexes::text::KeyTermIterator>(
+  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
       target_key, maps, field_mask);
   return BuildTextEvaluationResult(std::move(iterator));
 }
@@ -303,7 +303,7 @@ EvaluationResult FuzzyPredicate::Evaluate(
   if (!require_positions) {
     return EvaluationResult(true);
   }
-  auto iterator = std::make_unique<indexes::text::KeyTermIterator>(
+  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
       target_key, maps, field_mask);
   return BuildTextEvaluationResult(std::move(iterator));
 }

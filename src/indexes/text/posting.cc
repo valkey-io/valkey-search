@@ -90,8 +90,6 @@ size_t Postings::GetTotalTermFrequency() const {
 namespace {
 
 // Does any position for this key fall in a field in `field_mask`?
-// Maintain an overall field mask per position map on ingestion to skip this
-// iteration if perf regression is large
 bool ContainsFields(const PostingValue& value, uint64_t field_mask) {
   CHECK(value.map != nullptr)
       << "Posting list contains a key with no FlatPositionMap";
@@ -109,8 +107,8 @@ bool ContainsFields(const PostingValue& value, uint64_t field_mask) {
 
 }  // namespace
 
-std::optional<PostingValue> Postings::LookupKey(BorrowedInternedStringPtr key,
-                                                uint64_t field_mask) const {
+std::optional<PostingValue> Postings::GetPostingValue(
+    BorrowedInternedStringPtr key, uint64_t field_mask) const {
   auto it = key_to_positions_.find(key);
   if (it == key_to_positions_.end() ||
       !text::ContainsFields(it->second, field_mask)) {

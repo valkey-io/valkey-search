@@ -238,12 +238,13 @@ bool TermIterator::SeekForwardKey(const InternedStringPtr& target_key) {
   return FindMinimumValidKey();
 }
 
-KeyTermIterator::KeyTermIterator(FieldMaskPredicate query_field_mask)
+SingleKeyTermIterator::SingleKeyTermIterator(
+    FieldMaskPredicate query_field_mask)
     : query_field_mask_(query_field_mask) {}
 
 // Helper function to advance position iterators and populate the heap with
 // valid iterators for the new position.
-void KeyTermIterator::InsertValidPositionIterator(size_t idx) {
+void SingleKeyTermIterator::InsertValidPositionIterator(size_t idx) {
   auto& pos_iter = pos_iterators_[idx];
   // Skip positions that don't match the query field mask.
   while (pos_iter.IsValid() &&
@@ -256,7 +257,7 @@ void KeyTermIterator::InsertValidPositionIterator(size_t idx) {
 }
 
 // Position Logic follows the same Heap pattern as Key logic.
-bool KeyTermIterator::FindMinimumValidPosition() {
+bool SingleKeyTermIterator::FindMinimumValidPosition() {
   // 1. If the heap is empty, we have exhausted all positions for the current
   // key.
   // Note: This can be due to three cases:
@@ -293,7 +294,7 @@ bool KeyTermIterator::FindMinimumValidPosition() {
   return true;
 }
 
-bool KeyTermIterator::NextPosition() {
+bool SingleKeyTermIterator::NextPosition() {
   if (current_position_.has_value()) {
     for (size_t idx : current_pos_indices_) {
       pos_iterators_[idx].NextPosition();
@@ -304,7 +305,7 @@ bool KeyTermIterator::NextPosition() {
   return FindMinimumValidPosition();
 }
 
-bool KeyTermIterator::SeekForwardPosition(Position target_position) {
+bool SingleKeyTermIterator::SeekForwardPosition(Position target_position) {
   if (current_position_.has_value() &&
       current_position_.value().start >= target_position) {
     return true;
@@ -336,7 +337,7 @@ void TermIterator::ClearKeyState() {
   }
 }
 
-void KeyTermIterator::ClearPositionState() {
+void SingleKeyTermIterator::ClearPositionState() {
   pos_iterators_.clear();
   pos_set_.clear();
   current_pos_indices_.clear();

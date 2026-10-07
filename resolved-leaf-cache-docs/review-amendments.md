@@ -62,7 +62,7 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     `Postings::KeyIterator`, which holds btree iterators (posting.h:163-167). So on the main
     thread every probe seeks the target key inside `WithWordLock` and copies out its
     `PostingValue`; no `KeyIterator` is retained. Positional revalidation builds a
-    `KeyTermIterator` over the copied `PostingValue`s' position maps (decision 29). The
+    `SingleKeyTermIterator` over the copied `PostingValue`s' position maps (decision 29). The
     entries-fetcher path keeps its multi-key `KeyIterator`s unchanged. This deletes
     `RaxTargetMutexPool::LockAll`, `LockMode::kMainThreadWordLocksHeld`, the positional branch in
     `VerifyFilter` (response_generator.cc:181-197), and the `CHECK` at resolved_leaves.cc:349.
@@ -193,16 +193,16 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     TextIterator
     ├── TermIterator                       entries fetcher, many keys
     │     key heap over Postings::KeyIterator[]; scoring (tf / doc_len off the cursors)
-    │     KeyTermIterator positions_;      by value, concrete type: direct calls (see result)
+    │     SingleKeyTermIterator positions_;      by value, concrete type: direct calls (see result)
     │       on each new key: positions_.Reset(current_key, lambda yielding the active cursors' maps)
     │       the five TextIterator position methods forward to positions_
-    └── KeyTermIterator (final)            per-key evaluation, one key
+    └── SingleKeyTermIterator (final)            per-key evaluation, one key
           const Key* key_; bool done_;     trivial key API
           position heap over PositionIterator[]: today's seven position methods, moved verbatim
           Reset(key, maps); field mask fixed at construction
     ```
 
-    Rules: `KeyTermIterator` is `final`; the field mask is a constructor argument (it never
+    Rules: `SingleKeyTermIterator` is `final`; the field mask is a constructor argument (it never
     changes; `InsertValidPositionIterator` filters on it alone); `Reset` reuses the inlined
     vectors it already clears today and takes the maps through a template producer callback,
     not a span, so `TermIterator` hands over its active cursors' maps without an intermediate
@@ -210,15 +210,15 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     removed; see implementation-choices.md) and the pure-text path allocates exactly as it does
     now;
     `TermIterator::IsIteratorValid` consults `positions_` only when `require_positions_` is set,
-    since `Reset` is never called otherwise. `KeyTermIterator` is only ever built positional
+    since `Reset` is never called otherwise. `SingleKeyTermIterator` is only ever built positional
     (every per-key `Evaluate` returns a plain bool first when positions are not required), so it
     drops `require_positions`, `stem_field_mask` and `has_original`: those drove key-level mask
     selection and leaf partitioning for scoring, and `ProbePostings` already applied the mask via
-    `LookupKey`. `KeyPosting` is deleted; `ProbePostings` and `EvaluateTermLeaf` collect
+    `GetPostingValue`. `KeyPosting` is deleted; `ProbePostings` and `EvaluateTermLeaf` collect
     `PostingValue::map` pointers. `TermIterator`'s constructor and interface are unchanged, so
     text.cc, search.cc and the tests do not move. Churn: ~115 lines of term.cc re-homed to the
     other class, ~95 added, ~85 deleted; the only new logic is the map gather in
-    `FindMinimumValidKey` step 4 and `KeyTermIterator::Reset`.
+    `FindMinimumValidKey` step 4 and `SingleKeyTermIterator::Reset`.
 
     Why not the alternatives: a runtime key-source variant adds a branch per key step on the hot
     path; a shared abstract base implementing the position half is the same footprint but leaves
@@ -241,8 +241,8 @@ deadlock-free; every other pair is forbidden because writers take bucket → tre
     first build of the split was 1.7% to 6.6% slower than the round-1 commit. `perf stat`
     showed +4.0% instructions at unchanged IPC, so extra code rather than layout: the
     "direct calls" above were only half true. `TermIterator`'s position forwards called the
-    concrete `KeyTermIterator` method, but GCC compiled each forward to `add $0x1f68,%rdi; jmp
-    KeyTermIterator::X` with the body out of line in term.cc, so a proximity step went
+    concrete `SingleKeyTermIterator` method, but GCC compiled each forward to `add $0x1f68,%rdi; jmp
+    SingleKeyTermIterator::X` with the body out of line in term.cc, so a proximity step went
     virtual call → thunk → jump → body where the template went virtual call → body. The
     follow-up commit defines `DonePositions`, `CurrentPosition` and `CurrentFieldMask` in the
     class body so the forwards inline them (`NextPosition` and `SeekForwardPosition` are the
@@ -293,7 +293,7 @@ Dependencies, not a task list. Each step compiles and passes the existing suites
 9. Verification per plan-amendments.md decision 10 plus the two repros above, then
    `WITHSCORES` spot checks on the main-thread positional path (phrase, `INORDER`, `SLOP` with a
    mutated document), since that path's iterator source is new.
-10. Decision 29 (`TermIterator` / `KeyTermIterator` split), second commit: benchmark baseline on
+10. Decision 29 (`TermIterator` / `SingleKeyTermIterator` split), second commit: benchmark baseline on
     the round-1 commit first, then the refactor, then benchmark again.
 
 ## Superseded

@@ -41,8 +41,8 @@ search for positions in asc order across all the required words within the same
 key and same field. Once no more positions are found, DonePositions returns
 true. Thus, position iteration is a union of all position iterators obtained
 from all the posting iterators that are on the current key and field mask. This
-half lives in KeyTermIterator, which TermIterator embeds and re-targets at each
-key, and which per-key evaluation uses on its own over one copied-out key.
+half lives in SingleKeyTermIterator, which TermIterator embeds and re-targets at
+each key, and which per-key evaluation uses on its own over one copied-out key.
 
 */
 
@@ -62,28 +62,29 @@ struct TermScoringParams {
   absl::InlinedVector<uint32_t, kWordExpansionInlineCapacity> per_term_dt;
 };
 
-// The union of the words' positions within one key: the position half of the
-// TermIterator contract over a fixed key. Per-key evaluation (filter
-// revalidation, prefilter candidates) hands it the position maps that
-// Postings::LookupKey copied out and uses it as the leaf TextIterator directly;
-// TermIterator embeds one and re-targets it at each key the merge lands on.
-// Never scores: per-key callers score through ResolvedLeafCache::Probe.
-class KeyTermIterator final : public TextIterator {
+// A TermIterator fixed to one key: merges the positions of the term's words
+// within that key. Per-key evaluation (filter revalidation, prefilter
+// candidates) builds one from the position maps that Postings::GetPostingValue
+// copied out and uses it as the leaf TextIterator; TermIterator embeds one and
+// re-targets it at each key the merge lands on. Never scores: per-key callers
+// score through ResolvedLeafCache::Probe.
+class SingleKeyTermIterator final : public TextIterator {
  public:
   using PositionMaps =
       absl::InlinedVector<const FlatPositionMap*, kWordExpansionInlineCapacity>;
 
   // Primes at the first position of `key` that falls in `query_field_mask`.
   // `key` must outlive the iterator; `maps` is only read.
-  KeyTermIterator(const Key& key, absl::Span<const FlatPositionMap* const> maps,
-                  FieldMaskPredicate query_field_mask)
+  SingleKeyTermIterator(const Key& key,
+                        absl::Span<const FlatPositionMap* const> maps,
+                        FieldMaskPredicate query_field_mask)
       : query_field_mask_(query_field_mask) {
     Reset(key, [maps](auto&& fn) {
       for (const FlatPositionMap* map : maps) fn(*map);
     });
   }
   // Empty iterator for embedding; Reset() before use.
-  explicit KeyTermIterator(FieldMaskPredicate query_field_mask);
+  explicit SingleKeyTermIterator(FieldMaskPredicate query_field_mask);
 
   // Re-targets the iterator at `key`. `for_each_map(fn)` must call
   // `fn(const FlatPositionMap&)` once per word on `key`; a template so the
@@ -100,7 +101,7 @@ class KeyTermIterator final : public TextIterator {
       // Populate the position heap.
       InsertValidPositionIterator(pos_iterators_.size() - 1);
     });
-    KeyTermIterator::NextPosition();
+    SingleKeyTermIterator::NextPosition();
   }
 
   /* Implementation of TextIterator APIs */
@@ -169,7 +170,7 @@ class KeyTermIterator final : public TextIterator {
 
 // Merges the words' posting lists into one lexically ordered key stream and
 // scores each key; the positions within the current key come from the embedded
-// KeyTermIterator. Entries-fetcher path only (multi-key).
+// SingleKeyTermIterator. Entries-fetcher path only (multi-key).
 class TermIterator : public TextIterator {
  public:
   using KeyIterators =
@@ -221,7 +222,7 @@ class TermIterator : public TextIterator {
   // Raw pointer to the current key's btree_map entry, immutable while the
   // reader lock is held.
   const Key* current_key_{nullptr};
-  KeyTermIterator positions_;
+  SingleKeyTermIterator positions_;
   const bool require_positions_;
   const bool has_original_;
   // Whether a stem root literal iterator is present (index has_original_?1:0).

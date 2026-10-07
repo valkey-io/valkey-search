@@ -204,10 +204,10 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   writers take the stem lock only after releasing both the bucket and the tree lock. The lock
   table in review-amendments.md is left for its author to amend.
 - **Per-key `TextPredicate::Evaluate` uses the single-key iterator in both modes.** The
-  overrides build a `KeyTermIterator` over the copied-out position maps in the background too,
+  overrides build a `SingleKeyTermIterator` over the copied-out position maps in the background too,
   so there is one per-key probe path instead of a `KeyIterator` variant beside it. The
   entries-fetcher path (`BuildTextIterator`) keeps its multi-key `TermIterator`, which embeds a
-  `KeyTermIterator` for the positions of the current key (decision 29).
+  `SingleKeyTermIterator` for the positions of the current key (decision 29).
 - **`lock` is a plain `bool`** on `WithWordLock`, `WithStemParents` and `TextPredicate::Evaluate`,
   following `GetKeyDocLen(key, lock)` / `GetPerKeyTextIndex(key, lock)` /
   `GetTagValueDocCount(value, lock)`. No default, so every caller states its mode.
@@ -251,7 +251,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   `--asan` build (`halt_on_error=1`, no sanitizer output), which covers decision 24's
   use-after-free; the stem add/delete race itself has no deterministic hook, so ASAN is its
   check.
-- `KeyTermIterator` holds `const Key*`, not a `Key`: the target key outlives every per-key
+- `SingleKeyTermIterator` holds `const Key*`, not a `Key`: the target key outlives every per-key
   iterator, and a copy would cost an atomic pair per retained match.
 - Integration (devcontainer, `-k` over cancel, fulltext, scoring, stale_score_after_mutation,
   non_vector, filter_expressions, ft_hybrid, vector_mutation_rescore, postfilter,
@@ -275,7 +275,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   against 29,760 at the template commit.
 - **`Postings::KeyIterator::GetPositionMap()`** is the new primitive; `GetPositionIterator()`
   wraps it. `textinfocmd.cc` and `posting_test.cc` still use the latter.
-- **`KeyTermIterator::NextKey` clears position state** so a per-key iterator that is advanced
+- **`SingleKeyTermIterator::NextKey` clears position state** so a per-key iterator that is advanced
   reports `DonePositions()` like an exhausted `TermIterator`. `TermIterator::ClearKeyState`
   calls it only when positions were required; otherwise `positions_` was never reset.
 - **`MainThreadLockModesMatchBackground` rows all use the `-@rating:[500 600]` form.** The
@@ -283,7 +283,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   rows that used it only ever compared scores of non-matching documents. With the negated range
   the positional rows (`INORDER`, `SLOP 0`/`2`, prefix, suffix and fuzzy with `INORDER`/`SLOP`,
   OR with `INORDER`) produce true verdicts with scores to compare.
-- **`KeyTermIterator::GetScore` stays a constant stub with a comment**, not a `DCHECK(false)`:
+- **`SingleKeyTermIterator::GetScore` stays a constant stub with a comment**, not a `DCHECK(false)`:
   nothing calls it today, but a per-key iterator is returned through `EvaluationResult` and a
   composite asking its children for scores would crash rather than get the pre-scoring
   fallback.
@@ -336,7 +336,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   unchanged (3.35 vs 3.32), branch misses flat: extra code executing, not layout. The profile
   showed the `ProximityIterator` methods up by 1-2 points each and a new
   `TermIterator::DonePositions` at 1.1% self time. `TermIterator`'s position forwards had
-  compiled to `add $0x1f68,%rdi; jmp KeyTermIterator::X`, a thunk to the out-of-line body in
+  compiled to `add $0x1f68,%rdi; jmp SingleKeyTermIterator::X`, a thunk to the out-of-line body in
   term.cc, so every proximity step paid virtual call → thunk → jump → body where the template
   had virtual call → body. Fixed in the commit after the split by defining `DonePositions`,
   `CurrentPosition` and `CurrentFieldMask` in the class body so the forwards inline them:
@@ -374,7 +374,7 @@ Cleanups from the PR #1472 review that are not design decisions. The design deci
   candidate's tree. Terms, and phrases of terms, are answered from the shared postings and
   never reach that tree. A stale tree is wrong only when the key matches through a word the
   first key lacks, since the tree's words are probed against the shared postings
-  (`ProbePostings` → `LookupKey`); a first draft of the tests used one shared matching word
+  (`ProbePostings` → `GetPostingValue`); a first draft of the tests used one shared matching word
   and passed against the bug for that reason. Neither parent had the bug; the merge would
   have. The reset now lives in `EvaluateFull` and protects both entry points.
   `EvaluateFullRefetchesPerKeyTreeForEachKey` (unit) and `test_vector_range_and_prefix`

@@ -53,7 +53,7 @@ std::optional<indexes::text::PostingValue> ResolvedLeafCache::Probe(
     const WordPostings &word, BorrowedInternedStringPtr key,
     uint64_t field_mask) const {
   return text_index_schema_->WithWordLock(word.word, MainThread(), [&] {
-    return word.postings->LookupKey(key, field_mask);
+    return word.postings->GetPostingValue(key, field_mask);
   });
 }
 
@@ -324,7 +324,7 @@ EvaluationResult EvaluateTermLeaf(const ResolvedLeafCache &cache,
   const uint64_t field_mask = predicate.GetFieldMask();
   const uint64_t stem_field_mask =
       field_mask & predicate.GetTextIndexSchema()->GetStemTextFieldMask();
-  indexes::text::KeyTermIterator::PositionMaps maps;
+  indexes::text::SingleKeyTermIterator::PositionMaps maps;
   for (const TermGroup &group : leaf.groups) {
     const uint64_t mask =
         group.kind == TermGroup::Kind::kOriginal ? field_mask : stem_field_mask;
@@ -336,8 +336,8 @@ EvaluationResult EvaluateTermLeaf(const ResolvedLeafCache &cache,
     }
   }
   if (maps.empty()) return EvaluationResult(false);
-  auto iterator =
-      std::make_unique<indexes::text::KeyTermIterator>(key, maps, field_mask);
+  auto iterator = std::make_unique<indexes::text::SingleKeyTermIterator>(
+      key, maps, field_mask);
   if (!iterator->IsIteratorValid()) return EvaluationResult(false);
   return {true, std::move(iterator)};
 }

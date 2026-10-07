@@ -114,12 +114,14 @@ struct Postings {
   // Total frequency of the term across all keys and positions
   size_t GetTotalTermFrequency() const;
 
-  // One find for `key`'s posting entry; nullopt if absent. One Postings is
-  // shared by every TEXT field, so key presence alone does not mean the term
-  // occurred in a requested field: nullopt unless it falls in `field_mask`.
-  // `~0ULL` means any field and skips the per-position scan.
-  std::optional<PostingValue> LookupKey(BorrowedInternedStringPtr key,
-                                        uint64_t field_mask) const;
+  // Returns a copy of `key`'s posting value if the key is present and the
+  // term occurs in at least one field of `field_mask`. Postings are shared
+  // across all TEXT fields, so the field check is needed; pass `~0ULL` to
+  // accept any field without scanning positions.
+  // NOTE: We could make a space tradeoff and store a union of the field masks
+  // upon creation for every PostingValue to avoid iteration cost.
+  std::optional<PostingValue> GetPostingValue(BorrowedInternedStringPtr key,
+                                              uint64_t field_mask) const;
 
   // Defrag this contents of this object. Returns the updated "this" pointer.
   Postings* Defrag();
@@ -144,6 +146,8 @@ struct Postings {
 
     // Check if word is present in any of the fields specified by field_mask for
     // current key
+    // NOTE: We could make a space tradeoff and store a union of the field masks
+    // upon creation for every PostingValue to avoid iteration cost.
     bool ContainsFields(uint64_t field_mask) const;
 
     // Get Position Iterator
@@ -172,7 +176,7 @@ struct Postings {
  private:
   // Cache tf in PostingValue to avoid a map lookup
   // PostValue should be removed and restored if no extra-step
-  // Transparent comparator so LookupKey() can probe with a borrowed key.
+  // Transparent comparator so GetPostingValue() can probe with a borrowed key.
   absl::btree_map<Key, PostingValue, InternedStringPtrLess> key_to_positions_;
 };
 

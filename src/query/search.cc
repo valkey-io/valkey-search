@@ -2091,6 +2091,17 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   return absl::OkStatus();
 }
 
+// Lives here so both fanout.cc and server.cc can use it.
+CONTROLLED_INT(ForceMultiArmFailure, -1);
+
+absl::Status ForcedMultiArmFailure(size_t arm_index) {
+  const int forced = ForceMultiArmFailure.GetValue();
+  if (forced < 0 || static_cast<size_t>(forced) != arm_index) {
+    return absl::OkStatus();
+  }
+  return absl::InternalError("Forced multi-arm failure");
+}
+
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {

@@ -1125,8 +1125,10 @@ TEST_F(SearchRangeFp32, HnswFindsKeysInReplacedSlots)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto &replace_deleted = options::GetHNSWAllowReplaceDeletedMutable();
   const bool saved_replace_deleted = replace_deleted.GetValue();
+  SetDebugMode(true);
   absl::Cleanup restore = [&] {
     VMSDK_EXPECT_OK(replace_deleted.SetValue(saved_replace_deleted));
+    SetDebugMode(false);
   };
   VMSDK_EXPECT_OK(replace_deleted.SetValue(true));
   for (auto metric :
@@ -1161,8 +1163,10 @@ TEST_F(SearchRangeFp32, HnswMatchesFlatAfterChurn)
 ABSL_NO_THREAD_SAFETY_ANALYSIS {
   auto &replace_deleted = options::GetHNSWAllowReplaceDeletedMutable();
   const bool saved_replace_deleted = replace_deleted.GetValue();
+  SetDebugMode(true);
   absl::Cleanup restore = [&] {
     VMSDK_EXPECT_OK(replace_deleted.SetValue(saved_replace_deleted));
+    SetDebugMode(false);
   };
   VMSDK_EXPECT_OK(replace_deleted.SetValue(true));
   auto keys = [](const std::vector<Neighbor> &neighbors) {
